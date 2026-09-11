@@ -28,6 +28,9 @@ vb1 = ResourceBodyTexcoord
 vb4 = ResourceBlendBufferOverride
 drawindexed = 3, 0, 0
 
+[CommandListRemap]
+cs-t35 = ref ResourceBlendRemapVertexVGBuffer
+
 [ResourceBodyIB]
 filename = Meshes/Index.buf
 format = DXGI_FORMAT_R32_UINT
@@ -46,6 +49,11 @@ stride = 20
 filename = Meshes/Blend.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
+
+[ResourceBlendRemapVertexVGBuffer]
+filename = Meshes/BlendRemapVertexVG.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
 """)
     resources = extract_resources(sections)
     scanned = _scan_sections_for_draws(sections)
@@ -61,3 +69,7 @@ stride = 16
     group = build_draw_groups(sections, resources)[0]
     assert group["draws"][0].skinning_source.file == "Meshes/Blend.buf"
     assert group["draws"][0].skinning_source.encoding == "wwmi_u8_8"
+    assert group["draws"][0].skinning_source.vertex_vg_file == \
+        "Meshes/BlendRemapVertexVG.buf"
+    assert group["draws"][0].skinning_source.bone_id_namespace == \
+        "wwmi_vertex_vg"

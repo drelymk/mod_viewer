@@ -30,6 +30,7 @@ import {
   setRigJointRotation, solveRigIkTarget,
   selectHumanoidControl,
   setRigPoseControlStatus,
+  getHumanoidRigEditSnapshot,
   beginHumanoidControlCarry, updateHumanoidControlDraft,
   finishHumanoidControlCarry, cancelHumanoidControlCarry,
 } from './mesh/weight-rig-runtime.js';
@@ -259,6 +260,7 @@ rendererReady.then(ready => {
     arcballControls: controls,
     getMeshes: () => activeMeshes,
     getRigState: getModelRigState,
+    getHumanoidRigEditSnapshot,
     getRigJointPoseFrame,
     setRigJointRotation,
     solveRigIkTarget,

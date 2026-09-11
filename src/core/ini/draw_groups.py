@@ -131,6 +131,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     texture_override_index = getattr(
         section_info, "texture_override_index", TextureOverrideIndex())
     texture_override_index = texture_override_index.with_resource_files(resources)
+    global_compute_resources = dict(
+        getattr(section_info, "global_compute_resources", {}) or {})
     if not draw_sections:
         return []
 
@@ -311,9 +313,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 draw.position_stride, resolve_vertex_info)
             direct_skinning_resources = dict(group_vertex_resources)
             direct_skinning_resources.update(vertex_resources)
+            remap_resources = dict(global_compute_resources)
+            remap_resources.update(authored.skinning_remap_resources)
             skinning_source, skinning_error = resolve_skinning_source(
                 direct_skinning_resources, resolve_vertex_info,
-                bone_id_offset=authored.skinning_bone_offset)
+                bone_id_offset=authored.skinning_bone_offset,
+                remap_resources=remap_resources)
             if skinning_source is None and skinning_error is None:
                 occupied_slots = (set(group_vertex_resources)
                                   | set(vertex_resources))
@@ -325,7 +330,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 }
                 skinning_source, skinning_error = resolve_skinning_source(
                     blend_fallback, resolve_vertex_info,
-                    bone_id_offset=authored.skinning_bone_offset)
+                    bone_id_offset=authored.skinning_bone_offset,
+                    remap_resources=remap_resources)
             draw.skinning_source = skinning_source
             draw.skinning_error = skinning_error
             _apply_diffuse_state(draw, authored, resolve_texture_file)

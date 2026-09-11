@@ -47,6 +47,9 @@ class AuthoredDrawCall:
     texture_provenance: dict = field(default_factory=dict)
     geometry_match: GeometryMatch | None = None
     skinning_bone_offset: int = 0
+    # Compute-resource bindings captured at the draw's execution point.  The
+    # WWMI remapper uses cs-t35 for the per-vertex full VertexVG identities.
+    skinning_remap_resources: dict[int, str | None] = field(default_factory=dict)
     slot_textures: list = field(default_factory=list)
 
 

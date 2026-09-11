@@ -232,6 +232,7 @@ ib = ResourceBodyIB
 vb0 = ResourceBodyPosition
 vb1 = ResourceBodyBlend
 vb2 = ResourceBodyTexcoord
+cs-t35 = ref ResourceVertexVG
 drawindexed = 3, 0, 0
 
 [ResourceBodyIB]
@@ -250,6 +251,11 @@ format = DXGI_FORMAT_R8_UINT
 [ResourceBodyTexcoord]
 filename = body-texcoord.buf
 stride = 20
+
+[ResourceVertexVG]
+filename = body-vertex-vg.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 8
 """)
 
     draw = build_draw_groups(
@@ -257,6 +263,7 @@ stride = 20
 
     assert draw.skinning_bone_offset == 24
     assert draw.skinning_source.bone_id_offset == 24
+    assert draw.skinning_source.vertex_vg_file == "body-vertex-vg.buf"
 
 
 @pytest.mark.parametrize(

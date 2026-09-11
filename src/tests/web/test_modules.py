@@ -3608,137 +3608,6 @@ def test_selected_weight_topology_filters_weak_edges_and_pivots_synthetic_roots(
     }
 
 
-def test_structural_locality_filters_remote_tail_bridges_and_preserves_edges(
-        module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
-      const rig = await import('./js/mesh/weight-rig.js');
-      const relationship = (boneA, boneB, jointCenter, options = {}) => ({
-        boneA, boneB, sharedVertexCount: 4, productOverlap: 1,
-        minOverlap: 4, containment: .4, jaccard: .2, treeEdgeScore: .4,
-        jointCenter,
-        aDominantSharedSupport: options.aDominantSharedSupport ?? 1,
-        bDominantSharedSupport: options.bDominantSharedSupport ?? 1,
-        dominanceEvidenceAvailable: true,
-      });
-      const nodesFor = (centers, radius = 1) => centers.map(([boneId, x]) => ({
-        boneId, totalWeight: 10, affectedVertexCount: 10,
-        weightedCenter: [x, 0, 0], weightedRadius: radius,
-      }));
-      const decision = (nodes, edge, options = {}) =>
-        rig.candidateRelationshipDiagnostics({
-          nodes, relationships: [edge], boundingSphereRadius: 10,
-        }, options)[0];
-      const remoteNodes = nodesFor([[1, 0], [2, 10]]);
-      const remote = decision(remoteNodes,
-        relationship(1, 2, [9, 0, 0]));
-      const longNodes = nodesFor([[1, 0], [2, 10]], 4);
-      const long = decision(longNodes,
-        relationship(1, 2, [5, 0, 0]));
-      const helperNodes = nodesFor([[1, 0], [2, .2]], 0);
-      const helper = decision(helperNodes,
-        relationship(1, 2, [.1, 0, 0]));
-
-      const chainNodes = nodesFor([
-        [396, 0], [143, 1], [145, 2], [187, 3], [294, 4],
-      ]);
-      const chainMember = (a, b, center, aSupport, bSupport) => ({
-        nodes: chainNodes,
-        boundingSphereRadius: 10,
-        relationships: [relationship(a, b, center, {
-          aDominantSharedSupport: aSupport,
-          bDominantSharedSupport: bSupport,
-        })],
-      });
-      const chainGraphs = [
-        chainMember(396, 143, [.5, 0, 0], 1, 1),
-        chainMember(143, 145, [1.5, 0, 0], 1, 1),
-        chainMember(187, 294, [3.5, 0, 0], 1, 1),
-        chainMember(145, 187, [2.5, 0, 0], 1, 1),
-        chainMember(145, 187, [2.5, 0, 0], 1, 1),
-        chainMember(145, 187, [2.5, 0, 0], 0, 1),
-        chainMember(145, 187, [2.5, 0, 0], 0, 1),
-        chainMember(145, 187, [2.5, 0, 0], 0, 1),
-      ];
-      const aggregate = rig.aggregateInfluenceGraphs(chainGraphs);
-      const decisions = rig.candidateRelationshipDiagnostics(aggregate);
-      const pair = (left, right) => {
-        const a = Math.min(left, right), b = Math.max(left, right);
-        return decisions.find(item => item.relationship.boneA === a
-          && item.relationship.boneB === b);
-      };
-      const forest = rig.buildInferredRigForest(aggregate, {
-        rootOverrides: new Map([[0, 396], [1, 294]]),
-      });
-      const selectedPairs = forest.edges.map(edge =>
-        `${Math.min(edge.boneA, edge.boneB)}:${Math.max(edge.boneA, edge.boneB)}`)
-        .sort();
-
-      const strongMemberGraphs = [
-        chainMember(396, 143, [.5, 0, 0], 10, 10),
-        chainMember(396, 143, [.5, 0, 0], 0, 1),
-        chainMember(396, 143, [.5, 0, 0], 0, 1),
-      ];
-      const strongAggregate = rig.aggregateInfluenceGraphs(strongMemberGraphs);
-      const strongDecision = rig.candidateRelationshipDiagnostics(
-        strongAggregate)[0];
-      return {
-        constants: {
-          maxJointReach: rig.MAX_JOINT_REACH,
-          maxSupportSeparation: rig.MAX_SUPPORT_SEPARATION,
-        },
-        remote: {
-          accepted: remote.accepted, reason: remote.reason,
-          maxJointReach: remote.relationship.maxJointReach,
-          supportSeparation: remote.relationship.supportSeparation,
-        },
-        long: {accepted: long.accepted, reason: long.reason,
-          structuralLocality: long.relationship.structuralLocality},
-        helper: {accepted: helper.accepted, reason: helper.reason,
-          maxJointReach: helper.relationship.maxJointReach},
-        chain: {
-          pair145187: {accepted: pair(145, 187).accepted,
-            reason: pair(145, 187).reason,
-            memberDominanceRatio: pair(145, 187).memberDominanceRatio},
-          pair396143: pair(396, 143).accepted,
-          pair143145: pair(143, 145).accepted,
-          pair187294: pair(187, 294).accepted,
-          selectedPairs,
-        },
-        strongMemberRelationship: {
-          accepted: strongDecision.accepted,
-          reason: strongDecision.reason,
-        },
-      };
-    }""")
-    assert result["remote"]["accepted"] is False
-    assert result["remote"]["reason"] == "remote_tail_bridge"
-    assert result["remote"]["maxJointReach"] > result["constants"]["maxJointReach"]
-    assert result["remote"]["supportSeparation"] > result["constants"]["maxSupportSeparation"]
-    assert result["long"] == {
-        "accepted": True,
-        "reason": None,
-        "structuralLocality": pytest.approx(4 / 9),
-    }
-    assert result["helper"]["accepted"] is True
-    assert result["helper"]["reason"] is None
-    assert result["chain"] == {
-        "pair145187": {
-            "accepted": False,
-            "reason": "weak_transition",
-            "memberDominanceRatio": pytest.approx(.4),
-        },
-        "pair396143": True,
-        "pair143145": True,
-        "pair187294": True,
-        "selectedPairs": ["143:145", "143:396", "187:294"],
-    }
-    assert result["strongMemberRelationship"] == {
-        "accepted": True,
-        "reason": None,
-    }
-
-
 def test_model_bone_stats_sum_same_ids_before_averaging(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -4101,6 +3970,15 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       const initial = session.snapshot();
       const rootsAfterBegin = [...modelRigState.explicitRootSignatures];
       const poseAfterBegin = {...modelRigState.humanoidPose};
+      session.beginCarry('head');
+      const notificationsBeforeSilentUpdate = notifications;
+      const silentUpdated = session.updateDraft('head', [.3, .4, .5], {
+        candidateJointId: null, candidateDistance: Infinity,
+        notifyState: false, request: false,
+      });
+      const silentNotificationDelta =
+        notifications - notificationsBeforeSilentUpdate;
+      session.finishCarry();
       const allCarryResults = control.HUMANOID_CONTROL_KEYS.map((key, index) => {
         const target = [.1 * (index + 1), .2 * (index + 1),
           .03 * (index + 1)];
@@ -4125,13 +4003,16 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       const saved = await session.save();
       const expectedSemantic = control.humanoidControlPositionToSemantic(
         [1, 1, 1], rig.humanoidControlRig);
-      return {initial, rootsAfterBegin, poseAfterBegin, allCarryResults,
+      return {initial, rootsAfterBegin, poseAfterBegin, silentUpdated,
+        silentNotificationDelta, allCarryResults,
         snapped, sticky, free, saved, persisted, expectedSemantic,
         notifications, resets};
     }""")
     assert result["initial"]["controls"]["leftShoulder"]["position"] == [0, 0, 0]
     assert result["rootsAfterBegin"] == ["custom-root"]
     assert result["poseAfterBegin"] == {}
+    assert result["silentUpdated"] is True
+    assert result["silentNotificationDelta"] == 0
     assert len(result["allCarryResults"]) == 16
     assert all(item["began"] and item["updated"] and item["finished"]
                and item["position"] != [0, 0, 0]
@@ -5592,3 +5473,130 @@ def test_saved_humanoid_guide_reuses_spatial_semantics_for_source_forests(
     }
     assert next(item["rootId"] for item in result["roots"]
                 if item["nodeIds"] == [0, 1]) == 0
+
+
+def test_saved_humanoid_guide_handles_pelvis_adjacency_and_central_roots(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildHumanoidGuidedSourceForest} = await import(
+        './js/mesh/humanoid-guided-rig.js');
+      const controls = {
+        pelvis: [0, 0, 0], chest: [0, 4, 0], neck: [0, 6, 0], head: [0, 8, 0],
+        leftShoulder: [-1, 5.5, 0], leftElbow: [-2, 5, 0],
+        leftHand: [-3, 4.5, 0], rightShoulder: [1, 5.5, 0],
+        rightElbow: [2, 5, 0], rightHand: [3, 4.5, 0],
+        leftHip: [-6.25, 0, 0], leftKnee: [-6.25, -3, 0],
+        leftFoot: [-6.25, -6, 0], rightHip: [6.25, 0, 0],
+        rightKnee: [6.25, -3, 0], rightFoot: [6.25, -6, 0],
+      };
+      const controlRig = {
+        accepted: true, frame: {height: 8, right: [1, 0, 0],
+          forward: [0, 0, 1]},
+        controls: Object.fromEntries(Object.entries(controls).map(
+          ([key, position]) => [key, {position}]))
+      };
+      const guide = nodes => buildHumanoidGuidedSourceForest({
+        sourceKey: 'body', influenceGraph: {
+          evidenceMode: 'vertex', nodes,
+          relationships: [{boneA: nodes[0].boneId, boneB: nodes[1].boneId,
+            sharedVertexCount: 4, containment: .4, jaccard: .2}],
+        },
+      }, controlRig);
+      const central = guide([
+        {boneId: 10, weightedCenter: [0, .2, 0]},
+        {boneId: 2, weightedCenter: [0, 3.8, 0]},
+      ]);
+      const pelvis = guide([
+        {boneId: 30, weightedCenter: [0, .2, 0]},
+        {boneId: 40, weightedCenter: [-1.25, 0, 0]},
+      ]);
+      return {
+        centralRoot: central.forest.components[0].rootId,
+        centralDiagnostics: central.diagnostics,
+        pelvisDiagnostics: pelvis.diagnostics,
+      };
+    }""")
+    assert result["centralRoot"] == 10
+    assert result["centralDiagnostics"]["rootOverrideCount"] == 1
+    assert result["pelvisDiagnostics"]["guidedEdges"] == 1
+    assert result["pelvisDiagnostics"]["rejectedEdges"] == 0
+    assert result["pelvisDiagnostics"]["adjacentArticulationEdges"] == 1
+
+
+def test_mapped_control_descendants_stop_at_attachment_edges(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {buildHumanoidRigBinding} = await import(
+        './js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        pelvis: [0, .4, 0], chest: [0, 1.2, 0], neck: [0, 1.5, 0],
+        head: [0, 1.8, 0], leftShoulder: [-.8, 1.2, 0],
+        leftElbow: [-2, 1.2, 0], leftHand: [-3, 1.2, 0],
+        rightShoulder: [.8, 1.2, 0], rightElbow: [2, 1.2, 0],
+        rightHand: [3, 1.2, 0], leftHip: [-.45, .4, 0],
+        leftKnee: [-.45, -.4, 0], leftFoot: [-.45, -1.2, 0],
+        rightHip: [.45, .4, 0], rightKnee: [.45, -.4, 0],
+        rightFoot: [.45, -1.2, 0],
+      };
+      const member = id => ({sourceKey: 'body', boneId: id,
+        sourceBoneKey: `body#bone=${id}`});
+      const joints = [1, 2].map((jointId, index) => ({
+        jointId, restPivot: [-3 - index * .5, 1.2, 0],
+        restCenter: [-3 - index * .5, 1.2, 0],
+        restFrame: [0, 0, 0, 1], members: [member(jointId)],
+      }));
+      const modelRig = {
+        joints,
+        jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, joint.restPivot])),
+        restFrameByJointId: new Map(joints.map(joint =>
+          [joint.jointId, new THREE.Quaternion()])),
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2],
+          parentById: {1: null, 2: 1}, childrenById: {1: [2], 2: []},
+          edges: [{jointA: 1, jointB: 2, relationshipType: 'Attachment'}]}],
+        componentByJointId: new Map([[1, 0], [2, 0]]),
+      };
+      const controlRig = {frame: {height: 3, right: [1, 0, 0],
+        forward: [0, 0, 1]}, controls: Object.fromEntries(
+        Object.entries(controls).map(([key, position]) => [key, {position}]))};
+      const binding = buildHumanoidRigBinding({controlRig, modelRig,
+        heatBinding: {modelJointAssignments: new Map(),
+          sourceBoneAssignments: new Map()},
+        controlMappings: new Map([['leftHand', {
+          controlKey: 'leftHand', jointId: 1, sourceMembers: [member(1)],
+        }]])});
+      return {
+        root: binding.jointBindings.get(1)?.bindingMethod || null,
+        accessory: binding.jointBindings.get(2)?.bindingMethod || null,
+        unbound: binding.unboundJointIds,
+      };
+    }""")
+    assert result == {
+        "root": "manual_control_mapping",
+        "accessory": None,
+        "unbound": [2],
+    }
+
+
+def test_guided_forest_pivots_follow_changed_parent_edges(module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildInferredRigForest, jointPivotMap} = await import(
+        './js/mesh/weight-rig.js');
+      const nodes = [1, 2, 3].map(boneId => ({boneId}));
+      const edges = [
+        {boneA: 1, boneB: 2, treeEdgeScore: .9, jointCenter: [1, 0, 0]},
+        {boneA: 2, boneB: 3, treeEdgeScore: .8, jointCenter: [2, 0, 0]},
+        {boneA: 1, boneB: 3, treeEdgeScore: .7, jointCenter: [3, 0, 0]},
+      ];
+      const legacy = buildInferredRigForest({nodes, relationships: edges}, {
+        edges: edges.slice(0, 2), rootOverrides: new Map([[0, 1]]),
+      });
+      const guided = buildInferredRigForest({nodes, relationships: edges}, {
+        edges: [edges[1], edges[2]], rootOverrides: new Map([[0, 1]]),
+      });
+      const pivots = forest => Object.fromEntries(
+        [...jointPivotMap(forest, edges)].map(([id, point]) => [id, point]));
+      return {legacy: pivots(legacy), guided: pivots(guided)};
+    }""")
+    assert result["legacy"]["2"] == [1, 0, 0]
+    assert result["guided"]["2"] == [2, 0, 0]

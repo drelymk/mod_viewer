@@ -65,7 +65,8 @@ function overlayPresentationKey(source) {
 }
 
 function pivotFor(source, boneId) {
-  const joint = source?.joints?.find(item => item.jointId === Number(boneId));
+  const id = Number(boneId);
+  const joint = source?.joints?.find(item => Number(item?.jointId) === id);
   return joint?.restPivot || joint?.restCenter || null;
 }
 
@@ -277,6 +278,7 @@ const CONTROL_KEYS_FOR_OVERLAY = Object.freeze(HUMANOID_CONTROL_KEYS.map(key => 
 
 export function createRigOverlayController({
   scene, camera, canvas, getMeshes, getRigState,
+  getHumanoidRigEditSnapshot,
   getRigJointPoseFrame, arcballControls, setRigJointRotation,
   solveRigIkTarget, finishRigJointPose, onTransformControlsUnavailable,
   onRigJointPicked, onRigSurfacePickRequested, onRigJointPickCancelled,
@@ -492,6 +494,7 @@ export function createRigOverlayController({
   let hoveredControlKey = null;
   let humanoidCarryPlane = null;
   let humanoidCarryOffset = new THREE.Vector3();
+  let humanoidJointCandidates = null;
   let humanoidCarryControlKey = null;
   let humanoidCarryPointerId = null;
   let humanoidNavigationGesture = false;
@@ -1031,23 +1034,41 @@ export function createRigOverlayController({
       .map(([, jointId]) => Number(jointId)));
   }
 
+  function invalidateHumanoidJointCandidates() {
+    humanoidJointCandidates = null;
+  }
+
+  function buildHumanoidJointCandidates() {
+    if (!currentSource) {
+      humanoidJointCandidates = [];
+      return humanoidJointCandidates;
+    }
+    group.updateMatrixWorld?.(true);
+    humanoidJointCandidates = (currentSource.joints || []).flatMap(joint => {
+      const jointId = Number(joint?.jointId);
+      if (!Number.isInteger(jointId)) return [];
+      const frame = getRigJointPoseFrame?.(jointId);
+      const pivot = frame?.pivot || joint.restPivot || joint.restCenter;
+      const screen = projectRigPointToClient({
+        point: pivot, camera, canvas, worldMatrix: group.matrixWorld,
+      });
+      return screen && pivot ? [{jointId, pivot, screen}] : [];
+    });
+    return humanoidJointCandidates;
+  }
+
   function nearestMagneticJoint(clientX, clientY, controlKey) {
     const excluded = mappedJointIdsExcept(controlKey);
     const mappedJointId = Number(currentSnapshot?.humanoidRigEdit
       ?.mappedJointIdByControl?.[controlKey]);
     let mappedDistance = Infinity;
-    const candidates = (currentSource?.joints || []).flatMap(joint => {
-      const jointId = Number(joint.jointId);
-      if (!Number.isInteger(jointId) || excluded.has(jointId)) return [];
-      const pivot = getRigJointPoseFrame?.(jointId)?.pivot
-        || joint.restPivot || joint.restCenter;
-      const screen = projectRigPointToClient({
-        point: pivot, camera, canvas, worldMatrix: group.matrixWorld,
-      });
-      if (!screen) return [];
-      const distance = Math.hypot(screen.x - clientX, screen.y - clientY);
-      if (jointId === mappedJointId) mappedDistance = distance;
-      return [{jointId, pivot, screen, distance}];
+    const candidates = (humanoidJointCandidates
+      || buildHumanoidJointCandidates()).filter(candidate =>
+      !excluded.has(candidate.jointId)).map(candidate => {
+      const distance = Math.hypot(
+        candidate.screen.x - clientX, candidate.screen.y - clientY);
+      if (candidate.jointId === mappedJointId) mappedDistance = distance;
+      return {...candidate, distance};
     }).sort((left, right) => left.distance - right.distance
       || left.jointId - right.jointId);
     return candidates[0] ? {...candidates[0], mappedDistance} : null;
@@ -1074,15 +1095,20 @@ export function createRigOverlayController({
     return world.applyMatrix4(group.matrixWorld.clone().invert()).toArray();
   }
 
-  function syncAfterEditCallback() {
-    const snapshot = getRigState?.();
+  function syncAfterEditCallback({refreshState = false} = {}) {
+    const snapshot = refreshState ? getRigState?.() : null;
     if (snapshot) {
       currentSnapshot = snapshot;
       currentSource = sourceFor(snapshot);
-      updateHumanoidPosedOverlay(currentSource);
-      updateHumanoidCandidateMarker();
-      updateHumanoidVisibility();
+    } else {
+      const edit = getHumanoidRigEditSnapshot?.();
+      if (edit && currentSnapshot) {
+        currentSnapshot = {...currentSnapshot, humanoidRigEdit: edit};
+      }
     }
+    updateHumanoidPosedOverlay(currentSource);
+    updateHumanoidCandidateMarker();
+    updateHumanoidVisibility();
     requestRender?.();
   }
 
@@ -1119,6 +1145,8 @@ export function createRigOverlayController({
     humanoidCarryPointerId = pointerId;
     humanoidNavigationGesture = false;
     hoveredControlKey = nearest.key;
+    invalidateHumanoidJointCandidates();
+    buildHumanoidJointCandidates();
     setArcballHumanoidCarryState(true);
     syncAfterEditCallback();
     return true;
@@ -1135,6 +1163,8 @@ export function createRigOverlayController({
       candidateJointId: candidate?.jointId ?? null,
       candidateDistance: candidate?.distance ?? Infinity,
       mappedDistance: candidate?.mappedDistance ?? Infinity,
+      notifyState: false,
+      request: false,
     });
     humanoidCandidateJointId = candidate && candidate.distance
       <= JOINT_ATTRACTION_RADIUS_PX ? candidate.jointId : null;
@@ -1153,6 +1183,7 @@ export function createRigOverlayController({
     humanoidNavigationGesture = false;
     humanoidCandidateJointId = null;
     humanoidCandidateScreen = null;
+    invalidateHumanoidJointCandidates();
     setArcballHumanoidCarryState(false);
     setPickCursor('');
     syncAfterEditCallback();
@@ -1169,6 +1200,7 @@ export function createRigOverlayController({
     humanoidNavigationGesture = false;
     humanoidCandidateJointId = null;
     humanoidCandidateScreen = null;
+    invalidateHumanoidJointCandidates();
     setArcballHumanoidCarryState(false);
     setPickCursor('');
     syncAfterEditCallback();
@@ -1837,6 +1869,7 @@ export function createRigOverlayController({
     const wasHumanoidEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
     currentSnapshot = snapshot || {};
     currentSource = sourceFor(currentSnapshot);
+    invalidateHumanoidJointCandidates();
     rigJointPickingActive = !!currentSnapshot.jointPickIntent;
     const humanoidEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
     if (humanoidEditing
@@ -1909,12 +1942,14 @@ export function createRigOverlayController({
   const onRigChanged = event => refresh(event.detail || getRigState?.());
   const onPoseChanged = event => updatePoseFromEvent(event.detail);
   const onArcballChanged = () => {
+    invalidateHumanoidJointCandidates();
     updateHumanoidSpriteSizes();
     updateModelJointMarkers(currentSource);
     updateSelectedJointIndicator(currentSource);
     requestRender?.();
   };
   const onModelTransformChanged = () => {
+    invalidateHumanoidJointCandidates();
     updateModelFrame();
     updateModelJointMarkers(currentSource);
     updateSelectedJointIndicator(currentSource);

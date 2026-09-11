@@ -67,7 +67,13 @@ function adjacentSegments(left, right) {
   const rightToLeft = rightSegment.end === leftSegment.start
     && right.projection >= 1 - ADJACENT_PROJECTION_MARGIN
     && left.projection <= ADJACENT_PROJECTION_MARGIN;
-  return leftToRight || rightToLeft;
+  const sharedStart = leftSegment.start === rightSegment.start
+    && left.projection <= ADJACENT_PROJECTION_MARGIN
+    && right.projection <= ADJACENT_PROJECTION_MARGIN;
+  const sharedEnd = leftSegment.end === rightSegment.end
+    && left.projection >= 1 - ADJACENT_PROJECTION_MARGIN
+    && right.projection >= 1 - ADJACENT_PROJECTION_MARGIN;
+  return leftToRight || rightToLeft || sharedStart || sharedEnd;
 }
 
 function semanticRelationship(left, right) {
@@ -149,7 +155,8 @@ function rootOverrideForComponent(component, classifications, controlRig) {
     const pelvis = controlRig?.controls?.pelvis?.position
       || controlRig?.controls?.pelvis;
     return central.sort((left, right) =>
-      distance(left.position, pelvis) - distance(right.position, pelvis)
+      distance(left.classification.position, pelvis)
+        - distance(right.classification.position, pelvis)
       || left.boneId - right.boneId)[0].boneId;
   }
   if (roles.size !== 1) return null;

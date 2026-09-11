@@ -6,10 +6,6 @@
 
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
-export const MIN_BONE_RADIUS_RATIO = 0.005;
-export const MAX_JOINT_REACH = 2.5;
-export const MAX_SUPPORT_SEPARATION = 2.5;
-export const MIN_DOMINANCE_BALANCE = 0.5;
 
 function triangleArea(points) {
   const [a, b, c] = points;
@@ -281,20 +277,6 @@ function integrateMinimumLinearWeight(
     + integratePolygonLinearWeight(rightRegion, 'rightWeight');
 }
 
-function integrateDominantLinearWeight(
-    points, leftWeights, rightWeights, area, dominantSide) {
-  const vertices = points.map((position, index) => ({
-    position,
-    leftWeight: leftWeights[index],
-    rightWeight: rightWeights[index],
-    d: leftWeights[index] - rightWeights[index],
-  }));
-  const leftDominant = dominantSide === 'left';
-  const region = clipLinearWeightPolygon(vertices, !leftDominant);
-  return integratePolygonLinearWeight(region,
-    leftDominant ? 'leftWeight' : 'rightWeight');
-}
-
 function surfaceInfluenceWeights(
     indices, weights, influenceCount, vertexIndex, requested) {
   const values = positiveInfluencesForVertex(
@@ -378,8 +360,6 @@ export function buildSurfaceInfluenceGraph(
           sharedMeasure: 0,
           minOverlap: 0,
           productOverlap: 0,
-          aDominantSharedSupport: 0,
-          bDominantSharedSupport: 0,
           jointWeightTotal: 0,
           jointX: 0,
           jointY: 0,
@@ -391,10 +371,6 @@ export function buildSurfaceInfluenceGraph(
         relationship.sharedMeasure += triangle.area;
         relationship.minOverlap += integrateMinimumLinearWeight(
           triangle.points, weightsA, weightsB, triangle.area);
-        relationship.aDominantSharedSupport += integrateDominantLinearWeight(
-          triangle.points, weightsA, weightsB, triangle.area, 'left');
-        relationship.bDominantSharedSupport += integrateDominantLinearWeight(
-          triangle.points, weightsA, weightsB, triangle.area, 'right');
         relationship.productOverlap += productOverlap;
         relationship.jointWeightTotal += productOverlap;
         relationship.jointX += jointMoment[0];
@@ -434,8 +410,6 @@ export function buildSurfaceInfluenceGraph(
   const sourceRadius = nodes.length ? Math.max(...nodes.map(node =>
     (centerDistance(node.weightedCenter, sourceCenter) || 0)
       + (Number(node.weightedRadius) || 0))) : null;
-  const graphRadius = Number.isFinite(radius) && radius > 0
-    ? radius : sourceRadius;
   const relationships = [...relationshipEntries.values()].map(relationship => {
     const nodeA = nodeById.get(relationship.boneA);
     const nodeB = nodeById.get(relationship.boneB);
@@ -445,11 +419,11 @@ export function buildSurfaceInfluenceGraph(
     const jaccardDenominator = supportA + supportB - relationship.minOverlap;
     const distance = centerDistance(nodeA?.weightedCenter, nodeB?.weightedCenter);
     const normalizedDistance = distance !== null
-      && Number.isFinite(graphRadius) && graphRadius > 0
-      ? distance / graphRadius : null;
+      && Number.isFinite(radius) && radius > 0
+      ? distance / radius : null;
     const distancePenalty = Number.isFinite(normalizedDistance)
       ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
-    const finalized = {
+    return {
       ...relationship,
       jointCenter: relationship.jointWeightTotal > 0
         ? [relationship.jointX / relationship.jointWeightTotal,
@@ -463,11 +437,6 @@ export function buildSurfaceInfluenceGraph(
       normalizedDistance,
       treeEdgeScore: (denominator > 0
         ? relationship.minOverlap / denominator : 0) * distancePenalty,
-    };
-    return {
-      ...finalized,
-      ...relationshipSpatialEvidence(finalized, nodeA, nodeB, graphRadius),
-      ...relationshipDominanceEvidence(finalized),
     };
   });
   return {
@@ -577,177 +546,6 @@ function centerDistance(centerA, centerB) {
     Number(centerA[2]) - Number(centerB[2]));
 }
 
-function inferredSourceRadius(nodes) {
-  const weightedNodes = (nodes || []).filter(node =>
-    Number(node?.totalWeight) > 0 && node?.weightedCenter?.length >= 3);
-  const totalWeight = weightedNodes.reduce((sum, node) =>
-    sum + Number(node.totalWeight), 0);
-  if (!weightedNodes.length || totalWeight <= 0) return null;
-  const center = weightedNodes.reduce((sum, node) => {
-    const weight = Number(node.totalWeight) || 0;
-    return [
-      sum[0] + Number(node.weightedCenter[0]) * weight,
-      sum[1] + Number(node.weightedCenter[1]) * weight,
-      sum[2] + Number(node.weightedCenter[2]) * weight,
-    ];
-  }, [0, 0, 0]).map(value => value / totalWeight);
-  return Math.max(...weightedNodes.map(node =>
-    (centerDistance(node.weightedCenter, center) || 0)
-      + (Number(node.weightedRadius) || 0)));
-}
-
-function effectiveBoneRadius(node, sourceRadius) {
-  const weightedRadius = Number(node?.weightedRadius);
-  const radius = Number(sourceRadius);
-  const floor = Number.isFinite(radius) && radius > 0
-    ? radius * MIN_BONE_RADIUS_RATIO : 0;
-  return Math.max(
-    Number.isFinite(weightedRadius) && weightedRadius > 0
-      ? weightedRadius : 0,
-    floor, Number.EPSILON);
-}
-
-/** Calculate locality of an overlap region relative to both bone supports. */
-export function relationshipSpatialEvidence(
-    relationship, nodeA, nodeB, sourceRadius = null) {
-  const jointCenter = relationship?.jointCenter;
-  const radius = Number(sourceRadius);
-  const reachA = centerDistance(nodeA?.weightedCenter, jointCenter);
-  const reachB = centerDistance(nodeB?.weightedCenter, jointCenter);
-  const effectiveRadiusA = effectiveBoneRadius(nodeA, radius);
-  const effectiveRadiusB = effectiveBoneRadius(nodeB, radius);
-  const jointReachA = reachA === null ? null : reachA / effectiveRadiusA;
-  const jointReachB = reachB === null ? null : reachB / effectiveRadiusB;
-  const maxJointReach = jointReachA === null || jointReachB === null
-    ? null : Math.max(jointReachA, jointReachB);
-  const centerDistanceValue = centerDistance(
-    nodeA?.weightedCenter, nodeB?.weightedCenter);
-  const supportSeparation = centerDistanceValue === null
-    ? null : centerDistanceValue / (effectiveRadiusA + effectiveRadiusB);
-  const reachFactor = maxJointReach === null
-    ? 1 : 1 / (1 + Math.max(0, maxJointReach));
-  const separationFactor = supportSeparation === null
-    ? 1 : 1 / (1 + Math.max(0, supportSeparation));
-  return {
-    jointReachA,
-    jointReachB,
-    maxJointReach,
-    supportSeparation,
-    structuralLocality: Math.max(0, Math.min(1,
-      Math.sqrt(reachFactor * separationFactor))),
-  };
-}
-
-/** Calculate whether shared support contains a meaningful dominance transition. */
-export function relationshipDominanceEvidence(relationship) {
-  const available = relationship?.dominanceEvidenceAvailable !== undefined
-    ? relationship.dominanceEvidenceAvailable === true
-    : Object.hasOwn(relationship || {}, 'aDominantSharedSupport')
-      && Object.hasOwn(relationship || {}, 'bDominantSharedSupport');
-  if (!available) {
-    return {
-      dominanceBalance: null,
-      hasBidirectionalDominance: null,
-      dominanceEvidenceAvailable: false,
-    };
-  }
-  const aSupport = Number(relationship?.aDominantSharedSupport);
-  const bSupport = Number(relationship?.bDominantSharedSupport);
-  if (![aSupport, bSupport].every(Number.isFinite)) {
-    return {
-      dominanceBalance: null,
-      hasBidirectionalDominance: null,
-      dominanceEvidenceAvailable: false,
-    };
-  }
-  const total = Math.max(0, aSupport) + Math.max(0, bSupport);
-  const maximum = Math.max(Math.max(0, aSupport), Math.max(0, bSupport));
-  return {
-    dominanceBalance: maximum > 0
-      ? Math.min(Math.max(0, aSupport), Math.max(0, bSupport)) / maximum
-      : 0,
-    hasBidirectionalDominance: aSupport > 0 && bSupport > 0 && total > 0,
-    dominanceEvidenceAvailable: true,
-  };
-}
-
-function relationshipEvidence(relationship, nodeById, sourceRadius) {
-  const nodeA = nodeById.get(Number(relationship?.boneA));
-  const nodeB = nodeById.get(Number(relationship?.boneB));
-  return {
-    ...relationship,
-    ...relationshipSpatialEvidence(relationship, nodeA, nodeB, sourceRadius),
-    ...relationshipDominanceEvidence(relationship),
-  };
-}
-
-/** Evaluate spatial eligibility separately from overlap eligibility. */
-export function evaluateStructuralRelationship(relationship, options = {}) {
-  const structuralEvidenceAvailable = options.structuralEvidenceAvailable
-    !== false;
-  const maxJointReach = Number(options.maxJointReach
-    ?? MAX_JOINT_REACH);
-  const maxSupportSeparation = Number(options.maxSupportSeparation
-    ?? MAX_SUPPORT_SEPARATION);
-  const minDominanceBalance = Number(options.minDominanceBalance
-    ?? MIN_DOMINANCE_BALANCE);
-  const reach = Number(relationship?.maxJointReach);
-  const separation = Number(relationship?.supportSeparation);
-  const remoteTail = structuralEvidenceAvailable
-    && Number.isFinite(reach) && reach > maxJointReach;
-  const separatedSupports = structuralEvidenceAvailable
-    && Number.isFinite(separation)
-    && separation > maxSupportSeparation;
-  const dominanceBalance = Number(relationship?.dominanceBalance);
-  const weakDominance = structuralEvidenceAvailable
-    && Number.isFinite(dominanceBalance)
-    && dominanceBalance < minDominanceBalance;
-  const memberEvidence = Array.isArray(relationship?.memberEvidence)
-    ? relationship.memberEvidence : [];
-  const bidirectionalMemberCount = memberEvidence.filter(item =>
-    item.hasBidirectionalDominance === true).length;
-  const memberDominanceRatio = memberEvidence.length
-    ? bidirectionalMemberCount / memberEvidence.length : null;
-  const localMemberEvidence = structuralEvidenceAvailable
-    && memberEvidence.some(item =>
-    item.hasBidirectionalDominance === true
-      && Number(item.structuralLocality) >= .5);
-  // A low aggregate balance can be caused by unrelated members contaminating
-  // a real transition. Reject only when that contamination is consistent
-  // across the aggregate evidence and no local member supports the edge.
-  const weakMemberTransition = structuralEvidenceAvailable
-    && memberEvidence.length >= 3
-    && relationship?.dominanceEvidenceAvailable === true
-    && memberDominanceRatio < .5
-    && weakDominance;
-  const remoteTailBridge = (remoteTail && separatedSupports
-    && !localMemberEvidence) || weakMemberTransition;
-  const baseScore = Number(relationship?.treeEdgeScore
-    ?? relationship?.containment ?? relationship?.jaccard);
-  const locality = Number(relationship?.structuralLocality);
-  const memberLocality = Number(relationship?.maxMemberStructuralLocality);
-  const localityValues = [locality, memberLocality]
-    .filter(Number.isFinite);
-  const effectiveLocality = localMemberEvidence && localityValues.length
-    ? Math.max(...localityValues) : locality;
-  const structuralLocality = Number.isFinite(effectiveLocality)
-    ? Math.max(0, Math.min(1, effectiveLocality)) : 1;
-  return {
-    accepted: !remoteTailBridge,
-    reason: remoteTailBridge
-      ? (weakMemberTransition ? 'weak_transition' : 'remote_tail_bridge')
-      : null,
-    remoteTail,
-    separatedSupports,
-    weakDominance,
-    memberDominanceRatio,
-    localMemberEvidence,
-    weakMemberTransition,
-    treeEdgeScore: Number.isFinite(baseScore)
-      ? baseScore * structuralLocality : baseScore,
-  };
-}
-
 /** Build overlap evidence and an overlap-derived pivot for every bone pair. */
 export function buildInfluenceRelationships(
     baselinePositions, indices, weights, influenceCount, nodes,
@@ -779,10 +577,8 @@ export function buildInfluenceRelationships(
       for (let right = left + 1; right < ids.length; right += 1) {
         const [boneA, boneB] = pairIds(ids[left], ids[right]);
         const key = pairKey(boneA, boneB);
-        const weightLeft = mergedWeights[left];
-        const weightRight = mergedWeights[right];
-        const weightA = ids[left] === boneA ? weightLeft : weightRight;
-        const weightB = ids[left] === boneA ? weightRight : weightLeft;
+        const weightA = mergedWeights[left];
+        const weightB = mergedWeights[right];
         const jointWeight = weightA * weightB;
         const relationship = relationships.get(key) || {
           boneA,
@@ -791,8 +587,6 @@ export function buildInfluenceRelationships(
           sharedMeasure: null,
           minOverlap: 0,
           productOverlap: 0,
-          aDominantSharedSupport: 0,
-          bDominantSharedSupport: 0,
           jointWeightTotal: 0,
           jointX: 0,
           jointY: 0,
@@ -801,11 +595,6 @@ export function buildInfluenceRelationships(
         relationship.sharedVertexCount += 1;
         relationship.minOverlap += Math.min(weightA, weightB);
         relationship.productOverlap += jointWeight;
-        if (weightA > weightB) {
-          relationship.aDominantSharedSupport += weightA;
-        } else if (weightB > weightA) {
-          relationship.bDominantSharedSupport += weightB;
-        }
         if (baselinePositions && baselinePositions.length >= vertex * 3 + 3
             && Number.isFinite(jointWeight) && jointWeight > 0) {
           const offset = vertex * 3;
@@ -825,8 +614,6 @@ export function buildInfluenceRelationships(
   }
 
   const radius = Number(boundingSphereRadius);
-  const graphRadius = Number.isFinite(radius) && radius > 0
-    ? radius : inferredSourceRadius(nodes);
   return [...relationships.values()].map(relationship => {
     const nodeA = nodeById.get(relationship.boneA);
     const nodeB = nodeById.get(relationship.boneB);
@@ -842,7 +629,7 @@ export function buildInfluenceRelationships(
         relationship.jointY / relationship.jointWeightTotal,
         relationship.jointZ / relationship.jointWeightTotal]
       : null;
-    const finalized = {
+    return {
       ...relationship,
       jointCenter,
       containment: containmentDenominator > 0
@@ -850,13 +637,8 @@ export function buildInfluenceRelationships(
       jaccard: jaccardDenominator > 0
         ? relationship.minOverlap / jaccardDenominator : 0,
       centerDistance: distance,
-      normalizedDistance: distance !== null && graphRadius > 0
-        ? distance / graphRadius : null,
-    };
-    return {
-      ...finalized,
-      ...relationshipSpatialEvidence(finalized, nodeA, nodeB, graphRadius),
-      ...relationshipDominanceEvidence(finalized),
+      normalizedDistance: distance !== null && radius > 0
+        ? distance / radius : null,
     };
   });
 }
@@ -880,64 +662,29 @@ function treeEdgeCompare(a, b) {
 }
 
 export function candidateRelationshipEdges(graph, options = {}) {
-  return candidateRelationshipDiagnostics(graph, options)
-    .filter(result => result.accepted)
-    .map(result => result.relationship)
-    .sort(relationshipSort);
-}
-
-/** Return candidate decisions, including reasons for rejected relationships. */
-export function candidateRelationshipDiagnostics(graph, options = {}) {
   const minSharedVertexCount = Number(options.minSharedVertexCount ?? 1);
   const containmentThreshold = Number(
     options.containmentThreshold ?? CANDIDATE_CONTAINMENT_THRESHOLD);
   const jaccardThreshold = Number(
     options.jaccardThreshold ?? CANDIDATE_JACCARD_THRESHOLD);
   const surfaceEvidence = graph?.evidenceMode === 'surface';
-  const nodeById = new Map((graph?.nodes || []).map(node => [
-    Number(node.boneId), node]));
-  const suppliedRadius = Number(graph?.boundingSphereRadius);
-  const sourceRadius = Number.isFinite(suppliedRadius) && suppliedRadius > 0
-    ? suppliedRadius : inferredSourceRadius(graph?.nodes);
-  const hasExplicitSpatialEvidence = (graph?.relationships || []).some(
-    relationship => ['jointReachA', 'jointReachB', 'maxJointReach',
-      'supportSeparation', 'structuralLocality'].some(field =>
-      Object.hasOwn(relationship, field)));
-  const structuralEvidenceAvailable = Number.isFinite(suppliedRadius)
-    && suppliedRadius > 0 || hasExplicitSpatialEvidence;
-  return (graph?.relationships || []).map(relationship => {
-    const overlapEligible = (surfaceEvidence
+  return (graph?.relationships || [])
+    .filter(relationship => (surfaceEvidence
       ? Number(relationship.productOverlap) > 0
       : relationship.sharedVertexCount >= minSharedVertexCount)
       && (relationship.containment >= containmentThreshold
-        || relationship.jaccard >= jaccardThreshold);
-    const normalizedDistance = Number(relationship.normalizedDistance);
-    const distancePenalty = Number.isFinite(normalizedDistance)
-      ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
-    const baseRelationship = {
-      ...relationship,
-      treeEdgeScore: relationship.treeEdgeScore
-        ?? (relationship.containment * distancePenalty),
-    };
-    const enriched = relationshipEvidence(
-      baseRelationship, nodeById, sourceRadius);
-    const structural = evaluateStructuralRelationship(enriched, {
-      ...options,
-      structuralEvidenceAvailable,
-    });
-    const reason = !overlapEligible
-      ? 'below_overlap_threshold' : structural.reason;
-    return {
-      relationship: {
-        ...enriched,
-        treeEdgeScore: structural.treeEdgeScore,
-      },
-      ...structural,
-      accepted: overlapEligible && structural.accepted,
-      reason: reason || null,
-      overlapEligible,
-    };
-  });
+        || relationship.jaccard >= jaccardThreshold))
+    .map(relationship => {
+      const normalizedDistance = Number(relationship.normalizedDistance);
+      const distancePenalty = Number.isFinite(normalizedDistance)
+        ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
+      return {
+        ...relationship,
+        treeEdgeScore: relationship.treeEdgeScore
+          ?? (relationship.containment * distancePenalty),
+      };
+    })
+    .sort(relationshipSort);
 }
 
 export function buildMaximumSpanningTree(nodes, edges) {
@@ -1301,9 +1048,7 @@ export function aggregateInfluenceGraphs(graphs) {
     .map(graph => graph?.fallbackReason).filter(Boolean))];
   const nodeTotals = new Map();
   const relationshipTotals = new Map();
-  inputGraphs.forEach((graph, memberIndex) => {
-    const memberNodeById = new Map((graph?.nodes || []).map(node => [
-      Number(node.boneId), node]));
+  for (const graph of inputGraphs) {
     for (const node of graph?.nodes || []) {
       const boneId = Number(node.boneId);
       const totalWeight = Number(node.totalWeight) || 0;
@@ -1340,10 +1085,7 @@ export function aggregateInfluenceGraphs(graphs) {
         boneA: Math.min(boneA, boneB), boneB: Math.max(boneA, boneB),
         sharedVertexCount: 0, sharedMeasure: 0,
         minOverlap: 0, productOverlap: 0,
-        aDominantSharedSupport: 0, bDominantSharedSupport: 0,
-        dominanceEvidenceAvailable: false,
         jointWeightTotal: 0, jointX: 0, jointY: 0, jointZ: 0,
-        memberEvidence: [],
       };
       entry.sharedVertexCount += Number(relationship.sharedVertexCount) || 0;
       if (evidenceMode === 'surface') {
@@ -1351,10 +1093,6 @@ export function aggregateInfluenceGraphs(graphs) {
       }
       entry.minOverlap += Number(relationship.minOverlap) || 0;
       entry.productOverlap += Number(relationship.productOverlap) || 0;
-      entry.aDominantSharedSupport += Number(
-        relationship.aDominantSharedSupport) || 0;
-      entry.bDominantSharedSupport += Number(
-        relationship.bDominantSharedSupport) || 0;
       const jointWeightTotal = Number(relationship.jointWeightTotal) || 0;
       const jointCenter = relationship.jointCenter;
       if (jointWeightTotal > 0 && jointCenter?.length >= 3) {
@@ -1363,24 +1101,9 @@ export function aggregateInfluenceGraphs(graphs) {
         entry.jointY += Number(jointCenter[1]) * jointWeightTotal;
         entry.jointZ += Number(jointCenter[2]) * jointWeightTotal;
       }
-      const memberNodeA = memberNodeById.get(boneA);
-      const memberNodeB = memberNodeById.get(boneB);
-      const memberSpatial = relationshipSpatialEvidence(
-        relationship, memberNodeA, memberNodeB,
-        graph?.boundingSphereRadius);
-      const memberDominance = relationshipDominanceEvidence(relationship);
-      entry.dominanceEvidenceAvailable = entry.dominanceEvidenceAvailable
-        || memberDominance.dominanceEvidenceAvailable;
-      entry.memberEvidence.push({
-        memberIndex,
-        containment: Number(relationship.containment) || 0,
-        jaccard: Number(relationship.jaccard) || 0,
-        ...memberSpatial,
-        ...memberDominance,
-      });
       relationshipTotals.set(key, entry);
     }
-  });
+  }
   const nodes = [...nodeTotals.values()].map(entry => {
     const center = entry.totalWeight > 0 ? [
       entry.weightedX / entry.totalWeight,
@@ -1424,16 +1147,7 @@ export function aggregateInfluenceGraphs(graphs) {
       ? distance / radius : null;
     const distancePenalty = Number.isFinite(normalizedDistance)
       ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
-    const memberEvidence = relationship.memberEvidence || [];
-    const memberReaches = memberEvidence.map(item =>
-      Number(item.maxJointReach)).filter(Number.isFinite);
-    const memberLocalities = memberEvidence.map(item =>
-      Number(item.structuralLocality)).filter(Number.isFinite);
-    const memberContainments = memberEvidence.map(item =>
-      Number(item.containment)).filter(Number.isFinite);
-    const memberJaccards = memberEvidence.map(item =>
-      Number(item.jaccard)).filter(Number.isFinite);
-    const finalized = {
+    return {
       ...relationship,
       sharedMeasure: evidenceMode === 'surface'
         ? relationship.sharedMeasure : null,
@@ -1449,27 +1163,6 @@ export function aggregateInfluenceGraphs(graphs) {
       normalizedDistance,
       treeEdgeScore: (denominator > 0
         ? relationship.minOverlap / denominator : 0) * distancePenalty,
-    };
-    const spatial = relationshipSpatialEvidence(
-      finalized, nodeA, nodeB, radius);
-    const dominance = relationshipDominanceEvidence(finalized);
-    return {
-      ...finalized,
-      ...spatial,
-      ...dominance,
-      memberEvidence,
-      memberEvidenceCount: memberEvidence.length,
-      qualifyingMemberCount: memberEvidence.filter(item =>
-        item.containment >= CANDIDATE_CONTAINMENT_THRESHOLD
-          || item.jaccard >= CANDIDATE_JACCARD_THRESHOLD).length,
-      maxMemberContainment: memberContainments.length
-        ? Math.max(...memberContainments) : null,
-      maxMemberJaccard: memberJaccards.length
-        ? Math.max(...memberJaccards) : null,
-      minMemberJointReach: memberReaches.length
-        ? Math.min(...memberReaches) : null,
-      maxMemberStructuralLocality: memberLocalities.length
-        ? Math.max(...memberLocalities) : null,
     };
   });
   return {

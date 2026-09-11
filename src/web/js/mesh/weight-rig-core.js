@@ -786,11 +786,11 @@ function applyHumanoidJointGuide(sourceRigs, guide) {
       ? guide.sourceResults.get(String(sourceRig.sourceKey)) : null;
     if (result) {
       sourceRig.inferredForest = cloneSourceForest(result.forest);
-      // Keep the established weight-derived pivots for this first guided
-      // pass.  Only the relationship orientation is semantically guided.
-      sourceRig.jointPivotByBoneId = new Map(
-        [...(sourceRig.defaultJointPivotByBoneId || [])]
-          .map(([boneId, pivot]) => [boneId, [...pivot]]));
+      // Pivots belong to the selected undirected parent/child relationship.
+      // Guidance can replace that relationship, so the legacy pivot map is
+      // stale whenever the guided forest changes an edge.
+      sourceRig.jointPivotByBoneId = jointPivotMap(
+        sourceRig.inferredForest, sourceRig.influenceGraph?.relationships);
       sourceRig.humanoidJointGuideMode = 'humanoid_guided';
       rebuildSourceRigRestFrames(sourceRig);
       return;

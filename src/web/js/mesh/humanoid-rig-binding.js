@@ -500,7 +500,8 @@ function sourceChildIds(modelRig, jointId) {
   const edges = component?.edges;
   if (!Array.isArray(edges) || !edges.length) return children;
   const sourcePairs = new Set(edges.filter(edge =>
-    edge?.relationshipType !== 'attachment').map(edge => {
+    String(edge?.relationshipType || '').toLowerCase() !== 'attachment')
+    .map(edge => {
     const left = numberId(edge?.jointA ?? edge?.boneA);
     const right = numberId(edge?.jointB ?? edge?.boneB);
     return left === null || right === null ? null

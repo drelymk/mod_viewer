@@ -183,12 +183,14 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
   function updateDraft(controlKey, position, {
     candidateJointId = null, candidateDistance = Infinity,
     mappedDistance = Infinity,
+    notifyState = true, request = true,
   } = {}) {
     if (!state.editing || state.carryingControlKey !== controlKey) return false;
     const freePosition = finitePosition(position);
     if (!freePosition) {
       state.error = 'The draft control position is invalid.';
-      notify();
+      if (notifyState) notify();
+      if (request) requestRender?.();
       return false;
     }
     const modelRig = getModelRig?.();
@@ -243,8 +245,8 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
     rebuildHumanoidControlPaths(state.draftRig);
     state.error = null;
     updateDirty();
-    notify();
-    requestRender?.();
+    if (notifyState) notify();
+    if (request) requestRender?.();
     return true;
   }
 
