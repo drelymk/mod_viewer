@@ -1137,13 +1137,17 @@ export function createRigOverlayController({
       const childId = Number(edge.childId ?? edge.jointB ?? edge.boneB);
       const first = nodeByBoneId.get(parentId);
       const second = nodeByBoneId.get(childId);
-      if (first && second) {
-        linePositions.push(...first, ...second);
+      const firstPivot = pivotFor(source, parentId);
+      const secondPivot = pivotFor(source, childId);
+      if (first && second && firstPivot && secondPivot) {
+        linePositions.push(...firstPivot, ...secondPivot);
         const color = edge.relationshipType === 'attachment'
           ? [1, .48, .15] : [.38, .65, 1];
         lineColors.push(...color, ...color);
       }
-      if (first && second) lineBonePairs.push([parentId, childId]);
+      if (first && second && firstPivot && secondPivot) {
+        lineBonePairs.push([parentId, childId]);
+      }
       const joint = edge.jointCenter || pivotFor(source, childId);
       if (first && second && joint) {
         jointChildBoneIds.push(childId);
@@ -1172,6 +1176,7 @@ export function createRigOverlayController({
   function updatePosedOverlay(source = currentSource) {
     if (!source) return;
     const centers = new Map();
+    const pivots = new Map();
     const centerAttribute = centerPoints.geometry.getAttribute('position');
     nodeBoneIds.forEach(boneId => {
       const index = nodeIndexByBoneId.get(boneId);
@@ -1182,13 +1187,15 @@ export function createRigOverlayController({
       const value = vector(center);
       centerAttribute.setXYZ(index, value.x, value.y, value.z);
       centers.set(boneId, value);
+      const pivot = frame?.pivot || pivotFor(source, boneId);
+      if (pivot) pivots.set(boneId, vector(pivot));
     });
     if (centerAttribute) centerAttribute.needsUpdate = true;
 
     const lineAttribute = lineSegments.geometry.getAttribute('position');
     lineBonePairs.forEach(([parentId, childId], index) => {
-      const parent = centers.get(parentId);
-      const child = centers.get(childId);
+      const parent = pivots.get(parentId);
+      const child = pivots.get(childId);
       if (!parent || !child || !lineAttribute) return;
       lineAttribute.setXYZ(index * 2, parent.x, parent.y, parent.z);
       lineAttribute.setXYZ(index * 2 + 1, child.x, child.y, child.z);

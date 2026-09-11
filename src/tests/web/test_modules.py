@@ -226,9 +226,17 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       };
       const controller = createRigOverlayController({
         scene, getMeshes: () => [model], getRigState: () => state,
+        getRigJointPoseFrame: jointId => ({
+          center: [Number(jointId), 0, 0],
+          pivot: [Number(jointId) / 10, 0, 0],
+        }),
       });
       controller.refresh(state);
       const initial = controller.getDebugState();
+      const staticGroup = controller.group.getObjectByName(
+        'viewer-inferred-rig-static-geometry');
+      const linePositions = [...staticGroup.children[0].geometry
+        .getAttribute('position').array.slice(0, 6)];
       state = {...state, selectedJointId: 1};
       controller.refresh(state);
       const selectedRoot = controller.getDebugState();
@@ -259,7 +267,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
       const unavailable = controller.getDebugState();
       controller.dispose();
       return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
-        ikOff, unavailable};
+        ikOff, unavailable, linePositions};
     }""")
     assert result["initial"]["staticObjectCount"] == 5
     assert result["initial"]["nodeCount"] == 3
@@ -268,6 +276,7 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert result["initial"]["modelJointMarkerCount"] == 3
     assert result["initial"]["modelJointMarkerInstanced"] is True
     assert result["initial"]["modelJointMarkerSizePx"] == 5
+    assert result["linePositions"] == pytest.approx([.1, 0, 0, .2, 0, 0])
     assert result["initial"]["humanoidOverlayVisible"]
     assert result["initial"]["ikTargetVisible"]
     assert result["initial"]["humanoidSegmentCount"] == 13
@@ -996,7 +1005,7 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
     assert result["sameLineAttribute"]
     assert result["sameJointAttribute"]
     assert result["center"] == pytest.approx([0, 0, 0, 1, 2, 0])
-    assert result["line"] == pytest.approx([0, 0, 0, 1, 2, 0])
+    assert result["line"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["joint"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["dynamicUsage"]
 
