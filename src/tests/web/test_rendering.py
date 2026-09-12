@@ -1061,6 +1061,35 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
     finally:
         context.close()
 
+
+def test_rig_panel_does_not_start_rig_for_model_without_weights(
+        edge_browser, frontend_url):
+    payload = _payload("NoWeights")
+    payload["meshes"]["Body-NoWeights-0"]["skinning_available"] = False
+    context, page = _page(
+        edge_browser, frontend_url, {"NoWeights": payload})
+    try:
+        _open(page, "NoWeights")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        page.locator("#weight-rig-tab").click()
+        page.wait_for_function("""() => {
+          const weight = window.__testWeightRigRuntime.getModelWeightState();
+          return weight.loaded && weight.noWeights;
+        }""")
+        page.wait_for_timeout(100)
+        result = page.evaluate("""() => ({
+          weight: window.__testWeightRigRuntime.getModelWeightState(),
+          rig: window.__testWeightRigRuntime.getModelRigState(),
+        })""")
+        assert result["weight"]["loaded"]
+        assert result["weight"]["noWeights"]
+        assert not result["weight"]["error"]
+        assert not result["rig"]["loading"]
+        assert not result["rig"]["loaded"]
+    finally:
+        context.close()
+
+
 def test_weight_ready_state_has_no_eager_rig_preparation(
         edge_browser, frontend_url):
     context, page = _page(

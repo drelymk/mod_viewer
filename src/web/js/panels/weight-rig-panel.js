@@ -922,26 +922,25 @@ function closePopover() {
   ui.boneButton.setAttribute('aria-expanded', 'false');
 }
 
+function scheduleRigLoadAfterPaint(generation) {
+  const afterPaint = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame : callback => setTimeout(callback, 0);
+  afterPaint(() => setTimeout(() => {
+    const weight = getModelWeightState();
+    if (weight.generation !== generation || !weight.loaded
+        || weight.error || weight.noWeights) return;
+    void ensureModelRigLoaded();
+  }, 0));
+}
+
 function loadOnDemand() {
   if (loadingPromise) return loadingPromise;
   loadingPromise = ensureModelWeightsLoaded()
     .then(weight => {
-      if (!weight?.loaded) return weight;
-      const generation = weight.generation;
-      return new Promise(resolve => {
-        const afterPaint = () => setTimeout(() => {
-          if (getModelWeightState().generation !== generation) {
-            resolve(getModelRigState());
-            return;
-          }
-          resolve(ensureModelRigLoaded());
-        }, 0);
-        if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(afterPaint);
-        } else {
-          afterPaint();
-        }
-      });
+      if (weight?.loaded && !weight.error && !weight.noWeights) {
+        scheduleRigLoadAfterPaint(weight.generation);
+      }
+      return weight;
     })
     .finally(() => { loadingPromise = null; });
   return loadingPromise;
