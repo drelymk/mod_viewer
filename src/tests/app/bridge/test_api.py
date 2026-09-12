@@ -29,6 +29,7 @@ EXPECTED_API_METHODS = {
     "get_asset_folders",
     "get_control_state",
     "get_diagnostics",
+    "get_memory_diagnostics",
     "get_ini_text",
     "get_mesh_semantics",
     "save_texture_color",
@@ -170,6 +171,21 @@ def test_load_mod_forwards_disabled_ini_flag(monkeypatch):
 
     assert api.load_mod("mod", True) == {"ok": True}
     assert calls == [("mod", True)]
+
+
+def test_load_asset_clears_loaded_mod_state_before_transition(monkeypatch):
+    api = ModViewerAPI()
+    calls = []
+    monkeypatch.setattr(
+        api._mod_preview, "clear_loaded_model",
+        lambda: calls.append("clear"))
+    monkeypatch.setattr(
+        api._asset_preview, "load_asset",
+        lambda path: calls.append(("asset", path)) or {"ok": True},
+    )
+
+    assert api.load_asset("asset") == {"ok": True}
+    assert calls == ["clear", ("asset", "asset")]
 
 
 def test_texture_save_forwards_targets_and_usage(monkeypatch):

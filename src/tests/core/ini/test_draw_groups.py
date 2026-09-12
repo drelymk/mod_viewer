@@ -310,3 +310,518 @@ stride = 20
         assert draw.skinning_source.file == "body-blend.buf"
     else:
         assert draw.skinning_source is None
+
+
+def test_draw_groups_resolve_blend_from_position_provenance_without_hashes():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePotato]
+hash = 11111111
+vb0 = ResourceAlpha
+vb7 = ResourceAuthoredBlendStream
+
+[TextureOverrideBanana]
+hash = 22222222
+ib = ResourceIndex
+vb0 = ResourceAlpha
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceIndex]
+filename = index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceAlpha]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceAuthoredBlendStream]
+filename = skin-data.bin
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "skin-data.bin"
+    assert draw.skinning_resolution["resolution_source"] == \
+        "position_provenance"
+
+
+def test_draw_groups_position_provenance_does_not_merge_draw_snapshots():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideSource]
+ib = ResourceSourceIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+vb4 = ResourceSourceBlend
+drawindexed = 3, 0, 0
+vb4 = ResourceOtherBlend
+drawindexed = 3, 3, 0
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceSourceIndex]
+filename = source.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceSourceBlend]
+filename = source-a.blend
+stride = 32
+
+[ResourceOtherBlend]
+filename = source-b.blend
+stride = 32
+""")
+
+    groups = build_draw_groups(
+        sections, extract_resources(sections))
+    body_draw = next(
+        draw for group in groups if group["name"] == "Body"
+        for draw in group["draws"])
+
+    assert body_draw.skinning_source is None
+    assert body_draw.skinning_error is None
+
+
+def test_draw_groups_rejects_unlabeled_authored_weight_provenance():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb7 = ResourceColorData
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceColorData]
+filename = color.bin
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source is None
+    assert draw.skinning_resolution["resolution_source"] is None
+
+
+def test_draw_groups_position_provenance_respects_actual_draw_slots():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb2 = ResourceFallbackBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+vb2 = ResourceOtherStream
+drawindexed = 3, 0, 0
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceFallbackBlend]
+filename = fallback.blend
+stride = 32
+
+[ResourceOtherStream]
+filename = color.bin
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_source is None
+    assert draw.skinning_error is None
+
+
+def test_draw_groups_position_provenance_rejects_unrelated_draw_scope():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideOtherDraw]
+ib = ResourceOtherIndex
+vb0 = ResourcePosition
+run = CommandListOther
+drawindexed = 3, 0, 0
+
+[CommandListOther]
+vb4 = ResourceOtherBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceOtherIndex]
+filename = other.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceOtherBlend]
+filename = other.blend
+stride = 32
+""")
+
+    groups = build_draw_groups(
+        sections, extract_resources(sections))
+    body_draw = next(
+        draw for group in groups if group["name"] == "Body"
+        for draw in group["draws"])
+
+    assert body_draw.skinning_source is None
+    assert body_draw.skinning_error is None
+
+
+def test_draw_groups_position_provenance_rejects_conditional_bindings():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+if $mode
+    vb2 = ResourceBlendA
+else
+    vb2 = ResourceBlendB
+endif
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBlendA]
+filename = a.blend
+stride = 32
+
+[ResourceBlendB]
+filename = b.blend
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_source is None
+    assert draw.skinning_error is None
+
+
+def test_draw_groups_position_provenance_rejects_conditional_commandlist_root():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+if $mode
+    run = CommandListConditional
+endif
+
+[CommandListConditional]
+vb0 = ResourcePosition
+vb4 = ResourceConditionalBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceConditionalBlend]
+filename = conditional.blend
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_source is None
+    assert draw.skinning_error is None
+
+
+def test_draw_groups_position_provenance_follows_reverse_explicit_copy():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb4 = ResourceAuthoredBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePositionAlias
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[Present]
+ResourcePositionAlias = copy ResourcePosition
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourcePositionAlias]
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceAuthoredBlend]
+filename = blend.buf
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "blend.buf"
+    assert draw.skinning_resolution["resolution_source"] == \
+        "position_provenance"
+
+
+def test_draw_groups_position_provenance_reports_ambiguity():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePositionA]
+vb0 = ResourcePosition
+vb2 = ResourceBlendA
+
+[TextureOverridePositionB]
+vb0 = ResourcePosition
+vb2 = ResourceBlendB
+
+[TextureOverrideBody]
+ib = ResourceIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceIndex]
+filename = index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBlendA]
+filename = a.bin
+stride = 32
+
+[ResourceBlendB]
+filename = b.bin
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_source is None
+    assert draw.skinning_error == "ambiguous_skinning_source"
+
+
+def test_draw_groups_direct_binding_beats_position_provenance():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb4 = ResourceFallbackBlend
+
+[TextureOverrideBody]
+ib = ResourceIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+vb4 = ResourceDirectBlend
+drawindexed = 3, 0, 0
+
+[ResourceIndex]
+filename = index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceFallbackBlend]
+filename = fallback.bin
+stride = 32
+
+[ResourceDirectBlend]
+filename = direct.bin
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "direct.bin"
+    assert draw.skinning_resolution["resolution_source"] == "direct"
+
+
+def test_draw_groups_keep_draw_time_vertex_state_ordered():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb4 = ResourceFallbackBlend
+
+[TextureOverrideBody]
+ib = ResourceIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+vb4 = ResourceDirectBlend
+drawindexed = 3, 3, 0
+
+[ResourceIndex]
+filename = index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceFallbackBlend]
+filename = fallback.bin
+stride = 32
+
+[ResourceDirectBlend]
+filename = direct.bin
+stride = 32
+""")
+
+    draws = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"]
+
+    assert draws[0].skinning_source.file == "fallback.bin"
+    assert draws[0].skinning_resolution["resolution_source"] == \
+        "position_provenance"
+    assert draws[1].skinning_source.file == "direct.bin"
+    assert draws[1].skinning_resolution["resolution_source"] == "direct"
+
+
+def test_draw_groups_command_list_bindings_are_direct_draw_state():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideBody]
+ib = ResourceIndex
+run = CommandListShared
+drawindexed = 3, 0, 0
+
+[CommandListShared]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+vb4 = ResourceBlendBuffer
+
+[ResourceIndex]
+filename = index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBlendBuffer]
+filename = blend.buf
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "blend.buf"
+    assert draw.skinning_resolution["resolution_source"] == "direct"

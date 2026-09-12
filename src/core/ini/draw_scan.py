@@ -348,6 +348,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 slot = int(match.group(1))
                 resource = match.group(2)
                 value = None if resource.lower() == "null" else resource
+                if cond_stack:
+                    info["vertex_bindings_conditional"] = True
                 if slot <= 2 and value and not info[f"vb{slot}"]:
                     info[f"vb{slot}"] = value
                 info["_cur_vertex_resources"][slot] = value
@@ -433,6 +435,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
+            "vertex_bindings_conditional": False,
             "_cur_compute_resources": {},
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,

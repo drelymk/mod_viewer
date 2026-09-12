@@ -19,6 +19,7 @@ from .texture_bindings import (
 )
 from .transport import GeometryBlob
 from .identity import mesh_identity_for_draw
+from .skinning import SkinningManifestEntry
 from ..resource_paths import safe_resource_path
 
 
@@ -28,12 +29,14 @@ class MeshBuildResult:
 
     ``meshes`` contains only draw entries and ``textures`` is the shared
     texture registry. ``geometry`` records the optional caller-owned blob
-    writer used to produce offset/length references.
+    writer used to produce offset/length references. ``skinning_manifest`` is
+    private backend state and is never included in the public payload.
     """
 
     meshes: dict
     textures: dict
     geometry: GeometryBlob | None = None
+    skinning_manifest: dict[str, SkinningManifestEntry] | None = None
 
 
 def _geometry_ref(raw, geometry):
@@ -59,6 +62,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     buffers = BufferStore()
     sparse_shape_cache = {}
     result = {}
+    skinning_manifest = {}
 
     for group in groups:
         pos_path = safe_resource_path(mod_dir, group["position_file"])
@@ -93,6 +97,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             )
             if packed is None:
                 continue
+
+            if draw.skinning_source is not None:
+                skinning_manifest[draw.label] = \
+                    SkinningManifestEntry.from_vertices(
+                        draw.label, draw.skinning_source,
+                        packed.used_vertices)
 
             entry: dict = {
                 "pos": _geometry_ref(packed.positions, geometry),
@@ -150,6 +160,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         meshes=result,
         textures=registry.sources,
         geometry=geometry,
+        skinning_manifest=skinning_manifest,
     )
 
 

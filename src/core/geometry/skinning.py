@@ -5,7 +5,8 @@ import ntpath
 import os
 import posixpath
 import struct
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,22 @@ class SkinningSource:
 
 
 @dataclass(frozen=True, slots=True)
+class SkinningManifestEntry:
+    """Private mapping from one rendered mesh to authored skin vertices."""
+
+    mesh_key: str
+    skinning_source: SkinningSource
+    used_vertices: tuple[int, ...]
+    vertex_count: int
+
+    @classmethod
+    def from_vertices(cls, mesh_key, skinning_source, used_vertices):
+        compact = (used_vertices if isinstance(used_vertices, tuple)
+                   else tuple(used_vertices))
+        return cls(mesh_key, skinning_source, compact, len(compact))
+
+
+@dataclass(frozen=True, slots=True)
 class DecodedSkinning:
     """Canonical compact skin data sent to the frontend experiment."""
 
@@ -35,6 +52,7 @@ class DecodedSkinning:
     weights: bytes
     bone_ids: tuple[int, ...]
     diagnostics: dict
+    bone_stats: dict[int, dict[str, float | int]] = field(default_factory=dict)
 
 
 class SkinningPreviewError(ValueError):
@@ -166,7 +184,8 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
         if not filename:
             continue
         evidence = f"{resource_name} {filename}".lower()
-        if "blend" not in evidence:
+        labeled_blend = "blend" in evidence
+        if not labeled_blend:
             continue
         try:
             stride = int(info.get("stride"))
@@ -191,15 +210,13 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
         remap_info, remap_error = (None, None)
         if encoding.startswith("wwmi_"):
             remap_name = (remap_resources or {}).get(35)
-            if not remap_name:
-                unsupported.append("missing_vertex_vg_remap")
-                continue
-            remap_info, remap_error = _resolve_vertex_vg_resource(
-                remap_name, resolve_vertex_info,
-                influence_count)
-            if remap_error:
-                unsupported.append(remap_error)
-                continue
+            if remap_name:
+                remap_info, remap_error = _resolve_vertex_vg_resource(
+                    remap_name, resolve_vertex_info,
+                    influence_count)
+                if remap_error:
+                    unsupported.append(remap_error)
+                    continue
         source = SkinningSource(
             file=filename, stride=stride,
             influence_count=influence_count, encoding=encoding,
@@ -257,7 +274,6 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
                 or source.vertex_vg_stride != expected_stride):
             raise ValueError("Invalid VertexVG remap descriptor.")
         vertex_vg_data = bytes(vertex_vg_data or b"")
-    used_vertices = tuple(used_vertices)
     count = len(used_vertices)
     item_bytes = source.influence_count * 4
     index_bytes = bytearray(count * item_bytes)
@@ -269,8 +285,12 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
     vertex_vg_truncated = 0
     sums = []
     bone_ids = set()
+    bone_stats_accum = {}
 
-    for compact_index, source_index in enumerate(used_vertices):
+    # Consume the retained compact sequence directly.  Indexing avoids a
+    # decoder-side tuple materialization for backend manifest mappings.
+    for compact_index in range(count):
+        source_index = used_vertices[compact_index]
         output_offset = compact_index * item_bytes
         try:
             source_index = int(source_index)
@@ -340,6 +360,15 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
                              output_offset + influence * 4, weight)
             if weight > 0:
                 bone_ids.add(bone)
+                stats = bone_stats_accum.get(bone)
+                if stats is None:
+                    bone_stats_accum[bone] = [compact_index, 1, weight]
+                elif stats[0] != compact_index:
+                    stats[0] = compact_index
+                    stats[1] += 1
+                    stats[2] += weight
+                else:
+                    stats[2] += weight
 
     diagnostics = {
         "vertex_count": count,
@@ -360,10 +389,18 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
     }
     if source.vertex_vg_file:
         diagnostics["bone_id_namespace"] = source.bone_id_namespace
+    bone_stats = {
+        bone: {
+            "affected_vertex_count": stats[1],
+            "total_weight": stats[2],
+        }
+        for bone, stats in bone_stats_accum.items()
+    }
     return DecodedSkinning(
         vertex_count=count, influence_count=source.influence_count,
         indices=bytes(index_bytes), weights=bytes(weight_bytes),
-        bone_ids=tuple(sorted(bone_ids)), diagnostics=diagnostics)
+        bone_ids=tuple(sorted(bone_ids)), diagnostics=diagnostics,
+        bone_stats=bone_stats)
 
 
 def _error_for_draw(draw):
@@ -392,7 +429,7 @@ def _error_for_draw(draw):
 
 def build_skinning_preview(draw, group, mod_dir, *, buffers,
                            default_streams, default_index_size,
-                           geometry_convention):
+                           geometry_convention, timing=None):
     """Prepare the selected draw, decode its source, and return canonical data."""
     from .packing import _prepare_draw_vertices
     from ..resource_paths import safe_resource_path
@@ -413,19 +450,28 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
             raise SkinningPreviewError(
                 "skinning_remap_unavailable",
                 "The WWMI VertexVG remap buffer could not be found.")
+    prepare_started = time.perf_counter() if timing is not None else None
     prepared = _prepare_draw_vertices(
         draw, group, mod_dir=mod_dir, default_streams=default_streams,
         default_index_size=default_index_size, buffers=buffers,
         geometry_convention=geometry_convention)
+    if timing is not None:
+        timing["prepare_draw_vertices_seconds"] += (
+            time.perf_counter() - prepare_started)
+        timing["prepare_draw_vertices_calls"] += 1
     if prepared is None:
         raise SkinningPreviewError(
             "geometry_not_available",
             "The rendered draw geometry could not be prepared.")
+    decode_started = time.perf_counter() if timing is not None else None
     decoded = decode_skinning(
         draw.skinning_source, buffers.raw(source_path),
         prepared.used_vertices,
         (buffers.raw(remap_path) if draw.skinning_source.vertex_vg_file
          else None))
+    if timing is not None:
+        timing["decode_skinning_seconds"] += (
+            time.perf_counter() - decode_started)
     if decoded.diagnostics["truncated_vertices"]:
         raise SkinningPreviewError(
             "skinning_buffer_truncated",
@@ -438,7 +484,8 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
 
 
 __all__ = [
-    "SkinningSource", "DecodedSkinning", "SkinningPreviewError",
+    "SkinningSource", "SkinningManifestEntry", "DecodedSkinning",
+    "SkinningPreviewError",
     "normalize_skinning_source_file", "skinning_source_key",
     "skinning_source_descriptor", "resolve_skinning_source",
     "decode_skinning", "build_skinning_preview",

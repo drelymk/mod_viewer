@@ -3,7 +3,8 @@
 
 import {
   beginWeightModelPicking, cancelWeightModelPicking, clearSelectedBones,
-  ensureModelRigLoaded, getModelPhysicsState, getModelRigState,
+  ensureModelRigLoaded, ensureModelWeightsLoaded, getModelPhysicsState,
+  getModelRigState,
   getModelWeightState, loadSavedBoneSelection,
   clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
   saveModelWeightSelection,
@@ -901,14 +902,15 @@ function syncStatus() {
   const weight = latestWeightState || getModelWeightState();
   const rig = latestRigState || getModelRigState();
   let status = '';
-  if (weight.loading || rig.loading) status = 'Loading weights and rig…';
-  else if (weight.error) status = weight.error;
+  if (weight.error) status = weight.error;
   else if (rig.error) status = rig.error;
   else if (rig.humanoidRigEdit?.error) status = rig.humanoidRigEdit.error;
+  else if (weight.selectionSaveError) {
+    status = `Could not save bone selection: ${weight.selectionSaveError}`;
+  } else if (weight.loading) status = 'Loading weights…';
+  else if (rig.loading) status = 'Loading Rig…';
   else if (weight.loaded && (!weight.sources?.length || weight.noWeights)) {
     status = 'No skin weights available for this model.';
-  } else if (weight.selectionSaveError) {
-    status = `Could not save bone selection: ${weight.selectionSaveError}`;
   } else if (!weight.loaded && !rig.loaded) status = '';
   if (weight.pickStatus || rig.pickStatus) status = weight.pickStatus || rig.pickStatus;
   ui.status.textContent = status;
@@ -920,9 +922,27 @@ function closePopover() {
   ui.boneButton.setAttribute('aria-expanded', 'false');
 }
 
+function scheduleRigLoadAfterPaint(generation) {
+  const afterPaint = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame : callback => setTimeout(callback, 0);
+  afterPaint(() => setTimeout(() => {
+    const weight = getModelWeightState();
+    if (weight.generation !== generation || !weight.loaded
+        || weight.error || weight.noWeights) return;
+    void ensureModelRigLoaded();
+  }, 0));
+}
+
 function loadOnDemand() {
   if (loadingPromise) return loadingPromise;
-  loadingPromise = ensureModelRigLoaded().finally(() => { loadingPromise = null; });
+  loadingPromise = ensureModelWeightsLoaded()
+    .then(weight => {
+      if (weight?.loaded && !weight.error && !weight.noWeights) {
+        scheduleRigLoadAfterPaint(weight.generation);
+      }
+      return weight;
+    })
+    .finally(() => { loadingPromise = null; });
   return loadingPromise;
 }
 

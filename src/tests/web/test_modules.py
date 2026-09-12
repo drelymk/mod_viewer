@@ -1244,6 +1244,130 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
     assert result["nonZeroRootPivotKeys"] == [0, 2]
 
 
+def test_barycentric_third_moment_matches_reference_for_all_index_triples(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {barycentricThirdMoment} = await import(
+        './js/mesh/weight-rig.js');
+      const reference = (first, second, third, area) => {
+        const counts = [first, second, third].reduce((map, index) => {
+          map.set(index, (map.get(index) || 0) + 1);
+          return map;
+        }, new Map());
+        const multiplicities = [...counts.values()];
+        if (multiplicities.length === 1) return area / 10;
+        if (multiplicities.length === 2) return area / 30;
+        return area / 60;
+      };
+      const areas = [0, 1, .5, .123456789, 1234.56789, 1e-12];
+      const mismatches = [];
+      let caseCount = 0;
+      for (let first = 0; first < 3; first += 1) {
+        for (let second = 0; second < 3; second += 1) {
+          for (let third = 0; third < 3; third += 1) {
+            for (const area of areas) {
+              caseCount += 1;
+              const actual = barycentricThirdMoment(
+                first, second, third, area);
+              const expected = reference(first, second, third, area);
+              if (!Object.is(actual, expected)) {
+                mismatches.push({first, second, third, area, actual, expected});
+              }
+            }
+          }
+        }
+      }
+      return {caseCount, mismatches};
+    }""")
+    assert result == {"caseCount": 162, "mismatches": []}
+
+
+def test_surface_integrators_match_reference_third_moment_order(module_page):
+    result = module_page.evaluate("""async () => {
+      const {integrateLinearSecondMoment, integratePositionProduct} =
+        await import('./js/mesh/weight-rig.js');
+      const referenceThirdMoment = (first, second, third, area) => {
+        const counts = [first, second, third].reduce((map, index) => {
+          map.set(index, (map.get(index) || 0) + 1);
+          return map;
+        }, new Map());
+        const multiplicities = [...counts.values()];
+        if (multiplicities.length === 1) return area / 10;
+        if (multiplicities.length === 2) return area / 30;
+        return area / 60;
+      };
+      const dot3 = (left, right) => left[0] * right[0]
+        + left[1] * right[1] + left[2] * right[2];
+      const referenceSecondMoment = (points, weights, area) => {
+        let result = 0;
+        for (let left = 0; left < 3; left += 1) {
+          for (let right = 0; right < 3; right += 1) {
+            for (let weight = 0; weight < 3; weight += 1) {
+              result += dot3(points[left], points[right])
+                * weights[weight]
+                * referenceThirdMoment(left, right, weight, area);
+            }
+          }
+        }
+        return result;
+      };
+      const referencePositionProduct = (
+          points, leftWeights, rightWeights, area) => {
+        const result = [0, 0, 0];
+        for (let point = 0; point < 3; point += 1) {
+          for (let left = 0; left < 3; left += 1) {
+            for (let right = 0; right < 3; right += 1) {
+              const contribution = leftWeights[left] * rightWeights[right]
+                * referenceThirdMoment(point, left, right, area);
+              result[0] += points[point][0] * contribution;
+              result[1] += points[point][1] * contribution;
+              result[2] += points[point][2] * contribution;
+            }
+          }
+        }
+        return result;
+      };
+      const cases = [
+        {
+          points: [[0, 0, 0], [2, 0, 0], [0, 2, 0]],
+          weights: [.25, .5, .75],
+          left: [.2, .3, .5], right: [.8, .1, .4], area: 2,
+        },
+        {
+          points: [[1, -2, .5], [-.25, 3, 1.75], [2.5, .25, -1]],
+          weights: [1, 0, 0],
+          left: [1, 0, 0], right: [0, 0, 1], area: .123456789,
+        },
+        {
+          points: [[-.7, .2, 1.1], [1.3, -1.4, .6], [2.2, .9, -2.5]],
+          weights: [1 / 3, 2 / 3, 1 / 7],
+          left: [.25, .5, .25], right: [.6, .2, .2], area: 1e-12,
+        },
+      ];
+      return cases.map(item => {
+        const actualSecond = integrateLinearSecondMoment(
+          item.points, item.weights, item.area);
+        const expectedSecond = referenceSecondMoment(
+          item.points, item.weights, item.area);
+        const actualPosition = integratePositionProduct(
+          item.points, item.left, item.right, item.area);
+        const expectedPosition = referencePositionProduct(
+          item.points, item.left, item.right, item.area);
+        return {
+          secondEqual: Object.is(actualSecond, expectedSecond),
+          positionEqual: actualPosition.every((value, index) =>
+            Object.is(value, expectedPosition[index])),
+          actualSecond, expectedSecond, actualPosition, expectedPosition,
+        };
+      });
+    }""")
+    assert all(item["secondEqual"] and item["positionEqual"]
+               for item in result)
+    for item in result:
+        assert item["actualSecond"] == item["expectedSecond"]
+        assert item["actualPosition"] == item["expectedPosition"]
+
+
 def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         module_page):
     page = module_page
@@ -1314,6 +1438,46 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
     }
     assert result["mixedModeError"] == (
         "Cannot aggregate incompatible Rig evidence modes.")
+
+
+def test_cooperative_surface_evidence_matches_sync_and_supports_cancellation(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const positions = new Float32Array([
+        0, 0, 0, 2, 0, 0, 0, 2, 0,
+        1, 0, 0, 1, 1, 0, 0, 1, 0,
+      ]);
+      const triangles = new Uint32Array([
+        0, 1, 2, 1, 3, 2,
+      ]);
+      const indices = new Uint32Array([
+        0, 1, 0, 1, 0, 1,
+        0, 1, 0, 1, 0, 1,
+      ]);
+      const weights = new Float32Array([
+        0, 1, .5, .5, 1, 0,
+        0, 1, .5, .5, 1, 0,
+      ]);
+      const args = [positions, triangles, indices, weights, 2, [0, 1], 4];
+      const synchronous = rig.buildSurfaceInfluenceGraph(...args);
+      const cooperative = await rig.buildSurfaceInfluenceGraphCooperative(
+        ...args, {triangleBatch: 1, budgetMs: .01});
+      let checks = 0;
+      const cancelled = await rig.buildSurfaceInfluenceGraphCooperative(
+        ...args, {triangleBatch: 1, budgetMs: .01,
+          isCurrent: () => checks++ < 2});
+      return {
+        same: JSON.stringify(cooperative) === JSON.stringify(synchronous),
+        cancelled: cancelled === null,
+        cooperative,
+      };
+    }""")
+    assert result["same"]
+    assert result["cancelled"]
+    assert result["cooperative"]["evidenceMode"] == "surface"
+    assert result["cooperative"]["validTriangleCount"] == 2
 
 
 def test_triangle_surface_evidence_is_invariant_for_varying_weight_tessellation(
@@ -1626,6 +1790,250 @@ def test_surface_topology_diagnostics_reject_bad_triangles_without_nan(
     }
 
 
+def test_surface_eligibility_probe_matches_topology_diagnostics(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const cases = [
+        {
+          name: 'indexed',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 2],
+        },
+        {
+          name: 'nonIndexed',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        },
+        {
+          name: 'laterValidTriangle',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, NaN, 0, 0],
+          indices: [0, 1, 3, 0, 1, 2],
+        },
+        {
+          name: 'degenerate',
+          positions: [0, 0, 0, 1, 0, 0, 2, 0, 0],
+          indices: [0, 1, 2],
+        },
+        {
+          name: 'invalidIndex',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 9],
+        },
+        {
+          name: 'empty',
+          positions: [],
+        },
+      ];
+      return cases.map(item => {
+        const positions = new Float32Array(item.positions);
+        const indices = item.indices === undefined
+          ? null : new Uint32Array(item.indices);
+        const diagnostics = rig.inspectSurfaceTopology(positions, indices);
+        return {
+          name: item.name,
+          usable: rig.hasUsableSurfaceTopology(positions, indices),
+          diagnosed: diagnostics.surfaceEvidenceAvailable,
+          validTriangleCount: diagnostics.validTriangleCount,
+        };
+      });
+    }""")
+    assert result == [
+        {"name": "indexed", "usable": True, "diagnosed": True,
+         "validTriangleCount": 1},
+        {"name": "nonIndexed", "usable": True, "diagnosed": True,
+         "validTriangleCount": 1},
+        {"name": "laterValidTriangle", "usable": True, "diagnosed": True,
+         "validTriangleCount": 1},
+        {"name": "degenerate", "usable": False, "diagnosed": False,
+         "validTriangleCount": 0},
+        {"name": "invalidIndex", "usable": False, "diagnosed": False,
+         "validTriangleCount": 0},
+        {"name": "empty", "usable": False, "diagnosed": False,
+         "validTriangleCount": 0},
+    ]
+
+
+def test_rig_member_structural_identity_ignores_ui_and_provenance(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {memberStructuralEvidenceKey} = await import(
+        './js/mesh/rig-model-session.js');
+      const makeMember = (changes = {}) => ({
+        state: {
+          skinningSourceKey: 'source', influenceCount: 4,
+          encoding: 'compact', ...changes.state,
+        },
+        mesh: {
+          userData: {
+            semanticKey: 'semantic-a', component: 'Body', occurrence: 1,
+            material: 'material-a', texture: 'texture-a', visible: true,
+            identity: {
+              draw: {count: 6, start: 0, base: 0},
+              geometry_state: {
+                ib_file: 'indices.buf', index_size: 2,
+                position_file: 'positions.buf', position_stride: 12,
+                texcoord_file: 'uv.buf', texcoord_stride: 8,
+              },
+              ...changes.identity,
+            },
+          },
+          geometry: {
+            attributes: {position: {count: 3}},
+            index: {count: 3},
+            ...changes.geometry,
+          },
+        },
+      });
+      const base = makeMember();
+      const uiOnly = makeMember({
+        state: {semanticKey: 'ignored-state-field'},
+        identity: {component: 'Legs', material: 'material-b',
+          texture: 'texture-b'},
+      });
+      const different = field => memberStructuralEvidenceKey(
+        makeMember(field));
+      const baseKey = memberStructuralEvidenceKey(base);
+      return {
+        uiOnlyMatches: baseKey === memberStructuralEvidenceKey(uiOnly),
+        changedKeys: [
+          different({state: {skinningSourceKey: 'other'}}),
+          different({state: {influenceCount: 8}}),
+          different({state: {encoding: 'expanded'}}),
+          different({identity: {draw: {count: 7, start: 0, base: 0}}}),
+          different({identity: {draw: {count: 6, start: 1, base: 0}}}),
+          different({identity: {draw: {count: 6, start: 0, base: 1}}}),
+          different({identity: {geometry_state: {ib_file: 'other'}}}),
+          different({identity: {geometry_state: {index_size: 4}}}),
+          different({identity: {geometry_state: {position_file: 'other'}}}),
+          different({identity: {geometry_state: {position_stride: 16}}}),
+          different({identity: {geometry_state: {texcoord_file: 'other'}}}),
+          different({identity: {geometry_state: {texcoord_stride: 16}}}),
+          different({geometry: {attributes: {position: {count: 4}}}}),
+          different({geometry: {index: {count: 6}}}),
+        ].map(key => key !== baseKey),
+      };
+    }""")
+    assert result == {
+        "uiOnlyMatches": True,
+        "changedKeys": [True] * 14,
+    }
+
+
+def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wide(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {initializeRigSourceSession} = await import(
+        './js/mesh/rig-model-session.js');
+      const states = new Map();
+      const knownMeshes = new Set();
+      const sourceSkinningRigs = new Map();
+      const graphCalls = [];
+      const makeMesh = (name, valid, drawStart = 0) => {
+        const mesh = {
+          userData: {semanticKey: name, identity: {
+            draw: {count: 3, start: drawStart, base: 0},
+            geometry_state: {ib_file: 'indices.buf', index_size: 2,
+              position_file: 'positions.buf', position_stride: 12,
+              texcoord_file: 'uv.buf', texcoord_stride: 8},
+          }},
+          geometry: {
+            attributes: {position: {count: 3}},
+            index: {array: new Uint32Array([0, 1, 2]), count: 3},
+          },
+        };
+        states.set(mesh, {
+          loaded: true, skinningSourceKey: 'source', influenceCount: 1,
+          encoding: 'compact',
+          baselinePositions: new Float32Array(valid
+            ? [0, 0, 0, 1, 0, 0, 0, 1, 0]
+            : [0, 0, 0, 1, 0, 0, 2, 0, 0]),
+          indices: new Uint32Array([0, 1, 2]),
+          weights: new Float32Array([1, 1, 1]),
+          boneIds: new Uint16Array([1, 1, 1]),
+        });
+        knownMeshes.add(mesh);
+        return mesh;
+      };
+      const first = makeMesh('first', true);
+      const duplicate = makeMesh('duplicate', true, 2);
+      // Provenance may differ even when the retained Rig evidence is equal.
+      duplicate.userData.identity.geometry_state.ib_file = 'other-indices.buf';
+      const invalid = makeMesh('invalid', false, 1);
+      const graphFor = (mesh, state, evidenceMode, surfaceEvidence) => {
+        graphCalls.push({mesh: mesh.userData.semanticKey, evidenceMode,
+          surfaceAvailable: surfaceEvidence?.surfaceEvidenceAvailable ?? null});
+        return {
+          nodes: [{boneId: 1, totalWeight: 1, affectedVertexCount: 3,
+            affectedMeasure: evidenceMode === 'surface' ? 1 : null,
+            maxVertexWeight: 1, weightedCenter: [0, 0, 0],
+            weightedRadius: 0}], relationships: [], evidenceMode,
+          triangleCount: evidenceMode === 'surface' ? 1 : 0,
+          validTriangleCount: evidenceMode === 'surface' ? 1 : 0,
+        };
+      };
+      const session = initializeRigSourceSession({
+        states, knownMeshes, modelWeightState: {
+          sourceDescriptors: new Map([['source', {
+            sourceFile: 'weights.buf', boneIdOffset: 0,
+          }]]),
+        }, sourceSkinningRigs,
+        ensureRigMeshPrepared: () => true,
+        ensureInfluenceGraph: graphFor,
+        rebuildRestFrames: () => {},
+        cloneForest: forest => forest,
+      });
+      const fallbackRig = session.ensure('source',
+        [first, duplicate, invalid]);
+      const fallback = {
+        memberCount: fallbackRig.influenceGraph.memberCount,
+        uniqueMemberCount: fallbackRig.influenceGraph.uniqueMemberCount,
+        evidenceMode: fallbackRig.influenceGraph.evidenceMode,
+        graphCalls: [...graphCalls],
+      };
+      graphCalls.length = 0;
+      const surfaceRig = session.ensure('source', [first, duplicate]);
+      return {
+        fallback,
+        surface: {
+          memberCount: surfaceRig.influenceGraph.memberCount,
+          uniqueMemberCount: surfaceRig.influenceGraph.uniqueMemberCount,
+          evidenceMode: surfaceRig.influenceGraph.evidenceMode,
+          graphCalls,
+        },
+        exactOutput: {
+          nodes: surfaceRig.influenceGraph.nodes,
+          relationships: surfaceRig.influenceGraph.relationships,
+        },
+      };
+    }""")
+    assert result["fallback"] == {
+        "memberCount": 3,
+        "uniqueMemberCount": 2,
+        "evidenceMode": "vertex",
+        "graphCalls": [
+            {"mesh": "first", "evidenceMode": "vertex",
+             "surfaceAvailable": True},
+            {"mesh": "invalid", "evidenceMode": "vertex",
+             "surfaceAvailable": False},
+        ],
+    }
+    assert result["surface"] == {
+        "memberCount": 2,
+        "uniqueMemberCount": 1,
+        "evidenceMode": "surface",
+        "graphCalls": [{"mesh": "first", "evidenceMode": "surface",
+                         "surfaceAvailable": True}],
+    }
+    assert result["exactOutput"] == {
+        "nodes": [{"boneId": 1, "totalWeight": 1,
+                    "affectedVertexCount": 3, "affectedMeasure": 1,
+                    "maxVertexWeight": 1,
+                    "weightedCenter": [0, 0, 0], "weightedRadius": 0}],
+        "relationships": [],
+    }
+
+
 def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_page):
     page = module_page
     result = page.evaluate("""async () => {
@@ -1738,7 +2146,8 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
 def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliation,
+        buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const rig = (sourceKey, entries, edges = []) => {
         const nodeIds = entries.map(item => item[0]);
@@ -1789,6 +2198,8 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
       ], [[4, 43, .8]]);
       const far = rig('far', [[0, [10, 0, 0]]]);
       const result = buildModelRigReconciliation([body, legs, far]);
+      const cooperative = await buildModelRigReconciliationCooperative(
+        [body, legs, far]);
       const bodyJoint = result.sourceBoneToModelJointId['body#bone=0'];
       const legsJoint = result.sourceBoneToModelJointId['legs#bone=4'];
       const bodyChild = result.sourceBoneToModelJointId['body#bone=1'];
@@ -1810,6 +2221,17 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
           .map(item => item.rejectionReason).filter(Boolean),
         sourceEdgeSupport: result.edges.filter(edge =>
           edge.relationshipType === 'source').map(edge => edge.sourceSupportCount),
+        cooperativeSame: JSON.stringify({
+          joints: cooperative.joints,
+          edges: cooperative.edges,
+          components: cooperative.components,
+          sourceBoneToModelJointId: cooperative.sourceBoneToModelJointId,
+        }) === JSON.stringify({
+          joints: result.joints,
+          edges: result.edges,
+          components: result.components,
+          sourceBoneToModelJointId: result.sourceBoneToModelJointId,
+        }),
       };
     }""")
     assert result["sameRoot"]
@@ -1818,6 +2240,7 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
     assert sorted(result["clusterSizes"], reverse=True)[:2] == [2, 2]
     assert "topology_conflict" in result["rejected"] or "not_mutual" in result["rejected"]
     assert 2 in result["sourceEdgeSupport"]
+    assert result["cooperativeSame"]
     assert all(signature == expected
                for signature, expected in result["jointSignatures"])
 
@@ -1826,7 +2249,8 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {crossSourceWeightEvidence} = await import(
+      const {crossSourceWeightEvidence,
+        crossSourceWeightEvidenceCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, positions, ids) => ({
         sourceKey,
@@ -1844,17 +2268,27 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
       const mutual = crossSourceWeightEvidence(
         make('mutual-left', [0, 0, 0, 0, .018, 0], [10, 11]),
         make('mutual-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
+      const cooperative = await crossSourceWeightEvidenceCooperative(
+        make('coop-left', [0, 0, 0, 0, .018, 0], [10, 11]),
+        make('coop-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
       return {
         spatialMatches: spatial.get('left#bone=0|right#bone=1')
           ?.matchedVertexCount || 0,
         mutualPairs: [...mutual.values()].map(item => [
           item.leftSourceBoneKey, item.rightSourceBoneKey,
         ]).sort(),
+        cooperativePairs: [...cooperative.values()].map(item => [
+          item.leftSourceBoneKey, item.rightSourceBoneKey,
+          item.matchedVertexCount, item.weightedMatchStrength,
+        ]).sort(),
       };
     }""")
     assert result["spatialMatches"] == 1
     assert result["mutualPairs"] == [[
         "mutual-left#bone=11", "mutual-right#bone=21"]]
+    assert result["cooperativePairs"] == [[
+        "coop-left#bone=11", "coop-right#bone=21", 1,
+        pytest.approx(.575)]]
 
 
 def test_cross_source_reconciliation_preserves_host_root_and_reroots_accessory(

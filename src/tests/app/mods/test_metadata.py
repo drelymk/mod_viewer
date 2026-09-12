@@ -14,6 +14,7 @@ from app.mods import metadata
         ([{"source": "Hair\\HairBlend.buf", "bone_id_offset": 0,
            "bone_ids": [49, 45, True, -1, 47.0, 45, 53]}], [
              {"source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+              "source_key": "hair/hairblend.buf|offset=0",
               "bone_ids": [45, 49, 53]},
          ]),
         ([
@@ -27,12 +28,24 @@ from app.mods import metadata
              "bone_ids": [99]},
         ], [
             {"source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+             "source_key": "hair/hairblend.buf|offset=0",
              "bone_ids": [45, 49]},
             {"source": "Hair/HairBlend.buf", "bone_id_offset": 24,
+             "source_key": "hair/hairblend.buf|offset=24",
              "bone_ids": [1]},
             {"source": "HairBlend.buf", "bone_id_offset": 0,
+             "source_key": "hairblend.buf|offset=0",
              "bone_ids": [99]},
         ]),
+        ([{"source": "Meshes/Blend.buf", "source_key":
+           "meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|"
+           "vertex-vg=meshes/blendremapvertexvg.buf",
+           "bone_id_offset": 142, "bone_ids": [318, 319]}], [
+             {"source": "Meshes/Blend.buf", "source_key":
+              "meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|"
+              "vertex-vg=meshes/blendremapvertexvg.buf",
+              "bone_id_offset": 142, "bone_ids": [318, 319]},
+         ]),
     ],
 )
 def test_weight_selected_bones_validates_persisted_values(stored, expected):
@@ -57,6 +70,7 @@ def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
     assert result["saved"] is True
     assert result["selected_bones"] == [{
         "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+        "source_key": "hair/hairblend.buf|offset=0",
         "bone_ids": [45, 49, 53],
     }]
     assert json.loads(path.read_text(encoding="utf-8")) == {
@@ -65,6 +79,7 @@ def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
             "future_option": "preserve",
             "selected_bones": [{
                 "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+                "source_key": "hair/hairblend.buf|offset=0",
                 "bone_ids": [45, 49, 53],
             }],
         },

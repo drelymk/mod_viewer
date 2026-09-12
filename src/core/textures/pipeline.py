@@ -121,6 +121,15 @@ def reset_texture_cache():
         _texture_cache_mod = None
 
 
+def texture_cache_stats():
+    """Return the process-local rendered-PNG cache footprint."""
+    with _texture_cache_lock:
+        return {
+            "rendered_png_cache_entry_count": len(_texture_cache),
+            "rendered_png_cache_bytes": _texture_cache_bytes,
+        }
+
+
 def _cache_texture(key, png):
     global _texture_cache_bytes
     size = len(png)

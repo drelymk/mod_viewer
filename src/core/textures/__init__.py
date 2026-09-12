@@ -15,6 +15,7 @@ from .pipeline import (
     reset_texture_cache,
     set_texture_profile_hook,
     split_texture_key,
+    texture_cache_stats,
     texture_key,
     texture_key_for_role,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "reset_texture_cache",
     "set_texture_profile_hook",
     "split_texture_key",
+    "texture_cache_stats",
     "texture_key",
     "texture_key_for_role",
     "UVCoverage",

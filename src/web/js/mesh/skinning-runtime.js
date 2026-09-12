@@ -10,13 +10,23 @@ import {
 import {buildSelectedWeightMask} from './weight-selection.js';
 import {
   buildInfluenceNodes as buildRigInfluenceNodes,
+  buildInfluenceNodesCooperative as buildRigInfluenceNodesCooperative,
   buildInfluenceRelationships as buildRigInfluenceRelationships,
+  buildInfluenceRelationshipsCooperative as buildRigInfluenceRelationshipsCooperative,
   buildSurfaceInfluenceGraph,
+  buildSurfaceInfluenceGraphCooperative,
   inspectSurfaceTopology,
+  inspectSurfaceTopologyCooperative,
 } from './weight-rig.js';
 import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
+import {createWorkBudget} from './cooperative-scheduler.js';
 
 let activeRuntime = null;
+
+function clockNow() {
+  return typeof globalThis.performance?.now === 'function'
+    ? globalThis.performance.now() : Date.now();
+}
 
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
@@ -56,11 +66,13 @@ export function createSkinningRuntime({
     invalidateHumanoidDetection, invalidateModelRigLoad, clearPickedPoint,
     resetModelPose,
     syncPhysicsParticipants, buildAllSourceSkinningRigs,
+    buildAllSourceSkinningRigsCooperatively = null,
     buildModelSkinningRig, notifyModelWeightChanged, notifyModelRigChanged,
     resetModelState, requestRender, invalidateShadow,
   } = {}) {
   const modelRigState = getModelRigState();
   const rigPresetState = getRigPresetState();
+  const cooperativeGraphInFlight = new WeakMap();
 
   function markFinalBoundsDirty(mesh, state) {
     if (state.preDeformationFrustumCulled === null
@@ -187,6 +199,7 @@ export function createSkinningRuntime({
 
   function buildInfluenceGraph(mesh, state, requestedEvidenceMode = 'vertex',
       surfaceEvidence = null) {
+    ensureRigMeshPrepared(mesh, state);
     if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
     const radius = Number(mesh.geometry.boundingSphere?.radius);
     const rawNodes = state.influenceNodes || buildRigInfluenceNodes(
@@ -229,6 +242,7 @@ export function createSkinningRuntime({
 
   function ensureInfluenceGraph(mesh, state, evidenceMode = 'vertex',
       surfaceEvidence = null) {
+    ensureRigMeshPrepared(mesh, state);
     if (!state.influenceGraph
         || state.influenceGraph.evidenceMode !== evidenceMode) {
       state.influenceGraph = buildInfluenceGraph(
@@ -237,13 +251,48 @@ export function createSkinningRuntime({
     return state.influenceGraph;
   }
 
-  function captureBaseline(mesh, state) {
+  function ensureRigMeshPrepared(mesh, state) {
+    if (!state?.loaded) return false;
     const position = mesh.geometry?.attributes?.position;
     if (!position) throw new Error('The selected mesh has no position data.');
     const normal = mesh.geometry?.attributes?.normal;
-    state.baselinePositions = new Float32Array(position.array);
-    state.baselineNormals = normal ? new Float32Array(normal.array) : null;
-    state.originalMaterial = mesh.material;
+    if (!state.baselinePositions
+        || state.baselinePositions.length !== position.array.length) {
+      state.baselinePositions = new Float32Array(position.array);
+    }
+    if (normal && (!state.baselineNormals
+        || state.baselineNormals.length !== normal.array.length)) {
+      state.baselineNormals = new Float32Array(normal.array);
+    } else if (!normal) {
+      state.baselineNormals = null;
+    }
+    if (!state.originalMaterial) state.originalMaterial = mesh.material;
+    if (!state.influenceNodes) {
+      state.influenceNodes = buildRigInfluenceNodes(
+        state.baselinePositions, state.indices, state.weights,
+        state.influenceCount, state.boneIds);
+    }
+    if (!state.centerByBoneId) {
+      state.centerByBoneId = new Map(state.influenceNodes.map(node => [
+        node.boneId, node.weightedCenter]));
+    }
+    return true;
+  }
+
+  function normalizeWeightBoneStats(stats) {
+    return Object.fromEntries(Object.entries(stats || {}).flatMap(
+      ([rawBoneId, rawEntry]) => {
+        const boneId = Number(rawBoneId);
+        const affectedVertexCount = Number(
+          rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
+        const totalWeight = Number(
+          rawEntry?.totalWeight ?? rawEntry?.total_weight);
+        if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
+            || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+          return [];
+        }
+        return [[String(boneId), {affectedVertexCount, totalWeight}]];
+      }));
   }
 
   function sourceDescriptorForEntry(entry) {
@@ -262,7 +311,7 @@ export function createSkinningRuntime({
     return null;
   }
 
-  function installSkinningEntry(mesh, entry, buffer) {
+  function installSkinningEntry(mesh, entry, buffer, {refreshSelection = true} = {}) {
     const state = stateFor(mesh);
     const source = sourceDescriptorForEntry(entry);
     if (!source) throw new Error(
@@ -281,7 +330,12 @@ export function createSkinningRuntime({
         || weights.length !== position.count * influenceCount) {
       throw new Error('Skin data does not match rendered vertices.');
     }
-    captureBaseline(mesh, state);
+    state.originalMaterial = mesh.material;
+    state.baselinePositions = null;
+    state.baselineNormals = null;
+    state.influenceNodes = null;
+    state.influenceGraph = null;
+    state.centerByBoneId = null;
     state.indices = indices;
     state.weights = weights;
     state.influenceCount = influenceCount;
@@ -291,15 +345,135 @@ export function createSkinningRuntime({
       : buildBoneIds(indices, weights, influenceCount);
     state.encoding = entry.encoding || null;
     state.diagnostics = entry.diagnostics || null;
+    state.weightBoneStats = normalizeWeightBoneStats(entry.weight_stats);
     state.loaded = true;
     state.error = null;
-    state.influenceNodes = buildRigInfluenceNodes(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.boneIds);
-    state.centerByBoneId = new Map(state.influenceNodes.map(node => [
-      node.boneId, node.weightedCenter]));
-    refreshSelectedWeightMask(mesh, state);
+    if (refreshSelection) refreshSelectedWeightMask(mesh, state);
     return state;
+  }
+
+  async function restoreSelectedWeightMasks(generation) {
+    const budget = createWorkBudget();
+    for (const mesh of knownMeshes) {
+      if (generation !== getGeneration()) return false;
+      const state = states.get(mesh);
+      if (state?.loaded) refreshSelectedWeightMask(mesh, state);
+      await budget.checkpoint();
+    }
+    if (generation !== getGeneration()) return false;
+    if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
+    notifyModelWeightChanged();
+    return true;
+  }
+
+  async function ensureRigMeshPreparedCooperative(mesh, state, {
+      budget = createWorkBudget(), isCurrent = () => true,
+  } = {}) {
+    if (!state?.loaded || !isCurrent()) return false;
+    const position = mesh.geometry?.attributes?.position;
+    if (!position) throw new Error('The selected mesh has no position data.');
+    const normal = mesh.geometry?.attributes?.normal;
+    if (!state.baselinePositions
+        || state.baselinePositions.length !== position.array.length) {
+      state.baselinePositions = new Float32Array(position.array);
+    }
+    if (normal && (!state.baselineNormals
+        || state.baselineNormals.length !== normal.array.length)) {
+      state.baselineNormals = new Float32Array(normal.array);
+    } else if (!normal) {
+      state.baselineNormals = null;
+    }
+    if (!state.originalMaterial) state.originalMaterial = mesh.material;
+    if (!state.influenceNodes) {
+      const nodes = await buildRigInfluenceNodesCooperative(
+        state.baselinePositions, state.indices, state.weights,
+        state.influenceCount, state.boneIds, {budget, isCurrent});
+      if (!nodes || !state.loaded || !isCurrent()) return false;
+      state.influenceNodes = nodes;
+    }
+    if (!state.centerByBoneId) {
+      state.centerByBoneId = new Map(state.influenceNodes.map(node => [
+        node.boneId, node.weightedCenter]));
+    }
+    return isCurrent() && state.loaded;
+  }
+
+  async function buildInfluenceGraphCooperative(mesh, state,
+      requestedEvidenceMode = 'vertex', surfaceEvidence = null, {
+        budget = createWorkBudget(), isCurrent = () => true,
+      } = {}) {
+    if (!(await ensureRigMeshPreparedCooperative(mesh, state,
+      {budget, isCurrent}))) return null;
+    if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+    const radius = Number(mesh.geometry.boundingSphere?.radius);
+    let measure = surfaceEvidence;
+    if (!measure && requestedEvidenceMode === 'surface') {
+      measure = await inspectSurfaceTopologyCooperative(
+        state.baselinePositions, mesh.geometry?.index?.array || null,
+        {budget, isCurrent});
+      if (!measure) return null;
+    }
+    const evidenceMode = requestedEvidenceMode === 'surface'
+      && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
+    if (evidenceMode === 'surface') {
+      return buildSurfaceInfluenceGraphCooperative(
+        state.baselinePositions, mesh.geometry?.index?.array || null,
+        state.indices, state.weights, state.influenceCount, state.boneIds,
+        Number.isFinite(radius) && radius > 0 ? radius : null,
+        {budget, isCurrent});
+    }
+    const relationships = await buildRigInfluenceRelationshipsCooperative(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.influenceNodes,
+      Number.isFinite(radius) && radius > 0 ? radius : null,
+      {budget, isCurrent});
+    if (!relationships || !isCurrent()) return null;
+    return {
+      nodes: state.influenceNodes, relationships,
+      boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
+      evidenceMode,
+      triangleCount: measure?.triangleCount || 0,
+      validTriangleCount: measure?.validTriangleCount || 0,
+      degenerateTriangleCount: measure?.degenerateTriangleCount || 0,
+      invalidTriangleCount: measure?.invalidTriangleCount || 0,
+      totalSurfaceArea: measure?.totalSurfaceArea || 0,
+      measuredVertexCount: measure?.measuredVertexCount || 0,
+      zeroMeasureVertexCount: measure?.zeroMeasureVertexCount || 0,
+      fallbackReason: requestedEvidenceMode === 'surface'
+        && evidenceMode === 'vertex' ? 'surface_evidence_unavailable'
+        : requestedEvidenceMode === 'vertex' && measure
+          && !measure.surfaceEvidenceAvailable
+          ? 'surface_evidence_unavailable' : null,
+    };
+  }
+
+  async function ensureInfluenceGraphCooperative(mesh, state,
+      evidenceMode = 'vertex', surfaceEvidence = null, options = {}) {
+    if (!state?.loaded) return null;
+    if (state.influenceGraph?.evidenceMode === evidenceMode) {
+      return state.influenceGraph;
+    }
+    let pendingByMode = cooperativeGraphInFlight.get(mesh);
+    if (!pendingByMode) {
+      pendingByMode = new Map();
+      cooperativeGraphInFlight.set(mesh, pendingByMode);
+    }
+    const key = String(evidenceMode);
+    const pending = pendingByMode.get(key);
+    if (pending) return pending;
+    const promise = buildInfluenceGraphCooperative(
+      mesh, state, evidenceMode, surfaceEvidence, options)
+      .then(graph => {
+        if (graph && state.loaded && (!options.isCurrent
+            || options.isCurrent())) state.influenceGraph = graph;
+        return graph;
+      })
+      .finally(() => {
+        if (pendingByMode.get(key) === promise) pendingByMode.delete(key);
+        if (!pendingByMode.size) cooperativeGraphInFlight.delete(mesh);
+      });
+    pendingByMode.set(key, promise);
+    return promise;
   }
 
   function setModelWeightLoadError(error) {
@@ -312,14 +486,28 @@ export function createSkinningRuntime({
   function loadModelWeights() {
     if (modelWeightState.loaded) return Promise.resolve(modelWeightSnapshot());
     if (modelWeightState.promise) return modelWeightState.promise;
-    const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
     const generation = getGeneration();
+    const loadStartedAt = clockNow();
+    const performance = {};
+    modelWeightState.performance = performance;
+    const deferPhysicsSync = () => {
+      const readyGeneration = generation;
+      const afterPaint = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame : callback => setTimeout(callback, 0);
+      afterPaint(() => setTimeout(() => {
+        if (readyGeneration !== getGeneration() || !modelWeightState.loaded) {
+          return;
+        }
+        syncPhysicsToSelection();
+      }, 0));
+    };
+    const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
     if (!meshes.length) {
       modelWeightState.loaded = true;
       modelWeightState.noWeights = true;
       modelWeightState.savedSelectionApplied = true;
       refreshModelWeightSummary({refreshStats: true});
-      syncPhysicsToSelection();
+      deferPhysicsSync();
       notifyModelWeightChanged();
       return Promise.resolve(modelWeightSnapshot());
     }
@@ -346,8 +534,11 @@ export function createSkinningRuntime({
       if (buffer && buffer.byteLength !== Number(preview.data.length)) {
         throw new Error('Skin data download was incomplete.');
       }
+      performance.fetchMs = clockNow() - loadStartedAt;
+      const installStartedAt = clockNow();
+      const installBudget = createWorkBudget();
       for (const mesh of meshes) {
-        if (generation !== getGeneration() || !knownMeshes.has(mesh)) break;
+        if (generation !== getGeneration() || !knownMeshes.has(mesh)) return modelWeightSnapshot();
         const state = stateFor(mesh);
         const entry = preview?.meshes?.[mesh.userData.semanticKey];
         if (!entry || entry.status !== 'ok') {
@@ -356,23 +547,39 @@ export function createSkinningRuntime({
           continue;
         }
         try {
-          installSkinningEntry(mesh, entry, buffer);
+          installSkinningEntry(mesh, entry, buffer, {refreshSelection: false});
         } catch (error) {
           state.error = error instanceof Error ? error.message : String(error);
           state.loaded = false;
         }
+        await installBudget.checkpoint();
       }
       if (generation !== getGeneration()) return modelWeightSnapshot();
       modelWeightState.loaded = true;
       refreshModelWeightSummary({refreshStats: true});
+      performance.basicInstallMs = clockNow() - installStartedAt;
+      performance.weightReadyMs = clockNow() - loadStartedAt;
+      Object.assign(performance, installBudget.getStats());
+      // Basic Weight data is usable before derived selection masks and
+      // physics restoration begin.  Keep the loading flag tied to this
+      // milestone so the UI can paint and accept input immediately.
+      modelWeightState.loading = false;
+      notifyModelWeightChanged();
       if (!modelWeightState.savedSelectionApplied) {
         modelWeightState.savedSelectionApplied = true;
         setSelectedBones(sourceSelectionEntries(
-          modelWeightState.savedBonesBySource));
+          modelWeightState.savedBonesBySource), {
+            syncPhysics: false, refreshMasks: false,
+          });
+        await restoreSelectedWeightMasks(generation);
+        deferPhysicsSync();
       } else {
-        syncPhysicsToSelection();
+        await restoreSelectedWeightMasks(generation);
+        deferPhysicsSync();
         notifyModelWeightChanged();
       }
+      performance.selectedMaskRestoreMs = clockNow() - loadStartedAt
+        - performance.weightReadyMs;
       return modelWeightSnapshot();
     })();
     return modelWeightState.promise
@@ -386,6 +593,7 @@ export function createSkinningRuntime({
       })
       .finally(() => {
         if (generation === getGeneration()) {
+          performance.totalMs = clockNow() - loadStartedAt;
           modelWeightState.loading = false;
           modelWeightState.promise = null;
           notifyModelWeightChanged();
@@ -394,7 +602,11 @@ export function createSkinningRuntime({
   }
 
   function updateHeatmap(mesh, state, selectedMask = state.selectedWeightMask) {
-    if (!state.heatmapMode || !selectedMask) return;
+    if (!state.heatmapMode) return;
+    if (!selectedMask) {
+      disableHeatmap(mesh, state);
+      return;
+    }
     const count = Math.floor(state.indices.length / state.influenceCount);
     const colors = new Float32Array(count * 3);
     for (let vertex = 0; vertex < count; vertex += 1) {
@@ -496,9 +708,26 @@ export function createSkinningRuntime({
       syncPhysicsParticipants(new Set([sourceKey]));
     }
     if (modelRigState.loaded) {
-      buildAllSourceSkinningRigs();
-      buildModelSkinningRig();
-      modelRigState.loaded = true;
+      const generation = getGeneration();
+      modelRigState.loading = true;
+      notifyModelRigChanged();
+      const buildSources = buildAllSourceSkinningRigsCooperatively
+        || (() => Promise.resolve(buildAllSourceSkinningRigs()));
+      void buildSources({
+        generation,
+        isCurrent: () => generation === getGeneration(),
+      }).then(sourceRigs => {
+        if (!sourceRigs || generation !== getGeneration()) return null;
+        return buildModelSkinningRig(sourceRigs, {
+          generation,
+          isCurrent: () => generation === getGeneration(),
+        });
+      }).catch(() => null).then(built => {
+        if (generation !== getGeneration()) return;
+        modelRigState.loading = false;
+        if (built) modelRigState.loaded = true;
+        notifyModelRigChanged();
+      });
     }
     notifyModelRigChanged();
     notifyModelWeightChanged();
@@ -554,11 +783,9 @@ export function createSkinningRuntime({
     mesh.geometry.computeBoundingSphere();
     state.baselinePositions = new Float32Array(position.array);
     state.baselineNormals = normal ? new Float32Array(normal.array) : null;
-    state.influenceNodes = buildRigInfluenceNodes(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.boneIds);
-    state.centerByBoneId = new Map(state.influenceNodes.map(node => [
-      node.boneId, node.weightedCenter]));
+    state.influenceNodes = null;
+    state.centerByBoneId = null;
+    ensureRigMeshPrepared(mesh, state);
     state.influenceGraph = null;
     if (wasPhysicsEnabled && modelPhysicsSession.getState().enabled
         && sourceKey) {
@@ -589,6 +816,8 @@ export function createSkinningRuntime({
 
   return {
     applyDeformation, buildInfluenceGraph, ensureInfluenceGraph,
+    buildInfluenceGraphCooperative, ensureInfluenceGraphCooperative,
+    ensureRigMeshPrepared, ensureRigMeshPreparedCooperative,
     finalizeDeformationGeometry, forEachRigMesh,
     getSkinningState: mesh => states.get(mesh) || null,
     getSkinningBaseMaterial, withSkinningBaseMaterial,

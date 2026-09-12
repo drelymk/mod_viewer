@@ -106,6 +106,7 @@ def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
     assert result["status"] == "error"
     assert result["saved_bones"] == [{
         "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+        "source_key": "hair/hairblend.buf|offset=0",
         "bone_ids": [7, 9],
     }]
 
@@ -132,19 +133,24 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     events = []
     publication = _Publication(events)
     preview = ModPreview(_Access())
+    context = _context()
+    manifest = {"Body-1": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
+        lambda _folder, **_kwargs: ("mod", {}, {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)
-    monkeypatch.setattr(
-        "app.bridge.mod_preview.mod_loader.load_mod",
-        lambda **_kwargs: {
+    def load_model(**kwargs):
+        kwargs["context"].skinning_manifest = manifest
+        return {
             "meshes": {"Body-1": {}},
             "metadata": {"game": {"id": "genshin"}},
             "controls": {"present": {}},
-        })
+        }
+
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.mod_loader.load_mod", load_model)
     monkeypatch.setattr(
         "app.bridge.mod_preview.metadata.hydrate_textures",
         lambda *_args, **_kwargs: None)
@@ -161,6 +167,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     assert result["meshes"] == {"Body-1": {}}
     assert [event[0] for event in events] == ["profile", "publish", "commit"]
     assert preview._active_mesh_keys == {"mod": {"Body-1"}}
+    assert preview._skinning_manifests == {"mod": manifest}
 
 
 def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
@@ -234,6 +241,7 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
     publication = _Publication(events)
     preview = ModPreview(_Access())
     preview._active_mesh_keys["mod"] = {"old"}
+    preview._skinning_manifests["mod"] = {"old": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
@@ -250,6 +258,129 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
 
     assert events == [("discard",)]
     assert "mod" not in preview._active_mesh_keys
+    assert "mod" not in preview._skinning_manifests
+
+
+def test_clear_loaded_model_releases_all_model_private_state():
+    preview = ModPreview(_Access())
+    preview._current_model_folder = "mod"
+    preview._active_mesh_keys["mod"] = {"Body-1"}
+    preview._skinning_manifests["mod"] = {"Body-1": object()}
+    preview._last_skinning_diagnostics["mod"] = {"total_seconds": 1}
+
+    preview.clear_loaded_model()
+
+    assert preview._current_model_folder is None
+    assert preview._active_mesh_keys == {}
+    assert preview._skinning_manifests == {}
+    assert preview._last_skinning_diagnostics == {}
+
+
+def test_skinning_publications_follow_model_generation_and_fetch_lifecycle(
+        monkeypatch):
+    preview = ModPreview(_Access())
+    blobs = {}
+    released = []
+    published = 0
+
+    def publish(blob, *, replace=True):
+        nonlocal published
+        published += 1
+        url = f"/geometry/test-{published}"
+        blobs[url] = bytes(blob)
+        return url
+
+    def release(url):
+        released.append(url)
+        return blobs.pop(url, None) is not None
+
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.publish_geometry", publish)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.release_geometry", release)
+
+    generation = preview._model_generation
+    first = preview._publish_skinning_geometry(b"old-model", generation)
+    assert first in blobs
+    preview.clear_loaded_model()
+    assert first in released
+    assert blobs == {}
+
+    stale = preview._publish_skinning_geometry(b"stale-model", generation)
+    assert stale is None
+    assert stale not in blobs
+
+    current = preview._publish_skinning_geometry(
+        b"current-model", preview._model_generation)
+    assert current in blobs
+    blobs.pop(current)
+    preview.clear_loaded_model()
+
+    assert released == [first, "/geometry/test-2", current]
+    assert blobs == {}
+    assert preview._pending_skinning_geometry_urls == set()
+
+
+def test_stale_skinning_publications_do_not_accumulate_under_repeated_reload(
+        monkeypatch):
+    preview = ModPreview(_Access())
+    blobs = {}
+    released = []
+
+    def publish(blob, *, replace=True):
+        url = f"/geometry/test-{len(blobs)}-{len(released)}"
+        blobs[url] = bytes(blob)
+        return url
+
+    def release(url):
+        released.append(url)
+        blobs.pop(url, None)
+        return True
+
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.publish_geometry", publish)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.release_geometry", release)
+
+    generation = preview._model_generation
+    preview.clear_loaded_model()
+    for _ in range(32):
+        assert preview._publish_skinning_geometry(
+            b"stale-model", generation) is None
+
+    assert blobs == {}
+    assert len(released) == 32
+    assert preview._pending_skinning_geometry_urls == set()
+
+
+def test_memory_diagnostics_report_resource_retention(monkeypatch):
+    preview = ModPreview(_Access())
+    preview._dds_classification_caches["mod"] = {"one": object()}
+    preview._pending_skinning_geometry_urls.add("/geometry/weight")
+    preview._last_weight_blob_bytes = 17
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.server.geometry_stats",
+        lambda: {"pending_blob_count": 2, "pending_blob_bytes": 23})
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.texture_cache_stats",
+        lambda: {"rendered_png_cache_entry_count": 3,
+                 "rendered_png_cache_bytes": 29})
+
+    assert preview.get_memory_diagnostics() == {
+        "geometry": {"pending_blob_count": 2, "pending_blob_bytes": 23},
+        "weight": {
+            "pending_skinning_publication_count": 1,
+            "last_weight_blob_bytes": 17,
+        },
+        "dds": {
+            "cached_folder_count": 1,
+            "classification_entry_count": 1,
+        },
+        "texture": {
+            "rendered_png_cache_entry_count": 3,
+            "rendered_png_cache_bytes": 29,
+        },
+    }
 
 
 def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):

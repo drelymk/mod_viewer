@@ -51,6 +51,8 @@ class ModLoadContext:
     metadata: dict = field(default_factory=dict)
     asset_folders: list = field(default_factory=list)
     dds_classification_cache: dict = field(default_factory=dict)
+    # Private state retained by the bridge for the exact loaded model.
+    skinning_manifest: dict = field(default_factory=dict)
 
 
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
@@ -155,6 +157,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     """
     context = _resolve_context(
         folder_path, ini_paths=ini_paths, documents=documents, context=context)
+    context.skinning_manifest = {}
     overrides = overrides or {}
     if not context.ini_paths:
         health = _failure_health(context, overrides)
@@ -180,11 +183,15 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             game_profile=parsed.game.game)
         mesh_payload = built.meshes
         if not mesh_payload:
+            context.skinning_manifest = {}
             health = _failure_health(context, overrides)
             return _structured_payload(
                 health=health,
                 error="No mesh data could be extracted (buffer files missing?).",
                 game=parsed.game)
+
+        context.skinning_manifest = getattr(
+            built, "skinning_manifest", None) or {}
 
         # Viewer-only material choices are hydrated into the same evidence
         # field used by the classifier. This never edits the source INI.
@@ -203,6 +210,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             game=parsed.game, material_profiles=material_profiles,
             asset_resolution=asset_resolution)
     except Exception:
+        context.skinning_manifest = {}
         traceback.print_exc()
         health = _failure_health(context, overrides)
         return _structured_payload(

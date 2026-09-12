@@ -317,6 +317,16 @@ def release_geometry(url):
         return _geometry_blobs.pop(token, None) is not None
 
 
+def geometry_stats():
+    """Return the currently retained geometry publication footprint."""
+    with _geometry_lock:
+        return {
+            "pending_blob_count": len(_geometry_blobs),
+            "pending_blob_bytes": sum(
+                len(blob) for blob in _geometry_blobs.values()),
+        }
+
+
 class _Handler(http.server.SimpleHTTPRequestHandler):
     """Serves web/ with two extras: a /vendor/ mount and a rendered index.html."""
 

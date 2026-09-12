@@ -1,7 +1,10 @@
 """Mod preview orchestration behind the JavaScript bridge facade."""
 
 import os
+import time
 import traceback
+import threading
+from collections import OrderedDict
 
 import webview
 
@@ -9,10 +12,11 @@ from core.geometry.buffers import BufferStore
 from core.geometry.conventions import geometry_convention_for
 from core.geometry.mesh_builder import GeometryBlob
 from core.geometry.skinning import (
-    SkinningPreviewError, build_skinning_preview, skinning_source_descriptor,
+    SkinningPreviewError, build_skinning_preview, decode_skinning,
+    skinning_source_descriptor,
 )
 from core.resource_paths import safe_resource_path
-from core.textures import encode_texture_file
+from core.textures import encode_texture_file, texture_cache_stats
 from core.mod_discovery import discover_ini_paths
 from core.ini.health import analyze_mod
 from app.mods.analysis import resolved_draws
@@ -27,10 +31,19 @@ from app.session import edit as edit_session
 
 
 class ModPreview:
+    _DDS_CLASSIFICATION_CACHE_FOLDER_LIMIT = 24
+
     def __init__(self, access):
         self._access = access
         self._active_mesh_keys = {}
-        self._dds_classification_caches = {}
+        self._skinning_manifests = {}
+        self._current_model_folder = None
+        self._last_skinning_diagnostics = {}
+        self._last_weight_blob_bytes = 0
+        self._model_generation = 0
+        self._pending_skinning_geometry_urls = set()
+        self._model_state_lock = threading.RLock()
+        self._dds_classification_caches = OrderedDict()
 
     @staticmethod
     def _active_texture_source(folder_path, validate=False):
@@ -58,8 +71,15 @@ class ModPreview:
             folder_path, ini_paths, edit_session.documents_for(folder_path),
             metadata.load(folder_path))
         cache_key = os.path.normcase(os.path.abspath(folder_path))
-        context.dds_classification_cache = \
-            self._dds_classification_caches.setdefault(cache_key, {})
+        with self._model_state_lock:
+            cache = self._dds_classification_caches.pop(cache_key, None)
+            if cache is None:
+                cache = {}
+            self._dds_classification_caches[cache_key] = cache
+            while (len(self._dds_classification_caches)
+                   > self._DDS_CLASSIFICATION_CACHE_FOLDER_LIMIT):
+                self._dds_classification_caches.popitem(last=False)
+        context.dds_classification_cache = cache
         try:
             context.asset_folders = asset_folders.load_registry()
         except asset_folders.AssetFolderError:
@@ -73,7 +93,48 @@ class ModPreview:
         traceback.print_exc()
         return {"error": "Unexpected backend error. See the application log for details."}
 
+    def clear_loaded_model(self):
+        """Release private state for the model currently shown in the scene."""
+        with self._model_state_lock:
+            self._model_generation += 1
+            pending = self._pending_skinning_geometry_urls
+            self._pending_skinning_geometry_urls = set()
+            self._current_model_folder = None
+            self._active_mesh_keys.clear()
+            self._skinning_manifests.clear()
+            self._last_skinning_diagnostics.clear()
+            self._last_weight_blob_bytes = 0
+        for url in pending:
+            server.release_geometry(url)
+
+    @staticmethod
+    def _stale_skinning_preview():
+        return {
+            "status": "stale",
+            "format_version": 1,
+            "saved_bones": [],
+            "meshes": {},
+        }
+
+    def _skinning_request_is_current(self, generation):
+        with self._model_state_lock:
+            return generation == self._model_generation
+
+    def _publish_skinning_geometry(self, blob, generation):
+        """Publish one Weight blob only while its model session is current."""
+        url = server.publish_geometry(blob, replace=False)
+        with self._model_state_lock:
+            current = generation == self._model_generation
+            if current:
+                self._pending_skinning_geometry_urls.add(url)
+                self._last_weight_blob_bytes = len(blob)
+        if not current:
+            server.release_geometry(url)
+            return None
+        return url
+
     def load_mod(self, folder_path, disabled_ini=False):
+        self.clear_loaded_model()
         folder_path, overrides, pending_new_sections, context = \
             self.authoritative_context(folder_path, disabled_ini=disabled_ini)
         geometry = GeometryBlob()
@@ -91,6 +152,8 @@ class ModPreview:
             if not isinstance(result, dict) or result.get("error"):
                 publication.discard()
                 self._active_mesh_keys.pop(folder_path, None)
+                self._skinning_manifests.pop(folder_path, None)
+                self._last_skinning_diagnostics.pop(folder_path, None)
                 return result
 
             saved_metadata = context.metadata
@@ -115,10 +178,16 @@ class ModPreview:
             server.publish_payload_geometry(result, geometry)
             publication.commit()
             self._active_mesh_keys[folder_path] = set(result.get("meshes", {}))
+            self._skinning_manifests[folder_path] = dict(
+                getattr(context, "skinning_manifest", {}) or {})
+            with self._model_state_lock:
+                self._current_model_folder = folder_path
             return result
         except Exception:
             publication.discard()
             self._active_mesh_keys.pop(folder_path, None)
+            self._skinning_manifests.pop(folder_path, None)
+            self._last_skinning_diagnostics.pop(folder_path, None)
             raise
 
     def get_present_state(self, folder_path):
@@ -180,7 +249,7 @@ class ModPreview:
 
     @staticmethod
     def _decode_skinning_draw(draw, group, mod_dir, buffers,
-                              geometry_convention):
+                              geometry_convention, timing=None):
         paths = [
             safe_resource_path(mod_dir, group["position_file"]),
             safe_resource_path(mod_dir, group["texcoord_file"]),
@@ -198,14 +267,16 @@ class ModPreview:
             draw, group, mod_dir, buffers=buffers,
             default_streams=default_streams,
             default_index_size=group.get("index_size", 4),
-            geometry_convention=geometry_convention)
+            geometry_convention=geometry_convention, timing=timing)
 
     @staticmethod
-    def _skinning_source_descriptor(draw):
-        return skinning_source_descriptor(draw.skinning_source)
+    def _skinning_source_descriptor(draw_or_source):
+        source = getattr(draw_or_source, "skinning_source", draw_or_source)
+        return skinning_source_descriptor(source)
 
     @staticmethod
-    def _skin_entry(decoded, draw, offset):
+    def _skin_entry(decoded, draw_or_source, offset):
+        source = getattr(draw_or_source, "skinning_source", draw_or_source)
         indices_length = len(decoded.indices)
         blob = decoded.indices + decoded.weights
         return ({
@@ -213,8 +284,8 @@ class ModPreview:
             "vertex_count": decoded.vertex_count,
             "influence_count": decoded.influence_count,
             "bone_ids": list(decoded.bone_ids),
-            "encoding": draw.skinning_source.encoding,
-            "source": ModPreview._skinning_source_descriptor(draw),
+            "encoding": source.encoding,
+            "source": ModPreview._skinning_source_descriptor(source),
             "data": {
                 "indices": {
                     "offset": offset,
@@ -228,38 +299,86 @@ class ModPreview:
                 },
             },
             "diagnostics": dict(decoded.diagnostics),
+            "weight_stats": {
+                str(bone_id): dict(stats)
+                for bone_id, stats in getattr(decoded, "bone_stats", {}).items()
+            },
         }, blob)
 
     def get_model_skinning_preview(self, folder_path):
-        """Decode all active skinned draws through one analyzed model context."""
+        """Decode all active skin streams for the currently loaded model."""
+        with self._model_state_lock:
+            request_generation = self._model_generation
+        request_started = time.perf_counter()
+        timing = {
+            "resolve_draws_seconds": 0.0,
+            "prepare_draw_vertices_seconds": 0.0,
+            "decode_skinning_seconds": 0.0,
+            "build_blob_seconds": 0.0,
+            "resolve_draw_count": 0,
+            "prepare_draw_vertices_calls": 0,
+            "decoded_mesh_count": 0,
+            "compact_vertex_count": 0,
+            "weight_blob_bytes": 0,
+        }
         try:
             folder_path, overrides, _pending, context = \
                 self.authoritative_context(folder_path)
             saved_bones = metadata.weight_selected_bones(
                 data=context.metadata)
-            parsed, draws = self._skinning_draws(context, overrides)
             active_mesh_keys = self._active_mesh_keys.get(folder_path)
-            eligible_draws = {
-                key: selected for key, selected in draws.items()
-                if selected[0].skinning_source is not None
-            }
-            requested = (set(active_mesh_keys) if active_mesh_keys is not None
-                         else set(eligible_draws))
-            requested &= set(eligible_draws)
+            manifest = self._skinning_manifests.get(folder_path)
+            mapping_source = "loaded_model_manifest" if manifest is not None \
+                else "legacy_rebuild"
+            if manifest is not None:
+                requested = (set(active_mesh_keys)
+                             if active_mesh_keys is not None
+                             else set(manifest))
+                requested &= set(manifest)
+                selected_items = {
+                    key: manifest[key] for key in requested
+                }
+                parsed = None
+            else:
+                resolve_started = time.perf_counter()
+                parsed, draws = self._skinning_draws(context, overrides)
+                timing["resolve_draws_seconds"] = (
+                    time.perf_counter() - resolve_started)
+                timing["resolve_draw_count"] = len(draws)
+                eligible_draws = {
+                    key: selected for key, selected in draws.items()
+                    if selected[0].skinning_source is not None
+                }
+                requested = (set(active_mesh_keys)
+                             if active_mesh_keys is not None
+                             else set(eligible_draws))
+                requested &= set(eligible_draws)
+                selected_items = {
+                    key: eligible_draws[key] for key in requested
+                }
             meshes = {}
             pieces = []
             offset = 0
             buffers = BufferStore()
-            convention = geometry_convention_for(parsed.game.game)
-            for mesh_key in sorted(requested):
-                selected = eligible_draws.get(mesh_key)
-                if selected is None:
-                    continue
-                draw, group = selected
+            convention = (geometry_convention_for(parsed.game.game)
+                          if parsed is not None else None)
+            for mesh_key in sorted(selected_items):
+                if not self._skinning_request_is_current(request_generation):
+                    return self._stale_skinning_preview()
+                selected = selected_items[mesh_key]
+                draw = selected[0] if manifest is None else None
                 try:
-                    decoded = self._decode_skinning_draw(
-                        draw, group, context.mod_dir, buffers, convention)
-                    entry, blob = self._skin_entry(decoded, draw, offset)
+                    if manifest is not None:
+                        decoded = self._decode_skinning_manifest_entry(
+                            selected, context.mod_dir, buffers, timing)
+                        entry, blob = self._skin_entry(
+                            decoded, selected.skinning_source, offset)
+                    else:
+                        draw, group = selected
+                        decoded = self._decode_skinning_draw(
+                            draw, group, context.mod_dir, buffers, convention,
+                            timing=timing)
+                        entry, blob = self._skin_entry(decoded, draw, offset)
                 except SkinningPreviewError as error:
                     meshes[mesh_key] = {
                         "status": "error",
@@ -278,6 +397,8 @@ class ModPreview:
                 meshes[mesh_key] = entry
                 pieces.append(blob)
                 offset += len(blob)
+                timing["decoded_mesh_count"] += 1
+                timing["compact_vertex_count"] += decoded.vertex_count
 
             if not pieces:
                 return {
@@ -287,8 +408,13 @@ class ModPreview:
                     "meshes": meshes,
                     "error": "No active mesh has usable skin weights.",
                 }
+            blob_started = time.perf_counter()
             blob = b"".join(pieces)
-            url = server.publish_geometry(blob, replace=False)
+            url = self._publish_skinning_geometry(blob, request_generation)
+            if url is None:
+                return self._stale_skinning_preview()
+            timing["build_blob_seconds"] = time.perf_counter() - blob_started
+            timing["weight_blob_bytes"] = len(blob)
             return {
                 "status": "ok" if all(
                     entry.get("status") == "ok" for entry in meshes.values())
@@ -300,6 +426,69 @@ class ModPreview:
             }
         except Exception:
             return self._semantic_read_error()
+        finally:
+            timing["total_seconds"] = time.perf_counter() - request_started
+            timing["mapping_source"] = mapping_source if "mapping_source" in locals() \
+                else "unavailable"
+            with self._model_state_lock:
+                if request_generation == self._model_generation:
+                    self._last_skinning_diagnostics[folder_path] = timing
+
+    def get_memory_diagnostics(self):
+        """Return lightweight process-local resource retention metrics."""
+        with self._model_state_lock:
+            dds_folder_count = len(self._dds_classification_caches)
+            dds_entry_count = sum(
+                len(cache) for cache in self._dds_classification_caches.values())
+            pending_weight_count = len(self._pending_skinning_geometry_urls)
+            last_weight_bytes = self._last_weight_blob_bytes
+        return {
+            "geometry": server.geometry_stats(),
+            "weight": {
+                "pending_skinning_publication_count": pending_weight_count,
+                "last_weight_blob_bytes": last_weight_bytes,
+            },
+            "dds": {
+                "cached_folder_count": dds_folder_count,
+                "classification_entry_count": dds_entry_count,
+            },
+            "texture": texture_cache_stats(),
+        }
+
+    @staticmethod
+    def _decode_skinning_manifest_entry(entry, mod_dir, buffers, timing):
+        source = entry.skinning_source
+        source_path = safe_resource_path(mod_dir, source.file)
+        if not source_path or not os.path.exists(source_path):
+            raise SkinningPreviewError(
+                "skinning_not_available",
+                "The skin-weight buffer could not be found.")
+        remap_path = None
+        if source.vertex_vg_file:
+            remap_path = safe_resource_path(mod_dir, source.vertex_vg_file)
+            if not remap_path or not os.path.exists(remap_path):
+                raise SkinningPreviewError(
+                    "skinning_remap_unavailable",
+                    "The WWMI VertexVG remap buffer could not be found.")
+        decode_started = time.perf_counter()
+        decoded = decode_skinning(
+            source, buffers.raw(source_path), entry.used_vertices,
+            buffers.raw(remap_path) if remap_path else None)
+        timing["decode_skinning_seconds"] += (
+            time.perf_counter() - decode_started)
+        if decoded.vertex_count != entry.vertex_count:
+            raise SkinningPreviewError(
+                "skinning_preview_failed",
+                "The retained skinning mapping is inconsistent.")
+        if decoded.diagnostics["truncated_vertices"]:
+            raise SkinningPreviewError(
+                "skinning_buffer_truncated",
+                "The skin-weight buffer is truncated.")
+        if decoded.diagnostics["vertex_vg_truncated_vertices"]:
+            raise SkinningPreviewError(
+                "skinning_remap_truncated",
+                "The WWMI VertexVG remap buffer is truncated.")
+        return decoded
 
     def get_diagnostics(self, folder_path):
         """Return the read-only health scan for the current edit revision."""

@@ -27,6 +27,9 @@ class PackedDrawGeometry:
     texcoords: bytes | None
     normals: bytes | None
     shape_targets: list[PackedShapeTarget]
+    # Backend-only source mapping retained by the model builder for Weight.
+    # This is deliberately not part of the application payload.
+    used_vertices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -318,6 +321,7 @@ def pack_draw_geometry(
         texcoords=bytes(uv_bytes) if uv_bytes is not None else None,
         normals=bytes(normal_bytes) if normal_bytes is not None else None,
         shape_targets=shape_targets,
+        used_vertices=tuple(used),
     )
 
 

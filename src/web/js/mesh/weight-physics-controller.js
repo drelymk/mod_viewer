@@ -8,15 +8,18 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
     selectedBoneCount, eligibleSkinningMesh, createSourcePhysicsRig,
     createSourcePhysicsParticipant, getModelTransformState,
     invalidateCharacterShadowGeometry, notifyModelRigChanged, requestRender,
-    defaults} = {}) {
+    defaults, getGeneration = () => 0, setRigLoading = () => {}} = {}) {
+  let participantSyncToken = 0;
+
   function disable() {
     if (!modelPhysicsSession.getState().enabled) return false;
+    participantSyncToken += 1;
     modelPhysicsSession.disable();
     notifyModelRigChanged();
     return true;
   }
 
-  function syncParticipants(changedSourceKeys = null) {
+  async function syncParticipants(changedSourceKeys = null) {
     if (!modelPhysicsSession.getState().enabled) return;
     if (!selectedBoneCount(modelWeightState.selectedBonesBySource)) {
       disable();
@@ -46,6 +49,11 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
       members.push(mesh);
       groups.set(state.skinningSourceKey, members);
     }
+    const syncToken = ++participantSyncToken;
+    const generation = getGeneration();
+    const isCurrent = () => syncToken === participantSyncToken
+      && generation === getGeneration()
+      && modelPhysicsSession.getState().enabled;
     const affected = changedSourceKeys
       ? new Set(changedSourceKeys)
       : new Set([...groups.keys(), ...sourcePhysicsRigs.keys()]);
@@ -66,6 +74,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
 
     let attached = false;
     for (const [sourceKey, members] of groups) {
+      if (!isCurrent()) return false;
       const selected = modelWeightState.selectedBonesBySource.get(sourceKey);
       members.forEach(mesh => {
         const state = states.get(mesh);
@@ -75,8 +84,22 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
         }
       });
       if (!selected?.size) continue;
-      const rig = sourcePhysicsRigs.get(sourceKey)
-        || createSourcePhysicsRig(sourceKey, members);
+      let rig = sourcePhysicsRigs.get(sourceKey);
+      if (!rig) {
+        setRigLoading(true);
+        try {
+          const requestedRig = createSourcePhysicsRig(sourceKey, members, {
+            generation,
+            isCurrent: () => generation === getGeneration()
+              && syncToken === participantSyncToken,
+          });
+          rig = typeof requestedRig?.then === 'function'
+            ? await requestedRig : requestedRig;
+        } finally {
+          setRigLoading(false);
+        }
+      }
+      if (!rig || !isCurrent()) return false;
       sourcePhysicsRigs.set(sourceKey, rig);
       if (!rig.physicsForest) continue;
       if (!modelPhysicsSession.getParticipant(sourceKey)) {
@@ -90,6 +113,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
       requestRender();
     }
     notifyModelRigChanged();
+    return true;
   }
 
   function syncToSelection(changedSourceKeys = null) {
@@ -103,7 +127,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
     if (!enabled) {
       modelPhysicsSession.enable(getModelTransformState());
     }
-    syncParticipants(changedSourceKeys);
+    void syncParticipants(changedSourceKeys).catch(() => false);
     return true;
   }
 

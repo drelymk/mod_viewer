@@ -270,10 +270,15 @@ def _normalized_weight_bones(value):
             continue
         source = normalize_skinning_source_file(item.get("source"))
         offset = item.get("bone_id_offset")
+        source_key = item.get("source_key")
         if (source is None or isinstance(offset, bool)
                 or not isinstance(offset, int) or offset < 0):
             continue
-        key = skinning_source_key(source, offset)
+        if not isinstance(source_key, str) or not source_key.strip():
+            source_key = skinning_source_key(source, offset)
+        else:
+            source_key = source_key.strip().replace("\\", "/").casefold()
+        key = source_key
         if key is None:
             continue
         bone_ids = {
@@ -285,6 +290,7 @@ def _normalized_weight_bones(value):
             continue
         entry = merged.setdefault(key, {
             "source": source,
+            "source_key": source_key,
             "bone_id_offset": offset,
             "bone_ids": set(),
         })
@@ -292,6 +298,7 @@ def _normalized_weight_bones(value):
     return [
         {
             "source": entry["source"],
+            "source_key": entry["source_key"],
             "bone_id_offset": entry["bone_id_offset"],
             "bone_ids": sorted(entry["bone_ids"]),
         }

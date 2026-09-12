@@ -16,6 +16,31 @@ def unpack_values(raw, fmt):
     return struct.unpack(f"<{fmt}", raw)
 
 
+class IndexedMapping:
+    """Sequence fixture that exposes accidental decoder iteration/copying."""
+
+    def __init__(self, values):
+        self.values = list(values)
+
+    def __len__(self):
+        return len(self.values)
+
+    def __getitem__(self, index):
+        return self.values[index]
+
+    def __iter__(self):
+        raise AssertionError("decoder should consume the retained mapping")
+
+
+def test_decode_consumes_retained_vertex_mapping_without_materializing_tuple():
+    source = SkinningSource("blend.buf", 4, 1, "rigid_u32_1")
+
+    decoded = decode_skinning(
+        source, struct.pack("<2I", 7, 11), IndexedMapping([0, 1]))
+
+    assert unpack_values(decoded.indices, "2I") == (7, 11)
+
+
 def test_decode_gimi_four_influences_to_canonical_bytes():
     source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4")
     raw = struct.pack("<4f4I", .6, .3, .1, 0., 7, 8, 9, 0)
@@ -26,6 +51,11 @@ def test_decode_gimi_four_influences_to_canonical_bytes():
     assert unpack_values(decoded.weights, "4f") == pytest.approx((.6, .3, .1, 0.))
     assert decoded.bone_ids == (7, 8, 9)
     assert decoded.diagnostics["invalid_weight_vertices"] == 0
+    assert decoded.bone_stats == {
+        7: {"affected_vertex_count": 1, "total_weight": pytest.approx(.6)},
+        8: {"affected_vertex_count": 1, "total_weight": pytest.approx(.3)},
+        9: {"affected_vertex_count": 1, "total_weight": pytest.approx(.1)},
+    }
 
 
 def test_decode_wwmi_four_influences_divides_bytes_by_255():
@@ -63,8 +93,23 @@ def test_decode_wwmi_vertex_vg_remap_keeps_colliding_raw_indices_distinct():
     assert unpack_values(decoded.weights, "8f") == pytest.approx(
         tuple(value / 255 for value in [255, 128, 64, 32, 16, 8, 4, 2]))
     assert decoded.bone_ids == (0, 1, 2, 3, 45, 257, 259)
+    assert decoded.bone_stats[259] == {
+        "affected_vertex_count": 1, "total_weight": pytest.approx(128 / 255),
+    }
     assert decoded.diagnostics["bone_id_namespace"] == "wwmi_vertex_vg"
     assert decoded.diagnostics["vertex_vg_remap"] is True
+
+
+def test_decode_bone_stats_count_each_vertex_once_and_sum_duplicate_slots():
+    source = SkinningSource("blend.buf", 8, 4, "wwmi_u8_4")
+    raw = bytes([2, 2, 3, 0, 128, 64, 32, 0])
+
+    decoded = decode_skinning(source, raw, [0])
+
+    assert decoded.bone_stats == {
+        2: {"affected_vertex_count": 1, "total_weight": pytest.approx(192 / 255)},
+        3: {"affected_vertex_count": 1, "total_weight": pytest.approx(32 / 255)},
+    }
 
 
 def test_decode_rigid_uses_one_implicit_weight():
@@ -149,7 +194,7 @@ def test_resolver_accepts_known_blend_layouts(stride, fmt, encoding):
         bone_id_namespace=("wwmi_vertex_vg" if expected_remap else "model"))
 
 
-def test_resolver_rejects_wwmi_source_without_vertex_vg_remap():
+def test_resolver_accepts_wwmi_source_without_vertex_vg_remap():
     source, error = resolve_skinning_source(
         {1: "ResourceBlendBuffer"},
         {"ResourceBlendBuffer": {
@@ -157,8 +202,13 @@ def test_resolver_rejects_wwmi_source_without_vertex_vg_remap():
             "format": "DXGI_FORMAT_R8_UINT",
         }}.get)
 
-    assert source is None
-    assert error == "missing_vertex_vg_remap"
+    assert error is None
+    assert source == SkinningSource(
+        "blend.buf", 8, 4, "wwmi_u8_4", bone_id_namespace="model")
+    decoded = decode_skinning(
+        source, bytes([3, 4, 5, 6, 255, 128, 64, 32]), [0])
+    assert decoded.bone_ids == (3, 4, 5, 6)
+    assert decoded.diagnostics["vertex_vg_remap"] is False
 
 
 def test_resolver_carries_the_authored_model_bone_offset():
@@ -275,10 +325,11 @@ def test_skinning_source_descriptor_excludes_decoder_details():
     }
 
 
-def test_resolver_does_not_infer_blend_from_stride_alone():
+@pytest.mark.parametrize("stride", [4, 8, 16, 32])
+def test_resolver_does_not_infer_blend_from_stride_alone(stride):
     source, error = resolve_skinning_source(
         {1: "ResourceSomething"},
-        lambda _name: {"filename": "stream.buf", "stride": 8},
+        lambda _name: {"filename": "stream.buf", "stride": stride},
     )
 
     assert source is None
