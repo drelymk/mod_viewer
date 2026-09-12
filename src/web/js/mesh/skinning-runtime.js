@@ -15,8 +15,14 @@ import {
   inspectSurfaceTopology,
 } from './weight-rig.js';
 import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
+import {createWorkBudget} from './cooperative-scheduler.js';
 
 let activeRuntime = null;
+
+function clockNow() {
+  return typeof globalThis.performance?.now === 'function'
+    ? globalThis.performance.now() : Date.now();
+}
 
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
@@ -56,6 +62,7 @@ export function createSkinningRuntime({
     invalidateHumanoidDetection, invalidateModelRigLoad, clearPickedPoint,
     resetModelPose,
     syncPhysicsParticipants, buildAllSourceSkinningRigs,
+    buildAllSourceSkinningRigsCooperatively = null,
     buildModelSkinningRig, notifyModelWeightChanged, notifyModelRigChanged,
     resetModelState, requestRender, invalidateShadow,
   } = {}) {
@@ -299,7 +306,7 @@ export function createSkinningRuntime({
     return null;
   }
 
-  function installSkinningEntry(mesh, entry, buffer) {
+  function installSkinningEntry(mesh, entry, buffer, {refreshSelection = true} = {}) {
     const state = stateFor(mesh);
     const source = sourceDescriptorForEntry(entry);
     if (!source) throw new Error(
@@ -336,8 +343,22 @@ export function createSkinningRuntime({
     state.weightBoneStats = normalizeWeightBoneStats(entry.weight_stats);
     state.loaded = true;
     state.error = null;
-    refreshSelectedWeightMask(mesh, state);
+    if (refreshSelection) refreshSelectedWeightMask(mesh, state);
     return state;
+  }
+
+  async function restoreSelectedWeightMasks(generation) {
+    const budget = createWorkBudget();
+    for (const mesh of knownMeshes) {
+      if (generation !== getGeneration()) return false;
+      const state = states.get(mesh);
+      if (state?.loaded) refreshSelectedWeightMask(mesh, state);
+      await budget.checkpoint();
+    }
+    if (generation !== getGeneration()) return false;
+    if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
+    notifyModelWeightChanged();
+    return true;
   }
 
   function setModelWeightLoadError(error) {
@@ -351,6 +372,9 @@ export function createSkinningRuntime({
     if (modelWeightState.loaded) return Promise.resolve(modelWeightSnapshot());
     if (modelWeightState.promise) return modelWeightState.promise;
     const generation = getGeneration();
+    const loadStartedAt = clockNow();
+    const performance = {};
+    modelWeightState.performance = performance;
     const deferPhysicsSync = () => {
       const readyGeneration = generation;
       const afterPaint = typeof requestAnimationFrame === 'function'
@@ -395,8 +419,11 @@ export function createSkinningRuntime({
       if (buffer && buffer.byteLength !== Number(preview.data.length)) {
         throw new Error('Skin data download was incomplete.');
       }
+      performance.fetchMs = clockNow() - loadStartedAt;
+      const installStartedAt = clockNow();
+      const installBudget = createWorkBudget();
       for (const mesh of meshes) {
-        if (generation !== getGeneration() || !knownMeshes.has(mesh)) break;
+        if (generation !== getGeneration() || !knownMeshes.has(mesh)) return modelWeightSnapshot();
         const state = stateFor(mesh);
         const entry = preview?.meshes?.[mesh.userData.semanticKey];
         if (!entry || entry.status !== 'ok') {
@@ -405,24 +432,39 @@ export function createSkinningRuntime({
           continue;
         }
         try {
-          installSkinningEntry(mesh, entry, buffer);
+          installSkinningEntry(mesh, entry, buffer, {refreshSelection: false});
         } catch (error) {
           state.error = error instanceof Error ? error.message : String(error);
           state.loaded = false;
         }
+        await installBudget.checkpoint();
       }
       if (generation !== getGeneration()) return modelWeightSnapshot();
       modelWeightState.loaded = true;
       refreshModelWeightSummary({refreshStats: true});
+      performance.basicInstallMs = clockNow() - installStartedAt;
+      performance.weightReadyMs = clockNow() - loadStartedAt;
+      Object.assign(performance, installBudget.getStats());
+      // Basic Weight data is usable before derived selection masks and
+      // physics restoration begin.  Keep the loading flag tied to this
+      // milestone so the UI can paint and accept input immediately.
+      modelWeightState.loading = false;
+      notifyModelWeightChanged();
       if (!modelWeightState.savedSelectionApplied) {
         modelWeightState.savedSelectionApplied = true;
         setSelectedBones(sourceSelectionEntries(
-          modelWeightState.savedBonesBySource), {syncPhysics: false});
+          modelWeightState.savedBonesBySource), {
+            syncPhysics: false, refreshMasks: false,
+          });
+        await restoreSelectedWeightMasks(generation);
         deferPhysicsSync();
       } else {
+        await restoreSelectedWeightMasks(generation);
         deferPhysicsSync();
         notifyModelWeightChanged();
       }
+      performance.selectedMaskRestoreMs = clockNow() - loadStartedAt
+        - performance.weightReadyMs;
       return modelWeightSnapshot();
     })();
     return modelWeightState.promise
@@ -436,6 +478,7 @@ export function createSkinningRuntime({
       })
       .finally(() => {
         if (generation === getGeneration()) {
+          performance.totalMs = clockNow() - loadStartedAt;
           modelWeightState.loading = false;
           modelWeightState.promise = null;
           notifyModelWeightChanged();
@@ -550,9 +593,26 @@ export function createSkinningRuntime({
       syncPhysicsParticipants(new Set([sourceKey]));
     }
     if (modelRigState.loaded) {
-      buildAllSourceSkinningRigs();
-      buildModelSkinningRig();
-      modelRigState.loaded = true;
+      const generation = getGeneration();
+      modelRigState.loading = true;
+      notifyModelRigChanged();
+      const buildSources = buildAllSourceSkinningRigsCooperatively
+        || (() => Promise.resolve(buildAllSourceSkinningRigs()));
+      void buildSources({
+        generation,
+        isCurrent: () => generation === getGeneration(),
+      }).then(sourceRigs => {
+        if (!sourceRigs || generation !== getGeneration()) return null;
+        return buildModelSkinningRig(sourceRigs, {
+          generation,
+          isCurrent: () => generation === getGeneration(),
+        });
+      }).catch(() => null).then(built => {
+        if (generation !== getGeneration()) return;
+        modelRigState.loading = false;
+        if (built) modelRigState.loaded = true;
+        notifyModelRigChanged();
+      });
     }
     notifyModelRigChanged();
     notifyModelWeightChanged();

@@ -70,6 +70,7 @@ import {
   createRigRuntimeState, createWeightRuntimeState, matrixIsIdentity,
   EMPTY_ACTIVE_VERTICES, RIG_LIMB_ROLES, RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
+import {createWorkBudget} from './cooperative-scheduler.js';
 import {characterAxesFromOrientation} from './humanoid-orientation.js';
 import {
   buildHumanoidDriverBaseTransforms,
@@ -118,6 +119,11 @@ let humanoidControlRigSnapshotCache = null;
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 let humanoidRigEditSession = null;
 
+function clockNow() {
+  return typeof globalThis.performance?.now === 'function'
+    ? globalThis.performance.now() : Date.now();
+}
+
 function invalidateHumanoidDetection() {
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
@@ -160,6 +166,14 @@ physicsCoordinator = createWeightPhysicsCoordinator({
   notifyModelRigChanged,
   requestRender,
   defaults: DEFAULT_MODEL_PHYSICS_SETTINGS,
+  getGeneration: () => modelWeightGeneration,
+  setRigLoading: loading => {
+    if (modelRigState.loaded && !loading) return;
+    if (!loading && modelRigState.promise) return;
+    if (modelRigState.loading === !!loading) return;
+    modelRigState.loading = !!loading;
+    notifyModelRigChanged();
+  },
 });
 
 skinningRuntime = initializeSkinningRuntime({
@@ -189,6 +203,7 @@ skinningRuntime = initializeSkinningRuntime({
   resetModelPose,
   syncPhysicsParticipants,
   buildAllSourceSkinningRigs,
+  buildAllSourceSkinningRigsCooperatively,
   buildModelSkinningRig: (...args) => buildModelSkinningRig(...args),
   resetModelState: resetModelWeightState,
   notifyModelWeightChanged,
@@ -286,12 +301,30 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   cancelRigPicking: cancelRigJointPicking,
   rebuildActiveRig: async () => {
     if (!modelSkinningRig) return;
-    const sourceRigs = buildAllSourceSkinningRigs();
-    buildModelSkinningRig(sourceRigs);
-    // Edit mode starts from rest and does not carry a virtual pose into the
-    // rebuilt control rig.
-    modelRigState.humanoidPose = {};
-    applyModelPose({request: false});
+    const generation = modelWeightGeneration;
+    modelRigState.loading = true;
+    notifyModelRigChanged();
+    try {
+      const sourceRigs = await buildAllSourceSkinningRigsCooperatively({
+        generation,
+        isCurrent: () => generation === modelWeightGeneration,
+      });
+      if (!sourceRigs || generation !== modelWeightGeneration) return;
+      const built = await buildModelSkinningRig(sourceRigs, {
+        generation,
+        isCurrent: () => generation === modelWeightGeneration,
+      });
+      if (!built) return;
+      // Edit mode starts from rest and does not carry a virtual pose into the
+      // rebuilt control rig.
+      modelRigState.humanoidPose = {};
+      applyModelPose({request: false});
+    } finally {
+      if (generation === modelWeightGeneration) {
+        modelRigState.loading = false;
+        notifyModelRigChanged();
+      }
+    }
   },
   notifyChanged: notifyModelRigChanged,
   requestRender,
@@ -303,6 +336,7 @@ rigModelSession = initializeRigModelSession({
   getGeneration: () => modelWeightGeneration,
   ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
   buildAllSourceSkinningRigs,
+  buildAllSourceSkinningRigsCooperatively,
   buildModelSkinningRig,
   getSnapshot: () => rigSnapshot(),
   notifyChanged: notifyModelRigChanged,
@@ -668,6 +702,7 @@ function resetModelWeightState() {
   resetWeightPickingSession();
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
+  rigSourceSession?.reset?.();
   modelSkinningRig = null;
   weightRuntime.resetModelWeightState();
   resetWeightModelSession();
@@ -683,6 +718,23 @@ function ensureSourceSkinningRig(sourceKey, members) {
 
 function buildAllSourceSkinningRigs() {
   return rigSourceSession?.buildAll() || [];
+}
+
+function ensureSourceSkinningRigCooperatively(sourceKey, members, options) {
+  return rigSourceSession?.ensureCooperative(sourceKey, members, options)
+    || Promise.resolve(null);
+}
+
+function buildAllSourceSkinningRigsCooperatively(options) {
+  const startedAt = clockNow();
+  return (rigSourceSession?.buildAllCooperative(options)
+    || Promise.resolve([])).then(result => {
+      if (!options?.isCurrent || options.isCurrent()) {
+        modelRigState.performance.sourceRigPreparationMs =
+          clockNow() - startedAt;
+      }
+      return result;
+    });
 }
 
 function resetSourceSkinningPose(rig) {
@@ -890,7 +942,19 @@ function restoreDefaultModelRigOrientation(rig) {
   return true;
 }
 
-function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
+async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()], {
+    generation = null, isCurrent = () => true,
+  } = {}) {
+  const startedAt = clockNow();
+  const performance = modelRigState.performance || {};
+  modelRigState.performance = performance;
+  const budget = createWorkBudget();
+  const checkpoint = async () => {
+    if (generation !== null && !isCurrent()) return false;
+    await budget.checkpoint();
+    return generation === null || isCurrent();
+  };
+  if (!(await checkpoint())) return null;
   const previousSelectedJointId = modelRigState.selectedJointId;
   const previousRootSignatures = new Set(
     modelRigState.explicitRootSignatures);
@@ -898,6 +962,8 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
   const savedMainRig = hasSavedHumanoidMainRig(savedOverrides);
   const savedGuide = buildSavedHumanoidJointGuide(savedOverrides);
+  performance.savedGuideMs = clockNow() - startedAt;
+  if (!(await checkpoint())) return null;
   let humanoidGuide = null;
   let guideFallbackReason = savedGuide?.fallbackReason || null;
   if (savedGuide?.controlRig) {
@@ -915,6 +981,9 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
       semanticBySourceBoneKey: humanoidGuide.sourceBoneClassifications,
       humanoidGuidanceDiagnostics: humanoidGuide.diagnostics,
     } : undefined);
+  performance.reconciliationMs = clockNow() - startedAt
+    - (performance.savedGuideMs || 0);
+  if (!(await checkpoint())) return null;
   const joints = reconciliation.joints || [];
   const rig = {
     key: 'model-rig',
@@ -980,6 +1049,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
         ? guideFallbackReason || 'guided_humanoid_rig_failed' : null,
     },
   };
+  if (!(await checkpoint())) return null;
   // Install provenance-derived edge pivots before capturing the default
   // orientation. Reset Pose must restore the same pivots used on first load.
   rebuildModelRestFrames(rig, rig.inferredForest);
@@ -1012,6 +1082,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
       rig.structureRevision = ++rigRuntime.structureRevision;
     }
   }
+  if (!(await checkpoint())) return null;
   modelRigState.explicitRootSignatures = restoredRootSignatures;
   rigPresetState.lastApplyResult = null;
   sourceRigs.forEach(sourceRig => {
@@ -1023,6 +1094,7 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
     sourceRig.poseTransformCache.clear();
     sourceRig.poseFrameCache.clear();
   });
+  if (!(await checkpoint())) return null;
   modelSkinningRig = rig;
   buildPrimaryHumanoidRig(rig);
   skinningRuntime.updateModelWeightHeatmap();
@@ -1030,6 +1102,8 @@ function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()]) {
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
     && joints[previousSelectedJointId] ? previousSelectedJointId : null;
   updateModelPoseFrameCache(rig, rig.poseTransforms);
+  performance.totalRigBuildMs = clockNow() - startedAt;
+  Object.assign(performance, budget.getStats());
   return rig;
 }
 
@@ -1144,9 +1218,13 @@ function updateModelSourceAliases(rig) {
   }
 }
 
-function createSourcePhysicsRig(sourceKey, members) {
+function sourceMembersMatch(rig, members) {
+  return rig?.meshes?.size === members.length
+    && members.every(mesh => rig.meshes.has(mesh));
+}
+
+function buildSourcePhysicsRig(sourceKey, members, skinRig) {
   const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
-  const skinRig = ensureSourceSkinningRig(sourceKey, members);
   const rig = {
     key: sourceKey,
     sourceKey,
@@ -1177,6 +1255,22 @@ function createSourcePhysicsRig(sourceKey, members) {
   skinRig.physicsRig = rig;
   refreshSourcePhysicsRig(rig, members);
   return rig;
+}
+
+function createSourcePhysicsRig(sourceKey, members, options = {}) {
+  const cached = sourceSkinningRigs.get(sourceKey);
+  if (cached && sourceMembersMatch(cached, members)) {
+    // A prepared source rig is safe to consume synchronously. This preserves
+    // immediate participant updates while first-time preparation remains
+    // cooperative below.
+    return buildSourcePhysicsRig(sourceKey, members, cached);
+  }
+  return (async () => {
+    const skinRig = await ensureSourceSkinningRigCooperatively(
+      sourceKey, members, options);
+    if (!skinRig) return null;
+    return buildSourcePhysicsRig(sourceKey, members, skinRig);
+  })();
 }
 
 function refreshSourcePhysicsRig(rig, members) {
@@ -1648,7 +1742,8 @@ function setRigComponentRootForSource(sourceKey, boneId) {
 }
 
 function syncPhysicsParticipants(...args) {
-  return physicsCoordinator?.syncParticipants(...args);
+  const result = physicsCoordinator?.syncParticipants(...args);
+  return result?.catch?.(() => false) || result;
 }
 
 function syncPhysicsToSelection(...args) {

@@ -16,6 +16,31 @@ def unpack_values(raw, fmt):
     return struct.unpack(f"<{fmt}", raw)
 
 
+class IndexedMapping:
+    """Sequence fixture that exposes accidental decoder iteration/copying."""
+
+    def __init__(self, values):
+        self.values = list(values)
+
+    def __len__(self):
+        return len(self.values)
+
+    def __getitem__(self, index):
+        return self.values[index]
+
+    def __iter__(self):
+        raise AssertionError("decoder should consume the retained mapping")
+
+
+def test_decode_consumes_retained_vertex_mapping_without_materializing_tuple():
+    source = SkinningSource("blend.buf", 4, 1, "rigid_u32_1")
+
+    decoded = decode_skinning(
+        source, struct.pack("<2I", 7, 11), IndexedMapping([0, 1]))
+
+    assert unpack_values(decoded.indices, "2I") == (7, 11)
+
+
 def test_decode_gimi_four_influences_to_canonical_bytes():
     source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4")
     raw = struct.pack("<4f4I", .6, .3, .1, 0., 7, 8, 9, 0)

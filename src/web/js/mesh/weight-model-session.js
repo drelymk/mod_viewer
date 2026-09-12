@@ -221,7 +221,8 @@ function createSession({modelWeightState, states, knownMeshes,
     if (refreshStats) refreshModelBoneStats();
   }
 
-  function setSelectedBones(selection, {syncPhysics = true} = {}) {
+  function setSelectedBones(selection, {syncPhysics = true,
+      refreshMasks = true} = {}) {
     refreshModelWeightSummary();
     const next = selectionMapFromEntries(selection);
     if (modelWeightState.loaded) {
@@ -258,13 +259,13 @@ function createSession({modelWeightState, states, knownMeshes,
       ])),
     )));
     modelWeightState.selectedBonesBySource = next;
-    knownMeshes.forEach(mesh => {
+    if (refreshMasks) knownMeshes.forEach(mesh => {
       const state = states.get(mesh);
       if (changedSourceKeys.has(state?.skinningSourceKey)) {
         refreshSelectedWeightMask(mesh, state);
       }
     });
-    if (modelWeightState.heatmapEnabled) {
+    if (refreshMasks && modelWeightState.heatmapEnabled) {
       updateModelWeightHeatmap(changedSourceKeys);
     }
     if (syncPhysics) syncPhysicsToSelection(changedSourceKeys);

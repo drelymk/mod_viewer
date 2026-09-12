@@ -58,6 +58,7 @@ function createModelRigDefaults() {
     activeLimbRole: 'left_arm',
     selectedHumanoidControlKey: null,
     explicitRootSignatures: new Set(),
+    performance: {},
   };
 }
 
@@ -171,6 +172,7 @@ export function createWeightRuntimeState() {
     pickerViewMode: 'all',
     pickStatus: '',
     picking: false,
+    performance: {},
   });
   const modelWeightState = createModelWeightDefaults();
 

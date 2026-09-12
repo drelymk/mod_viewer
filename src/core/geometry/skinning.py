@@ -6,7 +6,6 @@ import os
 import posixpath
 import struct
 import time
-from array import array
 from dataclasses import dataclass, field
 
 
@@ -33,12 +32,13 @@ class SkinningManifestEntry:
 
     mesh_key: str
     skinning_source: SkinningSource
-    used_vertices: array
+    used_vertices: tuple[int, ...]
     vertex_count: int
 
     @classmethod
     def from_vertices(cls, mesh_key, skinning_source, used_vertices):
-        compact = array("I", used_vertices)
+        compact = (used_vertices if isinstance(used_vertices, tuple)
+                   else tuple(used_vertices))
         return cls(mesh_key, skinning_source, compact, len(compact))
 
 
@@ -275,7 +275,6 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
                 or source.vertex_vg_stride != expected_stride):
             raise ValueError("Invalid VertexVG remap descriptor.")
         vertex_vg_data = bytes(vertex_vg_data or b"")
-    used_vertices = tuple(used_vertices)
     count = len(used_vertices)
     item_bytes = source.influence_count * 4
     index_bytes = bytearray(count * item_bytes)
@@ -289,7 +288,10 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
     bone_ids = set()
     bone_stats_accum = {}
 
-    for compact_index, source_index in enumerate(used_vertices):
+    # Consume the retained compact sequence directly.  Indexing avoids a
+    # decoder-side tuple materialization for backend manifest mappings.
+    for compact_index in range(count):
+        source_index = used_vertices[compact_index]
         output_offset = compact_index * item_bytes
         try:
             source_index = int(source_index)

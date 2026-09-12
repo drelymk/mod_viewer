@@ -902,15 +902,15 @@ function syncStatus() {
   const weight = latestWeightState || getModelWeightState();
   const rig = latestRigState || getModelRigState();
   let status = '';
-  if (weight.loading) status = 'Loading weights…';
-  else if (rig.loading) status = 'Loading Rig…';
-  else if (weight.error) status = weight.error;
+  if (weight.error) status = weight.error;
   else if (rig.error) status = rig.error;
   else if (rig.humanoidRigEdit?.error) status = rig.humanoidRigEdit.error;
+  else if (weight.selectionSaveError) {
+    status = `Could not save bone selection: ${weight.selectionSaveError}`;
+  } else if (weight.loading) status = 'Loading weights…';
+  else if (rig.loading) status = 'Loading Rig…';
   else if (weight.loaded && (!weight.sources?.length || weight.noWeights)) {
     status = 'No skin weights available for this model.';
-  } else if (weight.selectionSaveError) {
-    status = `Could not save bone selection: ${weight.selectionSaveError}`;
   } else if (!weight.loaded && !rig.loaded) status = '';
   if (weight.pickStatus || rig.pickStatus) status = weight.pickStatus || rig.pickStatus;
   ui.status.textContent = status;

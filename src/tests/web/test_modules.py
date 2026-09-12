@@ -1917,6 +1917,8 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
       };
       const first = makeMesh('first', true);
       const duplicate = makeMesh('duplicate', true, 2);
+      // Provenance may differ even when the retained Rig evidence is equal.
+      duplicate.userData.identity.geometry_state.ib_file = 'other-indices.buf';
       const invalid = makeMesh('invalid', false, 1);
       const graphFor = (mesh, state, evidenceMode, surfaceEvidence) => {
         graphCalls.push({mesh: mesh.userData.semanticKey, evidenceMode,
