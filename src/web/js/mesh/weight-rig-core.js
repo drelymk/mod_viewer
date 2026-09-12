@@ -343,6 +343,7 @@ rigModelSession = initializeRigModelSession({
   buildAllSourceSkinningRigs,
   buildAllSourceSkinningRigsCooperatively,
   buildModelSkinningRig,
+  syncPhysicsToSelection,
   getSnapshot: () => rigSnapshot(),
   notifyChanged: notifyModelRigChanged,
   requestRender,
@@ -632,12 +633,15 @@ function notifyModelWeightChanged() {
 function selectionRecordsFromMap(selectionMap) {
   return [...(selectionMap || [])].map(([sourceKey, boneIds]) => {
     const separator = String(sourceKey).lastIndexOf('|offset=');
-    const fallbackOffset = Number(String(sourceKey).slice(separator + 8));
+    const sourceKeyText = String(sourceKey);
+    const nextSegment = sourceKeyText.indexOf('|', separator + 8);
+    const fallbackOffset = Number(sourceKeyText.slice(
+      separator + 8, nextSegment < 0 ? undefined : nextSegment));
     const descriptor = modelWeightState.sourceDescriptors.get(sourceKey)
       || (separator > 0 && Number.isInteger(fallbackOffset)
         ? {
           sourceKey,
-          sourceFile: String(sourceKey).slice(0, separator),
+          sourceFile: sourceKeyText.slice(0, separator),
           boneIdOffset: fallbackOffset,
         } : null);
     return descriptor ? {

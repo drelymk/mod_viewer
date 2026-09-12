@@ -29,6 +29,7 @@ EXPECTED_API_METHODS = {
     "get_asset_folders",
     "get_control_state",
     "get_diagnostics",
+    "get_memory_diagnostics",
     "get_ini_text",
     "get_mesh_semantics",
     "save_texture_color",

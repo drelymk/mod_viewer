@@ -346,25 +346,31 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if skinning_source is not None:
                 skinning_resolution["resolution_source"] = "direct"
             if skinning_source is None and skinning_error is None:
-                provenance_resources, provenance_sections = \
-                    vertex_binding_index.provenance_for_position(
+                provenance_bindings, provenance_sections = \
+                    vertex_binding_index.provenance_bindings_for_position(
                         effective_position_resource,
                         root_section=section_name,
                         current_bindings=vertex_resources)
+                provenance_resources = {
+                    resource for _slot, resource in provenance_bindings
+                }
                 skinning_resolution.update({
                     "provenance_section_count": len(provenance_sections),
                     "provenance_candidate_count": len(provenance_resources),
                 })
-                provenance_bindings = {
-                    slot: resource
-                    for slot, resource in enumerate(sorted(
-                        provenance_resources, key=str.casefold))
-                }
+                provenance_candidates = provenance_bindings
+                provenance_bindings = {}
+                provenance_slots = set()
+                for slot, resource in provenance_candidates:
+                    synthetic_slot = len(provenance_bindings) + 2
+                    provenance_bindings[synthetic_slot] = resource
+                    if slot >= 2:
+                        provenance_slots.add(synthetic_slot)
                 skinning_source, skinning_error = resolve_skinning_source(
                     provenance_bindings, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
                     remap_resources=remap_resources,
-                    allow_unlabeled=True)
+                    provenance_slots=provenance_slots)
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "position_provenance"

@@ -1908,8 +1908,8 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
             meshes: {[key]: {
               status: 'ok', vertex_count: 3, influence_count: 2,
               bone_ids: [0, 1, 2], encoding: 'test', source: {
-                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-                bone_id_offset: 0,
+                key: 'test/bodyblend.buf|offset=0',
+                file: 'Test/BodyBlend.buf', bone_id_offset: 0,
               },
               data: {
                 indices: {offset: 0, length: 24, type: 'u32'},
@@ -2019,20 +2019,23 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
           window.__savedSelections = [];
           window.pywebview.api.get_model_skinning_preview = async () => ({
             status: 'ok', format_version: 1,
-            saved_bones: [{source: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            saved_bones: [{source: 'Test/BodyBlend.buf',
+              source_key: 'test/bodyblend.buf|offset=0|namespace=wwmi_vertex_vg|'
+                + 'vertex-vg=test/bodyremap.buf', bone_id_offset: 0,
               bone_ids: [99, 1]}],
             data: {url, length: 48},
             meshes: {[key]: {
               status: 'ok', vertex_count: 3, influence_count: 2,
               bone_ids: [0, 1, 2], encoding: 'test', source: {
-                key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
+                key: 'test/bodyblend.buf|offset=0|namespace=wwmi_vertex_vg|vertex-vg=test/bodyremap.buf',
+                file: 'Test/BodyBlend.buf',
                 bone_id_offset: 0,
               },
               data: {
                 indices: {offset: 0, length: 24, type: 'u32'},
                 weights: {offset: 24, length: 24, type: 'f32'},
               }, diagnostics: {}, source: {
-                key: 'test/bodyblend.buf|offset=0',
+                key: 'test/bodyblend.buf|offset=0|namespace=wwmi_vertex_vg|vertex-vg=test/bodyremap.buf',
                 file: 'Test/BodyBlend.buf', bone_id_offset: 0,
               },
             }},
@@ -2102,6 +2105,7 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
         page.wait_for_function("window.__savedSelections.length === 1")
         assert page.evaluate("window.__savedSelections") == [[{
             'source': 'Test/BodyBlend.buf', 'bone_id_offset': 0,
+            'source_key': 'test/bodyblend.buf|offset=0|namespace=wwmi_vertex_vg|vertex-vg=test/bodyremap.buf',
             'bone_ids': [1],
         }]]
         page.evaluate("""() => {

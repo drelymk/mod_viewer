@@ -266,7 +266,9 @@ function sourceDescriptor(value, fallbackKey = '') {
     const separator = fallbackKey.lastIndexOf('|offset=');
     if (separator > 0) {
       file = normalizedSourceFile(fallbackKey.slice(0, separator));
-      offset = Number(fallbackKey.slice(separator + 8));
+      const nextSegment = fallbackKey.indexOf('|', separator + 8);
+      offset = Number(fallbackKey.slice(
+        separator + 8, nextSegment < 0 ? undefined : nextSegment));
     }
   }
   if (!file || !Number.isInteger(offset) || offset < 0) return null;
@@ -296,7 +298,7 @@ export function normalizeBoneSelection(entries) {
       ? (() => {
         const sourceFile = normalizedSourceFile(raw.source);
         const offset = Number(raw.bone_id_offset ?? raw.boneIdOffset ?? 0);
-        const sourceKey = String(raw.sourceKey
+        const sourceKey = String(raw.sourceKey ?? raw.source_key
           ?? `${sourceFile.toLowerCase()}|offset=${offset}`);
         return sourceFile && Number.isInteger(offset) && offset >= 0
           && sourceKey ? {
@@ -330,6 +332,7 @@ export function selectionForSource(selection, sourceKey) {
 export function serializeBoneSelection(selection) {
   return normalizeBoneSelection(selection).map(entry => ({
     source: entry.sourceFile,
+    source_key: entry.sourceKey,
     bone_id_offset: entry.boneIdOffset,
     bone_ids: [...entry.boneIds],
   }));

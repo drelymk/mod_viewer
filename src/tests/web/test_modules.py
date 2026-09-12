@@ -1475,6 +1475,7 @@ def test_cooperative_surface_evidence_matches_sync_and_supports_cancellation(
       };
     }""")
     assert result["same"]
+    assert result["cancelled"]
     assert result["cooperative"]["evidenceMode"] == "surface"
     assert result["cooperative"]["validTriangleCount"] == 2
 

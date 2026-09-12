@@ -325,10 +325,11 @@ def test_skinning_source_descriptor_excludes_decoder_details():
     }
 
 
-def test_resolver_does_not_infer_blend_from_stride_alone():
+@pytest.mark.parametrize("stride", [4, 8, 16, 32])
+def test_resolver_does_not_infer_blend_from_stride_alone(stride):
     source, error = resolve_skinning_source(
         {1: "ResourceSomething"},
-        lambda _name: {"filename": "stream.buf", "stride": 8},
+        lambda _name: {"filename": "stream.buf", "stride": stride},
     )
 
     assert source is None

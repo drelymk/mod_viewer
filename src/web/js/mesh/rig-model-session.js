@@ -536,6 +536,7 @@ function createSession({state, modelWeightState, getGeneration,
     ensureModelWeightsLoaded, buildAllSourceSkinningRigs,
     buildAllSourceSkinningRigsCooperatively = buildAllSourceSkinningRigs,
     buildModelSkinningRig,
+    syncPhysicsToSelection,
     getSnapshot, notifyChanged, requestRender, cancelWeightPicking,
     pickFromSurface, getModelJointId, rotationSnapValues} = {}) {
   let loadToken = null;
@@ -615,6 +616,7 @@ function createSession({state, modelWeightState, getGeneration,
           return getSnapshot();
         }
         state.loaded = true;
+        syncPhysicsToSelection?.();
         return getSnapshot();
       })
       .catch(error => {

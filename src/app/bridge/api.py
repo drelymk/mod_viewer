@@ -191,6 +191,9 @@ class ModViewerAPI:
     def get_model_skinning_preview(self, folder_path):
         return self._mod_preview.get_model_skinning_preview(folder_path)
 
+    def get_memory_diagnostics(self):
+        return self._mod_preview.get_memory_diagnostics()
+
     def get_diagnostics(self, folder_path):
         return self._mod_preview.get_diagnostics(folder_path)
 

@@ -317,7 +317,7 @@ def test_draw_groups_resolve_blend_from_position_provenance_without_hashes():
 [TextureOverridePotato]
 hash = 11111111
 vb0 = ResourceAlpha
-vb7 = ResourceSkinData
+vb7 = ResourceAuthoredBlendStream
 
 [TextureOverrideBanana]
 hash = 22222222
@@ -338,6 +338,96 @@ stride = 40
 filename = texcoord.buf
 stride = 20
 
+[ResourceAuthoredBlendStream]
+filename = skin-data.bin
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "skin-data.bin"
+    assert draw.skinning_resolution["resolution_source"] == \
+        "position_provenance"
+
+
+def test_draw_groups_position_provenance_does_not_merge_draw_snapshots():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideSource]
+ib = ResourceSourceIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+vb4 = ResourceSourceBlend
+drawindexed = 3, 0, 0
+vb4 = ResourceOtherBlend
+drawindexed = 3, 3, 0
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceSourceIndex]
+filename = source.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceSourceBlend]
+filename = source-a.blend
+stride = 32
+
+[ResourceOtherBlend]
+filename = source-b.blend
+stride = 32
+""")
+
+    groups = build_draw_groups(
+        sections, extract_resources(sections))
+    body_draw = next(
+        draw for group in groups if group["name"] == "Body"
+        for draw in group["draws"])
+
+    assert body_draw.skinning_source is None
+    assert body_draw.skinning_error is None
+
+
+def test_draw_groups_accepts_unlabeled_authored_weight_provenance():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb7 = ResourceSkinData
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
 [ResourceSkinData]
 filename = skin-data.bin
 stride = 32
@@ -348,6 +438,49 @@ stride = 32
 
     assert draw.skinning_error is None
     assert draw.skinning_source.file == "skin-data.bin"
+    assert draw.skinning_resolution["resolution_source"] == \
+        "position_provenance"
+
+
+def test_draw_groups_position_provenance_follows_reverse_explicit_copy():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+vb4 = ResourceAuthoredBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePositionAlias
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[Present]
+ResourcePositionAlias = copy ResourcePosition
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourcePositionAlias]
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceAuthoredBlend]
+filename = blend.buf
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.file == "blend.buf"
     assert draw.skinning_resolution["resolution_source"] == \
         "position_provenance"
 

@@ -1,6 +1,6 @@
 """Resolution of authored geometry resources into file-backed buffers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 from ..geometry.buffers import POSITION_STRIDE, _res_get
@@ -25,9 +25,14 @@ class VertexBindingIndex:
     section_runs: dict
     resource_consumers: dict
     resource_copy_sources: dict
+    resource_copy_neighbors: dict
+    _position_roots_cache: dict = field(default_factory=dict, init=False,
+                                        repr=False)
+    _scope_sections_cache: dict = field(default_factory=dict, init=False,
+                                        repr=False)
 
-    def _resource_reaches(self, start, target):
-        """Return whether an authored resource copy chain reaches target."""
+    def _resource_connected(self, start, target):
+        """Return whether explicit authored resource edges connect two names."""
         if not start or not target:
             return False
         target_key = str(target).casefold()
@@ -41,30 +46,61 @@ class VertexBindingIndex:
             visited.add(current_key)
             if current_key == target_key:
                 return True
-            pending.extend(self.resource_copy_sources.get(current_key, ()))
+            pending.extend(self.resource_copy_neighbors.get(current_key, ()))
         return False
 
     def _scope_sections(self, root):
+        cached = self._scope_sections_cache.get(root)
+        if cached is not None:
+            return cached
         if root not in self.sections:
-            return (root,)
-        return _reachable_execution_sections(
-            self.sections, root, self.section_lookup)
+            result = (root,)
+        else:
+            result = _reachable_execution_sections(
+                self.sections, root, self.section_lookup)
+        self._scope_sections_cache[root] = result
+        return result
+
+    def _position_roots(self, position_resource):
+        key = str(position_resource).casefold()
+        cached = self._position_roots_cache.get(key)
+        if cached is not None:
+            return cached
+        roots = set()
+        for bound_resource, consumers in self.resource_consumers.items():
+            if self._resource_connected(bound_resource, position_resource):
+                roots.update(consumers)
+        self._position_roots_cache[key] = roots
+        return roots
 
     def provenance_for_position(self, position_resource, *, root_section=None,
                                 current_bindings=None):
         """Return co-bound resources and their authored provenance sections."""
+        bindings, provenance_sections = self.provenance_bindings_for_position(
+            position_resource, root_section=root_section,
+            current_bindings=current_bindings)
+        return {resource for _slot, resource in bindings}, provenance_sections
+
+    def provenance_bindings_for_position(
+            self, position_resource, *, root_section=None,
+            current_bindings=None):
+        """Return co-bound ``(slot, resource)`` pairs with provenance."""
         if not position_resource:
-            return set(), set()
+            return [], set()
 
-        roots = set()
-        for bound_resource, consumers in self.resource_consumers.items():
-            if self._resource_reaches(bound_resource, position_resource):
-                roots.update(consumers)
+        roots = self._position_roots(position_resource)
 
-        candidates = set()
+        candidates = []
         provenance_sections = set()
         for root in roots:
             for section_name in self._scope_sections(root):
+                # A draw-producing root contains multiple execution snapshots.
+                # Unless it is the exact target draw, those snapshots are not
+                # safe provenance evidence because their conditions and order
+                # may not match the target draw.
+                if (section_name != root_section
+                        and section_name in self.section_draw_bindings):
+                    continue
                 if (section_name == root
                         and section_name in self.section_draw_bindings):
                     if section_name == root_section and current_bindings is not None:
@@ -74,12 +110,12 @@ class VertexBindingIndex:
                 else:
                     scopes = (self.section_bindings.get(section_name, {}),)
                 for bindings in scopes:
-                    for resource in bindings.values():
+                    for slot, resource in bindings.items():
                         if not resource:
                             continue
-                        if self._resource_reaches(resource, position_resource):
+                        if self._resource_connected(resource, position_resource):
                             continue
-                        candidates.add(resource)
+                        candidates.append((slot, resource))
                         provenance_sections.add(section_name)
         return candidates, provenance_sections
 
@@ -188,6 +224,15 @@ def _build_vertex_binding_index(section_info, sections,
     section_draw_bindings = {}
     section_runs = {}
     resource_consumers = {}
+    resource_copy_neighbors = {}
+    for destination, sources in resource_copy_sources.items():
+        destination_key = str(destination).casefold()
+        for source in sources:
+            source_key = str(source).casefold()
+            resource_copy_neighbors.setdefault(destination_key, set()).add(
+                source)
+            resource_copy_neighbors.setdefault(source_key, set()).add(
+                destination)
 
     for name, info in section_info.items():
         bindings = dict(info.get("vertex_resources_at_end") or {})
@@ -223,6 +268,7 @@ def _build_vertex_binding_index(section_info, sections,
         section_runs=section_runs,
         resource_consumers=resource_consumers,
         resource_copy_sources=resource_copy_sources,
+        resource_copy_neighbors=resource_copy_neighbors,
     )
 
 
