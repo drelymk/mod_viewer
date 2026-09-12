@@ -177,9 +177,48 @@ function collectSourceBoneEvidence(rig) {
   return result;
 }
 
+function prepareSourceBoneEvidence(evidenceByKey) {
+  evidenceByKey.forEach(evidence => {
+    const weightedCenter = vectorFrom(evidence.weightedCenter);
+    const restAnchor = vectorFrom(evidence.restAnchor);
+    const restDirection = vectorFrom(evidence.restDirection);
+    const jointPivot = vectorFrom(evidence.jointPivot);
+    Object.defineProperties(evidence, {
+      _weightedCenterVector: {
+        value: weightedCenter ? Object.freeze(weightedCenter) : null,
+        enumerable: false,
+      },
+      _restAnchorVector: {
+        value: restAnchor ? Object.freeze(restAnchor) : null,
+        enumerable: false,
+      },
+      _restDirectionVector: {
+        value: restDirection ? Object.freeze(restDirection) : null,
+        enumerable: false,
+      },
+      _jointPivotVector: {
+        value: jointPivot ? Object.freeze(jointPivot) : null,
+        enumerable: false,
+      },
+      _neighborBoneKeys: {
+        value: Object.freeze((evidence.neighborBoneIds || []).map(boneId =>
+          sourceBoneKey(evidence.sourceKey, boneId))),
+        enumerable: false,
+      },
+    });
+  });
+  return evidenceByKey;
+}
+
+function evidenceVector(evidence, property, fallback) {
+  return evidence?.[property]?.clone()
+    || vectorFrom(evidence?.[fallback]);
+}
+
 function modelReferenceRadius(evidence) {
   const points = [...evidence.values()].map(item =>
-    vectorFrom(item.weightedCenter)).filter(Boolean);
+    evidenceVector(item, '_weightedCenterVector', 'weightedCenter'))
+    .filter(Boolean);
   if (!points.length) return 1;
   const center = points.reduce((sum, point) => sum.add(point), new Vector3())
     .multiplyScalar(1 / points.length);
@@ -195,14 +234,15 @@ function neighborDirection(evidence, allEvidence, incoming) {
   if (incoming) {
     const parent = allEvidence.get(sourceBoneKey(
       evidence.sourceKey, evidence.parentBoneId));
-    const vector = parent && vectorFrom(evidence.restAnchor)
-      && vectorFrom(parent.restAnchor)
-      ? vectorFrom(evidence.restAnchor).sub(vectorFrom(parent.restAnchor))
+    const vector = parent && evidenceVector(evidence, '_restAnchorVector',
+      'restAnchor') && evidenceVector(parent, '_restAnchorVector', 'restAnchor')
+      ? evidenceVector(evidence, '_restAnchorVector', 'restAnchor')
+        .sub(evidenceVector(parent, '_restAnchorVector', 'restAnchor'))
       : null;
     if (vector?.length() > EPSILON) return vector.normalize();
   }
   return directionAvailable(evidence)
-    ? vectorFrom(evidence.restDirection) : null;
+    ? evidenceVector(evidence, '_restDirectionVector', 'restDirection') : null;
 }
 
 function topologyFeature(left, right) {
@@ -282,26 +322,47 @@ function nearestSample(sample, cells, cellSize, matchDistance) {
   for (let dx = -1; dx <= 1; dx += 1) {
     for (let dy = -1; dy <= 1; dy += 1) {
       for (let dz = -1; dz <= 1; dz += 1) {
-        const entries = cells.get(`${x + dx}:${y + dy}:${z + dz}`) || [];
-        entries.forEach(candidate => {
-          const distance = sample.point.distanceTo(candidate.point);
-          if (distance > matchDistance) return;
+        const entries = cells.get(`${x + dx}:${y + dy}:${z + dz}`);
+        if (!entries) continue;
+        for (const candidate of entries) {
+          const deltaX = sample.point.x - candidate.point.x;
+          const deltaY = sample.point.y - candidate.point.y;
+          const deltaZ = sample.point.z - candidate.point.z;
+          const distanceSquared = deltaX * deltaX + deltaY * deltaY
+            + deltaZ * deltaZ;
+          let distance = null;
+          if (distanceSquared > matchDistance * matchDistance
+              && (distance = Math.sqrt(distanceSquared)) > matchDistance) continue;
+          if (best && distanceSquared > best.distanceSquared) continue;
+          distance ??= Math.sqrt(distanceSquared);
+          if (distance > matchDistance) continue;
           if (!best || distance < best.distance
               || distance === best.distance
                 && candidate.sampleKey.localeCompare(
                   best.sample.sampleKey) < 0) {
-            best = {sample: candidate, distance};
+            best = {sample: candidate, distance, distanceSquared};
           }
-        });
+        }
       }
     }
   }
   return best;
 }
 
+function buildSpatialCells(samples, cellSize) {
+  const cells = new Map();
+  samples.forEach(sample => {
+    const key = cellKey(sample.point, cellSize);
+    const entries = cells.get(key) || [];
+    entries.push(sample);
+    cells.set(key, entries);
+  });
+  return cells;
+}
+
 export function crossSourceWeightEvidence(
     leftRig, rightRig, referenceRadius, leftSamples = null,
-    rightSamples = null) {
+    rightSamples = null, leftCells = null, rightCells = null) {
   const leftSampleList = leftSamples || vertexSamplesForRig(leftRig);
   const rightSampleList = rightSamples || vertexSamplesForRig(rightRig);
   if (!leftSampleList.length || !rightSampleList.length) return new Map();
@@ -309,24 +370,14 @@ export function crossSourceWeightEvidence(
   // The search examines one neighboring cell in each axis, so each cell must
   // cover the full match radius to avoid missing a valid pair at a boundary.
   const cellSize = matchDistance;
-  const leftCells = new Map();
-  leftSampleList.forEach(sample => {
-    const key = cellKey(sample.point, cellSize);
-    const entries = leftCells.get(key) || [];
-    entries.push(sample);
-    leftCells.set(key, entries);
-  });
-  const rightCells = new Map();
-  rightSampleList.forEach(sample => {
-    const key = cellKey(sample.point, cellSize);
-    const entries = rightCells.get(key) || [];
-    entries.push(sample);
-    rightCells.set(key, entries);
-  });
+  const leftCellMap = leftCells
+    || buildSpatialCells(leftSampleList, cellSize);
+  const rightCellMap = rightCells
+    || buildSpatialCells(rightSampleList, cellSize);
   const nearestLeftByRight = new Map();
   const nearestRightByLeft = new Map();
   rightSampleList.forEach(rightSample => {
-    const best = nearestSample(rightSample, leftCells, cellSize,
+    const best = nearestSample(rightSample, leftCellMap, cellSize,
       matchDistance);
     if (!best) return;
     nearestLeftByRight.set(rightSample, {
@@ -334,7 +385,7 @@ export function crossSourceWeightEvidence(
     });
   });
   leftSampleList.forEach(leftSample => {
-    const best = nearestSample(leftSample, rightCells, cellSize,
+    const best = nearestSample(leftSample, rightCellMap, cellSize,
       matchDistance);
     if (!best) return;
     nearestRightByLeft.set(leftSample, {
@@ -416,16 +467,19 @@ function semanticRelationshipFor(left, right, semanticBySourceBoneKey) {
 function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   // Equivalence compares like-for-like neutral regions. The parent joint pivot
   // is a structural anchor, not a replacement for a source bone's region.
-  const leftCenter = vectorFrom(left.weightedCenter);
-  const rightCenter = vectorFrom(right.weightedCenter);
+  const leftCenter = evidenceVector(left, '_weightedCenterVector',
+    'weightedCenter');
+  const rightCenter = evidenceVector(right, '_weightedCenterVector',
+    'weightedCenter');
   const distance = leftCenter?.distanceTo(rightCenter);
   if (!Number.isFinite(distance)) return null;
   const normalizedDistance = distance / gate.referenceRadius;
   if (normalizedDistance > CROSS_SOURCE_CANDIDATE_DISTANCE) return null;
   const directionAlignment = directionAvailable(left)
     && directionAvailable(right)
-    ? Math.abs(vectorFrom(left.restDirection)
-      .dot(vectorFrom(right.restDirection))) : null;
+    ? Math.abs(evidenceVector(left, '_restDirectionVector', 'restDirection')
+      .dot(evidenceVector(right, '_restDirectionVector', 'restDirection')))
+    : null;
   const radiusRatio = left.weightedRadius > EPSILON
     && right.weightedRadius > EPSILON
     ? Math.min(left.weightedRadius, right.weightedRadius)
@@ -594,13 +648,19 @@ function neighborMatches(candidate, evidenceByKey, unionFind) {
   }
   const leftNeighbors = left.neighborBoneIds || [];
   const rightNeighbors = right.neighborBoneIds || [];
+  const leftNeighborKeys = left._neighborBoneKeys || leftNeighbors.map(
+    boneId => sourceBoneKey(left.sourceKey, boneId));
+  const rightNeighborKeys = right._neighborBoneKeys || rightNeighbors.map(
+    boneId => sourceBoneKey(right.sourceKey, boneId));
   const usedRightNeighbors = new Set();
   const matchedNeighborPairs = [];
   leftNeighbors.forEach(leftNeighborId => {
-    const rightNeighborId = rightNeighbors.find(candidateId =>
-      !usedRightNeighbors.has(candidateId)
-      && unionFind.same(sourceBoneKey(left.sourceKey, leftNeighborId),
-        sourceBoneKey(right.sourceKey, candidateId)));
+    const leftNeighborIndex = leftNeighbors.indexOf(leftNeighborId);
+    const rightNeighborIndex = rightNeighborKeys.findIndex((candidateKey,
+      index) => !usedRightNeighbors.has(rightNeighbors[index])
+      && unionFind.same(leftNeighborKeys[leftNeighborIndex], candidateKey));
+    const rightNeighborId = rightNeighborIndex < 0
+      ? undefined : rightNeighbors[rightNeighborIndex];
     if (rightNeighborId === undefined) return;
     usedRightNeighbors.add(rightNeighborId);
     matchedNeighborPairs.push({leftBoneId: leftNeighborId, rightBoneId: rightNeighborId});
@@ -628,10 +688,12 @@ function graphAlignmentFeatures(candidate, evidenceByKey, unionFind) {
       left.sourceKey, pair.leftBoneId));
     const rightNeighbor = evidenceByKey.get(sourceBoneKey(
       right.sourceKey, pair.rightBoneId));
-    const leftVector = vectorFrom(leftNeighbor?.weightedCenter)
-      ?.sub(vectorFrom(left.weightedCenter));
-    const rightVector = vectorFrom(rightNeighbor?.weightedCenter)
-      ?.sub(vectorFrom(right.weightedCenter));
+    const leftVector = evidenceVector(leftNeighbor, '_weightedCenterVector',
+      'weightedCenter')?.sub(evidenceVector(left, '_weightedCenterVector',
+      'weightedCenter'));
+    const rightVector = evidenceVector(rightNeighbor, '_weightedCenterVector',
+      'weightedCenter')?.sub(evidenceVector(right, '_weightedCenterVector',
+      'weightedCenter'));
     if (!leftVector || !rightVector
         || leftVector.length() <= EPSILON || rightVector.length() <= EPSILON) {
       return;
@@ -707,20 +769,39 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
   };
 }
 
-function buildCrossSourceWeightEvidence(sourceRigs, referenceRadius) {
-  const evidence = new Map();
+function prepareCrossSourceEvidence(sourceRigs, referenceRadius) {
   const rigs = [...sourceRigs].sort((left, right) =>
     String(left.sourceKey).localeCompare(String(right.sourceKey)));
-  const samplesBySourceKey = new Map(rigs.map(rig => [
-    String(rig.sourceKey), vertexSamplesForRig(rig),
-  ]));
+  const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
+  const samplesBySourceKey = new Map();
+  const cellsBySourceKey = new Map();
+  rigs.forEach(rig => {
+    const sourceKey = String(rig.sourceKey);
+    const samples = vertexSamplesForRig(rig);
+    samplesBySourceKey.set(sourceKey, samples);
+    cellsBySourceKey.set(sourceKey,
+      buildSpatialCells(samples, matchDistance));
+  });
+  return {
+    rigs,
+    samplesBySourceKey,
+    cellsBySourceKey,
+  };
+}
+
+function buildCrossSourceWeightEvidence(sourceRigs, referenceRadius) {
+  const evidence = new Map();
+  const preparation = prepareCrossSourceEvidence(sourceRigs, referenceRadius);
+  const {rigs, samplesBySourceKey, cellsBySourceKey} = preparation;
   for (let leftIndex = 0; leftIndex < rigs.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < rigs.length; rightIndex += 1) {
       const leftRig = rigs[leftIndex];
       const rightRig = rigs[rightIndex];
       crossSourceWeightEvidence(leftRig, rightRig, referenceRadius,
         samplesBySourceKey.get(String(leftRig.sourceKey)),
-        samplesBySourceKey.get(String(rightRig.sourceKey)))
+        samplesBySourceKey.get(String(rightRig.sourceKey)),
+        cellsBySourceKey.get(String(leftRig.sourceKey)),
+        cellsBySourceKey.get(String(rightRig.sourceKey)))
         .forEach((record, key) => evidence.set(key, record));
     }
   }
@@ -760,28 +841,20 @@ function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = [],
 
 function markSpatialRelationships(candidates) {
   const endpointMap = new Map();
-  const competitionKey = (endpoint, otherSource) => JSON.stringify([
-    endpoint, String(otherSource),
-  ]);
-  const endpointDescriptor = (candidate, endpoint) =>
-    candidate.left.sourceBoneKey === endpoint
-      ? {otherSource: candidate.right.sourceKey,
-        otherKey: candidate.right.sourceBoneKey}
-      : {otherSource: candidate.left.sourceKey,
-        otherKey: candidate.left.sourceBoneKey};
   candidates.forEach(candidate => {
     for (const endpoint of [candidate.left.sourceBoneKey,
       candidate.right.sourceBoneKey]) {
       const descriptor = endpointDescriptor(candidate, endpoint);
-      const key = competitionKey(endpoint, descriptor.otherSource);
+      const key = endpointCompetitionKey(endpoint, descriptor.otherSource);
       const incident = endpointMap.get(key) || [];
       incident.push(candidate);
       endpointMap.set(key, incident);
     }
   });
-  const rankFor = (endpoint, candidatesForEndpoint) => {
-    const ranked = [...candidatesForEndpoint];
-    ranked.sort((left, right) => {
+  const rankedByEndpoint = new Map();
+  endpointMap.forEach((candidatesForEndpoint, key) => {
+    const [endpoint] = JSON.parse(key);
+    rankedByEndpoint.set(key, [...candidatesForEndpoint].sort((left, right) => {
       const leftDescriptor = endpointDescriptor(left, endpoint);
       const rightDescriptor = endpointDescriptor(right, endpoint);
       return (right.confidenceClass || 0) - (left.confidenceClass || 0)
@@ -791,20 +864,17 @@ function markSpatialRelationships(candidates) {
         || right.geometryConfidence - left.geometryConfidence
         || left.normalizedDistance - right.normalizedDistance
         || leftDescriptor.otherKey.localeCompare(rightDescriptor.otherKey);
-    });
-    return ranked;
-  };
+    }));
+  });
   candidates.forEach(candidate => {
     const leftDescriptor = endpointDescriptor(
       candidate, candidate.left.sourceBoneKey);
     const rightDescriptor = endpointDescriptor(
       candidate, candidate.right.sourceBoneKey);
-    const leftCandidates = rankFor(candidate.left.sourceBoneKey,
-      endpointMap.get(competitionKey(candidate.left.sourceBoneKey,
-        leftDescriptor.otherSource)) || []);
-    const rightCandidates = rankFor(candidate.right.sourceBoneKey,
-      endpointMap.get(competitionKey(candidate.right.sourceBoneKey,
-        rightDescriptor.otherSource)) || []);
+    const leftCandidates = rankedByEndpoint.get(endpointCompetitionKey(
+      candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [];
+    const rightCandidates = rankedByEndpoint.get(endpointCompetitionKey(
+      candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [];
     candidate.mutualBest = leftCandidates[0] === candidate
       && rightCandidates[0] === candidate;
     candidate.leftAmbiguous = candidateAmbiguous(
@@ -855,25 +925,6 @@ function compareGraphAlignmentCandidate(left, right) {
     || left.right.sourceBoneKey.localeCompare(right.right.sourceBoneKey);
 }
 
-function graphAlignmentCandidatesFor(candidates, endpoint, otherSource,
-    unionFind) {
-  return candidates.filter(candidate => {
-    // Rank only candidates incident to this endpoint. An unrelated branch
-    // must not compete with the endpoint's real correspondence.
-    if (candidate.left.sourceBoneKey !== endpoint
-        && candidate.right.sourceBoneKey !== endpoint) return false;
-    if (unionFind.same(candidate.left.sourceBoneKey,
-      candidate.right.sourceBoneKey)) return false;
-    const descriptor = endpointDescriptor(candidate, endpoint);
-    return descriptor.otherSource === otherSource
-      && descriptor.otherKey !== endpoint
-      && candidate.matchedNeighborCount > 0
-      && candidate.graphAlignmentScore
-        >= CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE
-      && candidate.topology.degree >= .5;
-  }).sort(compareGraphAlignmentCandidate);
-}
-
 function uniqueGraphWinner(candidate, ranked, tier) {
   if (ranked[0] !== candidate) return false;
   const second = ranked[1];
@@ -904,16 +955,30 @@ function runGraphAlignment(candidates, evidenceByKey, unionFind,
       && candidate.topology.degree >= .5
       && !unionFind.same(candidate.left.sourceBoneKey,
         candidate.right.sourceBoneKey));
+    const rankedByEndpoint = new Map();
+    available.forEach(candidate => {
+      for (const endpoint of [candidate.left.sourceBoneKey,
+        candidate.right.sourceBoneKey]) {
+        const descriptor = endpointDescriptor(candidate, endpoint);
+        const key = endpointCompetitionKey(endpoint, descriptor.otherSource);
+        const bucket = rankedByEndpoint.get(key) || [];
+        bucket.push(candidate);
+        rankedByEndpoint.set(key, bucket);
+      }
+    });
+    rankedByEndpoint.forEach(bucket => {
+      bucket.sort(compareGraphAlignmentCandidate);
+    });
     const rankFor = candidate => {
       const leftDescriptor = endpointDescriptor(
         candidate, candidate.left.sourceBoneKey);
       const rightDescriptor = endpointDescriptor(
         candidate, candidate.right.sourceBoneKey);
       return {
-        left: graphAlignmentCandidatesFor(available,
-          candidate.left.sourceBoneKey, leftDescriptor.otherSource, unionFind),
-        right: graphAlignmentCandidatesFor(available,
-          candidate.right.sourceBoneKey, rightDescriptor.otherSource, unionFind),
+        left: rankedByEndpoint.get(endpointCompetitionKey(
+          candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [],
+        right: rankedByEndpoint.get(endpointCompetitionKey(
+          candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [],
       };
     };
     const selected = available.filter(candidate => {
@@ -994,6 +1059,14 @@ function runPathAlignment(candidates, evidenceByKey, unionFind,
     candidate,
   ]));
   let changed = true;
+  const pathCache = new Map();
+  const pathFor = (startKey, endKey) => {
+    const key = `${startKey}\u0000${endKey}`;
+    if (pathCache.has(key)) return pathCache.get(key);
+    const path = pathBetweenSourceBones(startKey, endKey, evidenceByKey);
+    pathCache.set(key, path);
+    return path;
+  };
   while (changed) {
     changed = false;
     const alignments = new Map();
@@ -1003,10 +1076,8 @@ function runPathAlignment(candidates, evidenceByKey, unionFind,
              rightIndex < anchors.length; rightIndex += 1) {
           const first = anchors[leftIndex];
           const second = anchors[rightIndex];
-          const leftPath = pathBetweenSourceBones(
-            first.left, second.left, evidenceByKey);
-          const rightPath = pathBetweenSourceBones(
-            first.right, second.right, evidenceByKey);
+          const leftPath = pathFor(first.left, second.left);
+          const rightPath = pathFor(first.right, second.right);
           if (!leftPath || !rightPath || leftPath.length !== rightPath.length
               || leftPath.length < 3) continue;
           const internal = [];
@@ -1114,45 +1185,37 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
       return candidate.matchedNeighborCount > 0;
     });
     const endpointMap = new Map();
-    const competitionKey = (endpoint, otherSource) => JSON.stringify([
-      endpoint, String(otherSource),
-    ]);
-    const endpointDescriptor = (candidate, endpoint) =>
-      candidate.left.sourceBoneKey === endpoint
-        ? {otherSource: candidate.right.sourceKey,
-          otherKey: candidate.right.sourceBoneKey}
-        : {otherSource: candidate.left.sourceKey,
-          otherKey: candidate.left.sourceBoneKey};
     propagation.forEach(candidate => {
       for (const endpoint of [candidate.left.sourceBoneKey,
         candidate.right.sourceBoneKey]) {
         const descriptor = endpointDescriptor(candidate, endpoint);
-        const key = competitionKey(endpoint, descriptor.otherSource);
+        const key = endpointCompetitionKey(endpoint, descriptor.otherSource);
         const incident = endpointMap.get(key) || [];
         incident.push(candidate);
         endpointMap.set(key, incident);
       }
     });
-    const rankedFor = (endpoint, candidatesForEndpoint) =>
-      [...candidatesForEndpoint].sort((left, right) =>
+    const rankedByEndpoint = new Map();
+    endpointMap.forEach((candidatesForEndpoint, key) => {
+      const [endpoint] = JSON.parse(key);
+      rankedByEndpoint.set(key, [...candidatesForEndpoint].sort((left, right) =>
         right.propagationScore - left.propagationScore
         || (right.confidenceClass || 0) - (left.confidenceClass || 0)
         || right.combinedConfidence - left.combinedConfidence
         || right.supportReliability - left.supportReliability
         || left.normalizedDistance - right.normalizedDistance
         || endpointDescriptor(left, endpoint).otherKey.localeCompare(
-          endpointDescriptor(right, endpoint).otherKey));
+          endpointDescriptor(right, endpoint).otherKey)));
+    });
     const selected = propagation.filter(candidate => {
       const leftDescriptor = endpointDescriptor(
         candidate, candidate.left.sourceBoneKey);
       const rightDescriptor = endpointDescriptor(
         candidate, candidate.right.sourceBoneKey);
-      const leftBest = rankedFor(candidate.left.sourceBoneKey,
-        endpointMap.get(competitionKey(candidate.left.sourceBoneKey,
-          leftDescriptor.otherSource)) || []);
-      const rightBest = rankedFor(candidate.right.sourceBoneKey,
-        endpointMap.get(competitionKey(candidate.right.sourceBoneKey,
-          rightDescriptor.otherSource)) || []);
+      const leftBest = rankedByEndpoint.get(endpointCompetitionKey(
+        candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [];
+      const rightBest = rankedByEndpoint.get(endpointCompetitionKey(
+        candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [];
       const leftAmbiguous = candidateAmbiguous(
         leftBest[0] && {...leftBest[0], score: leftBest[0].propagationScore},
         leftBest[1] && {...leftBest[1], score: leftBest[1].propagationScore});
@@ -1234,11 +1297,14 @@ function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
     const members = memberKeys.map(key => evidenceByKey.get(key)).filter(Boolean);
     const signature = JSON.stringify(memberKeys);
     const center = weightedAverage(members.map(evidence => ({
-      point: vectorFrom(evidence.weightedCenter)?.toArray(),
+      point: evidenceVector(evidence, '_weightedCenterVector',
+        'weightedCenter')?.toArray(),
       weight: Math.max(evidence.totalWeight, evidence.affectedVertexCount, 1),
     }))) || [0, 0, 0];
-    const pivots = members.map(evidence => vectorFrom(
-      evidence.jointPivot || (evidence.isRoot ? null : evidence.restAnchor)))
+    const pivots = members.map(evidence =>
+      evidenceVector(evidence, '_jointPivotVector', 'jointPivot')
+        || (evidence.isRoot ? null : evidenceVector(evidence,
+          '_restAnchorVector', 'restAnchor')))
       .filter(Boolean);
     const pivotMedoid = medoid(pivots);
     const pivotTolerance = referenceRadius * CROSS_SOURCE_STRICT_DISTANCE;
@@ -1765,12 +1831,15 @@ function aggregateJointCrossEvidence(left, right, crossEvidenceByPair) {
 }
 
 function aggregateComponentCrossEvidence(component, target, joints,
-    crossEvidenceByPair, referenceRadius) {
+    crossEvidenceByPair, referenceRadius, jointEvidenceByPair = null) {
   const jointEvidence = [];
   component.nodeIds.forEach(accessoryId => {
     target.nodeIds.forEach(targetId => {
-      const evidence = aggregateJointCrossEvidence(joints[accessoryId],
-        joints[targetId], crossEvidenceByPair);
+      const key = jointPairKey(accessoryId, targetId);
+      const evidence = jointEvidenceByPair?.get(key)
+        || aggregateJointCrossEvidence(joints[accessoryId],
+          joints[targetId], crossEvidenceByPair);
+      jointEvidenceByPair?.set(key, evidence);
       const accessoryCenter = vectorFrom(joints[accessoryId]?.restCenter);
       const targetCenter = vectorFrom(joints[targetId]?.restCenter);
       const distance = accessoryCenter && targetCenter
@@ -1804,14 +1873,21 @@ function aggregateComponentCrossEvidence(component, target, joints,
   };
 }
 
-function sourceWitnessesForJoints(targetJoint, accessoryJoint) {
+function sourceKeysForJoint(joint) {
+  return [...new Set((joint?.members || []).map(member =>
+    String(member.sourceKey ?? '')).filter(Boolean))].sort();
+}
+
+function sourceWitnessesForJoints(targetJoint, accessoryJoint,
+    sourceKeysByJointId = null) {
   const witnesses = new Set();
-  for (const targetMember of targetJoint?.members || []) {
-    const targetSourceKey = String(targetMember.sourceKey ?? '');
-    if (!targetSourceKey) continue;
-    for (const accessoryMember of accessoryJoint?.members || []) {
-      const accessorySourceKey = String(accessoryMember.sourceKey ?? '');
-      if (!accessorySourceKey || targetSourceKey === accessorySourceKey) {
+  const targetSourceKeys = sourceKeysByJointId?.get(targetJoint?.jointId)
+    || sourceKeysForJoint(targetJoint);
+  const accessorySourceKeys = sourceKeysByJointId?.get(
+    accessoryJoint?.jointId) || sourceKeysForJoint(accessoryJoint);
+  for (const targetSourceKey of targetSourceKeys) {
+    for (const accessorySourceKey of accessorySourceKeys) {
+      if (targetSourceKey === accessorySourceKey) {
         continue;
       }
       witnesses.add(`${targetSourceKey}\u0000${accessorySourceKey}`);
@@ -1831,16 +1907,29 @@ function attachmentCandidates(joints, forest, referenceRadius,
   const candidates = [];
   const components = forest.components;
   const componentEvidenceByPair = new Map();
+  const jointEvidenceByPair = new Map();
+  const sourceKeysByJointId = new Map(joints.map(joint => [
+    joint.jointId, sourceKeysForJoint(joint),
+  ]));
+  const sourceWitnessesByJointPair = new Map();
+  const supportByComponentId = new Map(components.map(component => [
+    component.componentId, componentSupport(component, joints),
+  ]));
+  const jointDescriptorById = new Map(joints.map(joint => [joint.jointId, {
+    anchor: vectorFrom(joint.restCenter),
+    direction: vectorFrom(joint.restDirection),
+  }]));
   const componentEvidenceFor = (accessory, target) => {
     const key = `${accessory.componentId}:${target.componentId}`;
     if (!componentEvidenceByPair.has(key)) {
       componentEvidenceByPair.set(key, aggregateComponentCrossEvidence(
-        accessory, target, joints, crossEvidenceByPair, referenceRadius));
+        accessory, target, joints, crossEvidenceByPair, referenceRadius,
+        jointEvidenceByPair));
     }
     return componentEvidenceByPair.get(key);
   };
-  const directions = new Map(joints.map(joint => [joint.jointId,
-    vectorFrom(joint.restDirection)]));
+  const directions = new Map([...jointDescriptorById.entries()].map(([
+    jointId, descriptor]) => [jointId, descriptor.direction]));
   // The model joint direction is represented by the selected source member's
   // rest frame +Y. Keeping this derivation here avoids inventing labels or
   // changing the source-local rest-frame contract.
@@ -1851,10 +1940,11 @@ function attachmentCandidates(joints, forest, referenceRadius,
       .applyQuaternion(frame).normalize());
   });
   for (const accessory of components) {
-    const accessorySupport = componentSupport(accessory, joints);
+    const accessorySupport = supportByComponentId.get(accessory.componentId)
+      || 0;
     for (const target of components) {
       if (target.componentId === accessory.componentId) continue;
-      const targetSupport = componentSupport(target, joints);
+      const targetSupport = supportByComponentId.get(target.componentId) || 0;
       // Attach smaller inferred components to a larger body. This also makes
       // the direction of an attachment deterministic when two disconnected
       // components have identical synthetic support in a test fixture.
@@ -1867,14 +1957,19 @@ function attachmentCandidates(joints, forest, referenceRadius,
       const componentEvidence = componentEvidenceFor(accessory, target);
       for (const targetId of target.nodeIds) {
         const targetJoint = joints[targetId];
-        const targetAnchor = vectorFrom(targetJoint?.restCenter);
+        const targetAnchor = jointDescriptorById.get(targetId)?.anchor;
         if (!targetAnchor) continue;
         for (const accessoryId of accessory.nodeIds) {
           const accessoryJoint = joints[accessoryId];
-          const accessoryAnchor = vectorFrom(accessoryJoint?.restCenter);
+          const accessoryAnchor = jointDescriptorById.get(accessoryId)?.anchor;
           if (!accessoryAnchor) continue;
-          const sourceWitnesses = sourceWitnessesForJoints(
-            targetJoint, accessoryJoint);
+          const witnessKey = jointPairKey(targetId, accessoryId);
+          let sourceWitnesses = sourceWitnessesByJointPair.get(witnessKey);
+          if (!sourceWitnesses) {
+            sourceWitnesses = sourceWitnessesForJoints(targetJoint,
+              accessoryJoint, sourceKeysByJointId);
+            sourceWitnessesByJointPair.set(witnessKey, sourceWitnesses);
+          }
           if (!sourceWitnesses.length) continue;
           const towardAccessory = accessoryAnchor.clone().sub(targetAnchor);
           const distance = towardAccessory.length();
@@ -1885,8 +1980,10 @@ function attachmentCandidates(joints, forest, referenceRadius,
           const directionAlignment = accessoryDirection
             ? Math.abs(accessoryDirection.dot(towardAccessory.normalize()))
             : null;
-          const pairEvidence = aggregateJointCrossEvidence(targetJoint,
-            accessoryJoint, crossEvidenceByPair);
+          const pairEvidence = jointEvidenceByPair.get(witnessKey)
+            || aggregateJointCrossEvidence(targetJoint, accessoryJoint,
+              crossEvidenceByPair);
+          jointEvidenceByPair.set(witnessKey, pairEvidence);
           const nearbyTargetAgreement = Math.max(0,
             (componentEvidence.supportedTargetCountByAccessory.get(accessoryId)
               || 0) - (pairEvidence.matchedVertexCount > 0 ? 1 : 0));
@@ -2072,16 +2169,17 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     .sort((left, right) => String(left.sourceKey)
       .localeCompare(String(right.sourceKey)));
   const evidenceByKey = new Map();
-  rigs.forEach(rig => collectSourceBoneEvidence(rig).forEach((evidence, key) =>
-    evidenceByKey.set(key, evidence)));
+  rigs.forEach(rig =>
+    collectSourceBoneEvidence(rig).forEach((evidence, key) =>
+      evidenceByKey.set(key, evidence)));
+  prepareSourceBoneEvidence(evidenceByKey);
   const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
     modelReferenceRadius(evidenceByKey)));
   const candidateBuild = buildCandidates(
     evidenceByKey, referenceRadius, rigs, options);
   const candidates = candidateBuild.candidates;
   const unionFind = new GuardedUnionFind([...evidenceByKey.keys()]);
-  const equivalence = runEquivalencePasses(
-    candidates, evidenceByKey, unionFind);
+  const equivalence = runEquivalencePasses(candidates, evidenceByKey, unionFind);
   const model = buildModelJoints(unionFind, evidenceByKey,
     equivalence.correspondenceStrength, referenceRadius);
   const sourceEdges = sourceModelEdges(rigs, model.keyToJoint);
