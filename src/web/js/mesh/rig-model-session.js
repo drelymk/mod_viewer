@@ -6,29 +6,56 @@ import {sourceBoneKey} from './weight-rig-reconcile.js';
 import {
   aggregateInfluenceGraphs,
   buildInferredRigForest,
+  hasUsableSurfaceTopology,
   inspectSurfaceTopology,
   jointPivotMap,
 } from './weight-rig.js';
 
 let activeSession = null;
 
-function createSourceSession({states, knownMeshes, modelWeightState,
-    sourceSkinningRigs, ensureInfluenceGraph, rebuildRestFrames,
-    cloneForest} = {}) {
-  function memberArrayFingerprint(values) {
-    if (!values) return 'none';
-    const bytes = ArrayBuffer.isView(values)
-      ? new Uint8Array(values.buffer, values.byteOffset, values.byteLength)
-      : null;
-    if (!bytes) return `array:${values.length}:${[...values].join(',')}`;
-    let hash = 2166136261;
-    for (const byte of bytes) {
-      hash ^= byte;
-      hash = Math.imul(hash, 16777619);
-    }
-    return `${values.constructor.name}:${values.length}:${hash >>> 0}`;
-  }
+function memberStructuralEvidenceFields(member = {}) {
+  const state = member.state || {};
+  const identity = member.mesh?.userData?.identity || {};
+  const draw = identity.draw || {};
+  const geometry = identity.geometry_state || {};
+  const positionCount = member.mesh?.geometry?.attributes?.position?.count;
+  const surfaceIndexCount = member.mesh?.geometry?.index?.count
+    ?? member.mesh?.geometry?.index?.array?.length;
+  return [
+    state.skinningSourceKey ?? null,
+    state.influenceCount ?? null,
+    state.encoding ?? null,
+    draw.count ?? null,
+    draw.start ?? null,
+    draw.base ?? null,
+    geometry.ib_file ?? null,
+    geometry.index_size ?? null,
+    geometry.position_file ?? null,
+    geometry.position_stride ?? null,
+    geometry.texcoord_file ?? null,
+    geometry.texcoord_stride ?? null,
+    positionCount ?? null,
+    surfaceIndexCount ?? null,
+  ];
+}
 
+export function memberStructuralEvidenceKey(member = {}) {
+  return JSON.stringify(memberStructuralEvidenceFields(member));
+}
+
+function memberCompatibilityEvidenceKey(member = {}) {
+  // Some authored draw records share identical Rig evidence while their
+  // provenance-only draw start differs. Keep that broader key as a candidate
+  // only; memberEvidenceEqual remains the final identity decision.
+  const fields = memberStructuralEvidenceFields(member);
+  fields.splice(4, 1);
+  return JSON.stringify(fields);
+}
+
+function createSourceSession({states, knownMeshes, modelWeightState,
+    sourceSkinningRigs, ensureRigMeshPrepared, ensureInfluenceGraph,
+    rebuildRestFrames,
+    cloneForest} = {}) {
   function memberArraysEqual(left, right) {
     if (left === right) return true;
     if (!left || !right || left.length !== right.length) return false;
@@ -39,34 +66,53 @@ function createSourceSession({states, knownMeshes, modelWeightState,
   }
 
   function memberEvidenceEqual(left, right) {
-    return left.state.influenceCount === right.state.influenceCount
-      && memberArraysEqual(left.state.baselinePositions,
-        right.state.baselinePositions)
-      && memberArraysEqual(left.state.indices, right.state.indices)
-      && memberArraysEqual(left.state.weights, right.state.weights)
-      && memberArraysEqual(left.state.boneIds, right.state.boneIds)
-      && memberArraysEqual(left.surfaceIndices, right.surfaceIndices);
+    const leftState = left.state;
+    const rightState = right.state;
+    if (leftState.influenceCount !== rightState.influenceCount) return false;
+    const leftLengths = [
+      leftState.baselinePositions,
+      leftState.indices,
+      leftState.weights,
+      leftState.boneIds,
+      left.surfaceIndices,
+    ].map(values => values?.length ?? null);
+    const rightLengths = [
+      rightState.baselinePositions,
+      rightState.indices,
+      rightState.weights,
+      rightState.boneIds,
+      right.surfaceIndices,
+    ].map(values => values?.length ?? null);
+    if (leftLengths.some((length, index) => length !== rightLengths[index])) {
+      return false;
+    }
+    return memberArraysEqual(leftState.boneIds, rightState.boneIds)
+      && memberArraysEqual(left.surfaceIndices, right.surfaceIndices)
+      && memberArraysEqual(leftState.indices, rightState.indices)
+      && memberArraysEqual(leftState.weights, rightState.weights)
+      && memberArraysEqual(leftState.baselinePositions,
+        rightState.baselinePositions);
   }
 
   function normalizeMembers(members) {
-    const buckets = new Map();
+    const structuralBuckets = new Map();
+    const compatibilityBuckets = new Map();
     const uniqueMembers = [];
     for (const member of members) {
-      const state = member.state;
-      const fingerprint = [
-        state.influenceCount,
-        memberArrayFingerprint(state.baselinePositions),
-        memberArrayFingerprint(state.indices),
-        memberArrayFingerprint(state.weights),
-        memberArrayFingerprint(state.boneIds),
-        memberArrayFingerprint(member.surfaceIndices),
-      ].join('|');
-      const bucket = buckets.get(fingerprint) || [];
+      const structuralKey = memberStructuralEvidenceKey(member);
+      const bucket = structuralBuckets.get(structuralKey) || [];
       if (bucket.some(candidate => memberEvidenceEqual(candidate, member))) {
         continue;
       }
+      const compatibilityKey = memberCompatibilityEvidenceKey(member);
+      const compatibilityBucket = compatibilityBuckets.get(compatibilityKey)
+        || [];
+      if (compatibilityBucket.some(candidate =>
+          memberEvidenceEqual(candidate, member))) continue;
       bucket.push(member);
-      buckets.set(fingerprint, bucket);
+      structuralBuckets.set(structuralKey, bucket);
+      compatibilityBucket.push(member);
+      compatibilityBuckets.set(compatibilityKey, compatibilityBucket);
       uniqueMembers.push(member);
     }
     return uniqueMembers;
@@ -75,20 +121,26 @@ function createSourceSession({states, knownMeshes, modelWeightState,
   function aggregateInfluenceGraph(members) {
     const loadedMembers = members.map(mesh => {
       const state = states.get(mesh);
+      if (state?.loaded) ensureRigMeshPrepared?.(mesh, state);
       return state?.loaded ? {
         mesh,
         state,
         surfaceIndices: mesh.geometry?.index?.array || null,
-        surfaceEvidence: inspectSurfaceTopology(
-          state.baselinePositions, mesh.geometry?.index?.array || null),
       } : null;
     }).filter(Boolean);
     const uniqueMembers = normalizeMembers(loadedMembers);
-    const evidenceMode = loadedMembers.every(member =>
-      member.surfaceEvidence.surfaceEvidenceAvailable) ? 'surface' : 'vertex';
-    const graph = aggregateInfluenceGraphs(uniqueMembers.map(member =>
-      ensureInfluenceGraph(member.mesh, member.state, evidenceMode,
-        member.surfaceEvidence)));
+    const surfaceEligible = uniqueMembers.map(member =>
+      hasUsableSurfaceTopology(
+        member.state.baselinePositions, member.surfaceIndices));
+    const evidenceMode = surfaceEligible.every(Boolean) ? 'surface' : 'vertex';
+    const graph = aggregateInfluenceGraphs(uniqueMembers.map(member => {
+      const surfaceEvidence = evidenceMode === 'surface'
+        ? {surfaceEvidenceAvailable: true}
+        : inspectSurfaceTopology(
+          member.state.baselinePositions, member.surfaceIndices);
+      return ensureInfluenceGraph(
+        member.mesh, member.state, evidenceMode, surfaceEvidence);
+    }));
     return {
       ...graph,
       memberCount: loadedMembers.length,
@@ -216,7 +268,7 @@ export function initializeRigSourceSession(options) {
 }
 
 function createSession({state, modelWeightState, getGeneration,
-    loadModelWeights, buildAllSourceSkinningRigs, buildModelSkinningRig,
+    ensureModelWeightsLoaded, buildAllSourceSkinningRigs, buildModelSkinningRig,
     getSnapshot, notifyChanged, requestRender, cancelWeightPicking,
     pickFromSurface, getModelJointId, rotationSnapValues} = {}) {
   let loadToken = null;
@@ -276,7 +328,7 @@ function createSession({state, modelWeightState, getGeneration,
     state.error = null;
     state.pickStatus = '';
     notifyChanged();
-    const promise = loadModelWeights()
+    const promise = ensureModelWeightsLoaded()
       .then(() => {
         if (generation !== getGeneration() || loadToken !== token) {
           return getSnapshot();

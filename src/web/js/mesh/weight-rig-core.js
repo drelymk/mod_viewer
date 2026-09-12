@@ -68,7 +68,7 @@ import {initializeRigPoseRuntime} from './rig-pose-runtime.js';
 import {
   activePoseJointIds,
   createRigRuntimeState, createWeightRuntimeState, matrixIsIdentity,
-  RIG_LIMB_ROLES, RIG_ROTATION_SNAP_DEGREES,
+  EMPTY_ACTIVE_VERTICES, RIG_LIMB_ROLES, RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import {characterAxesFromOrientation} from './humanoid-orientation.js';
 import {
@@ -173,7 +173,7 @@ skinningRuntime = initializeSkinningRuntime({
   modelWeightSnapshot,
   selectionMapFromEntries,
   sourceSelectionEntries,
-  setSelectedBones: entries => setWeightModelSelectedBones(entries),
+  setSelectedBones: (...args) => setWeightModelSelectedBones(...args),
   syncPhysicsToSelection,
   refreshModelWeightSummary,
   refreshSelectedWeightMask,
@@ -202,6 +202,8 @@ rigSourceSession = initializeRigSourceSession({
   knownMeshes,
   modelWeightState,
   sourceSkinningRigs,
+  ensureRigMeshPrepared: (...args) =>
+    skinningRuntime.ensureRigMeshPrepared(...args),
   ensureInfluenceGraph: (...args) =>
     skinningRuntime.ensureInfluenceGraph(...args),
   rebuildRestFrames: rebuildSourceRigRestFrames,
@@ -254,6 +256,7 @@ initializeWeightModelSession({
   notifyChanged: () => notifyModelWeightChanged(),
   requestRender,
   getGeneration: () => modelWeightGeneration,
+  ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
 });
 
 initializeHumanoidPoseRuntime({
@@ -298,7 +301,7 @@ rigModelSession = initializeRigModelSession({
   state: modelRigState,
   modelWeightState,
   getGeneration: () => modelWeightGeneration,
-  loadModelWeights: () => skinningRuntime.loadModelWeights(),
+  ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
   buildAllSourceSkinningRigs,
   buildModelSkinningRig,
   getSnapshot: () => rigSnapshot(),
@@ -638,6 +641,13 @@ function refreshSelectedWeightMask(mesh, state) {
   if (!state?.loaded) return null;
   const selected = modelWeightState.selectedBonesBySource.get(
     state.skinningSourceKey) || new Set();
+  if (!selected.size) {
+    state.selectedWeightMask = null;
+    state.physicsActiveVertices = EMPTY_ACTIVE_VERTICES;
+    state.combinedPhysicsVerticesRef = null;
+    state.combinedActiveVertices = null;
+    return null;
+  }
   state.selectedWeightMask = buildSelectedWeightMask(
     state.indices, state.weights, state.influenceCount,
     selected);

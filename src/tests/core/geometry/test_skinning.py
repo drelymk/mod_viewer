@@ -26,6 +26,11 @@ def test_decode_gimi_four_influences_to_canonical_bytes():
     assert unpack_values(decoded.weights, "4f") == pytest.approx((.6, .3, .1, 0.))
     assert decoded.bone_ids == (7, 8, 9)
     assert decoded.diagnostics["invalid_weight_vertices"] == 0
+    assert decoded.bone_stats == {
+        7: {"affected_vertex_count": 1, "total_weight": pytest.approx(.6)},
+        8: {"affected_vertex_count": 1, "total_weight": pytest.approx(.3)},
+        9: {"affected_vertex_count": 1, "total_weight": pytest.approx(.1)},
+    }
 
 
 def test_decode_wwmi_four_influences_divides_bytes_by_255():
@@ -63,8 +68,23 @@ def test_decode_wwmi_vertex_vg_remap_keeps_colliding_raw_indices_distinct():
     assert unpack_values(decoded.weights, "8f") == pytest.approx(
         tuple(value / 255 for value in [255, 128, 64, 32, 16, 8, 4, 2]))
     assert decoded.bone_ids == (0, 1, 2, 3, 45, 257, 259)
+    assert decoded.bone_stats[259] == {
+        "affected_vertex_count": 1, "total_weight": pytest.approx(128 / 255),
+    }
     assert decoded.diagnostics["bone_id_namespace"] == "wwmi_vertex_vg"
     assert decoded.diagnostics["vertex_vg_remap"] is True
+
+
+def test_decode_bone_stats_count_each_vertex_once_and_sum_duplicate_slots():
+    source = SkinningSource("blend.buf", 8, 4, "wwmi_u8_4")
+    raw = bytes([2, 2, 3, 0, 128, 64, 32, 0])
+
+    decoded = decode_skinning(source, raw, [0])
+
+    assert decoded.bone_stats == {
+        2: {"affected_vertex_count": 1, "total_weight": pytest.approx(192 / 255)},
+        3: {"affected_vertex_count": 1, "total_weight": pytest.approx(32 / 255)},
+    }
 
 
 def test_decode_rigid_uses_one_implicit_weight():

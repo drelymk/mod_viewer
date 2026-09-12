@@ -8,6 +8,7 @@ export {
   clearSelectedBones,
   beginWeightModelPicking,
   cancelWeightModelPicking,
+  ensureModelWeightsLoaded,
   getModelWeightState,
   loadSavedBoneSelection,
   saveModelWeightSelection,
