@@ -70,7 +70,9 @@ class VertexBindingIndex:
         roots = set()
         for bound_resource, consumers in self.resource_consumers.items():
             if self._resource_connected(bound_resource, position_resource):
-                roots.update(consumers)
+                roots.update(
+                    consumer for consumer in consumers
+                    if str(consumer).lower().startswith("textureoverride"))
         self._position_roots_cache[key] = roots
         return roots
 
@@ -94,6 +96,11 @@ class VertexBindingIndex:
         candidates = []
         provenance_sections = set()
         for root in roots:
+            if self.section_binding_conditionals.get(root, False):
+                # A conditional binding anywhere in a TextureOverride's
+                # execution closure makes the complete root unsafe as static
+                # provenance evidence.
+                continue
             if root != root_section and root in self.section_draw_bindings:
                 # A different draw root has its own execution state. Its
                 # command-list closure must not leak into this draw's

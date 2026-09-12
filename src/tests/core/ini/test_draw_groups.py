@@ -574,6 +574,48 @@ stride = 32
     assert draw.skinning_error is None
 
 
+def test_draw_groups_position_provenance_rejects_conditional_commandlist_root():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverridePosition]
+vb0 = ResourcePosition
+if $mode
+    run = CommandListConditional
+endif
+
+[CommandListConditional]
+vb0 = ResourcePosition
+vb4 = ResourceConditionalBlend
+
+[TextureOverrideBody]
+ib = ResourceBodyIndex
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIndex]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceConditionalBlend]
+filename = conditional.blend
+stride = 32
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_source is None
+    assert draw.skinning_error is None
+
+
 def test_draw_groups_position_provenance_follows_reverse_explicit_copy():
     sections = parse_sections("sample.ini", text="""
 [TextureOverridePosition]
