@@ -351,6 +351,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         effective_position_resource,
                         root_section=section_name,
                         current_bindings=vertex_resources)
+                provenance_bindings = [
+                    (slot, resource)
+                    for slot, resource in provenance_bindings
+                    if slot not in vertex_resources
+                ]
+                provenance_candidates = provenance_bindings
                 provenance_resources = {
                     resource for _slot, resource in provenance_bindings
                 }
@@ -358,19 +364,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     "provenance_section_count": len(provenance_sections),
                     "provenance_candidate_count": len(provenance_resources),
                 })
-                provenance_candidates = provenance_bindings
                 provenance_bindings = {}
-                provenance_slots = set()
-                for slot, resource in provenance_candidates:
+                for _slot, resource in provenance_candidates:
                     synthetic_slot = len(provenance_bindings) + 2
                     provenance_bindings[synthetic_slot] = resource
-                    if slot >= 2:
-                        provenance_slots.add(synthetic_slot)
                 skinning_source, skinning_error = resolve_skinning_source(
                     provenance_bindings, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
-                    remap_resources=remap_resources,
-                    provenance_slots=provenance_slots)
+                    remap_resources=remap_resources)
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "position_provenance"

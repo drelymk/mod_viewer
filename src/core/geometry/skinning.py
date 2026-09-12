@@ -161,8 +161,7 @@ def _resolve_vertex_vg_resource(resource_name, resolve_vertex_info,
 
 
 def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
-                            bone_id_offset=0, remap_resources=None,
-                            provenance_slots=None):
+                            bone_id_offset=0, remap_resources=None):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -176,10 +175,6 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
         bone_id_offset = 0
     candidates = {}
     unsupported = []
-    provenance_slots = {
-        int(slot) for slot in (provenance_slots or ())
-        if isinstance(slot, int) and slot >= 2
-    }
     for _slot, resource_name in sorted(
             (effective_vertex_resources or {}).items()):
         if not resource_name:
@@ -190,7 +185,7 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
             continue
         evidence = f"{resource_name} {filename}".lower()
         labeled_blend = "blend" in evidence
-        if not labeled_blend and _slot not in provenance_slots:
+        if not labeled_blend:
             continue
         try:
             stride = int(info.get("stride"))

@@ -21,6 +21,7 @@ class VertexBindingIndex:
     sections: dict
     section_lookup: dict
     section_bindings: dict
+    section_binding_conditionals: dict
     section_draw_bindings: dict
     section_runs: dict
     resource_consumers: dict
@@ -93,6 +94,11 @@ class VertexBindingIndex:
         candidates = []
         provenance_sections = set()
         for root in roots:
+            if root != root_section and root in self.section_draw_bindings:
+                # A different draw root has its own execution state. Its
+                # command-list closure must not leak into this draw's
+                # provenance candidates.
+                continue
             for section_name in self._scope_sections(root):
                 # A draw-producing root contains multiple execution snapshots.
                 # Unless it is the exact target draw, those snapshots are not
@@ -100,6 +106,8 @@ class VertexBindingIndex:
                 # may not match the target draw.
                 if (section_name != root_section
                         and section_name in self.section_draw_bindings):
+                    continue
+                if self.section_binding_conditionals.get(section_name, False):
                     continue
                 if (section_name == root
                         and section_name in self.section_draw_bindings):
@@ -221,6 +229,7 @@ def _build_vertex_binding_index(section_info, sections,
     """Build the small reverse index used by skinning provenance lookup."""
     section_lookup = {str(name).lower(): name for name in sections}
     section_bindings = {}
+    section_binding_conditionals = {}
     section_draw_bindings = {}
     section_runs = {}
     resource_consumers = {}
@@ -237,6 +246,8 @@ def _build_vertex_binding_index(section_info, sections,
     for name, info in section_info.items():
         bindings = dict(info.get("vertex_resources_at_end") or {})
         section_bindings[name] = bindings
+        section_binding_conditionals[name] = bool(
+            info.get("vertex_bindings_conditional"))
         draw_bindings = [
             dict(draw.vertex_resources)
             for draw in info.get("draws", ())
@@ -264,6 +275,7 @@ def _build_vertex_binding_index(section_info, sections,
         sections=sections,
         section_lookup=section_lookup,
         section_bindings=section_bindings,
+        section_binding_conditionals=section_binding_conditionals,
         section_draw_bindings=section_draw_bindings,
         section_runs=section_runs,
         resource_consumers=resource_consumers,
