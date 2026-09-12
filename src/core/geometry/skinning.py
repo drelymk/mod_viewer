@@ -5,6 +5,8 @@ import ntpath
 import os
 import posixpath
 import struct
+import time
+from array import array
 from dataclasses import dataclass
 
 
@@ -23,6 +25,21 @@ class SkinningSource:
     vertex_vg_file: str | None = None
     vertex_vg_stride: int = 16
     bone_id_namespace: str = "model"
+
+
+@dataclass(frozen=True, slots=True)
+class SkinningManifestEntry:
+    """Private mapping from one rendered mesh to authored skin vertices."""
+
+    mesh_key: str
+    skinning_source: SkinningSource
+    used_vertices: array
+    vertex_count: int
+
+    @classmethod
+    def from_vertices(cls, mesh_key, skinning_source, used_vertices):
+        compact = array("I", used_vertices)
+        return cls(mesh_key, skinning_source, compact, len(compact))
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,7 +409,7 @@ def _error_for_draw(draw):
 
 def build_skinning_preview(draw, group, mod_dir, *, buffers,
                            default_streams, default_index_size,
-                           geometry_convention):
+                           geometry_convention, timing=None):
     """Prepare the selected draw, decode its source, and return canonical data."""
     from .packing import _prepare_draw_vertices
     from ..resource_paths import safe_resource_path
@@ -413,19 +430,28 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
             raise SkinningPreviewError(
                 "skinning_remap_unavailable",
                 "The WWMI VertexVG remap buffer could not be found.")
+    prepare_started = time.perf_counter() if timing is not None else None
     prepared = _prepare_draw_vertices(
         draw, group, mod_dir=mod_dir, default_streams=default_streams,
         default_index_size=default_index_size, buffers=buffers,
         geometry_convention=geometry_convention)
+    if timing is not None:
+        timing["prepare_draw_vertices_seconds"] += (
+            time.perf_counter() - prepare_started)
+        timing["prepare_draw_vertices_calls"] += 1
     if prepared is None:
         raise SkinningPreviewError(
             "geometry_not_available",
             "The rendered draw geometry could not be prepared.")
+    decode_started = time.perf_counter() if timing is not None else None
     decoded = decode_skinning(
         draw.skinning_source, buffers.raw(source_path),
         prepared.used_vertices,
         (buffers.raw(remap_path) if draw.skinning_source.vertex_vg_file
          else None))
+    if timing is not None:
+        timing["decode_skinning_seconds"] += (
+            time.perf_counter() - decode_started)
     if decoded.diagnostics["truncated_vertices"]:
         raise SkinningPreviewError(
             "skinning_buffer_truncated",
@@ -438,7 +464,8 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
 
 
 __all__ = [
-    "SkinningSource", "DecodedSkinning", "SkinningPreviewError",
+    "SkinningSource", "SkinningManifestEntry", "DecodedSkinning",
+    "SkinningPreviewError",
     "normalize_skinning_source_file", "skinning_source_key",
     "skinning_source_descriptor", "resolve_skinning_source",
     "decode_skinning", "build_skinning_preview",

@@ -132,19 +132,24 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     events = []
     publication = _Publication(events)
     preview = ModPreview(_Access())
+    context = _context()
+    manifest = {"Body-1": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
+        lambda _folder, **_kwargs: ("mod", {}, {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)
-    monkeypatch.setattr(
-        "app.bridge.mod_preview.mod_loader.load_mod",
-        lambda **_kwargs: {
+    def load_model(**kwargs):
+        kwargs["context"].skinning_manifest = manifest
+        return {
             "meshes": {"Body-1": {}},
             "metadata": {"game": {"id": "genshin"}},
             "controls": {"present": {}},
-        })
+        }
+
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.mod_loader.load_mod", load_model)
     monkeypatch.setattr(
         "app.bridge.mod_preview.metadata.hydrate_textures",
         lambda *_args, **_kwargs: None)
@@ -161,6 +166,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     assert result["meshes"] == {"Body-1": {}}
     assert [event[0] for event in events] == ["profile", "publish", "commit"]
     assert preview._active_mesh_keys == {"mod": {"Body-1"}}
+    assert preview._skinning_manifests == {"mod": manifest}
 
 
 def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
@@ -234,6 +240,7 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
     publication = _Publication(events)
     preview = ModPreview(_Access())
     preview._active_mesh_keys["mod"] = {"old"}
+    preview._skinning_manifests["mod"] = {"old": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
@@ -250,6 +257,7 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
 
     assert events == [("discard",)]
     assert "mod" not in preview._active_mesh_keys
+    assert "mod" not in preview._skinning_manifests
 
 
 def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):

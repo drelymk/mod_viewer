@@ -130,15 +130,22 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
         mod_dir=str(tmp_path), ini_paths=[str(ini)], docs={}, metadata={},
         asset_folders=[])
     preview = ModPreview(_Access())
+    preview._active_mesh_keys[str(tmp_path)] = set(rendered.meshes)
+    preview._skinning_manifests[str(tmp_path)] = rendered.skinning_manifest
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _path: (str(tmp_path), {}, {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
     monkeypatch.setattr(
-        "app.bridge.mod_preview.mod_loader.load_mod",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("preview must not load the model")),
+        preview, "_skinning_draws",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("loaded-model Weight must not resolve draws")),
+    )
+    monkeypatch.setattr(
+        "core.geometry.packing._prepare_draw_vertices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("loaded-model Weight must not prepare geometry")),
     )
 
     result = preview.get_model_skinning_preview(str(tmp_path))
@@ -156,6 +163,15 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     assert struct.unpack_from("<4I", published["blob"], 0) == (7, 8, 9, 0)
     assert struct.unpack_from("<4f", published["blob"], 4 * 4 * 4) == pytest.approx(
         (.6, .3, .1, 0.))
+    assert list(rendered.skinning_manifest["BodyBlend-1"].used_vertices) == [
+        0, 1, 2, 3]
+    assert result_entry["source"]["file"] == "body.blend"
+    assert preview._last_skinning_diagnostics[str(tmp_path)][
+        "mapping_source"] == "loaded_model_manifest"
+    assert preview._last_skinning_diagnostics[str(tmp_path)][
+        "resolve_draw_count"] == 0
+    assert preview._last_skinning_diagnostics[str(tmp_path)][
+        "prepare_draw_vertices_calls"] == 0
 
 
 def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
@@ -177,11 +193,18 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
         mod_dir=str(tmp_path), ini_paths=[str(ini)], docs={}, metadata={},
         asset_folders=[])
     preview = ModPreview(_Access())
+    preview._active_mesh_keys[str(tmp_path)] = set(rendered.meshes)
+    preview._skinning_manifests[str(tmp_path)] = rendered.skinning_manifest
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _path: (str(tmp_path), {}, {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
+    monkeypatch.setattr(
+        preview, "_skinning_draws",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("loaded-model Weight must not resolve draws")),
+    )
 
     result = preview.get_model_skinning_preview(str(tmp_path))
     entry = result["meshes"]["BodyBlend-1"]
@@ -193,6 +216,11 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
     assert entry["diagnostics"]["vertex_vg_source"] == "body.vertex_vg"
     assert entry["diagnostics"]["vertex_vg_truncated_vertices"] == 0
     assert entry["source"]["bone_id_namespace"] == "wwmi_vertex_vg"
+    manifest_source = rendered.skinning_manifest[
+        "BodyBlend-1"].skinning_source
+    assert manifest_source.vertex_vg_file == "body.vertex_vg"
+    assert manifest_source.vertex_vg_stride == 16
+    assert manifest_source.bone_id_namespace == "wwmi_vertex_vg"
     assert struct.unpack_from("<8I", published["blob"], 0) == (
         3, 259, 0, 0, 0, 0, 0, 0)
     assert struct.unpack_from("<8f", published["blob"], 3 * 8 * 4) == pytest.approx(
