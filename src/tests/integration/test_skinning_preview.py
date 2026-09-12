@@ -156,6 +156,11 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     assert result_entry["vertex_count"] == position_length // 12
     assert result_entry["encoding"] == "gimi_f32_u32_4"
     assert result_entry["bone_ids"] == [7, 8, 9]
+    assert result_entry["weight_stats"] == {
+        "7": {"affected_vertex_count": 4, "total_weight": pytest.approx(2.4)},
+        "8": {"affected_vertex_count": 4, "total_weight": pytest.approx(1.2)},
+        "9": {"affected_vertex_count": 4, "total_weight": pytest.approx(.4)},
+    }
     assert result_entry["data"]["indices"]["offset"] == 0
     assert result_entry["data"]["weights"]["offset"] == 4 * 4 * 4
     assert result["data"]["length"] == len(published["blob"])
@@ -211,6 +216,10 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
 
     assert result["status"] == "ok"
     assert entry["bone_ids"] == [3, 259]
+    assert entry["weight_stats"]["259"] == {
+        "affected_vertex_count": 3,
+        "total_weight": pytest.approx(3 * 128 / 255),
+    }
     assert entry["diagnostics"]["bone_id_namespace"] == "wwmi_vertex_vg"
     assert entry["diagnostics"]["vertex_vg_remap"] is True
     assert entry["diagnostics"]["vertex_vg_source"] == "body.vertex_vg"

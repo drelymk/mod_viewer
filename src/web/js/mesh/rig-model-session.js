@@ -13,7 +13,8 @@ import {
 let activeSession = null;
 
 function createSourceSession({states, knownMeshes, modelWeightState,
-    sourceSkinningRigs, ensureInfluenceGraph, rebuildRestFrames,
+    sourceSkinningRigs, ensureRigMeshPrepared, ensureInfluenceGraph,
+    rebuildRestFrames,
     cloneForest} = {}) {
   function memberArrayFingerprint(values) {
     if (!values) return 'none';
@@ -75,6 +76,7 @@ function createSourceSession({states, knownMeshes, modelWeightState,
   function aggregateInfluenceGraph(members) {
     const loadedMembers = members.map(mesh => {
       const state = states.get(mesh);
+      if (state?.loaded) ensureRigMeshPrepared?.(mesh, state);
       return state?.loaded ? {
         mesh,
         state,
@@ -216,7 +218,7 @@ export function initializeRigSourceSession(options) {
 }
 
 function createSession({state, modelWeightState, getGeneration,
-    loadModelWeights, buildAllSourceSkinningRigs, buildModelSkinningRig,
+    ensureModelWeightsLoaded, buildAllSourceSkinningRigs, buildModelSkinningRig,
     getSnapshot, notifyChanged, requestRender, cancelWeightPicking,
     pickFromSurface, getModelJointId, rotationSnapValues} = {}) {
   let loadToken = null;
@@ -276,7 +278,7 @@ function createSession({state, modelWeightState, getGeneration,
     state.error = null;
     state.pickStatus = '';
     notifyChanged();
-    const promise = loadModelWeights()
+    const promise = ensureModelWeightsLoaded()
       .then(() => {
         if (generation !== getGeneration() || loadToken !== token) {
           return getSnapshot();

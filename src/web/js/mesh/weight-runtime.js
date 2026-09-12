@@ -117,6 +117,37 @@ export function aggregateModelBoneStats(nodeLists) {
     }]));
 }
 
+export function aggregateModelWeightBoneStats(statMaps) {
+  const totals = new Map();
+  for (const stats of statMaps || []) {
+    for (const [rawBoneId, rawEntry] of Object.entries(stats || {})) {
+      const boneId = Number(rawBoneId);
+      const affectedVertexCount = Number(
+        rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
+      const totalWeight = Number(
+        rawEntry?.totalWeight ?? rawEntry?.total_weight);
+      if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
+          || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+        continue;
+      }
+      const entry = totals.get(boneId) || {
+        affectedVertexCount: 0,
+        totalWeight: 0,
+      };
+      entry.affectedVertexCount += affectedVertexCount;
+      entry.totalWeight += totalWeight;
+      totals.set(boneId, entry);
+    }
+  }
+  return Object.fromEntries([...totals.entries()]
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([boneId, entry]) => [boneId, {
+      affectedVertexCount: entry.affectedVertexCount,
+      averageInfluence: entry.affectedVertexCount > 0
+        ? entry.totalWeight / entry.affectedVertexCount : 0,
+    }]));
+}
+
 export function createWeightRuntimeState() {
   const states = new WeakMap();
   const knownMeshes = new Set();
@@ -170,6 +201,7 @@ export function createWeightRuntimeState() {
       debugMaterial: null,
       heatmapMode: null,
       diagnostics: null,
+      weightBoneStats: {},
       encoding: null,
       centerByBoneId: null,
       poseTransforms: null,

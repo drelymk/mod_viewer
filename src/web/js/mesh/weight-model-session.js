@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import {createWeightPickController} from '../scene/weight-pick-controller.js';
 import {computeModelBounds} from '../scene/model-bounds.js';
 import {sampleSkinningAtIntersection} from './weight-selection.js';
-import {aggregateModelBoneStats} from './weight-runtime.js';
+import {aggregateModelWeightBoneStats} from './weight-runtime.js';
 
 let activeSession = null;
 let activePickingSession = null;
@@ -147,22 +147,22 @@ function createSession({modelWeightState, states, knownMeshes,
     refreshSelectedWeightMask,
     updateModelWeightHeatmap, syncPhysicsToSelection, sameBoneSelection,
     serializeBoneSelection, eligibleSkinningMesh, notifyChanged,
-    requestRender, getGeneration} = {}) {
+    requestRender, getGeneration, ensureModelWeightsLoaded} = {}) {
   let selectionSavePromise = null;
 
   function refreshModelBoneStats() {
-    const nodesBySource = new Map();
+    const statsBySource = new Map();
     for (const mesh of knownMeshes) {
       const state = states.get(mesh);
       if (!state?.loaded || !state.skinningSourceKey) continue;
-      const nodes = state.influenceNodes || [];
-      const sourceNodes = nodesBySource.get(state.skinningSourceKey) || [];
-      sourceNodes.push(nodes);
-      nodesBySource.set(state.skinningSourceKey, sourceNodes);
+      const sourceStats = statsBySource.get(state.skinningSourceKey) || [];
+      sourceStats.push(state.weightBoneStats || {});
+      statsBySource.set(state.skinningSourceKey, sourceStats);
     }
     modelWeightState.sources = modelWeightState.sources.map(source => ({
       ...source,
-      boneStats: aggregateModelBoneStats(nodesBySource.get(source.key) || []),
+      boneStats: aggregateModelWeightBoneStats(
+        statsBySource.get(source.key) || []),
     }));
   }
 
@@ -221,7 +221,7 @@ function createSession({modelWeightState, states, knownMeshes,
     if (refreshStats) refreshModelBoneStats();
   }
 
-  function setSelectedBones(selection) {
+  function setSelectedBones(selection, {syncPhysics = true} = {}) {
     refreshModelWeightSummary();
     const next = selectionMapFromEntries(selection);
     if (modelWeightState.loaded) {
@@ -243,7 +243,7 @@ function createSession({modelWeightState, states, knownMeshes,
       modelWeightState.selectedBonesBySource);
     const nextEntries = sourceSelectionEntries(next);
     if (sameBoneSelection(previousEntries, nextEntries)) {
-      syncPhysicsToSelection();
+      if (syncPhysics) syncPhysicsToSelection();
       return modelWeightSnapshot();
     }
     const changedSourceKeys = new Set([
@@ -267,7 +267,7 @@ function createSession({modelWeightState, states, knownMeshes,
     if (modelWeightState.heatmapEnabled) {
       updateModelWeightHeatmap(changedSourceKeys);
     }
-    syncPhysicsToSelection(changedSourceKeys);
+    if (syncPhysics) syncPhysicsToSelection(changedSourceKeys);
     notifyChanged();
     requestRender();
     return modelWeightSnapshot();
@@ -330,6 +330,8 @@ function createSession({modelWeightState, states, knownMeshes,
   return {
     getState: modelWeightSnapshot,
     refreshModelWeightSummary,
+    ensureLoaded: () => ensureModelWeightsLoaded?.() || Promise.resolve(
+      modelWeightSnapshot()),
     setSelectedBones,
     setBoneSelected,
     clearSelectedBones: () => setSelectedBones([]),
@@ -362,8 +364,9 @@ export function getModelWeightState() { return session().getState(); }
 export function refreshModelWeightSummary(options) {
   return session().refreshModelWeightSummary(options);
 }
-export function setSelectedBones(selection) {
-  return session().setSelectedBones(selection);
+export function ensureModelWeightsLoaded() { return session().ensureLoaded(); }
+export function setSelectedBones(selection, options) {
+  return session().setSelectedBones(selection, options);
 }
 export function setBoneSelected(sourceKey, boneId, selected) {
   return session().setBoneSelected(sourceKey, boneId, selected);

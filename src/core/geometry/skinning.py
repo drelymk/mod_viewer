@@ -7,7 +7,7 @@ import posixpath
 import struct
 import time
 from array import array
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +52,7 @@ class DecodedSkinning:
     weights: bytes
     bone_ids: tuple[int, ...]
     diagnostics: dict
+    bone_stats: dict[int, dict[str, float | int]] = field(default_factory=dict)
 
 
 class SkinningPreviewError(ValueError):
@@ -286,6 +287,7 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
     vertex_vg_truncated = 0
     sums = []
     bone_ids = set()
+    bone_stats_accum = {}
 
     for compact_index, source_index in enumerate(used_vertices):
         output_offset = compact_index * item_bytes
@@ -357,6 +359,15 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
                              output_offset + influence * 4, weight)
             if weight > 0:
                 bone_ids.add(bone)
+                stats = bone_stats_accum.get(bone)
+                if stats is None:
+                    bone_stats_accum[bone] = [compact_index, 1, weight]
+                elif stats[0] != compact_index:
+                    stats[0] = compact_index
+                    stats[1] += 1
+                    stats[2] += weight
+                else:
+                    stats[2] += weight
 
     diagnostics = {
         "vertex_count": count,
@@ -377,10 +388,18 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
     }
     if source.vertex_vg_file:
         diagnostics["bone_id_namespace"] = source.bone_id_namespace
+    bone_stats = {
+        bone: {
+            "affected_vertex_count": stats[1],
+            "total_weight": stats[2],
+        }
+        for bone, stats in bone_stats_accum.items()
+    }
     return DecodedSkinning(
         vertex_count=count, influence_count=source.influence_count,
         indices=bytes(index_bytes), weights=bytes(weight_bytes),
-        bone_ids=tuple(sorted(bone_ids)), diagnostics=diagnostics)
+        bone_ids=tuple(sorted(bone_ids)), diagnostics=diagnostics,
+        bone_stats=bone_stats)
 
 
 def _error_for_draw(draw):

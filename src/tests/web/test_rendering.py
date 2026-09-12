@@ -1061,6 +1061,86 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
     finally:
         context.close()
 
+def test_weight_ready_state_has_no_eager_rig_preparation(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"WeightFirst": _payload("WeightFirst")})
+    try:
+        _open(page, "WeightFirst")
+        page.wait_for_function("window.modViewer.activeMeshes.length === 1")
+        result = page.evaluate("""async () => {
+          const runtime = window.__testWeightRigRuntime;
+          const mesh = window.modViewer.activeMeshes[0];
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          let releasePreview;
+          const pending = new Promise(resolve => { releasePreview = resolve; });
+          window.__testSkinningPreview = async () => pending;
+          const weightPromise = runtime.ensureModelWeightsLoaded();
+          await new Promise(resolve => setTimeout(resolve, 0));
+          const loading = {
+            weight: runtime.getModelWeightState(),
+            rig: runtime.getModelRigState(),
+          };
+          releasePreview({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0',
+              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            },
+            weight_stats: {
+              '1': {affected_vertex_count: 2, total_weight: 1.1},
+              '2': {affected_vertex_count: 2, total_weight: .7},
+            },
+            data: {
+              url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'},
+            }, diagnostics: {},
+          });
+          const weight = await weightPromise;
+          const stateAfterWeight = runtime.getModelWeightState();
+          const skinRuntime = await import('./js/mesh/skinning-runtime.js');
+          const skinAfterWeight = skinRuntime.getSkinningState(mesh);
+          const weightBaselineWasNull = skinAfterWeight.baselinePositions === null;
+          const weightNodesWereNull = skinAfterWeight.influenceNodes === null;
+          const rig = await runtime.ensureModelRigLoaded();
+          const skinAfterRig = skinRuntime.getSkinningState(mesh);
+          URL.revokeObjectURL(url);
+          return {
+            loadingWeight: loading.weight.loading,
+            loadingRig: loading.rig.loading,
+            loadingRigLoaded: loading.rig.loaded,
+            weightLoaded: weight.loaded,
+            stats: stateAfterWeight.sources[0].boneStats,
+            weightBaselineWasNull,
+            weightNodesWereNull,
+            rigLoaded: rig.loaded,
+            rigBaselineLength: skinAfterRig.baselinePositions?.length || 0,
+            rigNodeCount: skinAfterRig.influenceNodes?.length || 0,
+          };
+        }""")
+        assert result["loadingWeight"]
+        assert not result["loadingRig"]
+        assert not result["loadingRigLoaded"]
+        assert result["weightLoaded"]
+        assert result["stats"] == {
+            "1": {"affectedVertexCount": 2,
+                  "averageInfluence": pytest.approx(.55)},
+            "2": {"affectedVertexCount": 2,
+                  "averageInfluence": pytest.approx(.35)},
+        }
+        assert result["weightBaselineWasNull"]
+        assert result["weightNodesWereNull"]
+        assert result["rigLoaded"]
+        assert result["rigBaselineLength"] == 9
+        assert result["rigNodeCount"] == 3
+    finally:
+        context.close()
+
+
 def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         edge_browser, frontend_url):
     payload = _payload("CrossSourceRig")
@@ -1934,6 +2014,25 @@ def test_weight_saved_selection_applies_once_and_controls_physics(
               return {saved: true, selected_bones: bones};
             };
         }""")
+        readiness = page.evaluate("""async () => {
+          const runtime = window.__testWeightRigRuntime;
+          let physicsAtWeightReady = null;
+          const onWeightChanged = event => {
+            if (event.detail?.loaded && physicsAtWeightReady === null) {
+              physicsAtWeightReady = runtime.getModelPhysicsState().enabled;
+            }
+          };
+          window.addEventListener('mod-viewer-model-weight-changed',
+            onWeightChanged);
+          await runtime.ensureModelWeightsLoaded();
+          window.removeEventListener('mod-viewer-model-weight-changed',
+            onWeightChanged);
+          return {
+            selectedBoneCount: runtime.getModelWeightState().selectedBoneCount,
+            physicsAtWeightReady,
+          };
+        }""")
+        assert readiness == {"selectedBoneCount": 1, "physicsAtWeightReady": False}
         page.locator("#weight-rig-tab").click()
         page.wait_for_function("""() =>
           window.__testWeightRigRuntime.getModelWeightState().selectedBoneCount === 1""")
@@ -2126,7 +2225,8 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
           const [hair, coat] = window.modViewer.activeMeshes.map(getSkinningState);
           return {
             selected: window.__testWeightRigRuntime.getModelWeightState().selectedBones,
-            masks: [hair.selectedWeightMask[0], coat.selectedWeightMask[0]],
+            masks: [hair.selectedWeightMask?.[0] ?? null,
+                    coat.selectedWeightMask?.[0] ?? null],
             physics: window.__testWeightRigRuntime.getModelPhysicsState(),
             participants: [hair.physicsEnabled, coat.physicsEnabled],
           };
@@ -2136,7 +2236,7 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
             "sourceFile": "Hair/HairBlend.buf", "boneIdOffset": 0,
             "boneIds": [1],
         }]
-        assert result["masks"] == pytest.approx([.8, 0])
+        assert result["masks"] == [pytest.approx(.8), None]
         assert result["participants"] == [True, False]
         assert result["physics"]["participantCount"] == 1
 
@@ -2168,6 +2268,26 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         assert distinct["physics"]["participantCount"] == 2
         assert distinct["physics"]["participatingMeshCount"] == 2
         assert distinct["independentSources"]
+        cleared = page.evaluate("""async () => {
+          const runtime = await import('./js/mesh/weight-rig-runtime.js');
+          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          runtime.clearSelectedBones();
+          return window.modViewer.activeMeshes.map(mesh => {
+            const state = getSkinningState(mesh);
+            return {
+              selectedMask: state.selectedWeightMask,
+              heatmapMode: state.heatmapMode,
+              materialRestored: state.originalMaterial === mesh.material,
+              hasColor: !!mesh.geometry.getAttribute('color'),
+            };
+          });
+        }""")
+        assert cleared == [
+            {"selectedMask": None, "heatmapMode": None,
+             "materialRestored": True, "hasColor": False},
+            {"selectedMask": None, "heatmapMode": None,
+             "materialRestored": True, "hasColor": False},
+        ]
     finally:
         context.close()
 

@@ -3,7 +3,8 @@
 
 import {
   beginWeightModelPicking, cancelWeightModelPicking, clearSelectedBones,
-  ensureModelRigLoaded, getModelPhysicsState, getModelRigState,
+  ensureModelRigLoaded, ensureModelWeightsLoaded, getModelPhysicsState,
+  getModelRigState,
   getModelWeightState, loadSavedBoneSelection,
   clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
   saveModelWeightSelection,
@@ -901,7 +902,8 @@ function syncStatus() {
   const weight = latestWeightState || getModelWeightState();
   const rig = latestRigState || getModelRigState();
   let status = '';
-  if (weight.loading || rig.loading) status = 'Loading weights and rig…';
+  if (weight.loading) status = 'Loading weights…';
+  else if (rig.loading) status = 'Loading Rig…';
   else if (weight.error) status = weight.error;
   else if (rig.error) status = rig.error;
   else if (rig.humanoidRigEdit?.error) status = rig.humanoidRigEdit.error;
@@ -922,7 +924,26 @@ function closePopover() {
 
 function loadOnDemand() {
   if (loadingPromise) return loadingPromise;
-  loadingPromise = ensureModelRigLoaded().finally(() => { loadingPromise = null; });
+  loadingPromise = ensureModelWeightsLoaded()
+    .then(weight => {
+      if (!weight?.loaded) return weight;
+      const generation = weight.generation;
+      return new Promise(resolve => {
+        const afterPaint = () => setTimeout(() => {
+          if (getModelWeightState().generation !== generation) {
+            resolve(getModelRigState());
+            return;
+          }
+          resolve(ensureModelRigLoaded());
+        }, 0);
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(afterPaint);
+        } else {
+          afterPaint();
+        }
+      });
+    })
+    .finally(() => { loadingPromise = null; });
   return loadingPromise;
 }
 

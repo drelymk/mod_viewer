@@ -250,6 +250,10 @@ class ModPreview:
                 },
             },
             "diagnostics": dict(decoded.diagnostics),
+            "weight_stats": {
+                str(bone_id): dict(stats)
+                for bone_id, stats in getattr(decoded, "bone_stats", {}).items()
+            },
         }, blob)
 
     def get_model_skinning_preview(self, folder_path):
