@@ -10,9 +10,13 @@ import {
 import {buildSelectedWeightMask} from './weight-selection.js';
 import {
   buildInfluenceNodes as buildRigInfluenceNodes,
+  buildInfluenceNodesCooperative as buildRigInfluenceNodesCooperative,
   buildInfluenceRelationships as buildRigInfluenceRelationships,
+  buildInfluenceRelationshipsCooperative as buildRigInfluenceRelationshipsCooperative,
   buildSurfaceInfluenceGraph,
+  buildSurfaceInfluenceGraphCooperative,
   inspectSurfaceTopology,
+  inspectSurfaceTopologyCooperative,
 } from './weight-rig.js';
 import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
@@ -68,6 +72,7 @@ export function createSkinningRuntime({
   } = {}) {
   const modelRigState = getModelRigState();
   const rigPresetState = getRigPresetState();
+  const cooperativeGraphInFlight = new WeakMap();
 
   function markFinalBoundsDirty(mesh, state) {
     if (state.preDeformationFrustumCulled === null
@@ -359,6 +364,116 @@ export function createSkinningRuntime({
     if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
     notifyModelWeightChanged();
     return true;
+  }
+
+  async function ensureRigMeshPreparedCooperative(mesh, state, {
+      budget = createWorkBudget(), isCurrent = () => true,
+  } = {}) {
+    if (!state?.loaded || !isCurrent()) return false;
+    const position = mesh.geometry?.attributes?.position;
+    if (!position) throw new Error('The selected mesh has no position data.');
+    const normal = mesh.geometry?.attributes?.normal;
+    if (!state.baselinePositions
+        || state.baselinePositions.length !== position.array.length) {
+      state.baselinePositions = new Float32Array(position.array);
+    }
+    if (normal && (!state.baselineNormals
+        || state.baselineNormals.length !== normal.array.length)) {
+      state.baselineNormals = new Float32Array(normal.array);
+    } else if (!normal) {
+      state.baselineNormals = null;
+    }
+    if (!state.originalMaterial) state.originalMaterial = mesh.material;
+    if (!state.influenceNodes) {
+      const nodes = await buildRigInfluenceNodesCooperative(
+        state.baselinePositions, state.indices, state.weights,
+        state.influenceCount, state.boneIds, {budget, isCurrent});
+      if (!nodes || !state.loaded || !isCurrent()) return false;
+      state.influenceNodes = nodes;
+    }
+    if (!state.centerByBoneId) {
+      state.centerByBoneId = new Map(state.influenceNodes.map(node => [
+        node.boneId, node.weightedCenter]));
+    }
+    return isCurrent() && state.loaded;
+  }
+
+  async function buildInfluenceGraphCooperative(mesh, state,
+      requestedEvidenceMode = 'vertex', surfaceEvidence = null, {
+        budget = createWorkBudget(), isCurrent = () => true,
+      } = {}) {
+    if (!(await ensureRigMeshPreparedCooperative(mesh, state,
+      {budget, isCurrent}))) return null;
+    if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+    const radius = Number(mesh.geometry.boundingSphere?.radius);
+    let measure = surfaceEvidence;
+    if (!measure && requestedEvidenceMode === 'surface') {
+      measure = await inspectSurfaceTopologyCooperative(
+        state.baselinePositions, mesh.geometry?.index?.array || null,
+        {budget, isCurrent});
+      if (!measure) return null;
+    }
+    const evidenceMode = requestedEvidenceMode === 'surface'
+      && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
+    if (evidenceMode === 'surface') {
+      return buildSurfaceInfluenceGraphCooperative(
+        state.baselinePositions, mesh.geometry?.index?.array || null,
+        state.indices, state.weights, state.influenceCount, state.boneIds,
+        Number.isFinite(radius) && radius > 0 ? radius : null,
+        {budget, isCurrent});
+    }
+    const relationships = await buildRigInfluenceRelationshipsCooperative(
+      state.baselinePositions, state.indices, state.weights,
+      state.influenceCount, state.influenceNodes,
+      Number.isFinite(radius) && radius > 0 ? radius : null,
+      {budget, isCurrent});
+    if (!relationships || !isCurrent()) return null;
+    return {
+      nodes: state.influenceNodes, relationships,
+      boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
+      evidenceMode,
+      triangleCount: measure?.triangleCount || 0,
+      validTriangleCount: measure?.validTriangleCount || 0,
+      degenerateTriangleCount: measure?.degenerateTriangleCount || 0,
+      invalidTriangleCount: measure?.invalidTriangleCount || 0,
+      totalSurfaceArea: measure?.totalSurfaceArea || 0,
+      measuredVertexCount: measure?.measuredVertexCount || 0,
+      zeroMeasureVertexCount: measure?.zeroMeasureVertexCount || 0,
+      fallbackReason: requestedEvidenceMode === 'surface'
+        && evidenceMode === 'vertex' ? 'surface_evidence_unavailable'
+        : requestedEvidenceMode === 'vertex' && measure
+          && !measure.surfaceEvidenceAvailable
+          ? 'surface_evidence_unavailable' : null,
+    };
+  }
+
+  async function ensureInfluenceGraphCooperative(mesh, state,
+      evidenceMode = 'vertex', surfaceEvidence = null, options = {}) {
+    if (!state?.loaded) return null;
+    if (state.influenceGraph?.evidenceMode === evidenceMode) {
+      return state.influenceGraph;
+    }
+    let pendingByMode = cooperativeGraphInFlight.get(mesh);
+    if (!pendingByMode) {
+      pendingByMode = new Map();
+      cooperativeGraphInFlight.set(mesh, pendingByMode);
+    }
+    const key = String(evidenceMode);
+    const pending = pendingByMode.get(key);
+    if (pending) return pending;
+    const promise = buildInfluenceGraphCooperative(
+      mesh, state, evidenceMode, surfaceEvidence, options)
+      .then(graph => {
+        if (graph && state.loaded && (!options.isCurrent
+            || options.isCurrent())) state.influenceGraph = graph;
+        return graph;
+      })
+      .finally(() => {
+        if (pendingByMode.get(key) === promise) pendingByMode.delete(key);
+        if (!pendingByMode.size) cooperativeGraphInFlight.delete(mesh);
+      });
+    pendingByMode.set(key, promise);
+    return promise;
   }
 
   function setModelWeightLoadError(error) {
@@ -701,7 +816,8 @@ export function createSkinningRuntime({
 
   return {
     applyDeformation, buildInfluenceGraph, ensureInfluenceGraph,
-    ensureRigMeshPrepared,
+    buildInfluenceGraphCooperative, ensureInfluenceGraphCooperative,
+    ensureRigMeshPrepared, ensureRigMeshPreparedCooperative,
     finalizeDeformationGeometry, forEachRigMesh,
     getSkinningState: mesh => states.get(mesh) || null,
     getSkinningBaseMaterial, withSkinningBaseMaterial,

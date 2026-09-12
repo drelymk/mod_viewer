@@ -15,7 +15,8 @@ import {
   buildInferredRigRestFrames, rebuildModelRestFrames,
 } from './weight-rig-frames.js';
 import {
-  buildModelRigReconciliation, orientModelRigForest, sourceBoneKey,
+  buildModelRigReconciliationCooperative,
+  orientModelRigForest, sourceBoneKey,
 } from './weight-rig-reconcile.js';
 import {GRAVITY_WORLD_DIRECTION} from './weight-physics.js';
 import {
@@ -219,8 +220,12 @@ rigSourceSession = initializeRigSourceSession({
   sourceSkinningRigs,
   ensureRigMeshPrepared: (...args) =>
     skinningRuntime.ensureRigMeshPrepared(...args),
+  ensureRigMeshPreparedCooperative: (...args) =>
+    skinningRuntime.ensureRigMeshPreparedCooperative(...args),
   ensureInfluenceGraph: (...args) =>
     skinningRuntime.ensureInfluenceGraph(...args),
+  ensureInfluenceGraphCooperative: (...args) =>
+    skinningRuntime.ensureInfluenceGraphCooperative(...args),
   rebuildRestFrames: rebuildSourceRigRestFrames,
   cloneForest: cloneSourceForest,
 });
@@ -732,6 +737,21 @@ function buildAllSourceSkinningRigsCooperatively(options) {
       if (!options?.isCurrent || options.isCurrent()) {
         modelRigState.performance.sourceRigPreparationMs =
           clockNow() - startedAt;
+        const stats = (result || []).map(rig => rig.__cooperativeStats || {});
+        const timings = (result || []).map((rig, index) => {
+          const timing = rig.__cooperativeTimings;
+          const stat = rig.__cooperativeStats || {};
+          return timing ? {
+            ...timing,
+            largestChunkMs: Number(stat?.largestChunkMs) || 0,
+            yieldCount: Number(stat?.yieldCount) || 0,
+          } : null;
+        }).filter(Boolean);
+        modelRigState.performance.sourceRigLargestChunkMs = Math.max(
+          0, ...stats.map(item => Number(item.largestChunkMs) || 0));
+        modelRigState.performance.sourceRigYieldCount = stats.reduce(
+          (sum, item) => sum + (Number(item.yieldCount) || 0), 0);
+        modelRigState.performance.sourceRigDetails = timings;
       }
       return result;
     });
@@ -976,11 +996,16 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     }
   }
   applyHumanoidJointGuide(sourceRigs, humanoidGuide);
-  const reconciliation = buildModelRigReconciliation(sourceRigs,
+  const reconciliation = await buildModelRigReconciliationCooperative(sourceRigs,
     humanoidGuide ? {
       semanticBySourceBoneKey: humanoidGuide.sourceBoneClassifications,
       humanoidGuidanceDiagnostics: humanoidGuide.diagnostics,
-    } : undefined);
+    } : {}, {
+      budget,
+      isCurrent: () => generation === null || isCurrent(),
+      timings: performance,
+    });
+  if (!reconciliation) return null;
   performance.reconciliationMs = clockNow() - startedAt
     - (performance.savedGuideMs || 0);
   if (!(await checkpoint())) return null;
@@ -1103,7 +1128,9 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     && joints[previousSelectedJointId] ? previousSelectedJointId : null;
   updateModelPoseFrameCache(rig, rig.poseTransforms);
   performance.totalRigBuildMs = clockNow() - startedAt;
-  Object.assign(performance, budget.getStats());
+  const modelStats = budget.getStats();
+  performance.modelRigLargestChunkMs = modelStats.largestChunkMs;
+  performance.modelRigYieldCount = modelStats.yieldCount;
   return rig;
 }
 

@@ -4,6 +4,8 @@
 // the Rig/Pose mode consume the same inferred topology, while
 // retaining their own runtime selection and deformation state.
 
+import {createWorkBudget} from './cooperative-scheduler.js';
+
 export const CANDIDATE_CONTAINMENT_THRESHOLD = 0.02;
 export const CANDIDATE_JACCARD_THRESHOLD = 0.01;
 
@@ -481,6 +483,274 @@ export function buildSurfaceInfluenceGraph(
   };
 }
 
+function surfaceTriangleCount(positions, triangleIndices = null) {
+  const positionArray = positions || [];
+  const indexed = triangleIndices !== null && triangleIndices !== undefined;
+  const indexCount = indexed
+    ? Number(triangleIndices?.length) || 0
+    : Number(positionArray.length) / 3;
+  return {
+    positionArray,
+    positionCount: Math.floor(positionArray.length / 3),
+    indexed,
+    indexArray: indexed ? triangleIndices : null,
+    triangleCount: Math.ceil(indexCount / 3),
+  };
+}
+
+function createSurfaceGraphAccumulator(
+    baselinePositions, triangleIndices, indices, weights, influenceCount,
+    boneIds = null, boundingSphereRadius = null) {
+  const shape = surfaceTriangleCount(baselinePositions, triangleIndices);
+  const requested = boneIds === null || boneIds === undefined
+    ? null : new Set([...boneIds].map(Number));
+  const nodeEntries = new Map();
+  const relationshipEntries = new Map();
+  const topology = {
+    triangleCount: shape.triangleCount,
+    validTriangleCount: 0,
+    degenerateTriangleCount: 0,
+    invalidTriangleCount: 0,
+    totalSurfaceArea: 0,
+    measuredVertices: new Set(),
+  };
+
+  function process(sample) {
+    if (sample.kind === 'invalid') {
+      topology.invalidTriangleCount += 1;
+      return;
+    }
+    if (sample.kind === 'degenerate') {
+      topology.degenerateTriangleCount += 1;
+      return;
+    }
+    topology.validTriangleCount += 1;
+    topology.totalSurfaceArea += sample.area;
+    sample.indices.forEach(index => topology.measuredVertices.add(index));
+    const cornerWeights = sample.indices.map(vertex => surfaceInfluenceWeights(
+      indices, weights, influenceCount, vertex, requested));
+    const ids = [...new Set(cornerWeights.flatMap(values => [...values.keys()]))]
+      .sort((left, right) => left - right);
+    for (const boneId of ids) {
+      const boneWeights = cornerWeights.map(values => values.get(boneId) || 0);
+      const support = integrateLinear(boneWeights, sample.area);
+      if (support <= 0) continue;
+      const firstMoment = integrateLinearPosition(
+        sample.points, boneWeights, sample.area);
+      const secondMoment = integrateLinearSecondMoment(
+        sample.points, boneWeights, sample.area);
+      const entry = nodeEntries.get(boneId) || {
+        boneId,
+        totalWeight: 0,
+        affectedVertexCount: 0,
+        affectedVertices: new Set(),
+        affectedMeasure: 0,
+        maxVertexWeight: 0,
+        weightedX: 0,
+        weightedY: 0,
+        weightedZ: 0,
+        secondMoment: 0,
+      };
+      entry.totalWeight += support;
+      sample.indices.forEach((vertex, index) => {
+        if (cornerWeights[index].has(boneId)) entry.affectedVertices.add(vertex);
+      });
+      entry.affectedMeasure += sample.area;
+      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, ...boneWeights);
+      entry.weightedX += firstMoment[0];
+      entry.weightedY += firstMoment[1];
+      entry.weightedZ += firstMoment[2];
+      entry.secondMoment += secondMoment;
+      nodeEntries.set(boneId, entry);
+    }
+    for (let left = 0; left < ids.length; left += 1) {
+      for (let right = left + 1; right < ids.length; right += 1) {
+        const boneA = ids[left];
+        const boneB = ids[right];
+        const weightsA = cornerWeights.map(values => values.get(boneA) || 0);
+        const weightsB = cornerWeights.map(values => values.get(boneB) || 0);
+        const productOverlap = integrateLinearProduct(
+          weightsA, weightsB, sample.area);
+        if (productOverlap <= 0) continue;
+        const key = pairKey(boneA, boneB);
+        const jointMoment = integratePositionProduct(
+          sample.points, weightsA, weightsB, sample.area);
+        const relationship = relationshipEntries.get(key) || {
+          boneA,
+          boneB,
+          sharedVertexCount: 0,
+          sharedMeasure: 0,
+          minOverlap: 0,
+          productOverlap: 0,
+          jointWeightTotal: 0,
+          jointX: 0,
+          jointY: 0,
+          jointZ: 0,
+        };
+        relationship.sharedVertexCount += sample.indices.filter((vertex, index) =>
+          cornerWeights[index].has(boneA)
+          && cornerWeights[index].has(boneB)).length;
+        relationship.sharedMeasure += sample.area;
+        relationship.minOverlap += integrateMinimumLinearWeight(
+          sample.points, weightsA, weightsB, sample.area);
+        relationship.productOverlap += productOverlap;
+        relationship.jointWeightTotal += productOverlap;
+        relationship.jointX += jointMoment[0];
+        relationship.jointY += jointMoment[1];
+        relationship.jointZ += jointMoment[2];
+        relationshipEntries.set(key, relationship);
+      }
+    }
+  }
+
+  function finish() {
+    const nodes = [...nodeEntries.values()].map(entry => {
+      const center = entry.totalWeight > 0 ? [
+        entry.weightedX / entry.totalWeight,
+        entry.weightedY / entry.totalWeight,
+        entry.weightedZ / entry.totalWeight,
+      ] : [0, 0, 0];
+      return {
+        boneId: entry.boneId,
+        totalWeight: entry.totalWeight,
+        affectedVertexCount: entry.affectedVertices.size,
+        affectedMeasure: entry.affectedMeasure,
+        maxVertexWeight: entry.maxVertexWeight,
+        weightedCenter: center,
+        weightedRadius: Math.sqrt(Math.max(0,
+          entry.secondMoment / entry.totalWeight - dot3(center, center))),
+      };
+    }).sort((left, right) => left.boneId - right.boneId);
+    const nodeById = new Map(nodes.map(node => [node.boneId, node]));
+    const radius = Number(boundingSphereRadius);
+    const totalNodeWeight = nodes.reduce(
+      (sum, node) => sum + node.totalWeight, 0);
+    const sourceCenter = nodes.length ? nodes.reduce((sum, node) => [
+      sum[0] + node.weightedCenter[0] * node.totalWeight,
+      sum[1] + node.weightedCenter[1] * node.totalWeight,
+      sum[2] + node.weightedCenter[2] * node.totalWeight,
+    ], [0, 0, 0]).map(value =>
+      totalNodeWeight > 0 ? value / totalNodeWeight : 0) : [0, 0, 0];
+    const sourceRadius = nodes.length ? Math.max(...nodes.map(node =>
+      (centerDistance(node.weightedCenter, sourceCenter) || 0)
+        + (Number(node.weightedRadius) || 0))) : null;
+    const relationships = [...relationshipEntries.values()].map(relationship => {
+      const nodeA = nodeById.get(relationship.boneA);
+      const nodeB = nodeById.get(relationship.boneB);
+      const supportA = Number(nodeA?.totalWeight) || 0;
+      const supportB = Number(nodeB?.totalWeight) || 0;
+      const denominator = Math.min(supportA, supportB);
+      const jaccardDenominator = supportA + supportB - relationship.minOverlap;
+      const distance = centerDistance(nodeA?.weightedCenter, nodeB?.weightedCenter);
+      const normalizedDistance = distance !== null
+        && Number.isFinite(radius) && radius > 0
+        ? distance / radius : null;
+      const distancePenalty = Number.isFinite(normalizedDistance)
+        ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
+      return {
+        ...relationship,
+        jointCenter: relationship.jointWeightTotal > 0
+          ? [relationship.jointX / relationship.jointWeightTotal,
+            relationship.jointY / relationship.jointWeightTotal,
+            relationship.jointZ / relationship.jointWeightTotal]
+          : null,
+        containment: denominator > 0 ? relationship.minOverlap / denominator : 0,
+        jaccard: jaccardDenominator > 0
+          ? relationship.minOverlap / jaccardDenominator : 0,
+        centerDistance: distance,
+        normalizedDistance,
+        treeEdgeScore: (denominator > 0
+          ? relationship.minOverlap / denominator : 0) * distancePenalty,
+      };
+    });
+    return {
+      nodes,
+      relationships,
+      boundingSphereRadius: Number.isFinite(radius) && radius > 0
+        ? radius : sourceRadius,
+      evidenceMode: 'surface',
+      triangleCount: topology.triangleCount,
+      validTriangleCount: topology.validTriangleCount,
+      degenerateTriangleCount: topology.degenerateTriangleCount,
+      invalidTriangleCount: topology.invalidTriangleCount,
+      totalSurfaceArea: topology.totalSurfaceArea,
+      measuredVertexCount: topology.measuredVertices.size,
+      zeroMeasureVertexCount: shape.positionCount
+        - topology.measuredVertices.size,
+      fallbackReason: null,
+    };
+  }
+
+  return {shape, process, finish};
+}
+
+export async function inspectSurfaceTopologyCooperative(
+    positions, triangleIndices = null,
+    {budget = createWorkBudget(), isCurrent = () => true,
+      triangleBatch = 32} = {}) {
+  const shape = surfaceTriangleCount(positions, triangleIndices);
+  let validTriangleCount = 0;
+  let degenerateTriangleCount = 0;
+  let invalidTriangleCount = 0;
+  let totalSurfaceArea = 0;
+  const measuredVertices = new Set();
+  for (let triangle = 0; triangle < shape.triangleCount; triangle += 1) {
+    if (triangle % triangleBatch === 0) {
+      if (!isCurrent()) return null;
+      await budget.checkpoint();
+      if (!isCurrent()) return null;
+    }
+    const sample = readSurfaceTriangle(
+      shape.positionArray, shape.indexArray, shape.indexed,
+      shape.positionCount, triangle);
+    if (sample.kind === 'invalid') {
+      invalidTriangleCount += 1;
+    } else if (sample.kind === 'degenerate') {
+      degenerateTriangleCount += 1;
+    } else {
+      validTriangleCount += 1;
+      totalSurfaceArea += sample.area;
+      sample.indices.forEach(index => measuredVertices.add(index));
+    }
+  }
+  if (!isCurrent()) return null;
+  await budget.checkpoint();
+  return {
+    triangleCount: shape.triangleCount,
+    validTriangleCount,
+    degenerateTriangleCount,
+    invalidTriangleCount,
+    totalSurfaceArea,
+    measuredVertexCount: measuredVertices.size,
+    zeroMeasureVertexCount: shape.positionCount - measuredVertices.size,
+    surfaceEvidenceAvailable: validTriangleCount > 0 && totalSurfaceArea > 0,
+  };
+}
+
+export async function buildSurfaceInfluenceGraphCooperative(
+    baselinePositions, triangleIndices, indices, weights, influenceCount,
+    boneIds = null, boundingSphereRadius = null,
+    {budget = createWorkBudget(), isCurrent = () => true,
+      triangleBatch = 32} = {}) {
+  const accumulator = createSurfaceGraphAccumulator(
+    baselinePositions, triangleIndices, indices, weights, influenceCount,
+    boneIds, boundingSphereRadius);
+  const {shape} = accumulator;
+  for (let triangle = 0; triangle < shape.triangleCount; triangle += 1) {
+    if (triangle % triangleBatch === 0) {
+      if (!isCurrent()) return null;
+      await budget.checkpoint();
+      if (!isCurrent()) return null;
+    }
+    accumulator.process(readSurfaceTriangle(
+      shape.positionArray, shape.indexArray, shape.indexed,
+      shape.positionCount, triangle));
+  }
+  if (!isCurrent()) return null;
+  await budget.checkpoint();
+  return accumulator.finish();
+}
+
 export function buildInfluenceNodes(
     baselinePositions, indices, weights, influenceCount, boneIds = null) {
   const vertexCount = compactVertexCount(indices, weights, influenceCount);
@@ -526,6 +796,85 @@ export function buildInfluenceNodes(
     });
   }
 
+  const orderedIds = requested ? [...requested] : [...entries.keys()];
+  return orderedIds.filter(boneId => entries.has(boneId)).map(boneId => {
+    const entry = entries.get(boneId);
+    const nodeCenter = entry.positionWeight > 0
+      ? [entry.weightedX / entry.positionWeight,
+        entry.weightedY / entry.positionWeight,
+        entry.weightedZ / entry.positionWeight]
+      : [0, 0, 0];
+    const weightedRadius = entry.positionWeight > 0
+      ? Math.sqrt(Math.max(0,
+        entry.squaredPositionWeight / entry.positionWeight
+        - (nodeCenter[0] ** 2 + nodeCenter[1] ** 2
+          + nodeCenter[2] ** 2)))
+      : null;
+    return {
+      boneId: entry.boneId,
+      totalWeight: entry.totalWeight,
+      affectedVertexCount: entry.affectedVertexCount,
+      affectedMeasure: entry.affectedMeasure,
+      maxVertexWeight: entry.maxVertexWeight,
+      weightedCenter: nodeCenter,
+      weightedRadius,
+    };
+  });
+}
+
+export async function buildInfluenceNodesCooperative(
+    baselinePositions, indices, weights, influenceCount, boneIds = null,
+    {budget = createWorkBudget(), isCurrent = () => true,
+      vertexBatch = 256} = {}) {
+  const vertexCount = compactVertexCount(indices, weights, influenceCount);
+  const requested = boneIds === null || boneIds === undefined
+    ? null : new Set([...boneIds].map(Number));
+  const entries = new Map();
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    if (vertex % vertexBatch === 0) {
+      if (!isCurrent()) return null;
+      await budget.checkpoint();
+      if (!isCurrent()) return null;
+    }
+    const influences = positiveInfluencesForVertex(
+      indices, weights, influenceCount, vertex);
+    influences.forEach((weight, boneId) => {
+      if (requested && !requested.has(boneId)) return;
+      const entry = entries.get(boneId) || {
+        boneId,
+        totalWeight: 0,
+        affectedVertexCount: 0,
+        affectedMeasure: null,
+        maxVertexWeight: 0,
+        weightedX: 0,
+        weightedY: 0,
+        weightedZ: 0,
+        squaredPositionWeight: 0,
+        positionWeight: 0,
+      };
+      entry.totalWeight += weight;
+      entry.affectedVertexCount += 1;
+      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
+      if (baselinePositions
+          && baselinePositions.length >= vertex * 3 + 3) {
+        const offset = vertex * 3;
+        const x = Number(baselinePositions[offset]);
+        const y = Number(baselinePositions[offset + 1]);
+        const z = Number(baselinePositions[offset + 2]);
+        if ([x, y, z].every(Number.isFinite)) {
+          entry.weightedX += x * weight;
+          entry.weightedY += y * weight;
+          entry.weightedZ += z * weight;
+          entry.squaredPositionWeight += (
+            x * x + y * y + z * z) * weight;
+          entry.positionWeight += weight;
+        }
+      }
+      entries.set(boneId, entry);
+    });
+  }
+  if (!isCurrent()) return null;
+  await budget.checkpoint();
   const orderedIds = requested ? [...requested] : [...entries.keys()];
   return orderedIds.filter(boneId => entries.has(boneId)).map(boneId => {
     const entry = entries.get(boneId);
@@ -637,6 +986,110 @@ export function buildInfluenceRelationships(
     }
   }
 
+  const radius = Number(boundingSphereRadius);
+  return [...relationships.values()].map(relationship => {
+    const nodeA = nodeById.get(relationship.boneA);
+    const nodeB = nodeById.get(relationship.boneB);
+    const supportA = Number(nodeA?.totalWeight) || 0;
+    const supportB = Number(nodeB?.totalWeight) || 0;
+    const containmentDenominator = Math.min(supportA, supportB);
+    const jaccardDenominator = supportA + supportB
+      - relationship.minOverlap;
+    const distance = centerDistance(
+      nodeA?.weightedCenter, nodeB?.weightedCenter);
+    const jointCenter = relationship.jointWeightTotal > 0
+      ? [relationship.jointX / relationship.jointWeightTotal,
+        relationship.jointY / relationship.jointWeightTotal,
+        relationship.jointZ / relationship.jointWeightTotal]
+      : null;
+    return {
+      ...relationship,
+      jointCenter,
+      containment: containmentDenominator > 0
+        ? relationship.minOverlap / containmentDenominator : 0,
+      jaccard: jaccardDenominator > 0
+        ? relationship.minOverlap / jaccardDenominator : 0,
+      centerDistance: distance,
+      normalizedDistance: distance !== null && radius > 0
+        ? distance / radius : null,
+    };
+  });
+}
+
+export async function buildInfluenceRelationshipsCooperative(
+    baselinePositions, indices, weights, influenceCount, nodes,
+    boundingSphereRadius = null,
+    {budget = createWorkBudget(), isCurrent = () => true,
+      vertexBatch = 128} = {}) {
+  const nodeById = new Map((nodes || []).map(node => [
+    Number(node.boneId), node]));
+  const vertexCount = compactVertexCount(indices, weights, influenceCount);
+  const relationships = new Map();
+  const ids = [];
+  const mergedWeights = [];
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    if (vertex % vertexBatch === 0) {
+      if (!isCurrent()) return null;
+      await budget.checkpoint();
+      if (!isCurrent()) return null;
+    }
+    ids.length = 0;
+    mergedWeights.length = 0;
+    const start = vertex * influenceCount;
+    for (let influence = 0; influence < influenceCount; influence += 1) {
+      const boneId = Number(indices[start + influence]);
+      const weight = Number(weights[start + influence]);
+      if (!nodeById.has(boneId) || !Number.isFinite(weight) || weight <= 0) {
+        continue;
+      }
+      const existing = ids.indexOf(boneId);
+      if (existing >= 0) mergedWeights[existing] += weight;
+      else {
+        ids.push(boneId);
+        mergedWeights.push(weight);
+      }
+    }
+    for (let left = 0; left < ids.length; left += 1) {
+      for (let right = left + 1; right < ids.length; right += 1) {
+        const [boneA, boneB] = pairIds(ids[left], ids[right]);
+        const key = pairKey(boneA, boneB);
+        const weightA = mergedWeights[left];
+        const weightB = mergedWeights[right];
+        const jointWeight = weightA * weightB;
+        const relationship = relationships.get(key) || {
+          boneA,
+          boneB,
+          sharedVertexCount: 0,
+          sharedMeasure: null,
+          minOverlap: 0,
+          productOverlap: 0,
+          jointWeightTotal: 0,
+          jointX: 0,
+          jointY: 0,
+          jointZ: 0,
+        };
+        relationship.sharedVertexCount += 1;
+        relationship.minOverlap += Math.min(weightA, weightB);
+        relationship.productOverlap += jointWeight;
+        if (baselinePositions && baselinePositions.length >= vertex * 3 + 3
+            && Number.isFinite(jointWeight) && jointWeight > 0) {
+          const offset = vertex * 3;
+          const x = Number(baselinePositions[offset]);
+          const y = Number(baselinePositions[offset + 1]);
+          const z = Number(baselinePositions[offset + 2]);
+          if ([x, y, z].every(Number.isFinite)) {
+            relationship.jointWeightTotal += jointWeight;
+            relationship.jointX += x * jointWeight;
+            relationship.jointY += y * jointWeight;
+            relationship.jointZ += z * jointWeight;
+          }
+        }
+        relationships.set(key, relationship);
+      }
+    }
+  }
+  if (!isCurrent()) return null;
+  await budget.checkpoint();
   const radius = Number(boundingSphereRadius);
   return [...relationships.values()].map(relationship => {
     const nodeA = nodeById.get(relationship.boneA);

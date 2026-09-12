@@ -1440,6 +1440,45 @@ def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         "Cannot aggregate incompatible Rig evidence modes.")
 
 
+def test_cooperative_surface_evidence_matches_sync_and_supports_cancellation(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const positions = new Float32Array([
+        0, 0, 0, 2, 0, 0, 0, 2, 0,
+        1, 0, 0, 1, 1, 0, 0, 1, 0,
+      ]);
+      const triangles = new Uint32Array([
+        0, 1, 2, 1, 3, 2,
+      ]);
+      const indices = new Uint32Array([
+        0, 1, 0, 1, 0, 1,
+        0, 1, 0, 1, 0, 1,
+      ]);
+      const weights = new Float32Array([
+        0, 1, .5, .5, 1, 0,
+        0, 1, .5, .5, 1, 0,
+      ]);
+      const args = [positions, triangles, indices, weights, 2, [0, 1], 4];
+      const synchronous = rig.buildSurfaceInfluenceGraph(...args);
+      const cooperative = await rig.buildSurfaceInfluenceGraphCooperative(
+        ...args, {triangleBatch: 1, budgetMs: .01});
+      let checks = 0;
+      const cancelled = await rig.buildSurfaceInfluenceGraphCooperative(
+        ...args, {triangleBatch: 1, budgetMs: .01,
+          isCurrent: () => checks++ < 2});
+      return {
+        same: JSON.stringify(cooperative) === JSON.stringify(synchronous),
+        cancelled: cancelled === null,
+        cooperative,
+      };
+    }""")
+    assert result["same"]
+    assert result["cooperative"]["evidenceMode"] == "surface"
+    assert result["cooperative"]["validTriangleCount"] == 2
+
+
 def test_triangle_surface_evidence_is_invariant_for_varying_weight_tessellation(
         module_page):
     page = module_page
@@ -2106,7 +2145,8 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
 def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliation,
+        buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const rig = (sourceKey, entries, edges = []) => {
         const nodeIds = entries.map(item => item[0]);
@@ -2157,6 +2197,8 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
       ], [[4, 43, .8]]);
       const far = rig('far', [[0, [10, 0, 0]]]);
       const result = buildModelRigReconciliation([body, legs, far]);
+      const cooperative = await buildModelRigReconciliationCooperative(
+        [body, legs, far]);
       const bodyJoint = result.sourceBoneToModelJointId['body#bone=0'];
       const legsJoint = result.sourceBoneToModelJointId['legs#bone=4'];
       const bodyChild = result.sourceBoneToModelJointId['body#bone=1'];
@@ -2178,6 +2220,17 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
           .map(item => item.rejectionReason).filter(Boolean),
         sourceEdgeSupport: result.edges.filter(edge =>
           edge.relationshipType === 'source').map(edge => edge.sourceSupportCount),
+        cooperativeSame: JSON.stringify({
+          joints: cooperative.joints,
+          edges: cooperative.edges,
+          components: cooperative.components,
+          sourceBoneToModelJointId: cooperative.sourceBoneToModelJointId,
+        }) === JSON.stringify({
+          joints: result.joints,
+          edges: result.edges,
+          components: result.components,
+          sourceBoneToModelJointId: result.sourceBoneToModelJointId,
+        }),
       };
     }""")
     assert result["sameRoot"]
@@ -2186,6 +2239,7 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
     assert sorted(result["clusterSizes"], reverse=True)[:2] == [2, 2]
     assert "topology_conflict" in result["rejected"] or "not_mutual" in result["rejected"]
     assert 2 in result["sourceEdgeSupport"]
+    assert result["cooperativeSame"]
     assert all(signature == expected
                for signature, expected in result["jointSignatures"])
 
@@ -2194,7 +2248,8 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {crossSourceWeightEvidence} = await import(
+      const {crossSourceWeightEvidence,
+        crossSourceWeightEvidenceCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, positions, ids) => ({
         sourceKey,
@@ -2212,17 +2267,27 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
       const mutual = crossSourceWeightEvidence(
         make('mutual-left', [0, 0, 0, 0, .018, 0], [10, 11]),
         make('mutual-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
+      const cooperative = await crossSourceWeightEvidenceCooperative(
+        make('coop-left', [0, 0, 0, 0, .018, 0], [10, 11]),
+        make('coop-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
       return {
         spatialMatches: spatial.get('left#bone=0|right#bone=1')
           ?.matchedVertexCount || 0,
         mutualPairs: [...mutual.values()].map(item => [
           item.leftSourceBoneKey, item.rightSourceBoneKey,
         ]).sort(),
+        cooperativePairs: [...cooperative.values()].map(item => [
+          item.leftSourceBoneKey, item.rightSourceBoneKey,
+          item.matchedVertexCount, item.weightedMatchStrength,
+        ]).sort(),
       };
     }""")
     assert result["spatialMatches"] == 1
     assert result["mutualPairs"] == [[
         "mutual-left#bone=11", "mutual-right#bone=21"]]
+    assert result["cooperativePairs"] == [[
+        "coop-left#bone=11", "coop-right#bone=21", 1,
+        pytest.approx(.575)]]
 
 
 def test_cross_source_reconciliation_preserves_host_root_and_reroots_accessory(

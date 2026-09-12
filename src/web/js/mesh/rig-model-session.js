@@ -8,9 +8,15 @@ import {
   buildInferredRigForest,
   hasUsableSurfaceTopology,
   inspectSurfaceTopology,
+  inspectSurfaceTopologyCooperative,
   jointPivotMap,
 } from './weight-rig.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
+
+function clockNow() {
+  return typeof globalThis.performance?.now === 'function'
+    ? globalThis.performance.now() : Date.now();
+}
 
 let activeSession = null;
 
@@ -57,7 +63,9 @@ function memberEvidenceShapeKey(member = {}) {
 }
 
 function createSourceSession({states, knownMeshes, modelWeightState,
-    sourceSkinningRigs, ensureRigMeshPrepared, ensureInfluenceGraph,
+    sourceSkinningRigs, ensureRigMeshPrepared,
+    ensureRigMeshPreparedCooperative = ensureRigMeshPrepared,
+    ensureInfluenceGraph, ensureInfluenceGraphCooperative = ensureInfluenceGraph,
     rebuildRestFrames,
     cloneForest} = {}) {
   function memberArraysEqual(left, right) {
@@ -147,6 +155,160 @@ function createSourceSession({states, knownMeshes, modelWeightState,
     };
   }
 
+  async function memberArraysEqualCooperative(left, right, budget, isCurrent) {
+    if (left === right) return true;
+    if (!left || !right || left.length !== right.length) return false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (!Object.is(left[index], right[index])) return false;
+      if ((index & 2047) === 0) {
+        if (!isCurrent()) return null;
+        await budget.checkpoint();
+        if (!isCurrent()) return null;
+      }
+    }
+    return true;
+  }
+
+  async function memberEvidenceEqualCooperative(left, right, budget,
+      isCurrent) {
+    const leftState = left.state;
+    const rightState = right.state;
+    if (leftState.influenceCount !== rightState.influenceCount) return false;
+    const leftLengths = [
+      leftState.baselinePositions,
+      leftState.indices,
+      leftState.weights,
+      leftState.boneIds,
+      left.surfaceIndices,
+    ].map(values => values?.length ?? null);
+    const rightLengths = [
+      rightState.baselinePositions,
+      rightState.indices,
+      rightState.weights,
+      rightState.boneIds,
+      right.surfaceIndices,
+    ].map(values => values?.length ?? null);
+    if (leftLengths.some((length, index) => length !== rightLengths[index])) {
+      return false;
+    }
+    for (const [leftValues, rightValues] of [
+      [leftState.boneIds, rightState.boneIds],
+      [left.surfaceIndices, right.surfaceIndices],
+      [leftState.indices, rightState.indices],
+      [leftState.weights, rightState.weights],
+      [leftState.baselinePositions, rightState.baselinePositions],
+    ]) {
+      const equal = await memberArraysEqualCooperative(
+        leftValues, rightValues, budget, isCurrent);
+      if (equal === null) return null;
+      if (!equal) return false;
+    }
+    return isCurrent() ? true : null;
+  }
+
+  async function normalizeMembersCooperative(members, budget, isCurrent) {
+    const evidenceBuckets = new Map();
+    const uniqueMembers = [];
+    for (const member of members) {
+      if (!isCurrent()) return null;
+      const key = memberEvidenceShapeKey(member);
+      const bucket = evidenceBuckets.get(key) || [];
+      let duplicate = false;
+      for (const candidate of bucket) {
+        const equal = await memberEvidenceEqualCooperative(
+          candidate, member, budget, isCurrent);
+        if (equal === null) return null;
+        if (equal) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        bucket.push(member);
+        evidenceBuckets.set(key, bucket);
+        uniqueMembers.push(member);
+      }
+      await budget.checkpoint();
+    }
+    return uniqueMembers;
+  }
+
+  async function aggregateInfluenceGraphCooperative(members, {
+      budget, isCurrent = () => true,
+  }) {
+    const timings = {
+      sourceKey: String(states.get(members[0])?.skinningSourceKey || ''),
+      meshCount: 0,
+      vertexCount: 0,
+      triangleCount: 0,
+      meshPreparationMs: 0,
+      topologyMs: 0,
+      surfaceGraphMs: 0,
+      vertexGraphMs: 0,
+    };
+    const loadedMembers = [];
+    for (const mesh of members) {
+      if (!isCurrent()) return null;
+      const state = states.get(mesh);
+      if (!state?.loaded) continue;
+      const preparationStartedAt = clockNow();
+      if (!(await ensureRigMeshPreparedCooperative(mesh, state,
+        {budget, isCurrent}))) return null;
+      timings.meshPreparationMs += clockNow() - preparationStartedAt;
+      loadedMembers.push({
+        mesh,
+        state,
+        surfaceIndices: mesh.geometry?.index?.array || null,
+      });
+      await budget.checkpoint();
+    }
+    const uniqueMembers = await normalizeMembersCooperative(
+      loadedMembers, budget, isCurrent);
+    if (!uniqueMembers) return null;
+    timings.meshCount = loadedMembers.length;
+    timings.vertexCount = uniqueMembers.reduce((sum, member) => sum +
+      Math.floor((member.state.baselinePositions?.length || 0) / 3), 0);
+    const surfaceEvidenceByMesh = new Map();
+    let surfaceEligible = true;
+    for (const member of uniqueMembers) {
+      const topologyStartedAt = clockNow();
+      const measure = await inspectSurfaceTopologyCooperative(
+        member.state.baselinePositions, member.surfaceIndices,
+        {budget, isCurrent});
+      if (!measure) return null;
+      timings.topologyMs += clockNow() - topologyStartedAt;
+      surfaceEvidenceByMesh.set(member.mesh, measure);
+      timings.triangleCount += measure.triangleCount;
+      surfaceEligible = surfaceEligible && measure.surfaceEvidenceAvailable;
+    }
+    const evidenceMode = surfaceEligible ? 'surface' : 'vertex';
+    const graphs = [];
+    for (const member of uniqueMembers) {
+      if (!isCurrent()) return null;
+      const surfaceEvidence = surfaceEvidenceByMesh.get(member.mesh);
+      const graphStartedAt = clockNow();
+      const graph = await ensureInfluenceGraphCooperative(
+        member.mesh, member.state, evidenceMode,
+        evidenceMode === 'surface' ? surfaceEvidence : surfaceEvidence,
+        {budget, isCurrent});
+      if (!graph) return null;
+      if (evidenceMode === 'surface') {
+        timings.surfaceGraphMs += clockNow() - graphStartedAt;
+      } else {
+        timings.vertexGraphMs += clockNow() - graphStartedAt;
+      }
+      graphs.push(graph);
+      await budget.checkpoint();
+    }
+    const graph = aggregateInfluenceGraphs(graphs);
+    return {
+      ...graph,
+      memberCount: loadedMembers.length,
+      uniqueMemberCount: uniqueMembers.length,
+      __cooperativeTimings: timings,
+    };
+  }
+
   function assembleSourceSkinningRig(sourceKey, members, influenceGraph,
       inferredForest, {finalize = true} = {}) {
     const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
@@ -198,24 +360,47 @@ function createSourceSession({states, knownMeshes, modelWeightState,
 
   function createSourceSkinningRig(sourceKey, members) {
     const influenceGraph = aggregateInfluenceGraph(members);
+    const forestStartedAt = clockNow();
     const inferredForest = buildInferredRigForest(influenceGraph);
+    if (influenceGraph.__cooperativeTimings) {
+      influenceGraph.__cooperativeTimings.inferredForestMs =
+        clockNow() - forestStartedAt;
+    }
     return assembleSourceSkinningRig(
       sourceKey, members, influenceGraph, inferredForest);
   }
 
   async function createSourceSkinningRigCooperative(sourceKey, members,
-      budget) {
-    const influenceGraph = aggregateInfluenceGraph(members);
-    await budget.checkpoint();
+      budget, isCurrent = () => true) {
+    const influenceGraph = await aggregateInfluenceGraphCooperative(members, {
+      budget, isCurrent,
+    });
+    if (!influenceGraph || !isCurrent()) return null;
+    const forestStartedAt = clockNow();
     const inferredForest = buildInferredRigForest(influenceGraph);
+    if (influenceGraph.__cooperativeTimings) {
+      influenceGraph.__cooperativeTimings.inferredForestMs =
+        clockNow() - forestStartedAt;
+    }
     await budget.checkpoint();
+    if (!isCurrent()) return null;
     const rig = assembleSourceSkinningRig(
       sourceKey, members, influenceGraph, inferredForest, {finalize: false});
     await budget.checkpoint();
+    if (!isCurrent()) return null;
+    const restFrameStartedAt = clockNow();
     rebuildRestFrames(rig);
+    if (influenceGraph.__cooperativeTimings) {
+      influenceGraph.__cooperativeTimings.restFrameMs =
+        clockNow() - restFrameStartedAt;
+    }
+    await budget.checkpoint();
+    if (!isCurrent()) return null;
     rig.defaultInferredForest = cloneForest(rig.inferredForest);
     rig.defaultJointPivotByBoneId = new Map([...rig.jointPivotByBoneId]
       .map(([boneId, pivot]) => [boneId, [...pivot]]));
+    rig.__cooperativeStats = budget.getStats();
+    rig.__cooperativeTimings = influenceGraph.__cooperativeTimings || null;
     return rig;
   }
 
@@ -287,7 +472,7 @@ function createSourceSession({states, knownMeshes, modelWeightState,
       await budget.checkpoint();
       if (!current()) return null;
       const rig = await createSourceSkinningRigCooperative(
-        sourceKey, members, budget);
+        sourceKey, members, budget, current);
       if (!current()) return null;
       sourceSkinningRigs.set(sourceKey, rig);
       return rig;
