@@ -260,6 +260,21 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
     assert "mod" not in preview._skinning_manifests
 
 
+def test_clear_loaded_model_releases_all_model_private_state():
+    preview = ModPreview(_Access())
+    preview._current_model_folder = "mod"
+    preview._active_mesh_keys["mod"] = {"Body-1"}
+    preview._skinning_manifests["mod"] = {"Body-1": object()}
+    preview._last_skinning_diagnostics["mod"] = {"total_seconds": 1}
+
+    preview.clear_loaded_model()
+
+    assert preview._current_model_folder is None
+    assert preview._active_mesh_keys == {}
+    assert preview._skinning_manifests == {}
+    assert preview._last_skinning_diagnostics == {}
+
+
 def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):
     preview = ModPreview(_Access())
     preview._active_mesh_keys["mod"] = {"Body-1"}

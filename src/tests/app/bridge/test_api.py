@@ -172,6 +172,21 @@ def test_load_mod_forwards_disabled_ini_flag(monkeypatch):
     assert calls == [("mod", True)]
 
 
+def test_load_asset_clears_loaded_mod_state_before_transition(monkeypatch):
+    api = ModViewerAPI()
+    calls = []
+    monkeypatch.setattr(
+        api._mod_preview, "clear_loaded_model",
+        lambda: calls.append("clear"))
+    monkeypatch.setattr(
+        api._asset_preview, "load_asset",
+        lambda path: calls.append(("asset", path)) or {"ok": True},
+    )
+
+    assert api.load_asset("asset") == {"ok": True}
+    assert calls == ["clear", ("asset", "asset")]
+
+
 def test_texture_save_forwards_targets_and_usage(monkeypatch):
     api = ModViewerAPI()
     calls = []

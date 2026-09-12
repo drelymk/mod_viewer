@@ -67,6 +67,7 @@ def test_repeated_vertices_keep_exact_packed_positions_uvs_and_indices(
 
     assert _unpack_f32(packed.positions) == (
         2., 0., 0., 4., 0., 0., 5., 0., 0.)
+    assert packed.used_vertices == (2, 4, 5)
     assert _unpack_f32(packed.texcoords) == (
         2., .75, 4., .5, 5., .25)
     assert _unpack_indices(packed.indices) == (2, 0, 2, 1, 2, 0)
@@ -80,6 +81,7 @@ def test_base_vertex_location_is_applied_before_packing(tmp_path):
     assert _unpack_f32(packed.positions) == (
         3., 0., 0., 4., 0., 0., 5., 0., 0.)
     assert _unpack_indices(packed.indices) == (0, 1, 2)
+    assert packed.used_vertices == (3, 4, 5)
 
 
 def test_negative_effective_index_rejects_the_draw(tmp_path):
@@ -98,6 +100,7 @@ def test_truncated_position_removes_only_the_affected_triangle(tmp_path):
         uvs=[(0., 0.)] * 5)
 
     assert _unpack_indices(packed.indices) == (0, 1, 2)
+    assert packed.used_vertices == (0, 1, 2)
 
 
 def test_invalid_vertex_decode_is_cached_across_triangles(tmp_path):
@@ -179,6 +182,7 @@ def test_reverse_winding_preserves_compact_vertex_order_and_output_shape(
     assert reverse.positions == forward.positions
     assert reverse.texcoords == forward.texcoords
     assert reverse.indices == forward.indices
+    assert reverse.used_vertices == forward.used_vertices
 
 
 @pytest.mark.parametrize("trailing", [(0,), (0, 1)])
@@ -240,6 +244,7 @@ def test_shared_vertices_preserve_prepared_identity_and_decode_once(tmp_path):
     prepared, = prepared_results
     assert prepared.raw_indices == [5, 4, 2, 4, 5, 2]
     assert prepared.used_vertices == [2, 4, 5]
+    assert packed.used_vertices == (2, 4, 5)
     assert prepared.remap == {2: 0, 4: 1, 5: 2}
     assert prepared.decoded_vertices == {
         i: (float(i), 0., 0., None, None) for i in (2, 4, 5)}

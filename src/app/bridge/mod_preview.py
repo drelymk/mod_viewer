@@ -78,13 +78,15 @@ class ModPreview:
         traceback.print_exc()
         return {"error": "Unexpected backend error. See the application log for details."}
 
-    def load_mod(self, folder_path, disabled_ini=False):
-        previous_folder = self._current_model_folder
-        if previous_folder is not None:
-            self._skinning_manifests.pop(previous_folder, None)
-            self._active_mesh_keys.pop(previous_folder, None)
-            self._last_skinning_diagnostics.pop(previous_folder, None)
+    def clear_loaded_model(self):
+        """Release private state for the model currently shown in the scene."""
         self._current_model_folder = None
+        self._active_mesh_keys.clear()
+        self._skinning_manifests.clear()
+        self._last_skinning_diagnostics.clear()
+
+    def load_mod(self, folder_path, disabled_ini=False):
+        self.clear_loaded_model()
         folder_path, overrides, pending_new_sections, context = \
             self.authoritative_context(folder_path, disabled_ini=disabled_ini)
         geometry = GeometryBlob()

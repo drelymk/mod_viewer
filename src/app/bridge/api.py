@@ -121,6 +121,7 @@ class ModViewerAPI:
     # -- Asset preview and fill --------------------------------------------
 
     def load_asset(self, folder_path):
+        self._mod_preview.clear_loaded_model()
         return self._asset_preview.load_asset(folder_path)
 
     def pick_asset_texture_file(self, folder_path, texture_role=None):
