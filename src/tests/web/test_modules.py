@@ -1626,6 +1626,248 @@ def test_surface_topology_diagnostics_reject_bad_triangles_without_nan(
     }
 
 
+def test_surface_eligibility_probe_matches_topology_diagnostics(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const cases = [
+        {
+          name: 'indexed',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 2],
+        },
+        {
+          name: 'nonIndexed',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        },
+        {
+          name: 'laterValidTriangle',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, NaN, 0, 0],
+          indices: [0, 1, 3, 0, 1, 2],
+        },
+        {
+          name: 'degenerate',
+          positions: [0, 0, 0, 1, 0, 0, 2, 0, 0],
+          indices: [0, 1, 2],
+        },
+        {
+          name: 'invalidIndex',
+          positions: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 9],
+        },
+        {
+          name: 'empty',
+          positions: [],
+        },
+      ];
+      return cases.map(item => {
+        const positions = new Float32Array(item.positions);
+        const indices = item.indices === undefined
+          ? null : new Uint32Array(item.indices);
+        const diagnostics = rig.inspectSurfaceTopology(positions, indices);
+        return {
+          name: item.name,
+          usable: rig.hasUsableSurfaceTopology(positions, indices),
+          diagnosed: diagnostics.surfaceEvidenceAvailable,
+          validTriangleCount: diagnostics.validTriangleCount,
+        };
+      });
+    }""")
+    assert result == [
+        {"name": "indexed", "usable": True, "diagnosed": True,
+         "validTriangleCount": 1},
+        {"name": "nonIndexed", "usable": True, "diagnosed": True,
+         "validTriangleCount": 1},
+        {"name": "laterValidTriangle", "usable": True, "diagnosed": True,
+         "validTriangleCount": 1},
+        {"name": "degenerate", "usable": False, "diagnosed": False,
+         "validTriangleCount": 0},
+        {"name": "invalidIndex", "usable": False, "diagnosed": False,
+         "validTriangleCount": 0},
+        {"name": "empty", "usable": False, "diagnosed": False,
+         "validTriangleCount": 0},
+    ]
+
+
+def test_rig_member_structural_identity_ignores_ui_and_provenance(module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {memberStructuralEvidenceKey} = await import(
+        './js/mesh/rig-model-session.js');
+      const makeMember = (changes = {}) => ({
+        state: {
+          skinningSourceKey: 'source', influenceCount: 4,
+          encoding: 'compact', ...changes.state,
+        },
+        mesh: {
+          userData: {
+            semanticKey: 'semantic-a', component: 'Body', occurrence: 1,
+            material: 'material-a', texture: 'texture-a', visible: true,
+            identity: {
+              draw: {count: 6, start: 0, base: 0},
+              geometry_state: {
+                ib_file: 'indices.buf', index_size: 2,
+                position_file: 'positions.buf', position_stride: 12,
+                texcoord_file: 'uv.buf', texcoord_stride: 8,
+              },
+              ...changes.identity,
+            },
+          },
+          geometry: {
+            attributes: {position: {count: 3}},
+            index: {count: 3},
+            ...changes.geometry,
+          },
+        },
+      });
+      const base = makeMember();
+      const uiOnly = makeMember({
+        state: {semanticKey: 'ignored-state-field'},
+        identity: {component: 'Legs', material: 'material-b',
+          texture: 'texture-b'},
+      });
+      const different = field => memberStructuralEvidenceKey(
+        makeMember(field));
+      const baseKey = memberStructuralEvidenceKey(base);
+      return {
+        uiOnlyMatches: baseKey === memberStructuralEvidenceKey(uiOnly),
+        changedKeys: [
+          different({state: {skinningSourceKey: 'other'}}),
+          different({state: {influenceCount: 8}}),
+          different({state: {encoding: 'expanded'}}),
+          different({identity: {draw: {count: 7, start: 0, base: 0}}}),
+          different({identity: {draw: {count: 6, start: 1, base: 0}}}),
+          different({identity: {draw: {count: 6, start: 0, base: 1}}}),
+          different({identity: {geometry_state: {ib_file: 'other'}}}),
+          different({identity: {geometry_state: {index_size: 4}}}),
+          different({identity: {geometry_state: {position_file: 'other'}}}),
+          different({identity: {geometry_state: {position_stride: 16}}}),
+          different({identity: {geometry_state: {texcoord_file: 'other'}}}),
+          different({identity: {geometry_state: {texcoord_stride: 16}}}),
+          different({geometry: {attributes: {position: {count: 4}}}}),
+          different({geometry: {index: {count: 6}}}),
+        ].map(key => key !== baseKey),
+      };
+    }""")
+    assert result == {
+        "uiOnlyMatches": True,
+        "changedKeys": [True] * 14,
+    }
+
+
+def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wide(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {initializeRigSourceSession} = await import(
+        './js/mesh/rig-model-session.js');
+      const states = new Map();
+      const knownMeshes = new Set();
+      const sourceSkinningRigs = new Map();
+      const graphCalls = [];
+      const makeMesh = (name, valid, drawStart = 0) => {
+        const mesh = {
+          userData: {semanticKey: name, identity: {
+            draw: {count: 3, start: drawStart, base: 0},
+            geometry_state: {ib_file: 'indices.buf', index_size: 2,
+              position_file: 'positions.buf', position_stride: 12,
+              texcoord_file: 'uv.buf', texcoord_stride: 8},
+          }},
+          geometry: {
+            attributes: {position: {count: 3}},
+            index: {array: new Uint32Array([0, 1, 2]), count: 3},
+          },
+        };
+        states.set(mesh, {
+          loaded: true, skinningSourceKey: 'source', influenceCount: 1,
+          encoding: 'compact',
+          baselinePositions: new Float32Array(valid
+            ? [0, 0, 0, 1, 0, 0, 0, 1, 0]
+            : [0, 0, 0, 1, 0, 0, 2, 0, 0]),
+          indices: new Uint32Array([0, 1, 2]),
+          weights: new Float32Array([1, 1, 1]),
+          boneIds: new Uint16Array([1, 1, 1]),
+        });
+        knownMeshes.add(mesh);
+        return mesh;
+      };
+      const first = makeMesh('first', true);
+      const duplicate = makeMesh('duplicate', true, 2);
+      const invalid = makeMesh('invalid', false, 1);
+      const graphFor = (mesh, state, evidenceMode, surfaceEvidence) => {
+        graphCalls.push({mesh: mesh.userData.semanticKey, evidenceMode,
+          surfaceAvailable: surfaceEvidence?.surfaceEvidenceAvailable ?? null});
+        return {
+          nodes: [{boneId: 1, totalWeight: 1, affectedVertexCount: 3,
+            affectedMeasure: evidenceMode === 'surface' ? 1 : null,
+            maxVertexWeight: 1, weightedCenter: [0, 0, 0],
+            weightedRadius: 0}], relationships: [], evidenceMode,
+          triangleCount: evidenceMode === 'surface' ? 1 : 0,
+          validTriangleCount: evidenceMode === 'surface' ? 1 : 0,
+        };
+      };
+      const session = initializeRigSourceSession({
+        states, knownMeshes, modelWeightState: {
+          sourceDescriptors: new Map([['source', {
+            sourceFile: 'weights.buf', boneIdOffset: 0,
+          }]]),
+        }, sourceSkinningRigs,
+        ensureRigMeshPrepared: () => true,
+        ensureInfluenceGraph: graphFor,
+        rebuildRestFrames: () => {},
+        cloneForest: forest => forest,
+      });
+      const fallbackRig = session.ensure('source',
+        [first, duplicate, invalid]);
+      const fallback = {
+        memberCount: fallbackRig.influenceGraph.memberCount,
+        uniqueMemberCount: fallbackRig.influenceGraph.uniqueMemberCount,
+        evidenceMode: fallbackRig.influenceGraph.evidenceMode,
+        graphCalls: [...graphCalls],
+      };
+      graphCalls.length = 0;
+      const surfaceRig = session.ensure('source', [first, duplicate]);
+      return {
+        fallback,
+        surface: {
+          memberCount: surfaceRig.influenceGraph.memberCount,
+          uniqueMemberCount: surfaceRig.influenceGraph.uniqueMemberCount,
+          evidenceMode: surfaceRig.influenceGraph.evidenceMode,
+          graphCalls,
+        },
+        exactOutput: {
+          nodes: surfaceRig.influenceGraph.nodes,
+          relationships: surfaceRig.influenceGraph.relationships,
+        },
+      };
+    }""")
+    assert result["fallback"] == {
+        "memberCount": 3,
+        "uniqueMemberCount": 2,
+        "evidenceMode": "vertex",
+        "graphCalls": [
+            {"mesh": "first", "evidenceMode": "vertex",
+             "surfaceAvailable": True},
+            {"mesh": "invalid", "evidenceMode": "vertex",
+             "surfaceAvailable": False},
+        ],
+    }
+    assert result["surface"] == {
+        "memberCount": 2,
+        "uniqueMemberCount": 1,
+        "evidenceMode": "surface",
+        "graphCalls": [{"mesh": "first", "evidenceMode": "surface",
+                         "surfaceAvailable": True}],
+    }
+    assert result["exactOutput"] == {
+        "nodes": [{"boneId": 1, "totalWeight": 1,
+                    "affectedVertexCount": 3, "affectedMeasure": 1,
+                    "maxVertexWeight": 1,
+                    "weightedCenter": [0, 0, 0], "weightedRadius": 0}],
+        "relationships": [],
+    }
+
+
 def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_page):
     page = module_page
     result = page.evaluate("""async () => {

@@ -17,6 +17,33 @@ function triangleArea(points) {
     ab[0] * ac[1] - ab[1] * ac[0]);
 }
 
+function readSurfaceTriangle(
+    positionArray, indexArray, indexed, positionCount, triangle) {
+  const indices = [0, 1, 2].map(offset => {
+    const index = triangle * 3 + offset;
+    return indexed ? Number(indexArray[index]) : index;
+  });
+  if (indices.some(index => !Number.isInteger(index)
+      || index < 0 || index >= positionCount)) {
+    return {kind: 'invalid'};
+  }
+  const points = indices.map(vertex => {
+    const offset = vertex * 3;
+    return [
+      Number(positionArray[offset]),
+      Number(positionArray[offset + 1]),
+      Number(positionArray[offset + 2]),
+    ];
+  });
+  if (points.some(point => point.some(value => !Number.isFinite(value)))) {
+    return {kind: 'invalid'};
+  }
+  const area = triangleArea(points);
+  if (!Number.isFinite(area)) return {kind: 'invalid'};
+  if (area <= 0) return {kind: 'degenerate', indices, points, area};
+  return {kind: 'valid', indices, points, area};
+}
+
 function collectSurfaceTriangles(
     positions, triangleIndices = null, includeTriangles = true) {
   const positionArray = positions || [];
@@ -34,40 +61,22 @@ function collectSurfaceTriangles(
   let validTriangleCount = 0;
   let totalSurfaceArea = 0;
   for (let triangle = 0; triangle < triangleCount; triangle += 1) {
-    const indices = [0, 1, 2].map(offset => {
-      const index = triangle * 3 + offset;
-      return indexed ? Number(indexArray[index]) : index;
-    });
-    if (indices.some(index => !Number.isInteger(index)
-        || index < 0 || index >= positionCount)) {
+    const sample = readSurfaceTriangle(
+      positionArray, indexArray, indexed, positionCount, triangle);
+    if (sample.kind === 'invalid') {
       invalidTriangleCount += 1;
       continue;
     }
-    const points = indices.map(vertex => {
-      const offset = vertex * 3;
-      return [
-        Number(positionArray[offset]),
-        Number(positionArray[offset + 1]),
-        Number(positionArray[offset + 2]),
-      ];
-    });
-    if (points.some(point => point.some(value => !Number.isFinite(value)))) {
-      invalidTriangleCount += 1;
-      continue;
-    }
-    const area = triangleArea(points);
-    if (!Number.isFinite(area)) {
-      invalidTriangleCount += 1;
-      continue;
-    }
-    if (area === 0) {
+    if (sample.kind === 'degenerate') {
       degenerateTriangleCount += 1;
       continue;
     }
     validTriangleCount += 1;
-    totalSurfaceArea += area;
-    indices.forEach(index => measuredVertices.add(index));
-    if (triangles) triangles.push({indices, points, area});
+    totalSurfaceArea += sample.area;
+    sample.indices.forEach(index => measuredVertices.add(index));
+    if (triangles) triangles.push({
+      indices: sample.indices, points: sample.points, area: sample.area,
+    });
   }
   return {
     positionCount,
@@ -275,6 +284,24 @@ function integrateMinimumLinearWeight(
   const rightRegion = clipLinearWeightPolygon(vertices, false);
   return integratePolygonLinearWeight(leftRegion, 'leftWeight')
     + integratePolygonLinearWeight(rightRegion, 'rightWeight');
+}
+
+/** Return whether topology contains at least one usable positive-area triangle. */
+export function hasUsableSurfaceTopology(positions, triangleIndices = null) {
+  const positionArray = positions || [];
+  const positionCount = Math.floor(positionArray.length / 3);
+  const indexed = triangleIndices !== null && triangleIndices !== undefined;
+  const indexArray = indexed ? triangleIndices : null;
+  const indexCount = indexed
+    ? Number(indexArray?.length) || 0
+    : Number(positionArray.length) / 3;
+  const triangleCount = Math.ceil(indexCount / 3);
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    const sample = readSurfaceTriangle(
+      positionArray, indexArray, indexed, positionCount, triangle);
+    if (sample.kind === 'valid' && sample.area > 0) return true;
+  }
+  return false;
 }
 
 function surfaceInfluenceWeights(
