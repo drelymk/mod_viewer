@@ -161,7 +161,8 @@ def _resolve_vertex_vg_resource(resource_name, resolve_vertex_info,
 
 
 def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
-                            bone_id_offset=0, remap_resources=None):
+                            bone_id_offset=0, remap_resources=None,
+                            allow_unlabeled=False):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -184,7 +185,8 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
         if not filename:
             continue
         evidence = f"{resource_name} {filename}".lower()
-        if "blend" not in evidence:
+        labeled_blend = "blend" in evidence
+        if not allow_unlabeled and not labeled_blend:
             continue
         try:
             stride = int(info.get("stride"))
@@ -203,21 +205,20 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
         elif stride == 4:
             encoding, influence_count = "rigid_u32_1", 1
         else:
-            unsupported.append(stride)
+            if labeled_blend or not allow_unlabeled:
+                unsupported.append(stride)
         if encoding is None:
             continue
         remap_info, remap_error = (None, None)
         if encoding.startswith("wwmi_"):
             remap_name = (remap_resources or {}).get(35)
-            if not remap_name:
-                unsupported.append("missing_vertex_vg_remap")
-                continue
-            remap_info, remap_error = _resolve_vertex_vg_resource(
-                remap_name, resolve_vertex_info,
-                influence_count)
-            if remap_error:
-                unsupported.append(remap_error)
-                continue
+            if remap_name:
+                remap_info, remap_error = _resolve_vertex_vg_resource(
+                    remap_name, resolve_vertex_info,
+                    influence_count)
+                if remap_error:
+                    unsupported.append(remap_error)
+                    continue
         source = SkinningSource(
             file=filename, stride=stride,
             influence_count=influence_count, encoding=encoding,

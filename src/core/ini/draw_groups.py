@@ -114,8 +114,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     section_info = _scan_sections_for_draws(sections, var_prefix, gating_vars)
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
-        section_info, resources, resource_copy_sources)
+        section_info, resources, resource_copy_sources, sections=sections)
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
+    vertex_binding_index = resolved_buffers["vertex_binding_index"]
     component_buffers = resolved_buffers["component_buffers"]
     component_positions = resolved_buffers["component_positions"]
     component_texcoords = resolved_buffers["component_texcoords"]
@@ -174,6 +175,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
         ib_resource = info["ib"] or global_ib
         component = _ib_res_to_component(ib_resource)
+        group_vertex_resources = {
+            slot: resource
+            for slot, resource in (
+                info.get("vertex_resources_at_end") or {}).items()
+            if resource
+        }
         buffers = lookup_component_buffers(component)
         if not buffers:
             position = (info["vb0"] or _lookup_component_value(
@@ -212,10 +219,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         texcoord_stride = texcoord_info.get("stride", 20)
         position_stride = position_info.get("stride", POSITION_STRIDE)
         index_size = _ib_index_size(ib_info.get("format"))
-        group_vertex_resources = {
-            slot: info[f"vb{slot}"]
-            for slot in (0, 1, 2) if info[f"vb{slot}"]
-        }
         group_normal_source = _resolve_normal_source(
             group_vertex_resources, resources, position_file, position_stride,
             resolve_vertex_info)
@@ -259,6 +262,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
             draw_buffers = lookup_component_buffers(
                 _ib_res_to_component(effective_ib))
+            effective_position_resource = buffers["position"]
             if draw_buffers and draw_buffers != buffers:
                 position, stride = resolve_vertex_resource(
                     draw_buffers["position"])
@@ -267,6 +271,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if position:
                     draw.position_file = position
                     draw.position_stride = stride or POSITION_STRIDE
+                    effective_position_resource = draw_buffers["position"]
                 if texcoord:
                     draw.texcoord_file = texcoord
                     draw.texcoord_stride = texcoord_stride_for_draw or 20
@@ -277,11 +282,13 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if position_resource is None:
                     draw.position_file = None
                     draw.position_stride = None
+                    effective_position_resource = None
                 else:
                     position, stride = resolve_vertex_resource(position_resource)
                     if position:
                         draw.position_file = position
                         draw.position_stride = stride or POSITION_STRIDE
+                        effective_position_resource = position_resource
 
             authored_texcoords = {
                 slot: vertex_resources[slot]
@@ -311,29 +318,76 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             draw.normal_source = _resolve_normal_source(
                 effective_vertex_resources, resources, draw.position_file,
                 draw.position_stride, resolve_vertex_info)
-            direct_skinning_resources = dict(group_vertex_resources)
-            direct_skinning_resources.update(vertex_resources)
+            # AuthoredDrawCall.vertex_resources is the complete effective
+            # state captured at this draw, including CommandList bindings and
+            # explicit nulls.  Do not merge a section-end snapshot here: a
+            # later vbN assignment must not leak backward to an earlier draw.
+            direct_skinning_resources = {
+                slot: resource
+                for slot, resource in vertex_resources.items()
+                if resource
+            }
             remap_resources = dict(global_compute_resources)
             remap_resources.update(authored.skinning_remap_resources)
+            skinning_resolution = {
+                "direct_candidate_count": sum(
+                    1 for resource in direct_skinning_resources.values()
+                    if resource),
+                "position_resource": effective_position_resource,
+                "provenance_section_count": 0,
+                "provenance_candidate_count": 0,
+                "legacy_component_candidate_count": 0,
+                "resolution_source": None,
+            }
             skinning_source, skinning_error = resolve_skinning_source(
                 direct_skinning_resources, resolve_vertex_info,
                 bone_id_offset=authored.skinning_bone_offset,
                 remap_resources=remap_resources)
+            if skinning_source is not None:
+                skinning_resolution["resolution_source"] = "direct"
             if skinning_source is None and skinning_error is None:
-                occupied_slots = (set(group_vertex_resources)
-                                  | set(vertex_resources))
+                provenance_resources, provenance_sections = \
+                    vertex_binding_index.provenance_for_position(
+                        effective_position_resource,
+                        root_section=section_name,
+                        current_bindings=vertex_resources)
+                skinning_resolution.update({
+                    "provenance_section_count": len(provenance_sections),
+                    "provenance_candidate_count": len(provenance_resources),
+                })
+                provenance_bindings = {
+                    slot: resource
+                    for slot, resource in enumerate(sorted(
+                        provenance_resources, key=str.casefold))
+                }
+                skinning_source, skinning_error = resolve_skinning_source(
+                    provenance_bindings, resolve_vertex_info,
+                    bone_id_offset=authored.skinning_bone_offset,
+                    remap_resources=remap_resources,
+                    allow_unlabeled=True)
+                if skinning_source is not None:
+                    skinning_resolution["resolution_source"] = \
+                        "position_provenance"
+            if skinning_source is None and skinning_error is None:
+                occupied_slots = set(vertex_resources)
                 blend_fallback = {
                     slot: resource
                     for slot, resource in lookup_component_blend_vertex_resources(
                         _ib_res_to_component(effective_ib)).items()
                     if slot not in occupied_slots
                 }
+                skinning_resolution[
+                    "legacy_component_candidate_count"] = len(blend_fallback)
                 skinning_source, skinning_error = resolve_skinning_source(
                     blend_fallback, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
                     remap_resources=remap_resources)
+                if skinning_source is not None:
+                    skinning_resolution["resolution_source"] = \
+                        "legacy_component"
             draw.skinning_source = skinning_source
             draw.skinning_error = skinning_error
+            draw.skinning_resolution = skinning_resolution
             _apply_diffuse_state(draw, authored, resolve_texture_file)
             _apply_auxiliary_map_state(draw, authored, resolve_texture_file)
             draw.texture_provenance = {

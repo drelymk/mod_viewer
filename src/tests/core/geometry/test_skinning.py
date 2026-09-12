@@ -194,7 +194,7 @@ def test_resolver_accepts_known_blend_layouts(stride, fmt, encoding):
         bone_id_namespace=("wwmi_vertex_vg" if expected_remap else "model"))
 
 
-def test_resolver_rejects_wwmi_source_without_vertex_vg_remap():
+def test_resolver_accepts_wwmi_source_without_vertex_vg_remap():
     source, error = resolve_skinning_source(
         {1: "ResourceBlendBuffer"},
         {"ResourceBlendBuffer": {
@@ -202,8 +202,13 @@ def test_resolver_rejects_wwmi_source_without_vertex_vg_remap():
             "format": "DXGI_FORMAT_R8_UINT",
         }}.get)
 
-    assert source is None
-    assert error == "missing_vertex_vg_remap"
+    assert error is None
+    assert source == SkinningSource(
+        "blend.buf", 8, 4, "wwmi_u8_4", bone_id_namespace="model")
+    decoded = decode_skinning(
+        source, bytes([3, 4, 5, 6, 255, 128, 64, 32]), [0])
+    assert decoded.bone_ids == (3, 4, 5, 6)
+    assert decoded.diagnostics["vertex_vg_remap"] is False
 
 
 def test_resolver_carries_the_authored_model_bone_offset():

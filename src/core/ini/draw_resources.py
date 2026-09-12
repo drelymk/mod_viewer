@@ -1,9 +1,87 @@
 """Resolution of authored geometry resources into file-backed buffers."""
 
+from dataclasses import dataclass
 import re
 
 from ..geometry.buffers import POSITION_STRIDE, _res_get
 from ..geometry.vertex_attributes import VertexAttributeSource
+from .draw_scan import (_reachable_execution_sections, _run_target_name)
+
+
+@dataclass
+class VertexBindingIndex:
+    """Reverse references between authored vertex bindings and INI scopes.
+
+    This is deliberately smaller than an execution graph.  The draw scanner
+    already captures effective per-draw state; this index only retains enough
+    authored scope information to answer which vertex resources were bound
+    alongside a resolved Position resource.
+    """
+
+    sections: dict
+    section_lookup: dict
+    section_bindings: dict
+    section_draw_bindings: dict
+    section_runs: dict
+    resource_consumers: dict
+    resource_copy_sources: dict
+
+    def _resource_reaches(self, start, target):
+        """Return whether an authored resource copy chain reaches target."""
+        if not start or not target:
+            return False
+        target_key = str(target).casefold()
+        pending = [str(start)]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            current_key = current.casefold()
+            if current_key in visited:
+                continue
+            visited.add(current_key)
+            if current_key == target_key:
+                return True
+            pending.extend(self.resource_copy_sources.get(current_key, ()))
+        return False
+
+    def _scope_sections(self, root):
+        if root not in self.sections:
+            return (root,)
+        return _reachable_execution_sections(
+            self.sections, root, self.section_lookup)
+
+    def provenance_for_position(self, position_resource, *, root_section=None,
+                                current_bindings=None):
+        """Return co-bound resources and their authored provenance sections."""
+        if not position_resource:
+            return set(), set()
+
+        roots = set()
+        for bound_resource, consumers in self.resource_consumers.items():
+            if self._resource_reaches(bound_resource, position_resource):
+                roots.update(consumers)
+
+        candidates = set()
+        provenance_sections = set()
+        for root in roots:
+            for section_name in self._scope_sections(root):
+                if (section_name == root
+                        and section_name in self.section_draw_bindings):
+                    if section_name == root_section and current_bindings is not None:
+                        scopes = (current_bindings,)
+                    else:
+                        scopes = self.section_draw_bindings[section_name]
+                else:
+                    scopes = (self.section_bindings.get(section_name, {}),)
+                for bindings in scopes:
+                    for resource in bindings.values():
+                        if not resource:
+                            continue
+                        if self._resource_reaches(resource, position_resource):
+                            continue
+                        candidates.add(resource)
+                        provenance_sections.add(section_name)
+        return candidates, provenance_sections
 
 
 def _ib_res_to_component(ib_res):
@@ -102,6 +180,52 @@ def _resolve_normal_source(effective_vertex_resources, resources,
     return None
 
 
+def _build_vertex_binding_index(section_info, sections,
+                                resource_copy_sources):
+    """Build the small reverse index used by skinning provenance lookup."""
+    section_lookup = {str(name).lower(): name for name in sections}
+    section_bindings = {}
+    section_draw_bindings = {}
+    section_runs = {}
+    resource_consumers = {}
+
+    for name, info in section_info.items():
+        bindings = dict(info.get("vertex_resources_at_end") or {})
+        section_bindings[name] = bindings
+        draw_bindings = [
+            dict(draw.vertex_resources)
+            for draw in info.get("draws", ())
+        ]
+        if draw_bindings:
+            section_draw_bindings[name] = draw_bindings
+        for resource in bindings.values():
+            if resource:
+                resource_consumers.setdefault(
+                    str(resource).casefold(), set()).add(name)
+        for snapshot in draw_bindings:
+            for resource in snapshot.values():
+                if resource:
+                    resource_consumers.setdefault(
+                        str(resource).casefold(), set()).add(name)
+
+        runs = []
+        for raw in sections.get(name, ()):
+            target_name = _run_target_name(raw, section_lookup)
+            if target_name and target_name not in runs:
+                runs.append(target_name)
+        section_runs[name] = tuple(runs)
+
+    return VertexBindingIndex(
+        sections=sections,
+        section_lookup=section_lookup,
+        section_bindings=section_bindings,
+        section_draw_bindings=section_draw_bindings,
+        section_runs=section_runs,
+        resource_consumers=resource_consumers,
+        resource_copy_sources=resource_copy_sources,
+    )
+
+
 def _select_draw_sections(section_info, global_ib):
     """Select TextureOverride sections that can produce viewer geometry."""
     return [(name, info) for name, info in section_info.items()
@@ -110,7 +234,8 @@ def _select_draw_sections(section_info, global_ib):
             and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
 
 
-def _resolve_component_buffers(section_info, resources, resource_copy_sources):
+def _resolve_component_buffers(section_info, resources, resource_copy_sources,
+                               sections=None):
     """Resolve component, hash, and WWMI global buffer bindings."""
     vertex_info_cache = {}
 
@@ -245,6 +370,9 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources):
 
     return {
         "resolve_vertex_info": resolve_vertex_info,
+        "vertex_binding_index": _build_vertex_binding_index(
+            section_info, sections or {},
+            resource_copy_sources),
         "component_buffers": component_buffers,
         "component_positions": component_positions,
         "component_texcoords": component_texcoords,
@@ -262,4 +390,5 @@ __all__ = [
     "_ib_res_to_component", "_ib_index_size", "_extract_hash",
     "_collect_resource_copy_sources", "_resolve_normal_source",
     "_resolve_component_buffers", "_select_draw_sections",
+    "VertexBindingIndex",
 ]
