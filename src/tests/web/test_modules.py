@@ -1244,6 +1244,130 @@ def test_inferred_rig_pivots_aggregate_and_keep_disconnected_components(module_p
     assert result["nonZeroRootPivotKeys"] == [0, 2]
 
 
+def test_barycentric_third_moment_matches_reference_for_all_index_triples(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {barycentricThirdMoment} = await import(
+        './js/mesh/weight-rig.js');
+      const reference = (first, second, third, area) => {
+        const counts = [first, second, third].reduce((map, index) => {
+          map.set(index, (map.get(index) || 0) + 1);
+          return map;
+        }, new Map());
+        const multiplicities = [...counts.values()];
+        if (multiplicities.length === 1) return area / 10;
+        if (multiplicities.length === 2) return area / 30;
+        return area / 60;
+      };
+      const areas = [0, 1, .5, .123456789, 1234.56789, 1e-12];
+      const mismatches = [];
+      let caseCount = 0;
+      for (let first = 0; first < 3; first += 1) {
+        for (let second = 0; second < 3; second += 1) {
+          for (let third = 0; third < 3; third += 1) {
+            for (const area of areas) {
+              caseCount += 1;
+              const actual = barycentricThirdMoment(
+                first, second, third, area);
+              const expected = reference(first, second, third, area);
+              if (!Object.is(actual, expected)) {
+                mismatches.push({first, second, third, area, actual, expected});
+              }
+            }
+          }
+        }
+      }
+      return {caseCount, mismatches};
+    }""")
+    assert result == {"caseCount": 162, "mismatches": []}
+
+
+def test_surface_integrators_match_reference_third_moment_order(module_page):
+    result = module_page.evaluate("""async () => {
+      const {integrateLinearSecondMoment, integratePositionProduct} =
+        await import('./js/mesh/weight-rig.js');
+      const referenceThirdMoment = (first, second, third, area) => {
+        const counts = [first, second, third].reduce((map, index) => {
+          map.set(index, (map.get(index) || 0) + 1);
+          return map;
+        }, new Map());
+        const multiplicities = [...counts.values()];
+        if (multiplicities.length === 1) return area / 10;
+        if (multiplicities.length === 2) return area / 30;
+        return area / 60;
+      };
+      const dot3 = (left, right) => left[0] * right[0]
+        + left[1] * right[1] + left[2] * right[2];
+      const referenceSecondMoment = (points, weights, area) => {
+        let result = 0;
+        for (let left = 0; left < 3; left += 1) {
+          for (let right = 0; right < 3; right += 1) {
+            for (let weight = 0; weight < 3; weight += 1) {
+              result += dot3(points[left], points[right])
+                * weights[weight]
+                * referenceThirdMoment(left, right, weight, area);
+            }
+          }
+        }
+        return result;
+      };
+      const referencePositionProduct = (
+          points, leftWeights, rightWeights, area) => {
+        const result = [0, 0, 0];
+        for (let point = 0; point < 3; point += 1) {
+          for (let left = 0; left < 3; left += 1) {
+            for (let right = 0; right < 3; right += 1) {
+              const contribution = leftWeights[left] * rightWeights[right]
+                * referenceThirdMoment(point, left, right, area);
+              result[0] += points[point][0] * contribution;
+              result[1] += points[point][1] * contribution;
+              result[2] += points[point][2] * contribution;
+            }
+          }
+        }
+        return result;
+      };
+      const cases = [
+        {
+          points: [[0, 0, 0], [2, 0, 0], [0, 2, 0]],
+          weights: [.25, .5, .75],
+          left: [.2, .3, .5], right: [.8, .1, .4], area: 2,
+        },
+        {
+          points: [[1, -2, .5], [-.25, 3, 1.75], [2.5, .25, -1]],
+          weights: [1, 0, 0],
+          left: [1, 0, 0], right: [0, 0, 1], area: .123456789,
+        },
+        {
+          points: [[-.7, .2, 1.1], [1.3, -1.4, .6], [2.2, .9, -2.5]],
+          weights: [1 / 3, 2 / 3, 1 / 7],
+          left: [.25, .5, .25], right: [.6, .2, .2], area: 1e-12,
+        },
+      ];
+      return cases.map(item => {
+        const actualSecond = integrateLinearSecondMoment(
+          item.points, item.weights, item.area);
+        const expectedSecond = referenceSecondMoment(
+          item.points, item.weights, item.area);
+        const actualPosition = integratePositionProduct(
+          item.points, item.left, item.right, item.area);
+        const expectedPosition = referencePositionProduct(
+          item.points, item.left, item.right, item.area);
+        return {
+          secondEqual: Object.is(actualSecond, expectedSecond),
+          positionEqual: actualPosition.every((value, index) =>
+            Object.is(value, expectedPosition[index])),
+          actualSecond, expectedSecond, actualPosition, expectedPosition,
+        };
+      });
+    }""")
+    assert all(item["secondEqual"] and item["positionEqual"]
+               for item in result)
+    for item in result:
+        assert item["actualSecond"] == item["expectedSecond"]
+        assert item["actualPosition"] == item["expectedPosition"]
+
+
 def test_surface_evidence_weights_rig_nodes_relationships_and_aggregation(
         module_page):
     page = module_page

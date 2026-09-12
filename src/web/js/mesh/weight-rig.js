@@ -137,14 +137,11 @@ function barycentricSecondMoment(left, right, area) {
   return left === right ? area / 6 : area / 12;
 }
 
-function barycentricThirdMoment(first, second, third, area) {
-  const counts = [first, second, third].reduce((map, index) => {
-    map.set(index, (map.get(index) || 0) + 1);
-    return map;
-  }, new Map());
-  const multiplicities = [...counts.values()];
-  if (multiplicities.length === 1) return area / 10;
-  if (multiplicities.length === 2) return area / 30;
+export function barycentricThirdMoment(first, second, third, area) {
+  if (first === second && second === third) return area / 10;
+  if (first === second || first === third || second === third) {
+    return area / 30;
+  }
   return area / 60;
 }
 
@@ -171,7 +168,7 @@ function integrateLinearPosition(points, weights, area) {
   return result;
 }
 
-function integrateLinearSecondMoment(points, weights, area) {
+export function integrateLinearSecondMoment(points, weights, area) {
   let result = 0;
   for (let left = 0; left < 3; left += 1) {
     for (let right = 0; right < 3; right += 1) {
@@ -196,7 +193,7 @@ function integrateLinearProduct(leftWeights, rightWeights, area) {
   return result;
 }
 
-function integratePositionProduct(points, leftWeights, rightWeights, area) {
+export function integratePositionProduct(points, leftWeights, rightWeights, area) {
   const result = [0, 0, 0];
   for (let point = 0; point < 3; point += 1) {
     for (let left = 0; left < 3; left += 1) {
