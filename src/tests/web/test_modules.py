@@ -5248,6 +5248,21 @@ def test_humanoid_binding_covers_unmapped_limbs_and_explicit_paths(module_page):
           ['leftShoulder', {controlKey: 'leftShoulder', jointId: 0}],
           ['leftElbow', {controlKey: 'leftElbow', jointId: 2}],
         ])});
+      const descendantModel = makeModel([
+        positions.leftFoot, [-1.5, .1, 0], [-2.1, -.5, 0]], {
+        rootId: 0, parentById: {0: null, 1: 0, 2: 1},
+        childrenById: {0: [1], 1: [2], 2: []}});
+      const descendantBinding = bindingModule.buildHumanoidRigBinding({
+        controlRig, modelRig: descendantModel,
+        controlMappings: new Map([
+          ['leftFoot', {controlKey: 'leftFoot', jointId: 0}],
+        ])});
+      const boundaryBinding = bindingModule.buildHumanoidRigBinding({
+        controlRig, modelRig: descendantModel,
+        controlMappings: new Map([
+          ['leftShoulder', {controlKey: 'leftShoulder', jointId: 0}],
+          ['leftElbow', {controlKey: 'leftElbow', jointId: 1}],
+        ])});
       return {
         geometric: [0, 1, 2, 3, 4, 5].map(jointId => {
           const entry = geometric.jointBindings.get(jointId);
@@ -5263,6 +5278,17 @@ def test_humanoid_binding_covers_unmapped_limbs_and_explicit_paths(module_page):
           pathBinding.jointBindings.get(1)?.driverId || null,
           pathBinding.jointBindings.get(1)?.bindingMethod || null,
           pathBinding.jointBindings.get(2)?.bindingMethod || null],
+        descendants: [0, 1, 2].map(jointId => {
+          const entry = descendantBinding.jointBindings.get(jointId);
+          return [entry?.driverId || null, entry?.bindingMethod || null,
+            entry?.mappedRootJointId ?? null];
+        }),
+        descendantCount: descendantBinding.diagnostics.mappedDescendantCount,
+        boundary: [0, 1, 2].map(jointId => {
+          const entry = boundaryBinding.jointBindings.get(jointId);
+          return [entry?.driverId || null, entry?.bindingMethod || null,
+            entry?.mappedRootJointId ?? null];
+        }),
       };
     }""")
     assert result["geometric"] == [
@@ -5280,6 +5306,17 @@ def test_humanoid_binding_covers_unmapped_limbs_and_explicit_paths(module_page):
     assert result["path"] == [
         "manual_control_mapping", "left_upper_arm", "mapped_joint_path",
         "manual_control_mapping"]
+    assert result["descendants"] == [
+        ["left_lower_leg", "manual_control_mapping", None],
+        ["left_lower_leg", "mapped_control_descendant", 0],
+        ["left_lower_leg", "mapped_control_descendant", 0],
+    ]
+    assert result["descendantCount"] == 2
+    assert result["boundary"] == [
+        ["left_upper_arm", "manual_control_mapping", None],
+        ["left_lower_arm", "manual_control_mapping", None],
+        ["left_lower_arm", "mapped_control_descendant", 1],
+    ]
 
 
 def test_driver_translation_counts_as_active_pose_joint(module_page):

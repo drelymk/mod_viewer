@@ -320,9 +320,11 @@ of documentation, comments and tests; use portable fixtures instead.
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
 - `humanoid-rig-binding.js` treats saved ModelJoint mappings as explicit
-  deformation overrides. Explicit mapped joints and shortest paths claim their
-  ModelJoints first; every remaining ModelJoint uses the nearest valid,
-  height-normalized humanoid driver segment within the shared geometric limit.
+  deformation overrides. Explicit mapped joints claim their full descendant
+  subtrees, with another explicit mapping acting as a boundary; mapped shortest
+  paths claim their interiors, and every remaining ModelJoint uses the nearest
+  valid, height-normalized humanoid driver segment within the shared geometric
+  limit.
   These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
   Posed absolute driver targets are converted to authored-rest deltas before
   ModelJoint transforms are aliased back to source bones, so directly bound

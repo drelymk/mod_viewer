@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. Explicit mappings and mapped
-// paths claim deformation joints; every other ModelJoint uses geometry.
+// The control rig owns the semantic topology. Explicit mappings, their
+// descendant subtrees and mapped paths claim deformation joints; every other
+// ModelJoint uses geometry.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
   {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
@@ -261,6 +262,17 @@ function allJointIds(modelRig) {
     .filter(Number.isInteger).sort((left, right) => left - right);
 }
 
+function childJointIds(modelRig, jointId) {
+  const id = numberId(jointId);
+  if (id === null) return [];
+  const component = componentForJoint(modelRig, id);
+  const children = component?.childrenById instanceof Map
+    ? component.childrenById.get(id) ?? component.childrenById.get(String(id))
+    : component?.childrenById?.[id];
+  return (children || []).map(numberId).filter(Number.isInteger)
+    .sort((left, right) => left - right);
+}
+
 function mappedControlEntries(controlMappings) {
   if (!(controlMappings instanceof Map)) {
     return {entries: [], invalidJointIds: new Set(), conflicts: []};
@@ -375,9 +387,11 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
   const jointBindings = new Map();
   const mapped = mappedControlEntries(controlMappings);
   const mappedPaths = resolvedPathCandidates(modelRig, controlMappings);
+  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
   let mappedControlCount = 0;
+  let mappedDescendantCount = 0;
 
-  // Explicit mappings claim only their exact ModelJoint. They are deformation
+  // Explicit mappings claim their exact ModelJoint first. They are deformation
   // overrides, not evidence that other controls need to be resolved first.
   mapped.entries.forEach(({controlKey, jointId}) => {
     const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
@@ -417,6 +431,46 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
     });
   });
 
+  // A mapped ModelJoint owns all of its descendants. Explicitly mapped joints
+  // are boundaries so a more specific mapping can own its own subtree.
+  mapped.entries.forEach(({controlKey, jointId}) => {
+    const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
+    const driver = drivers.get(driverId);
+    if (!driver) return;
+    const queue = childJointIds(modelRig, jointId);
+    const visited = new Set([jointId]);
+    let queueIndex = 0;
+    while (queueIndex < queue.length) {
+      const descendantId = numberId(queue[queueIndex++]);
+      if (descendantId === null || visited.has(descendantId)) continue;
+      visited.add(descendantId);
+      if (mappedJointIds.has(descendantId)) continue;
+
+      if (!jointBindings.has(descendantId)) {
+        const binding = directBindingFor(modelRig, descendantId, {
+          driverId,
+          distance: 0,
+          distanceRatio: 0,
+          rawProjection: 0,
+          projection: 0,
+          endpointDistanceRatio: 0,
+          score: 0,
+        }, drivers, {
+          bindingMethod: 'mapped_control_descendant',
+          controlKey,
+          mappedRootJointId: jointId,
+        });
+        if (binding) {
+          jointBindings.set(descendantId, binding);
+          mappedDescendantCount += 1;
+        }
+      }
+      childJointIds(modelRig, descendantId).forEach(child => {
+        if (!visited.has(child)) queue.push(child);
+      });
+    }
+  });
+
   // Every remaining ModelJoint uses the nearest valid Main Rig driver. The
   // broader secondary limit provides limb coverage without a control-mapping
   // inference layer or ambiguity veto.
@@ -445,6 +499,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
     diagnostics: {
       mappedControlCount,
       mappedPathCount: mappedPaths.candidates.length,
+      mappedDescendantCount,
       geometricBindingCount: [...jointBindings.values()].filter(entry =>
         entry.bindingMethod === 'geometric_proximity').length,
       unboundJointCount: unboundJointIds.length,
