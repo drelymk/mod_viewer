@@ -127,14 +127,14 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
 
 
 def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path):
-    signature = '["body#bone=7"]'
     value = {
-        "version": 1,
+        "version": 2,
+        "model_rig_builder_version": 1,
         "controls": {
             "leftShoulder": {
                 "semantic": {"sideN": -0.18, "height01": 0.7,
                               "depthN": 0.01},
-                "joint_signature": signature,
+                "joint_id": 17,
             },
         },
     }
@@ -161,15 +161,73 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     assert final["rig"]["presets"] == data["rig"]["presets"]
 
 
+def test_save_semantic_humanoid_control_rig_does_not_invent_builder_provenance(
+        tmp_path):
+    value = {
+        "version": 2,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.3, "height01": 0.7,
+                              "depthN": 0.0},
+            },
+        },
+    }
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is True
+    assert result["humanoid_control_rig"] == value
+    assert metadata.humanoid_control_rig(str(tmp_path)) == value
+
+
+@pytest.mark.parametrize("builder_version", [0, True, "1"])
+def test_save_explicit_humanoid_joint_requires_current_builder_version(
+        tmp_path, builder_version):
+    value = {
+        "version": 2,
+        "model_rig_builder_version": builder_version,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.3, "height01": 0.7,
+                              "depthN": 0.0},
+                "joint_id": 42,
+            },
+        },
+    }
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is False
+    assert not (tmp_path / metadata.METADATA_NAME).exists()
+
+
+def test_save_explicit_humanoid_joint_rejects_missing_builder_version(tmp_path):
+    value = {
+        "version": 2,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.3, "height01": 0.7,
+                              "depthN": 0.0},
+                "joint_id": 42,
+            },
+        },
+    }
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is False
+    assert not (tmp_path / metadata.METADATA_NAME).exists()
+
+
 @pytest.mark.parametrize("invalid", [
-    {"version": 2, "controls": {}},
+    {"version": 3, "controls": {}},
     {"version": 1, "controls": {"unknown": {
         "semantic": {"sideN": 0, "height01": 0, "depthN": 0}}}},
     {"version": 1, "controls": {"chest": {
         "semantic": {"sideN": True, "height01": 0, "depthN": 0}}}},
     {"version": 1, "controls": {"chest": {
         "semantic": {"sideN": 0, "height01": 0, "depthN": 0},
-        "joint_signature": "not-json"}}},
+        "joint_id": -1}}},
 ])
 def test_save_humanoid_control_rig_rejects_malformed_values(tmp_path, invalid):
     result = metadata.save_humanoid_control_rig(str(tmp_path), invalid)
@@ -187,6 +245,119 @@ def test_malformed_humanoid_rig_does_not_hide_valid_pose_presets():
         },
     })
     assert result["presets"][0]["id"] == "pose-1"
+
+
+def test_old_humanoid_control_rig_version_is_ignored():
+    result = metadata.humanoid_control_rig(data={
+        "rig": {"version": 1, "presets": [],
+                "humanoid_control_rig": {
+                    "version": 1,
+                    "controls": {"leftFoot": {
+                        "semantic": {"sideN": 0, "height01": 0,
+                                      "depthN": 0},
+                        "joint_signature": '["old#bone=49"]',
+                    }},
+                }},
+    })
+    assert result == {
+        "version": 2, "controls": {},
+        "error": "Humanoid control-rig metadata could not be loaded.",
+    }
+
+
+def test_invalid_humanoid_joint_id_is_preserved_as_explicit_mapping():
+    result = metadata.humanoid_control_rig(data={
+        "rig": {"version": 1, "presets": [],
+                "humanoid_control_rig": {
+                    "version": 2,
+                    "controls": {"leftHand": {
+                        "semantic": {"sideN": 0, "height01": 0,
+                                      "depthN": 0},
+                        "joint_id": -1,
+                    }},
+                }},
+    })
+    assert result == {
+        "version": 2,
+        "controls": {"leftHand": {
+            "semantic": {"sideN": 0.0, "height01": 0.0,
+                          "depthN": 0.0},
+            "joint_id": None,
+        }},
+        "error": "Some humanoid control-rig overrides were ignored.",
+    }
+
+
+def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
+    value = {
+        "version": 1,
+        "builder_version": 1,
+        "model_reference_radius": 1.25,
+        "source_table": ["body|offset=0"],
+        "joints": [{
+            "joint_id": 0,
+            "members": [[0, 7]],
+            "representative_member_index": 0,
+            "parent_id": None,
+            "rest_center": [0, 1, 0],
+            "rest_pivot": [0, 1, 0],
+            "rest_frame": [0, 0, 0, 1],
+        }],
+        "edges": [],
+    }
+    saved = metadata.save_model_rig(str(tmp_path), value)
+    assert saved == {"saved": True,
+                     "path": str(tmp_path / metadata.MODEL_RIG_METADATA_NAME)}
+    assert metadata.load_model_rig(str(tmp_path)) == value
+    sidecar_text = (tmp_path / metadata.MODEL_RIG_METADATA_NAME).read_text(
+        encoding="utf-8")
+    assert "\n" not in sidecar_text
+    assert json.loads(sidecar_text) == value
+    assert metadata.save_model_rig(str(tmp_path), {
+        **value, "joints": [{**value["joints"][0],
+                              "members": [[0, 7], [0, 8]],
+                              "representative_member_index": 1}],
+    })["saved"] is True
+
+
+def test_model_rig_sidecar_rejects_impossible_topology(tmp_path):
+    joint = lambda joint_id, parent_id: {
+        "joint_id": joint_id,
+        "members": [[0, joint_id + 7]],
+        "representative_member_index": 0,
+        "parent_id": parent_id,
+        "rest_center": [0, joint_id, 0],
+        "rest_pivot": [0, joint_id, 0],
+        "rest_frame": [0, 0, 0, 1],
+    }
+    edge = lambda joint_a, joint_b: {
+        "joint_a": joint_a, "joint_b": joint_b,
+        "relationship_type": "source", "edge_strength": 1,
+        "edge_pivot": [0, 0, 0],
+    }
+    value = {
+        "version": 1,
+        "builder_version": 1,
+        "model_reference_radius": 1,
+        "source_table": ["body|offset=0"],
+        "joints": [joint(0, None), joint(1, 0), joint(2, 1)],
+        "edges": [edge(0, 1), edge(1, 2)],
+    }
+    invalid_values = [
+        {**value, "joints": [{**value["joints"][0],
+                               "members": [],
+                               "representative_member_index": None},
+                              *value["joints"][1:]]},
+        {**value, "joints": [{**value["joints"][0],
+                               "representative_member_index": None},
+                              *value["joints"][1:]]},
+        {**value, "edges": [*value["edges"], edge(0, 2)]},
+        {**value, "joints": [{**value["joints"][0], "parent_id": 1},
+                              *value["joints"][1:]]},
+    ]
+    for invalid in invalid_values:
+        assert metadata._normalized_model_rig(invalid) is None
+        assert metadata.save_model_rig(str(tmp_path), invalid)["saved"] is False
 
 
 def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():

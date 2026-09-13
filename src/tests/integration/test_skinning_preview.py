@@ -225,6 +225,7 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
     assert entry["diagnostics"]["vertex_vg_source"] == "body.vertex_vg"
     assert entry["diagnostics"]["vertex_vg_truncated_vertices"] == 0
     assert entry["source"]["bone_id_namespace"] == "wwmi_vertex_vg"
+    assert entry["source"]["bone_ids_model_wide"] is True
     manifest_source = rendered.skinning_manifest[
         "BodyBlend-1"].skinning_source
     assert manifest_source.vertex_vg_file == "body.vertex_vg"

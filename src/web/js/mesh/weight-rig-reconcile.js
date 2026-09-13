@@ -678,22 +678,6 @@ export async function crossSourceWeightEvidenceCooperative(
   return evidence;
 }
 
-function semanticRelationshipFor(left, right, semanticBySourceBoneKey) {
-  if (!(semanticBySourceBoneKey instanceof Map)) return null;
-  const leftSemantic = semanticBySourceBoneKey.get(left.sourceBoneKey);
-  const rightSemantic = semanticBySourceBoneKey.get(right.sourceBoneKey);
-  if (!leftSemantic?.confident || !rightSemantic?.confident) {
-    return {kind: 'unclassified', score: 0};
-  }
-  if (leftSemantic.driverId === rightSemantic.driverId) {
-    return {kind: 'same_segment', score: 0.08};
-  }
-  if (leftSemantic.role && leftSemantic.role === rightSemantic.role) {
-    return {kind: 'same_region', score: 0.04};
-  }
-  return {kind: 'semantic_mismatch', score: -0.12};
-}
-
 function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   // Equivalence compares like-for-like neutral regions. The parent joint pivot
   // is a structural anchor, not a replacement for a source bone's region.
@@ -742,11 +726,6 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   // and a one-vertex coincidence cannot become a seed by itself.
   const combinedConfidence = 1 - (1 - geometryConfidence)
     * (1 - crossConfidence);
-  const semantic = semanticRelationshipFor(left, right,
-    gate.semanticBySourceBoneKey);
-  const semanticScore = semantic?.score || 0;
-  const semanticallyAdjustedConfidence = clamp(
-    combinedConfidence + semanticScore);
   const strongCrossEvidence = !!crossEvidence
     && crossEvidence.matchedVertexCount >= CROSS_SOURCE_STRONG_VERTEX_COUNT
     && crossEvidence.weightedMatchStrength
@@ -779,10 +758,7 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
     weightedMatchStrength: crossEvidence?.weightedMatchStrength || 0,
     geometryConfidence,
     crossConfidence,
-    combinedConfidence: semanticallyAdjustedConfidence,
-    baseCombinedConfidence: combinedConfidence,
-    semanticKind: semantic?.kind || null,
-    semanticScore,
+    combinedConfidence,
     strongCrossEvidence,
     geometrySeed,
     confidenceClass,
@@ -868,6 +844,33 @@ class GuardedUnionFind {
     }
     return result;
   }
+}
+
+function buildModelWideBoneIdentity(evidenceByKey) {
+  const unionFind = new GuardedUnionFind([...evidenceByKey.keys()]);
+  const byBoneId = new Map();
+  evidenceByKey.forEach((evidence, sourceBoneKey) => {
+    const boneId = Number(evidence.boneId);
+    const members = byBoneId.get(boneId) || [];
+    members.push(sourceBoneKey);
+    byBoneId.set(boneId, members);
+  });
+  const sortedBuckets = [...byBoneId.entries()].sort((left, right) =>
+    left[0] - right[0]);
+  const clusterOrder = new Map();
+  sortedBuckets.forEach((bucket, order) => {
+    const members = bucket[1];
+    members.sort((left, right) => left.localeCompare(right));
+    clusterOrder.set(members[0], order);
+    for (let index = 1; index < members.length; index += 1) {
+      unionFind.union(members[0], members[index]);
+    }
+  });
+  return {
+    unionFind,
+    clusterOrder,
+    uniqueModelBoneIdCount: sortedBuckets.length,
+  };
 }
 
 function neighborMatches(candidate, evidenceByKey, unionFind) {
@@ -987,10 +990,6 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
     crossJaccard: candidate.crossEvidence?.crossJaccard ?? null,
     strongCrossEvidence: !!candidate.strongCrossEvidence,
     geometrySeed: !!candidate.geometrySeed,
-    ...(candidate.semanticKind ? {
-      semanticKind: candidate.semanticKind,
-      semanticScore: candidate.semanticScore || 0,
-    } : {}),
     confidenceClass: candidate.confidenceClass || 0,
     rootConflict: !!candidate.topology?.rootConflict,
     score: candidate.combinedConfidence ?? candidate.score,
@@ -1113,10 +1112,7 @@ function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = [],
       for (const left of leftEntries) {
         for (const right of rightEntries) {
           const candidate = candidateFor(left, right, evidenceByKey,
-            crossEvidenceByPair, {
-            referenceRadius,
-            semanticBySourceBoneKey: options.semanticBySourceBoneKey,
-          });
+            crossEvidenceByPair, {referenceRadius});
           if (candidate) candidates.push(candidate);
         }
       }
@@ -1573,10 +1569,13 @@ function medoid(points) {
 }
 
 function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
-    referenceRadius) {
+    referenceRadius, {clusterOrder = null} = {}) {
   const clusters = [...unionFind.clusters().values()]
     .map(members => members.sort())
-    .sort((left, right) => left[0].localeCompare(right[0]));
+    .sort((left, right) => clusterOrder
+      ? clusterOrder.get(left[0]) - clusterOrder.get(right[0])
+        || left[0].localeCompare(right[0])
+      : left[0].localeCompare(right[0]));
   const keyToJoint = new Map();
   const joints = clusters.map((memberKeys, jointId) => {
     memberKeys.forEach(key => keyToJoint.set(key, jointId));
@@ -2450,27 +2449,26 @@ function evidenceSnapshot(evidence) {
   }]);
 }
 
-export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
-  const rigs = [...sourceRigs].filter(rig => rig?.sourceKey !== undefined)
-    .sort((left, right) => String(left.sourceKey)
-      .localeCompare(String(right.sourceKey)));
-  const evidenceByKey = new Map();
-  rigs.forEach(rig =>
-    collectSourceBoneEvidence(rig).forEach((evidence, key) =>
-      evidenceByKey.set(key, evidence)));
-  prepareSourceBoneEvidence(evidenceByKey);
-  const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
-    modelReferenceRadius(evidenceByKey)));
-  const candidateBuild = buildCandidates(
-    evidenceByKey, referenceRadius, rigs, options);
+function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
+    referenceRadius, {useModelWideBoneIds = false, options = {}} = {}) {
+  const identity = useModelWideBoneIds
+    ? buildModelWideBoneIdentity(evidenceByKey) : null;
+  const candidateBuild = identity ? {
+    candidates: [], crossEvidenceByPair: new Map(),
+  } : buildCandidates(evidenceByKey, referenceRadius, sourceRigs, options);
   const candidates = candidateBuild.candidates;
-  const unionFind = new GuardedUnionFind([...evidenceByKey.keys()]);
-  const equivalence = runEquivalencePasses(candidates, evidenceByKey, unionFind);
+  const unionFind = identity?.unionFind
+    || new GuardedUnionFind([...evidenceByKey.keys()]);
+  const equivalence = identity ? {
+    correspondenceStrength: new Map(), accepted: [], diagnostics: [],
+  } : runEquivalencePasses(candidates, evidenceByKey, unionFind);
   const model = buildModelJoints(unionFind, evidenceByKey,
-    equivalence.correspondenceStrength, referenceRadius);
-  const sourceEdges = sourceModelEdges(rigs, model.keyToJoint);
+    equivalence.correspondenceStrength, referenceRadius, {
+      clusterOrder: identity?.clusterOrder || null,
+    });
+  const sourceEdges = sourceModelEdges(sourceRigs, model.keyToJoint);
   const sourceForestEdges = maximumSpanningForest(model.joints, sourceEdges);
-  const votes = rootVotes(rigs, model.keyToJoint);
+  const votes = rootVotes(sourceRigs, model.keyToJoint);
   const sourceForest = orientModelForest(model.joints, sourceForestEdges, votes);
   const attachments = addAttachments(
     model.joints, sourceForestEdges, sourceForest, referenceRadius,
@@ -2485,7 +2483,6 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     diagnostic.survivedFinalForest = survivingAttachments.some(edge =>
       edge.jointA === diagnostic.jointA && edge.jointB === diagnostic.jointB);
   });
-  const acceptedEquivalences = equivalence.accepted.map(item => ({...item}));
   const attachmentDiagnostics = attachments.diagnostics.map(item => ({
     ...item,
     left: {jointId: item.jointA}, right: {jointId: item.jointB},
@@ -2510,9 +2507,14 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
     component.nodeIds.flatMap(jointId => (model.joints[jointId]?.members || [])
       .map(member => member.sourceKey))))].sort();
   const reconciliation = {
-    sourceCount: rigs.length,
+    identityMode: identity ? 'model-wide-bone-id' : 'geometric-reconciliation',
+    uniqueModelBoneIdCount: identity?.uniqueModelBoneIdCount ?? null,
+    sourceCount: sourceRigs.length,
     sourceBoneCount: evidenceByKey.size,
     candidateCount: candidates.length,
+    sampleBuildMs: identity ? 0 : null,
+    spatialIndexMs: identity ? 0 : null,
+    crossSourceMatchMs: identity ? 0 : null,
     modelJointCount: model.joints.length,
     equivalenceClusterCount: [...unionFind.clusters().values()]
       .filter(members => members.length > 1).length,
@@ -2529,11 +2531,8 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
       sum + component.nodeIds.length, 0),
     unresolvedSourceKeys,
     modelReferenceRadius: referenceRadius,
-    ...(options.humanoidGuidanceDiagnostics ? {
-      semanticGuidance: {...options.humanoidGuidanceDiagnostics},
-    } : {}),
     joints: model.joints,
-    acceptedEquivalences,
+    acceptedEquivalences: equivalence.accepted.map(item => ({...item})),
     acceptedAttachments: survivingAttachments,
     attachmentDiagnostics,
     rejectedCandidates,
@@ -2555,10 +2554,27 @@ export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
   };
 }
 
+export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
+  const rigs = [...sourceRigs].filter(rig => rig?.sourceKey !== undefined)
+    .sort((left, right) => String(left.sourceKey)
+      .localeCompare(String(right.sourceKey)));
+  const useModelWideBoneIds = rigs.length > 0
+    && rigs.every(rig => rig.boneIdsModelWide === true);
+  const evidenceByKey = new Map();
+  rigs.forEach(rig =>
+    collectSourceBoneEvidence(rig).forEach((evidence, key) =>
+      evidenceByKey.set(key, evidence)));
+  prepareSourceBoneEvidence(evidenceByKey);
+  const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
+    modelReferenceRadius(evidenceByKey)));
+  return assembleModelRigReconciliation(rigs, evidenceByKey,
+    referenceRadius, {useModelWideBoneIds, options});
+}
+
 /**
  * Build Model Rig reconciliation while chunking the vertex-sample and
- * cross-source matching work. The final graph assembly intentionally reuses
- * the synchronous path after those large geometry passes are complete.
+ * cross-source matching work. The final graph assembly uses the shared graph
+ * assembly after those large geometry passes are complete.
  */
 export async function buildModelRigReconciliationCooperative(
     sourceRigs = [], options = {}, {
@@ -2567,6 +2583,8 @@ export async function buildModelRigReconciliationCooperative(
   const rigs = [...sourceRigs].filter(rig => rig?.sourceKey !== undefined)
     .sort((left, right) => String(left.sourceKey)
       .localeCompare(String(right.sourceKey)));
+  const useModelWideBoneIds = rigs.length > 0
+    && rigs.every(rig => rig.boneIdsModelWide === true);
   const evidenceByKey = new Map();
   for (const rig of rigs) {
     if (!isCurrent()) return null;
@@ -2577,16 +2595,29 @@ export async function buildModelRigReconciliationCooperative(
   prepareSourceBoneEvidence(evidenceByKey);
   const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
     modelReferenceRadius(evidenceByKey)));
+  if (useModelWideBoneIds) {
+    if (timings) {
+      timings.sampleBuildMs = 0;
+      timings.spatialIndexMs = 0;
+      timings.crossSourceMatchMs = 0;
+    }
+    const graphStartedAt = clockNow();
+    const result = assembleModelRigReconciliation(
+      rigs, evidenceByKey, referenceRadius, {
+        useModelWideBoneIds: true, options,
+      });
+    if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
+    return result;
+  }
   const crossEvidenceByPair = await buildCrossSourceWeightEvidenceCooperative(
     rigs, referenceRadius, {budget, isCurrent, timings});
   if (!crossEvidenceByPair || !isCurrent()) return null;
   await budget.checkpoint();
   if (!isCurrent()) return null;
   const graphStartedAt = clockNow();
-  const result = buildModelRigReconciliation(rigs, {
-    ...options,
-    modelReferenceRadius: referenceRadius,
-    crossEvidenceByPair,
+  const result = assembleModelRigReconciliation(
+    rigs, evidenceByKey, referenceRadius, {
+      options: {...options, crossEvidenceByPair},
   });
   if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
   return result;

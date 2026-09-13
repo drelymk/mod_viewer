@@ -305,6 +305,7 @@ export function createSkinningRuntime({
         return {
           sourceKey: source.key, sourceFile: source.file,
           boneIdOffset: offset,
+          boneIdsModelWide: source.bone_ids_model_wide === true,
         };
       }
     }

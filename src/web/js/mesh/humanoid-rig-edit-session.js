@@ -5,7 +5,9 @@
 // candidates; the session owns draft state, hysteresis, and persistence.
 
 import {
+  HUMANOID_CONTROL_RIG_VERSION,
   HUMANOID_CONTROL_KEYS,
+  MODEL_RIG_BUILDER_VERSION,
   humanoidControlPositionToSemantic,
   rebuildHumanoidControlPaths,
 } from './humanoid-control-rig.js';
@@ -30,7 +32,8 @@ function finitePosition(value) {
 
 function normalizeOverrides(value) {
   const raw = value?.humanoid_control_rig || value;
-  if (!raw || typeof raw !== 'object' || Number(raw.version) !== 1
+  if (!raw || typeof raw !== 'object'
+      || Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION
       || !raw.controls || typeof raw.controls !== 'object') return null;
   const controls = {};
   HUMANOID_CONTROL_KEYS.forEach(key => {
@@ -45,12 +48,16 @@ function normalizeOverrides(value) {
         sideN: values[0], height01: values[1], depthN: values[2],
       },
     };
-    if (typeof entry.joint_signature === 'string'
-        && entry.joint_signature.length > 0) {
-      controls[key].joint_signature = entry.joint_signature;
+    if (Object.prototype.hasOwnProperty.call(entry, 'joint_id')) {
+      controls[key].joint_id = Number.isInteger(entry.joint_id)
+        && entry.joint_id >= 0 ? entry.joint_id : null;
     }
   });
-  return {version: 1, controls};
+  const normalized = {version: HUMANOID_CONTROL_RIG_VERSION,
+    model_rig_builder_version: Number.isInteger(
+      raw.model_rig_builder_version) ? raw.model_rig_builder_version : null,
+    controls};
+  return normalized;
 }
 
 function sameSemantic(left, right, tolerance = 1e-7) {
@@ -77,7 +84,7 @@ function currentModPath(getKnownMeshes) {
 
 function createSession({modelRigState, getModelRig, getAutomaticRig,
     resetCurrentPoseForHumanoidRigEdit, setPhysicsSuspended,
-    resolveMappings, rebuildActiveRig, getKnownMeshes, persist, clearPersist,
+    resolveMappings, refreshHumanoidRig, getKnownMeshes, persist, clearPersist,
     cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {
   let savedOverrides = null;
   let generation = 0;
@@ -223,9 +230,6 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
         && !usedByOther.has(Number(candidateJointId))) {
       const mapping = {
         controlKey, jointId: Number(candidateJointId),
-        jointSignature: candidate.signature || null,
-        sourceMembers: [...(candidate.members || candidate.sourceMembers || [])]
-          .map(member => ({...member})),
       };
       state.mappedJointIdByControl.set(controlKey, mapping);
       state.draftRig.controls[controlKey].position = finitePosition(
@@ -295,11 +299,14 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       const mapping = state.mappedJointIdByControl.get(key);
       const joint = mapping ? jointFor(modelRig, mapping.jointId) : null;
       const entry = {semantic};
-      if (joint?.signature) entry.joint_signature = joint.signature;
+      if (joint) {
+        entry.joint_id = Number(joint.jointId);
+      }
       if (!sameSemantic(semantic, automatic.controls?.[key]?.semantic)
-          || entry.joint_signature) controls[key] = entry;
+          || entry.joint_id !== undefined) controls[key] = entry;
     });
-    return {version: 1, controls};
+    return {version: HUMANOID_CONTROL_RIG_VERSION,
+      model_rig_builder_version: MODEL_RIG_BUILDER_VERSION, controls};
   }
 
   function queueWrite(operation) {
@@ -336,7 +343,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       if (requestGeneration !== generation) return {saved: true, stale: true};
       savedOverrides = Object.keys(value.controls).length ? value : null;
       if (dirtyBeforeSave) {
-        await rebuildActiveRig?.(savedOverrides);
+        await refreshHumanoidRig?.(savedOverrides);
       }
       state = {
         editing: false, saving: false, error: null, dirty: false,
@@ -372,7 +379,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
         || 'The Humanoid Rig was not reset.');
       if (requestGeneration !== generation) return {saved: true, stale: true};
       savedOverrides = null;
-      await rebuildActiveRig?.(null);
+      await refreshHumanoidRig?.(null);
       state.saving = false;
       state.error = null;
       notify();

@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. Explicitly mapped ModelJoints
-// own their source-connected descendants until another mapped control or a
-// mapped path takes ownership; automatic heat/geometric inference remains the
-// fallback for everything else.
+// The control rig owns the semantic topology. Mapped controls claim their
+// exact ModelJoints, unmapped controls get point-radius seeds, and remaining
+// ownership comes only from parent-to-child inheritance.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
   {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
@@ -34,23 +33,11 @@ export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
 ]);
 
 const EPSILON = 1e-8;
-const DEFAULT_DIRECT_DISTANCE_RATIO = 0.105;
-const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
-const DEFAULT_AMBIGUITY_MARGIN_RATIO = 0.025;
-const TERMINAL_EXTENSION_RATIO = 0.15;
-const CENTRAL_DRIVER_IDS = new Set(['torso', 'neck', 'head']);
-const COMPLETE_MAPPED_HEAT_CONTROLS = Object.freeze({
-  left_arm: Object.freeze(['leftShoulder', 'leftElbow', 'leftHand']),
-  right_arm: Object.freeze(['rightShoulder', 'rightElbow', 'rightHand']),
-  left_leg: Object.freeze(['leftHip', 'leftKnee', 'leftFoot']),
-  right_leg: Object.freeze(['rightHip', 'rightKnee', 'rightFoot']),
-});
-const HEAT_DRIVER_ROLES = Object.freeze({
-  left_upper_arm: 'left_arm', left_lower_arm: 'left_arm',
-  right_upper_arm: 'right_arm', right_lower_arm: 'right_arm',
-  left_upper_leg: 'left_leg', left_lower_leg: 'left_leg',
-  right_upper_leg: 'right_leg', right_lower_leg: 'right_leg',
-});
+// One height-normalized radius is shared by anchor reservation and additional
+// direct seeds. Keep it small: this is an ownership gate, not a limb-width
+// classifier.
+const DEFAULT_POINT_RADIUS_RATIO = 0.08;
+const CONTROL_ORDER = Object.freeze(Object.keys(HUMANOID_CONTROL_DRIVER_IDS));
 
 function numberId(value) {
   const result = Number(value);
@@ -134,14 +121,6 @@ function restJointWorldMatrix(modelRig, jointId) {
   return matrix;
 }
 
-function parentFor(modelRig, jointId) {
-  const componentId = modelRig?.componentByJointId?.get?.(Number(jointId));
-  const component = Number.isInteger(Number(componentId))
-    ? modelRig?.components?.[Number(componentId)] : null;
-  const parent = component?.parentById?.[Number(jointId)];
-  return parent === null || parent === undefined ? null : numberId(parent);
-}
-
 function pointForJoint(modelRig, jointId) {
   const id = numberId(jointId);
   if (id === null) return null;
@@ -153,193 +132,23 @@ function pointForJoint(modelRig, jointId) {
     || vector(joint?.restPivot ?? joint?.restCenter, [0, 0, 0]);
 }
 
-function segmentDistance(point, start, end) {
-  const direction = end.clone().sub(start);
-  const lengthSq = direction.lengthSq();
-  const projection = lengthSq > EPSILON
-    ? point.clone().sub(start).dot(direction) / lengthSq : 0;
-  const t = Math.max(0, Math.min(1, projection));
-  const closest = start.clone().addScaledVector(direction, t);
-  return {
-    distance: point.distanceTo(closest),
-    rawProjection: projection,
-    projection: t,
-    closest,
-  };
-}
-
-function segmentOrder(id) {
-  const index = HUMANOID_DRIVER_SEGMENTS.findIndex(segment => segment.id === id);
-  return index < 0 ? HUMANOID_DRIVER_SEGMENTS.length : index;
-}
-
-function confidenceForDistance(distanceRatio) {
-  if (distanceRatio <= .035) return 'high';
-  if (distanceRatio <= .075) return 'medium';
-  return 'low';
-}
-
-function candidateForPoint(point, driver, height) {
-  const result = segmentDistance(point, driver.start, driver.end);
-  return {
-    driverId: driver.id,
-    distance: result.distance,
-    distanceRatio: result.distance / Math.max(height, EPSILON),
-    rawProjection: result.rawProjection,
-    projection: result.projection,
-    endpointDistanceRatio: point.distanceTo(driver.end) / Math.max(height, EPSILON),
-    score: result.distance / Math.max(height, EPSILON),
-  };
-}
-
-function frameVector(controlRig, key, fallback) {
-  return vector(controlRig?.frame?.[key], fallback).normalize();
-}
-
-function centralDomain(controlRig, height) {
-  const right = frameVector(controlRig, 'right', [1, 0, 0]);
-  const pelvis = controlPoint(controlRig, 'pelvis');
-  const shoulder = controlPoint(controlRig, 'leftShoulder')
-    .clone().sub(controlPoint(controlRig, 'rightShoulder')).length() * .5;
-  return {
-    right, pelvis,
-    halfWidth: Math.max(.06 * height, shoulder * .75),
-  };
-}
-
-function semanticCandidateAllowed(point, driver, candidate, controlRig, height) {
-  const id = driver.id;
-  if (CENTRAL_DRIVER_IDS.has(id)) {
-    const domain = centralDomain(controlRig, height);
-    const lateral = Math.abs(point.clone().sub(domain.pelvis).dot(domain.right));
-    return lateral <= domain.halfWidth;
-  }
-
-  // A limb binding must be on the limb's authored corridor. Clamping a point
-  // behind a shoulder/hip to the segment endpoint is not a semantic match.
-  if (candidate.rawProjection < -1e-5) return false;
-  const terminal = /^(left|right)_lower_(arm|leg)$/.test(id);
-  if (candidate.rawProjection > 1 + 1e-5
-      && (!terminal || candidate.endpointDistanceRatio > TERMINAL_EXTENSION_RATIO)) {
-    return false;
-  }
-
-  const side = id.startsWith('left_') ? -1 : id.startsWith('right_') ? 1 : 0;
-  if (!side) return false;
-  const domain = centralDomain(controlRig, height);
-  const lateral = point.clone().sub(domain.pelvis).dot(domain.right);
-  // Keep central torso/head geometry on the torso driver. This also prevents
-  // a secondary root from making an entire central subtree follow an arm.
-  if (Math.abs(lateral) <= domain.halfWidth) return false;
-  if (Math.sign(lateral) !== side) return false;
-  return true;
-}
-
-function sortedCandidates(point, drivers, height, controlRig) {
-  const list = Array.isArray(drivers) ? drivers : [...(drivers?.values?.() || [])];
-  return list.map(driver => candidateForPoint(point, driver, height))
-    .filter(candidate => semanticCandidateAllowed(
-      point, list.find(driver => driver.id === candidate.driverId),
-      candidate, controlRig, height))
-    .sort((left, right) => left.score - right.score
-      || segmentOrder(left.driverId) - segmentOrder(right.driverId));
-}
-
-function isAmbiguous(candidates, marginRatio) {
-  return candidates.length > 1
-    && candidates[1].score - candidates[0].score < marginRatio;
-}
-
-function articulationPreferredCandidate(candidates) {
-  if (!candidates.length) return null;
-  const bestScore = candidates[0].score;
-  const tied = candidates.filter(candidate =>
-    Math.abs(candidate.score - bestScore) <= 1e-7);
-  if (tied.length <= 1) return candidates[0];
-  // At a shared articulation, the segment beginning at that control owns the
-  // joint.  This makes Knee→Foot and Elbow→Hand win at Knee/Elbow without
-  // making near-equal candidates elsewhere silently arbitrary.
-  const startsAtArticulation = tied.filter(candidate => candidate.projection < .05);
-  return startsAtArticulation.length === 1 ? startsAtArticulation[0]
-    : candidates[0];
-}
-
-function isExactArticulationTie(candidates, best) {
-  const tied = candidates.filter(candidate =>
-    Math.abs(candidate.score - best.score) <= 1e-7);
-  return tied.length === 2 && best.projection < .05
-    && tied.some(candidate => candidate !== best
-      && candidate.projection > .95);
-}
-
-/**
- * Classify a rest-space point against the fitted humanoid driver corridors.
- *
- * The binding path intentionally keeps this classifier private because it
- * also applies binding-specific distance gates.  The optional guided ModelRig
- * builder uses the same spatial semantics, but does not need a ModelJoint or
- * a heat-binding result yet.  Returning the candidate list makes ambiguity a
- * visible, conservative outcome instead of silently forcing a classification.
- */
-export function classifyHumanoidPoint(pointValue, controlRig, options = {}) {
-  const point = vector(pointValue);
-  const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
-  const drivers = buildHumanoidDriverFrames(controlRig);
-  const candidates = sortedCandidates(point, drivers, height, controlRig);
-  const best = articulationPreferredCandidate(candidates);
-  const maximumDistanceRatio = Number.isFinite(
-    Number(options.maximumDistanceRatio))
-    ? Number(options.maximumDistanceRatio) : DEFAULT_SECONDARY_DISTANCE_RATIO;
-  const ambiguityMargin = Number.isFinite(Number(options.ambiguityMarginRatio))
-    ? Number(options.ambiguityMarginRatio) : DEFAULT_AMBIGUITY_MARGIN_RATIO;
-  if (!best) {
-    return {
-      classified: false, confident: false, confidence: 'low',
-      reason: 'no_semantic_candidate', candidates: [],
-    };
-  }
-  const ambiguous = isAmbiguous(candidates, ambiguityMargin)
-    && !isExactArticulationTie(candidates, best);
-  const withinDistance = best.distanceRatio <= maximumDistanceRatio;
-  const confidence = confidenceForDistance(best.distanceRatio);
-  const classified = withinDistance && !ambiguous;
-  return {
-    ...best,
-    role: HUMANOID_DRIVER_SEGMENTS.find(segment =>
-      segment.id === best.driverId)?.role || null,
-    confidence,
-    classified,
-    confident: classified && confidence !== 'low',
-    reason: !withinDistance ? 'outside_semantic_corridor'
-      : ambiguous ? 'ambiguous_semantic_candidate' : null,
-    candidates: candidates.slice(0, 4).map(candidate => ({...candidate})),
-  };
-}
-
-function directBindingFor(modelRig, jointId, candidate, driverMap, metadata = {}) {
+function directBindingFor(modelRig, jointId, driverMap, owner) {
   const restJointWorld = restJointWorldMatrix(modelRig, jointId);
-  const driver = driverMap.get(candidate.driverId);
+  const driverId = HUMANOID_CONTROL_DRIVER_IDS[owner?.controlKey];
+  const driver = driverMap.get(driverId);
   if (!restJointWorld || !driver) return null;
   const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
   return {
     type: 'driver',
-    driverId: candidate.driverId,
+    driverId,
     localMatrix,
     restJointWorld,
-    distance: candidate.distance,
-    distanceRatio: candidate.distanceRatio,
-    rawProjection: candidate.rawProjection,
-    projection: candidate.projection,
-    endpointDistanceRatio: candidate.endpointDistanceRatio,
-    score: candidate.score,
-    confidence: confidenceForDistance(candidate.distanceRatio),
-    ...metadata,
+    bindingMethod: owner?.bindingMethod || 'inherited_control',
+    controlKey: owner?.controlKey || null,
+    ownerSource: owner?.source || null,
+    anchorJointId: numberId(owner?.anchorJointId),
+    inheritedFromJointId: numberId(owner?.inheritedFromJointId),
   };
-}
-
-function valueFor(collection, key) {
-  if (collection instanceof Map) return collection.get(key) ?? collection.get(String(key));
-  return collection?.[key];
 }
 
 function allJointIds(modelRig) {
@@ -347,15 +156,33 @@ function allJointIds(modelRig) {
     .filter(Number.isInteger).sort((left, right) => left - right);
 }
 
+function childIdsForComponent(component, jointId) {
+  const children = collectionValue(component?.childrenById, numberId(jointId));
+  return (children || []).map(numberId).filter(Number.isInteger)
+    .sort((left, right) => left - right);
+}
+
+function collectionValue(collection, id) {
+  return collection instanceof Map
+    ? collection.get(id) ?? collection.get(String(id))
+    : collection?.[id];
+}
+
+function parentJointId(component, jointId) {
+  const parent = collectionValue(component?.parentById, numberId(jointId));
+  return parent === null || parent === undefined ? null : numberId(parent);
+}
+
 function mappedControlEntries(controlMappings) {
-  if (!(controlMappings instanceof Map)) {
-    return {entries: [], invalidJointIds: new Set(), conflicts: []};
-  }
-  const entries = [...controlMappings.entries()].map(([key, mapping]) => ({
-    controlKey: mapping?.controlKey || key,
-    mapping,
-    jointId: numberId(mapping?.jointId),
-  }));
+  if (!(controlMappings instanceof Map)) return [];
+  const entries = [...controlMappings.entries()]
+    .filter(([key, mapping]) => CONTROL_ORDER.includes(
+      mapping?.controlKey || key))
+    .map(([key, mapping]) => ({
+      controlKey: mapping?.controlKey || key,
+      jointId: numberId(mapping?.jointId),
+    })).sort((left, right) => CONTROL_ORDER.indexOf(left.controlKey)
+      - CONTROL_ORDER.indexOf(right.controlKey));
   const byJointId = new Map();
   entries.forEach(entry => {
     if (entry.jointId === null) return;
@@ -364,248 +191,219 @@ function mappedControlEntries(controlMappings) {
     byJointId.set(entry.jointId, owners);
   });
   const invalidJointIds = new Set();
-  const conflicts = [];
   byJointId.forEach((owners, jointId) => {
     if (owners.length <= 1) return;
     invalidJointIds.add(jointId);
-    conflicts.push({
-      type: 'conflicting_control_mappings',
-      jointId,
-      controlKeys: owners.map(entry => entry.controlKey).sort(),
-    });
   });
+  return entries.filter(entry => entry.jointId !== null
+    && !invalidJointIds.has(entry.jointId));
+}
+
+function controlOrder(controlKey) {
+  const index = CONTROL_ORDER.indexOf(controlKey);
+  return index < 0 ? CONTROL_ORDER.length : index;
+}
+
+function pointJointCandidate(modelRig, controlRig, controlKey, jointId,
+    height) {
+  const point = controlPoint(controlRig, controlKey);
+  const joint = pointForJoint(modelRig, jointId);
+  if (!joint) return null;
+  const distance = point.distanceTo(joint);
   return {
-    entries: entries.filter(entry => entry.jointId !== null
-      && !invalidJointIds.has(entry.jointId)),
-    invalidJointIds,
-    conflicts,
+    controlKey,
+    jointId,
+    distanceRatio: distance / Math.max(height, EPSILON),
   };
 }
 
-function completeMappedHeatRoles(entries) {
-  const mappedControls = new Set(entries.map(entry => entry.controlKey));
-  return new Set(Object.entries(COMPLETE_MAPPED_HEAT_CONTROLS)
-    .filter(([, controls]) => controls.every(controlKey =>
-      mappedControls.has(controlKey)))
-    .map(([role]) => role));
+function candidatesForControl(modelRig, controlRig, controlKey, jointIds,
+    height, radius) {
+  return jointIds.map(jointId => pointJointCandidate(
+    modelRig, controlRig, controlKey, jointId, height))
+    .filter(candidate => candidate
+      && candidate.distanceRatio <= radius + EPSILON)
+    .sort((left, right) => left.distanceRatio - right.distanceRatio
+      || left.jointId - right.jointId);
 }
 
-function heatRoleForAssignment(assignment) {
-  return assignment?.limbRole || HEAT_DRIVER_ROLES[assignment?.driverId]
-    || null;
+function directOwnerFor(controlKey, source, bindingMethod, candidate = null,
+    anchorJointId = null) {
+  return {
+    controlKey,
+    source,
+    bindingMethod,
+    anchorJointId: numberId(anchorJointId ?? candidate?.jointId),
+  };
 }
 
-function heatAssignmentSuppressed(assignment, suppressedRoles) {
-  return suppressedRoles.has(heatRoleForAssignment(assignment));
-}
+function assignAutomaticAnchors({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState}) {
+  const nextCandidateByControl = new Map(
+    automaticControls.map(controlKey => [controlKey, 0]));
+  let pending = [...automaticControls];
 
-function mappedPathCandidates(modelRig, controlMappings) {
-  const mapped = mappedControlEntries(controlMappings);
-  const byControl = new Map(mapped.entries.map(entry =>
-    [entry.controlKey, entry]));
-  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
-  const candidates = [];
-  const conflicts = [...mapped.conflicts];
-  HUMANOID_DRIVER_SEGMENTS.forEach(segment => {
-    const start = byControl.get(segment.start);
-    const end = byControl.get(segment.end);
-    if (!start || !end) return;
-    const path = shortestModelJointPath(modelRig, start.jointId, end.jointId);
-    if (!path || path.length < 2) return;
-    const interior = path.slice(1, -1);
-    if (interior.some(jointId => mappedJointIds.has(jointId))) {
-      conflicts.push({
-        type: 'mapped_control_inside_path',
-        driverId: segment.id,
-        segmentStartControl: segment.start,
-        segmentEndControl: segment.end,
-        path,
-      });
-      return;
-    }
-    candidates.push({segment, path, start, end});
-  });
-
-  const ownersByJointId = new Map();
-  const rejected = new Set();
-  candidates.forEach(candidate => {
-    candidate.path.slice(1, -1).forEach(jointId => {
-      const owner = ownersByJointId.get(jointId);
-      if (!owner) {
-        ownersByJointId.set(jointId, candidate);
+  while (pending.length) {
+    const proposals = new Map();
+    const nextPending = [];
+    pending.forEach(controlKey => {
+      const candidates = candidatesByControl.get(controlKey) || [];
+      let index = nextCandidateByControl.get(controlKey) || 0;
+      while (index < candidates.length
+          && directOwnerByJointId.has(candidates[index].jointId)) index += 1;
+      nextCandidateByControl.set(controlKey, index);
+      if (index >= candidates.length) {
+        controlState.get(controlKey).source = 'unresolved';
         return;
       }
-      rejected.add(owner);
-      rejected.add(candidate);
-      conflicts.push({
-        type: 'conflicting_mapped_paths',
-        jointId,
-        driverIds: [owner.segment.id, candidate.segment.id].sort(),
-      });
+      const candidate = candidates[index];
+      const proposalsForJoint = proposals.get(candidate.jointId) || [];
+      proposalsForJoint.push(candidate);
+      proposals.set(candidate.jointId, proposalsForJoint);
+      nextPending.push(controlKey);
     });
-  });
-  return {
-    candidates: candidates.filter(candidate => !rejected.has(candidate)),
-    conflicts,
-  };
-}
+    if (!proposals.size) break;
 
-function jointForId(modelRig, jointId) {
-  const id = numberId(jointId);
-  if (id === null) return null;
-  const indexedJoint = modelRig?.joints?.[id];
-  return indexedJoint && Number(indexedJoint.jointId) === id
-    ? indexedJoint : modelRig?.joints?.find?.(joint =>
-      Number(joint?.jointId) === id);
-}
-
-function sourceMembersForJoint(modelRig, jointId, mapping = null) {
-  const members = [
-    ...(jointForId(modelRig, jointId)?.members || []),
-    ...(mapping?.sourceMembers || []),
-  ];
-  const unique = new Map();
-  members.forEach(member => {
-    const sourceKey = member?.sourceKey;
-    const boneId = numberId(member?.boneId);
-    if (sourceKey === undefined || boneId === null) return;
-    const key = member.sourceBoneKey || `${String(sourceKey)}#bone=${boneId}`;
-    if (!unique.has(key)) unique.set(key, member);
-  });
-  return [...unique.entries()].map(([sourceBoneKey, member]) => ({
-    ...member,
-    sourceKey: String(member.sourceKey),
-    boneId: numberId(member.boneId),
-    sourceBoneKey,
-  }));
-}
-
-const HUMANOID_CONTROL_SOURCE_ROLES = Object.freeze({
-  chest: 'torso', pelvis: 'torso', neck: 'torso', head: 'torso',
-  leftShoulder: 'left_arm', leftElbow: 'left_arm', leftHand: 'left_arm',
-  rightShoulder: 'right_arm', rightElbow: 'right_arm', rightHand: 'right_arm',
-  leftHip: 'left_leg', leftKnee: 'left_leg', leftFoot: 'left_leg',
-  rightHip: 'right_leg', rightKnee: 'right_leg', rightFoot: 'right_leg',
-});
-
-function sourceRoleForControl(controlKey) {
-  return HUMANOID_CONTROL_SOURCE_ROLES[controlKey] || null;
-}
-
-function sourceProgress(controlKey) {
-  if (controlKey === 'chest' || controlKey === 'pelvis') return 0;
-  return /Elbow|Knee|Hand|Foot/.test(controlKey || '') ? 1 : 0;
-}
-
-function sourceAssignmentForMember(member, driverId, metadata = {}) {
-  const totalWeight = Number(member?.totalWeight)
-    || Number(member?.affectedMeasure) || Number(member?.affectedVertexCount) || 0;
-  return {
-    sourceKey: member.sourceKey,
-    boneId: member.boneId,
-    sourceBoneKey: member.sourceBoneKey,
-    driverId,
-    totalWeight,
-    confidence: 'high',
-    pathMember: true,
-    branchMember: false,
-    ...metadata,
-  };
-}
-
-function componentChildren(modelRig, jointId) {
-  const componentId = modelRig?.componentByJointId?.get?.(Number(jointId));
-  const component = Number.isInteger(Number(componentId))
-    ? modelRig?.components?.[Number(componentId)] : null;
-  return (component?.childrenById?.[Number(jointId)] || [])
-    .map(numberId).filter(Number.isInteger).sort((left, right) => left - right);
-}
-
-function sourceChildIds(modelRig, jointId) {
-  const children = componentChildren(modelRig, jointId);
-  const componentId = modelRig?.componentByJointId?.get?.(Number(jointId));
-  const component = Number.isInteger(Number(componentId))
-    ? modelRig?.components?.[Number(componentId)] : null;
-  const edges = component?.edges;
-  if (!Array.isArray(edges) || !edges.length) return children;
-  const sourcePairs = new Set(edges.filter(edge =>
-    String(edge?.relationshipType || '').toLowerCase() !== 'attachment')
-    .map(edge => {
-    const left = numberId(edge?.jointA ?? edge?.boneA);
-    const right = numberId(edge?.jointB ?? edge?.boneB);
-    return left === null || right === null ? null
-      : `${Math.min(left, right)}:${Math.max(left, right)}`;
-  }).filter(Boolean));
-  return children.filter(child => sourcePairs.has(
-    `${Math.min(Number(jointId), child)}:${Math.max(Number(jointId), child)}`));
-}
-
-function mappedDescendantOwnership(modelRig, jointId, driverId, drivers,
-    controlRig, height, secondaryLimit, ambiguityMargin) {
-  const point = pointForJoint(modelRig, jointId);
-  const driver = drivers.get(driverId);
-  if (!point || !driver) return 'unknown';
-
-  // A mapped ancestor must retain unclassified helper/cloth descendants. Only
-  // stop when another driver is a clear, unambiguous semantic owner.
-  const candidates = sortedCandidates(point, drivers, height, controlRig);
-  const best = articulationPreferredCandidate(candidates);
-  const ambiguous = isAmbiguous(candidates, ambiguityMargin)
-    && !isExactArticulationTie(candidates, best);
-  const confidentlyDifferent = !ambiguous
-    && best && best.driverId !== driverId
-    && best.distanceRatio <= secondaryLimit
-    && confidenceForDistance(best.distanceRatio) !== 'low';
-  if (confidentlyDifferent) return 'different';
-
-  const ownCandidate = candidateForPoint(point, driver, height);
-  if (semanticCandidateAllowed(point, driver, ownCandidate, controlRig, height)
-      && ownCandidate.distanceRatio <= secondaryLimit) {
-    return 'same';
-  }
-  return 'unknown';
-}
-
-function mappedDescendantJointIds(modelRig, rootId, mappedJointIds,
-    jointBindings, driverId, drivers, controlRig, height, secondaryLimit,
-    ambiguityMargin) {
-  const descendants = [];
-  const visited = new Set([Number(rootId)]);
-  const queue = sourceChildIds(modelRig, rootId);
-  while (queue.length) {
-    const jointId = queue.shift();
-    if (visited.has(jointId)) continue;
-    visited.add(jointId);
-    // An explicitly mapped control is a boundary. Its own mapping will walk
-    // its descendants with the correct, more specific driver.
-    if (mappedJointIds.has(jointId)) continue;
-    const existing = jointBindings.get(jointId);
-    if (existing?.driverId && existing.driverId !== driverId) continue;
-    const ownership = mappedDescendantOwnership(modelRig, jointId, driverId,
-      drivers, controlRig, height, secondaryLimit, ambiguityMargin);
-    if (ownership === 'different') continue;
-    if (!existing) descendants.push(jointId);
-    sourceChildIds(modelRig, jointId).forEach(child => {
-      if (!visited.has(child)) queue.push(child);
+    proposals.forEach((jointProposals, jointId) => {
+      jointProposals.sort((left, right) => left.distanceRatio
+        - right.distanceRatio || controlOrder(left.controlKey)
+        - controlOrder(right.controlKey));
+      const winner = jointProposals[0];
+      if (!directOwnerByJointId.has(jointId)) {
+        const state = controlState.get(winner.controlKey);
+        directOwnerByJointId.set(jointId, directOwnerFor(
+          winner.controlKey, 'automatic', 'automatic_control_mapping',
+          winner, null));
+        state.source = 'automatic';
+        state.anchorJointId = jointId;
+        state.directSeedCount += 1;
+        state.distanceRatio = winner.distanceRatio;
+      }
+      nextCandidateByControl.set(winner.controlKey,
+        (nextCandidateByControl.get(winner.controlKey) || 0) + 1);
+    });
+    pending = nextPending.filter(controlKey => {
+      const candidates = candidatesByControl.get(controlKey) || [];
+      return (nextCandidateByControl.get(controlKey) || 0) < candidates.length
+        && controlState.get(controlKey).anchorJointId === null;
     });
   }
-  return descendants;
 }
 
-function unboundSubtree(modelRig, rootId, directIds) {
-  const result = [];
-  const queue = [rootId];
-  while (queue.length) {
-    const id = queue.shift();
-    if (directIds.has(id)) continue;
-    result.push(id);
-    componentChildren(modelRig, id).forEach(child => queue.push(child));
+function assignAutomaticExtraSeeds({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState}) {
+  const candidatesByJoint = new Map();
+  automaticControls.forEach(controlKey => {
+    (candidatesByControl.get(controlKey) || []).forEach(candidate => {
+      const candidates = candidatesByJoint.get(candidate.jointId) || [];
+      candidates.push(candidate);
+      candidatesByJoint.set(candidate.jointId, candidates);
+    });
+  });
+  [...candidatesByJoint.keys()].sort((left, right) => left - right)
+    .forEach(jointId => {
+      if (directOwnerByJointId.has(jointId)) return;
+      const winner = (candidatesByJoint.get(jointId) || [])
+        .filter(candidate => !directOwnerByJointId.has(candidate.jointId))
+        .sort((left, right) => left.distanceRatio - right.distanceRatio
+          || controlOrder(left.controlKey) - controlOrder(right.controlKey))[0];
+      if (!winner) return;
+      const state = controlState.get(winner.controlKey);
+      if (!state || state.anchorJointId === null) return;
+      directOwnerByJointId.set(jointId, directOwnerFor(
+        winner.controlKey, 'automatic', 'automatic_control_mapping',
+        winner, state.anchorJointId));
+      state.directSeedCount += 1;
+    });
+}
+
+function inheritedOwners(modelRig, directOwnerByJointId) {
+  const ownerByJointId = new Map(directOwnerByJointId);
+  const visited = new Set();
+
+  function walk(component, jointId, parentOwner = null, parentId = null) {
+    const stack = [{jointId, parentOwner, parentId}];
+    while (stack.length) {
+      const current = stack.pop();
+      const id = numberId(current.jointId);
+      if (id === null || visited.has(id)) continue;
+      visited.add(id);
+      const directOwner = directOwnerByJointId.get(id);
+      const owner = directOwner || current.parentOwner;
+      if (owner && !directOwner) {
+        ownerByJointId.set(id, {
+          ...owner,
+          bindingMethod: 'inherited_control',
+          inheritedFromJointId: numberId(current.parentId),
+        });
+      }
+      const nextParentOwner = owner ? {...owner} : null;
+      const children = childIdsForComponent(component, id);
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push({jointId: children[index], parentOwner: nextParentOwner,
+          parentId: id});
+      }
+    }
   }
-  return result;
+
+  (modelRig?.components || []).forEach(component => {
+    const nodeIds = (component?.nodeIds || []).map(numberId)
+      .filter(Number.isInteger).sort((left, right) => left - right);
+    const nodeSet = new Set(nodeIds);
+    const roots = nodeIds.filter(jointId => {
+      const parent = parentJointId(component, jointId);
+      return parent === null || !nodeSet.has(parent);
+    });
+    const rootId = numberId(component?.rootId);
+    if (rootId !== null && nodeSet.has(rootId)) roots.unshift(rootId);
+    [...new Set(roots)].sort((left, right) => left - right)
+      .forEach(root => walk(component, root));
+    nodeIds.forEach(jointId => {
+      if (visited.has(jointId)) return;
+      const parent = parentJointId(component, jointId);
+      walk(component, jointId, parent === null
+        ? null : ownerByJointId.get(parent) || null, parent);
+    });
+  });
+  return ownerByJointId;
 }
 
-function secondaryCandidates(root, drivers, height, controlRig) {
-  return sortedCandidates(root, drivers, height, controlRig);
+function ownershipDiagnostics(controlState, directOwnerByJointId,
+    ownerByJointId, unboundJointIds) {
+  const byControl = {};
+  const inheritedCountByControl = new Map();
+  ownerByJointId.forEach(owner => {
+    if (owner.bindingMethod !== 'inherited_control') return;
+    inheritedCountByControl.set(owner.controlKey,
+      (inheritedCountByControl.get(owner.controlKey) || 0) + 1);
+  });
+  let automaticControlCount = 0;
+  let unresolvedControlCount = 0;
+  controlState.forEach((state, controlKey) => {
+    const source = state.source || 'unresolved';
+    if (source === 'automatic') automaticControlCount += 1;
+    if (source === 'unresolved') unresolvedControlCount += 1;
+    byControl[controlKey] = {
+      controlKey,
+      source,
+      anchorJointId: state.anchorJointId ?? null,
+      rootJointId: state.anchorJointId ?? null,
+      directSeedCount: state.directSeedCount || 0,
+      distanceRatio: state.distanceRatio ?? null,
+      descendantCount: inheritedCountByControl.get(controlKey) || 0,
+    };
+  });
+  return {
+    mappedControlCount: [...controlState.values()]
+      .filter(state => state.source === 'mapped').length,
+    automaticControlCount,
+    unresolvedControlCount,
+    directSeedCount: directOwnerByJointId.size,
+    inheritedJointCount: [...ownerByJointId.values()]
+      .filter(owner => owner.bindingMethod === 'inherited_control').length,
+    unownedJointCount: unboundJointIds.length,
+    bindingsByControl: byControl,
+  };
 }
 
 /**
@@ -626,390 +424,82 @@ export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
   return result;
 }
 
-/**
- * Build humanoid deltas for the exact source bones accepted by automatic heat
- * or authoritative mapped binding. The result stays source-local so an
- * unclassified member of the same ModelJoint does not inherit the classified
- * member's humanoid motion.
- */
-export function buildHumanoidSourceBoneDriverTransforms({heatBinding,
-    controlRig, posedControls = null} = {}) {
-  const result = new Map();
-  const restDrivers = buildHumanoidDriverFrames(controlRig);
-  const posedDrivers = buildHumanoidDriverFrames(controlRig, posedControls);
-  const entries = heatBinding?.sourceBoneAssignments instanceof Map
-    ? [...heatBinding.sourceBoneAssignments.values()]
-    : Object.values(heatBinding?.sourceBoneAssignments || {});
-  entries.forEach(assignment => {
-    const sourceKey = assignment?.sourceKey;
-    const boneId = numberId(assignment?.boneId);
-    const driverId = assignment?.driverId;
-    const rest = restDrivers.get(driverId);
-    const posed = posedDrivers.get(driverId);
-    if (sourceKey === undefined || boneId === null || !rest || !posed) return;
-    const matrix = posed.matrix.clone().multiply(rest.matrix.clone().invert());
-    const source = result.get(String(sourceKey)) || new Map();
-    source.set(boneId, {driverId, matrix});
-    result.set(String(sourceKey), source);
-  });
-  return result;
-}
-
-/** Build deterministic direct and secondary ModelJoint bindings. */
-export function buildHumanoidRigBinding({controlRig, modelRig, heatBinding,
+/** Build direct ModelJoint ownership and inherited deformation bindings. */
+export function buildHumanoidRigBinding({controlRig, modelRig,
     controlMappings = null, options = {}} = {}) {
-  const started = typeof performance !== 'undefined' && performance.now
-    ? performance.now() : Date.now();
   const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
   const drivers = buildHumanoidDriverFrames(controlRig);
-  const driverList = [...drivers.values()];
-  const directLimit = Number.isFinite(Number(options.directDistanceRatio))
-    ? Number(options.directDistanceRatio) : DEFAULT_DIRECT_DISTANCE_RATIO;
-  const secondaryLimit = Number.isFinite(Number(options.secondaryDistanceRatio))
-    ? Number(options.secondaryDistanceRatio) : DEFAULT_SECONDARY_DISTANCE_RATIO;
-  const ambiguityMargin = Number.isFinite(Number(options.ambiguityMarginRatio))
-    ? Number(options.ambiguityMarginRatio) : DEFAULT_AMBIGUITY_MARGIN_RATIO;
-  const jointBindings = new Map();
-  const candidatesByJointId = new Map();
-  let ambiguousBindingCount = 0;
+  const pointDistanceRatio = Number.isFinite(Number(options.pointDistanceRatio))
+    ? Math.max(0, Number(options.pointDistanceRatio))
+    : DEFAULT_POINT_RADIUS_RATIO;
+  const directOwnerByJointId = new Map();
+  const controlState = new Map(CONTROL_ORDER.map(controlKey => [controlKey, {
+    source: 'unresolved',
+    anchorJointId: null,
+    directSeedCount: 0,
+    distanceRatio: null,
+  }]));
   const mapped = mappedControlEntries(controlMappings);
-  const completeMappedRoles = completeMappedHeatRoles(mapped.entries);
-  const mappedPaths = mappedPathCandidates(modelRig, controlMappings);
-  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
-  const sourceBoneAssignments = new Map();
-  let mappedDescendantJointCount = 0;
-  if (heatBinding?.sourceBoneAssignments instanceof Map) {
-    heatBinding.sourceBoneAssignments.forEach((assignment, sourceKey) => {
-      if (!heatAssignmentSuppressed(assignment, completeMappedRoles)) {
-        sourceBoneAssignments.set(sourceKey, assignment);
-      }
-    });
-  } else {
-    Object.entries(heatBinding?.sourceBoneAssignments || {}).forEach(
-      ([sourceKey, assignment]) => {
-        if (!heatAssignmentSuppressed(assignment, completeMappedRoles)) {
-          sourceBoneAssignments.set(sourceKey, assignment);
-        }
-      });
-  }
 
-  // A manually snapped control owns its resolved ModelJoint before either
-  // heat connectivity or geometric corridor scoring is considered.
-  mapped.entries.forEach(({controlKey, mapping, jointId}) => {
-      const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
-      const driver = drivers.get(driverId);
-      const restJointWorld = jointId === null
-        ? null : restJointWorldMatrix(modelRig, jointId);
-      if (jointId === null || !driver || !restJointWorld) return;
-      const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
-      const sourceMembers = sourceMembersForJoint(modelRig, jointId, mapping);
-      jointBindings.set(jointId, {
-        type: 'driver', driverId, localMatrix, restJointWorld,
-        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
-        endpointDistanceRatio: 0, score: 0, confidence: 'high',
-        bindingMethod: 'manual_control_mapping',
-        controlKey,
-        sourceBoneKeys: sourceMembers.map(member => member.sourceBoneKey).sort(),
-      });
-      sourceMembers.forEach(member => sourceBoneAssignments.set(
-        member.sourceBoneKey, sourceAssignmentForMember(member, driverId, {
-          limbRole: sourceRoleForControl(controlKey),
-          progress: sourceProgress(controlKey),
-          segmentIndex: /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
-          bindingMethod: 'manual_control_mapping',
-          controlKey,
-        })));
-  });
-
-  // When both canonical endpoints are mapped, the shortest path in their
-  // component's undirected ModelJoint graph owns the segment. Only the
-  // interior joints are claimed here; endpoints remain explicit mappings.
-  mappedPaths.candidates.forEach(({segment, path}) => {
-    const driver = drivers.get(segment.id);
-    if (!driver) return;
-    path.slice(1, -1).forEach(jointId => {
-      if (jointBindings.has(jointId)) return;
-      const binding = directBindingFor(modelRig, jointId, {
-        driverId: segment.id,
-        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
-        endpointDistanceRatio: 0, score: 0,
-      }, drivers, {
-        bindingMethod: 'mapped_joint_path',
-        segmentStartControl: segment.start,
-        segmentEndControl: segment.end,
-      });
-      if (!binding) return;
-      jointBindings.set(jointId, binding);
-      sourceMembersForJoint(modelRig, jointId).forEach(member =>
-        sourceBoneAssignments.set(member.sourceBoneKey,
-          sourceAssignmentForMember(member, segment.id, {
-            limbRole: segment.role,
-            segmentStartControl: segment.start,
-            segmentEndControl: segment.end,
-            bindingMethod: 'mapped_joint_path',
-          })));
-    });
-  });
-
-  // A mapped control is an authoritative anchor for its source-connected
-  // descendants. Walk through same-driver mapped path joints, but stop at a
-  // different mapped control so each explicit control remains a boundary.
-  // Attachment edges are excluded by sourceChildIds; accessories retain the
-  // existing conservative binding behavior.
-  mapped.entries.forEach(({controlKey, jointId}) => {
+  // Phase A: explicit mappings claim only their exact ModelJoint.
+  mapped.forEach(({controlKey, jointId}) => {
     const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
-    const driver = drivers.get(driverId);
-    if (!driver || jointId === null) return;
-    const descendants = mappedDescendantJointIds(modelRig, jointId,
-      mappedJointIds, jointBindings, driverId, drivers, controlRig, height,
-      secondaryLimit, ambiguityMargin);
-    descendants.forEach(descendantId => {
-      if (jointBindings.has(descendantId)) return;
-      const restJointWorld = restJointWorldMatrix(modelRig, descendantId);
-      if (!restJointWorld) return;
-      const sourceMembers = sourceMembersForJoint(modelRig, descendantId);
-      const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
-      jointBindings.set(descendantId, {
-        type: 'driver', driverId, localMatrix, restJointWorld,
-        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
-        endpointDistanceRatio: 0, score: 0, confidence: 'high',
-        bindingMethod: 'mapped_control_descendant',
-        controlKey,
-        mappedRootJointId: jointId,
-        sourceBoneKeys: sourceMembers.map(member => member.sourceBoneKey).sort(),
-      });
-      sourceMembers.forEach(member => sourceBoneAssignments.set(
-        member.sourceBoneKey, sourceAssignmentForMember(member, driverId, {
-          limbRole: sourceRoleForControl(controlKey),
-          progress: sourceProgress(controlKey),
-          segmentIndex: /Elbow|Knee|Hand|Foot/.test(controlKey) ? 1 : 0,
-          bindingMethod: 'mapped_control_descendant',
-          controlKey,
-          mappedRootJointId: jointId,
-          pathMember: false,
-          branchMember: true,
-        })));
-      mappedDescendantJointCount += 1;
-    });
-  });
-
-  // Heat ownership is the fallback for limb drivers that do not have a
-  // complete mapped control chain. Explicit mappings and mapped graph paths
-  // have already claimed their endpoints/interiors; a complete mapped chain
-  // also disables heat for that limb so unrelated nearby source bones cannot
-  // pull the mapped limb into the torso.
-  allJointIds(modelRig).forEach(jointId => {
-    if (jointBindings.has(jointId)) return;
-    const assignment = valueFor(heatBinding?.modelJointAssignments, jointId);
-    if (!assignment?.driverId || !drivers.has(assignment.driverId)) return;
-    if (heatAssignmentSuppressed(assignment, completeMappedRoles)) return;
-    const point = pointForJoint(modelRig, jointId);
-    const driver = drivers.get(assignment.driverId);
-    const restJointWorld = restJointWorldMatrix(modelRig, jointId);
-    if (!point || !driver || !restJointWorld) return;
-    const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
-    jointBindings.set(jointId, {
-      type: 'driver',
-      driverId: assignment.driverId,
-      localMatrix,
-      restJointWorld,
-      distance: null,
-      distanceRatio: null,
-      rawProjection: null,
-      projection: null,
-      endpointDistanceRatio: null,
-      score: null,
-      confidence: assignment.confidence || 'medium',
-      bindingMethod: 'heat_connectivity',
-      limbRole: assignment.limbRole || null,
-      progress: Number(assignment.progress),
-      sourceBoneKeys: [...(assignment.sourceBoneKeys || [])],
-      memberCount: Number(assignment.memberCount) || 0,
-    });
-  });
-
-  allJointIds(modelRig).forEach(jointId => {
-    if (jointBindings.has(jointId)) return;
-    const point = pointForJoint(modelRig, jointId);
-    if (!point) return;
-    const candidates = sortedCandidates(point, drivers, height, controlRig);
-    candidatesByJointId.set(jointId, candidates);
-    const centralCandidates = candidates.filter(candidate =>
-      CENTRAL_DRIVER_IDS.has(candidate.driverId));
-    const best = articulationPreferredCandidate(centralCandidates);
-    if (!best || best.distanceRatio > directLimit) return;
-    const chosenCandidates = centralCandidates[0] === best
-      ? centralCandidates : [best, ...centralCandidates.filter(item => item !== best)];
-    if (isAmbiguous(chosenCandidates, ambiguityMargin)
-        && !isExactArticulationTie(candidates, best)) {
-      ambiguousBindingCount += 1;
+    if (!drivers.has(driverId) || !restJointWorldMatrix(modelRig, jointId)) {
       return;
     }
-    const binding = directBindingFor(modelRig, jointId, best, drivers,
-      {bindingMethod: 'central_proximity'});
+    directOwnerByJointId.set(jointId, directOwnerFor(
+      controlKey, 'mapped', 'manual_control_mapping', null, jointId));
+    const state = controlState.get(controlKey);
+    state.source = 'mapped';
+    state.anchorJointId = jointId;
+    state.directSeedCount += 1;
+  });
+
+  const rejectedControlKeys = controlMappings?.rejectedControlKeys
+    instanceof Set ? controlMappings.rejectedControlKeys : new Set();
+  const automaticControls = CONTROL_ORDER.filter(controlKey =>
+    controlState.get(controlKey).anchorJointId === null
+      && !rejectedControlKeys.has(controlKey));
+
+  // Calculate one candidate table after mapped roots are reserved. Both
+  // automatic phases reuse it, while later ownership checks exclude anchors
+  // and earlier extra seeds from consideration.
+  const availableJointIds = allJointIds(modelRig)
+    .filter(jointId => !directOwnerByJointId.has(jointId));
+  const candidatesByControl = new Map(automaticControls.map(controlKey => [
+    controlKey,
+    candidatesForControl(modelRig, controlRig, controlKey,
+      availableJointIds, height, pointDistanceRatio),
+  ]));
+
+  // Phase B: reserve one nearest point-to-point anchor per unmapped control.
+  assignAutomaticAnchors({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState});
+
+  // Phase C: reserve all remaining in-radius joints before inheritance.
+  assignAutomaticExtraSeeds({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState});
+
+  // Phase D: propagate direct ownership through the actual ModelRig hierarchy.
+  // Direct owners are boundaries; no path or geometry is invented here.
+  const ownerByJointId = inheritedOwners(modelRig, directOwnerByJointId);
+
+  // Phase E: create the existing driver-relative transforms for every owner.
+  const jointBindings = new Map();
+  ownerByJointId.forEach((owner, jointId) => {
+    const binding = directBindingFor(modelRig, jointId, drivers, owner);
     if (binding) jointBindings.set(jointId, binding);
   });
 
-  const secondaryAttachments = [];
-  const secondaryJointIds = new Set();
-  const directIds = new Set(jointBindings.keys());
   const allIds = allJointIds(modelRig);
-  const rootCandidates = new Set(allIds.filter(id => {
-    if (directIds.has(id)) return false;
-    const parent = parentFor(modelRig, id);
-    return parent === null || directIds.has(parent);
-  }));
-  [...rootCandidates].sort((left, right) => left - right).forEach(rootId => {
-    if (directIds.has(rootId) || secondaryJointIds.has(rootId)) return;
-    const root = pointForJoint(modelRig, rootId);
-    if (!root) return;
-    const candidates = secondaryCandidates(root, drivers, height, controlRig)
-      .filter(candidate => CENTRAL_DRIVER_IDS.has(candidate.driverId));
-    const best = articulationPreferredCandidate(candidates);
-    if (!best || best.distanceRatio > secondaryLimit
-        || (isAmbiguous(candidates, ambiguityMargin)
-          && !isExactArticulationTie(candidates, best))) return;
-    const restRootWorld = restJointWorldMatrix(modelRig, rootId);
-    const driver = drivers.get(best.driverId);
-    if (!restRootWorld || !driver) return;
-    const jointIds = unboundSubtree(modelRig, rootId, directIds);
-    if (!jointIds.length) return;
-    const localMatrix = driver.matrix.clone().invert().multiply(restRootWorld);
-    secondaryAttachments.push({
-      rootJointId: rootId,
-      driverId: best.driverId,
-      localMatrix,
-      jointIds,
-      confidence: confidenceForDistance(best.distanceRatio),
-      distance: best.distance,
-      distanceRatio: best.distanceRatio,
-      rawProjection: best.rawProjection,
-      projection: best.projection,
-      endpointDistanceRatio: best.endpointDistanceRatio,
-      ambiguityMargin: candidates[1] ? candidates[1].score - best.score : 1,
-    });
-    jointIds.forEach(id => secondaryJointIds.add(id));
-  });
-
-  const unboundJointIds = allIds.filter(id =>
-    !directIds.has(id) && !secondaryJointIds.has(id));
-  const byDriver = {};
-  jointBindings.forEach(entry => {
-    byDriver[entry.driverId] = (byDriver[entry.driverId] || 0) + 1;
-  });
-  const runtime = (typeof performance !== 'undefined' && performance.now
-    ? performance.now() : Date.now()) - started;
-  const binding = {
+  const unboundJointIds = allIds.filter(id => !jointBindings.has(id));
+  return {
     version: 1,
     jointBindings,
-    secondaryAttachments,
     unboundJointIds,
-    diagnostics: {
-      totalModelJoints: allJointIds(modelRig).length,
-      directBodyBindings: jointBindings.size,
-      secondaryAttachmentRoots: secondaryAttachments.length,
-      secondaryDescendantJoints: secondaryAttachments.reduce(
-        (sum, item) => sum + Math.max(0, item.jointIds.length - 1), 0),
-      unboundJoints: unboundJointIds.length,
-      bindingsByDriver: byDriver,
-      ambiguousBindingCount,
-      fitRuntimeMs: Number(controlRig?.diagnostics?.fitRuntimeMs) || 0,
-      bindingRuntimeMs: Math.max(0, runtime),
-      directDistanceRatio: directLimit,
-      secondaryDistanceRatio: secondaryLimit,
-      ambiguityMarginRatio: ambiguityMargin,
-      completeMappedHeatRoles: [...completeMappedRoles].sort(),
-      candidateCount: candidatesByJointId.size,
-      mappedPathCount: mappedPaths.candidates.length,
-      mappedPathJointCount: mappedPaths.candidates.reduce((sum, candidate) =>
-        sum + Math.max(0, candidate.path.length - 2), 0),
-      mappedDescendantJointCount,
-      mappedPathConflicts: mappedPaths.conflicts,
-      heatBinding: heatBinding?.diagnostics || null,
-      heatConflicts: [...(heatBinding?.conflicts || [])],
-    },
+    diagnostics: ownershipDiagnostics(controlState,
+      directOwnerByJointId, ownerByJointId, unboundJointIds),
   };
-  binding.sourceBoneAssignments = sourceBoneAssignments;
-  return binding;
-}
-
-function componentForJoint(modelRig, jointId) {
-  const id = numberId(jointId);
-  if (id === null) return null;
-  const rawComponentId = modelRig?.componentByJointId instanceof Map
-    ? modelRig.componentByJointId.get(id)
-      ?? modelRig.componentByJointId.get(String(id))
-    : modelRig?.componentByJointId?.[id];
-  const componentId = numberId(rawComponentId);
-  if (componentId !== null && modelRig?.components?.[componentId]) {
-    return modelRig.components[componentId];
-  }
-  return (modelRig?.components || []).find(component =>
-    (component?.nodeIds || []).some(nodeId => numberId(nodeId) === id)) || null;
-}
-
-function addGraphEdge(adjacency, leftValue, rightValue) {
-  const left = numberId(leftValue);
-  const right = numberId(rightValue);
-  if (left === null || right === null || left === right) return;
-  if (!adjacency.has(left)) adjacency.set(left, new Set());
-  if (!adjacency.has(right)) adjacency.set(right, new Set());
-  adjacency.get(left).add(right);
-  adjacency.get(right).add(left);
-}
-
-function modelJointAdjacency(modelRig, component) {
-  const adjacency = new Map();
-  (component?.nodeIds || []).forEach(id => {
-    const jointId = numberId(id);
-    if (jointId !== null && !adjacency.has(jointId)) {
-      adjacency.set(jointId, new Set());
-    }
-  });
-  Object.entries(component?.parentById || {}).forEach(([child, parent]) => {
-    const childId = numberId(child);
-    if (childId !== null && !adjacency.has(childId)) {
-      adjacency.set(childId, new Set());
-    }
-    addGraphEdge(adjacency, child, parent);
-  });
-  Object.entries(component?.childrenById || {}).forEach(([parent, children]) => {
-    const parentId = numberId(parent);
-    if (parentId !== null && !adjacency.has(parentId)) {
-      adjacency.set(parentId, new Set());
-    }
-    (children || []).forEach(child => addGraphEdge(adjacency, parent, child));
-  });
-  return adjacency;
-}
-
-function shortestModelJointPath(modelRig, startValue, endValue) {
-  const start = numberId(startValue);
-  const end = numberId(endValue);
-  const startComponent = componentForJoint(modelRig, start);
-  const endComponent = componentForJoint(modelRig, end);
-  if (start === null || end === null || !startComponent
-      || startComponent !== endComponent) return null;
-  const adjacency = modelJointAdjacency(modelRig, startComponent);
-  if (!adjacency.has(start) || !adjacency.has(end)) return null;
-  const queue = [start];
-  const previous = new Map([[start, null]]);
-  while (queue.length) {
-    const current = queue.shift();
-    if (current === end) break;
-    [...(adjacency.get(current) || [])].sort((left, right) => left - right)
-      .forEach(next => {
-        if (previous.has(next)) return;
-        previous.set(next, current);
-        queue.push(next);
-      });
-  }
-  if (!previous.has(end)) return null;
-  const path = [];
-  for (let current = end; current !== null; current = previous.get(current)) {
-    path.push(current);
-  }
-  return path.reverse();
 }
 
 function matrixFrom(value) {
@@ -1042,28 +532,9 @@ export function buildHumanoidDriverBaseTransforms({binding, controlRig,
   };
   if (binding.jointBindings instanceof Map) {
     binding.jointBindings.forEach((entry, jointId) => {
-      // Limb heat ownership is applied per source bone by
-      // buildHumanoidSourceBoneDriverTransforms. Keeping it out of this
-      // ModelJoint layer prevents reconciled accessory members from inheriting
-      // the limb driver.
-      if (entry.bindingMethod === 'heat_connectivity') return;
       apply(jointId, entry.driverId, entry.localMatrix);
     });
   }
-  (binding.secondaryAttachments || []).forEach(attachment => {
-    const rootId = numberId(attachment.rootJointId);
-    if (rootId === null) return;
-    apply(rootId, attachment.driverId, attachment.localMatrix);
-    const rootDelta = result.get(rootId);
-    if (!rootDelta) return;
-    (attachment.jointIds || []).forEach(jointIdValue => {
-      const jointId = numberId(jointIdValue);
-      if (jointId === null || jointId === rootId) return;
-      // A secondary subtree keeps its authored internal hierarchy; its body
-      // attachment is the one rigid delta shared by the subtree root.
-      result.set(jointId, rootDelta.clone());
-    });
-  });
   return {driverWorldByJointId, result};
 }
 

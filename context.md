@@ -244,20 +244,27 @@ of documentation, comments and tests; use portable fixtures instead.
   attachments conservative; never infer semantic labels such as hair or skirt.
 - Cross-source Rig/Pose reconciliation is a viewer-owned model graph layered
   over the source rigs. Preserve `SourceBoneRef {sourceKey,boneId}` and the
-  canonical `${sourceKey}#bone=${boneId}` key; equal numeric IDs from different
-  sources never merge without geometry/topology evidence, and authored indices
-  and weight buffers are never rewritten. Build model joints from strict
-  mutual-best equivalences, guarded one-member-per-source clusters,
-  topology-assisted propagation and ambiguity rejection. Collapse source edges
-  into a model-level maximum-spanning forest, then add only conservative,
-  cycle-free cross-source attachment edges between component/boundary joints.
+  canonical `${sourceKey}#bone=${boneId}` key; validated VertexVG sources
+  explicitly mark their numeric IDs as model-wide, so an all-VertexVG model
+  may group equal IDs directly while mixed or source-local models retain the
+  geometry/topology evidence requirement. Authored indices and weight buffers
+  are never rewritten. Build model joints from strict mutual-best
+  equivalences, guarded one-member-per-source clusters, topology-assisted
+  propagation and ambiguity rejection. Collapse source edges into a
+  model-level maximum-spanning forest, then add only conservative, cycle-free
+  cross-source attachment edges between component/boundary joints.
 - Cross-source reconciliation connects multiple skinning palettes for inferred
   posing. Because the model-wide inferred hierarchy may differ from each source
   palette's original weighting topology, some cross-source weighted regions can
   stretch during rotation. This remains a known Rig limitation.
-- Each ModelJoint exposes a stable signature made from its sorted canonical
-  source-bone keys. Runtime joint, component and root indices are ephemeral and
-  must not be persisted as preset identities.
+ - Each ModelJoint exposes a stable signature made from its sorted canonical
+   source-bone keys. The ModelRig builder assigns deterministic zero-based
+   `joint_id` values and persists the necessary joint structure in the separate
+   `.mod_viewer.rig.json` sidecar. A sidecar is reusable when its format,
+   builder version and source table match; automatic asset-change detection is
+   intentionally deferred. Component and root indices remain runtime
+   structure details, while Main Rig control mappings refer to hydrated
+   `joint_id` values and pose presets continue to use signatures.
 - M3 Rig pose presets use the existing per-mod `.mod_viewer.json` under
   `rig.version = 1` with an array of stable-ID records containing only a name,
   explicit root signatures and normalized non-identity local joint quaternions.
@@ -309,27 +316,33 @@ of documentation, comments and tests; use portable fixtures instead.
   instantaneous Physics offsets.
 - The Rig picker maps source influences to model joints. The Rig panel selects
   model joints and displays topology without semantic labels; the combined
-  overlay renders model joints, source edges and distinguishable attachment
-  edges with O(1) Three.js objects. Reconciliation rebuilds on source
-  membership/shape changes and resets pose; model structure revisions do not
-  change for pose, materials, textures, visibility or model turns.
+  overlay renders model joints and topology edges with O(1) Three.js objects.
+  Reconciliation runs only when the sidecar is absent or incompatible and
+  resets pose; model structure revisions do not change for pose, materials,
+  textures, visibility or model turns.
 - The `HumanoidControlRig` is the primary automatic pose skeleton. It fits the
   fixed 16-control topology (Chest/Pelvis/Neck/Head plus bilateral
   Shoulder/Elbow/Hand and Hip/Knee/Foot) from immutable A-pose geometry and
   semantic orientation. Edit Rig always starts from the model's rest pose;
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
-- `humanoid-heat-binding.js` first classifies each exact source's heat-
-  connectivity graph against the shared control paths. Only complete,
-  conservative limb traversals publish source-Bone ownership for deformation;
-  incomplete paths remain unavailable to the driver.
-- `humanoid-rig-binding.js` binds clear body-corridor ModelJoints to explicit
-  humanoid driver segments with `inverse(restDriverWorld) * restJointWorld`
-  offsets. Posed absolute driver targets are converted to authored-rest
-  deltas before source-bone publication, so directly bound parent/child joints
-  are not double-transformed. Conservative secondary attachment roots may
-  follow a driver while retaining their internal hierarchy; ambiguous or
-  distant components remain unbound. No accessory categories are inferred.
+- `humanoid-rig-binding.js` uses ordered direct ownership. Explicitly mapped
+  controls claim only their exact ModelJoint; each unmapped control first
+  reserves one nearest point-to-point anchor inside one shared,
+  height-normalized radius, then claims every remaining in-radius joint as an
+  additional direct seed. All direct seeds are reserved before a
+  parent-to-child inheritance pass walks every descendant branch, including
+  attachment descendants, with every direct seed acting as a boundary. No
+  whole-model geometric classification or alternate binding topology is
+  used.
+  These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
+  Posed absolute driver targets are converted to authored-rest deltas before
+  ModelJoint transforms are aliased back to source bones, so directly bound
+  parent/child joints are not double-transformed. IK availability depends only
+  on the accepted Main Rig controls, never on ModelJoint mapping.
+- Saving or resetting Main Rig metadata reuses the loaded ModelRig and only
+  refreshes humanoid overrides, mappings, bindings and pose; it must not rerun
+  source preparation or ModelJoint reconciliation.
 - Humanoid IK uses guaranteed virtual two-bone controls. Manual ModelJoint
   rotations, presets, and Physics remain available and compose after the
   humanoid driver base. Reset clears both virtual pose and manual deltas

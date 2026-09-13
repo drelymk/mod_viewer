@@ -106,11 +106,50 @@ def _resolve_slot_texture_files(authored, resolve_file):
     ]
 
 
+def _resource_filename_stem(value):
+    normalized = str(value or "").strip().replace("\\", "/")
+    filename = normalized.rsplit("/", 1)[-1]
+    return filename.rsplit(".", 1)[0].casefold()
+
+
+def _declared_vertex_vg_resources_for_blend(
+        resources, blend_resource_name, blend_filename):
+    """Return declared remaps strongly associated with one Blend resource."""
+    blend_name = str(blend_resource_name or "").strip().casefold()
+    blend_stem = _resource_filename_stem(blend_filename)
+    evidence_marker = "blendremapvertexvg"
+    remap_marker = "remapvertexvg"
+    candidates = []
+    def matches_association(candidate, anchor):
+        stripped = candidate.replace(remap_marker, "", 1)
+        return (stripped == anchor
+                or candidate.startswith(anchor + remap_marker))
+
+    for name, info in (resources or {}).items():
+        if not isinstance(info, dict) or not info.get("filename"):
+            continue
+        resource_name = str(name).strip().casefold()
+        filename_stem = _resource_filename_stem(info["filename"])
+        if (evidence_marker not in resource_name
+                and evidence_marker not in filename_stem):
+            continue
+        is_associated = (
+            matches_association(resource_name, blend_name)
+            or matches_association(filename_stem, blend_stem))
+        if is_associated:
+            candidates.append(name)
+    return sorted(set(candidates), key=lambda value: str(value).casefold())
+
+
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     if seen is None:
         seen = {}
+    def declared_vertex_vg_resources_for_blend(blend_resource_name,
+                                                blend_filename):
+        return _declared_vertex_vg_resources_for_blend(
+            resources, blend_resource_name, blend_filename)
     section_info = _scan_sections_for_draws(sections, var_prefix, gating_vars)
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
@@ -342,7 +381,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             skinning_source, skinning_error = resolve_skinning_source(
                 direct_skinning_resources, resolve_vertex_info,
                 bone_id_offset=authored.skinning_bone_offset,
-                remap_resources=remap_resources)
+                remap_resources=remap_resources,
+                declared_vertex_vg_resources_for_blend=(
+                    declared_vertex_vg_resources_for_blend))
             if skinning_source is not None:
                 skinning_resolution["resolution_source"] = "direct"
             if skinning_source is None and skinning_error is None:
@@ -371,7 +412,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_source, skinning_error = resolve_skinning_source(
                     provenance_bindings, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
-                    remap_resources=remap_resources)
+                    remap_resources=remap_resources,
+                    declared_vertex_vg_resources_for_blend=(
+                        declared_vertex_vg_resources_for_blend))
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "position_provenance"
@@ -388,7 +431,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_source, skinning_error = resolve_skinning_source(
                     blend_fallback, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
-                    remap_resources=remap_resources)
+                    remap_resources=remap_resources,
+                    declared_vertex_vg_resources_for_blend=(
+                        declared_vertex_vg_resources_for_blend))
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "legacy_component"

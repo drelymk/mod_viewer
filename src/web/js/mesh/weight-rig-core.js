@@ -18,6 +18,9 @@ import {
   buildModelRigReconciliationCooperative,
   orientModelRigForest, sourceBoneKey,
 } from './weight-rig-reconcile.js';
+import {
+  hydrateModelRig, loadOrBuildModelRig, serializeModelRig,
+} from './model-rig-persistence.js';
 import {GRAVITY_WORLD_DIRECTION} from './weight-physics.js';
 import {
   buildSelectedWeightMask, normalizeBoneSelection,
@@ -74,20 +77,16 @@ import {
 import {createWorkBudget} from './cooperative-scheduler.js';
 import {characterAxesFromOrientation} from './humanoid-orientation.js';
 import {
-  buildHumanoidDriverBaseTransforms,
-  buildHumanoidSourceBoneDriverTransforms,
-  buildHumanoidRigBinding,
+  buildHumanoidDriverBaseTransforms, buildHumanoidRigBinding,
 } from './humanoid-rig-binding.js';
 import {
   applyHumanoidControlRigOverrides, buildHumanoidControlRig,
   resolveHumanoidControlMappings,
 } from './humanoid-control-rig.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
-import {buildHumanoidHeatBinding} from './humanoid-heat-binding.js';
 import {
   initializeHumanoidRigEditSession, resetHumanoidRigEditSession,
 } from './humanoid-rig-edit-session.js';
-import {buildHumanoidJointGuide} from './humanoid-guided-rig.js';
 
 const weightRuntime = createWeightRuntimeState();
 const {states, knownMeshes, modelWeightState, stateFor} = weightRuntime;
@@ -304,32 +303,11 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
     ?.clear_humanoid_control_rig?.(path),
   cancelWeightPicking: cancelWeightModelPicking,
   cancelRigPicking: cancelRigJointPicking,
-  rebuildActiveRig: async () => {
+  refreshHumanoidRig: async savedOverrides => {
     if (!modelSkinningRig) return;
-    const generation = modelWeightGeneration;
-    modelRigState.loading = true;
-    notifyModelRigChanged();
-    try {
-      const sourceRigs = await buildAllSourceSkinningRigsCooperatively({
-        generation,
-        isCurrent: () => generation === modelWeightGeneration,
-      });
-      if (!sourceRigs || generation !== modelWeightGeneration) return;
-      const built = await buildModelSkinningRig(sourceRigs, {
-        generation,
-        isCurrent: () => generation === modelWeightGeneration,
-      });
-      if (!built) return;
-      // Edit mode starts from rest and does not carry a virtual pose into the
-      // rebuilt control rig.
-      modelRigState.humanoidPose = {};
-      applyModelPose({request: false});
-    } finally {
-      if (generation === modelWeightGeneration) {
-        modelRigState.loading = false;
-        notifyModelRigChanged();
-      }
-    }
+    applySavedHumanoidRig(modelSkinningRig, savedOverrides);
+    modelRigState.humanoidPose = {};
+    applyModelPose({request: false});
   },
   notifyChanged: notifyModelRigChanged,
   requestRender,
@@ -542,8 +520,7 @@ function primaryHumanoidLimb(role = modelRigState.activeLimbRole) {
   const available = !!(keys && rig?.accepted && keys.every(key =>
     rig.controls?.[key]?.position));
   return {
-    role, keys: keys || [], available,
-    bendSign: 1,
+    role, keys: keys || [], available, bendSign: 1,
   };
 }
 
@@ -819,73 +796,6 @@ function restoreDefaultSourceRigOrientations() {
     .map(restoreDefaultSourceRigOrientation).some(Boolean);
 }
 
-function hasSavedHumanoidMainRig(savedOverrides) {
-  return !!(savedOverrides?.controls
-    && Object.keys(savedOverrides.controls).length);
-}
-
-function buildSavedHumanoidJointGuide(savedOverrides) {
-  if (!hasSavedHumanoidMainRig(savedOverrides)) return null;
-  try {
-    const orientationState = getModelTransformState?.();
-    const automaticRig = buildHumanoidControlRig({
-      meshes: [...knownMeshes],
-      axes: humanoidSemanticAxes(),
-      orientationState,
-    });
-    if (!automaticRig?.accepted) {
-      return {automaticRig, controlRig: null,
-        fallbackReason: automaticRig?.diagnostics?.reason
-          || 'automatic_humanoid_rig_unavailable'};
-    }
-    // The saved metadata is a geometry guide at this stage.  ModelJoint
-    // signatures are resolved only after the guided ModelRig exists.
-    const controlRig = applyHumanoidControlRigOverrides({
-      automaticRig,
-      savedOverrides,
-      modelRig: null,
-      resolvedMappings: new Map(),
-    });
-    if (!controlRig?.accepted) {
-      return {automaticRig, controlRig: null,
-        fallbackReason: 'guided_humanoid_rig_unavailable'};
-    }
-    return {automaticRig, controlRig, fallbackReason: null};
-  } catch (error) {
-    return {
-      automaticRig: null,
-      controlRig: null,
-      fallbackReason: error instanceof Error ? error.message
-        : 'guided_humanoid_rig_failed',
-    };
-  }
-}
-
-function applyHumanoidJointGuide(sourceRigs, guide) {
-  const guided = !!guide?.sourceResults;
-  sourceRigs.forEach(sourceRig => {
-    if (!guided && sourceRig.humanoidJointGuideMode !== 'humanoid_guided') {
-      sourceRig.humanoidJointGuideMode = 'legacy';
-      return;
-    }
-    const result = guided
-      ? guide.sourceResults.get(String(sourceRig.sourceKey)) : null;
-    if (result) {
-      sourceRig.inferredForest = cloneSourceForest(result.forest);
-      // Pivots belong to the selected undirected parent/child relationship.
-      // Guidance can replace that relationship, so the legacy pivot map is
-      // stale whenever the guided forest changes an edge.
-      sourceRig.jointPivotByBoneId = jointPivotMap(
-        sourceRig.inferredForest, sourceRig.influenceGraph?.relationships);
-      sourceRig.humanoidJointGuideMode = 'humanoid_guided';
-      rebuildSourceRigRestFrames(sourceRig);
-      return;
-    }
-    restoreDefaultSourceRigOrientation(sourceRig);
-    sourceRig.humanoidJointGuideMode = 'legacy';
-  });
-}
-
 function defaultRootOverrides(rig) {
   return new Map((rig.defaultComponents || []).map(component => [
     Number(component.componentId), Number(component.rootId),
@@ -966,6 +876,36 @@ function restoreDefaultModelRigOrientation(rig) {
   return true;
 }
 
+function modelRigFolderPath() {
+  return [...knownMeshes]
+    .find(mesh => mesh?.userData?.modPath)?.userData?.modPath || null;
+}
+
+async function loadPersistedModelRig() {
+  const api = globalThis.window?.pywebview?.api;
+  const path = modelRigFolderPath();
+  if (!path || typeof api?.load_model_rig !== 'function') return null;
+  try {
+    return await api.load_model_rig(path);
+  } catch (_error) {
+    // An unreadable cache is equivalent to a cache miss. The normal
+    // reconciliation path remains the source of truth.
+    return null;
+  }
+}
+
+async function savePersistedModelRig(value) {
+  const api = globalThis.window?.pywebview?.api;
+  const path = modelRigFolderPath();
+  if (!path || typeof api?.save_model_rig !== 'function') return false;
+  try {
+    const result = await api.save_model_rig(path, value);
+    return result?.saved === true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()], {
     generation = null, isCurrent = () => true,
   } = {}) {
@@ -983,41 +923,31 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
   const previousRootSignatures = new Set(
     modelRigState.explicitRootSignatures);
   if (modelSkinningRig) resetModelPose({request: false});
-  const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
-  const savedMainRig = hasSavedHumanoidMainRig(savedOverrides);
-  const savedGuide = buildSavedHumanoidJointGuide(savedOverrides);
-  performance.savedGuideMs = clockNow() - startedAt;
-  if (!(await checkpoint())) return null;
-  let humanoidGuide = null;
-  let guideFallbackReason = savedGuide?.fallbackReason || null;
-  if (savedGuide?.controlRig) {
-    try {
-      humanoidGuide = buildHumanoidJointGuide(
-        sourceRigs, savedGuide.controlRig);
-    } catch (error) {
-      guideFallbackReason = error instanceof Error ? error.message
-        : 'guided_humanoid_rig_failed';
-    }
-  }
-  applyHumanoidJointGuide(sourceRigs, humanoidGuide);
-  const reconciliation = await buildModelRigReconciliationCooperative(sourceRigs,
-    humanoidGuide ? {
-      semanticBySourceBoneKey: humanoidGuide.sourceBoneClassifications,
-      humanoidGuidanceDiagnostics: humanoidGuide.diagnostics,
-    } : {}, {
+  const lifecycle = await loadOrBuildModelRig({
+    load: () => loadPersistedModelRig(),
+    hydrate: saved => hydrateModelRig(saved?.model_rig || saved, sourceRigs),
+    build: () => buildModelRigReconciliationCooperative(sourceRigs, {}, {
       budget,
       isCurrent: () => generation === null || isCurrent(),
       timings: performance,
-    });
+    }),
+  });
+  const reconciliation = lifecycle.modelRig;
+  const hydratedFromCache = lifecycle.hydratedFromCache;
   if (!reconciliation) return null;
-  performance.reconciliationMs = clockNow() - startedAt
-    - (performance.savedGuideMs || 0);
+  performance.modelRigCacheHit = hydratedFromCache;
+  performance.modelRigHydrationMs = hydratedFromCache
+    ? clockNow() - startedAt : 0;
+  performance.reconciliationMs = hydratedFromCache
+    ? 0 : clockNow() - startedAt;
   if (!(await checkpoint())) return null;
   const joints = reconciliation.joints || [];
   const rig = {
     key: 'model-rig',
     sourceKey: 'model-rig',
     sourceRigs: [...sourceRigs],
+    modelReferenceRadius: reconciliation.modelReferenceRadius
+      || reconciliation.reconciliation?.modelReferenceRadius || 0,
     reconciliation,
     joints,
     edges: reconciliation.edges || [],
@@ -1027,13 +957,18 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     },
     components: reconciliation.components || [],
     componentByJointId: reconciliation.componentByJointId || new Map(),
-    centerByJointId: new Map(joints.map(joint => [
-      joint.jointId, joint.restCenter || [0, 0, 0]])),
-    jointPivotByJointId: new Map(joints.map(joint => [
-      joint.jointId, joint.restPivot || joint.restCenter || [0, 0, 0]])),
-    jointPivotByEdgeKey: null,
-    restFrameByJointId: new Map(joints.map(joint => [
-      joint.jointId, cloneRigQuaternion(joint.restFrame)])),
+    centerByJointId: reconciliation.centerByJointId
+      || new Map(joints.map(joint => [
+        joint.jointId, joint.restCenter || [0, 0, 0]])),
+    jointPivotByJointId: reconciliation.jointPivotByJointId
+      || new Map(joints.map(joint => [
+        joint.jointId, joint.restPivot || joint.restCenter || [0, 0, 0]])),
+    jointPivotByEdgeKey: reconciliation.jointPivotByEdgeKey || null,
+    restFrameByJointId: reconciliation.restFrameByJointId
+      ? new Map([...reconciliation.restFrameByJointId].map(([jointId, frame]) =>
+        [jointId, cloneRigQuaternion(frame)]))
+      : new Map(joints.map(joint => [
+        joint.jointId, cloneRigQuaternion(joint.restFrame)])),
     restDirectionByJointId: new Map(),
     restFrameEvidenceByJointId: new Map(),
     restContinuationChildByJointId: new Map(),
@@ -1045,7 +980,6 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     poseTransforms: new Map(),
     poseRotations: new Map(),
     manualPoseTransforms: new Map(),
-    humanoidSourceBoneTransforms: new Map(),
     poseTransformCache: new Map(),
     poseFrameCache: new Map(),
     poseAffectedJointIds: new Set(),
@@ -1054,34 +988,20 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     poseSourceBoneIdsByMesh: new Map(),
     poseRevision: 0,
     structureRevision: ++rigRuntime.structureRevision,
-    humanoidGuidedAutomaticRig: humanoidGuide
-      ? savedGuide.automaticRig : null,
     jointBuildDiagnostics: {
-      mode: humanoidGuide ? 'humanoid_guided' : 'legacy',
-      savedMainRig,
-      classifiedCount: humanoidGuide?.diagnostics?.classified || 0,
-      unclassifiedCount: humanoidGuide?.diagnostics?.unclassified
-        || (reconciliation.reconciliation?.sourceBoneCount
-          || reconciliation.sourceBoneEvidence?.length || 0)
-          - (humanoidGuide?.diagnostics?.classified || 0),
-      guidedEdgeCount: humanoidGuide?.diagnostics?.guidedEdges || 0,
-      rejectedEdgeCount: humanoidGuide?.diagnostics?.rejectedEdges || 0,
-      sameSegmentEdgeCount: humanoidGuide?.diagnostics?.sameSegmentEdges || 0,
-      adjacentArticulationEdgeCount:
-        humanoidGuide?.diagnostics?.adjacentArticulationEdges || 0,
-      rootOverrideCount: humanoidGuide?.diagnostics?.rootOverrideCount || 0,
       mergeCount: reconciliation.reconciliation?.equivalenceClusterCount || 0,
-      semanticMergeCount: (reconciliation.reconciliation?.acceptedEquivalences
-        || []).filter(item => ['same_segment', 'same_region'].includes(
-          item.semanticKind)).length,
-      fallbackReason: savedMainRig && !humanoidGuide
-        ? guideFallbackReason || 'guided_humanoid_rig_failed' : null,
+      sourceBoneCount: reconciliation.reconciliation?.sourceBoneCount
+        || reconciliation.sourceBoneEvidence?.length || 0,
+      componentCount: (reconciliation.components || []).length,
+      edgeCount: (reconciliation.edges || []).length,
     },
   };
   if (!(await checkpoint())) return null;
   // Install provenance-derived edge pivots before capturing the default
   // orientation. Reset Pose must restore the same pivots used on first load.
   rebuildModelRestFrames(rig, rig.inferredForest);
+  const persistedModelRig = !hydratedFromCache
+    ? serializeModelRig(rig, {sourceRigs}) : null;
   rig.defaultComponents = rig.components.map(cloneModelComponent);
   rig.defaultComponentByJointId = new Map(rig.componentByJointId);
   rig.defaultRootIdByComponent = new Map(rig.defaultComponents.map(component => [
@@ -1125,6 +1045,10 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
   });
   if (!(await checkpoint())) return null;
   modelSkinningRig = rig;
+  if (persistedModelRig) {
+    performance.modelRigCacheSaved = await savePersistedModelRig(
+      persistedModelRig);
+  }
   buildPrimaryHumanoidRig(rig);
   skinningRuntime.updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;
@@ -1142,32 +1066,35 @@ function buildPrimaryHumanoidRig(rig) {
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
   const orientationState = getModelTransformState?.();
-  const automaticRig = rig.humanoidGuidedAutomaticRig
-    || buildHumanoidControlRig({
-      meshes: [...knownMeshes],
-      axes: humanoidSemanticAxes(),
-      orientationState,
-    });
-  const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
-  const resolvedMappings = automaticRig?.accepted
+  const automaticRig = buildHumanoidControlRig({
+    meshes: [...knownMeshes],
+    axes: humanoidSemanticAxes(),
+    orientationState,
+  });
+  rig.humanoidAutomaticControlRig = automaticRig;
+  applySavedHumanoidRig(rig,
+    humanoidRigEditSession?.getSavedOverrides?.());
+}
+
+function applySavedHumanoidRig(rig, savedOverrides = null) {
+  if (!rig) return;
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigSnapshotCache = null;
+  const orientationState = getModelTransformState?.();
+  const automaticRig = rig.humanoidAutomaticControlRig;
+  const controlMappings = automaticRig?.accepted
     ? resolveHumanoidControlMappings({
       savedOverrides, modelRig: rig,
     }) : new Map();
   const controlRig = automaticRig?.accepted
     ? applyHumanoidControlRigOverrides({
-      automaticRig, savedOverrides, modelRig: rig, resolvedMappings,
+      automaticRig, savedOverrides, modelRig: rig,
+      resolvedMappings: controlMappings,
     }) : automaticRig;
-  const heatBinding = controlRig?.accepted
-    ? buildHumanoidHeatBinding({
-      controlRig, sourceRigs: rig.sourceRigs, modelRig: rig,
-    }) : null;
   const binding = controlRig?.accepted
-    ? buildHumanoidRigBinding({controlRig, modelRig: rig, heatBinding,
-      controlMappings: resolvedMappings}) : null;
-  rig.humanoidAutomaticControlRig = automaticRig;
-  delete rig.humanoidGuidedAutomaticRig;
+    ? buildHumanoidRigBinding({controlRig, modelRig: rig, controlMappings}) : null;
   rig.humanoidControlRig = controlRig;
-  rig.humanoidHeatBinding = heatBinding;
+  rig.humanoidControlMappings = controlMappings;
   rig.humanoidBinding = binding;
   rig.humanoidOrientationRevision = Number(
     orientationState?.modelOrientationRevision) || 0;
@@ -1217,9 +1144,6 @@ function updateModelSourceAliases(rig) {
     const rotations = rig.sourceRotationAliases.get(sourceRig.sourceKey)
       || new Map();
     const manualTransforms = rig.manualPoseTransforms || new Map();
-    const humanoidTransforms = rig.humanoidSourceBoneTransforms?.get(
-      sourceRig.sourceKey) || new Map();
-    const jointBindings = rig.humanoidBinding?.jointBindings;
     transforms.clear();
     rotations.clear();
     for (const boneId of sourceRig.boneIds || []) {
@@ -1227,16 +1151,9 @@ function updateModelSourceAliases(rig) {
         sourceBoneKey(sourceRig.sourceKey, boneId));
       const manual = Number.isInteger(jointId)
         ? manualTransforms.get(jointId) : null;
-      const humanoid = humanoidTransforms.get(Number(boneId))?.matrix;
-      const modelBinding = Number.isInteger(jointId)
-        ? jointBindings?.get?.(jointId) : null;
       const modelTransform = Number.isInteger(jointId)
         ? rig.poseTransforms.get(jointId) : null;
-      const transform = humanoid
-        ? humanoid.clone().multiply(manual || RIG_IDENTITY_MATRIX)
-        : modelBinding?.bindingMethod === 'heat_connectivity'
-          ? manual
-          : modelTransform || manual;
+      const transform = modelTransform || manual;
       if (!transform) continue;
       transforms.set(Number(boneId), transform);
       rotations.set(Number(boneId),
@@ -1363,13 +1280,6 @@ function buildModelPoseTransforms() {
     posedControls: modelRigState.humanoidPose,
   });
   modelSkinningRig.manualPoseTransforms = manualTransforms;
-  modelSkinningRig.humanoidSourceBoneTransforms =
-    buildHumanoidSourceBoneDriverTransforms({
-      heatBinding: modelSkinningRig.humanoidBinding ||
-        modelSkinningRig.humanoidHeatBinding,
-      controlRig: modelSkinningRig.humanoidControlRig,
-      posedControls: modelRigState.humanoidPose,
-    });
   modelSkinningRig.humanoidDriverTransforms = driverLayer.result;
   modelSkinningRig.humanoidDriverWorldByJointId =
     driverLayer.driverWorldByJointId;
@@ -1419,20 +1329,6 @@ function sourceBoneIdsForModelJoints(sourceRig, jointIds) {
   return affected;
 }
 
-function sourceBoneIdsForHumanoidTransforms(rig) {
-  const affected = new Map();
-  rig?.humanoidSourceBoneTransforms?.forEach((entries, sourceKey) => {
-    const boneIds = new Set();
-    entries.forEach((entry, boneId) => {
-      if (entry?.matrix?.isMatrix4 && !matrixIsIdentity(entry.matrix)) {
-        boneIds.add(Number(boneId));
-      }
-    });
-    if (boneIds.size) affected.set(sourceKey, boneIds);
-  });
-  return affected;
-}
-
 function sourceBoneKeyForSet(ids) {
   return [...ids].sort((left, right) => left - right).join(',');
 }
@@ -1457,7 +1353,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const rig = modelSkinningRig;
   if (!rig) return false;
   const transforms = buildModelPoseTransforms();
-  const humanoidSourceBones = sourceBoneIdsForHumanoidTransforms(rig);
   rig.poseRevision = (rig.poseRevision || 0) + 1;
   const posedJointIds = activePoseJointIds({
     manualRotations: rig.poseRotationByJointId,
@@ -1477,8 +1372,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
       sourceRig.sourceKey) || new Map();
     const affectedBoneIds = sourceBoneIdsForModelJoints(
       sourceRig, affectedJointIds);
-    (humanoidSourceBones.get(sourceRig.sourceKey) || []).forEach(boneId =>
-      affectedBoneIds.add(Number(boneId)));
     forEachRigMesh(sourceRig, (mesh, state) => {
       const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
       const boneKey = sourceBoneKeyForSet(affectedBoneIds);

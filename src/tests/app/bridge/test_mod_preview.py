@@ -126,6 +126,7 @@ def test_single_and_bulk_skin_entries_share_source_descriptor():
         "key": "hair/hairblend.buf|offset=24",
         "file": "Hair/HairBlend.buf",
         "bone_id_offset": 24,
+        "bone_ids_model_wide": False,
     }
 
 
