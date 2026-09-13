@@ -319,17 +319,18 @@ of documentation, comments and tests; use portable fixtures instead.
   semantic orientation. Edit Rig always starts from the model's rest pose;
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
-- `humanoid-heat-binding.js` first classifies each exact source's heat-
-  connectivity graph against the shared control paths. Only complete,
-  conservative limb traversals publish source-Bone ownership for deformation;
-  incomplete paths remain unavailable to the driver.
-- `humanoid-rig-binding.js` binds clear body-corridor ModelJoints to explicit
-  humanoid driver segments with `inverse(restDriverWorld) * restJointWorld`
-  offsets. Posed absolute driver targets are converted to authored-rest
-  deltas before source-bone publication, so directly bound parent/child joints
-  are not double-transformed. Conservative secondary attachment roots may
-  follow a driver while retaining their internal hierarchy; ambiguous or
-  distant components remain unbound. No accessory categories are inferred.
+- `humanoid-rig-binding.js` resolves each Main Rig control independently: a
+  saved ModelJoint signature is authoritative for that control, while an
+  unmapped control uses conservative, height-normalized geometric inference
+  against ModelJoint rest pivots. Inferred mappings are runtime-only, reserve
+  their winning joint, and remain unresolved when geometry is distant or
+  ambiguous. Body-corridor ModelJoints bind to humanoid driver segments with
+  `inverse(restDriverWorld) * restJointWorld` offsets. Posed absolute driver
+  targets are converted to authored-rest deltas before source-bone
+  publication, so directly bound parent/child joints are not
+  double-transformed. Conservative secondary attachment roots may follow a
+  driver while retaining their internal hierarchy; ambiguous or distant
+  components remain unbound. No accessory categories are inferred.
 - Humanoid IK uses guaranteed virtual two-bone controls. Manual ModelJoint
   rotations, presets, and Physics remain available and compose after the
   humanoid driver base. Reset clears both virtual pose and manual deltas
