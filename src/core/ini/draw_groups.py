@@ -12,6 +12,7 @@ from .draw_resources import (
     _select_draw_sections,
 )
 from .draw_scan import _scan_sections_for_draws
+from .geometry_resolution import GeometryResolution, GeometryResolver
 from .texture_roles import TextureOverrideIndex
 
 
@@ -142,7 +143,7 @@ def _declared_vertex_vg_resources_for_blend(
 
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
-                      gating_vars=None):
+                      gating_vars=None, mod_dir=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     if seen is None:
         seen = {}
@@ -167,6 +168,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     global_ib = resolved_buffers["global_ib"]
     global_position = resolved_buffers["global_position"]
     global_texcoord = resolved_buffers["global_texcoord"]
+    geometry_resolver = GeometryResolver(
+        section_info, resources, resource_copy_sources, vertex_binding_index,
+        resolve_vertex_info, mod_dir=mod_dir,
+        global_position=global_position, global_texcoord=global_texcoord)
     draw_sections = _select_draw_sections(section_info, global_ib)
     texture_override_index = getattr(
         section_info, "texture_override_index", TextureOverrideIndex())
@@ -176,13 +181,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     if not draw_sections:
         return []
 
-    ib_file_cache = {}
-
-    def resolve_ib_file(ib_name):
-        if ib_name not in ib_file_cache:
-            ib_file_cache[ib_name] = _res_get(resources, ib_name).get("filename")
-        return ib_file_cache[ib_name]
-
     texture_file_cache = {}
 
     def resolve_texture_file(resource_name):
@@ -190,10 +188,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             texture_file_cache[resource_name] = _res_get(
                 resources, resource_name).get("filename")
         return texture_file_cache[resource_name]
-
-    def resolve_vertex_resource(resource_name):
-        resource_info = resolve_vertex_info(resource_name)
-        return resource_info.get("filename"), resource_info.get("stride")
 
     def lookup_component_buffers(component):
         return _lookup_component_value(component_buffers, component)
@@ -213,54 +207,17 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                  else f"{display_name}_{seen[display_name]}")
 
         ib_resource = info["ib"] or global_ib
-        component = _ib_res_to_component(ib_resource)
         group_vertex_resources = {
             slot: resource
             for slot, resource in (
                 info.get("vertex_resources_at_end") or {}).items()
             if resource
         }
-        buffers = lookup_component_buffers(component)
-        if not buffers:
-            position = (info["vb0"] or _lookup_component_value(
-                component_positions, component))
-            vb2_stride = (_res_get(resources, info["vb2"]).get("stride", 0)
-                          if info["vb2"] else 0)
-            texcoord = ((info["vb2"] if info["vb2"] and vb2_stride != 32
-                         else None) or info["vb1"] or _lookup_component_value(
-                             component_texcoords, component))
-            if (position and texcoord
-                    and resolve_vertex_info(position).get("filename")):
-                buffers = {"position": position, "texcoord": texcoord}
-        if not buffers:
-            texture_hash = _extract_hash(section_name) or _extract_hash(ib_resource)
-            if texture_hash and texture_hash in hash_positions and texture_hash in hash_texcoords:
-                buffers = {
-                    "position": hash_positions[texture_hash],
-                    "texcoord": hash_texcoords[texture_hash],
-                }
-        if not buffers and global_position and global_texcoord:
-            buffers = {"position": global_position, "texcoord": global_texcoord}
-        if not buffers:
-            continue
-
-        position_info = resolve_vertex_info(buffers["position"])
-        texcoord_info = _res_get(resources, buffers["texcoord"])
         ib_info = _res_get(resources, ib_resource)
         diffuse_info = (_res_get(resources, info["diffuse"])
                         if info["diffuse"] else {})
-        position_file = position_info.get("filename")
-        texcoord_file = texcoord_info.get("filename")
-        ib_file = ib_info.get("filename")
-        if not (position_file and texcoord_file and ib_file):
+        if not ib_resource or not ib_info.get("filename"):
             continue
-
-        texcoord_stride = texcoord_info.get("stride", 20)
-        position_stride = position_info.get("stride", POSITION_STRIDE)
-        index_size = _ib_index_size(ib_info.get("format"))
-        group_normal_source = _resolve_normal_source(
-            group_vertex_resources, resources, position_file, position_stride,
-            resolve_vertex_info)
         authored_draws = list(info["draws"]) or [AuthoredDrawCall(
             count=None, start=0, base=0, source=info["src"],
             occurrence=DrawOccurrence(section_name, None),
@@ -274,81 +231,47 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             slot_textures=info.get("slot_textures_at_end") or [],
         )]
         draws = []
+        resolved_for_group = []
         for number, authored in enumerate(authored_draws, 1):
+            effective_ib = authored.index_resource or ib_resource
+            effective_component = _ib_res_to_component(effective_ib)
+            component_pair = lookup_component_buffers(effective_component) or {}
+            texture_hash = (_extract_hash(section_name) or
+                            _extract_hash(effective_ib))
+            resolution = geometry_resolver.resolve(
+                section_name, authored, effective_ib,
+                legacy_position=component_pair.get("position"),
+                legacy_texcoord=component_pair.get("texcoord"),
+                component_position=_lookup_component_value(
+                    component_positions, effective_component),
+                component_texcoord=_lookup_component_value(
+                    component_texcoords, effective_component),
+                hash_position=hash_positions.get(texture_hash),
+                hash_texcoord=hash_texcoords.get(texture_hash),
+            )
+            if resolution.ib_file and resolution.position_file and \
+                    resolution.texcoord_file:
+                resolved_for_group.append(resolution)
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,
                 conditions=authored.conditions,
                 sources=[authored.source] if authored.source else [],
                 occurrence=authored.occurrence,
-                ib_file=ib_file, index_size=index_size,
-                position_file=position_file, position_stride=position_stride,
-                texcoord_file=texcoord_file, texcoord_stride=texcoord_stride,
-                normal_source=group_normal_source,
+                ib_file=resolution.ib_file,
+                index_size=resolution.index_size,
+                position_file=resolution.position_file,
+                position_stride=resolution.position_stride,
+                texcoord_file=resolution.texcoord_file,
+                texcoord_stride=resolution.texcoord_stride,
                 geometry_match=authored.geometry_match,
                 skinning_bone_offset=authored.skinning_bone_offset,
                 texture_provenance=dict(authored.texture_provenance),
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
             )
-            effective_ib = authored.index_resource or ib_resource
-            if effective_ib != ib_resource:
-                resolved_ib = resolve_ib_file(effective_ib)
-                if resolved_ib:
-                    draw.ib_file = resolved_ib
-                    draw.index_size = _ib_index_size(
-                        _res_get(resources, effective_ib).get("format"))
-
-            draw_buffers = lookup_component_buffers(
-                _ib_res_to_component(effective_ib))
-            effective_position_resource = buffers["position"]
-            if draw_buffers and draw_buffers != buffers:
-                position, stride = resolve_vertex_resource(
-                    draw_buffers["position"])
-                texcoord, texcoord_stride_for_draw = resolve_vertex_resource(
-                    draw_buffers["texcoord"])
-                if position:
-                    draw.position_file = position
-                    draw.position_stride = stride or POSITION_STRIDE
-                    effective_position_resource = draw_buffers["position"]
-                if texcoord:
-                    draw.texcoord_file = texcoord
-                    draw.texcoord_stride = texcoord_stride_for_draw or 20
-
             vertex_resources = authored.vertex_resources
-            if 0 in vertex_resources:
-                position_resource = vertex_resources[0]
-                if position_resource is None:
-                    draw.position_file = None
-                    draw.position_stride = None
-                    effective_position_resource = None
-                else:
-                    position, stride = resolve_vertex_resource(position_resource)
-                    if position:
-                        draw.position_file = position
-                        draw.position_stride = stride or POSITION_STRIDE
-                        effective_position_resource = position_resource
-
-            authored_texcoords = {
-                slot: vertex_resources[slot]
-                for slot in (1, 2) if slot in vertex_resources
-            }
-            resolved_texcoord = None
-            for slot in (2, 1):
-                resource_name = authored_texcoords.get(slot)
-                if not resource_name:
-                    continue
-                texcoord, stride = resolve_vertex_resource(resource_name)
-                if texcoord and (stride or 0) != 32:
-                    resolved_texcoord = (texcoord, stride or 20)
-                    break
-            if resolved_texcoord:
-                draw.texcoord_file, draw.texcoord_stride = resolved_texcoord
-            elif (authored_texcoords and any(resource_name is None
-                                              for resource_name in authored_texcoords.values())):
-                draw.texcoord_file = None
-                draw.texcoord_stride = None
-
+            effective_position_resource = resolution.position_resource
             effective_vertex_resources = dict(
                 lookup_component_vertex_resources(
                     _ib_res_to_component(effective_ib)))
@@ -440,6 +363,21 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             draw.skinning_source = skinning_source
             draw.skinning_error = skinning_error
             draw.skinning_resolution = skinning_resolution
+            draw.geometry_resolution = {
+                "source": resolution.source,
+                "ib_resource": resolution.ib_resource,
+                "position_resource": resolution.position_resource,
+                "texcoord_resource": resolution.texcoord_resource,
+                "position_candidate_count": resolution.evidence.get(
+                    "position_candidate_count", 0),
+                "texcoord_candidate_count": resolution.evidence.get(
+                    "texcoord_candidate_count", 0),
+                "coherence_selected": resolution.evidence.get(
+                    "coherence_selected", False),
+                "used_name_tiebreaker": resolution.evidence.get(
+                    "used_name_tiebreaker", False),
+                "error": resolution.error,
+            }
             _apply_diffuse_state(draw, authored, resolve_texture_file)
             _apply_auxiliary_map_state(draw, authored, resolve_texture_file)
             draw.texture_provenance = {
@@ -448,6 +386,24 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if draw.texture_default(role) or draw.texture_rules(role)
             }
             draws.append(draw)
+
+        if not draws:
+            continue
+        group_resolution = (resolved_for_group[0]
+                            if resolved_for_group else GeometryResolution(
+                                ib_resource=ib_resource,
+                                ib_file=ib_info.get("filename"),
+                                index_size=_ib_index_size(
+                                    ib_info.get("format"))))
+        position_file = group_resolution.position_file
+        texcoord_file = group_resolution.texcoord_file
+        position_stride = group_resolution.position_stride
+        texcoord_stride = group_resolution.texcoord_stride
+        ib_file = group_resolution.ib_file
+        index_size = group_resolution.index_size
+        group_normal_source = _resolve_normal_source(
+            group_vertex_resources, resources, position_file, position_stride,
+            resolve_vertex_info)
 
         pool_files = []
         seen_pool_files = set()

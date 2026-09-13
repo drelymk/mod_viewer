@@ -133,15 +133,28 @@ def _prepare_draw_vertices(
     valid_raw = []
     append_valid = valid_raw.append
     reverse_winding = geometry_convention.reverse_winding
+    input_triangle_count = len(raw) // 3
+    rejected_triangle_count = 0
+    position_bounds_failure = False
     for triangle_start in range(0, len(raw) - 2, 3):
         a = raw[triangle_start]
         b = raw[triangle_start + 1]
         c = raw[triangle_start + 2]
+        position_indices = (a, b, c)
+        if any(index * draw_streams.position_stride + POSITION_OFFSET < 0 or
+               index * draw_streams.position_stride + POSITION_OFFSET + 12 >
+               len(pos_data) for index in position_indices):
+            position_bounds_failure = True
+            rejected_triangle_count += 1
+            continue
         if decode_vertex(a) is None:
+            rejected_triangle_count += 1
             continue
         if decode_vertex(b) is None:
+            rejected_triangle_count += 1
             continue
         if decode_vertex(c) is None:
+            rejected_triangle_count += 1
             continue
         append_valid(a)
         if reverse_winding:
@@ -150,6 +163,18 @@ def _prepare_draw_vertices(
         else:
             append_valid(b)
             append_valid(c)
+    valid_triangle_count = len(valid_raw) // 3
+    draw.geometry_resolution.update({
+        "input_triangle_count": input_triangle_count,
+        "valid_triangle_count": valid_triangle_count,
+        "rejected_triangle_count": rejected_triangle_count,
+    })
+    if position_bounds_failure and rejected_triangle_count > valid_triangle_count:
+        # A short position stream is a resolution failure when more triangles
+        # are lost than survive.  Keeping a small valid remainder preserves
+        # the established safety behavior for isolated corrupt triangles.
+        draw.geometry_resolution["error"] = "invalid_index_coverage"
+        return None
     if not valid_raw:
         return None
     raw = valid_raw

@@ -31,7 +31,7 @@ class IniAnalysis:
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
-                seen=None):
+                seen=None, mod_dir=None):
     """Analyze ``sections`` once and return all derived semantic models.
 
     Extractors accept the shared canonical spelling map so a normal load does
@@ -77,7 +77,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     }
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
-        seen=seen, gating_vars=scan_gating_vars)
+        seen=seen, gating_vars=scan_gating_vars, mod_dir=mod_dir)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,

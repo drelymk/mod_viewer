@@ -113,7 +113,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
             extract_resources(secs), ini_path, folder_path)
         analysis = analyze_ini(
             secs, resources=resources, var_prefix=var_prefix, source=source,
-            seen=seen_labels)
+            seen=seen_labels, mod_dir=folder_path)
         ini_groups = analysis.draw_groups
         identity_source = _ini_rel(ini_path, folder_path)
         for group in ini_groups:

@@ -130,6 +130,7 @@ class DrawCall(MutableMapping):
     skinning_source: SkinningSource | None = None
     skinning_error: str | None = None
     skinning_resolution: dict = field(default_factory=dict)
+    geometry_resolution: dict = field(default_factory=dict)
 
     _ALWAYS_PRESENT: ClassVar[frozenset[str]] = frozenset({
         "count", "start", "base", "conditions", "sources",
@@ -147,6 +148,7 @@ class DrawCall(MutableMapping):
         "asset_slot_evidence", "texture_hashes",
         "skinning_bone_offset",
         "skinning_source", "skinning_error", "skinning_resolution",
+        "geometry_resolution",
     })
     _RENDER_IDENTITY_FIELDS: ClassVar[tuple[str, ...]] = (
         "count", "start", "base",

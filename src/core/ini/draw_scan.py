@@ -318,6 +318,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             if match:
                 info["_match_index_count"] = int(match.group(1))
             match = re.match(
+                r"override_vertex_count\s*=\s*(\d+)", line, re.I)
+            if match:
+                info["_vertex_count_evidence"].append(
+                    int(match.group(1)))
+            match = re.match(
                 r"ps-t(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if match:
                 slot = int(match.group(1))
@@ -358,6 +363,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 if not info["ib"]:
                     info["ib"] = match.group(1)
                 info["_cur_ib"] = match.group(1)
+            match = re.match(r"draw\s*=\s*(\d+)(?:\s*,\s*-?\d+)?\s*$",
+                             line, re.I)
+            if match:
+                info["_vertex_count_evidence"].append(int(match.group(1)))
             if re.match(r"handling\s*=\s*skip\b", line, re.I):
                 info["handling_skip"] = True
             match = re.fullmatch(
@@ -382,6 +391,38 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                     base=int(match.group(3)), conditions=conditions,
                     source=source,
                     occurrence=occurrence,
+                    index_resource=info.get("_cur_ib"),
+                    diffuse_variants=_effective_role_assignments(
+                        info.get("_cur_diffuse_variants") or []),
+                    diffuse_history=_effective_role_assignments(
+                        info.get("_diffuse_history") or []),
+                    vertex_resources=dict(info["_cur_vertex_resources"]),
+                    auxiliary_maps=aux_snapshot(info),
+                    texture_provenance=texture_provenance_snapshot(info),
+                    geometry_match=geometry_match(info),
+                    skinning_bone_offset=info.get(
+                        "_cur_skinning_bone_offset", 0),
+                    skinning_remap_resources=dict(
+                        info.get("_cur_compute_resources") or {}),
+                    slot_textures=slot_snapshot(info),
+                ))
+            elif re.fullmatch(r"drawindexed\s*=\s*auto\s*", line, re.I):
+                occurrence = DrawOccurrence(
+                    section_name, draw_ordinal, execution_path)
+                draw_ordinal += 1
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+                source = line_source(raw)
+                if source:
+                    source = {
+                        **source,
+                        "occurrence": occurrence.to_dict(),
+                    }
+                info["draws"].append(AuthoredDrawCall(
+                    count=None, start=0, base=0, conditions=conditions,
+                    source=source, occurrence=occurrence,
                     index_resource=info.get("_cur_ib"),
                     diffuse_variants=_effective_role_assignments(
                         info.get("_cur_diffuse_variants") or []),
@@ -440,6 +481,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
             "_cur_skinning_bone_offset": 0,
+            "_vertex_count_evidence": [],
         }
         scan(lines, info, [], {name}, name)
         info.pop("_cur_ib", None)
@@ -452,6 +494,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         info["geometry_match_at_end"] = geometry_match(info)
         info["vertex_resources_at_end"] = dict(
             info.get("_cur_vertex_resources") or {})
+        info["vertex_count_evidence"] = tuple(
+            info.get("_vertex_count_evidence") or ())
+        info.pop("_vertex_count_evidence", None)
         info.pop("_cur_vertex_resources", None)
         info["slot_textures_at_end"] = slot_snapshot(info)
         for key in (
