@@ -4415,86 +4415,109 @@ def test_humanoid_overrides_resolve_semantics_and_manual_binding(module_page):
 def test_model_rig_sidecar_serialization_and_hydration(module_page):
     result = module_page.evaluate("""async () => {
       const persistence = await import('./js/mesh/model-rig-persistence.js');
+      const frames = await import('./js/mesh/weight-rig-frames.js');
       const sourceRigs = [{
         sourceKey: 'body|offset=0', sourceFile: 'Body/Body.buf',
         boneIdOffset: 0,
-        graph: {
-          nodes: [
-            {boneId: 7, affectedVertexCount: 10, totalWeight: 4,
-              weightedCenter: [0, 0, 0]},
-            {boneId: 8, affectedVertexCount: 9, totalWeight: 3,
-              weightedCenter: [0, 1, 0]},
-            {boneId: 9, affectedVertexCount: 8, totalWeight: 2,
-              weightedCenter: [0, 2, 0]},
-          ],
-          relationships: [{boneA: 7, boneB: 8, sharedVertexCount: 2,
-            productOverlap: .5, center: [0, .5, 0]}],
-        },
+      }, {
+        sourceKey: 'cloth|offset=2', sourceFile: 'Cloth/Cloth.buf',
+        boneIdOffset: 2,
       }];
-      const joint = (jointId, parentId, boneId, y) => ({
-        jointId, parentId,
-        members: [{sourceKey: 'body|offset=0',
-          sourceBoneKey: `body|offset=0#bone=${boneId}`, boneId}],
-        restCenter: [0, y, 0], restPivot: [0, y, 0],
-        restFrame: [0, 0, 0, 1], restDirection: [0, 1, 0],
-      });
+      const member = (sourceKey, boneId) => ({sourceKey,
+        sourceBoneKey: `${sourceKey}#bone=${boneId}`, boneId});
+      const joint = (jointId, parentId, members, representativeMember,
+          restCenter) => ({jointId, parentId, members, representativeMember,
+        restCenter, restPivot: [...restCenter],
+        restFrame: [0, 0, 0, 1], restDirection: [0, 1, 0]});
+      const joints = [
+        joint(0, null, [member('body|offset=0', 7),
+          member('cloth|offset=2', 70)], member('cloth|offset=2', 70),
+        [0, 0, 0]),
+        joint(1, 0, [member('body|offset=0', 8)],
+        member('body|offset=0', 8), [0, 1, 0]),
+        joint(2, 0, [member('cloth|offset=2', 80)],
+        member('cloth|offset=2', 80), [1, 1, 0]),
+        joint(3, 1, [member('cloth|offset=2', 81)],
+        member('cloth|offset=2', 81), [0, 2, 0]),
+      ];
+      joints[0].childrenIds = [1, 2];
+      joints[1].childrenIds = [3];
+      joints[2].childrenIds = [];
+      joints[3].childrenIds = [];
+      const edges = [
+        {jointA: 0, jointB: 1, relationshipType: 'source',
+          treeEdgeScore: .7, jointCenter: [0, .5, 0]},
+        {jointA: 0, jointB: 2, relationshipType: 'source',
+          treeEdgeScore: .2, jointCenter: [.5, .5, 0]},
+        {jointA: 1, jointB: 3, relationshipType: 'attachment',
+          attachmentScore: .9, jointCenter: [0, 1.5, 0]},
+      ];
+      const sourceBoneToModelJointMap = new Map([
+        ['body|offset=0#bone=7', 0], ['cloth|offset=2#bone=70', 0],
+        ['body|offset=0#bone=8', 1], ['cloth|offset=2#bone=80', 2],
+        ['cloth|offset=2#bone=81', 3],
+      ]);
+      const components = [{componentId: 0, rootId: 0, nodeIds: [0, 1, 2, 3],
+        parentById: {0: null, 1: 0, 2: 0, 3: 1},
+        childrenById: {0: [1, 2], 1: [3], 2: [], 3: []}, edges}];
       const rig = {
         sourceRigs, modelReferenceRadius: 2,
-        joints: [
-          {...joint(0, null, 7, 0), members: [
-            {sourceKey: 'body|offset=0', sourceBoneKey: 'body|offset=0#bone=7', boneId: 7},
-            {sourceKey: 'body|offset=0', sourceBoneKey: 'body|offset=0#bone=70', boneId: 70}],
-            representativeMember: {sourceKey: 'body|offset=0',
-              sourceBoneKey: 'body|offset=0#bone=70', boneId: 70}},
-          joint(1, 0, 8, 1), joint(2, 1, 9, 2)],
-        edges: [
-          {jointA: 0, jointB: 1, relationshipType: 'source',
-            treeEdgeScore: .7, jointCenter: [0, .75, 0]},
-          {jointA: 1, jointB: 2, relationshipType: 'attachment',
-            attachmentScore: .2, jointCenter: [0, 1.5, 0]},
-        ],
+        joints, edges, components,
+        childrenById: new Map([[0, [1, 2]], [1, [3]], [2, []], [3, []]]),
+        centerByJointId: new Map(joints.map(joint =>
+          [joint.jointId, [...joint.restCenter]])),
+        jointPivotByJointId: new Map(joints.map(joint =>
+          [joint.jointId, [...joint.restPivot]])),
+        sourceBoneToModelJointId: sourceBoneToModelJointMap,
+        sourceBoneToModelJointMap,
       };
+      const forest = {components};
+      frames.rebuildModelRestFrames(rig, forest);
       const saved = persistence.serializeModelRig(rig, {sourceRigs});
       const hydrated = persistence.hydrateModelRig(saved, sourceRigs);
+      frames.rebuildModelRestFrames(hydrated, hydrated);
+      const mapValues = map => [...(map || new Map()).entries()].map(
+        ([id, value]) => [typeof id === 'string' && id.includes(':')
+          ? id : Number(id), value?.toArray ? value.toArray()
+          : Array.isArray(value) ? value
+          : value === null || value === undefined ? value : Number(value)]);
+      const state = value => ({
+        joints: value.joints.map(item => [item.jointId, item.parentId,
+          item.childrenIds]),
+        representatives: value.joints.map(item =>
+          item.representativeMember?.sourceBoneKey || null),
+        edgeTypes: value.edges.map(edge => [edge.jointA, edge.jointB,
+          edge.relationshipType]),
+        jointPivots: mapValues(value.jointPivotByJointId),
+        edgePivots: mapValues(value.jointPivotByEdgeKey),
+        restFrames: mapValues(value.restFrameByJointId),
+        restDirections: mapValues(value.restDirectionByJointId),
+        continuations: mapValues(value.restContinuationChildByJointId),
+        sourceMap: [...value.sourceBoneToModelJointId].sort(),
+      });
       return {
         version: saved.version,
         fields: Object.keys(saved).sort(),
-        savedJointIds: saved.joints.map(item => item.joint_id),
+        sourceTable: saved.source_table,
         compactMembers: saved.joints[0].members,
         representativeMemberIndex: saved.joints[0].representative_member_index,
-        modelReferenceRadius: saved.model_reference_radius,
-        edgeTypes: saved.edges.map(edge => edge.relationship_type),
         edgeStrengths: saved.edges.map(edge => edge.edge_strength),
         edgePivots: saved.edges.map(edge => edge.edge_pivot),
-        hydratedComponents: hydrated.components.map(item => ({
-          rootId: item.rootId, nodeIds: item.nodeIds,
-        })),
-        hydratedChildren: [...hydrated.childrenById.entries()],
-        hydratedRepresentative: hydrated.joints[0].representativeMember,
-        hydratedAttachment: hydrated.edges[1].relationshipType,
-        hydratedEdgePivots: [...hydrated.jointPivotByEdgeKey.entries()],
-        mappedBone: hydrated.sourceBoneToModelJointId.get(
-          'body|offset=0#bone=9'),
+        equivalent: JSON.stringify(state(rig)) === JSON.stringify(state(hydrated)),
+        fresh: state(rig), cached: state(hydrated),
       };
     }""")
     assert result["version"] == 1
     assert result["fields"] == ["builder_version", "edges",
                                  "joints", "model_reference_radius",
                                  "source_table", "version"]
-    assert result["savedJointIds"] == [0, 1, 2]
-    assert result["compactMembers"] == [[0, 7], [0, 70]]
+    assert result["sourceTable"] == ["body|offset=0", "cloth|offset=2"]
+    assert result["compactMembers"] == [[0, 7], [1, 70]]
     assert result["representativeMemberIndex"] == 1
-    assert result["modelReferenceRadius"] == 2
-    assert result["edgeTypes"] == ["source", "attachment"]
-    assert result["edgeStrengths"] == pytest.approx([.7, .2])
-    assert result["edgePivots"] == [[0, .75, 0], [0, 1.5, 0]]
-    assert result["hydratedComponents"] == [{"rootId": 0, "nodeIds": [0, 1, 2]}]
-    assert result["hydratedChildren"] == [[0, [1]], [1, [2]], [2, []]]
-    assert result["hydratedRepresentative"]["boneId"] == 70
-    assert result["hydratedAttachment"] == "attachment"
-    assert result["hydratedEdgePivots"] == [["0:1", [0, .75, 0]],
-                                               ["1:2", [0, 1.5, 0]]]
-    assert result["mappedBone"] == 2
+    assert result["edgeStrengths"] == pytest.approx([.7, .2, .9])
+    assert result["edgePivots"] == [[0, .5, 0], [.5, .5, 0], [0, 1.5, 0]]
+    assert result["equivalent"] is True
+    assert result["fresh"] == result["cached"]
 
 
 def test_model_rig_second_load_skips_reconciliation(module_page):
@@ -4506,6 +4529,8 @@ def test_model_rig_second_load_skips_reconciliation(module_page):
         joints: [{jointId: 0, parentId: null,
         members: [{sourceKey: sourceRigs[0].sourceKey,
           sourceBoneKey: 'body|offset=0#bone=7', boneId: 7}],
+        representativeMember: {sourceKey: sourceRigs[0].sourceKey,
+          sourceBoneKey: 'body|offset=0#bone=7', boneId: 7},
         restCenter: [0, 0, 0], restPivot: [0, 0, 0],
         restFrame: [0, 0, 0, 1]}], edges: []};
       let saved = null;
@@ -4732,8 +4757,7 @@ def test_humanoid_edit_save_and_reset_refresh_without_model_rig_rebuild(
       });
       const beforeTopology = topology();
       const modelRigSidecar = JSON.stringify({version: 1, builder_version: 1,
-        source_table: [{source_key: 'body', source_file: 'Body.buf',
-          bone_id_offset: 0}], joints: [{joint_id: 0}]});
+        source_table: ['body|offset=0'], joints: [{joint_id: 0}]});
       const beforeModelRigSidecar = modelRigSidecar;
       const refreshes = [];
       let legacyRebuilds = 0;
@@ -5502,7 +5526,7 @@ def test_humanoid_binding_claims_remaining_in_radius_joints_as_direct_seeds(
         shoulder: binding.diagnostics.bindingsByControl.leftShoulder,
         elbow: binding.diagnostics.bindingsByControl.leftElbow,
         hand: binding.diagnostics.bindingsByControl.leftHand,
-        directRootCount: binding.diagnostics.directRootCount,
+        directSeedCount: binding.diagnostics.directSeedCount,
       };
     }""")
     assert result["owners"] == [
@@ -5516,7 +5540,7 @@ def test_humanoid_binding_claims_remaining_in_radius_joints_as_direct_seeds(
     assert result["shoulder"]["directSeedCount"] == 3
     assert result["elbow"]["directSeedCount"] == 2
     assert result["hand"]["directSeedCount"] == 1
-    assert result["directRootCount"] == 6
+    assert result["directSeedCount"] == 6
 
 
 def test_humanoid_binding_overlapping_extra_seed_uses_closest_control(
@@ -5698,7 +5722,7 @@ def test_humanoid_binding_uses_one_root_and_expands_recursive_boundaries(
       };
       return {
         owners: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(ownerFor),
-        directRootCount: binding.diagnostics.directRootCount,
+        directSeedCount: binding.diagnostics.directSeedCount,
         leftElbow: binding.diagnostics.bindingsByControl.leftElbow,
       };
     }""")
@@ -5714,7 +5738,7 @@ def test_humanoid_binding_uses_one_root_and_expands_recursive_boundaries(
         ["leftHand", "inherited_control", 7],
         [None, None, None],
     ]
-    assert result["directRootCount"] == 3
+    assert result["directSeedCount"] == 3
     assert result["leftElbow"]["rootJointId"] == 3
     assert result["leftElbow"]["descendantCount"] == 2
 

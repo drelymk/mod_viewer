@@ -17,12 +17,8 @@ function stableVector(value, length) {
 
 function serializedSourceTable(sourceRigs = []) {
   return [...sourceRigs]
-    .map((sourceRig) => ({
-      source_key: String(sourceRig?.sourceKey || ""),
-      source_file: String(sourceRig?.sourceFile || ""),
-      bone_id_offset: Number(sourceRig?.boneIdOffset || 0),
-    }))
-    .sort((left, right) => left.source_key.localeCompare(right.source_key));
+    .map(sourceRig => String(sourceRig?.sourceKey || ""))
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function sourceBoneKey(sourceKey, boneId) {
@@ -30,11 +26,10 @@ function sourceBoneKey(sourceKey, boneId) {
 }
 
 function sourceTableIndexByKey(sourceTable) {
-  return new Map(sourceTable.map((source, index) => [source.source_key, index]));
+  return new Map(sourceTable.map((source, index) => [String(source), index]));
 }
 
-function serializedMembers(joint, sourceTable) {
-  const sourceIndexByKey = sourceTableIndexByKey(sourceTable);
+function serializedMembers(joint, sourceIndexByKey) {
   return (Array.isArray(joint?.members) ? joint.members : [])
     .map(member => {
       const sourceIndex = sourceIndexByKey.get(String(member?.sourceKey));
@@ -72,10 +67,11 @@ export function serializeModelRig(rig, {
   sourceRigs = rig?.sourceRigs || [],
 } = {}) {
   const sourceTable = serializedSourceTable(sourceRigs);
+  const sourceIndexByKey = sourceTableIndexByKey(sourceTable);
   const joints = (Array.isArray(rig?.joints) ? rig.joints : []).map((joint,
       fallbackId) => {
     const members = Array.isArray(joint?.members) ? joint.members : [];
-    const compactMembers = serializedMembers(joint, sourceTable);
+    const compactMembers = serializedMembers(joint, sourceIndexByKey);
     const representative = joint?.representativeMember;
     const representativeKey = representative
       ? String(representative.sourceBoneKey
@@ -160,8 +156,11 @@ function rebuildForest(joints, edges) {
 
   const edgePairs = new Set(edges.map(edge =>
     modelJointPairKey(edge.jointA, edge.jointB)));
-  if (joints.some(joint => joint.parentId !== null
-      && !edgePairs.has(modelJointPairKey(joint.parentId, joint.jointId)))) {
+  const expectedEdgePairs = new Set(joints
+    .filter(joint => joint.parentId !== null)
+    .map(joint => modelJointPairKey(joint.parentId, joint.jointId)));
+  if (edgePairs.size !== expectedEdgePairs.size
+      || [...expectedEdgePairs].some(pair => !edgePairs.has(pair))) {
     return null;
   }
   const roots = joints.filter((joint) => joint.parentId === null)
@@ -242,12 +241,12 @@ export function hydrateModelRig(data, sourceRigs = []) {
   const joints = data.joints.map((rawJoint, index) => {
     if (!rawJoint || rawJoint.joint_id !== index) return null;
     if (!Array.isArray(rawJoint.members)
+        || rawJoint.members.length === 0
         || rawJoint.members.some(member =>
           !validCompactMember(member, sourceTable))) return null;
     const representativeIndex = rawJoint.representative_member_index;
-    if (representativeIndex !== null
-        && (!validInteger(representativeIndex)
-          || representativeIndex >= rawJoint.members.length)) return null;
+    if (!validInteger(representativeIndex)
+        || representativeIndex >= rawJoint.members.length) return null;
     const parentId = rawJoint.parent_id === null ? null : rawJoint.parent_id;
     if (parentId !== null
         && (!validInteger(parentId) || parentId >= data.joints.length
@@ -257,7 +256,7 @@ export function hydrateModelRig(data, sourceRigs = []) {
     const restFrame = stableVector(rawJoint.rest_frame, 4);
     if (!restCenter || !restPivot || !restFrame) return null;
     const members = rawJoint.members.map(([sourceIndex, boneId]) => {
-      const sourceKey = sourceTable[sourceIndex].source_key;
+      const sourceKey = sourceTable[sourceIndex];
       return {
         sourceKey,
         sourceBoneKey: sourceBoneKey(sourceKey, boneId),
@@ -270,8 +269,7 @@ export function hydrateModelRig(data, sourceRigs = []) {
       signature: JSON.stringify(members.map(member =>
         member.sourceBoneKey).sort()),
       members,
-      representativeMember: representativeIndex === null
-        ? null : members[representativeIndex],
+      representativeMember: members[representativeIndex],
       parentId,
       childrenIds: [],
       restCenter,

@@ -398,7 +398,7 @@ function ownershipDiagnostics(controlState, directOwnerByJointId,
       .filter(state => state.source === 'mapped').length,
     automaticControlCount,
     unresolvedControlCount,
-    directRootCount: directOwnerByJointId.size,
+    directSeedCount: directOwnerByJointId.size,
     inheritedJointCount: [...ownerByJointId.values()]
       .filter(owner => owner.bindingMethod === 'inherited_control').length,
     unownedJointCount: unboundJointIds.length,

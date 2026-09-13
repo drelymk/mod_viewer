@@ -116,13 +116,6 @@ def _model_rig_text(value, maximum=MODEL_RIG_SOURCE_MAX_LENGTH):
             and "\x00" not in value)
 
 
-def _model_rig_source_file(value):
-    """Validate a stored source label without allowing a filesystem path."""
-    return (_model_rig_text(value)
-            and not value.startswith(("/", "\\"))
-            and not (len(value) > 1 and value[1] == ":"))
-
-
 def _model_rig_vector(value, length):
     if not isinstance(value, list) or len(value) != length:
         return None
@@ -132,7 +125,7 @@ def _model_rig_vector(value, length):
     return [float(item) for item in value]
 
 
-def _normalized_model_rig(value):
+def _normalized_model_rig(value, *, include_text=False):
     if not isinstance(value, dict):
         return None
     if value.get("version") != MODEL_RIG_VERSION \
@@ -156,21 +149,12 @@ def _normalized_model_rig(value):
     sources = []
     source_keys = set()
     for source in source_table:
-        if not isinstance(source, dict):
+        if not _model_rig_text(source):
             return None
-        source_key = source.get("source_key")
-        source_file = source.get("source_file")
-        offset = source.get("bone_id_offset")
-        if (not _model_rig_text(source_key)
-                or not _model_rig_source_file(source_file)
-                or isinstance(offset, bool)
-                or not isinstance(offset, int)):
+        if source in source_keys:
             return None
-        if source_key in source_keys:
-            return None
-        source_keys.add(source_key)
-        sources.append({"source_key": source_key, "source_file": source_file,
-                        "bone_id_offset": offset})
+        source_keys.add(source)
+        sources.append(source)
 
     normalized_joints = []
     for index, joint in enumerate(joints):
@@ -183,11 +167,11 @@ def _normalized_model_rig(value):
         parent_id = joint.get("parent_id")
         if (not isinstance(members, list)
                 or len(members) > MODEL_RIG_MAX_MEMBERS_PER_JOINT
-                or (representative_member_index is not None
-                    and (isinstance(representative_member_index, bool)
-                         or not isinstance(representative_member_index, int)
-                         or representative_member_index < 0
-                         or representative_member_index >= len(members)))
+                or len(members) == 0
+                or (isinstance(representative_member_index, bool)
+                    or not isinstance(representative_member_index, int)
+                    or representative_member_index < 0
+                    or representative_member_index >= len(members))
                 or (parent_id is not None
                     and (isinstance(parent_id, bool)
                          or not isinstance(parent_id, int)
@@ -218,6 +202,20 @@ def _normalized_model_rig(value):
             "parent_id": parent_id,
             **vectors,
         })
+    visit_state = [0] * len(normalized_joints)
+    for start in range(len(normalized_joints)):
+        if visit_state[start] == 2:
+            continue
+        path = []
+        current = start
+        while current is not None and visit_state[current] == 0:
+            visit_state[current] = 1
+            path.append(current)
+            current = normalized_joints[current]["parent_id"]
+        if current is not None and visit_state[current] == 1:
+            return None
+        for index in path:
+            visit_state[index] = 2
 
     normalized_edges = []
     edge_keys = set()
@@ -251,6 +249,12 @@ def _normalized_model_rig(value):
             "edge_strength": float(edge_strength),
             "edge_pivot": edge_pivot,
         })
+    expected_edge_keys = {
+        tuple(sorted((joint["parent_id"], joint["joint_id"])))
+        for joint in normalized_joints if joint["parent_id"] is not None
+    }
+    if edge_keys != expected_edge_keys:
+        return None
 
     normalized = {
         "version": MODEL_RIG_VERSION,
@@ -261,11 +265,13 @@ def _normalized_model_rig(value):
         "edges": normalized_edges,
     }
     try:
-        if len(json.dumps(normalized, ensure_ascii=False)) > MODEL_RIG_MAX_BYTES:
+        text = json.dumps(normalized, separators=(",", ":"),
+                          ensure_ascii=False)
+        if len(text.encode("utf-8")) > MODEL_RIG_MAX_BYTES:
             return None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, UnicodeError):
         return None
-    return normalized
+    return (normalized, text) if include_text else normalized
 
 
 def load_model_rig(folder_path):
@@ -282,16 +288,16 @@ def load_model_rig(folder_path):
 
 def save_model_rig(folder_path, model_rig):
     """Atomically replace the cached ModelRig sidecar."""
-    normalized = _normalized_model_rig(model_rig)
-    if normalized is None:
+    normalized_result = _normalized_model_rig(model_rig, include_text=True)
+    if normalized_result is None:
         return {"saved": False, "error": "Invalid ModelRig metadata."}
+    normalized, text = normalized_result
     with _LOCK:
         path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
         temp_path = path + ".tmp"
         try:
             with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(normalized, fh, separators=(",", ":"),
-                          ensure_ascii=False)
+                fh.write(text)
             os.replace(temp_path, path)
         except (OSError, TypeError, ValueError) as error:
             try:

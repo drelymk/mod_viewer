@@ -235,9 +235,7 @@ def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
         "version": 1,
         "builder_version": 1,
         "model_reference_radius": 1.25,
-        "source_table": [{"source_key": "body|offset=0",
-                          "source_file": "Body/Body.buf",
-                          "bone_id_offset": 0}],
+        "source_table": ["body|offset=0"],
         "joints": [{
             "joint_id": 0,
             "members": [[0, 7]],
@@ -253,13 +251,55 @@ def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
     assert saved == {"saved": True,
                      "path": str(tmp_path / metadata.MODEL_RIG_METADATA_NAME)}
     assert metadata.load_model_rig(str(tmp_path)) == value
-    assert json.loads((tmp_path / metadata.MODEL_RIG_METADATA_NAME).read_text(
-        encoding="utf-8")) == value
+    sidecar_text = (tmp_path / metadata.MODEL_RIG_METADATA_NAME).read_text(
+        encoding="utf-8")
+    assert "\n" not in sidecar_text
+    assert json.loads(sidecar_text) == value
     assert metadata.save_model_rig(str(tmp_path), {
         **value, "joints": [{**value["joints"][0],
                               "members": [[0, 7], [0, 8]],
                               "representative_member_index": 1}],
     })["saved"] is True
+
+
+def test_model_rig_sidecar_rejects_impossible_topology(tmp_path):
+    joint = lambda joint_id, parent_id: {
+        "joint_id": joint_id,
+        "members": [[0, joint_id + 7]],
+        "representative_member_index": 0,
+        "parent_id": parent_id,
+        "rest_center": [0, joint_id, 0],
+        "rest_pivot": [0, joint_id, 0],
+        "rest_frame": [0, 0, 0, 1],
+    }
+    edge = lambda joint_a, joint_b: {
+        "joint_a": joint_a, "joint_b": joint_b,
+        "relationship_type": "source", "edge_strength": 1,
+        "edge_pivot": [0, 0, 0],
+    }
+    value = {
+        "version": 1,
+        "builder_version": 1,
+        "model_reference_radius": 1,
+        "source_table": ["body|offset=0"],
+        "joints": [joint(0, None), joint(1, 0), joint(2, 1)],
+        "edges": [edge(0, 1), edge(1, 2)],
+    }
+    invalid_values = [
+        {**value, "joints": [{**value["joints"][0],
+                               "members": [],
+                               "representative_member_index": None},
+                              *value["joints"][1:]]},
+        {**value, "joints": [{**value["joints"][0],
+                               "representative_member_index": None},
+                              *value["joints"][1:]]},
+        {**value, "edges": [*value["edges"], edge(0, 2)]},
+        {**value, "joints": [{**value["joints"][0], "parent_id": 1},
+                              *value["joints"][1:]]},
+    ]
+    for invalid in invalid_values:
+        assert metadata._normalized_model_rig(invalid) is None
+        assert metadata.save_model_rig(str(tmp_path), invalid)["saved"] is False
 
 
 def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():
