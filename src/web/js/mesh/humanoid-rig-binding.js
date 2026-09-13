@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. Explicit mappings, their
-// descendant subtrees and mapped paths claim deformation joints; every other
-// ModelJoint uses geometry.
+// The control rig owns the semantic topology. Explicit mappings, complete
+// terminal descendant subtrees and mapped paths claim deformation joints;
+// every other ModelJoint uses geometry.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
   {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
@@ -34,8 +34,15 @@ export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
 
 const EPSILON = 1e-8;
 const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
+const DEFAULT_LATERAL_DISTANCE_RATIO = 0.08;
 const TERMINAL_EXTENSION_RATIO = 0.15;
 const CENTRAL_DRIVER_IDS = new Set(['torso', 'neck', 'head']);
+const HUMANOID_LIMB_CHAINS = Object.freeze([
+  {controls: ['leftShoulder', 'leftElbow', 'leftHand'], terminal: 'leftHand'},
+  {controls: ['rightShoulder', 'rightElbow', 'rightHand'], terminal: 'rightHand'},
+  {controls: ['leftHip', 'leftKnee', 'leftFoot'], terminal: 'leftFoot'},
+  {controls: ['rightHip', 'rightKnee', 'rightFoot'], terminal: 'rightFoot'},
+]);
 
 function numberId(value) {
   const result = Number(value);
@@ -156,16 +163,22 @@ function confidenceForDistance(distanceRatio) {
   return 'low';
 }
 
-function candidateForPoint(point, driver, height) {
+function candidateForPoint(point, driver, height, controlRig = null) {
   const result = segmentDistance(point, driver.start, driver.end);
+  const offset = point.clone().sub(result.closest);
+  const right = frameVector(controlRig, 'right', [1, 0, 0]);
+  const forward = frameVector(controlRig, 'forward', [0, 0, 1]);
+  const normalizedHeight = Math.max(height, EPSILON);
   return {
     driverId: driver.id,
     distance: result.distance,
-    distanceRatio: result.distance / Math.max(height, EPSILON),
+    distanceRatio: result.distance / normalizedHeight,
+    lateralRatio: Math.abs(offset.dot(right)) / normalizedHeight,
+    depthRatio: Math.abs(offset.dot(forward)) / normalizedHeight,
     rawProjection: result.rawProjection,
     projection: result.projection,
-    endpointDistanceRatio: point.distanceTo(driver.end) / Math.max(height, EPSILON),
-    score: result.distance / Math.max(height, EPSILON),
+    endpointDistanceRatio: point.distanceTo(driver.end) / normalizedHeight,
+    score: result.distance / normalizedHeight,
   };
 }
 
@@ -214,7 +227,9 @@ function semanticCandidateAllowed(point, driver, candidate, controlRig, height) 
 
 function sortedCandidates(point, drivers, height, controlRig) {
   const list = Array.isArray(drivers) ? drivers : [...(drivers?.values?.() || [])];
-  return list.map(driver => candidateForPoint(point, driver, height))
+  return list.map(driver => candidateForPoint(point, driver, height, controlRig))
+    .filter(candidate => candidate.lateralRatio
+      <= DEFAULT_LATERAL_DISTANCE_RATIO + EPSILON)
     .filter(candidate => semanticCandidateAllowed(
       point, list.find(driver => driver.id === candidate.driverId),
       candidate, controlRig, height))
@@ -388,6 +403,8 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
   const mapped = mappedControlEntries(controlMappings);
   const mappedPaths = resolvedPathCandidates(modelRig, controlMappings);
   const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
+  const mappedByControl = new Map(mapped.entries.map(entry =>
+    [entry.controlKey, entry]));
   let mappedControlCount = 0;
   let mappedDescendantCount = 0;
 
@@ -431,9 +448,14 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
     });
   });
 
-  // A mapped ModelJoint owns all of its descendants. Explicitly mapped joints
-  // are boundaries so a more specific mapping can own its own subtree.
-  mapped.entries.forEach(({controlKey, jointId}) => {
+  // A fully mapped limb's terminal ModelJoint owns all of its descendants.
+  // Explicitly mapped joints are boundaries so a more specific mapping can
+  // own its own subtree. Partial mappings intentionally use geometry for the
+  // remaining joints.
+  HUMANOID_LIMB_CHAINS.forEach(({controls, terminal}) => {
+    if (!controls.every(controlKey => mappedByControl.has(controlKey))) return;
+    const terminalMapping = mappedByControl.get(terminal);
+    const {controlKey, jointId} = terminalMapping;
     const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
     const driver = drivers.get(driverId);
     if (!driver) return;

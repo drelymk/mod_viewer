@@ -320,16 +320,19 @@ of documentation, comments and tests; use portable fixtures instead.
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
 - `humanoid-rig-binding.js` treats saved ModelJoint mappings as explicit
-  deformation overrides. Explicit mapped joints claim their full descendant
-  subtrees, with another explicit mapping acting as a boundary; mapped shortest
-  paths claim their interiors, and every remaining ModelJoint uses the nearest
-  valid, height-normalized humanoid driver segment within the shared geometric
-  limit.
+  deformation overrides. Explicit mapped controls and shortest paths claim
+  their ModelJoints first; only a fully mapped limb's terminal Hand/Foot claims
+  its descendant subtree, with another explicit mapping acting as a boundary.
+  Every remaining ModelJoint uses the nearest valid, height-normalized driver
+  segment within the broad geometric limit and narrow lateral-width gate.
   These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
   Posed absolute driver targets are converted to authored-rest deltas before
   ModelJoint transforms are aliased back to source bones, so directly bound
   parent/child joints are not double-transformed. IK availability depends only
   on the accepted Main Rig controls, never on ModelJoint mapping.
+- Saving or resetting Main Rig metadata reuses the loaded ModelRig and only
+  refreshes humanoid overrides, mappings, bindings and pose; it must not rerun
+  source preparation or ModelJoint reconciliation.
 - Humanoid IK uses guaranteed virtual two-bone controls. Manual ModelJoint
   rotations, presets, and Physics remain available and compose after the
   humanoid driver base. Reset clears both virtual pose and manual deltas

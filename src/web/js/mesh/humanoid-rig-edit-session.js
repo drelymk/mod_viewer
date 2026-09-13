@@ -77,7 +77,7 @@ function currentModPath(getKnownMeshes) {
 
 function createSession({modelRigState, getModelRig, getAutomaticRig,
     resetCurrentPoseForHumanoidRigEdit, setPhysicsSuspended,
-    resolveMappings, rebuildActiveRig, getKnownMeshes, persist, clearPersist,
+    resolveMappings, refreshHumanoidRig, getKnownMeshes, persist, clearPersist,
     cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {
   let savedOverrides = null;
   let generation = 0;
@@ -336,7 +336,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       if (requestGeneration !== generation) return {saved: true, stale: true};
       savedOverrides = Object.keys(value.controls).length ? value : null;
       if (dirtyBeforeSave) {
-        await rebuildActiveRig?.(savedOverrides);
+        await refreshHumanoidRig?.(savedOverrides);
       }
       state = {
         editing: false, saving: false, error: null, dirty: false,
@@ -372,7 +372,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
         || 'The Humanoid Rig was not reset.');
       if (requestGeneration !== generation) return {saved: true, stale: true};
       savedOverrides = null;
-      await rebuildActiveRig?.(null);
+      await refreshHumanoidRig?.(null);
       state.saving = false;
       state.error = null;
       notify();

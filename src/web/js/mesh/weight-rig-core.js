@@ -300,32 +300,11 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
     ?.clear_humanoid_control_rig?.(path),
   cancelWeightPicking: cancelWeightModelPicking,
   cancelRigPicking: cancelRigJointPicking,
-  rebuildActiveRig: async () => {
+  refreshHumanoidRig: async savedOverrides => {
     if (!modelSkinningRig) return;
-    const generation = modelWeightGeneration;
-    modelRigState.loading = true;
-    notifyModelRigChanged();
-    try {
-      const sourceRigs = await buildAllSourceSkinningRigsCooperatively({
-        generation,
-        isCurrent: () => generation === modelWeightGeneration,
-      });
-      if (!sourceRigs || generation !== modelWeightGeneration) return;
-      const built = await buildModelSkinningRig(sourceRigs, {
-        generation,
-        isCurrent: () => generation === modelWeightGeneration,
-      });
-      if (!built) return;
-      // Edit mode starts from rest and does not carry a virtual pose into the
-      // rebuilt control rig.
-      modelRigState.humanoidPose = {};
-      applyModelPose({request: false});
-    } finally {
-      if (generation === modelWeightGeneration) {
-        modelRigState.loading = false;
-        notifyModelRigChanged();
-      }
-    }
+    applySavedHumanoidRig(modelSkinningRig, savedOverrides);
+    modelRigState.humanoidPose = {};
+    applyModelPose({request: false});
   },
   notifyChanged: notifyModelRigChanged,
   requestRender,
@@ -1037,7 +1016,17 @@ function buildPrimaryHumanoidRig(rig) {
     axes: humanoidSemanticAxes(),
     orientationState,
   });
-  const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
+  rig.humanoidAutomaticControlRig = automaticRig;
+  applySavedHumanoidRig(rig,
+    humanoidRigEditSession?.getSavedOverrides?.());
+}
+
+function applySavedHumanoidRig(rig, savedOverrides = null) {
+  if (!rig) return;
+  humanoidControlRigCacheKey = '';
+  humanoidControlRigSnapshotCache = null;
+  const orientationState = getModelTransformState?.();
+  const automaticRig = rig.humanoidAutomaticControlRig;
   const controlMappings = automaticRig?.accepted
     ? resolveHumanoidControlMappings({
       savedOverrides, modelRig: rig,
@@ -1049,7 +1038,6 @@ function buildPrimaryHumanoidRig(rig) {
     }) : automaticRig;
   const binding = controlRig?.accepted
     ? buildHumanoidRigBinding({controlRig, modelRig: rig, controlMappings}) : null;
-  rig.humanoidAutomaticControlRig = automaticRig;
   rig.humanoidControlRig = controlRig;
   rig.humanoidControlMappings = controlMappings;
   rig.humanoidBinding = binding;

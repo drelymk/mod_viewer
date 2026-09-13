@@ -4518,6 +4518,92 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
     assert result["resets"] == 1
 
 
+def test_humanoid_edit_save_and_reset_refresh_without_model_rig_rebuild(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const control = await import('./js/mesh/humanoid-control-rig.js');
+      const edit = await import('./js/mesh/humanoid-rig-edit-session.js');
+      const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(
+        (key, index) => [key, {position: [0, index / 20, 0],
+          semantic: {sideN: 0, height01: index / 20, depthN: 0}}]));
+      const automatic = {version: 1, available: true, accepted: true,
+        frame: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1],
+          lowHeight: 0, highHeight: 1, height: 1,
+          sideCenter: 0, depthCenter: 0}, controls, paths: {}};
+      const rig = {
+        humanoidControlRig: automatic,
+        humanoidAutomaticControlRig: automatic,
+        joints: [{jointId: 0, signature: '[0]', restPivot: [0, 0, 0]},
+          {jointId: 1, signature: '[1]', restPivot: [0, 1, 0]}],
+        components: [{componentId: 0, rootId: 0, nodeIds: [0, 1],
+          parentById: {0: null, 1: 0}, childrenById: {0: [1], 1: []}}],
+        componentByJointId: new Map([[0, 0], [1, 0]]),
+        sourceBoneToModelJointId: new Map([['body#bone=0', 0],
+          ['body#bone=1', 1]]),
+      };
+      const modelRigState = {humanoidPose: {head: [1, 0, 0]}};
+      const topology = () => JSON.stringify({
+        joints: rig.joints.map(joint => [joint.jointId, joint.signature]),
+        components: rig.components.map(component => ({
+          nodeIds: component.nodeIds, parentById: component.parentById,
+          childrenById: component.childrenById,
+        })),
+        sourceBoneToModelJointId: [...rig.sourceBoneToModelJointId],
+      });
+      const beforeTopology = topology();
+      const refreshes = [];
+      let legacyRebuilds = 0;
+      const session = edit.initializeHumanoidRigEditSession({
+        modelRigState,
+        getModelRig: () => rig,
+        getAutomaticRig: () => rig.humanoidAutomaticControlRig,
+        resetCurrentPoseForHumanoidRigEdit: () => {
+          modelRigState.humanoidPose = {};
+        },
+        getKnownMeshes: () => [{userData: {modPath: 'mod'}}],
+        resolveMappings: control.resolveHumanoidControlMappings,
+        persist: async () => ({saved: true}),
+        clearPersist: async () => ({saved: true}),
+        refreshHumanoidRig: async savedOverrides => {
+          refreshes.push(savedOverrides ? 'save' : 'reset');
+          const mappings = control.resolveHumanoidControlMappings({
+            savedOverrides, modelRig: rig,
+          });
+          rig.humanoidControlRig = control.applyHumanoidControlRigOverrides({
+            automaticRig: rig.humanoidAutomaticControlRig, savedOverrides,
+            modelRig: rig, resolvedMappings: mappings,
+          });
+          modelRigState.humanoidPose = {};
+        },
+        // This is the removed callback. It must remain unused.
+        rebuildActiveRig: async () => { legacyRebuilds += 1; },
+      });
+      session.begin();
+      session.beginCarry('head');
+      session.updateDraft('head', [.25, .8, .1], {
+        candidateJointId: null, candidateDistance: Infinity,
+      });
+      session.finishCarry();
+      const saved = await session.save();
+      const savedHead = [...rig.humanoidControlRig.controls.head.position];
+      const afterSaveTopology = topology();
+      session.begin();
+      const reset = await session.reset();
+      const resetHead = [...rig.humanoidControlRig.controls.head.position];
+      return {saved, reset, refreshes, legacyRebuilds, beforeTopology,
+        afterSaveTopology, afterResetTopology: topology(), savedHead, resetHead,
+        automaticHead: automatic.controls.head.position};
+    }""")
+    assert result["saved"]["saved"] is True
+    assert result["reset"]["saved"] is True
+    assert result["refreshes"] == ["save", "reset"]
+    assert result["legacyRebuilds"] == 0
+    assert result["beforeTopology"] == result["afterSaveTopology"]
+    assert result["beforeTopology"] == result["afterResetTopology"]
+    assert result["savedHead"] != result["automaticHead"]
+    assert result["resetHead"] == result["automaticHead"]
+
+
 def test_humanoid_ik_selection_uses_control_keys_and_resets_default(module_page):
     result = module_page.evaluate("""async () => {
       const pose = await import('./js/mesh/humanoid-pose-runtime.js');
@@ -5249,19 +5335,22 @@ def test_humanoid_binding_covers_unmapped_limbs_and_explicit_paths(module_page):
           ['leftElbow', {controlKey: 'leftElbow', jointId: 2}],
         ])});
       const descendantModel = makeModel([
-        positions.leftFoot, [-1.5, .1, 0], [-2.1, -.5, 0]], {
-        rootId: 0, parentById: {0: null, 1: 0, 2: 1},
-        childrenById: {0: [1], 1: [2], 2: []}});
+        positions.leftHip, positions.leftKnee, positions.leftFoot,
+        [-1.5, .1, 0], [-2.1, -.5, 0]], {
+        rootId: 0, parentById: {0: null, 1: 0, 2: 1, 3: 2, 4: 3},
+        childrenById: {0: [1], 1: [2], 2: [3], 3: [4], 4: []}});
       const descendantBinding = bindingModule.buildHumanoidRigBinding({
         controlRig, modelRig: descendantModel,
         controlMappings: new Map([
-          ['leftFoot', {controlKey: 'leftFoot', jointId: 0}],
+          ['leftHip', {controlKey: 'leftHip', jointId: 0}],
+          ['leftKnee', {controlKey: 'leftKnee', jointId: 1}],
+          ['leftFoot', {controlKey: 'leftFoot', jointId: 2}],
         ])});
-      const boundaryBinding = bindingModule.buildHumanoidRigBinding({
+      const partialBinding = bindingModule.buildHumanoidRigBinding({
         controlRig, modelRig: descendantModel,
         controlMappings: new Map([
-          ['leftShoulder', {controlKey: 'leftShoulder', jointId: 0}],
-          ['leftElbow', {controlKey: 'leftElbow', jointId: 1}],
+          ['leftHip', {controlKey: 'leftHip', jointId: 0}],
+          ['leftKnee', {controlKey: 'leftKnee', jointId: 1}],
         ])});
       return {
         geometric: [0, 1, 2, 3, 4, 5].map(jointId => {
@@ -5278,14 +5367,14 @@ def test_humanoid_binding_covers_unmapped_limbs_and_explicit_paths(module_page):
           pathBinding.jointBindings.get(1)?.driverId || null,
           pathBinding.jointBindings.get(1)?.bindingMethod || null,
           pathBinding.jointBindings.get(2)?.bindingMethod || null],
-        descendants: [0, 1, 2].map(jointId => {
+        descendants: [0, 1, 2, 3, 4].map(jointId => {
           const entry = descendantBinding.jointBindings.get(jointId);
           return [entry?.driverId || null, entry?.bindingMethod || null,
             entry?.mappedRootJointId ?? null];
         }),
         descendantCount: descendantBinding.diagnostics.mappedDescendantCount,
-        boundary: [0, 1, 2].map(jointId => {
-          const entry = boundaryBinding.jointBindings.get(jointId);
+        partial: [0, 1, 2, 3, 4].map(jointId => {
+          const entry = partialBinding.jointBindings.get(jointId);
           return [entry?.driverId || null, entry?.bindingMethod || null,
             entry?.mappedRootJointId ?? null];
         }),
@@ -5307,15 +5396,59 @@ def test_humanoid_binding_covers_unmapped_limbs_and_explicit_paths(module_page):
         "manual_control_mapping", "left_upper_arm", "mapped_joint_path",
         "manual_control_mapping"]
     assert result["descendants"] == [
+        ["left_upper_leg", "manual_control_mapping", None],
         ["left_lower_leg", "manual_control_mapping", None],
-        ["left_lower_leg", "mapped_control_descendant", 0],
-        ["left_lower_leg", "mapped_control_descendant", 0],
+        ["left_lower_leg", "manual_control_mapping", None],
+        ["left_lower_leg", "mapped_control_descendant", 2],
+        ["left_lower_leg", "mapped_control_descendant", 2],
     ]
     assert result["descendantCount"] == 2
-    assert result["boundary"] == [
-        ["left_upper_arm", "manual_control_mapping", None],
-        ["left_lower_arm", "manual_control_mapping", None],
-        ["left_lower_arm", "mapped_control_descendant", 1],
+    assert result["partial"] == [
+        ["left_upper_leg", "manual_control_mapping", None],
+        ["left_lower_leg", "manual_control_mapping", None],
+        ["left_lower_leg", "geometric_proximity", None],
+        [None, None, None],
+        [None, None, None],
+    ]
+
+
+def test_humanoid_binding_uses_narrow_lateral_geometric_gate(module_page):
+    result = module_page.evaluate("""async () => {
+      const bindingModule = await import('./js/mesh/humanoid-rig-binding.js');
+      const controls = {
+        chest: [0, 1.5, 0], pelvis: [0, .5, 0],
+        leftShoulder: [-.2, 1.4, 0], leftElbow: [-.5, 1.2, 0],
+        leftHand: [-.8, 1, 0], rightShoulder: [.2, 1.4, 0],
+        rightElbow: [.5, 1.2, 0], rightHand: [.8, 1, 0],
+        leftHip: [-.25, .5, 0], leftKnee: [-.25, .25, 0],
+        leftFoot: [-.25, 0, 0], rightHip: [.25, .5, 0],
+        rightKnee: [.25, .25, 0], rightFoot: [.25, 0, 0],
+      };
+      const controlRig = {frame: {height: 2.1, right: [1, 0, 0],
+        forward: [0, 0, 1]}, controls: Object.fromEntries(
+        Object.entries(controls).map(([key, position]) => [key, {position}]))};
+      const points = [
+        [-.65, 1.1, 0], [-.65, 1.1, .15], [-1, 1, 0],
+        [-.25, .1, 0], [-.25, .1, .15], [-.45, .1, 0],
+      ];
+      const joints = points.map((restPivot, jointId) => ({jointId,
+        restPivot, restCenter: restPivot, restFrame: [0, 0, 0, 1]}));
+      const modelRig = {joints, jointPivotByJointId: new Map(
+        joints.map(joint => [joint.jointId, joint.restPivot]))};
+      const binding = bindingModule.buildHumanoidRigBinding({
+        controlRig, modelRig});
+      return points.map((_, jointId) => {
+        const entry = binding.jointBindings.get(jointId);
+        return [entry?.driverId || null, entry?.bindingMethod || null];
+      });
+    }""")
+    assert result == [
+        ["left_lower_arm", "geometric_proximity"],
+        ["left_lower_arm", "geometric_proximity"],
+        [None, None],
+        ["left_lower_leg", "geometric_proximity"],
+        ["left_lower_leg", "geometric_proximity"],
+        [None, None],
     ]
 
 
