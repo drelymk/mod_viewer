@@ -106,11 +106,24 @@ def _resolve_slot_texture_files(authored, resolve_file):
     ]
 
 
+def _declared_vertex_vg_resources(resources):
+    """Return declared VertexVG remaps without scanning the filesystem."""
+    candidates = []
+    for name, info in (resources or {}).items():
+        if not isinstance(info, dict) or not info.get("filename"):
+            continue
+        evidence = f"{name} {info['filename']}".lower()
+        if "blendremapvertexvg" in evidence:
+            candidates.append(name)
+    return sorted(candidates, key=lambda value: str(value).casefold())
+
+
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     if seen is None:
         seen = {}
+    declared_vertex_vg_resources = _declared_vertex_vg_resources(resources)
     section_info = _scan_sections_for_draws(sections, var_prefix, gating_vars)
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
@@ -342,7 +355,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             skinning_source, skinning_error = resolve_skinning_source(
                 direct_skinning_resources, resolve_vertex_info,
                 bone_id_offset=authored.skinning_bone_offset,
-                remap_resources=remap_resources)
+                remap_resources=remap_resources,
+                declared_vertex_vg_resources=declared_vertex_vg_resources)
             if skinning_source is not None:
                 skinning_resolution["resolution_source"] = "direct"
             if skinning_source is None and skinning_error is None:
@@ -371,7 +385,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_source, skinning_error = resolve_skinning_source(
                     provenance_bindings, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
-                    remap_resources=remap_resources)
+                    remap_resources=remap_resources,
+                    declared_vertex_vg_resources=declared_vertex_vg_resources)
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "position_provenance"
@@ -388,7 +403,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_source, skinning_error = resolve_skinning_source(
                     blend_fallback, resolve_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
-                    remap_resources=remap_resources)
+                    remap_resources=remap_resources,
+                    declared_vertex_vg_resources=declared_vertex_vg_resources)
                 if skinning_source is not None:
                     skinning_resolution["resolution_source"] = \
                         "legacy_component"

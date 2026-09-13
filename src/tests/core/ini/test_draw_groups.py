@@ -266,6 +266,46 @@ stride = 8
     assert draw.skinning_source.vertex_vg_file == "body-vertex-vg.buf"
 
 
+def test_draw_groups_resolve_declared_unbound_vertex_vg_resource():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideComponent3]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyBlend
+vb2 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyBlend]
+filename = Meshes/Blend_R16.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 32
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+
+[ResourceBlendRemapVertexVGBuffer]
+filename = Meshes/BlendRemapVertexVG.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.vertex_vg_file == \
+        "Meshes/BlendRemapVertexVG.buf"
+    assert draw.skinning_source.bone_id_namespace == "wwmi_vertex_vg"
+
+
 @pytest.mark.parametrize(
     ("blend_slot", "expect_source"),
     [(1, False), (4, True)],
