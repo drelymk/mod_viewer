@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
 // The control rig owns the semantic topology. Mapped controls claim their
-// exact ModelJoints, unmapped controls get geometric anchors, and all other
+// exact ModelJoints, unmapped controls get point-radius seeds, and remaining
 // ownership comes only from parent-to-child inheritance.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
@@ -33,7 +33,10 @@ export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
 ]);
 
 const EPSILON = 1e-8;
-const DEFAULT_POINT_DISTANCE_RATIO = 0.24;
+// One height-normalized radius is shared by anchor reservation and additional
+// direct seeds. Keep it small: this is an ownership gate, not a limb-width
+// classifier.
+const DEFAULT_POINT_RADIUS_RATIO = 0.08;
 const CONTROL_ORDER = Object.freeze(Object.keys(HUMANOID_CONTROL_DRIVER_IDS));
 
 function numberId(value) {
@@ -177,7 +180,6 @@ function mappedControlEntries(controlMappings) {
       mapping?.controlKey || key))
     .map(([key, mapping]) => ({
       controlKey: mapping?.controlKey || key,
-      mapping,
       jointId: numberId(mapping?.jointId),
     })).sort((left, right) => CONTROL_ORDER.indexOf(left.controlKey)
       - CONTROL_ORDER.indexOf(right.controlKey));
@@ -211,7 +213,6 @@ function pointJointCandidate(modelRig, controlRig, controlKey, jointId,
   return {
     controlKey,
     jointId,
-    distance,
     distanceRatio: distance / Math.max(height, EPSILON),
   };
 }
@@ -236,15 +237,8 @@ function directOwnerFor(controlKey, source, bindingMethod, candidate = null,
   };
 }
 
-function assignAutomaticAnchors({modelRig, controlRig, height, radius,
-    automaticControls, directOwnerByJointId, controlState}) {
-  const availableJointIds = allJointIds(modelRig)
-    .filter(jointId => !directOwnerByJointId.has(jointId));
-  const candidatesByControl = new Map(automaticControls.map(controlKey => [
-    controlKey,
-    candidatesForControl(modelRig, controlRig, controlKey,
-      availableJointIds, height, radius),
-  ]));
+function assignAutomaticAnchors({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState}) {
   const nextCandidateByControl = new Map(
     automaticControls.map(controlKey => [controlKey, 0]));
   let pending = [...automaticControls];
@@ -282,6 +276,7 @@ function assignAutomaticAnchors({modelRig, controlRig, height, radius,
           winner, null));
         state.source = 'automatic';
         state.anchorJointId = jointId;
+        state.directSeedCount += 1;
         state.distanceRatio = winner.distanceRatio;
       }
       nextCandidateByControl.set(winner.controlKey,
@@ -293,6 +288,33 @@ function assignAutomaticAnchors({modelRig, controlRig, height, radius,
         && controlState.get(controlKey).anchorJointId === null;
     });
   }
+}
+
+function assignAutomaticExtraSeeds({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState}) {
+  const candidatesByJoint = new Map();
+  automaticControls.forEach(controlKey => {
+    (candidatesByControl.get(controlKey) || []).forEach(candidate => {
+      const candidates = candidatesByJoint.get(candidate.jointId) || [];
+      candidates.push(candidate);
+      candidatesByJoint.set(candidate.jointId, candidates);
+    });
+  });
+  [...candidatesByJoint.keys()].sort((left, right) => left - right)
+    .forEach(jointId => {
+      if (directOwnerByJointId.has(jointId)) return;
+      const winner = (candidatesByJoint.get(jointId) || [])
+        .filter(candidate => !directOwnerByJointId.has(candidate.jointId))
+        .sort((left, right) => left.distanceRatio - right.distanceRatio
+          || controlOrder(left.controlKey) - controlOrder(right.controlKey))[0];
+      if (!winner) return;
+      const state = controlState.get(winner.controlKey);
+      if (!state || state.anchorJointId === null) return;
+      directOwnerByJointId.set(jointId, directOwnerFor(
+        winner.controlKey, 'automatic', 'automatic_control_mapping',
+        winner, state.anchorJointId));
+      state.directSeedCount += 1;
+    });
 }
 
 function inheritedOwners(modelRig, directOwnerByJointId) {
@@ -315,8 +337,7 @@ function inheritedOwners(modelRig, directOwnerByJointId) {
           inheritedFromJointId: numberId(current.parentId),
         });
       }
-      const nextParentOwner = owner
-        ? {...owner, jointId: id} : null;
+      const nextParentOwner = owner ? {...owner} : null;
       const children = childIdsForComponent(component, id);
       for (let index = children.length - 1; index >= 0; index -= 1) {
         stack.push({jointId: children[index], parentOwner: nextParentOwner,
@@ -367,6 +388,7 @@ function ownershipDiagnostics(controlState, directOwnerByJointId,
       source,
       anchorJointId: state.anchorJointId ?? null,
       rootJointId: state.anchorJointId ?? null,
+      directSeedCount: state.directSeedCount || 0,
       distanceRatio: state.distanceRatio ?? null,
       descendantCount: inheritedCountByControl.get(controlKey) || 0,
     };
@@ -409,11 +431,12 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
   const drivers = buildHumanoidDriverFrames(controlRig);
   const pointDistanceRatio = Number.isFinite(Number(options.pointDistanceRatio))
     ? Math.max(0, Number(options.pointDistanceRatio))
-    : DEFAULT_POINT_DISTANCE_RATIO;
+    : DEFAULT_POINT_RADIUS_RATIO;
   const directOwnerByJointId = new Map();
   const controlState = new Map(CONTROL_ORDER.map(controlKey => [controlKey, {
     source: 'unresolved',
     anchorJointId: null,
+    directSeedCount: 0,
     distanceRatio: null,
   }]));
   const mapped = mappedControlEntries(controlMappings);
@@ -429,6 +452,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
     const state = controlState.get(controlKey);
     state.source = 'mapped';
     state.anchorJointId = jointId;
+    state.directSeedCount += 1;
   });
 
   const rejectedControlKeys = controlMappings?.rejectedControlKeys
@@ -437,16 +461,30 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
     controlState.get(controlKey).anchorJointId === null
       && !rejectedControlKeys.has(controlKey));
 
-  // Phase B: resolve unmapped controls to unique point-to-point anchors.
-  assignAutomaticAnchors({modelRig, controlRig, height,
-    radius: pointDistanceRatio, automaticControls,
+  // Calculate one candidate table after mapped roots are reserved. Both
+  // automatic phases reuse it, while later ownership checks exclude anchors
+  // and earlier extra seeds from consideration.
+  const availableJointIds = allJointIds(modelRig)
+    .filter(jointId => !directOwnerByJointId.has(jointId));
+  const candidatesByControl = new Map(automaticControls.map(controlKey => [
+    controlKey,
+    candidatesForControl(modelRig, controlRig, controlKey,
+      availableJointIds, height, pointDistanceRatio),
+  ]));
+
+  // Phase B: reserve one nearest point-to-point anchor per unmapped control.
+  assignAutomaticAnchors({automaticControls, candidatesByControl,
     directOwnerByJointId, controlState});
 
-  // Phase C: propagate direct ownership through the actual ModelRig hierarchy.
+  // Phase C: reserve all remaining in-radius joints before inheritance.
+  assignAutomaticExtraSeeds({automaticControls, candidatesByControl,
+    directOwnerByJointId, controlState});
+
+  // Phase D: propagate direct ownership through the actual ModelRig hierarchy.
   // Direct owners are boundaries; no path or geometry is invented here.
   const ownerByJointId = inheritedOwners(modelRig, directOwnerByJointId);
 
-  // Phase D: create the existing driver-relative transforms for every owner.
+  // Phase E: create the existing driver-relative transforms for every owner.
   const jointBindings = new Map();
   ownerByJointId.forEach((owner, jointId) => {
     const binding = directBindingFor(modelRig, jointId, drivers, owner);

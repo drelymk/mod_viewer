@@ -325,13 +325,14 @@ of documentation, comments and tests; use portable fixtures instead.
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
  - `humanoid-rig-binding.js` uses ordered direct ownership. Explicitly mapped
-   controls claim only their exact ModelJoint; each unmapped control claims at
-   most one nearest point-to-point anchor inside one shared,
-   height-normalized radius. All direct roots are reserved before a
-   parent-to-child inheritance pass walks every descendant branch, with every
-   direct root acting as a boundary. No automatic nearby-joint claiming,
-   shortest paths, semantic segment fallback, terminal Hand/Foot special case,
-   or global ModelJoint proximity assignment is used.
+   controls claim only their exact ModelJoint; each unmapped control first
+   reserves one nearest point-to-point anchor inside one shared,
+   height-normalized radius, then claims every remaining in-radius joint as an
+   additional direct seed. All direct seeds are reserved before a
+   parent-to-child inheritance pass walks every descendant branch, including
+   attachment descendants, with every direct seed acting as a boundary. No
+   No whole-model geometric classification or alternate binding topology is
+   used.
   These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
   Posed absolute driver targets are converted to authored-rest deltas before
   ModelJoint transforms are aliased back to source bones, so directly bound

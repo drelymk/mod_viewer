@@ -34,6 +34,7 @@ MODEL_RIG_BUILDER_VERSION = 1
 MODEL_RIG_SOURCE_MAX_LENGTH = 1024
 MODEL_RIG_MAX_JOINTS = 250000
 MODEL_RIG_MAX_MEMBERS_PER_JOINT = 256
+MODEL_RIG_MAX_EDGES = 250000
 MODEL_RIG_MAX_BYTES = 64 * 1024 * 1024
 HUMANOID_CONTROL_KEYS = (
     "chest", "pelvis", "neck", "head", "leftShoulder", "leftElbow", "leftHand",
@@ -131,7 +132,7 @@ def _model_rig_vector(value, length):
     return [float(item) for item in value]
 
 
-def _normalized_model_rig(value, *, strict=False):
+def _normalized_model_rig(value):
     if not isinstance(value, dict):
         return None
     if value.get("version") != MODEL_RIG_VERSION \
@@ -139,9 +140,17 @@ def _normalized_model_rig(value, *, strict=False):
         return None
     source_table = value.get("source_table")
     joints = value.get("joints")
+    edges = value.get("edges")
+    model_reference_radius = value.get("model_reference_radius")
     if (not isinstance(source_table, list)
             or not isinstance(joints, list)
-            or len(joints) > MODEL_RIG_MAX_JOINTS):
+            or not isinstance(edges, list)
+            or len(joints) == 0 or len(joints) > MODEL_RIG_MAX_JOINTS
+            or len(edges) > MODEL_RIG_MAX_EDGES
+            or isinstance(model_reference_radius, bool)
+            or not isinstance(model_reference_radius, (int, float))
+            or not math.isfinite(model_reference_radius)
+            or model_reference_radius <= 0):
         return None
 
     sources = []
@@ -170,9 +179,15 @@ def _normalized_model_rig(value, *, strict=False):
                 or joint.get("joint_id") != index):
             return None
         members = joint.get("members")
+        representative_member_index = joint.get("representative_member_index")
         parent_id = joint.get("parent_id")
         if (not isinstance(members, list)
                 or len(members) > MODEL_RIG_MAX_MEMBERS_PER_JOINT
+                or (representative_member_index is not None
+                    and (isinstance(representative_member_index, bool)
+                         or not isinstance(representative_member_index, int)
+                         or representative_member_index < 0
+                         or representative_member_index >= len(members)))
                 or (parent_id is not None
                     and (isinstance(parent_id, bool)
                          or not isinstance(parent_id, int)
@@ -181,21 +196,15 @@ def _normalized_model_rig(value, *, strict=False):
             return None
         normalized_members = []
         for member in members:
-            if not isinstance(member, dict):
+            if (not isinstance(member, list) or len(member) != 2
+                    or isinstance(member[0], bool)
+                    or not isinstance(member[0], int) or member[0] < 0
+                    or member[0] >= len(source_table)
+                    or isinstance(member[1], bool)
+                    or not isinstance(member[1], int) or member[1] < 0):
                 return None
-            source_key = member.get("source_key")
-            source_bone_key = member.get("source_bone_key")
-            bone_id = member.get("bone_id")
-            if (not _model_rig_text(source_key)
-                    or not _model_rig_text(source_bone_key)
-                    or isinstance(bone_id, bool)
-                    or not isinstance(bone_id, int) or bone_id < 0):
-                return None
-            normalized_members.append({
-                "source_key": source_key,
-                "source_bone_key": source_bone_key,
-                "bone_id": bone_id,
-            })
+            bone_id = member[1]
+            normalized_members.append([member[0], bone_id])
         vectors = {
             key: _model_rig_vector(joint.get(key), length)
             for key, length in (("rest_center", 3), ("rest_pivot", 3),
@@ -205,15 +214,51 @@ def _normalized_model_rig(value, *, strict=False):
         normalized_joints.append({
             "joint_id": index,
             "members": normalized_members,
+            "representative_member_index": representative_member_index,
             "parent_id": parent_id,
             **vectors,
+        })
+
+    normalized_edges = []
+    edge_keys = set()
+    for edge in edges:
+        if not isinstance(edge, dict):
+            return None
+        joint_a = edge.get("joint_a")
+        joint_b = edge.get("joint_b")
+        relationship_type = edge.get("relationship_type")
+        edge_strength = edge.get("edge_strength")
+        edge_pivot = _model_rig_vector(edge.get("edge_pivot"), 3)
+        if (isinstance(joint_a, bool) or not isinstance(joint_a, int)
+                or isinstance(joint_b, bool) or not isinstance(joint_b, int)
+                or joint_a < 0 or joint_b < 0 or joint_a >= len(joints)
+                or joint_b >= len(joints) or joint_a == joint_b
+                or relationship_type not in ("source", "attachment")
+                or isinstance(edge_strength, bool)
+                or not isinstance(edge_strength, (int, float))
+                or not math.isfinite(edge_strength) or edge_strength < 0
+                or edge_pivot is None):
+            return None
+        left, right = sorted((joint_a, joint_b))
+        edge_key = (left, right)
+        if edge_key in edge_keys:
+            return None
+        edge_keys.add(edge_key)
+        normalized_edges.append({
+            "joint_a": left,
+            "joint_b": right,
+            "relationship_type": relationship_type,
+            "edge_strength": float(edge_strength),
+            "edge_pivot": edge_pivot,
         })
 
     normalized = {
         "version": MODEL_RIG_VERSION,
         "builder_version": MODEL_RIG_BUILDER_VERSION,
+        "model_reference_radius": float(model_reference_radius),
         "source_table": sources,
         "joints": normalized_joints,
+        "edges": normalized_edges,
     }
     try:
         if len(json.dumps(normalized, ensure_ascii=False)) > MODEL_RIG_MAX_BYTES:
@@ -237,7 +282,7 @@ def load_model_rig(folder_path):
 
 def save_model_rig(folder_path, model_rig):
     """Atomically replace the cached ModelRig sidecar."""
-    normalized = _normalized_model_rig(model_rig, strict=True)
+    normalized = _normalized_model_rig(model_rig)
     if normalized is None:
         return {"saved": False, "error": "Invalid ModelRig metadata."}
     with _LOCK:
@@ -245,27 +290,14 @@ def save_model_rig(folder_path, model_rig):
         temp_path = path + ".tmp"
         try:
             with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
-                json.dump(normalized, fh, indent=2, ensure_ascii=False)
-                fh.write("\n")
+                json.dump(normalized, fh, separators=(",", ":"),
+                          ensure_ascii=False)
             os.replace(temp_path, path)
         except (OSError, TypeError, ValueError) as error:
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-            return {"saved": False, "error": str(error)}
-    return {"saved": True, "path": path, "model_rig": normalized}
-
-
-def clear_model_rig(folder_path):
-    """Remove only the cached ModelRig sidecar."""
-    path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
-    with _LOCK:
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            return {"saved": False}
-        except OSError as error:
             return {"saved": False, "error": str(error)}
     return {"saved": True, "path": path}
 
@@ -553,13 +585,14 @@ def _normalized_humanoid_entry(value, *, strict=False):
                 or not math.isfinite(number)):
             return None
         normalized_semantic[key] = float(number)
+    has_joint_id = "joint_id" in value
     joint_id = value.get("joint_id")
     if (joint_id is not None
             and (isinstance(joint_id, bool) or not isinstance(joint_id, int)
                  or joint_id < 0)):
         return None
     result = {"semantic": normalized_semantic}
-    if joint_id is not None:
+    if has_joint_id:
         result["joint_id"] = joint_id
     return result
 
@@ -576,20 +609,17 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
                 "error": "Humanoid control-rig metadata could not be loaded."}
     controls = {}
     malformed = False
-    rejected_control_keys = set()
-    raw_rejected = value.get("rejected_control_keys", [])
-    if not isinstance(raw_rejected, list):
+    has_builder_version = "model_rig_builder_version" in value
+    builder_version = value.get("model_rig_builder_version")
+    if has_builder_version and (
+            isinstance(builder_version, bool)
+            or not isinstance(builder_version, int)):
         if strict:
             return None
         malformed = True
-        raw_rejected = []
-    for key in raw_rejected:
-        if key not in HUMANOID_CONTROL_KEYS or key in rejected_control_keys:
-            if strict:
-                return None
-            malformed = True
-            continue
-        rejected_control_keys.add(key)
+    if strict and has_builder_version \
+            and builder_version != MODEL_RIG_BUILDER_VERSION:
+        return None
     for key, raw in value["controls"].items():
         if key not in HUMANOID_CONTROL_KEYS:
             malformed = True
@@ -606,18 +636,19 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
                 semantic_only.pop("joint_id", None)
                 entry = _normalized_humanoid_entry(semantic_only)
                 if entry is not None:
+                    # Preserve the fact that this was an explicit mapping so
+                    # the frontend can reject it instead of auto-mapping it.
+                    entry["joint_id"] = None
                     controls[key] = entry
-                rejected_control_keys.add(key)
             continue
         controls[key] = entry
-        if "joint_id" in entry:
-            rejected_control_keys.discard(key)
     if strict and malformed:
         return None
     result = {"version": HUMANOID_CONTROL_RIG_VERSION, "controls": controls}
-    if rejected_control_keys:
-        result["rejected_control_keys"] = sorted(rejected_control_keys,
-                                                   key=HUMANOID_CONTROL_KEYS.index)
+    if strict:
+        result["model_rig_builder_version"] = MODEL_RIG_BUILDER_VERSION
+    elif has_builder_version and isinstance(builder_version, int):
+        result["model_rig_builder_version"] = builder_version
     if malformed:
         result["error"] = "Some humanoid control-rig overrides were ignored."
     return result

@@ -957,13 +957,18 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     },
     components: reconciliation.components || [],
     componentByJointId: reconciliation.componentByJointId || new Map(),
-    centerByJointId: new Map(joints.map(joint => [
-      joint.jointId, joint.restCenter || [0, 0, 0]])),
-    jointPivotByJointId: new Map(joints.map(joint => [
-      joint.jointId, joint.restPivot || joint.restCenter || [0, 0, 0]])),
-    jointPivotByEdgeKey: null,
-    restFrameByJointId: new Map(joints.map(joint => [
-      joint.jointId, cloneRigQuaternion(joint.restFrame)])),
+    centerByJointId: reconciliation.centerByJointId
+      || new Map(joints.map(joint => [
+        joint.jointId, joint.restCenter || [0, 0, 0]])),
+    jointPivotByJointId: reconciliation.jointPivotByJointId
+      || new Map(joints.map(joint => [
+        joint.jointId, joint.restPivot || joint.restCenter || [0, 0, 0]])),
+    jointPivotByEdgeKey: reconciliation.jointPivotByEdgeKey || null,
+    restFrameByJointId: reconciliation.restFrameByJointId
+      ? new Map([...reconciliation.restFrameByJointId].map(([jointId, frame]) =>
+        [jointId, cloneRigQuaternion(frame)]))
+      : new Map(joints.map(joint => [
+        joint.jointId, cloneRigQuaternion(joint.restFrame)])),
     restDirectionByJointId: new Map(),
     restFrameEvidenceByJointId: new Map(),
     restContinuationChildByJointId: new Map(),

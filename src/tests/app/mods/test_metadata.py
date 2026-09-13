@@ -129,6 +129,7 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
 def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path):
     value = {
         "version": 2,
+        "model_rig_builder_version": 1,
         "controls": {
             "leftShoulder": {
                 "semantic": {"sideN": -0.18, "height01": 0.7,
@@ -206,7 +207,7 @@ def test_old_humanoid_control_rig_version_is_ignored():
     }
 
 
-def test_invalid_humanoid_joint_id_is_preserved_as_rejected_mapping():
+def test_invalid_humanoid_joint_id_is_preserved_as_explicit_mapping():
     result = metadata.humanoid_control_rig(data={
         "rig": {"version": 1, "presets": [],
                 "humanoid_control_rig": {
@@ -223,40 +224,42 @@ def test_invalid_humanoid_joint_id_is_preserved_as_rejected_mapping():
         "controls": {"leftHand": {
             "semantic": {"sideN": 0.0, "height01": 0.0,
                           "depthN": 0.0},
+            "joint_id": None,
         }},
-        "rejected_control_keys": ["leftHand"],
         "error": "Some humanoid control-rig overrides were ignored.",
     }
 
 
-def test_model_rig_sidecar_round_trip_and_clear(tmp_path):
+def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
     value = {
         "version": 1,
         "builder_version": 1,
+        "model_reference_radius": 1.25,
         "source_table": [{"source_key": "body|offset=0",
                           "source_file": "Body/Body.buf",
                           "bone_id_offset": 0}],
         "joints": [{
             "joint_id": 0,
-            "members": [{"source_key": "body|offset=0",
-                          "source_bone_key": "body|offset=0#bone=7",
-                          "bone_id": 7}],
+            "members": [[0, 7]],
+            "representative_member_index": 0,
             "parent_id": None,
             "rest_center": [0, 1, 0],
             "rest_pivot": [0, 1, 0],
             "rest_frame": [0, 0, 0, 1],
         }],
+        "edges": [],
     }
     saved = metadata.save_model_rig(str(tmp_path), value)
-    assert saved["saved"] is True
+    assert saved == {"saved": True,
+                     "path": str(tmp_path / metadata.MODEL_RIG_METADATA_NAME)}
     assert metadata.load_model_rig(str(tmp_path)) == value
+    assert json.loads((tmp_path / metadata.MODEL_RIG_METADATA_NAME).read_text(
+        encoding="utf-8")) == value
     assert metadata.save_model_rig(str(tmp_path), {
-        **value, "edges": [], "model_reference_radius": 1.25,
+        **value, "joints": [{**value["joints"][0],
+                              "members": [[0, 7], [0, 8]],
+                              "representative_member_index": 1}],
     })["saved"] is True
-    assert metadata.load_model_rig(str(tmp_path)) == value
-    cleared = metadata.clear_model_rig(str(tmp_path))
-    assert cleared["saved"] is True
-    assert metadata.load_model_rig(str(tmp_path)) is None
 
 
 def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():

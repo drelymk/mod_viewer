@@ -19,7 +19,6 @@ EXPECTED_API_METHODS = {
     "delete_present_position",
     "delete_rig_pose_preset",
     "clear_humanoid_control_rig",
-    "clear_model_rig",
     "delete_toggle",
     "discard_changes",
     "edit_asset_folder",

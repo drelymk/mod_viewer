@@ -7,6 +7,7 @@
 import {
   HUMANOID_CONTROL_RIG_VERSION,
   HUMANOID_CONTROL_KEYS,
+  MODEL_RIG_BUILDER_VERSION,
   humanoidControlPositionToSemantic,
   rebuildHumanoidControlPaths,
 } from './humanoid-control-rig.js';
@@ -35,10 +36,6 @@ function normalizeOverrides(value) {
       || Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION
       || !raw.controls || typeof raw.controls !== 'object') return null;
   const controls = {};
-  const rejectedControlKeys = new Set(
-    Array.isArray(raw.rejected_control_keys)
-      ? raw.rejected_control_keys.filter(key =>
-        HUMANOID_CONTROL_KEYS.includes(key)) : []);
   HUMANOID_CONTROL_KEYS.forEach(key => {
     const entry = raw.controls[key];
     const semantic = entry?.semantic;
@@ -51,17 +48,15 @@ function normalizeOverrides(value) {
         sideN: values[0], height01: values[1], depthN: values[2],
       },
     };
-    if (entry.joint_id !== undefined
-        && Number.isInteger(entry.joint_id) && entry.joint_id >= 0) {
-      controls[key].joint_id = entry.joint_id;
-      rejectedControlKeys.delete(key);
+    if (Object.prototype.hasOwnProperty.call(entry, 'joint_id')) {
+      controls[key].joint_id = Number.isInteger(entry.joint_id)
+        && entry.joint_id >= 0 ? entry.joint_id : null;
     }
   });
-  const normalized = {version: HUMANOID_CONTROL_RIG_VERSION, controls};
-  if (rejectedControlKeys.size) {
-    normalized.rejected_control_keys = HUMANOID_CONTROL_KEYS.filter(key =>
-      rejectedControlKeys.has(key));
-  }
+  const normalized = {version: HUMANOID_CONTROL_RIG_VERSION,
+    model_rig_builder_version: Number.isInteger(
+      raw.model_rig_builder_version) ? raw.model_rig_builder_version : null,
+    controls};
   return normalized;
 }
 
@@ -295,8 +290,6 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
     const modelRig = getModelRig?.();
     if (!automatic || !modelRig) throw new Error('The inferred Rig is not loaded.');
     const controls = {};
-    const rejectedControlKeys = new Set(
-      savedOverrides?.rejected_control_keys || []);
     HUMANOID_CONTROL_KEYS.forEach(key => {
       const draft = state.draftRig?.controls?.[key];
       const position = finitePosition(draft?.position);
@@ -308,17 +301,12 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       const entry = {semantic};
       if (joint) {
         entry.joint_id = Number(joint.jointId);
-        rejectedControlKeys.delete(key);
       }
       if (!sameSemantic(semantic, automatic.controls?.[key]?.semantic)
           || entry.joint_id !== undefined) controls[key] = entry;
     });
-    const value = {version: HUMANOID_CONTROL_RIG_VERSION, controls};
-    if (rejectedControlKeys.size) {
-      value.rejected_control_keys = HUMANOID_CONTROL_KEYS.filter(key =>
-        rejectedControlKeys.has(key));
-    }
-    return value;
+    return {version: HUMANOID_CONTROL_RIG_VERSION,
+      model_rig_builder_version: MODEL_RIG_BUILDER_VERSION, controls};
   }
 
   function queueWrite(operation) {
@@ -344,8 +332,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       const path = currentModPath(getKnownMeshes);
       if (!path) throw new Error('Humanoid Rig persistence is unavailable.');
       const result = await queueWrite(async () => {
-        if (Object.keys(value.controls).length
-            || value.rejected_control_keys?.length) {
+        if (Object.keys(value.controls).length) {
           return persist?.(path, value);
         }
         if (savedOverrides) return clearPersist?.(path);
@@ -354,8 +341,7 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       if (!result?.saved) throw new Error(result?.error
         || 'The Humanoid Rig was not saved.');
       if (requestGeneration !== generation) return {saved: true, stale: true};
-      savedOverrides = Object.keys(value.controls).length
-        || value.rejected_control_keys?.length ? value : null;
+      savedOverrides = Object.keys(value.controls).length ? value : null;
       if (dirtyBeforeSave) {
         await refreshHumanoidRig?.(savedOverrides);
       }

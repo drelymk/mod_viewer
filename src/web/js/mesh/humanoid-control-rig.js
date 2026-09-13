@@ -13,9 +13,11 @@ import {
   buildProportionalHumanoidRig,
   semanticAxesFrame,
 } from './humanoid-proportional-template.js';
+import {MODEL_RIG_BUILDER_VERSION} from './model-rig-persistence.js';
 
 const EPSILON = 1e-8;
 export const HUMANOID_CONTROL_RIG_VERSION = 2;
+export {MODEL_RIG_BUILDER_VERSION};
 const DEFAULT_MAX_POINT_COUNT = 160000;
 const FOOT_SIDE_MIN = 0.025;
 const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
@@ -393,17 +395,23 @@ function cloneControlRig(rig) {
 /** Resolve saved ModelJoint IDs without guessing replacements. */
 export function resolveHumanoidControlMappings({savedOverrides, modelRig} = {}) {
   const result = new Map();
-  const rejectedControlKeys = new Set(
-    Array.isArray(savedOverrides?.rejected_control_keys)
-      ? savedOverrides.rejected_control_keys.filter(key =>
-        CONTROL_KEYS.includes(key)) : []);
+  const rejectedControlKeys = new Set();
   result.rejectedControlKeys = rejectedControlKeys;
   const controls = savedOverrides?.controls;
   if (!controls || typeof controls !== 'object') return result;
+  const builderVersion = savedOverrides?.model_rig_builder_version;
   const usedJoints = new Set();
   CONTROL_KEYS.forEach(controlKey => {
     const raw = controls[controlKey];
-    if (!raw || raw.joint_id === undefined) return;
+    if (!raw || typeof raw !== 'object'
+        || !Object.prototype.hasOwnProperty.call(raw, 'joint_id')) return;
+    // An explicit ID is only meaningful for the ModelRig builder that wrote
+    // it. Missing or stale provenance rejects the mapping and disables the
+    // proximity fallback for this control.
+    if (builderVersion !== MODEL_RIG_BUILDER_VERSION) {
+      rejectedControlKeys.add(controlKey);
+      return;
+    }
     const jointId = Number.isInteger(raw.joint_id) ? raw.joint_id : null;
     if (!Number.isInteger(jointId) || jointId < 0) {
       rejectedControlKeys.add(controlKey);
