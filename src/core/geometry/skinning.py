@@ -121,7 +121,14 @@ def skinning_source_descriptor(source):
         file, offset, source.vertex_vg_file, source.bone_id_namespace)
     if key is None:
         return None
-    descriptor = {"key": key, "file": file, "bone_id_offset": offset}
+    descriptor = {
+        "key": key,
+        "file": file,
+        "bone_id_offset": offset,
+        "bone_ids_model_wide": bool(
+            source.vertex_vg_file
+            and source.bone_id_namespace == "wwmi_vertex_vg"),
+    }
     if source.vertex_vg_file and source.bone_id_namespace != "model":
         descriptor.update({
             "bone_id_namespace": source.bone_id_namespace,

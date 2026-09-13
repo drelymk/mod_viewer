@@ -1976,6 +1976,7 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
         states, knownMeshes, modelWeightState: {
           sourceDescriptors: new Map([['source', {
             sourceFile: 'weights.buf', boneIdOffset: 0,
+            boneIdsModelWide: true,
           }]]),
         }, sourceSkinningRigs,
         ensureRigMeshPrepared: () => true,
@@ -1989,6 +1990,7 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
         memberCount: fallbackRig.influenceGraph.memberCount,
         uniqueMemberCount: fallbackRig.influenceGraph.uniqueMemberCount,
         evidenceMode: fallbackRig.influenceGraph.evidenceMode,
+        boneIdsModelWide: fallbackRig.boneIdsModelWide,
         graphCalls: [...graphCalls],
       };
       graphCalls.length = 0;
@@ -2011,6 +2013,7 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
         "memberCount": 3,
         "uniqueMemberCount": 2,
         "evidenceMode": "vertex",
+        "boneIdsModelWide": True,
         "graphCalls": [
             {"mesh": "first", "evidenceMode": "vertex",
              "surfaceAvailable": True},
@@ -2220,7 +2223,9 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
         rejected: result.reconciliation.rejectedCandidates
           .map(item => item.rejectionReason).filter(Boolean),
         sourceEdgeSupport: result.edges.filter(edge =>
-          edge.relationshipType === 'source').map(edge => edge.sourceSupportCount),
+          edge.relationshipType === 'source')
+          .map(edge => edge.sourceSupportCount),
+        identityMode: result.reconciliation.identityMode,
         cooperativeSame: JSON.stringify({
           joints: cooperative.joints,
           edges: cooperative.edges,
@@ -2243,6 +2248,139 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
     assert result["cooperativeSame"]
     assert all(signature == expected
                for signature, expected in result["jointSignatures"])
+    assert result["identityMode"] == "geometric-reconciliation"
+
+
+def test_model_wide_bone_ids_build_dense_direct_model_rig_and_skip_matching(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const {buildModelRigReconciliation,
+        buildModelRigReconciliationCooperative} = await import(
+        './js/mesh/weight-rig-reconcile.js');
+      const makeRig = (sourceKey, boneIds, links = [], modelWide = true,
+          guardDirect = false) => {
+        const parentById = Object.fromEntries(boneIds.map(id => [id, null]));
+        const childrenById = Object.fromEntries(boneIds.map(id => [id, []]));
+        links.forEach(([parent, child]) => {
+          parentById[child] = parent;
+          childrenById[parent].push(child);
+        });
+        const roots = boneIds.filter(id => parentById[id] === null);
+        const componentByBoneId = Object.fromEntries(boneIds.map(id => {
+          let root = id;
+          while (parentById[root] !== null) root = parentById[root];
+          return [id, roots.indexOf(root)];
+        }));
+        const component = rootId => ({componentId: roots.indexOf(rootId), rootId,
+          nodeIds: boneIds.filter(id => {
+            let current = id;
+            while (parentById[current] !== null) current = parentById[current];
+            return current === rootId;
+          }), parentById, childrenById,
+          depthById: Object.fromEntries(boneIds.map(id => [id, 0])),
+          edges: links.map(([parent, child, score = 1]) => ({
+            boneA: parent, boneB: child, treeEdgeScore: score,
+          }))});
+        const rig = {
+          sourceKey, boneIds, boneIdsModelWide: modelWide,
+          influenceGraph: {
+            nodes: boneIds.map((boneId, index) => ({boneId,
+              weightedCenter: [index, 0, 0], weightedRadius: .1,
+              totalWeight: 1, affectedVertexCount: 10})),
+            relationships: links.map(([boneA, boneB, score = 1]) => ({
+              boneA, boneB, treeEdgeScore: score,
+              jointCenter: [(boneA + boneB) / 2, 0, 0],
+            })),
+          },
+          centerByBoneId: new Map(boneIds.map((boneId, index) =>
+            [boneId, [index, 0, 0]])),
+          jointPivotByBoneId: new Map(boneIds
+            .filter(id => parentById[id] !== null)
+            .map(id => [id, [id, 0, 0]])),
+          restDirectionByBoneId: new Map(boneIds.map(id =>
+            [id, [1, 0, 0]])),
+          restFrameByBoneId: new Map(),
+          restFrameEvidenceByBoneId: new Map(boneIds.map(id => [id, {
+            directionSource: 'child-weighted-center'}])),
+          inferredForest: {
+            components: roots.map(component),
+            componentByBoneId,
+          },
+        };
+        if (guardDirect) Object.defineProperty(rig, 'vertexEvidence', {
+          get() { throw new Error('direct mode must not build samples'); },
+        });
+        return rig;
+      };
+      const rigs = [
+        makeRig('a', [1, 5, 10], [[1, 5, .9], [5, 10, .8]], true, true),
+        makeRig('b', [1, 5, 20], [[1, 5, .7], [5, 20, .6]], true, true),
+        makeRig('c', [1, 30], [[1, 30, .5]], true, true),
+      ];
+      const direct = buildModelRigReconciliation(rigs);
+      const timings = {};
+      const cooperative = await buildModelRigReconciliationCooperative(rigs, {}, {
+        timings,
+      });
+      const snapshot = value => ({
+        jointIds: value.joints.map(joint => joint.jointId),
+        members: value.joints.map(joint => joint.members.map(member =>
+          member.sourceBoneKey)),
+        edges: value.edges.map(edge => [edge.jointA, edge.jointB,
+          edge.relationshipType]),
+        components: value.components.map(component => ({
+          rootId: component.rootId, nodeIds: component.nodeIds,
+          parentById: component.parentById, childrenById: component.childrenById,
+        })),
+        sourceMap: value.sourceBoneToModelJointId,
+      });
+      const samePositionA = makeRig('same-a', [10]);
+      const samePositionB = makeRig('same-b', [11]);
+      samePositionB.centerByBoneId.set(11, [0, 0, 0]);
+      samePositionB.influenceGraph.nodes[0].weightedCenter = [0, 0, 0];
+      const distinct = buildModelRigReconciliation([
+        samePositionA, samePositionB]);
+      const sparse = buildModelRigReconciliation([
+        makeRig('sparse', [0, 4, 57, 376])]);
+      const mixed = buildModelRigReconciliation([
+        makeRig('mixed-wide', [1], [], true),
+        makeRig('mixed-local', [1], [], false),
+      ]);
+      return {
+        direct: snapshot(direct), cooperative: snapshot(cooperative),
+        identityMode: direct.reconciliation.identityMode,
+        uniqueModelBoneIdCount: direct.reconciliation.uniqueModelBoneIdCount,
+        candidateCount: direct.reconciliation.candidateCount,
+        skippedTimings: [timings.sampleBuildMs, timings.spatialIndexMs,
+          timings.crossSourceMatchMs],
+        samePositionCount: distinct.joints.length,
+        samePositionIds: Object.values(distinct.sourceBoneToModelJointId),
+        sparseIds: sparse.joints.map(joint => joint.jointId),
+        sparseCount: sparse.joints.length,
+        mixedIdentityMode: mixed.reconciliation.identityMode,
+      };
+    }""")
+    assert result["identityMode"] == "model-wide-bone-id"
+    assert result["uniqueModelBoneIdCount"] == 5
+    assert result["candidateCount"] == 0
+    assert result["skippedTimings"] == [0, 0, 0]
+    assert result["direct"] == result["cooperative"]
+    assert result["direct"]["jointIds"] == [0, 1, 2, 3, 4]
+    assert result["direct"]["members"] == [
+        ["a#bone=1", "b#bone=1", "c#bone=1"],
+        ["a#bone=5", "b#bone=5"],
+        ["a#bone=10"], ["b#bone=20"], ["c#bone=30"],
+    ]
+    assert result["direct"]["sourceMap"] == {
+        "a#bone=1": 0, "b#bone=1": 0, "c#bone=1": 0,
+        "a#bone=5": 1, "b#bone=5": 1,
+        "a#bone=10": 2, "b#bone=20": 3, "c#bone=30": 4,
+    }
+    assert result["samePositionCount"] == 2
+    assert len(set(result["samePositionIds"])) == 2
+    assert result["sparseIds"] == [0, 1, 2, 3]
+    assert result["sparseCount"] == 4
+    assert result["mixedIdentityMode"] == "geometric-reconciliation"
 
 
 def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(

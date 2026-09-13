@@ -244,13 +244,15 @@ of documentation, comments and tests; use portable fixtures instead.
   attachments conservative; never infer semantic labels such as hair or skirt.
 - Cross-source Rig/Pose reconciliation is a viewer-owned model graph layered
   over the source rigs. Preserve `SourceBoneRef {sourceKey,boneId}` and the
-  canonical `${sourceKey}#bone=${boneId}` key; equal numeric IDs from different
-  sources never merge without geometry/topology evidence, and authored indices
-  and weight buffers are never rewritten. Build model joints from strict
-  mutual-best equivalences, guarded one-member-per-source clusters,
-  topology-assisted propagation and ambiguity rejection. Collapse source edges
-  into a model-level maximum-spanning forest, then add only conservative,
-  cycle-free cross-source attachment edges between component/boundary joints.
+  canonical `${sourceKey}#bone=${boneId}` key; validated VertexVG sources
+  explicitly mark their numeric IDs as model-wide, so an all-VertexVG model
+  may group equal IDs directly while mixed or source-local models retain the
+  geometry/topology evidence requirement. Authored indices and weight buffers
+  are never rewritten. Build model joints from strict mutual-best
+  equivalences, guarded one-member-per-source clusters, topology-assisted
+  propagation and ambiguity rejection. Collapse source edges into a
+  model-level maximum-spanning forest, then add only conservative, cycle-free
+  cross-source attachment edges between component/boundary joints.
 - Cross-source reconciliation connects multiple skinning palettes for inferred
   posing. Because the model-wide inferred hierarchy may differ from each source
   palette's original weighting topology, some cross-source weighted regions can

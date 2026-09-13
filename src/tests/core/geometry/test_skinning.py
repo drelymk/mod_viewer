@@ -254,6 +254,7 @@ def test_resolver_uses_bound_vertex_vg_resource_without_applying_offset():
     assert skinning_source_descriptor(source) == {
         "key": "blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=remap.buf",
         "file": "blend.buf", "bone_id_offset": 142,
+        "bone_ids_model_wide": True,
         "bone_id_namespace": "wwmi_vertex_vg",
         "vertex_vg_source": "remap.buf",
     }
@@ -322,6 +323,7 @@ def test_skinning_source_descriptor_excludes_decoder_details():
         "key": "hair/hairblend.buf|offset=24",
         "file": "Hair/HairBlend.buf",
         "bone_id_offset": 24,
+        "bone_ids_model_wide": False,
     }
 
 
