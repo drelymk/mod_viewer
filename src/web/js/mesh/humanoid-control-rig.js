@@ -13,9 +13,9 @@ import {
   buildProportionalHumanoidRig,
   semanticAxesFrame,
 } from './humanoid-proportional-template.js';
-import {buildJointSignatureIndex} from './weight-rig-presets.js';
 
 const EPSILON = 1e-8;
+export const HUMANOID_CONTROL_RIG_VERSION = 2;
 const DEFAULT_MAX_POINT_COUNT = 160000;
 const FOOT_SIDE_MIN = 0.025;
 const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
@@ -390,31 +390,37 @@ function cloneControlRig(rig) {
   return serializeHumanoidControlRig(rig);
 }
 
-/** Resolve saved stable ModelJoint signatures without guessing replacements. */
+/** Resolve saved ModelJoint IDs without guessing replacements. */
 export function resolveHumanoidControlMappings({savedOverrides, modelRig} = {}) {
   const result = new Map();
+  const rejectedControlKeys = new Set(
+    Array.isArray(savedOverrides?.rejected_control_keys)
+      ? savedOverrides.rejected_control_keys.filter(key =>
+        CONTROL_KEYS.includes(key)) : []);
+  result.rejectedControlKeys = rejectedControlKeys;
   const controls = savedOverrides?.controls;
   if (!controls || typeof controls !== 'object') return result;
-  const lookup = buildJointSignatureIndex(modelRig);
   const usedJoints = new Set();
   CONTROL_KEYS.forEach(controlKey => {
     const raw = controls[controlKey];
-    const signature = typeof raw?.joint_signature === 'string'
-      ? raw.joint_signature : null;
-    if (!signature || lookup.ambiguousSignatures.has(signature)) return;
-    const jointId = lookup.resolvedBySignature.get(signature);
-    if (!Number.isInteger(jointId) || usedJoints.has(jointId)) return;
+    if (!raw || raw.joint_id === undefined) return;
+    const jointId = Number.isInteger(raw.joint_id) ? raw.joint_id : null;
+    if (!Number.isInteger(jointId) || jointId < 0) {
+      rejectedControlKeys.add(controlKey);
+      return;
+    }
+    if (usedJoints.has(jointId)) {
+      rejectedControlKeys.add(controlKey);
+      return;
+    }
     const joint = (modelRig?.joints || []).find(item =>
       Number(item?.jointId) === jointId);
-    if (!joint) return;
+    if (!joint) {
+      rejectedControlKeys.add(controlKey);
+      return;
+    }
     usedJoints.add(jointId);
-    result.set(controlKey, {
-      controlKey,
-      jointId,
-      jointSignature: signature,
-      sourceMembers: [...(joint.members || joint.sourceMembers || [])]
-        .map(member => ({...member})),
-    });
+    result.set(controlKey, {controlKey, jointId});
   });
   return result;
 }
@@ -464,7 +470,8 @@ export function applyHumanoidControlOverrides(options = {}) {
 
 export function validateHumanoidControlOverrides(value) {
   const raw = value?.humanoid_control_rig || value;
-  if (!raw || typeof raw !== 'object' || Number(raw.version) !== 1
+  if (!raw || typeof raw !== 'object'
+      || Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION
       || !raw.controls || typeof raw.controls !== 'object') {
     return {valid: false, error: 'Invalid humanoid control-rig metadata.'};
   }
@@ -477,10 +484,9 @@ export function validateHumanoidControlOverrides(value) {
     if (!validSemantic(entry?.semantic)) {
       return {valid: false, error: 'Invalid humanoid semantic coordinates.'};
     }
-    if (entry.joint_signature !== undefined
-        && (typeof entry.joint_signature !== 'string'
-          || !entry.joint_signature.length)) {
-      return {valid: false, error: 'Invalid humanoid joint signature.'};
+    if (entry.joint_id !== undefined
+        && (!Number.isInteger(entry.joint_id) || entry.joint_id < 0)) {
+      return {valid: false, error: 'Invalid humanoid joint ID.'};
     }
   }
   return {valid: true, error: null};

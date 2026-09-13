@@ -5,6 +5,7 @@
 // candidates; the session owns draft state, hysteresis, and persistence.
 
 import {
+  HUMANOID_CONTROL_RIG_VERSION,
   HUMANOID_CONTROL_KEYS,
   humanoidControlPositionToSemantic,
   rebuildHumanoidControlPaths,
@@ -30,9 +31,14 @@ function finitePosition(value) {
 
 function normalizeOverrides(value) {
   const raw = value?.humanoid_control_rig || value;
-  if (!raw || typeof raw !== 'object' || Number(raw.version) !== 1
+  if (!raw || typeof raw !== 'object'
+      || Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION
       || !raw.controls || typeof raw.controls !== 'object') return null;
   const controls = {};
+  const rejectedControlKeys = new Set(
+    Array.isArray(raw.rejected_control_keys)
+      ? raw.rejected_control_keys.filter(key =>
+        HUMANOID_CONTROL_KEYS.includes(key)) : []);
   HUMANOID_CONTROL_KEYS.forEach(key => {
     const entry = raw.controls[key];
     const semantic = entry?.semantic;
@@ -45,12 +51,18 @@ function normalizeOverrides(value) {
         sideN: values[0], height01: values[1], depthN: values[2],
       },
     };
-    if (typeof entry.joint_signature === 'string'
-        && entry.joint_signature.length > 0) {
-      controls[key].joint_signature = entry.joint_signature;
+    if (entry.joint_id !== undefined
+        && Number.isInteger(entry.joint_id) && entry.joint_id >= 0) {
+      controls[key].joint_id = entry.joint_id;
+      rejectedControlKeys.delete(key);
     }
   });
-  return {version: 1, controls};
+  const normalized = {version: HUMANOID_CONTROL_RIG_VERSION, controls};
+  if (rejectedControlKeys.size) {
+    normalized.rejected_control_keys = HUMANOID_CONTROL_KEYS.filter(key =>
+      rejectedControlKeys.has(key));
+  }
+  return normalized;
 }
 
 function sameSemantic(left, right, tolerance = 1e-7) {
@@ -223,9 +235,6 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
         && !usedByOther.has(Number(candidateJointId))) {
       const mapping = {
         controlKey, jointId: Number(candidateJointId),
-        jointSignature: candidate.signature || null,
-        sourceMembers: [...(candidate.members || candidate.sourceMembers || [])]
-          .map(member => ({...member})),
       };
       state.mappedJointIdByControl.set(controlKey, mapping);
       state.draftRig.controls[controlKey].position = finitePosition(
@@ -286,6 +295,8 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
     const modelRig = getModelRig?.();
     if (!automatic || !modelRig) throw new Error('The inferred Rig is not loaded.');
     const controls = {};
+    const rejectedControlKeys = new Set(
+      savedOverrides?.rejected_control_keys || []);
     HUMANOID_CONTROL_KEYS.forEach(key => {
       const draft = state.draftRig?.controls?.[key];
       const position = finitePosition(draft?.position);
@@ -295,11 +306,19 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       const mapping = state.mappedJointIdByControl.get(key);
       const joint = mapping ? jointFor(modelRig, mapping.jointId) : null;
       const entry = {semantic};
-      if (joint?.signature) entry.joint_signature = joint.signature;
+      if (joint) {
+        entry.joint_id = Number(joint.jointId);
+        rejectedControlKeys.delete(key);
+      }
       if (!sameSemantic(semantic, automatic.controls?.[key]?.semantic)
-          || entry.joint_signature) controls[key] = entry;
+          || entry.joint_id !== undefined) controls[key] = entry;
     });
-    return {version: 1, controls};
+    const value = {version: HUMANOID_CONTROL_RIG_VERSION, controls};
+    if (rejectedControlKeys.size) {
+      value.rejected_control_keys = HUMANOID_CONTROL_KEYS.filter(key =>
+        rejectedControlKeys.has(key));
+    }
+    return value;
   }
 
   function queueWrite(operation) {
@@ -325,7 +344,8 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       const path = currentModPath(getKnownMeshes);
       if (!path) throw new Error('Humanoid Rig persistence is unavailable.');
       const result = await queueWrite(async () => {
-        if (Object.keys(value.controls).length) {
+        if (Object.keys(value.controls).length
+            || value.rejected_control_keys?.length) {
           return persist?.(path, value);
         }
         if (savedOverrides) return clearPersist?.(path);
@@ -334,7 +354,8 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
       if (!result?.saved) throw new Error(result?.error
         || 'The Humanoid Rig was not saved.');
       if (requestGeneration !== generation) return {saved: true, stale: true};
-      savedOverrides = Object.keys(value.controls).length ? value : null;
+      savedOverrides = Object.keys(value.controls).length
+        || value.rejected_control_keys?.length ? value : null;
       if (dirtyBeforeSave) {
         await refreshHumanoidRig?.(savedOverrides);
       }

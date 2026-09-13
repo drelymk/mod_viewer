@@ -557,6 +557,18 @@ class ModPreview:
         folder_path = self._access.mod_folder(folder_path)
         return metadata.clear_humanoid_control_rig(folder_path)
 
+    def load_model_rig(self, folder_path):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.load_model_rig(folder_path)
+
+    def save_model_rig(self, folder_path, model_rig):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.save_model_rig(folder_path, model_rig)
+
+    def clear_model_rig(self, folder_path):
+        folder_path = self._access.mod_folder(folder_path)
+        return metadata.clear_model_rig(folder_path)
+
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):
         folder_path = self._access.mod_folder(folder_path)

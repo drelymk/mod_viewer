@@ -18,6 +18,9 @@ import {
   buildModelRigReconciliationCooperative,
   orientModelRigForest, sourceBoneKey,
 } from './weight-rig-reconcile.js';
+import {
+  hydrateModelRig, loadOrBuildModelRig, serializeModelRig,
+} from './model-rig-persistence.js';
 import {GRAVITY_WORLD_DIRECTION} from './weight-physics.js';
 import {
   buildSelectedWeightMask, normalizeBoneSelection,
@@ -873,6 +876,36 @@ function restoreDefaultModelRigOrientation(rig) {
   return true;
 }
 
+function modelRigFolderPath() {
+  return [...knownMeshes]
+    .find(mesh => mesh?.userData?.modPath)?.userData?.modPath || null;
+}
+
+async function loadPersistedModelRig() {
+  const api = globalThis.window?.pywebview?.api;
+  const path = modelRigFolderPath();
+  if (!path || typeof api?.load_model_rig !== 'function') return null;
+  try {
+    return await api.load_model_rig(path);
+  } catch (_error) {
+    // An unreadable cache is equivalent to a cache miss. The normal
+    // reconciliation path remains the source of truth.
+    return null;
+  }
+}
+
+async function savePersistedModelRig(value) {
+  const api = globalThis.window?.pywebview?.api;
+  const path = modelRigFolderPath();
+  if (!path || typeof api?.save_model_rig !== 'function') return false;
+  try {
+    const result = await api.save_model_rig(path, value);
+    return result?.saved === true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values()], {
     generation = null, isCurrent = () => true,
   } = {}) {
@@ -890,20 +923,31 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
   const previousRootSignatures = new Set(
     modelRigState.explicitRootSignatures);
   if (modelSkinningRig) resetModelPose({request: false});
-  const reconciliation = await buildModelRigReconciliationCooperative(sourceRigs,
-    {}, {
+  const lifecycle = await loadOrBuildModelRig({
+    load: () => loadPersistedModelRig(),
+    hydrate: saved => hydrateModelRig(saved?.model_rig || saved, sourceRigs),
+    build: () => buildModelRigReconciliationCooperative(sourceRigs, {}, {
       budget,
       isCurrent: () => generation === null || isCurrent(),
       timings: performance,
+    }),
   });
+  const reconciliation = lifecycle.modelRig;
+  const hydratedFromCache = lifecycle.hydratedFromCache;
   if (!reconciliation) return null;
-  performance.reconciliationMs = clockNow() - startedAt;
+  performance.modelRigCacheHit = hydratedFromCache;
+  performance.modelRigHydrationMs = hydratedFromCache
+    ? clockNow() - startedAt : 0;
+  performance.reconciliationMs = hydratedFromCache
+    ? 0 : clockNow() - startedAt;
   if (!(await checkpoint())) return null;
   const joints = reconciliation.joints || [];
   const rig = {
     key: 'model-rig',
     sourceKey: 'model-rig',
     sourceRigs: [...sourceRigs],
+    modelReferenceRadius: reconciliation.modelReferenceRadius
+      || reconciliation.reconciliation?.modelReferenceRadius || 0,
     reconciliation,
     joints,
     edges: reconciliation.edges || [],
@@ -951,6 +995,8 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
   // Install provenance-derived edge pivots before capturing the default
   // orientation. Reset Pose must restore the same pivots used on first load.
   rebuildModelRestFrames(rig, rig.inferredForest);
+  const persistedModelRig = !hydratedFromCache
+    ? serializeModelRig(rig, {sourceRigs}) : null;
   rig.defaultComponents = rig.components.map(cloneModelComponent);
   rig.defaultComponentByJointId = new Map(rig.componentByJointId);
   rig.defaultRootIdByComponent = new Map(rig.defaultComponents.map(component => [
@@ -994,6 +1040,10 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
   });
   if (!(await checkpoint())) return null;
   modelSkinningRig = rig;
+  if (persistedModelRig) {
+    performance.modelRigCacheSaved = await savePersistedModelRig(
+      persistedModelRig);
+  }
   buildPrimaryHumanoidRig(rig);
   skinningRuntime.updateModelWeightHeatmap();
   modelRigState.structureRevision = rig.structureRevision;

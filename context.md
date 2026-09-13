@@ -255,9 +255,14 @@ of documentation, comments and tests; use portable fixtures instead.
   posing. Because the model-wide inferred hierarchy may differ from each source
   palette's original weighting topology, some cross-source weighted regions can
   stretch during rotation. This remains a known Rig limitation.
-- Each ModelJoint exposes a stable signature made from its sorted canonical
-  source-bone keys. Runtime joint, component and root indices are ephemeral and
-  must not be persisted as preset identities.
+ - Each ModelJoint exposes a stable signature made from its sorted canonical
+   source-bone keys. The ModelRig builder assigns deterministic zero-based
+   `joint_id` values and persists the necessary joint structure in the separate
+   `.mod_viewer.rig.json` sidecar. A sidecar is reusable when its format,
+   builder version and source table match; automatic asset-change detection is
+   intentionally deferred. Component and root indices remain runtime
+   structure details, while Main Rig control mappings refer to hydrated
+   `joint_id` values and pose presets continue to use signatures.
 - M3 Rig pose presets use the existing per-mod `.mod_viewer.json` under
   `rig.version = 1` with an array of stable-ID records containing only a name,
   explicit root signatures and normalized non-identity local joint quaternions.
@@ -309,10 +314,10 @@ of documentation, comments and tests; use portable fixtures instead.
   instantaneous Physics offsets.
 - The Rig picker maps source influences to model joints. The Rig panel selects
   model joints and displays topology without semantic labels; the combined
-  overlay renders model joints, source edges and distinguishable attachment
-  edges with O(1) Three.js objects. Reconciliation rebuilds on source
-  membership/shape changes and resets pose; model structure revisions do not
-  change for pose, materials, textures, visibility or model turns.
+  overlay renders model joints and topology edges with O(1) Three.js objects.
+  Reconciliation runs only when the sidecar is absent or incompatible and
+  resets pose; model structure revisions do not change for pose, materials,
+  textures, visibility or model turns.
 - The `HumanoidControlRig` is the primary automatic pose skeleton. It fits the
   fixed 16-control topology (Chest/Pelvis/Neck/Head plus bilateral
   Shoulder/Elbow/Hand and Hip/Knee/Foot) from immutable A-pose geometry and
@@ -320,12 +325,13 @@ of documentation, comments and tests; use portable fixtures instead.
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
  - `humanoid-rig-binding.js` uses ordered direct ownership. Explicitly mapped
-   controls claim only their exact ModelJoint; unmapped controls claim nearest
-   point-to-point anchors and then other free joints inside one shared,
-   height-normalized radius. A parent-to-child inheritance pass propagates
-   each direct owner, with direct owners acting as boundaries. No shortest
-   paths, semantic segment fallback, terminal Hand/Foot special case, or
-   global ModelJoint proximity assignment is used.
+   controls claim only their exact ModelJoint; each unmapped control claims at
+   most one nearest point-to-point anchor inside one shared,
+   height-normalized radius. All direct roots are reserved before a
+   parent-to-child inheritance pass walks every descendant branch, with every
+   direct root acting as a boundary. No automatic nearby-joint claiming,
+   shortest paths, semantic segment fallback, terminal Hand/Foot special case,
+   or global ModelJoint proximity assignment is used.
   These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
   Posed absolute driver targets are converted to authored-rest deltas before
   ModelJoint transforms are aliased back to source bones, so directly bound

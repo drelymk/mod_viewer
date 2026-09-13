@@ -19,6 +19,7 @@ from core.textures.color_adjustment import (
 )
 
 METADATA_NAME = ".mod_viewer.json"
+MODEL_RIG_METADATA_NAME = ".mod_viewer.rig.json"
 PRESENT_NAMES_KEY = "__all__"
 _LOCK = threading.RLock()
 
@@ -27,7 +28,13 @@ RIG_METADATA_KEY = "rig"
 RIG_METADATA_VERSION = 1
 RIG_PRESET_NAME_MAX_LENGTH = 80
 RIG_SIGNATURE_MAX_LENGTH = 1024
-HUMANOID_CONTROL_RIG_VERSION = 1
+HUMANOID_CONTROL_RIG_VERSION = 2
+MODEL_RIG_VERSION = 1
+MODEL_RIG_BUILDER_VERSION = 1
+MODEL_RIG_SOURCE_MAX_LENGTH = 1024
+MODEL_RIG_MAX_JOINTS = 250000
+MODEL_RIG_MAX_MEMBERS_PER_JOINT = 256
+MODEL_RIG_MAX_BYTES = 64 * 1024 * 1024
 HUMANOID_CONTROL_KEYS = (
     "chest", "pelvis", "neck", "head", "leftShoulder", "leftElbow", "leftHand",
     "rightShoulder", "rightElbow", "rightHand", "leftHip", "leftKnee",
@@ -100,6 +107,166 @@ def _save(folder_path, data):
         json.dump(data, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     os.replace(temp_path, path)
+    return {"saved": True, "path": path}
+
+
+def _model_rig_text(value, maximum=MODEL_RIG_SOURCE_MAX_LENGTH):
+    return (isinstance(value, str) and bool(value) and len(value) <= maximum
+            and "\x00" not in value)
+
+
+def _model_rig_source_file(value):
+    """Validate a stored source label without allowing a filesystem path."""
+    return (_model_rig_text(value)
+            and not value.startswith(("/", "\\"))
+            and not (len(value) > 1 and value[1] == ":"))
+
+
+def _model_rig_vector(value, length):
+    if not isinstance(value, list) or len(value) != length:
+        return None
+    if any(isinstance(item, bool) or not isinstance(item, (int, float))
+           or not math.isfinite(item) for item in value):
+        return None
+    return [float(item) for item in value]
+
+
+def _normalized_model_rig(value, *, strict=False):
+    if not isinstance(value, dict):
+        return None
+    if value.get("version") != MODEL_RIG_VERSION \
+            or value.get("builder_version") != MODEL_RIG_BUILDER_VERSION:
+        return None
+    source_table = value.get("source_table")
+    joints = value.get("joints")
+    if (not isinstance(source_table, list)
+            or not isinstance(joints, list)
+            or len(joints) > MODEL_RIG_MAX_JOINTS):
+        return None
+
+    sources = []
+    source_keys = set()
+    for source in source_table:
+        if not isinstance(source, dict):
+            return None
+        source_key = source.get("source_key")
+        source_file = source.get("source_file")
+        offset = source.get("bone_id_offset")
+        if (not _model_rig_text(source_key)
+                or not _model_rig_source_file(source_file)
+                or isinstance(offset, bool)
+                or not isinstance(offset, int)):
+            return None
+        if source_key in source_keys:
+            return None
+        source_keys.add(source_key)
+        sources.append({"source_key": source_key, "source_file": source_file,
+                        "bone_id_offset": offset})
+
+    normalized_joints = []
+    for index, joint in enumerate(joints):
+        if (not isinstance(joint, dict)
+                or isinstance(joint.get("joint_id"), bool)
+                or joint.get("joint_id") != index):
+            return None
+        members = joint.get("members")
+        parent_id = joint.get("parent_id")
+        if (not isinstance(members, list)
+                or len(members) > MODEL_RIG_MAX_MEMBERS_PER_JOINT
+                or (parent_id is not None
+                    and (isinstance(parent_id, bool)
+                         or not isinstance(parent_id, int)
+                         or parent_id < 0 or parent_id >= len(joints)
+                         or parent_id == index))):
+            return None
+        normalized_members = []
+        for member in members:
+            if not isinstance(member, dict):
+                return None
+            source_key = member.get("source_key")
+            source_bone_key = member.get("source_bone_key")
+            bone_id = member.get("bone_id")
+            if (not _model_rig_text(source_key)
+                    or not _model_rig_text(source_bone_key)
+                    or isinstance(bone_id, bool)
+                    or not isinstance(bone_id, int) or bone_id < 0):
+                return None
+            normalized_members.append({
+                "source_key": source_key,
+                "source_bone_key": source_bone_key,
+                "bone_id": bone_id,
+            })
+        vectors = {
+            key: _model_rig_vector(joint.get(key), length)
+            for key, length in (("rest_center", 3), ("rest_pivot", 3),
+                                ("rest_frame", 4))}
+        if any(vector is None for vector in vectors.values()):
+            return None
+        normalized_joints.append({
+            "joint_id": index,
+            "members": normalized_members,
+            "parent_id": parent_id,
+            **vectors,
+        })
+
+    normalized = {
+        "version": MODEL_RIG_VERSION,
+        "builder_version": MODEL_RIG_BUILDER_VERSION,
+        "source_table": sources,
+        "joints": normalized_joints,
+    }
+    try:
+        if len(json.dumps(normalized, ensure_ascii=False)) > MODEL_RIG_MAX_BYTES:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return normalized
+
+
+def load_model_rig(folder_path):
+    """Load a validated cached ModelRig sidecar, if one is present."""
+    path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
+    try:
+        if os.path.getsize(path) > MODEL_RIG_MAX_BYTES:
+            return None
+        with open(path, encoding="utf-8") as fh:
+            return _normalized_model_rig(json.load(fh))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def save_model_rig(folder_path, model_rig):
+    """Atomically replace the cached ModelRig sidecar."""
+    normalized = _normalized_model_rig(model_rig, strict=True)
+    if normalized is None:
+        return {"saved": False, "error": "Invalid ModelRig metadata."}
+    with _LOCK:
+        path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
+        temp_path = path + ".tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(normalized, fh, indent=2, ensure_ascii=False)
+                fh.write("\n")
+            os.replace(temp_path, path)
+        except (OSError, TypeError, ValueError) as error:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            return {"saved": False, "error": str(error)}
+    return {"saved": True, "path": path, "model_rig": normalized}
+
+
+def clear_model_rig(folder_path):
+    """Remove only the cached ModelRig sidecar."""
+    path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
+    with _LOCK:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            return {"saved": False}
+        except OSError as error:
+            return {"saved": False, "error": str(error)}
     return {"saved": True, "path": path}
 
 
@@ -386,12 +553,14 @@ def _normalized_humanoid_entry(value, *, strict=False):
                 or not math.isfinite(number)):
             return None
         normalized_semantic[key] = float(number)
-    signature = value.get("joint_signature")
-    if signature is not None and not _valid_rig_signature(signature):
+    joint_id = value.get("joint_id")
+    if (joint_id is not None
+            and (isinstance(joint_id, bool) or not isinstance(joint_id, int)
+                 or joint_id < 0)):
         return None
     result = {"semantic": normalized_semantic}
-    if signature is not None:
-        result["joint_signature"] = signature
+    if joint_id is not None:
+        result["joint_id"] = joint_id
     return result
 
 
@@ -407,18 +576,48 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
                 "error": "Humanoid control-rig metadata could not be loaded."}
     controls = {}
     malformed = False
+    rejected_control_keys = set()
+    raw_rejected = value.get("rejected_control_keys", [])
+    if not isinstance(raw_rejected, list):
+        if strict:
+            return None
+        malformed = True
+        raw_rejected = []
+    for key in raw_rejected:
+        if key not in HUMANOID_CONTROL_KEYS or key in rejected_control_keys:
+            if strict:
+                return None
+            malformed = True
+            continue
+        rejected_control_keys.add(key)
     for key, raw in value["controls"].items():
         if key not in HUMANOID_CONTROL_KEYS:
             malformed = True
+            if strict:
+                return None
             continue
         entry = _normalized_humanoid_entry(raw, strict=strict)
         if entry is None:
             malformed = True
+            if strict:
+                return None
+            if isinstance(raw, dict) and "joint_id" in raw:
+                semantic_only = dict(raw)
+                semantic_only.pop("joint_id", None)
+                entry = _normalized_humanoid_entry(semantic_only)
+                if entry is not None:
+                    controls[key] = entry
+                rejected_control_keys.add(key)
             continue
         controls[key] = entry
+        if "joint_id" in entry:
+            rejected_control_keys.discard(key)
     if strict and malformed:
         return None
     result = {"version": HUMANOID_CONTROL_RIG_VERSION, "controls": controls}
+    if rejected_control_keys:
+        result["rejected_control_keys"] = sorted(rejected_control_keys,
+                                                   key=HUMANOID_CONTROL_KEYS.index)
     if malformed:
         result["error"] = "Some humanoid control-rig overrides were ignored."
     return result

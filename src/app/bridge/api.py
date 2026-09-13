@@ -227,6 +227,15 @@ class ModViewerAPI:
     def clear_humanoid_control_rig(self, folder_path):
         return self._mod_preview.clear_humanoid_control_rig(folder_path)
 
+    def load_model_rig(self, folder_path):
+        return self._mod_preview.load_model_rig(folder_path)
+
+    def save_model_rig(self, folder_path, model_rig):
+        return self._mod_preview.save_model_rig(folder_path, model_rig)
+
+    def clear_model_rig(self, folder_path):
+        return self._mod_preview.clear_model_rig(folder_path)
+
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):
         return self._mod_preview.save_component_material_kind(

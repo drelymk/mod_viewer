@@ -282,7 +282,7 @@ function assignAutomaticAnchors({modelRig, controlRig, height, radius,
           winner, null));
         state.source = 'automatic';
         state.anchorJointId = jointId;
-        state.directJointIds.push(jointId);
+        state.distanceRatio = winner.distanceRatio;
       }
       nextCandidateByControl.set(winner.controlKey,
         (nextCandidateByControl.get(winner.controlKey) || 0) + 1);
@@ -295,47 +295,34 @@ function assignAutomaticAnchors({modelRig, controlRig, height, radius,
   }
 }
 
-function assignAutomaticNearbyJoints({modelRig, controlRig, height, radius,
-    automaticControls, directOwnerByJointId, controlState}) {
-  allJointIds(modelRig).filter(jointId => !directOwnerByJointId.has(jointId))
-    .forEach(jointId => {
-      const candidates = automaticControls.map(controlKey =>
-        pointJointCandidate(modelRig, controlRig, controlKey, jointId, height))
-        .filter(candidate => candidate
-          && candidate.distanceRatio <= radius + EPSILON)
-        .sort((left, right) => left.distanceRatio - right.distanceRatio
-          || controlOrder(left.controlKey) - controlOrder(right.controlKey));
-      const winner = candidates[0];
-      if (!winner) return;
-      const state = controlState.get(winner.controlKey);
-      directOwnerByJointId.set(jointId, directOwnerFor(
-        winner.controlKey, 'automatic', 'automatic_control_radius', winner,
-        state.anchorJointId));
-      state.directJointIds.push(jointId);
-    });
-}
-
 function inheritedOwners(modelRig, directOwnerByJointId) {
   const ownerByJointId = new Map(directOwnerByJointId);
   const visited = new Set();
 
   function walk(component, jointId, parentOwner = null, parentId = null) {
-    const id = numberId(jointId);
-    if (id === null || visited.has(id)) return;
-    visited.add(id);
-    const directOwner = directOwnerByJointId.get(id);
-    const owner = directOwner || parentOwner;
-    if (owner && !directOwner) {
-      ownerByJointId.set(id, {
-        ...owner,
-        bindingMethod: 'inherited_control',
-        inheritedFromJointId: numberId(parentId),
-      });
+    const stack = [{jointId, parentOwner, parentId}];
+    while (stack.length) {
+      const current = stack.pop();
+      const id = numberId(current.jointId);
+      if (id === null || visited.has(id)) continue;
+      visited.add(id);
+      const directOwner = directOwnerByJointId.get(id);
+      const owner = directOwner || current.parentOwner;
+      if (owner && !directOwner) {
+        ownerByJointId.set(id, {
+          ...owner,
+          bindingMethod: 'inherited_control',
+          inheritedFromJointId: numberId(current.parentId),
+        });
+      }
+      const nextParentOwner = owner
+        ? {...owner, jointId: id} : null;
+      const children = childIdsForComponent(component, id);
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push({jointId: children[index], parentOwner: nextParentOwner,
+          parentId: id});
+      }
     }
-    const nextParentOwner = owner
-      ? {...owner, jointId: id} : null;
-    childIdsForComponent(component, id).forEach(childId =>
-      walk(component, childId, nextParentOwner, id));
   }
 
   (modelRig?.components || []).forEach(component => {
@@ -379,8 +366,9 @@ function ownershipDiagnostics(controlState, directOwnerByJointId,
       controlKey,
       source,
       anchorJointId: state.anchorJointId ?? null,
-      directJointIds: [...state.directJointIds].sort((left, right) => left - right),
-      inheritedJointCount: inheritedCountByControl.get(controlKey) || 0,
+      rootJointId: state.anchorJointId ?? null,
+      distanceRatio: state.distanceRatio ?? null,
+      descendantCount: inheritedCountByControl.get(controlKey) || 0,
     };
   });
   return {
@@ -388,7 +376,7 @@ function ownershipDiagnostics(controlState, directOwnerByJointId,
       .filter(state => state.source === 'mapped').length,
     automaticControlCount,
     unresolvedControlCount,
-    directJointCount: directOwnerByJointId.size,
+    directRootCount: directOwnerByJointId.size,
     inheritedJointCount: [...ownerByJointId.values()]
       .filter(owner => owner.bindingMethod === 'inherited_control').length,
     unownedJointCount: unboundJointIds.length,
@@ -426,7 +414,7 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
   const controlState = new Map(CONTROL_ORDER.map(controlKey => [controlKey, {
     source: 'unresolved',
     anchorJointId: null,
-    directJointIds: [],
+    distanceRatio: null,
   }]));
   const mapped = mappedControlEntries(controlMappings);
 
@@ -441,28 +429,24 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
     const state = controlState.get(controlKey);
     state.source = 'mapped';
     state.anchorJointId = jointId;
-    state.directJointIds.push(jointId);
   });
 
+  const rejectedControlKeys = controlMappings?.rejectedControlKeys
+    instanceof Set ? controlMappings.rejectedControlKeys : new Set();
   const automaticControls = CONTROL_ORDER.filter(controlKey =>
-    controlState.get(controlKey).anchorJointId === null);
+    controlState.get(controlKey).anchorJointId === null
+      && !rejectedControlKeys.has(controlKey));
 
   // Phase B: resolve unmapped controls to unique point-to-point anchors.
   assignAutomaticAnchors({modelRig, controlRig, height,
     radius: pointDistanceRatio, automaticControls,
     directOwnerByJointId, controlState});
 
-  // Phase C: let automatic controls claim other free joints only inside the
-  // same point-to-point radius used for anchor resolution.
-  assignAutomaticNearbyJoints({modelRig, controlRig, height,
-    radius: pointDistanceRatio, automaticControls,
-    directOwnerByJointId, controlState});
-
-  // Phase D: propagate direct ownership through the actual ModelRig hierarchy.
+  // Phase C: propagate direct ownership through the actual ModelRig hierarchy.
   // Direct owners are boundaries; no path or geometry is invented here.
   const ownerByJointId = inheritedOwners(modelRig, directOwnerByJointId);
 
-  // Phase E: create the existing driver-relative transforms for every owner.
+  // Phase D: create the existing driver-relative transforms for every owner.
   const jointBindings = new Map();
   ownerByJointId.forEach((owner, jointId) => {
     const binding = directBindingFor(modelRig, jointId, drivers, owner);

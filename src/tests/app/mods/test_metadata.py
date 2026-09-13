@@ -127,14 +127,13 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
 
 
 def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path):
-    signature = '["body#bone=7"]'
     value = {
-        "version": 1,
+        "version": 2,
         "controls": {
             "leftShoulder": {
                 "semantic": {"sideN": -0.18, "height01": 0.7,
                               "depthN": 0.01},
-                "joint_signature": signature,
+                "joint_id": 17,
             },
         },
     }
@@ -162,14 +161,14 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
 
 
 @pytest.mark.parametrize("invalid", [
-    {"version": 2, "controls": {}},
+    {"version": 3, "controls": {}},
     {"version": 1, "controls": {"unknown": {
         "semantic": {"sideN": 0, "height01": 0, "depthN": 0}}}},
     {"version": 1, "controls": {"chest": {
         "semantic": {"sideN": True, "height01": 0, "depthN": 0}}}},
     {"version": 1, "controls": {"chest": {
         "semantic": {"sideN": 0, "height01": 0, "depthN": 0},
-        "joint_signature": "not-json"}}},
+        "joint_id": -1}}},
 ])
 def test_save_humanoid_control_rig_rejects_malformed_values(tmp_path, invalid):
     result = metadata.save_humanoid_control_rig(str(tmp_path), invalid)
@@ -187,6 +186,77 @@ def test_malformed_humanoid_rig_does_not_hide_valid_pose_presets():
         },
     })
     assert result["presets"][0]["id"] == "pose-1"
+
+
+def test_old_humanoid_control_rig_version_is_ignored():
+    result = metadata.humanoid_control_rig(data={
+        "rig": {"version": 1, "presets": [],
+                "humanoid_control_rig": {
+                    "version": 1,
+                    "controls": {"leftFoot": {
+                        "semantic": {"sideN": 0, "height01": 0,
+                                      "depthN": 0},
+                        "joint_signature": '["old#bone=49"]',
+                    }},
+                }},
+    })
+    assert result == {
+        "version": 2, "controls": {},
+        "error": "Humanoid control-rig metadata could not be loaded.",
+    }
+
+
+def test_invalid_humanoid_joint_id_is_preserved_as_rejected_mapping():
+    result = metadata.humanoid_control_rig(data={
+        "rig": {"version": 1, "presets": [],
+                "humanoid_control_rig": {
+                    "version": 2,
+                    "controls": {"leftHand": {
+                        "semantic": {"sideN": 0, "height01": 0,
+                                      "depthN": 0},
+                        "joint_id": -1,
+                    }},
+                }},
+    })
+    assert result == {
+        "version": 2,
+        "controls": {"leftHand": {
+            "semantic": {"sideN": 0.0, "height01": 0.0,
+                          "depthN": 0.0},
+        }},
+        "rejected_control_keys": ["leftHand"],
+        "error": "Some humanoid control-rig overrides were ignored.",
+    }
+
+
+def test_model_rig_sidecar_round_trip_and_clear(tmp_path):
+    value = {
+        "version": 1,
+        "builder_version": 1,
+        "source_table": [{"source_key": "body|offset=0",
+                          "source_file": "Body/Body.buf",
+                          "bone_id_offset": 0}],
+        "joints": [{
+            "joint_id": 0,
+            "members": [{"source_key": "body|offset=0",
+                          "source_bone_key": "body|offset=0#bone=7",
+                          "bone_id": 7}],
+            "parent_id": None,
+            "rest_center": [0, 1, 0],
+            "rest_pivot": [0, 1, 0],
+            "rest_frame": [0, 0, 0, 1],
+        }],
+    }
+    saved = metadata.save_model_rig(str(tmp_path), value)
+    assert saved["saved"] is True
+    assert metadata.load_model_rig(str(tmp_path)) == value
+    assert metadata.save_model_rig(str(tmp_path), {
+        **value, "edges": [], "model_reference_radius": 1.25,
+    })["saved"] is True
+    assert metadata.load_model_rig(str(tmp_path)) == value
+    cleared = metadata.clear_model_rig(str(tmp_path))
+    assert cleared["saved"] is True
+    assert metadata.load_model_rig(str(tmp_path)) is None
 
 
 def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():
