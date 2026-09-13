@@ -1105,20 +1105,133 @@ function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = [],
     bySource.set(evidence.sourceKey, entries);
   }
   const candidates = [];
+  const crossRecordsBySourcePair = new Map();
+  const crossRightKeysByLeftKey = new Map();
+  for (const record of crossEvidenceByPair?.values?.() || []) {
+    const leftKey = record.leftSourceBoneKey;
+    const rightKey = record.rightSourceBoneKey;
+    if (!leftKey || !rightKey) continue;
+    const sourcePair = [sourceKeyFromBoneKey(leftKey),
+      sourceKeyFromBoneKey(rightKey)].sort().join('|');
+    const records = crossRecordsBySourcePair.get(sourcePair) || [];
+    records.push(record);
+    crossRecordsBySourcePair.set(sourcePair, records);
+    const leftRights = crossRightKeysByLeftKey.get(leftKey) || new Set();
+    leftRights.add(rightKey);
+    crossRightKeysByLeftKey.set(leftKey, leftRights);
+    const rightRights = crossRightKeysByLeftKey.get(rightKey) || new Set();
+    rightRights.add(leftKey);
+    crossRightKeysByLeftKey.set(rightKey, rightRights);
+  }
+  const maximumGeometryFallbacks = 8;
+  const candidateDistance = Math.max(EPSILON,
+    referenceRadius * CROSS_SOURCE_CANDIDATE_DISTANCE);
+  const cellKey = point => [
+    Math.floor(point.x / candidateDistance),
+    Math.floor(point.y / candidateDistance),
+    Math.floor(point.z / candidateDistance),
+  ].join(':');
+  const cellsFor = entries => {
+    const cells = new Map();
+    entries.forEach(entry => {
+      const point = evidenceVector(entry, '_weightedCenterVector',
+        'weightedCenter');
+      if (!point) return;
+      const bucket = cells.get(cellKey(point)) || [];
+      bucket.push(entry);
+      cells.set(cellKey(point), bucket);
+    });
+    return cells;
+  };
+  const nearby = (cells, point) => {
+    const origin = [
+      Math.floor(point.x / candidateDistance),
+      Math.floor(point.y / candidateDistance),
+      Math.floor(point.z / candidateDistance),
+    ];
+    const result = [];
+    for (let x = -1; x <= 1; x += 1) {
+      for (let y = -1; y <= 1; y += 1) {
+        for (let z = -1; z <= 1; z += 1) {
+          result.push(...(cells.get([
+            origin[0] + x, origin[1] + y, origin[2] + z,
+          ].join(':')) || []));
+        }
+      }
+    }
+    return result;
+  };
   const sources = [...bySource.keys()].sort();
   for (let leftIndex = 0; leftIndex < sources.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < sources.length; rightIndex += 1) {
       const leftEntries = bySource.get(sources[leftIndex]);
       const rightEntries = bySource.get(sources[rightIndex]);
+      const rightCells = cellsFor(rightEntries);
+      const sourcePair = [sources[leftIndex], sources[rightIndex]].join('|');
+      const crossRecords = crossRecordsBySourcePair.get(sourcePair) || [];
+      const crossKeys = new Set(crossRecords.map(record =>
+        crossPairKey(record.leftSourceBoneKey, record.rightSourceBoneKey)));
+      const crossCandidates = new Map();
+      crossRecords.forEach(record => {
+        let left = evidenceByKey.get(record.leftSourceBoneKey);
+        let right = evidenceByKey.get(record.rightSourceBoneKey);
+        if (left?.sourceKey !== sources[leftIndex]
+            || right?.sourceKey !== sources[rightIndex]) {
+          [left, right] = [right, left];
+        }
+        if (!left || !right) return;
+        const key = crossPairKey(left.sourceBoneKey, right.sourceBoneKey);
+        if (crossCandidates.has(key)) return;
+        const candidate = candidateFor(left, right, evidenceByKey,
+          crossEvidenceByPair, {
+            referenceRadius,
+            semanticBySourceBoneKey: options.semanticBySourceBoneKey,
+          });
+        if (candidate) crossCandidates.set(key, candidate);
+      });
+      candidates.push(...crossCandidates.values());
+      // Cross-source vertex evidence is the authoritative pairing lane for
+      // this source pair. Geometry-only fallbacks are needed only when that
+      // lane has no records, where the spatial index keeps the search bounded.
+      if (crossRecords.length) continue;
       for (const left of leftEntries) {
-        for (const right of rightEntries) {
+        const leftPoint = evidenceVector(left, '_weightedCenterVector',
+          'weightedCenter');
+        const possibleRights = leftPoint
+          ? nearby(rightCells, leftPoint) : rightEntries;
+        const crossRights = crossRightKeysByLeftKey.get(left.sourceBoneKey)
+          || new Set();
+        const fallback = [];
+        for (const right of possibleRights) {
+          if (crossRights.has(right.sourceBoneKey)) continue;
+          const rightPoint = evidenceVector(right, '_weightedCenterVector',
+            'weightedCenter');
+          const distance = leftPoint && rightPoint
+            ? leftPoint.distanceToSquared(rightPoint) : Infinity;
+          if (fallback.length < maximumGeometryFallbacks) {
+            fallback.push({right, distance});
+            continue;
+          }
+          let worst = 0;
+          for (let index = 1; index < fallback.length; index += 1) {
+            if (fallback[index].distance > fallback[worst].distance) {
+              worst = index;
+            }
+          }
+          if (distance < fallback[worst].distance) {
+            fallback[worst] = {right, distance};
+          }
+        }
+        fallback.forEach(({right}) => {
+          const key = crossPairKey(left.sourceBoneKey, right.sourceBoneKey);
+          if (crossKeys.has(key)) return;
           const candidate = candidateFor(left, right, evidenceByKey,
             crossEvidenceByPair, {
             referenceRadius,
             semanticBySourceBoneKey: options.semanticBySourceBoneKey,
           });
           if (candidate) candidates.push(candidate);
-        }
+        });
       }
     }
   }
@@ -1291,24 +1404,32 @@ function pathBetweenSourceBones(startKey, endKey, evidenceByKey) {
   if (sourceKeyFromBoneKey(startKey) !== sourceKeyFromBoneKey(endKey)) {
     return null;
   }
-  const previous = new Map([[startKey, null]]);
-  const queue = [startKey];
-  while (queue.length) {
-    const current = queue.shift();
-    if (current === endKey) break;
-    const evidence = evidenceByKey.get(current);
-    for (const neighborId of evidence?.neighborBoneIds || []) {
-      const neighborKey = sourceBoneKey(evidence.sourceKey, neighborId);
-      if (previous.has(neighborKey)) continue;
-      previous.set(neighborKey, current);
-      queue.push(neighborKey);
-    }
+  const parentKey = key => {
+    const evidence = evidenceByKey.get(key);
+    const parentId = Number(evidence?.parentBoneId);
+    return Number.isFinite(parentId)
+      ? sourceBoneKey(evidence.sourceKey, parentId) : null;
+  };
+  const leftPath = [];
+  const leftAncestors = new Map();
+  let leftKey = startKey;
+  while (leftKey !== null && !leftAncestors.has(leftKey)) {
+    leftAncestors.set(leftKey, leftPath.length);
+    leftPath.push(leftKey);
+    leftKey = parentKey(leftKey);
   }
-  if (!previous.has(endKey)) return null;
-  const path = [];
-  for (let current = endKey; current !== null;
-       current = previous.get(current)) path.push(current);
-  return path.reverse();
+  const rightPath = [];
+  const rightVisited = new Set();
+  let rightKey = endKey;
+  while (rightKey !== null && !rightVisited.has(rightKey)
+      && !leftAncestors.has(rightKey)) {
+    rightVisited.add(rightKey);
+    rightPath.push(rightKey);
+    rightKey = parentKey(rightKey);
+  }
+  if (rightKey === null || !leftAncestors.has(rightKey)) return null;
+  return leftPath.slice(0, leftAncestors.get(rightKey) + 1)
+    .concat(rightPath.reverse());
 }
 
 function matchedSourcePairs(unionFind) {
@@ -1639,7 +1760,19 @@ function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
 function sourceModelEdges(sourceRigs, keyToJoint) {
   const edgeMap = new Map();
   for (const rig of sourceRigs) {
+    const relationshipByPair = new Map(
+      (rig.influenceGraph?.relationships || []).map(relationship => {
+        const left = Number(relationship.boneA);
+        const right = Number(relationship.boneB);
+        return [`${Math.min(left, right)}:${Math.max(left, right)}`,
+          relationship];
+      }));
     for (const component of rig?.inferredForest?.components || []) {
+      const sourceEdgeByPair = new Map((component.edges || []).map(edge => {
+        const left = Number(edge.boneA);
+        const right = Number(edge.boneB);
+        return [`${Math.min(left, right)}:${Math.max(left, right)}`, edge];
+      }));
       const parentById = component.parentById || {};
       for (const [childValue, parentValue] of Object.entries(parentById)) {
         if (parentValue === null || parentValue === undefined) continue;
@@ -1659,19 +1792,10 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           sourceEdges: [], combinedTreeScore: 0,
           relationshipType: 'source',
         };
-        const sourceEdge = (component.edges || []).find(candidate => {
-          const a = Number(candidate.boneA);
-          const b = Number(candidate.boneB);
-          return (a === parentBoneId && b === childBoneId)
-            || (a === childBoneId && b === parentBoneId);
-        });
-        const sourceRelationship = (rig.influenceGraph?.relationships || [])
-          .find(candidate => {
-            const a = Number(candidate.boneA);
-            const b = Number(candidate.boneB);
-            return (a === parentBoneId && b === childBoneId)
-              || (a === childBoneId && b === parentBoneId);
-          });
+        const sourcePair = `${Math.min(parentBoneId, childBoneId)}:${Math.max(
+          parentBoneId, childBoneId)}`;
+        const sourceEdge = sourceEdgeByPair.get(sourcePair);
+        const sourceRelationship = relationshipByPair.get(sourcePair);
         const treeScore = edgeScore(sourceEdge);
         edge.sourceEdges.push({
           sourceKey: String(rig.sourceKey),
@@ -1726,16 +1850,24 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
   });
   adjacency.forEach(items => items.sort((left, right) =>
     left.other - right.other));
+  const edgeByPair = new Map(edges.map(edge => [
+    `${Math.min(edge.jointA, edge.jointB)}:${Math.max(edge.jointA, edge.jointB)}`,
+    edge,
+  ]));
   const componentById = new Map();
   const components = [];
   const unseen = new Set(joints.map(joint => joint.jointId));
+  const jointIds = joints.map(joint => joint.jointId);
+  let startIndex = 0;
   while (unseen.size) {
-    const start = Math.min(...unseen);
+    while (!unseen.has(jointIds[startIndex])) startIndex += 1;
+    const start = jointIds[startIndex];
+    startIndex += 1;
     const members = [];
     const queue = [start];
     unseen.delete(start);
-    while (queue.length) {
-      const current = queue.shift();
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+      const current = queue[queueIndex];
       members.push(current);
       (adjacency.get(current) || []).forEach(item => {
         if (!unseen.has(item.other)) return;
@@ -1751,14 +1883,10 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
     const parentById = {[rootId]: null};
     const childrenById = {[rootId]: []};
     const depthById = {[rootId]: 0};
-    const edgeByPair = new Map(edges.map(edge => [
-      `${Math.min(edge.jointA, edge.jointB)}:${Math.max(edge.jointA, edge.jointB)}`,
-      edge,
-    ]));
     const walk = [rootId];
     const visited = new Set([rootId]);
-    while (walk.length) {
-      const parent = walk.shift();
+    for (let walkIndex = 0; walkIndex < walk.length; walkIndex += 1) {
+      const parent = walk[walkIndex];
       (adjacency.get(parent) || []).forEach(item => {
         if (visited.has(item.other)) return;
         visited.add(item.other);
@@ -1844,8 +1972,8 @@ function orientComponentFromRoot(component, rootId) {
   const queue = Number.isFinite(root) ? [root] : [];
   const visited = new Set(queue);
   if (Number.isFinite(root)) depthById[root] = 0;
-  while (queue.length) {
-    const parent = queue.shift();
+  for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+    const parent = queue[queueIndex];
     (adjacency.get(parent) || []).forEach(child => {
       if (visited.has(child)) return;
       visited.add(child);
@@ -1940,13 +2068,17 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
 
   const unseen = new Set(componentById.keys());
   const orientedGroups = [];
+  const componentIds = [...componentById.keys()];
+  let startIndex = 0;
   while (unseen.size) {
-    const start = Math.min(...unseen);
+    while (!unseen.has(componentIds[startIndex])) startIndex += 1;
+    const start = componentIds[startIndex];
+    startIndex += 1;
     const groupIds = [];
     const queue = [start];
     unseen.delete(start);
-    while (queue.length) {
-      const current = queue.shift();
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+      const current = queue[queueIndex];
       groupIds.push(current);
       (adjacency.get(current) || []).forEach(item => {
         const other = item.targetComponentId === current
@@ -1971,8 +2103,8 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
     if (host) {
       oriented.set(host.componentId, cloneForestComponent(host));
       const pending = [host.componentId];
-      while (pending.length) {
-        const parentComponentId = pending.shift();
+      for (let pendingIndex = 0; pendingIndex < pending.length; pendingIndex += 1) {
+        const parentComponentId = pending[pendingIndex];
         (outgoing.get(parentComponentId) || []).forEach(item => {
           if (!groupSet.has(item.accessoryComponentId)
               || oriented.has(item.accessoryComponentId)) return;
@@ -2027,8 +2159,8 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
     if (Number.isFinite(rootId) && Object.hasOwn(depthById, rootId)) {
       depthById[rootId] = 0;
       const pending = [rootId];
-      while (pending.length) {
-        const parent = pending.shift();
+      for (let pendingIndex = 0; pendingIndex < pending.length; pendingIndex += 1) {
+        const parent = pending[pendingIndex];
         (childrenById[parent] || []).forEach(child => {
           if (depthById[child] !== null) return;
           depthById[child] = depthById[parent] + 1;

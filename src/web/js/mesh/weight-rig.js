@@ -1238,8 +1238,8 @@ export function orientTree(treeEdges, rootId) {
   if (Number.isFinite(root)) {
     const queue = [root];
     depthById[root] = 0;
-    while (queue.length) {
-      const current = queue.shift();
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+      const current = queue[queueIndex];
       const depth = depthById[current];
       (adjacency.get(current) || []).forEach(neighbor => {
         if (depthById[neighbor] !== null) return;
@@ -1273,8 +1273,8 @@ function connectedNodeComponents(nodes, edges) {
     const component = [];
     const queue = [start];
     seen.add(start);
-    while (queue.length) {
-      const current = queue.shift();
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+      const current = queue[queueIndex];
       component.push(current);
       for (const neighbor of adjacency.get(current) || []) {
         if (seen.has(neighbor)) continue;
@@ -1406,27 +1406,64 @@ function componentAdjacency(nodeIds, edges) {
   return adjacency;
 }
 
-function distanceFrom(adjacency, startId) {
-  const distance = new Map([[startId, 0]]);
-  const queue = [startId];
-  while (queue.length) {
-    const current = queue.shift();
-    for (const neighbor of adjacency.get(current) || []) {
-      if (distance.has(neighbor)) continue;
-      distance.set(neighbor, distance.get(current) + 1);
-      queue.push(neighbor);
+function distanceSumsInTree(nodeIds, adjacency) {
+  const result = new Map();
+  const visited = new Set();
+  for (const startId of nodeIds) {
+    if (visited.has(startId)) continue;
+    const parent = new Map([[startId, null]]);
+    const depth = new Map([[startId, 0]]);
+    const order = [startId];
+    visited.add(startId);
+    for (let index = 0; index < order.length; index += 1) {
+      const current = order[index];
+      for (const neighbor of adjacency.get(current) || []) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        parent.set(neighbor, current);
+        depth.set(neighbor, depth.get(current) + 1);
+        order.push(neighbor);
+      }
     }
+    const subtreeSize = new Map(order.map(id => [id, 1]));
+    const rootDistanceSum = order.reduce(
+      (sum, id) => sum + depth.get(id), 0);
+    const sums = new Map([[startId, rootDistanceSum]]);
+    for (let index = order.length - 1; index > 0; index -= 1) {
+      const id = order[index];
+      const parentId = parent.get(id);
+      subtreeSize.set(parentId, subtreeSize.get(parentId)
+        + subtreeSize.get(id));
+    }
+    const componentSize = order.length;
+    for (const id of order) {
+      const parentId = parent.get(id);
+      if (parentId === null) continue;
+      sums.set(id, sums.get(parentId)
+        + componentSize - 2 * subtreeSize.get(id));
+    }
+    sums.forEach((sum, id) => result.set(id, sum));
   }
-  return distance;
+  return result;
 }
 
-function nodeEvidenceScore(node, adjacency, edges) {
-  const distances = distanceFrom(adjacency, node.boneId);
-  const distanceSum = [...distances.values()].reduce((sum, value) => sum + value, 0);
+function edgeStrengthByNode(nodeIds, edges) {
+  const result = new Map(nodeIds.map(id => [id, 0]));
+  for (const edge of edges || []) {
+    const score = treeEdgeScore(edge);
+    const left = Number(edge.boneA);
+    const right = Number(edge.boneB);
+    if (result.has(left)) result.set(left, result.get(left) + score);
+    if (result.has(right)) result.set(right, result.get(right) + score);
+  }
+  return result;
+}
+
+function nodeEvidenceScore(node, adjacency, distanceSums,
+    edgeStrengths) {
+  const distanceSum = distanceSums.get(node.boneId) || 0;
   const centrality = 1 / (1 + distanceSum);
-  const edgeStrength = (edges || []).filter(edge =>
-    Number(edge.boneA) === node.boneId || Number(edge.boneB) === node.boneId)
-    .reduce((sum, edge) => sum + treeEdgeScore(edge), 0);
+  const edgeStrength = edgeStrengths.get(node.boneId) || 0;
   // Each term is source-local.  The raw values are normalized by the caller's
   // component maxima so adding a high-ID bone cannot change the result.
   return {centrality, affected: Number(
@@ -1438,9 +1475,12 @@ function nodeEvidenceScore(node, adjacency, edges) {
 function chooseRoot(nodeIds, nodes, edges) {
   const nodeById = new Map((nodes || []).map(node => [Number(node.boneId), node]));
   const adjacency = componentAdjacency(nodeIds, edges);
+  const distanceSums = distanceSumsInTree(nodeIds, adjacency);
+  const edgeStrengths = edgeStrengthByNode(nodeIds, edges);
   const evidence = nodeIds.map(id => ({
     id,
-    ...nodeEvidenceScore(nodeById.get(id) || {boneId: id}, adjacency, edges),
+    ...nodeEvidenceScore(nodeById.get(id) || {boneId: id}, adjacency,
+      distanceSums, edgeStrengths),
   }));
   const max = field => Math.max(...evidence.map(item => Number(item[field]) || 0), 1);
   const score = item => (
