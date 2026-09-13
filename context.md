@@ -319,12 +319,13 @@ of documentation, comments and tests; use portable fixtures instead.
   semantic orientation. Edit Rig always starts from the model's rest pose;
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
-- `humanoid-rig-binding.js` treats saved ModelJoint mappings as explicit
-  deformation overrides. Explicit mapped controls and shortest paths claim
-  their ModelJoints first; only a fully mapped limb's terminal Hand/Foot claims
-  its descendant subtree, with another explicit mapping acting as a boundary.
-  Every remaining ModelJoint uses the nearest valid, height-normalized driver
-  segment within the broad geometric limit and narrow lateral-width gate.
+ - `humanoid-rig-binding.js` uses ordered direct ownership. Explicitly mapped
+   controls claim only their exact ModelJoint; unmapped controls claim nearest
+   point-to-point anchors and then other free joints inside one shared,
+   height-normalized radius. A parent-to-child inheritance pass propagates
+   each direct owner, with direct owners acting as boundaries. No shortest
+   paths, semantic segment fallback, terminal Hand/Foot special case, or
+   global ModelJoint proximity assignment is used.
   These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
   Posed absolute driver targets are converted to authored-rest deltas before
   ModelJoint transforms are aliased back to source bones, so directly bound

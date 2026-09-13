@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. Explicit mappings, complete
-// terminal descendant subtrees and mapped paths claim deformation joints;
-// every other ModelJoint uses geometry.
+// The control rig owns the semantic topology. Mapped controls claim their
+// exact ModelJoints, unmapped controls get geometric anchors, and all other
+// ownership comes only from parent-to-child inheritance.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
   {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
@@ -33,16 +33,8 @@ export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
 ]);
 
 const EPSILON = 1e-8;
-const DEFAULT_SECONDARY_DISTANCE_RATIO = 0.24;
-const DEFAULT_LATERAL_DISTANCE_RATIO = 0.08;
-const TERMINAL_EXTENSION_RATIO = 0.15;
-const CENTRAL_DRIVER_IDS = new Set(['torso', 'neck', 'head']);
-const HUMANOID_LIMB_CHAINS = Object.freeze([
-  {controls: ['leftShoulder', 'leftElbow', 'leftHand'], terminal: 'leftHand'},
-  {controls: ['rightShoulder', 'rightElbow', 'rightHand'], terminal: 'rightHand'},
-  {controls: ['leftHip', 'leftKnee', 'leftFoot'], terminal: 'leftFoot'},
-  {controls: ['rightHip', 'rightKnee', 'rightFoot'], terminal: 'rightFoot'},
-]);
+const DEFAULT_POINT_DISTANCE_RATIO = 0.24;
+const CONTROL_ORDER = Object.freeze(Object.keys(HUMANOID_CONTROL_DRIVER_IDS));
 
 function numberId(value) {
   const result = Number(value);
@@ -137,138 +129,22 @@ function pointForJoint(modelRig, jointId) {
     || vector(joint?.restPivot ?? joint?.restCenter, [0, 0, 0]);
 }
 
-function segmentDistance(point, start, end) {
-  const direction = end.clone().sub(start);
-  const lengthSq = direction.lengthSq();
-  const projection = lengthSq > EPSILON
-    ? point.clone().sub(start).dot(direction) / lengthSq : 0;
-  const t = Math.max(0, Math.min(1, projection));
-  const closest = start.clone().addScaledVector(direction, t);
-  return {
-    distance: point.distanceTo(closest),
-    rawProjection: projection,
-    projection: t,
-    closest,
-  };
-}
-
-function segmentOrder(id) {
-  const index = HUMANOID_DRIVER_SEGMENTS.findIndex(segment => segment.id === id);
-  return index < 0 ? HUMANOID_DRIVER_SEGMENTS.length : index;
-}
-
-function confidenceForDistance(distanceRatio) {
-  if (distanceRatio <= .035) return 'high';
-  if (distanceRatio <= .075) return 'medium';
-  return 'low';
-}
-
-function candidateForPoint(point, driver, height, controlRig = null) {
-  const result = segmentDistance(point, driver.start, driver.end);
-  const offset = point.clone().sub(result.closest);
-  const right = frameVector(controlRig, 'right', [1, 0, 0]);
-  const forward = frameVector(controlRig, 'forward', [0, 0, 1]);
-  const normalizedHeight = Math.max(height, EPSILON);
-  return {
-    driverId: driver.id,
-    distance: result.distance,
-    distanceRatio: result.distance / normalizedHeight,
-    lateralRatio: Math.abs(offset.dot(right)) / normalizedHeight,
-    depthRatio: Math.abs(offset.dot(forward)) / normalizedHeight,
-    rawProjection: result.rawProjection,
-    projection: result.projection,
-    endpointDistanceRatio: point.distanceTo(driver.end) / normalizedHeight,
-    score: result.distance / normalizedHeight,
-  };
-}
-
-function frameVector(controlRig, key, fallback) {
-  return vector(controlRig?.frame?.[key], fallback).normalize();
-}
-
-function centralDomain(controlRig, height) {
-  const right = frameVector(controlRig, 'right', [1, 0, 0]);
-  const pelvis = controlPoint(controlRig, 'pelvis');
-  const shoulder = controlPoint(controlRig, 'leftShoulder')
-    .clone().sub(controlPoint(controlRig, 'rightShoulder')).length() * .5;
-  return {
-    right, pelvis,
-    halfWidth: Math.max(.06 * height, shoulder * .75),
-  };
-}
-
-function semanticCandidateAllowed(point, driver, candidate, controlRig, height) {
-  const id = driver.id;
-  if (CENTRAL_DRIVER_IDS.has(id)) {
-    const domain = centralDomain(controlRig, height);
-    const lateral = Math.abs(point.clone().sub(domain.pelvis).dot(domain.right));
-    return lateral <= domain.halfWidth;
-  }
-
-  // A limb binding must be on the limb's authored corridor. Clamping a point
-  // behind a shoulder/hip to the segment endpoint is not a semantic match.
-  if (candidate.rawProjection < -1e-5) return false;
-  const terminal = /^(left|right)_lower_(arm|leg)$/.test(id);
-  if (candidate.rawProjection > 1 + 1e-5
-      && (!terminal || candidate.endpointDistanceRatio > TERMINAL_EXTENSION_RATIO)) {
-    return false;
-  }
-
-  const side = id.startsWith('left_') ? -1 : id.startsWith('right_') ? 1 : 0;
-  if (!side) return false;
-  const domain = centralDomain(controlRig, height);
-  const lateral = point.clone().sub(domain.pelvis).dot(domain.right);
-  // Keep central torso/head geometry on the torso driver. This also prevents
-  // a secondary root from making an entire central subtree follow an arm.
-  if (Math.abs(lateral) <= domain.halfWidth) return false;
-  if (Math.sign(lateral) !== side) return false;
-  return true;
-}
-
-function sortedCandidates(point, drivers, height, controlRig) {
-  const list = Array.isArray(drivers) ? drivers : [...(drivers?.values?.() || [])];
-  return list.map(driver => candidateForPoint(point, driver, height, controlRig))
-    .filter(candidate => candidate.lateralRatio
-      <= DEFAULT_LATERAL_DISTANCE_RATIO + EPSILON)
-    .filter(candidate => semanticCandidateAllowed(
-      point, list.find(driver => driver.id === candidate.driverId),
-      candidate, controlRig, height))
-    .sort((left, right) => left.score - right.score
-      || segmentOrder(left.driverId) - segmentOrder(right.driverId));
-}
-
-function articulationPreferredCandidate(candidates) {
-  if (!candidates.length) return null;
-  const bestScore = candidates[0].score;
-  const tied = candidates.filter(candidate =>
-    Math.abs(candidate.score - bestScore) <= 1e-7);
-  if (tied.length <= 1) return candidates[0];
-  // At a shared articulation, the segment beginning at that control owns the
-  // joint.  This makes Knee→Foot and Elbow→Hand win at Knee/Elbow without
-  // making near-equal candidates elsewhere silently arbitrary.
-  const startsAtArticulation = tied.filter(candidate => candidate.projection < .05);
-  return startsAtArticulation.length === 1 ? startsAtArticulation[0]
-    : candidates[0];
-}
-
-function directBindingFor(modelRig, jointId, candidate, driverMap, metadata = {}) {
+function directBindingFor(modelRig, jointId, driverMap, owner) {
   const restJointWorld = restJointWorldMatrix(modelRig, jointId);
-  const driver = driverMap.get(candidate.driverId);
+  const driverId = HUMANOID_CONTROL_DRIVER_IDS[owner?.controlKey];
+  const driver = driverMap.get(driverId);
   if (!restJointWorld || !driver) return null;
   const localMatrix = driver.matrix.clone().invert().multiply(restJointWorld);
   return {
     type: 'driver',
-    driverId: candidate.driverId,
+    driverId,
     localMatrix,
     restJointWorld,
-    distance: candidate.distance,
-    distanceRatio: candidate.distanceRatio,
-    rawProjection: candidate.rawProjection,
-    projection: candidate.projection,
-    endpointDistanceRatio: candidate.endpointDistanceRatio,
-    score: candidate.score,
-    confidence: confidenceForDistance(candidate.distanceRatio),
-    ...metadata,
+    bindingMethod: owner?.bindingMethod || 'inherited_control',
+    controlKey: owner?.controlKey || null,
+    ownerSource: owner?.source || null,
+    anchorJointId: numberId(owner?.anchorJointId),
+    inheritedFromJointId: numberId(owner?.inheritedFromJointId),
   };
 }
 
@@ -277,26 +153,34 @@ function allJointIds(modelRig) {
     .filter(Number.isInteger).sort((left, right) => left - right);
 }
 
-function childJointIds(modelRig, jointId) {
-  const id = numberId(jointId);
-  if (id === null) return [];
-  const component = componentForJoint(modelRig, id);
-  const children = component?.childrenById instanceof Map
-    ? component.childrenById.get(id) ?? component.childrenById.get(String(id))
-    : component?.childrenById?.[id];
+function childIdsForComponent(component, jointId) {
+  const children = collectionValue(component?.childrenById, numberId(jointId));
   return (children || []).map(numberId).filter(Number.isInteger)
     .sort((left, right) => left - right);
 }
 
+function collectionValue(collection, id) {
+  return collection instanceof Map
+    ? collection.get(id) ?? collection.get(String(id))
+    : collection?.[id];
+}
+
+function parentJointId(component, jointId) {
+  const parent = collectionValue(component?.parentById, numberId(jointId));
+  return parent === null || parent === undefined ? null : numberId(parent);
+}
+
 function mappedControlEntries(controlMappings) {
-  if (!(controlMappings instanceof Map)) {
-    return {entries: [], invalidJointIds: new Set(), conflicts: []};
-  }
-  const entries = [...controlMappings.entries()].map(([key, mapping]) => ({
-    controlKey: mapping?.controlKey || key,
-    mapping,
-    jointId: numberId(mapping?.jointId),
-  }));
+  if (!(controlMappings instanceof Map)) return [];
+  const entries = [...controlMappings.entries()]
+    .filter(([key, mapping]) => CONTROL_ORDER.includes(
+      mapping?.controlKey || key))
+    .map(([key, mapping]) => ({
+      controlKey: mapping?.controlKey || key,
+      mapping,
+      jointId: numberId(mapping?.jointId),
+    })).sort((left, right) => CONTROL_ORDER.indexOf(left.controlKey)
+      - CONTROL_ORDER.indexOf(right.controlKey));
   const byJointId = new Map();
   entries.forEach(entry => {
     if (entry.jointId === null) return;
@@ -305,72 +189,210 @@ function mappedControlEntries(controlMappings) {
     byJointId.set(entry.jointId, owners);
   });
   const invalidJointIds = new Set();
-  const conflicts = [];
   byJointId.forEach((owners, jointId) => {
     if (owners.length <= 1) return;
     invalidJointIds.add(jointId);
-    conflicts.push({
-      type: 'conflicting_control_mappings',
-      jointId,
-      controlKeys: owners.map(entry => entry.controlKey).sort(),
-    });
   });
+  return entries.filter(entry => entry.jointId !== null
+    && !invalidJointIds.has(entry.jointId));
+}
+
+function controlOrder(controlKey) {
+  const index = CONTROL_ORDER.indexOf(controlKey);
+  return index < 0 ? CONTROL_ORDER.length : index;
+}
+
+function pointJointCandidate(modelRig, controlRig, controlKey, jointId,
+    height) {
+  const point = controlPoint(controlRig, controlKey);
+  const joint = pointForJoint(modelRig, jointId);
+  if (!joint) return null;
+  const distance = point.distanceTo(joint);
   return {
-    entries: entries.filter(entry => entry.jointId !== null
-      && !invalidJointIds.has(entry.jointId)),
-    invalidJointIds,
-    conflicts,
+    controlKey,
+    jointId,
+    distance,
+    distanceRatio: distance / Math.max(height, EPSILON),
   };
 }
 
-function resolvedPathCandidates(modelRig, controlMappings) {
-  const mapped = mappedControlEntries(controlMappings);
-  const byControl = new Map(mapped.entries.map(entry =>
-    [entry.controlKey, entry]));
-  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
-  const candidates = [];
-  const conflicts = [...mapped.conflicts];
-  HUMANOID_DRIVER_SEGMENTS.forEach(segment => {
-    const start = byControl.get(segment.start);
-    const end = byControl.get(segment.end);
-    if (!start || !end) return;
-    const path = shortestModelJointPath(modelRig, start.jointId, end.jointId);
-    if (!path || path.length < 2) return;
-    const interior = path.slice(1, -1);
-    if (interior.some(jointId => mappedJointIds.has(jointId))) {
-      conflicts.push({
-        type: 'mapped_control_inside_path',
-        driverId: segment.id,
-        segmentStartControl: segment.start,
-        segmentEndControl: segment.end,
-        path,
-      });
-      return;
-    }
-    candidates.push({segment, path, start, end});
-  });
+function candidatesForControl(modelRig, controlRig, controlKey, jointIds,
+    height, radius) {
+  return jointIds.map(jointId => pointJointCandidate(
+    modelRig, controlRig, controlKey, jointId, height))
+    .filter(candidate => candidate
+      && candidate.distanceRatio <= radius + EPSILON)
+    .sort((left, right) => left.distanceRatio - right.distanceRatio
+      || left.jointId - right.jointId);
+}
 
-  const ownersByJointId = new Map();
-  const rejected = new Set();
-  candidates.forEach(candidate => {
-    candidate.path.slice(1, -1).forEach(jointId => {
-      const owner = ownersByJointId.get(jointId);
-      if (!owner) {
-        ownersByJointId.set(jointId, candidate);
+function directOwnerFor(controlKey, source, bindingMethod, candidate = null,
+    anchorJointId = null) {
+  return {
+    controlKey,
+    source,
+    bindingMethod,
+    anchorJointId: numberId(anchorJointId ?? candidate?.jointId),
+  };
+}
+
+function assignAutomaticAnchors({modelRig, controlRig, height, radius,
+    automaticControls, directOwnerByJointId, controlState}) {
+  const availableJointIds = allJointIds(modelRig)
+    .filter(jointId => !directOwnerByJointId.has(jointId));
+  const candidatesByControl = new Map(automaticControls.map(controlKey => [
+    controlKey,
+    candidatesForControl(modelRig, controlRig, controlKey,
+      availableJointIds, height, radius),
+  ]));
+  const nextCandidateByControl = new Map(
+    automaticControls.map(controlKey => [controlKey, 0]));
+  let pending = [...automaticControls];
+
+  while (pending.length) {
+    const proposals = new Map();
+    const nextPending = [];
+    pending.forEach(controlKey => {
+      const candidates = candidatesByControl.get(controlKey) || [];
+      let index = nextCandidateByControl.get(controlKey) || 0;
+      while (index < candidates.length
+          && directOwnerByJointId.has(candidates[index].jointId)) index += 1;
+      nextCandidateByControl.set(controlKey, index);
+      if (index >= candidates.length) {
+        controlState.get(controlKey).source = 'unresolved';
         return;
       }
-      rejected.add(owner);
-      rejected.add(candidate);
-      conflicts.push({
-        type: 'conflicting_mapped_paths',
-        jointId,
-        driverIds: [owner.segment.id, candidate.segment.id].sort(),
+      const candidate = candidates[index];
+      const proposalsForJoint = proposals.get(candidate.jointId) || [];
+      proposalsForJoint.push(candidate);
+      proposals.set(candidate.jointId, proposalsForJoint);
+      nextPending.push(controlKey);
+    });
+    if (!proposals.size) break;
+
+    proposals.forEach((jointProposals, jointId) => {
+      jointProposals.sort((left, right) => left.distanceRatio
+        - right.distanceRatio || controlOrder(left.controlKey)
+        - controlOrder(right.controlKey));
+      const winner = jointProposals[0];
+      if (!directOwnerByJointId.has(jointId)) {
+        const state = controlState.get(winner.controlKey);
+        directOwnerByJointId.set(jointId, directOwnerFor(
+          winner.controlKey, 'automatic', 'automatic_control_mapping',
+          winner, null));
+        state.source = 'automatic';
+        state.anchorJointId = jointId;
+        state.directJointIds.push(jointId);
+      }
+      nextCandidateByControl.set(winner.controlKey,
+        (nextCandidateByControl.get(winner.controlKey) || 0) + 1);
+    });
+    pending = nextPending.filter(controlKey => {
+      const candidates = candidatesByControl.get(controlKey) || [];
+      return (nextCandidateByControl.get(controlKey) || 0) < candidates.length
+        && controlState.get(controlKey).anchorJointId === null;
+    });
+  }
+}
+
+function assignAutomaticNearbyJoints({modelRig, controlRig, height, radius,
+    automaticControls, directOwnerByJointId, controlState}) {
+  allJointIds(modelRig).filter(jointId => !directOwnerByJointId.has(jointId))
+    .forEach(jointId => {
+      const candidates = automaticControls.map(controlKey =>
+        pointJointCandidate(modelRig, controlRig, controlKey, jointId, height))
+        .filter(candidate => candidate
+          && candidate.distanceRatio <= radius + EPSILON)
+        .sort((left, right) => left.distanceRatio - right.distanceRatio
+          || controlOrder(left.controlKey) - controlOrder(right.controlKey));
+      const winner = candidates[0];
+      if (!winner) return;
+      const state = controlState.get(winner.controlKey);
+      directOwnerByJointId.set(jointId, directOwnerFor(
+        winner.controlKey, 'automatic', 'automatic_control_radius', winner,
+        state.anchorJointId));
+      state.directJointIds.push(jointId);
+    });
+}
+
+function inheritedOwners(modelRig, directOwnerByJointId) {
+  const ownerByJointId = new Map(directOwnerByJointId);
+  const visited = new Set();
+
+  function walk(component, jointId, parentOwner = null, parentId = null) {
+    const id = numberId(jointId);
+    if (id === null || visited.has(id)) return;
+    visited.add(id);
+    const directOwner = directOwnerByJointId.get(id);
+    const owner = directOwner || parentOwner;
+    if (owner && !directOwner) {
+      ownerByJointId.set(id, {
+        ...owner,
+        bindingMethod: 'inherited_control',
+        inheritedFromJointId: numberId(parentId),
       });
+    }
+    const nextParentOwner = owner
+      ? {...owner, jointId: id} : null;
+    childIdsForComponent(component, id).forEach(childId =>
+      walk(component, childId, nextParentOwner, id));
+  }
+
+  (modelRig?.components || []).forEach(component => {
+    const nodeIds = (component?.nodeIds || []).map(numberId)
+      .filter(Number.isInteger).sort((left, right) => left - right);
+    const nodeSet = new Set(nodeIds);
+    const roots = nodeIds.filter(jointId => {
+      const parent = parentJointId(component, jointId);
+      return parent === null || !nodeSet.has(parent);
+    });
+    const rootId = numberId(component?.rootId);
+    if (rootId !== null && nodeSet.has(rootId)) roots.unshift(rootId);
+    [...new Set(roots)].sort((left, right) => left - right)
+      .forEach(root => walk(component, root));
+    nodeIds.forEach(jointId => {
+      if (visited.has(jointId)) return;
+      const parent = parentJointId(component, jointId);
+      walk(component, jointId, parent === null
+        ? null : ownerByJointId.get(parent) || null, parent);
     });
   });
+  return ownerByJointId;
+}
+
+function ownershipDiagnostics(controlState, directOwnerByJointId,
+    ownerByJointId, unboundJointIds) {
+  const byControl = {};
+  const inheritedCountByControl = new Map();
+  ownerByJointId.forEach(owner => {
+    if (owner.bindingMethod !== 'inherited_control') return;
+    inheritedCountByControl.set(owner.controlKey,
+      (inheritedCountByControl.get(owner.controlKey) || 0) + 1);
+  });
+  let automaticControlCount = 0;
+  let unresolvedControlCount = 0;
+  controlState.forEach((state, controlKey) => {
+    const source = state.source || 'unresolved';
+    if (source === 'automatic') automaticControlCount += 1;
+    if (source === 'unresolved') unresolvedControlCount += 1;
+    byControl[controlKey] = {
+      controlKey,
+      source,
+      anchorJointId: state.anchorJointId ?? null,
+      directJointIds: [...state.directJointIds].sort((left, right) => left - right),
+      inheritedJointCount: inheritedCountByControl.get(controlKey) || 0,
+    };
+  });
   return {
-    candidates: candidates.filter(candidate => !rejected.has(candidate)),
-    conflicts,
+    mappedControlCount: [...controlState.values()]
+      .filter(state => state.source === 'mapped').length,
+    automaticControlCount,
+    unresolvedControlCount,
+    directJointCount: directOwnerByJointId.size,
+    inheritedJointCount: [...ownerByJointId.values()]
+      .filter(owner => owner.bindingMethod === 'inherited_control').length,
+    unownedJointCount: unboundJointIds.length,
+    bindingsByControl: byControl,
   };
 }
 
@@ -392,222 +414,70 @@ export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
   return result;
 }
 
-/** Build explicit and geometric ModelJoint bindings. */
+/** Build direct ModelJoint ownership and inherited deformation bindings. */
 export function buildHumanoidRigBinding({controlRig, modelRig,
     controlMappings = null, options = {}} = {}) {
   const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
   const drivers = buildHumanoidDriverFrames(controlRig);
-  const geometryLimit = Number.isFinite(Number(options.secondaryDistanceRatio))
-    ? Number(options.secondaryDistanceRatio) : DEFAULT_SECONDARY_DISTANCE_RATIO;
-  const jointBindings = new Map();
+  const pointDistanceRatio = Number.isFinite(Number(options.pointDistanceRatio))
+    ? Math.max(0, Number(options.pointDistanceRatio))
+    : DEFAULT_POINT_DISTANCE_RATIO;
+  const directOwnerByJointId = new Map();
+  const controlState = new Map(CONTROL_ORDER.map(controlKey => [controlKey, {
+    source: 'unresolved',
+    anchorJointId: null,
+    directJointIds: [],
+  }]));
   const mapped = mappedControlEntries(controlMappings);
-  const mappedPaths = resolvedPathCandidates(modelRig, controlMappings);
-  const mappedJointIds = new Set(mapped.entries.map(entry => entry.jointId));
-  const mappedByControl = new Map(mapped.entries.map(entry =>
-    [entry.controlKey, entry]));
-  let mappedControlCount = 0;
-  let mappedDescendantCount = 0;
 
-  // Explicit mappings claim their exact ModelJoint first. They are deformation
-  // overrides, not evidence that other controls need to be resolved first.
-  mapped.entries.forEach(({controlKey, jointId}) => {
+  // Phase A: explicit mappings claim only their exact ModelJoint.
+  mapped.forEach(({controlKey, jointId}) => {
     const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
-    const driver = drivers.get(driverId);
-    const binding = driver ? directBindingFor(modelRig, jointId, {
-      driverId,
-      distance: 0,
-      distanceRatio: 0,
-      rawProjection: 0,
-      projection: 0,
-      endpointDistanceRatio: 0,
-      score: 0,
-    }, drivers, {bindingMethod: 'manual_control_mapping', controlKey}) : null;
-    if (!binding) return;
-    jointBindings.set(jointId, binding);
-    mappedControlCount += 1;
-  });
-
-  // When both endpoints are explicitly mapped, only the interior shortest path
-  // is claimed by that driver segment. Unmapped endpoints remain geometric.
-  mappedPaths.candidates.forEach(({segment, path}) => {
-    const driver = drivers.get(segment.id);
-    if (!driver) return;
-    path.slice(1, -1).forEach(jointId => {
-      if (jointBindings.has(jointId)) return;
-      const binding = directBindingFor(modelRig, jointId, {
-        driverId: segment.id,
-        distance: 0, distanceRatio: 0, rawProjection: 0, projection: 0,
-        endpointDistanceRatio: 0, score: 0,
-      }, drivers, {
-        bindingMethod: 'mapped_joint_path',
-        segmentStartControl: segment.start,
-        segmentEndControl: segment.end,
-      });
-      if (!binding) return;
-      jointBindings.set(jointId, binding);
-    });
-  });
-
-  // A fully mapped limb's terminal ModelJoint owns all of its descendants.
-  // Explicitly mapped joints are boundaries so a more specific mapping can
-  // own its own subtree. Partial mappings intentionally use geometry for the
-  // remaining joints.
-  HUMANOID_LIMB_CHAINS.forEach(({controls, terminal}) => {
-    if (!controls.every(controlKey => mappedByControl.has(controlKey))) return;
-    const terminalMapping = mappedByControl.get(terminal);
-    const {controlKey, jointId} = terminalMapping;
-    const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
-    const driver = drivers.get(driverId);
-    if (!driver) return;
-    const queue = childJointIds(modelRig, jointId);
-    const visited = new Set([jointId]);
-    let queueIndex = 0;
-    while (queueIndex < queue.length) {
-      const descendantId = numberId(queue[queueIndex++]);
-      if (descendantId === null || visited.has(descendantId)) continue;
-      visited.add(descendantId);
-      if (mappedJointIds.has(descendantId)) continue;
-
-      if (!jointBindings.has(descendantId)) {
-        const binding = directBindingFor(modelRig, descendantId, {
-          driverId,
-          distance: 0,
-          distanceRatio: 0,
-          rawProjection: 0,
-          projection: 0,
-          endpointDistanceRatio: 0,
-          score: 0,
-        }, drivers, {
-          bindingMethod: 'mapped_control_descendant',
-          controlKey,
-          mappedRootJointId: jointId,
-        });
-        if (binding) {
-          jointBindings.set(descendantId, binding);
-          mappedDescendantCount += 1;
-        }
-      }
-      childJointIds(modelRig, descendantId).forEach(child => {
-        if (!visited.has(child)) queue.push(child);
-      });
+    if (!drivers.has(driverId) || !restJointWorldMatrix(modelRig, jointId)) {
+      return;
     }
+    directOwnerByJointId.set(jointId, directOwnerFor(
+      controlKey, 'mapped', 'manual_control_mapping', null, jointId));
+    const state = controlState.get(controlKey);
+    state.source = 'mapped';
+    state.anchorJointId = jointId;
+    state.directJointIds.push(jointId);
   });
 
-  // Every remaining ModelJoint uses the nearest valid Main Rig driver. The
-  // broader secondary limit provides limb coverage without a control-mapping
-  // inference layer or ambiguity veto.
-  allJointIds(modelRig).forEach(jointId => {
-    if (jointBindings.has(jointId)) return;
-    const point = pointForJoint(modelRig, jointId);
-    if (!point) return;
-    const candidates = sortedCandidates(point, drivers, height, controlRig);
-    const best = articulationPreferredCandidate(candidates);
-    if (!best || best.distanceRatio > geometryLimit) return;
-    const binding = directBindingFor(modelRig, jointId, best, drivers,
-      {bindingMethod: 'geometric_proximity'});
+  const automaticControls = CONTROL_ORDER.filter(controlKey =>
+    controlState.get(controlKey).anchorJointId === null);
+
+  // Phase B: resolve unmapped controls to unique point-to-point anchors.
+  assignAutomaticAnchors({modelRig, controlRig, height,
+    radius: pointDistanceRatio, automaticControls,
+    directOwnerByJointId, controlState});
+
+  // Phase C: let automatic controls claim other free joints only inside the
+  // same point-to-point radius used for anchor resolution.
+  assignAutomaticNearbyJoints({modelRig, controlRig, height,
+    radius: pointDistanceRatio, automaticControls,
+    directOwnerByJointId, controlState});
+
+  // Phase D: propagate direct ownership through the actual ModelRig hierarchy.
+  // Direct owners are boundaries; no path or geometry is invented here.
+  const ownerByJointId = inheritedOwners(modelRig, directOwnerByJointId);
+
+  // Phase E: create the existing driver-relative transforms for every owner.
+  const jointBindings = new Map();
+  ownerByJointId.forEach((owner, jointId) => {
+    const binding = directBindingFor(modelRig, jointId, drivers, owner);
     if (binding) jointBindings.set(jointId, binding);
   });
 
   const allIds = allJointIds(modelRig);
   const unboundJointIds = allIds.filter(id => !jointBindings.has(id));
-  const byDriver = {};
-  jointBindings.forEach(entry => {
-    byDriver[entry.driverId] = (byDriver[entry.driverId] || 0) + 1;
-  });
-  const binding = {
+  return {
     version: 1,
     jointBindings,
     unboundJointIds,
-    diagnostics: {
-      mappedControlCount,
-      mappedPathCount: mappedPaths.candidates.length,
-      mappedDescendantCount,
-      geometricBindingCount: [...jointBindings.values()].filter(entry =>
-        entry.bindingMethod === 'geometric_proximity').length,
-      unboundJointCount: unboundJointIds.length,
-      bindingsByDriver: byDriver,
-    },
+    diagnostics: ownershipDiagnostics(controlState,
+      directOwnerByJointId, ownerByJointId, unboundJointIds),
   };
-  return binding;
-}
-
-function componentForJoint(modelRig, jointId) {
-  const id = numberId(jointId);
-  if (id === null) return null;
-  const rawComponentId = modelRig?.componentByJointId instanceof Map
-    ? modelRig.componentByJointId.get(id)
-      ?? modelRig.componentByJointId.get(String(id))
-    : modelRig?.componentByJointId?.[id];
-  const componentId = numberId(rawComponentId);
-  if (componentId !== null && modelRig?.components?.[componentId]) {
-    return modelRig.components[componentId];
-  }
-  return (modelRig?.components || []).find(component =>
-    (component?.nodeIds || []).some(nodeId => numberId(nodeId) === id)) || null;
-}
-
-function addGraphEdge(adjacency, leftValue, rightValue) {
-  const left = numberId(leftValue);
-  const right = numberId(rightValue);
-  if (left === null || right === null || left === right) return;
-  if (!adjacency.has(left)) adjacency.set(left, new Set());
-  if (!adjacency.has(right)) adjacency.set(right, new Set());
-  adjacency.get(left).add(right);
-  adjacency.get(right).add(left);
-}
-
-function modelJointAdjacency(modelRig, component) {
-  const adjacency = new Map();
-  (component?.nodeIds || []).forEach(id => {
-    const jointId = numberId(id);
-    if (jointId !== null && !adjacency.has(jointId)) {
-      adjacency.set(jointId, new Set());
-    }
-  });
-  Object.entries(component?.parentById || {}).forEach(([child, parent]) => {
-    const childId = numberId(child);
-    if (childId !== null && !adjacency.has(childId)) {
-      adjacency.set(childId, new Set());
-    }
-    addGraphEdge(adjacency, child, parent);
-  });
-  Object.entries(component?.childrenById || {}).forEach(([parent, children]) => {
-    const parentId = numberId(parent);
-    if (parentId !== null && !adjacency.has(parentId)) {
-      adjacency.set(parentId, new Set());
-    }
-    (children || []).forEach(child => addGraphEdge(adjacency, parent, child));
-  });
-  return adjacency;
-}
-
-function shortestModelJointPath(modelRig, startValue, endValue) {
-  const start = numberId(startValue);
-  const end = numberId(endValue);
-  const startComponent = componentForJoint(modelRig, start);
-  const endComponent = componentForJoint(modelRig, end);
-  if (start === null || end === null || !startComponent
-      || startComponent !== endComponent) return null;
-  const adjacency = modelJointAdjacency(modelRig, startComponent);
-  if (!adjacency.has(start) || !adjacency.has(end)) return null;
-  const queue = [start];
-  const previous = new Map([[start, null]]);
-  while (queue.length) {
-    const current = queue.shift();
-    if (current === end) break;
-    [...(adjacency.get(current) || [])].sort((left, right) => left - right)
-      .forEach(next => {
-        if (previous.has(next)) return;
-        previous.set(next, current);
-        queue.push(next);
-      });
-  }
-  if (!previous.has(end)) return null;
-  const path = [];
-  for (let current = end; current !== null; current = previous.get(current)) {
-    path.push(current);
-  }
-  return path.reverse();
 }
 
 function matrixFrom(value) {
