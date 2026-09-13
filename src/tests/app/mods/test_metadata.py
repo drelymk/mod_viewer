@@ -161,6 +161,64 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     assert final["rig"]["presets"] == data["rig"]["presets"]
 
 
+def test_save_semantic_humanoid_control_rig_does_not_invent_builder_provenance(
+        tmp_path):
+    value = {
+        "version": 2,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.3, "height01": 0.7,
+                              "depthN": 0.0},
+            },
+        },
+    }
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is True
+    assert result["humanoid_control_rig"] == value
+    assert metadata.humanoid_control_rig(str(tmp_path)) == value
+
+
+@pytest.mark.parametrize("builder_version", [0, True, "1"])
+def test_save_explicit_humanoid_joint_requires_current_builder_version(
+        tmp_path, builder_version):
+    value = {
+        "version": 2,
+        "model_rig_builder_version": builder_version,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.3, "height01": 0.7,
+                              "depthN": 0.0},
+                "joint_id": 42,
+            },
+        },
+    }
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is False
+    assert not (tmp_path / metadata.METADATA_NAME).exists()
+
+
+def test_save_explicit_humanoid_joint_rejects_missing_builder_version(tmp_path):
+    value = {
+        "version": 2,
+        "controls": {
+            "leftShoulder": {
+                "semantic": {"sideN": -0.3, "height01": 0.7,
+                              "depthN": 0.0},
+                "joint_id": 42,
+            },
+        },
+    }
+
+    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
+
+    assert result["saved"] is False
+    assert not (tmp_path / metadata.METADATA_NAME).exists()
+
+
 @pytest.mark.parametrize("invalid", [
     {"version": 3, "controls": {}},
     {"version": 1, "controls": {"unknown": {

@@ -266,7 +266,7 @@ stride = 8
     assert draw.skinning_source.vertex_vg_file == "body-vertex-vg.buf"
 
 
-def test_draw_groups_resolve_declared_unbound_vertex_vg_resource():
+def test_draw_groups_treat_r16_wwmi_ids_as_model_wide_without_remap():
     sections = parse_sections("sample.ini", text=r"""[TextureOverrideComponent3]
 ib = ResourceBodyIB
 vb0 = ResourceBodyPosition
@@ -301,9 +301,163 @@ stride = 16
         sections, extract_resources(sections))[0]["draws"][0]
 
     assert draw.skinning_error is None
-    assert draw.skinning_source.vertex_vg_file == \
-        "Meshes/BlendRemapVertexVG.buf"
-    assert draw.skinning_source.bone_id_namespace == "wwmi_vertex_vg"
+    assert draw.skinning_source.encoding == "wwmi_u16_8"
+    assert draw.skinning_source.vertex_vg_file is None
+    assert draw.skinning_source.bone_id_namespace == "model"
+
+
+def test_draw_groups_associate_unbound_vertex_vg_with_each_blend_family():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyBlend
+vb2 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[TextureOverrideHair]
+ib = ResourceHairIB
+vb0 = ResourceHairPosition
+vb1 = ResourceHairBlend
+vb2 = ResourceHairTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceHairIB]
+filename = hair.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+
+[ResourceHairPosition]
+filename = hair-position.buf
+stride = 40
+
+[ResourceHairTexcoord]
+filename = hair-texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = Meshes/BodyBlend.buf
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+
+[ResourceHairBlend]
+filename = Meshes/HairBlend.buf
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+
+[ResourceBodyBlendRemapVertexVG]
+filename = Meshes/BodyBlendRemapVertexVG.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+
+[ResourceHairBlendRemapVertexVG]
+filename = Meshes/HairBlendRemapVertexVG.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+""")
+
+    groups = build_draw_groups(sections, extract_resources(sections))
+    sources = {
+        group["name"]: group["draws"][0].skinning_source
+        for group in groups
+    }
+
+    assert sources["Body"].vertex_vg_file == \
+        "Meshes/BodyBlendRemapVertexVG.buf"
+    assert sources["Hair"].vertex_vg_file == \
+        "Meshes/HairBlendRemapVertexVG.buf"
+
+
+def test_draw_groups_reject_multiple_associated_vertex_vg_candidates():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyBlend
+vb2 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = Meshes/BodyBlend.buf
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+
+[ResourceBodyBlendRemapVertexVG]
+filename = Meshes/BodyBlendRemapVertexVG.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+
+[ResourceBodyBlendRemapVertexVGAlt]
+filename = Meshes/BodyBlendRemapVertexVGAlt.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_error is None
+    assert draw.skinning_source.vertex_vg_file is None
+    assert draw.skinning_source.bone_id_namespace == "model"
+
+
+def test_draw_groups_do_not_attach_unrelated_single_vertex_vg_resource():
+    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyBlend
+vb2 = ResourceBodyTexcoord
+drawindexed = 3, 0, 0
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+
+[ResourceBodyBlend]
+filename = Meshes/BodyBlend.buf
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+
+[ResourceAccessoryBlendRemapVertexVG]
+filename = Meshes/AccessoryBlendRemapVertexVG.buf
+format = DXGI_FORMAT_R16_UINT
+stride = 16
+""")
+
+    draw = build_draw_groups(
+        sections, extract_resources(sections))[0]["draws"][0]
+
+    assert draw.skinning_source.vertex_vg_file is None
+    assert draw.skinning_source.bone_id_namespace == "model"
 
 
 @pytest.mark.parametrize(

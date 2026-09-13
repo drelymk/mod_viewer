@@ -125,9 +125,7 @@ def skinning_source_descriptor(source):
         "key": key,
         "file": file,
         "bone_id_offset": offset,
-        "bone_ids_model_wide": bool(
-            source.vertex_vg_file
-            and source.bone_id_namespace == "wwmi_vertex_vg"),
+        "bone_ids_model_wide": skinning_bone_ids_model_wide(source),
     }
     if source.vertex_vg_file and source.bone_id_namespace != "model":
         descriptor.update({
@@ -136,6 +134,16 @@ def skinning_source_descriptor(source):
                 source.vertex_vg_file),
         })
     return descriptor
+
+
+def skinning_bone_ids_model_wide(source):
+    """Return whether decoded IDs already identify model bones."""
+    if not isinstance(source, SkinningSource):
+        return False
+    return bool(
+        source.encoding == "wwmi_u16_8"
+        or (source.vertex_vg_file
+            and source.bone_id_namespace == "wwmi_vertex_vg"))
 
 
 def _format_supports_packed_weights(value):
@@ -169,7 +177,7 @@ def _resolve_vertex_vg_resource(resource_name, resolve_vertex_info,
 
 def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
                             bone_id_offset=0, remap_resources=None,
-                            declared_vertex_vg_resources=None):
+                            declared_vertex_vg_resources_for_blend=None):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -230,7 +238,12 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
                     continue
             else:
                 valid_declared = []
-                for candidate_name in declared_vertex_vg_resources or ():
+                declared_resources = ()
+                if callable(declared_vertex_vg_resources_for_blend):
+                    declared_resources = (
+                        declared_vertex_vg_resources_for_blend(
+                            resource_name, filename) or ())
+                for candidate_name in declared_resources:
                     candidate, _candidate_error = _resolve_vertex_vg_resource(
                         candidate_name, resolve_vertex_info, influence_count)
                     if candidate is not None:
@@ -379,7 +392,9 @@ def decode_skinning(source, raw_data, used_vertices, vertex_vg_data=None):
                 zip(decoded_indices, values)):
             bone = (int(remapped_indices[influence])
                     if remapped_indices is not None
-                    else int(raw_bone) + int(source.bone_id_offset))
+                    else (int(raw_bone)
+                          if source.encoding == "wwmi_u16_8"
+                          else int(raw_bone) + int(source.bone_id_offset)))
             struct.pack_into("<I", index_bytes,
                              output_offset + influence * 4, bone)
             struct.pack_into("<f", weight_bytes,
@@ -513,6 +528,7 @@ __all__ = [
     "SkinningSource", "SkinningManifestEntry", "DecodedSkinning",
     "SkinningPreviewError",
     "normalize_skinning_source_file", "skinning_source_key",
-    "skinning_source_descriptor", "resolve_skinning_source",
+    "skinning_source_descriptor", "skinning_bone_ids_model_wide",
+    "resolve_skinning_source",
     "decode_skinning", "build_skinning_preview",
 ]

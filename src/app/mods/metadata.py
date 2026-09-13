@@ -626,6 +626,7 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
     if strict and has_builder_version \
             and builder_version != MODEL_RIG_BUILDER_VERSION:
         return None
+    has_explicit_joint_mapping = False
     for key, raw in value["controls"].items():
         if key not in HUMANOID_CONTROL_KEYS:
             malformed = True
@@ -648,11 +649,17 @@ def _normalized_humanoid_control_rig(value, *, strict=False):
                     controls[key] = entry
             continue
         controls[key] = entry
+        if "joint_id" in entry:
+            has_explicit_joint_mapping = True
+    if (strict and has_explicit_joint_mapping
+            and (not has_builder_version
+                 or builder_version != MODEL_RIG_BUILDER_VERSION)):
+        return None
     if strict and malformed:
         return None
     result = {"version": HUMANOID_CONTROL_RIG_VERSION, "controls": controls}
-    if strict:
-        result["model_rig_builder_version"] = MODEL_RIG_BUILDER_VERSION
+    if strict and has_builder_version:
+        result["model_rig_builder_version"] = builder_version
     elif has_builder_version and isinstance(builder_version, int):
         result["model_rig_builder_version"] = builder_version
     if malformed:
