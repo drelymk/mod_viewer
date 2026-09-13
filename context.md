@@ -319,18 +319,15 @@ of documentation, comments and tests; use portable fixtures instead.
   semantic orientation. Edit Rig always starts from the model's rest pose;
   saved control overrides and pose presets remain separate state.
   `ModelJoint` topology no longer defines human anatomy or IK paths.
-- `humanoid-rig-binding.js` resolves each Main Rig control independently: a
-  saved ModelJoint signature is authoritative for that control, while an
-  unmapped control uses conservative, height-normalized geometric inference
-  against ModelJoint rest pivots. Inferred mappings are runtime-only, reserve
-  their winning joint, and remain unresolved when geometry is distant or
-  ambiguous. Body-corridor ModelJoints bind to humanoid driver segments with
-  `inverse(restDriverWorld) * restJointWorld` offsets. Posed absolute driver
-  targets are converted to authored-rest deltas before source-bone
-  publication, so directly bound parent/child joints are not
-  double-transformed. Conservative secondary attachment roots may follow a
-  driver while retaining their internal hierarchy; ambiguous or distant
-  components remain unbound. No accessory categories are inferred.
+- `humanoid-rig-binding.js` treats saved ModelJoint mappings as explicit
+  deformation overrides. Explicit mapped joints and shortest paths claim their
+  ModelJoints first; every remaining ModelJoint uses the nearest valid,
+  height-normalized humanoid driver segment within the shared geometric limit.
+  These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
+  Posed absolute driver targets are converted to authored-rest deltas before
+  ModelJoint transforms are aliased back to source bones, so directly bound
+  parent/child joints are not double-transformed. IK availability depends only
+  on the accepted Main Rig controls, never on ModelJoint mapping.
 - Humanoid IK uses guaranteed virtual two-bone controls. Manual ModelJoint
   rotations, presets, and Physics remain available and compose after the
   humanoid driver base. Reset clears both virtual pose and manual deltas

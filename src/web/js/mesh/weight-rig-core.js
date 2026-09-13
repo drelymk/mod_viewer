@@ -74,9 +74,7 @@ import {
 import {createWorkBudget} from './cooperative-scheduler.js';
 import {characterAxesFromOrientation} from './humanoid-orientation.js';
 import {
-  buildHumanoidDriverBaseTransforms,
-  buildHumanoidSourceBoneDriverTransforms,
-  buildHumanoidRigBinding, resolveHumanoidEffectiveMappings,
+  buildHumanoidDriverBaseTransforms, buildHumanoidRigBinding,
 } from './humanoid-rig-binding.js';
 import {
   applyHumanoidControlRigOverrides, buildHumanoidControlRig,
@@ -469,8 +467,6 @@ function modelRigSnapshotForState() {
   });
   if (snapshot) {
     snapshot.humanoidControlRig = humanoidControlRigSnapshot();
-    snapshot.controlResolution = modelSkinningRig?.humanoidBinding?.diagnostics
-      ?.controlResolution || {};
     snapshot.jointBuild = modelSkinningRig?.jointBuildDiagnostics
       ? {...modelSkinningRig.jointBuildDiagnostics} : null;
   }
@@ -503,7 +499,6 @@ function humanoidControlRigSnapshot() {
       diagnostics: {reason: 'rig_not_loaded'},
     };
   } else {
-    const bindingDiagnostics = modelSkinningRig?.humanoidBinding?.diagnostics || {};
     const controls = Object.fromEntries(Object.entries(rig.controls || {})
       .map(([key, control]) => [key, {
         ...control,
@@ -519,15 +514,11 @@ function humanoidControlRigSnapshot() {
       confidence: rig.confidence || 'low',
       confidenceByRegion: {...(rig.confidenceByRegion || {})},
       controls,
-      controlResolution: {...(bindingDiagnostics.controlResolution || {})},
       diagnostics: {
         reason: rig.diagnostics?.reason || null,
         templatePoints: {...(rig.diagnostics?.templatePoints || {})},
         structureRevision: modelRigState.humanoidStructureRevision,
         modelOrientationRevision: orientationRevision,
-        manualControlCount: Number(bindingDiagnostics.manualControlCount) || 0,
-        geometricControlCount: Number(bindingDiagnostics.geometricControlCount) || 0,
-        unresolvedControlCount: Number(bindingDiagnostics.unresolvedControlCount) || 0,
       },
     };
   }
@@ -544,21 +535,10 @@ function primaryHumanoidLimb(role = modelRigState.activeLimbRole) {
     right_leg: ['rightHip', 'rightKnee', 'rightFoot'],
   }[role];
   const rig = modelSkinningRig?.humanoidControlRig;
-  const resolution = modelSkinningRig?.humanoidBinding?.diagnostics
-    ?.controlResolution || {};
-  const unresolvedKey = keys?.find(key => {
-    const entry = resolution[key];
-    return !entry || !Number.isInteger(Number(entry.jointId))
-      || entry.method === 'unresolved';
-  }) || null;
-  const available = !!(keys && rig?.accepted && !unresolvedKey && keys.every(key =>
+  const available = !!(keys && rig?.accepted && keys.every(key =>
     rig.controls?.[key]?.position));
   return {
-    role, keys: keys || [], available,
-    unresolvedControlKey: unresolvedKey,
-    reason: unresolvedKey ? `unresolved_control:${unresolvedKey}`
-      : available ? null : 'control_unavailable',
-    bendSign: 1,
+    role, keys: keys || [], available, bendSign: 1,
   };
 }
 
@@ -572,7 +552,7 @@ function ikSnapshot() {
       confidence: limb.available ? 'high' : 'low',
       bendSign: limb.bendSign,
       controlKeys: [...limb.keys],
-      reason: limb.reason,
+      reason: limb.available ? null : 'control_unavailable',
     }];
   }));
   return {
@@ -582,7 +562,7 @@ function ikSnapshot() {
     available: active.available,
     controlKeys: [...active.keys],
     confidence: active.available ? 'high' : 'low',
-    reason: active.reason,
+    reason: active.available ? null : 'control_unavailable',
     bendSign: active.bendSign,
     mappings,
   };
@@ -972,7 +952,6 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
     poseTransforms: new Map(),
     poseRotations: new Map(),
     manualPoseTransforms: new Map(),
-    humanoidSourceBoneTransforms: new Map(),
     poseTransformCache: new Map(),
     poseFrameCache: new Map(),
     poseAffectedJointIds: new Set(),
@@ -1059,26 +1038,20 @@ function buildPrimaryHumanoidRig(rig) {
     orientationState,
   });
   const savedOverrides = humanoidRigEditSession?.getSavedOverrides?.();
-  const explicitMappings = automaticRig?.accepted
+  const controlMappings = automaticRig?.accepted
     ? resolveHumanoidControlMappings({
       savedOverrides, modelRig: rig,
     }) : new Map();
   const controlRig = automaticRig?.accepted
     ? applyHumanoidControlRigOverrides({
       automaticRig, savedOverrides, modelRig: rig,
-      resolvedMappings: explicitMappings,
+      resolvedMappings: controlMappings,
     }) : automaticRig;
-  const effectiveMappings = controlRig?.accepted
-    ? resolveHumanoidEffectiveMappings({
-      controlRig, modelRig: rig, explicitMappings,
-    }) : new Map();
   const binding = controlRig?.accepted
-    ? buildHumanoidRigBinding({controlRig, modelRig: rig,
-      effectiveMappings}) : null;
+    ? buildHumanoidRigBinding({controlRig, modelRig: rig, controlMappings}) : null;
   rig.humanoidAutomaticControlRig = automaticRig;
   rig.humanoidControlRig = controlRig;
-  rig.humanoidExplicitControlMappings = explicitMappings;
-  rig.humanoidEffectiveControlMappings = effectiveMappings;
+  rig.humanoidControlMappings = controlMappings;
   rig.humanoidBinding = binding;
   rig.humanoidOrientationRevision = Number(
     orientationState?.modelOrientationRevision) || 0;
@@ -1128,8 +1101,6 @@ function updateModelSourceAliases(rig) {
     const rotations = rig.sourceRotationAliases.get(sourceRig.sourceKey)
       || new Map();
     const manualTransforms = rig.manualPoseTransforms || new Map();
-    const humanoidTransforms = rig.humanoidSourceBoneTransforms?.get(
-      sourceRig.sourceKey) || new Map();
     transforms.clear();
     rotations.clear();
     for (const boneId of sourceRig.boneIds || []) {
@@ -1137,12 +1108,9 @@ function updateModelSourceAliases(rig) {
         sourceBoneKey(sourceRig.sourceKey, boneId));
       const manual = Number.isInteger(jointId)
         ? manualTransforms.get(jointId) : null;
-      const humanoid = humanoidTransforms.get(Number(boneId))?.matrix;
       const modelTransform = Number.isInteger(jointId)
         ? rig.poseTransforms.get(jointId) : null;
-      const transform = humanoid
-        ? humanoid.clone().multiply(manual || RIG_IDENTITY_MATRIX)
-        : modelTransform || manual;
+      const transform = modelTransform || manual;
       if (!transform) continue;
       transforms.set(Number(boneId), transform);
       rotations.set(Number(boneId),
@@ -1269,12 +1237,6 @@ function buildModelPoseTransforms() {
     posedControls: modelRigState.humanoidPose,
   });
   modelSkinningRig.manualPoseTransforms = manualTransforms;
-  modelSkinningRig.humanoidSourceBoneTransforms =
-    buildHumanoidSourceBoneDriverTransforms({
-      binding: modelSkinningRig.humanoidBinding,
-      controlRig: modelSkinningRig.humanoidControlRig,
-      posedControls: modelRigState.humanoidPose,
-    });
   modelSkinningRig.humanoidDriverTransforms = driverLayer.result;
   modelSkinningRig.humanoidDriverWorldByJointId =
     driverLayer.driverWorldByJointId;
@@ -1324,20 +1286,6 @@ function sourceBoneIdsForModelJoints(sourceRig, jointIds) {
   return affected;
 }
 
-function sourceBoneIdsForHumanoidTransforms(rig) {
-  const affected = new Map();
-  rig?.humanoidSourceBoneTransforms?.forEach((entries, sourceKey) => {
-    const boneIds = new Set();
-    entries.forEach((entry, boneId) => {
-      if (entry?.matrix?.isMatrix4 && !matrixIsIdentity(entry.matrix)) {
-        boneIds.add(Number(boneId));
-      }
-    });
-    if (boneIds.size) affected.set(sourceKey, boneIds);
-  });
-  return affected;
-}
-
 function sourceBoneKeyForSet(ids) {
   return [...ids].sort((left, right) => left - right).join(',');
 }
@@ -1362,7 +1310,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
   const rig = modelSkinningRig;
   if (!rig) return false;
   const transforms = buildModelPoseTransforms();
-  const humanoidSourceBones = sourceBoneIdsForHumanoidTransforms(rig);
   rig.poseRevision = (rig.poseRevision || 0) + 1;
   const posedJointIds = activePoseJointIds({
     manualRotations: rig.poseRotationByJointId,
@@ -1382,8 +1329,6 @@ function applyModelPose({request = true, dragging = false} = {}) {
       sourceRig.sourceKey) || new Map();
     const affectedBoneIds = sourceBoneIdsForModelJoints(
       sourceRig, affectedJointIds);
-    (humanoidSourceBones.get(sourceRig.sourceKey) || []).forEach(boneId =>
-      affectedBoneIds.add(Number(boneId)));
     forEachRigMesh(sourceRig, (mesh, state) => {
       const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
       const boneKey = sourceBoneKeyForSet(affectedBoneIds);
