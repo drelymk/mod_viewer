@@ -400,6 +400,31 @@ def extract_menu_var_names(sections, var_prefix=None, menu=None,
     return found
 
 
+def _selector_image_bindings(sections, resource):
+    """Return exact ``(selector variable, value) -> image`` bindings."""
+    bindings = {}
+    selector_re = re.compile(
+        r"(?:if|elif|else\s+if)\s+\$([^\s=]+)\s*==\s*(-?\d+)", re.I)
+    for _section, lines in sections.items():
+        current = None
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = selector_re.match(line)
+            if match:
+                current = (match.group(1).casefold(), match.group(2))
+                continue
+            if line.casefold() == "else":
+                current = None
+                continue
+            icon = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
+            if not icon or current is None:
+                continue
+            info = resource(icon.group(1))
+            if info.get("filename"):
+                bindings.setdefault(current, info["filename"])
+    return bindings
+
+
 def attach_menu_images(menu, sections, resources):
     """Attach authored menu-item filenames to recognized slots/sliders."""
     slot_images = {}
@@ -475,6 +500,8 @@ def attach_menu_images(menu, sections, resources):
             for slot, filename in candidates.items():
                 slot_images.setdefault(slot, filename)
 
+    selector_images = _selector_image_bindings(sections, resource)
+
     def compact(text):
         return re.sub(r"[^a-z0-9]", "", text.lower())
 
@@ -490,8 +517,29 @@ def attach_menu_images(menu, sections, resources):
         "pussy": ("itempussy", "pussy"),
     }
     for info in menu.values():
-        if info.get("slot") in slot_images:
-            info["image_file"] = slot_images[info["slot"]]
+        selector = info.get("selector")
+        if selector:
+            names = {str(name).casefold().lstrip("$")
+                     for name in info.get("_selector_names", ())}
+            variable = str(selector.get("var", ""))
+            names.add(variable.rsplit("/", 1)[-1]
+                      .rsplit("::", 1)[-1].casefold().lstrip("$"))
+            value = str(selector.get("value", ""))
+            image = next((filename for (name, candidate), filename
+                          in selector_images.items()
+                          if candidate == value and name in names), None)
+            if image:
+                info["image_file"] = image
+            # A selector was available but no exact image dispatch proved the
+            # relationship.  Do not guess from resource/variable names.
+            continue
+        slot = info.get("slot")
+        try:
+            slot = int(slot) if slot is not None else None
+        except (TypeError, ValueError):
+            pass
+        if slot in slot_images:
+            info["image_file"] = slot_images[slot]
             continue
         if not (info.get("name") or info.get("var")):
             continue

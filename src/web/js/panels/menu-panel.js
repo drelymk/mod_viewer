@@ -9,7 +9,7 @@ import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.j
 import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
-import { dnfSatisfied } from '../editing/control-state.js';
+import { strictDnfSatisfied } from '../editing/control-state.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -63,6 +63,10 @@ function buildMenuItem(info) {
   valSpan.textContent = getToggleValue(info.var);
 
   btn.addEventListener('click', () => {
+    if (info.action) {
+      applyAction(info.action);
+      return;
+    }
     const idx = info.values.indexOf(getToggleValue(info.var));
     setToggleValue(info.var, info.values[(idx + 1) % info.values.length]);
     // The game applies these right after the click, in source order, so a
@@ -146,10 +150,10 @@ function nextAssignmentValue(assignment) {
 }
 
 export function applyAction(info) {
-  if (!dnfSatisfied(info?.conditions)) return false;
+  if (!strictDnfSatisfied(info?.conditions)) return false;
   let changed = false;
   for (const assignment of info?.assignments || []) {
-    if (!dnfSatisfied(assignment.conditions)) continue;
+    if (!strictDnfSatisfied(assignment.conditions)) continue;
     const value = nextAssignmentValue(assignment);
     if (value === null || value === undefined) continue;
     setToggleValue(assignment.target, value);
@@ -198,7 +202,10 @@ export function buildMenuPanel(menu, actions = []) {
   });
 
   const keys = Object.keys(menu || {});
-  if (!keys.length && !(actions || []).length) {
+  const visibleActions = (actions || []).filter(candidate =>
+    candidate?.kind === 'compound_action'
+    && candidate.user_facing === true);
+  if (!keys.length && !visibleActions.length) {
     panel.style.display = 'none';
     return;
   }
@@ -235,7 +242,10 @@ export function buildMenuPanel(menu, actions = []) {
     }
   }
 
-  for (const action of actions || []) {
+  // Command lists are implementation details.  Only explicit compound
+  // actions are user-facing; branch-level state actions are represented by
+  // their projected controls above.
+  for (const action of visibleActions) {
     const { item, sync } = buildActionItem(action);
     syncers.push(sync);
     list.appendChild(item);

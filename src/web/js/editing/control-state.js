@@ -85,6 +85,32 @@ function controlValues(controls) {
   return domains;
 }
 
+// Action execution has a closed-world contract: an unknown selector must not
+// accidentally execute a branch.  Rendering intentionally keeps the
+// fail-open dnfSatisfied() semantics so an unknown gate cannot hide geometry.
+export function strictDnfSatisfied(condGroups) {
+  if (!condGroups || condGroups.length === 0) return true;
+  return condGroups.some(group => group.every(condition => {
+    const current = values[condition.var];
+    if (current === undefined) return false;
+    if (condition.op && condition.op !== '==' && condition.op !== '!=') {
+      const left = Number(current);
+      const right = Number(condition.value);
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+      switch (condition.op) {
+        case '>': return left > right;
+        case '<': return left < right;
+        case '>=': return left >= right;
+        case '<=': return left <= right;
+        default: return false;
+      }
+    }
+    return condition.negate
+      ? current !== condition.value
+      : current === condition.value;
+  }));
+}
+
 /** Reconcile authoritative control semantics without resetting live values. */
 export function reconcileControlState(rules, defaults, controls = null) {
   stateRules = rules || [];

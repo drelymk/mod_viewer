@@ -178,6 +178,48 @@ def _project_assignment(write, ids, folder_path=None):
     }
 
 
+def _project_selector(selector, ids):
+    if not selector:
+        return None
+    result = dict(selector)
+    variable = result.get("var")
+    key = variable.key if isinstance(variable, VariableId) else variable
+    result["var"] = ids.get(key, key)
+    result["value"] = str(result.get("value", ""))
+    return result
+
+
+def _selector_names(graph, aliases):
+    names = []
+    for variable in aliases or ():
+        node = graph.variables.get(variable)
+        authored = sorted(
+            node.authored_names if node and node.authored_names else
+            {variable.name},
+            key=lambda value: (value.casefold(), value),
+        )[0]
+        if authored.casefold() not in {item.casefold() for item in names}:
+            names.append(authored)
+    return names
+
+
+def _project_action(action, ids, folder_path):
+    return {
+        "kind": action.kind,
+        "trigger": action.trigger,
+        "conditions": _project_conditions(action.conditions, ids),
+        "writes": [ids.get(variable.key, variable.key)
+                   for variable in action.writes],
+        "assignments": [_project_assignment(write, ids, folder_path)
+                        for write in action.assignments],
+        "source": _project_source(action.source, folder_path),
+        "selector": _project_selector(action.selector, ids),
+        "selector_aliases": [ids.get(variable.key, variable.key)
+                             for variable in action.selector_aliases],
+        "user_facing": action.user_facing,
+    }
+
+
 def _filter_and_project_groups(groups, graph, ids):
     """Drop unmodelled runtime gates only after graph classification."""
     allowed = set(graph.control_variables)
@@ -269,6 +311,10 @@ def _unified_projection(graph, sources, ids, folder_path,
             for section in pending_new_sections.get(relative, ())
         }
         for key in program.key_inputs:
+            if key.section.casefold() == PRESENT_SECTION.casefold():
+                # The reserved Present section is capture/editing machinery,
+                # never an ordinary Toggle even when it writes render state.
+                continue
             is_pending = key.section.casefold() in pending
             item = _key_projection(
                 program, key, graph, ids, source_label, folder_path,
@@ -324,6 +370,24 @@ def _unified_projection(graph, sources, ids, folder_path,
                     control.capture_bindings, ids, folder_path),
                 "_semantic_id": control.id,
             }
+            selectors = [controller.selector for controller in interactive
+                         if controller.selector]
+            if selectors:
+                info["selector"] = _project_selector(selectors[0], ids)
+                info["slot"] = info["selector"].get("value")
+                aliases = []
+                for controller in interactive:
+                    for variable in controller.selector_aliases:
+                        if variable not in aliases:
+                            aliases.append(variable)
+                info["_selector_names"] = _selector_names(graph, aliases)
+            operation = next((action for action in graph.actions
+                              if control.state_var in action.writes
+                              and action.assignments
+                              and (action.kind == "interactive"
+                                   or action.selector)), None)
+            if operation is not None:
+                info["action"] = _project_action(operation, ids, folder_path)
             if domain.get("kind") == "discrete":
                 info["values"] = domain.get("values", [])
             else:
@@ -334,16 +398,8 @@ def _unified_projection(graph, sources, ids, folder_path,
             key = f"{key_source.relative_path}::{control.state_var.name}"
             menu.setdefault(key, info)
             emitted_controls.add(control.id)
-    actions = [{
-        "kind": action.kind,
-        "trigger": action.trigger,
-        "conditions": _project_conditions(action.conditions, ids),
-        "writes": [ids.get(variable.key, variable.key)
-                   for variable in action.writes],
-        "assignments": [_project_assignment(write, ids, folder_path)
-                        for write in action.assignments],
-        "source": _project_source(action.source, folder_path),
-    } for action in graph.actions]
+    actions = [_project_action(action, ids, folder_path)
+               for action in graph.actions]
     return {"toggles": toggles, "menu": menu, "actions": actions}
 
 
@@ -356,7 +412,9 @@ def _state_rules(graph, ids, folder_path):
     rules = []
     for program in graph.facts:
         for write in program.writes:
-            if write.section.casefold() != "present" or write.literal is None:
+            if (write.section.casefold() not in {
+                    "present", PRESENT_SECTION.casefold()}
+                    or write.literal is None):
                 continue
             rules.append({
                 "var": ids.get(write.target.key, write.target.key),

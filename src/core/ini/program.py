@@ -31,7 +31,13 @@ _POST_RE = re.compile(r'^post\s+(.+)$', re.I)
 
 
 def _clean(raw) -> str:
-    return str(raw).split(";", 1)[0].strip()
+    text = str(raw).strip()
+    # Semicolon is a valid 3DMigoto key binding.  The section parser already
+    # preserves it on key/back assignments; keep the scanner consistent so
+    # ``key = ;`` reaches KeyInput.key as ``;`` instead of an empty binding.
+    if re.fullmatch(r"(?i)(?:key|back)\s*=\s*;", text):
+        return text
+    return text.split(";", 1)[0].strip()
 
 
 def _literal(value: str):

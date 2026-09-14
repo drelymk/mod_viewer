@@ -7,17 +7,18 @@ does not attempt to execute arbitrary 3DMigoto programs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import re
 from typing import Iterable, Mapping
 
+from .dnf import DNF_TRUE, dnf_and, dnf_or
 from .program import KeyInput, ProgramFacts, VariableWrite
 from .variables import VariableId
 
 
 _RUNTIME_NAMES = {
     "active", "done", "modactive", "mod_enabled", "modenabled",
-    "object_detected", "part", "menu", "clickedslot", "hoveredslot",
+    "object_detected", "part", "menu",
     "enable_mods", "draw_type", "cursor_x", "cursor_y",
 }
 _EXTERNAL_ROOTS = {
@@ -33,6 +34,27 @@ class RenderEffect:
     target: object = None
     source: dict | None = None
     metadata: Mapping = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class InfluenceEdge:
+    """A conservative influence edge in the write/control graph."""
+
+    source: VariableId
+    target: VariableId
+    kind: str
+    source_info: dict | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InputRoot:
+    """An authored input entry point, distinct from a visible control."""
+
+    kind: str
+    section: str
+    source: dict | None = None
+    writes: tuple[VariableId, ...] = ()
+    runs: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -51,6 +73,9 @@ class Controller:
     source: dict | None = None
     trigger: str = ""
     writes: tuple[VariableId, ...] = ()
+    selector: dict | None = None
+    selector_aliases: tuple[VariableId, ...] = ()
+    user_facing: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +83,10 @@ class Controller:
             "source": dict(self.source) if self.source else None,
             "trigger": self.trigger,
             "writes": [variable.key for variable in self.writes],
+            "selector": _selector_to_dict(self.selector),
+            "selector_aliases": [variable.key
+                                 for variable in self.selector_aliases],
+            "user_facing": self.user_facing,
         }
 
 
@@ -70,6 +99,9 @@ class Action:
     # Keep the source-ordered assignments so a compound action can be
     # projected without inventing a synthetic state variable.
     assignments: tuple[VariableWrite, ...] = ()
+    selector: dict | None = None
+    selector_aliases: tuple[VariableId, ...] = ()
+    user_facing: bool = False
 
     @property
     def kind(self) -> str:
@@ -87,6 +119,10 @@ class Action:
             "assignments": [_write_to_dict(write)
                             for write in self.assignments],
             "source": dict(self.source) if self.source else None,
+            "selector": _selector_to_dict(self.selector),
+            "selector_aliases": [variable.key
+                                 for variable in self.selector_aliases],
+            "user_facing": self.user_facing,
         }
 
 
@@ -111,6 +147,8 @@ class ControlGraph:
     effects: list[RenderEffect] = field(default_factory=list)
     facts: list[ProgramFacts] = field(default_factory=list)
     internal_controllers: dict[str, list[Controller]] = field(default_factory=dict)
+    input_roots: list[InputRoot] = field(default_factory=list)
+    influences: list[InfluenceEdge] = field(default_factory=list)
 
     @property
     def control_variables(self) -> set[VariableId]:
@@ -139,6 +177,26 @@ class ControlGraph:
                 key: [controller.to_dict() for controller in controllers]
                 for key, controllers in self.internal_controllers.items()
             },
+            "input_roots": [
+                {
+                    "kind": root.kind,
+                    "section": root.section,
+                    "source": dict(root.source) if root.source else None,
+                    "writes": [variable.key for variable in root.writes],
+                    "runs": list(root.runs),
+                }
+                for root in self.input_roots
+            ],
+            "influences": [
+                {
+                    "source": edge.source.key,
+                    "target": edge.target.key,
+                    "kind": edge.kind,
+                    "source_info": (dict(edge.source_info)
+                                    if edge.source_info else None),
+                }
+                for edge in self.influences
+            ],
         }
 
 
@@ -163,6 +221,16 @@ def _write_to_dict(write: VariableWrite) -> dict:
         "authored_target": write.authored_target,
         "exact_copy": write.exact_copy,
     }
+
+
+def _selector_to_dict(selector):
+    if not selector:
+        return None
+    result = dict(selector)
+    variable = result.get("var")
+    if isinstance(variable, VariableId):
+        result["var"] = variable.key
+    return result
 
 
 def _numeric(value):
@@ -206,6 +274,19 @@ def _condition_vars(conditions) -> set[VariableId]:
     return result
 
 
+def _condition_dnf(conditions):
+    """Return a mutable DNF view, treating an empty condition as true."""
+    if not conditions:
+        return DNF_TRUE
+    return [list(group) for group in conditions]
+
+
+def _combine_conditions(left, right):
+    """Combine two condition DNFs without losing the true sentinel."""
+    return tuple(tuple(group) for group in dnf_and(
+        _condition_dnf(left), _condition_dnf(right)))
+
+
 def _dedupe(items):
     result = []
     seen = set()
@@ -236,39 +317,43 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
         step = re.fullmatch(r"\(?\$[a-z0-9_.${}-]+([+-])1\)?", expression)
         if step and var.name in expression:
             step_writes.append((write, step.group(1)))
+        if any(token in expression for token in (
+                "cursor", "mouse", "range", "delta", "lerp", "interpol",
+                "dt", "td", "time", "slider")):
+            continuous = True
         if re.search(r"\$[^=]+[+\-*/]", expression):
-            continuous = continuous or any(token in expression
-                                            for token in ("cursor", "range", "dt", "td"))
+            continuous = continuous or any(token in expression for token in (
+                "cursor", "range", "delta", "lerp", "interpol", "dt", "td",
+                "time", "slider"))
         if re.search(r"%\s*\d+", write.expression):
             match = re.search(r"%\s*(\d+)", write.expression)
             if match:
                 cycle_values.extend(str(i) for i in range(int(match.group(1))))
-        for group in write.conditions or ():
-            for clause in group:
-                if clause.get("var") != var.key:
-                    continue
-                number = _numeric(clause.get("value"))
-                if number is None:
-                    continue
-                op = clause.get("op")
-                if op in ("<", "<="):
-                    # Continuous clamps use the authored boundary itself;
-                    # only discrete cycle ranges need an integer-exclusive
-                    # conversion for ``<``/``>``.
-                    candidate = (number if continuous or op == "<="
-                                 else number - 1)
-                    maximum = (candidate if maximum is None else
-                               min(maximum, candidate))
-                elif op in (">", ">="):
-                    candidate = (number if continuous or op == ">="
-                                 else number + 1)
-                    minimum = (candidate if minimum is None else
-                               max(minimum, candidate))
+        # A comparison is a range bound only when this same branch writes the
+        # compared boundary back to the same variable.  Conditions by
+        # themselves are often menu dispatch or visibility logic and do not
+        # describe a slider domain.
+        if write.literal is not None:
+            literal = _numeric(write.literal)
+            if literal is not None:
+                for group in write.conditions or ():
+                    for clause in group:
+                        if clause.get("var") != var.key:
+                            continue
+                        boundary = _numeric(clause.get("value"))
+                        if boundary is None or literal != boundary:
+                            continue
+                        op = clause.get("op")
+                        if op in ("<", "<="):
+                            minimum = (boundary if minimum is None else
+                                       max(minimum, boundary))
+                        elif op in (">", ">="):
+                            maximum = (boundary if maximum is None else
+                                       min(maximum, boundary))
 
-    # A bounded +/- 1 writer is the generic wrapped discrete form.  The
-    # comparison operator is retained on program facts without changing the
-    # historical public DNF shape, so this works for both ``<`` and ``>=``
-    # reset idioms.
+    # A bounded +/- 1 writer is the generic wrapped discrete form.  It is
+    # distinct from continuous clamp inference above: here the reset literal
+    # is a different state value and the step is bounded by the branch guard.
     if step_writes and not cycle_values:
         reset_values = [value for write in all_writes
                         for value in ([write.literal]
@@ -345,36 +430,205 @@ def _descendants(root: VariableId, reverse: Mapping[VariableId, set[VariableId]]
     return found
 
 
-def _reachable_from_keys(facts: list[ProgramFacts], reverse_runs):
-    """Return sections reachable from authored Key/input roots."""
-    reachable = set()
-    for program in facts:
-        lookup = {name.casefold(): name for name in program.source.sections}
-        edges = {}
-        for edge in program.run_edges:
-            edges.setdefault(edge.source_section, set()).add(edge.target_section)
-        roots = [item.section for item in program.key_inputs]
-        pending = list(roots)
-        local = set()
-        while pending:
-            section = pending.pop()
-            if section in local:
+def _run_closure(program: ProgramFacts, roots: Iterable[str]):
+    """Return ``section -> path conditions`` for one set of run roots.
+
+    The old implementation collapsed every Key in an INI into one reachable
+    section set.  Keeping conditions per root lets callers build a Key action
+    from only its own ``run=`` closure, while still allowing the separate
+    input/influence pass to reason about Present-driven execution.
+    """
+    edges = {}
+    for edge in program.run_edges:
+        edges.setdefault(edge.source_section.casefold(), []).append(edge)
+    paths = {}
+    pending = []
+    for root in roots:
+        key = str(root)
+        if key.casefold() not in paths:
+            paths[key.casefold()] = tuple(tuple(group) for group in DNF_TRUE)
+            pending.append(key)
+    while pending:
+        section = pending.pop()
+        current = paths[section.casefold()]
+        for edge in edges.get(section.casefold(), ()):
+            path = _combine_conditions(current, edge.conditions)
+            target_key = edge.target_section.casefold()
+            merged = tuple(tuple(group) for group in dnf_or(
+                _condition_dnf(paths.get(target_key)),
+                _condition_dnf(path)))
+            if target_key not in paths or merged != paths[target_key]:
+                paths[target_key] = merged
+                pending.append(edge.target_section)
+    return paths
+
+
+def _reachable_from_section(program: ProgramFacts, root_section: str):
+    """Compatibility-friendly section closure for one authored root."""
+    return _run_closure(program, (root_section,))
+
+
+def _writes_from_closure(program: ProgramFacts, roots: Iterable[str]):
+    paths = _run_closure(program, roots)
+    result = []
+    for write in program.writes:
+        path = paths.get(write.section.casefold())
+        if path is None or write.phase == "post":
+            continue
+        result.append(replace(
+            write, conditions=_combine_conditions(path, write.conditions)))
+    return result
+
+
+def _exact_alias_map(writes_by_target):
+    aliases = {}
+    for target, writes in writes_by_target.items():
+        for write in writes:
+            if write.phase != "post" and write.exact_copy and write.dependencies:
+                aliases.setdefault(target, set()).update(write.dependencies)
+    return aliases
+
+
+def _alias_family(variable, aliases):
+    """Return variables connected by exact-copy forwarding."""
+    reverse = {}
+    for target, dependencies in aliases.items():
+        for dependency in dependencies:
+            reverse.setdefault(dependency, set()).add(target)
+    found, pending = set(), [variable]
+    while pending:
+        current = pending.pop()
+        if current in found:
+            continue
+        found.add(current)
+        pending.extend(aliases.get(current, ()))
+        pending.extend(reverse.get(current, ()))
+    return found
+
+
+def _selector_candidates(writes: Iterable[VariableWrite]):
+    values = {}
+    for write in writes:
+        for group in write.conditions or ():
+            for clause in group:
+                if (clause.get("negate") or clause.get("op", "==") != "=="
+                        or _numeric(clause.get("value")) is None):
+                    continue
+                variable = clause.get("var")
+                if isinstance(variable, str):
+                    try:
+                        variable = VariableId.from_key(variable)
+                    except ValueError:
+                        continue
+                if isinstance(variable, VariableId):
+                    values.setdefault(variable, set()).add(
+                        str(clause.get("value")))
+    return {
+        variable: values_for_var for variable, values_for_var in values.items()
+        if len(values_for_var) >= 2
+    }
+
+
+def _selector_for_write(write, candidates):
+    """Find the innermost simple equality dispatch for one write."""
+    matches = []
+    for group in write.conditions or ():
+        for clause in group:
+            variable = clause.get("var")
+            if isinstance(variable, str):
+                try:
+                    variable = VariableId.from_key(variable)
+                except ValueError:
+                    continue
+            if (variable in candidates and not clause.get("negate")
+                    and clause.get("op", "==") == "=="):
+                matches.append({"var": variable,
+                                "value": str(clause.get("value"))})
+    return matches[-1] if matches else None
+
+
+def _without_selector(conditions, selector):
+    """Remove dispatch clauses from a branch's executable conditions.
+
+    A branch action already represents ``selector == value``.  Requiring the
+    hidden dispatcher variable to be present in the frontend state would make
+    otherwise valid preset/slot actions fail closed forever.  Other guards
+    remain strict and continue to protect side effects.
+    """
+    if not selector or not conditions:
+        return conditions
+    selector_var = selector["var"]
+    selector_value = str(selector["value"])
+    result = []
+    for group in conditions:
+        kept = []
+        for clause in group:
+            variable = clause.get("var")
+            if isinstance(variable, str):
+                try:
+                    variable = VariableId.from_key(variable)
+                except ValueError:
+                    pass
+            if (variable == selector_var
+                    and str(clause.get("value")) == selector_value):
                 continue
-            local.add(section)
-            pending.extend(edges.get(section, ()))
-        reachable.update((program.source.path, section) for section in local)
-    return reachable
+            # The negated clauses which make an elif branch exclusive use the
+            # same selector variable but a different value; they are also
+            # part of dispatch, not a frontend guard.
+            if variable == selector_var:
+                continue
+            kept.append(clause)
+        result.append(kept)
+    return tuple(tuple(group) for group in result)
+
+
+def _action_groups(assignments):
+    """Split source-ordered assignments by mutually-exclusive selectors."""
+    assignments = tuple(assignments)
+    candidates = _selector_candidates(assignments)
+    if not candidates:
+        return [(None, assignments)]
+    groups = {}
+    order = []
+    positions = {id(assignment): index
+                 for index, assignment in enumerate(assignments)}
+    for assignment in assignments:
+        selector = _selector_for_write(assignment, candidates)
+        marker = (selector["var"], selector["value"]) if selector else None
+        if marker not in groups:
+            groups[marker] = []
+            order.append(marker)
+        groups[marker].append(assignment)
+    common = groups.get(None, ())
+    branch_markers = [marker for marker in order if marker is not None]
+    if not branch_markers:
+        return [(None, assignments)]
+    result = []
+    for marker in branch_markers:
+        branch = tuple(sorted(
+            tuple(common) + tuple(groups[marker]),
+            key=lambda assignment: positions[id(assignment)]))
+        result.append((
+            {"var": marker[0], "value": marker[1]}, branch))
+    return result
+
+
+def _is_input_section(section):
+    low = str(section).casefold()
+    return low.startswith("key") or low in {"present", "keymodviewerpresent"}
 
 
 def _looks_like_external_input(writes: Iterable[VariableWrite], known_vars):
-    """Recognize command lists that have evidence of an external input root.
+    """Recognize input-driven command lists without a name allow-list.
 
-    A command list with no caller is not automatically a viewer action: many
-    mods keep ordinary helper writes in unreferenced sections.  Input-like
-    evidence is either a cycle expression or a condition/dependency supplied
-    outside the program's declared state (for example ``$choice`` or a
-    framework runtime variable).
+    Simple numeric selector dispatch is strong evidence on its own.  Other
+    evidence comes from runtime/external dependencies or an undeclared
+    condition variable.  A plain helper with only literal assignments does
+    not become a viewer action.
     """
+    writes = list(writes)
+    if _selector_candidates(writes):
+        return True
     for write in writes:
         condition_vars = _condition_vars(write.conditions)
         if any(_is_runtime(variable) or variable not in known_vars
@@ -394,6 +648,65 @@ def _looks_like_external_input(writes: Iterable[VariableWrite], known_vars):
     return False
 
 
+def _build_influences(facts: Iterable[ProgramFacts]):
+    """Build data, branch-condition, and run-condition influence edges."""
+    edges = []
+    for program in facts:
+        writes_by_section = {}
+        for write in program.writes:
+            writes_by_section.setdefault(write.section.casefold(), []).append(write)
+            for dependency in write.dependencies:
+                edges.append(InfluenceEdge(
+                    dependency, write.target, "data", write.source))
+            for variable in _condition_vars(write.conditions):
+                edges.append(InfluenceEdge(
+                    variable, write.target, "condition", write.source))
+        for run in program.run_edges:
+            for variable in _condition_vars(run.conditions):
+                for write in writes_by_section.get(
+                        run.target_section.casefold(), ()):
+                    edges.append(InfluenceEdge(
+                        variable, write.target, "run_condition", run.source))
+    return _dedupe(edges)
+
+
+def _changed_render_variables(assignments, reverse, render_vars):
+    return tuple(dict.fromkeys(
+        target for write in assignments
+        for target in _descendants(write.target, reverse)
+        if target in render_vars))
+
+
+def _actions_for_assignments(trigger, conditions, assignments, source,
+                             reverse, render_vars, aliases):
+    """Create one action per selector branch, preserving write order."""
+    actions = []
+    for selector, branch in _action_groups(assignments):
+        changed = _changed_render_variables(branch, reverse, render_vars)
+        if not changed:
+            continue
+        selector_aliases = tuple(sorted(
+            _alias_family(selector["var"], aliases) if selector else (),
+            key=lambda variable: variable.key))
+        branch_assignments = tuple(
+            replace(write, conditions=_without_selector(
+                write.conditions, selector))
+            for write in branch)
+        branch_conditions = (_without_selector(
+            conditions, selector) if selector else conditions)
+        actions.append(Action(
+            trigger=trigger,
+            conditions=branch_conditions,
+            writes=changed,
+            source=source,
+            assignments=branch_assignments,
+            selector=selector,
+            selector_aliases=selector_aliases,
+            user_facing=len(changed) > 1,
+        ))
+    return actions
+
+
 def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderEffect],
                         shape_vars: Iterable[VariableId] = ()) -> ControlGraph:
     """Build one graph from all independent INI scans."""
@@ -401,6 +714,7 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
     effects = list(effects)
     graph = ControlGraph(effects=effects, facts=facts)
     nodes, writes_by_target, reverse = _build_indexes(facts)
+    aliases = _exact_alias_map(writes_by_target)
     graph.variables = nodes
     for effect in effects:
         for var in effect.variables:
@@ -409,13 +723,28 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
     render_vars = {var for effect in effects for var in effect.variables
                    if not _is_runtime(var)}
     shape_set = set(shape_vars)
-    reachable_sections = _reachable_from_keys(facts, reverse)
+    graph.influences = _build_influences(facts)
     incoming_sections = {}
+    input_paths = {}
     for program in facts:
         for edge in program.run_edges:
             incoming_sections.setdefault(
                 (program.source.path, edge.target_section), set()).add(
                     edge.source_section)
+        roots = [key.section for key in program.key_inputs]
+        roots.extend(section for section in program.source.sections
+                     if section.casefold() == "present")
+        input_paths[program.source.path] = _run_closure(program, roots)
+        for key in program.key_inputs:
+            graph.input_roots.append(InputRoot(
+                kind=("reserved_present"
+                      if key.section.casefold() == "keymodviewerpresent"
+                      else "key"),
+                section=key.section,
+                source=key.source,
+                writes=key.writes,
+                runs=key.runs,
+            ))
 
     # A Key is direct only when it writes a semantic state. A Key that merely
     # runs a helper remains an input root for interactive tracing, never a
@@ -427,29 +756,25 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
     for program in facts:
         for key in program.key_inputs:
             direct = tuple(key.writes)
-            if direct:
+            reserved_present = key.section.casefold() == "keymodviewerpresent"
+            if direct and not reserved_present:
                 for var in direct:
                     direct_by_var.setdefault(var, []).append(Controller(
                         "direct_key", key.source, key.key, direct))
-            reachable_writes = [write for write in program.writes
-                                if write.phase != "post"
-                                and (program.source.path, write.section)
-                                in reachable_sections]
-            changed = tuple(dict.fromkeys(
-                target for write in reachable_writes
-                for target in _descendants(write.target, reverse)
-                if target in render_vars))
-            if key.runs and changed:
-                action = Action(
-                    key.key or key.section, key.conditions, changed,
-                    key.source, tuple(reachable_writes))
-                actions.append(action)
-                controller_kind = (
-                    "compound_action" if len(changed) > 1 else "interactive")
-                for var in changed:
-                    interactive_by_var.setdefault(var, []).append(Controller(
-                        controller_kind, key.source, key.key or key.section,
-                        changed))
+            if key.runs and not reserved_present:
+                reachable_writes = _writes_from_closure(program, key.runs)
+                key_actions = _actions_for_assignments(
+                    key.key or key.section, key.conditions, reachable_writes,
+                    key.source, reverse, render_vars, aliases)
+                actions.extend(key_actions)
+                for action in key_actions:
+                    controller_kind = action.kind
+                    for var in action.writes:
+                        interactive_by_var.setdefault(var, []).append(Controller(
+                            controller_kind, key.source,
+                            key.key or key.section, action.writes,
+                            action.selector, action.selector_aliases,
+                            action.user_facing))
 
     # Framework menu command lists can be entry points even when their Key
     # trigger is outside the selected INI.  Their writes are still structural
@@ -463,9 +788,11 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
         for section, section_writes in command_writes.items():
             section_key = (program.source.path, section)
             callers = incoming_sections.get(section_key, set())
-            if (callers and section_key not in reachable_sections
-                    and not any(str(caller).casefold().startswith("key")
-                                for caller in callers)):
+            paths = input_paths.get(program.source.path, {})
+            path_conditions = paths.get(section.casefold())
+            input_caller = any(_is_input_section(caller)
+                               for caller in callers)
+            if callers and path_conditions is None and not input_caller:
                 # A command list invoked by a TextureOverride or another
                 # runtime path is execution machinery, not a user controller.
                 continue
@@ -474,21 +801,30 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                 # An unreferenced helper is not evidence of a user action just
                 # because it writes a variable that also affects rendering.
                 continue
-            changed = tuple(dict.fromkeys(
-                target for write in section_writes
-                for target in _descendants(write.target, reverse)
-                if target in render_vars))
-            if not changed:
-                continue
             source = next((write.source for write in section_writes
                            if write.source), None)
-            controller_kind = (
-                "compound_action" if len(changed) > 1 else "interactive")
-            controller = Controller(controller_kind, source, section, changed)
-            actions.append(Action(
-                section, (), changed, source, tuple(section_writes)))
-            for var in changed:
-                interactive_by_var.setdefault(var, []).append(controller)
+            assignments = [replace(
+                write,
+                conditions=_combine_conditions(path_conditions, write.conditions)
+                if path_conditions else write.conditions)
+                for write in section_writes]
+            section_actions = _actions_for_assignments(
+                section, (), assignments, source, reverse, render_vars, aliases)
+            if any(str(caller).casefold().startswith("key")
+                   for caller in callers):
+                # A Key-rooted closure already has the user-facing action;
+                # this command-list projection only contributes the shared
+                # interactive controller and must not duplicate its button.
+                section_actions = [replace(action, user_facing=False)
+                                   for action in section_actions]
+            actions.extend(section_actions)
+            for action in section_actions:
+                controller = Controller(
+                    action.kind, source, section, action.writes,
+                    action.selector, action.selector_aliases,
+                    action.user_facing)
+                for var in action.writes:
+                    interactive_by_var.setdefault(var, []).append(controller)
 
     graph.actions = _dedupe(actions)
     controls_by_var: dict[VariableId, tuple[list, list]] = {}
@@ -549,7 +885,8 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
         # variable's control, preserving derived-state replay semantics.
         if not controllers:
             continue
-        writes = writes_by_target.get(var, [])
+        writes = [write for write in writes_by_target.get(var, ())
+                  if write.phase != "post"]
         dependency_writes = [
             dependency_write
             for write in writes
@@ -589,5 +926,5 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
 
 __all__ = [
     "Action", "Control", "ControlGraph", "Controller", "RenderEffect",
-    "VariableNode", "build_control_graph",
+    "InfluenceEdge", "InputRoot", "VariableNode", "build_control_graph",
 ]

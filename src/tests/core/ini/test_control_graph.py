@@ -9,6 +9,7 @@ from core.ini.analysis import analyze_ini
 from core.ini.program import scan_program
 from core.ini.texture_roles import _condition_group_is_consistent
 from core.ini.variables import VariableId, VariableResolver, source_from_path
+from core.ini.menu import attach_menu_images, extract_menu_toggles
 from core.editing.present import capturable_variables, add as add_present
 from core.ini.document import IniDocument
 
@@ -112,6 +113,280 @@ $\cx_Mod049\key_1 = $key_1
     }]
     state = load_control_state(ModLoadContext(str(tmp_path), [model, menu]))
     assert len(state["controls"]["menu"]) == 1
+
+
+def test_reserved_present_is_not_a_toggle_when_it_repeats_render_state(tmp_path):
+    path = _write(tmp_path / "present.ini", r"""[Constants]
+global persist $Outfit = 0
+
+[KeyOutfit]
+key = o
+type = cycle
+$Outfit = 0,1
+
+[KeyModViewerPresent]
+key = p
+type = cycle
+$Outfit = 0,1
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Outfit == 1
+    drawindexed = 3, 0, 0
+endif
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    parsed = analyze_mod_inis([path], str(tmp_path))
+
+    assert "KeyOutfit" in parsed.control_projection["toggles"]
+    assert "KeyModViewerPresent" not in parsed.control_projection["toggles"]
+    assert parsed.present["item"]["count"] == 2
+
+
+def test_key_run_closures_do_not_cross_contaminate_sibling_keys(tmp_path):
+    path = _write(tmp_path / "closures.ini", r"""[Constants]
+global persist $Hair = 0
+global persist $Dress = 0
+
+[KeyHair]
+key = h
+run = CommandListHair
+
+[KeyDress]
+key = d
+run = CommandListDress
+
+[CommandListHair]
+$Hair = 1 - $Hair
+
+[CommandListDress]
+$Dress = 1 - $Dress
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+[TextureOverrideDress]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Dress == 1
+    drawindexed = 3, 0, 0
+endif
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    source = source_from_path(path, str(tmp_path))
+    resolver = VariableResolver([source])
+    facts = scan_program(source, resolver)
+    hair = resolver.resolve("$Hair", source, "Constants")
+    dress = resolver.resolve("$Dress", source, "Constants")
+    graph = build_control_graph(
+        [facts], [RenderEffect("visibility", (hair,)),
+                  RenderEffect("visibility", (dress,))])
+
+    by_trigger = {action.trigger: action for action in graph.actions
+                  if action.trigger in {"h", "d"}}
+    assert [write.target for write in by_trigger["h"].assignments] == [hair]
+    assert [write.target for write in by_trigger["d"].assignments] == [dress]
+
+
+def test_input_root_can_reach_present_menu_without_becoming_a_toggle(tmp_path):
+    path = _write(tmp_path / "present-menu.ini", r"""[Constants]
+global $mouse_clicked
+global persist $Hair = 0
+
+[KeyMouse]
+key = m
+$mouse_clicked = 1
+
+[Present]
+if $mouse_clicked
+    run = CommandListSetHair
+endif
+
+[CommandListSetHair]
+$Hair = 1 - $Hair
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    parsed = analyze_mod_inis([path], str(tmp_path))
+
+    assert "KeyMouse" not in parsed.control_projection["toggles"]
+    hair = next(item for item in parsed.control_projection["menu"].values()
+                if item["var"] == "Hair")
+    assert "interactive" in hair["controllers"]
+
+
+def test_selector_branches_keep_assignments_and_aliases_separate(tmp_path):
+    path = _write(tmp_path / "selector.ini", r"""[Constants]
+global persist $Hair = 0
+global persist $Dress = 0
+global $slot
+global $hoveredSlot
+global $clickedSlot
+
+[CommandListClickedSlot]
+$hoveredSlot = $slot
+$clickedSlot = $hoveredSlot
+if $clickedSlot == 1
+    $Hair = 1 - $Hair
+elif $clickedSlot == 2
+    $Dress = 1 - $Dress
+endif
+
+[CommandListSlotItemImage]
+if $slot == 1
+    ps-t100 = ResourceMenuItem.1
+elif $slot == 2
+    ps-t100 = ResourceMenuItem.2
+endif
+
+[ResourceMenuItem.1]
+filename = hair.dds
+[ResourceMenuItem.2]
+filename = dress.dds
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+[TextureOverrideDress]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Dress == 1
+    drawindexed = 3, 0, 0
+endif
+
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    parsed = analyze_mod_inis([path], str(tmp_path))
+    actions = [action for action in parsed.control_graph.actions
+               if action.trigger == "CommandListClickedSlot"]
+    assert {(action.selector["value"], action.writes[0].name)
+            for action in actions} == {("1", "hair"), ("2", "dress")}
+    assert {action.selector["var"].name for action in actions} == {
+        "clickedslot"}
+    menu = parsed.control_projection["menu"]
+    assert next(item for item in menu.values() if item["var"] == "Hair")[
+        "image_file"] == "hair.dds"
+    assert next(item for item in menu.values() if item["var"] == "Dress")[
+        "image_file"] == "dress.dds"
+
+
+def test_generic_selector_projection_does_not_regress_legacy_menu_contract(
+        tmp_path):
+    path = _write(tmp_path / "selector-oracle.ini", r"""[Constants]
+global persist $Hair = 0
+global persist $Dress = 0
+global $slot
+global $clickedSlot
+
+[CommandListClickedSlot]
+$clickedSlot = $slot
+if $clickedSlot == 1
+    $Hair = 1 - $Hair
+elif $clickedSlot == 2
+    $Dress = 1 - $Dress
+endif
+
+[CommandListSlotItemImage]
+if $slot == 1
+    ps-t100 = ResourceMenuItem.1
+elif $slot == 2
+    ps-t100 = ResourceMenuItem.2
+endif
+[ResourceMenuItem.1]
+filename = hair.dds
+[ResourceMenuItem.2]
+filename = dress.dds
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+[TextureOverrideDress]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Dress == 1
+    drawindexed = 3, 0, 0
+endif
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    source = source_from_path(path, str(tmp_path))
+    legacy = extract_menu_toggles(source.sections)
+    attach_menu_images(legacy, source.sections, source.resources)
+    parsed = analyze_mod_inis([path], str(tmp_path))
+    generic = {item["var"].casefold(): item
+               for item in parsed.control_projection["menu"].values()}
+
+    assert {item["var"].casefold() for item in legacy.values()} <= set(generic)
+    for item in legacy.values():
+        projected = generic[item["var"].casefold()]
+        assert projected["domain"]["values"] == item["values"]
+        assert projected.get("image_file") == item.get("image_file")
 
 
 def test_shape_program_scan_preserves_authored_state():
@@ -479,7 +754,7 @@ endif
     assert state["controls"]["actions"] == parsed.control_projection["actions"]
 
 
-def test_continuous_bounds_keep_authored_comparison_boundaries(tmp_path):
+def test_continuous_bounds_ignore_unpaired_comparison_conditions(tmp_path):
     source = source_from_path("shape.ini", str(tmp_path), text=r"""[Constants]
 global persist $shape = 0.5
 
@@ -497,8 +772,63 @@ endif
     graph = build_control_graph(
         [facts], [RenderEffect("shape", (shape,))], shape_vars=(shape,))
     assert graph.controls[shape.key].domain == {
-        "kind": "continuous", "min": 0.1, "max": 0.75,
+        "kind": "continuous", "min": 0.0, "max": 1.0,
     }
+
+
+def test_continuous_bounds_require_same_branch_clamp_write(tmp_path):
+    source = source_from_path("shape.ini", str(tmp_path), text=r"""[Constants]
+global persist $shape = 0.5
+
+[CommandListClamp]
+if $shape < 0
+    $shape = 0
+endif
+if $shape > 1
+    $shape = 1
+endif
+""")
+    resolver = VariableResolver([source])
+    facts = scan_program(source, resolver)
+    shape = resolver.resolve("$shape", source, "Constants")
+    graph = build_control_graph(
+        [facts], [RenderEffect("shape", (shape,))], shape_vars=(shape,))
+    assert graph.controls[shape.key].domain == {
+        "kind": "continuous", "min": 0, "max": 1,
+    }
+
+
+def test_cursor_assignment_is_continuous_when_render_facing(tmp_path):
+    source = source_from_path("slider.ini", str(tmp_path), text=r"""[Constants]
+global persist $slider = 0.5
+
+[CommandListDrag]
+$slider = $cursor_x
+if $slider < 0
+    $slider = 0
+endif
+if $slider > 1
+    $slider = 1
+endif
+""")
+    resolver = VariableResolver([source])
+    facts = scan_program(source, resolver)
+    slider = resolver.resolve("$slider", source, "Constants")
+    graph = build_control_graph(
+        [facts], [RenderEffect("texture", (slider,))])
+    assert graph.controls[slider.key].domain == {
+        "kind": "continuous", "min": 0, "max": 1,
+    }
+
+
+def test_key_semicolon_binding_survives_program_scan():
+    source = source_from_path("backbow.ini", "", text=r"""[Key$BackBow]
+key = ;
+type = cycle
+$BackBow = 0,1
+""")
+    facts = scan_program(source)
+    assert facts.key_inputs[0].key == ";"
 
 
 def test_texture_only_semantic_assignment_is_a_render_control(tmp_path):

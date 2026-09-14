@@ -215,6 +215,7 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
             "values": values,
             "default": toggle_defaults.get(info["var"], values[0] if values else "0"),
             "effects": info.get("effects", []),
+            "action": info.get("action"),
         }
         image_path = safe_resource_path(mod_dir, info.get("image_file"))
         if image_path and os.path.isfile(image_path):
