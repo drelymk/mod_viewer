@@ -64,16 +64,20 @@ $\cx_Mod049\key_1 = $key_1
 
 
 def test_unified_graph_discovers_namespaced_interactive_control(tmp_path):
-    model = _write(tmp_path / "Model.ini", r"""namespace = cx_Mod049
+    model = _write(tmp_path / "Model.ini", r"""namespace = fixture_shared
 
 [Constants]
-global $key_1 = 1
+global $key_1 = 0
+global $key_2 = 0
 
 [TextureOverrideBody]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 ib = ResourceIndex
-if $key_1 == 1
+if $key_1 > 0
+    drawindexed = 3, 0, 0
+endif
+if $key_2 == 1
     drawindexed = 3, 0, 0
 endif
 
@@ -88,36 +92,63 @@ filename = index.buf
 format = R32_UINT
 """)
     menu = _write(tmp_path / "Menu.ini", r"""[Constants]
-global persist $key_1 = 0
+global $check1 = 0
+global persist $value_2 = 1
+global persist $key_1 = 3
+global persist $value_1 = 0
 
 [KeyClick]
-key = x
+key = VK_LBUTTON
 type = cycle
-$key_1 = 0,1
+$check1 = 0,1
 
-[KeyModViewerPresent]
-$\cx_Mod049\key_1 = $key_1
+[Present]
+run = CommandListUpdateButtons
+if $key_1 > 3
+    $key_1 = 0
+else
+    $key_1 = $key_1 + $value_1
+endif
+$value_1 = 0
+$\fixture_shared\key_1 = $key_1
+$\fixture_shared\key_2 = $value_2
+
+[CommandListUpdateButtons]
+if $check1 == 1
+    if cursor_x > 0.1 && cursor_x < 0.2
+        $value_1 = 1 - $value_1
+    endif
+    if cursor_x > 0.2 && cursor_x < 0.3
+        $value_2 = 1 - $value_2
+    endif
+endif
 """)
 
     parsed = analyze_mod_inis([model, menu], str(tmp_path))
     controls = parsed.control_projection
 
-    assert len(controls["menu"]) == 1
-    control = next(iter(controls["menu"].values()))
-    assert control["var"].casefold() == "cx_mod049/key_1"
-    assert control["domain"] == {"kind": "discrete", "values": ["0", "1"]}
-    assert parsed.groups[0]["draws"][0].conditions == [[{
-        "var": "cx_Mod049/key_1", "value": "1", "negate": False,
-    }]]
-    menu_target = next(target for target in parsed.present["target_inis"]
-                       if target["value"] == "Menu.ini")
-    assert menu_target["vars"] == ["cx_Mod049/key_1"]
-    assert menu_target["capture_bindings"] == [{
-        "ini": "Menu.ini", "authored_var": "key_1",
-        "control_id": "cx_Mod049/key_1",
-    }]
+    assert {info["var"].casefold() for info in controls["menu"].values()} == {
+        "fixture_shared/key_1", "fixture_shared/key_2",
+    }
+    assert len(controls["menu"]) == 2
+    by_var = {info["var"].casefold(): info
+              for info in controls["menu"].values()}
+    assert by_var["fixture_shared/key_1"]["domain"] == {
+        "kind": "discrete", "values": ["0", "1", "2", "3"],
+    }
+    assert by_var["fixture_shared/key_2"]["domain"] == {
+        "kind": "discrete", "values": ["0", "1"],
+    }
+    assert all("interactive" in info["controllers"]
+               and "direct_key" not in info["controllers"]
+               and "action" not in info
+               for info in by_var.values())
+    assert not controls["toggles"]
+    assert all(info["capture_bindings"] for info in by_var.values())
     state = load_control_state(ModLoadContext(str(tmp_path), [model, menu]))
-    assert len(state["controls"]["menu"]) == 1
+    assert set(info["var"] for info in state["controls"]["menu"].values()) == {
+        "fixture_shared/key_1", "fixture_shared/key_2",
+    }
 
 
 def test_reserved_present_is_not_a_toggle_when_it_repeats_render_state(tmp_path):

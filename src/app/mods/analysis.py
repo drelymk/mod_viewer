@@ -347,7 +347,7 @@ def _action_for_control(graph, control, controllers):
     candidates = [action for action in graph.actions
                   if control.state_var in action.writes
                   and action.assignments
-                  and (action.kind == "interactive" or action.user_facing)]
+                  and action.user_facing]
     selector_controllers = [controller for controller in controllers
                             if controller.selector]
     # A slot-specific operation is the most precise menu behavior.  Do not

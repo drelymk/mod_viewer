@@ -486,7 +486,8 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
     minimum = maximum = None
     step_writes = []
     all_writes = list(writes)
-    for write in all_writes + list(dependency_writes or ()):
+    dependency_writes = list(dependency_writes or ())
+    for write in all_writes + dependency_writes:
         cycle_values.extend(write.cycle_values)
         if write.literal is not None:
             literal_values.append(write.literal)
@@ -494,8 +495,18 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
         if re.fullmatch(r"1-\$[a-z0-9_.${}-]+", expression):
             cycle_values.extend(("0", "1"))
         step = re.fullmatch(r"\(?\$[a-z0-9_.${}-]+([+-])1\)?", expression)
-        if step and var.name in expression:
+        write_var = write.target
+        if step and write_var.name.casefold() in expression:
             step_writes.append((write, step.group(1)))
+        # A wrapped state can advance by another discrete helper rather than
+        # by a literal one (for example ``$key = $key + $value``).  Preserve
+        # the bounded-range inference for that form when the expression is a
+        # safe arithmetic update and the branch guard is about its target.
+        if (write.dependencies and write.target in write.dependencies
+                and any(dependency != write.target
+                        for dependency in write.dependencies)
+                and _safe_arithmetic_expression(write.expression)):
+            step_writes.append((write, None))
         if any(token in expression for token in (
                 "cursor", "mouse", "range", "delta", "lerp", "interpol",
                 "dt", "td", "time", "slider")):
@@ -517,7 +528,8 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
             if literal is not None:
                 for group in write.conditions or ():
                     for clause in group:
-                        if clause.get("var") != var.key:
+                        if clause.get("var") not in {
+                                var.key, write.target.key}:
                             continue
                         boundary = _numeric(clause.get("value"))
                         if boundary is None or literal != boundary:
@@ -534,16 +546,18 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
     # distinct from continuous clamp inference above: here the reset literal
     # is a different state value and the step is bounded by the branch guard.
     if step_writes and not cycle_values:
-        reset_values = [value for write in all_writes
+        domain_writes = all_writes + dependency_writes
+        reset_values = [value for write in domain_writes
                         for value in ([write.literal]
                                       if write.literal is not None else [])]
         low = min((_numeric(value) for value in reset_values
                    if _numeric(value) is not None), default=None)
         high = None
-        for write in all_writes:
+        for write in domain_writes:
             for group in write.conditions or ():
                 for clause in group:
-                    if clause.get("var") != var.key:
+                    if clause.get("var") not in {
+                            var.key, write.target.key}:
                         continue
                     number = _numeric(clause.get("value"))
                     if number is None:
@@ -577,6 +591,28 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
 
 
 _AFFINE_VAR = r"\$[a-z0-9_.${}\\-]+"
+
+
+def _safe_arithmetic_expression(expression):
+    """Accept only arithmetic made from resolved variables and constants."""
+    normalized = re.sub(_AFFINE_VAR, "v", str(expression), flags=re.I)
+    normalized = re.sub(r"(?:\d+(?:\.\d*)?|\.\d+)", "n", normalized)
+    return not re.sub(r"[\s()+\-*/%vn]", "", normalized,
+                      flags=re.I)
+
+
+def _safe_provenance_write(write: VariableWrite) -> bool:
+    """Return whether a write may carry user influence to its target."""
+    if (write.phase == "post" or not write.dependencies
+            or _is_runtime(write.target)):
+        return False
+    if any(_is_runtime(variable) for variable in write.dependencies):
+        return False
+    if any(_is_runtime(variable) for variable in
+           _condition_vars(write.conditions)):
+        return False
+    return (write.exact_copy and len(write.dependencies) == 1) or (
+        _safe_arithmetic_expression(write.expression))
 
 
 def _selector_transform(write: VariableWrite):
@@ -1257,16 +1293,23 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                     if action.routing_conditions:
                         continue
                     controller_kind = action.kind
-                    for var in action.writes:
+                    provenance_targets = set(action.writes)
+                    provenance_targets.update(
+                        write.target for write in action.assignments)
+                    for var in sorted(provenance_targets,
+                                      key=lambda item: item.key):
                         interactive_by_var.setdefault(var, []).append(Controller(
                             controller_kind, key.source,
                             key.key or key.section, action.writes,
                             action.selector, action.selector_aliases,
                             action.user_facing,
                             action.routing_conditions,
-                            _controller_domain(
+                            (_controller_domain(
                                 var, action.assignments, reverse,
-                                var in shape_set),
+                                var in shape_set)
+                             if any(write.target == var
+                                    for write in action.assignments)
+                             else None),
                             action.routing_selectors))
 
     # Framework menu command lists can be entry points even when their Key
@@ -1326,19 +1369,68 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                     action.selector, action.selector_aliases,
                     action.user_facing,
                     action.routing_conditions,
-                    _controller_domain(
+                    (_controller_domain(
                         action.writes[0], action.assignments, reverse)
-                    if len(action.writes) == 1 else None,
+                     if (len(action.writes) == 1
+                         and any(write.target == action.writes[0]
+                                 for write in action.assignments))
+                     else None),
                     action.routing_selectors)
-                for var in action.writes:
+                provenance_targets = set(action.writes)
+                provenance_targets.update(
+                    write.target for write in action.assignments)
+                for var in sorted(provenance_targets,
+                                  key=lambda item: item.key):
                     interactive_by_var.setdefault(var, []).append(controller)
 
     graph.actions = _dedupe(actions)
+    # Preserve the fact that an interactive helper writes a state variable,
+    # even when its complete action is not safe to replay.  The provenance is
+    # carried through Present arithmetic and exact-copy namespace forwarding;
+    # only render-facing targets become controls.
+    user_provenance = {
+        variable: list(direct_by_var.get(variable, ()))
+        + list(interactive_by_var.get(variable, ()))
+        for variable in set(direct_by_var) | set(interactive_by_var)
+    }
+    changed = True
+    while changed:
+        changed = False
+        for program in facts:
+            for write in program.writes:
+                if not _safe_provenance_write(write):
+                    continue
+                dependencies = tuple(
+                    dependency for dependency in write.dependencies
+                    if dependency != write.target)
+                upstream_controllers = [
+                    controller
+                    for dependency in dependencies
+                    for controller in user_provenance.get(dependency, ())
+                ]
+                if not upstream_controllers:
+                    continue
+                target_controllers = user_provenance.setdefault(
+                    write.target, [])
+                existing = {repr(controller)
+                            for controller in target_controllers}
+                for controller in upstream_controllers:
+                    forwarded = Controller(
+                        "interactive",
+                        controller.source or write.source,
+                        controller.trigger or write.section,
+                        (write.target,),
+                    )
+                    if repr(forwarded) in existing:
+                        continue
+                    target_controllers.append(forwarded)
+                    existing.add(repr(forwarded))
+                    changed = True
+
     controls_by_var: dict[VariableId, tuple[list, list]] = {}
     for var in sorted(render_vars, key=lambda item: item.key):
         controllers = []
-        controllers.extend(direct_by_var.get(var, ()))
-        controllers.extend(interactive_by_var.get(var, ()))
+        controllers.extend(user_provenance.get(var, ()))
         # A safe derived render flag can be selected by an upstream direct
         # state (for example outfit -> Present piece). Expose the upstream
         # state while retaining the render flag in its effect set.
@@ -1351,11 +1443,8 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                 # Exact namespace forwarding gets its own controller on the
                 # render-facing target. The source variable remains a
                 # provenance/capture node, not a duplicate UI state.
-                if (write.dependencies and
-                        any(dep in direct_by_var for dep in write.dependencies)):
-                    controllers.append(Controller(
-                        "interactive", write.source, write.section, (var,)))
-                else:
+                if not any(dep in user_provenance
+                           for dep in write.dependencies):
                     upstream.extend(write.dependencies)
         for parent in upstream:
             if parent in direct_by_var and not _is_runtime(parent):
