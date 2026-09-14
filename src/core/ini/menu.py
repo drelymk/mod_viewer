@@ -421,7 +421,7 @@ def _selector_image_bindings(sections, resource):
                 continue
             info = resource(icon.group(1))
             if info.get("filename"):
-                bindings.setdefault(current, info["filename"])
+                bindings.setdefault(current, set()).add(info["filename"])
     return bindings
 
 
@@ -525,13 +525,17 @@ def attach_menu_images(menu, sections, resources):
             names.add(variable.rsplit("/", 1)[-1]
                       .rsplit("::", 1)[-1].casefold().lstrip("$"))
             value = str(selector.get("value", ""))
-            image = next((filename for (name, candidate), filename
-                          in selector_images.items()
-                          if candidate == value and name in names), None)
-            if image:
-                info["image_file"] = image
+            matches = {
+                filename
+                for (name, candidate), filenames in selector_images.items()
+                if candidate == value and name in names
+                for filename in filenames
+            }
+            if len(matches) == 1:
+                info["image_file"] = next(iter(matches))
             # A selector was available but no exact image dispatch proved the
-            # relationship.  Do not guess from resource/variable names.
+            # relationship, or multiple conflicting images matched. Do not
+            # guess from resource/variable names.
             continue
         slot = info.get("slot")
         try:

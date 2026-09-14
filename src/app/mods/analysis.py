@@ -278,7 +278,25 @@ def _project_provenance(graph, ids, folder_path):
         }
         for edge in graph.influences
     ]
-    return {"input_roots": roots, "influences": influences}
+    selector_flow = [
+        {
+            "source": ids.get(edge.source.key, edge.source.key),
+            "target": ids.get(edge.target.key, edge.target.key),
+            "conditions": _project_conditions(edge.conditions, ids),
+            "source_info": _project_source(edge.source_info, folder_path),
+        }
+        for edge in graph.selector_flow
+    ]
+    return {
+        "input_roots": roots,
+        "influences": influences,
+        "modeled_state_variables": [
+            ids.get(variable.key, variable.key)
+            for variable in sorted(graph.modeled_state_variables,
+                                   key=lambda item: item.key)
+        ],
+        "selector_flow": selector_flow,
+    }
 
 
 def _source_path(source):
@@ -348,11 +366,7 @@ def _action_for_control(graph, control, controllers):
 
 def _filter_and_project_groups(groups, graph, ids):
     """Drop unmodelled runtime gates only after graph classification."""
-    allowed = set(graph.control_variables)
-    allowed.update(effect_var
-                   for control in graph.controls.values()
-                   for effect in control.effects
-                   for effect_var in effect.variables)
+    allowed = graph.modeled_state_variables
     allowed_keys = {variable.key for variable in allowed}
     for group in groups:
         for shape in group.get("shape_effects") or []:
@@ -379,7 +393,9 @@ def _write_values(program, section, variable):
             result.extend(write.cycle_values)
         elif write.literal is not None:
             result.append(write.literal)
-    return list(dict.fromkeys(result))
+    # Cycle/PRESENT positions are authored data. Repeated values carry
+    # meaning because companion variables must stay aligned by position.
+    return result
 
 
 def _key_projection(program, key, graph, ids, source_label, folder_path,
@@ -501,12 +517,19 @@ def _unified_projection(graph, sources, ids, folder_path,
             if selectors:
                 info["selector"] = _project_selector(selectors[0], ids)
                 info["slot"] = info["selector"].get("value")
-                aliases = []
-                for controller in interactive:
-                    for variable in controller.selector_aliases:
-                        if variable not in aliases:
-                            aliases.append(variable)
-                info["_selector_names"] = _selector_names(graph, aliases)
+                selector_family = set()
+                for selector in selectors:
+                    variable = selector.get("var")
+                    selector_family.update(graph.selector_family(variable))
+                    if variable is not None:
+                        selector_family.add(variable)
+                info["_selector_names"] = _selector_names(
+                    graph, sorted(selector_family, key=lambda item: item.key))
+                info["_selector_flow"] = [
+                    ids.get(variable.key, variable.key)
+                    for variable in sorted(selector_family,
+                                            key=lambda item: item.key)
+                ]
             operation = _action_for_control(graph, control, interactive)
             if operation is not None:
                 info["action"] = _project_action(operation, ids, folder_path)
@@ -537,19 +560,31 @@ def _controllers_for(graph, variable):
 
 
 def _state_rules(graph, ids, folder_path):
+    modeled = graph.modeled_state_variables
+    modeled_keys = {variable.key for variable in modeled}
     rules = []
     for program in graph.facts:
         for write in program.writes:
-            if (write.section.casefold() not in {
-                    "present", PRESENT_SECTION.casefold()}
-                    or write.literal is None):
+            if (write.section.casefold() != "present"
+                    or write.phase == "post"
+                    or write.target not in modeled):
+                continue
+            conditions = write.conditions or ()
+            if any(clause.get("var") not in modeled_keys
+                   for group in conditions for clause in group):
+                # A derived value guarded by runtime/framework state cannot
+                # be reproduced by the viewer and must stay out of JS state.
+                continue
+            operation = _project_operation(write, ids)
+            if operation is None:
                 continue
             rules.append({
                 "var": ids.get(write.target.key, write.target.key),
                 "value": write.literal,
-                "conditions": _project_conditions(write.conditions, ids),
+                "conditions": _project_conditions(conditions, ids),
                 "phase": write.phase,
                 "source": _project_source(write.source, folder_path),
+                "operation": operation,
             })
     return rules
 
@@ -726,8 +761,11 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         }
         attach_menu_images(entries, source.sections, source.resources)
 
+    modeled = graph.modeled_state_variables
     defaults = {}
     for node in graph.variables.values():
+        if node.id not in modeled:
+            continue
         for declaration in node.declarations:
             if declaration.default is not None:
                 defaults[ids.get(node.id.key, node.id.key)] = declaration.default

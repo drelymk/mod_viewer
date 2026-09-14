@@ -1,6 +1,7 @@
 """Regression coverage for the unified variable/control analysis path."""
 
 import json
+from pathlib import Path
 
 from app.mods.analysis import analyze_mod_inis
 from app.mods.controls import load_control_state
@@ -12,7 +13,9 @@ from core.ini.program import scan_program
 from core.ini.texture_roles import _condition_group_is_consistent
 from core.ini.variables import VariableId, VariableResolver, source_from_path
 from core.ini.menu import attach_menu_images, extract_menu_toggles
-from core.editing.present import capturable_variables, add as add_present
+from core.editing.present import (
+    capturable_variables, add as add_present, details as present_details,
+)
 from core.ini.document import IniDocument
 
 
@@ -154,6 +157,137 @@ format = R32_UINT
     assert "KeyOutfit" in parsed.control_projection["toggles"]
     assert "KeyModViewerPresent" not in parsed.control_projection["toggles"]
     assert parsed.present["item"]["count"] == 2
+
+
+def test_present_sequences_keep_duplicate_positions_and_only_real_mismatch_fails(
+        tmp_path):
+    first = _write(tmp_path / "first.ini", r"""[Constants]
+global persist $A = 1
+global persist $B = 1
+global persist $C = 0
+global persist $D = 0
+
+[KeyModViewerPresent]
+key = ]
+back = [
+type = cycle
+$A = 1,0,1
+$B = 1,1,1
+$C = 0,0,0
+$D = 0,1,0
+""")
+    details = present_details(IniDocument.load(first))
+    assert details["count"] == 3
+    assert details["vars"] == {
+        "A": ["1", "0", "1"],
+        "B": ["1", "1", "1"],
+        "C": ["0", "0", "0"],
+        "D": ["0", "1", "0"],
+    }
+
+    second = _write(tmp_path / "second.ini", r"""[Constants]
+global persist $A = 0
+global persist $B = 0
+
+[KeyModViewerPresent]
+key = ]
+back = [
+type = cycle
+$A = 0,1,0
+$B = 0,0,0
+""")
+    aligned = analyze_mod_inis([first, second], str(tmp_path)).present["item"]
+    assert aligned["count"] == 3
+    assert aligned["sync_error"] is None
+
+    Path(second).write_text(Path(second).read_text(encoding="utf-8")
+                            .replace("$B = 0,0,0", "$B = 0,0"),
+                            encoding="utf-8")
+    mismatch = analyze_mod_inis([first, second], str(tmp_path)).present["item"]
+    assert mismatch["count"] == 0
+    assert "different position counts" in mismatch["sync_error"]
+
+
+def test_modeled_state_keeps_safe_present_derivation_and_drops_runtime_wrappers(
+        tmp_path):
+    path = _write(tmp_path / "derived.ini", r"""[Constants]
+global persist $Outfit = 0
+global $Piece = 0
+global $object_detected = 0
+
+[KeyOutfit]
+key = o
+type = cycle
+$Outfit = 0,1
+
+[Present]
+if $Outfit == 1
+    $Piece = 1
+else
+    $Piece = 0
+endif
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $object_detected
+    if $Piece == 1
+        Resource\ZZMI\Diffuse = ResourceBodyOn
+        drawindexed = 3, 0, 0
+    else
+        Resource\ZZMI\Diffuse = ResourceBodyOff
+        drawindexed = 3, 0, 0
+    endif
+endif
+[ResourceBodyOn]
+filename = body-on.dds
+[ResourceBodyOff]
+filename = body-off.dds
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    parsed = analyze_mod_inis([path], str(tmp_path))
+    modeled = {variable.name for variable in
+               parsed.control_graph.modeled_state_variables}
+
+    assert {"outfit", "piece"} <= modeled
+    assert "object_detected" not in modeled
+    assert set(parsed.defaults) == {"Outfit", "Piece"}
+    assert all(clause["var"].casefold() != "object_detected"
+               for group in parsed.groups for draw in group["draws"]
+               for branch in draw.conditions for clause in branch)
+    assert all(clause["var"].casefold() != "object_detected"
+               for group in parsed.groups for draw in group["draws"]
+               for variant in draw.texture_rules("diffuse")
+               for branch in variant["conditions"] for clause in branch)
+    assert {rule["var"] for rule in parsed.state_rules} == {"Piece"}
+
+
+def test_selector_image_conflict_fails_closed(tmp_path):
+    source = {
+        "ImageA": ["if $slot == 1", "ps-t100 = ResourceA", "endif"],
+        "ImageB": ["if $slot == 1", "ps-t100 = ResourceB", "endif"],
+    }
+    resources = {
+        "ResourceA": {"filename": "menu/a.dds"},
+        "ResourceB": {"filename": "menu/b.dds"},
+    }
+    menu = {"one": {
+        "name": "State", "var": "State", "selector": {
+            "var": "clickedSlot", "value": "1",
+        }, "_selector_names": ["clickedSlot", "slot"],
+    }}
+
+    attach_menu_images(menu, source, resources)
+    assert "image_file" not in menu["one"]
 
 
 def test_key_run_closures_do_not_cross_contaminate_sibling_keys(tmp_path):
@@ -664,7 +798,7 @@ endif
         {"kind": "set", "value": "2"},
     ]
     serialized = graph.to_dict()
-    assert serialized["schema_version"] == 2
+    assert serialized["schema_version"] == 3
     json.dumps(serialized)
 
 

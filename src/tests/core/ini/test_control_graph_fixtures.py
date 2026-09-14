@@ -43,6 +43,22 @@ def test_mod2_fixture_preserves_direct_keys_menu_branches_and_preset():
     assert set(preset["writes"]) == {"Body", "Hair"}
     assert "KeyMouse" not in toggles
     assert "HairColor" not in menu
+    assert "object_detected" not in parsed.defaults
+    assert "mouse_clicked" not in parsed.defaults
+    modeled = parsed.control_projection["provenance"][
+        "modeled_state_variables"]
+    assert {name.casefold() for name in modeled} == {"body", "hair", "eyes"}
+    for group in parsed.groups:
+        for draw in group["draws"]:
+            conditions = list(draw.conditions)
+            conditions.extend(
+                condition for variant in draw.texture_rules("diffuse")
+                for condition in variant["conditions"])
+            assert all(clause["var"].casefold() != "object_detected"
+                       for branch in conditions for clause in branch)
+    hair_draw = next(draw for group in parsed.groups
+                     for draw in group["draws"] if draw.label == "Hair-1")
+    assert hair_draw.texture_rules("diffuse")
 
 
 def test_sandrone_fixture_separates_slots_and_continuous_controls():
@@ -60,11 +76,25 @@ def test_sandrone_fixture_separates_slots_and_continuous_controls():
         }
     assert "KeyMenu" not in parsed.control_projection["toggles"]
     assert "KeyClickedSlot" not in parsed.control_projection["toggles"]
+    assert "active" not in parsed.defaults
+    assert all(clause["var"].casefold() != "active"
+               for group in parsed.groups for draw in group["draws"]
+               for branch in draw.conditions for clause in branch)
 
     slot_actions = [action for action in parsed.control_projection["actions"]
                     if action["trigger"] == "CommandListClickedSlot"]
     assert {(action["selector"]["value"], action["writes"][0])
             for action in slot_actions} == {("1", "Hair"), ("2", "Hat")}
+    assert all({"slot", "hoveredslot"}.isdisjoint(
+        {alias.casefold() for alias in action["selector_aliases"]})
+               for action in slot_actions)
+    flow = parsed.control_projection["provenance"]["selector_flow"]
+    assert {(
+        edge["source"].casefold(), edge["target"].casefold())
+        for edge in flow
+    } >= {("slot", "hoveredslot"), ("hoveredslot", "clickedslot")}
+    assert {"slot", "hoveredslot", "clickedslot"} <= {
+        name.casefold() for name in menu["hair"]["_selector_names"]}
 
 
 def test_lucy_fixture_keeps_present_and_internal_range_state_separate():
@@ -81,6 +111,11 @@ def test_lucy_fixture_keeps_present_and_internal_range_state_separate():
     assert next(item for item in menu.values()
                 if item["var"].casefold() == "outfit")["image_file"] == (
                     "menu/flat.dds")
+    assert "active" not in parsed.defaults
+    assert "first_run" not in parsed.defaults
+    assert all(clause["var"].casefold() != "active"
+               for group in parsed.groups for draw in group["draws"]
+               for branch in draw.conditions for clause in branch)
 
 
 def test_belle_fixture_keeps_slider_slots_and_direct_toggle():
@@ -96,6 +131,10 @@ def test_belle_fixture_keeps_slider_slots_and_direct_toggle():
         assert menu[variable]["domain"] == {
             "kind": "continuous", "min": 0, "max": 1,
         }
+    assert "active" not in parsed.defaults
+    assert {"slot", "hovered_slot", "clicked_slot"} <= {
+        name.casefold() for name in menu["swapvarsliderbreast"][
+            "_selector_names"]}
 
 
 def test_namespace_fixture_projects_one_qualified_state_and_present_capture():
@@ -106,7 +145,7 @@ def test_namespace_fixture_projects_one_qualified_state_and_present_capture():
     assert set(menu) == {"fixture_shared/state"}
     assert "KeyState" not in parsed.control_projection["toggles"]
     assert "KeyModViewerPresent" not in parsed.control_projection["toggles"]
-    assert parsed.control_projection["schema_version"] == 2
+    assert parsed.control_projection["schema_version"] == 3
     roots = parsed.control_projection["provenance"]["input_roots"]
     assert any(root["kind"] == "reserved_present" for root in roots)
     assert any(root["kind"] == "present" for root in roots)
@@ -114,9 +153,15 @@ def test_namespace_fixture_projects_one_qualified_state_and_present_capture():
                and edge["target"].casefold() == "fixture_shared/state"
                for edge in parsed.control_projection["provenance"][
                    "influences"])
+    assert parsed.present["item"]["count"] == 3
+    assert parsed.present["item"]["vars"] == [{
+        "var": "namespace_menu::State",
+        "values": ["0", "1", "1"],
+        "default": "0",
+    }]
     state = load_control_state(
         ModLoadContext(str(FIXTURE_ROOT), paths))
-    assert state["controls"]["schema_version"] == 2
+    assert state["controls"]["schema_version"] == 3
     assert state["controls"]["provenance"]["input_roots"]
 
 

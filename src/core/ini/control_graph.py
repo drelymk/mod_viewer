@@ -18,7 +18,10 @@ from .variables import VariableId
 
 _RUNTIME_NAMES = {
     "active", "done", "modactive", "mod_enabled", "modenabled",
-    "object_detected", "part", "menu",
+    "object_detected", "part", "menu", "mouse_clicked", "slot",
+    "hoveredslot", "hovered_slot", "clickedslot", "clicked_slot",
+    "button_number", "first_run",
+    "first_run_done", "merge_status", "merge_status_id",
     "enable_mods", "draw_type", "cursor_x", "cursor_y",
 }
 _EXTERNAL_ROOTS = {
@@ -27,9 +30,9 @@ _EXTERNAL_ROOTS = {
 }
 
 # Bump when the serialized control/action contract gains fields or changes
-# execution semantics.  Consumers may continue accepting version 1 payloads
-# with the optional fields below omitted.
-CONTROL_GRAPH_SCHEMA_VERSION = 2
+# execution semantics. Consumers may continue accepting older payloads with
+# the optional fields below omitted.
+CONTROL_GRAPH_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +52,33 @@ class InfluenceEdge:
     target: VariableId
     kind: str
     source_info: dict | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SelectorFlowEdge:
+    """A UI-only exact-copy path between selector variables.
+
+    This is deliberately separate from semantic aliases: a conditional copy
+    can explain how a menu hit-test value reaches an action dispatcher without
+    making the two variables interchangeable render state.
+    """
+
+    source: VariableId
+    target: VariableId
+    conditions: tuple = ()
+    source_info: dict | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "source": self.source.key,
+            "target": self.target.key,
+            "conditions": [
+                [_clause_to_dict(clause) for clause in group]
+                for group in (self.conditions or ())
+            ],
+            "source_info": (dict(self.source_info)
+                            if self.source_info else None),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,19 +186,64 @@ class ControlGraph:
     internal_controllers: dict[str, list[Controller]] = field(default_factory=dict)
     input_roots: list[InputRoot] = field(default_factory=list)
     influences: list[InfluenceEdge] = field(default_factory=list)
+    selector_flow: list[SelectorFlowEdge] = field(default_factory=list)
 
     @property
     def control_variables(self) -> set[VariableId]:
         return {control.state_var for control in self.controls.values()}
+
+    @property
+    def modeled_state_variables(self) -> set[VariableId]:
+        """Return state the viewer can intentionally reproduce.
+
+        Raw render conditions also mention runtime/framework values.  Those
+        values must remain unknown to the browser, so only visible controls
+        and safe Present-derived render flags enter the modeled state.
+        """
+        modeled = set(self.control_variables)
+        render_vars = {
+            variable
+            for effect in self.effects
+            for variable in effect.variables
+            if not _is_runtime(variable)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for program in self.facts:
+                for write in program.writes:
+                    if (write.phase == "post"
+                            or write.section.casefold() != "present"
+                            or write.target not in render_vars
+                            or write.target in modeled):
+                        continue
+                    if not _condition_vars(write.conditions) <= modeled:
+                        continue
+                    safe_copy = (write.exact_copy
+                                 and len(write.dependencies) == 1
+                                 and write.dependencies[0] in modeled)
+                    if write.literal is None and not safe_copy:
+                        continue
+                    modeled.add(write.target)
+                    changed = True
+        return modeled
 
     def variable_for(self, value) -> VariableId | None:
         if isinstance(value, VariableId):
             return value if value in self.variables else None
         return next((item for item in self.variables if item.key == str(value)), None)
 
+    def selector_family(self, variable) -> set[VariableId]:
+        """Return selector-flow neighbors without changing semantic identity."""
+        return _selector_family(variable, self.selector_flow)
+
     def to_dict(self) -> dict:
         return {
             "schema_version": CONTROL_GRAPH_SCHEMA_VERSION,
+            "modeled_state_variables": [
+                variable.key for variable in sorted(
+                    self.modeled_state_variables, key=lambda item: item.key)
+            ],
             "controls": {
                 key: {
                     "state_var": control.state_var.key,
@@ -213,6 +288,7 @@ class ControlGraph:
                 }
                 for edge in self.influences
             ],
+            "selector_flow": [edge.to_dict() for edge in self.selector_flow],
         }
 
 
@@ -765,6 +841,40 @@ def _build_influences(facts: Iterable[ProgramFacts]):
     return _dedupe(edges)
 
 
+def _build_selector_flow(facts: Iterable[ProgramFacts]):
+    """Build UI selector provenance from exact copies only."""
+    edges = []
+    for program in facts:
+        for write in program.writes:
+            if not write.exact_copy or len(write.dependencies) != 1:
+                continue
+            edges.append(SelectorFlowEdge(
+                source=write.dependencies[0], target=write.target,
+                conditions=write.conditions, source_info=write.source))
+    return _dedupe(edges)
+
+
+def _selector_family(variable, edges):
+    """Return a cycle-safe undirected family for UI selector association."""
+    if isinstance(variable, str):
+        try:
+            variable = VariableId.from_key(variable)
+        except ValueError:
+            return set()
+    adjacent = {}
+    for edge in edges:
+        adjacent.setdefault(edge.source, set()).add(edge.target)
+        adjacent.setdefault(edge.target, set()).add(edge.source)
+    found, pending = set(), [variable]
+    while pending:
+        current = pending.pop()
+        if current in found:
+            continue
+        found.add(current)
+        pending.extend(adjacent.get(current, ()))
+    return found
+
+
 def _changed_render_variables(assignments, reverse, render_vars):
     return tuple(dict.fromkeys(
         target for write in assignments
@@ -842,6 +952,7 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                    if not _is_runtime(var)}
     shape_set = set(shape_vars)
     graph.influences = _build_influences(facts)
+    graph.selector_flow = _build_selector_flow(facts)
     incoming_sections = {}
     input_paths = {}
     for program in facts:
@@ -1072,5 +1183,5 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
 __all__ = [
     "Action", "Control", "ControlGraph", "Controller", "RenderEffect",
     "CONTROL_GRAPH_SCHEMA_VERSION", "InfluenceEdge", "InputRoot",
-    "VariableNode", "build_control_graph",
+    "SelectorFlowEdge", "VariableNode", "build_control_graph",
 ]

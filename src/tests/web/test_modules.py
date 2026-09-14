@@ -235,6 +235,22 @@ def test_menu_panel_hides_internal_compound_actions(module_page):
     assert result == "none"
 
 
+def test_modeled_state_rules_replay_without_runtime_defaults(module_page):
+    result = module_page.evaluate("""async () => {
+      const state = await import('./js/editing/control-state.js');
+      state.resetControlState();
+      state.setControlStateRules([
+        {var: 'Piece', value: '1', operation: {kind: 'set', value: '1'},
+         conditions: [[{var: 'Hair', value: '1', negate: false}]]},
+        {var: 'PieceCopy', value: null,
+         operation: {kind: 'copy', source: 'Piece'}, conditions: []},
+      ], {Hair: '1', Piece: '0', PieceCopy: '0'});
+      state.replayControlStateRules();
+      return state.getControlState();
+    }""")
+    assert result == {"Hair": "1", "Piece": "1", "PieceCopy": "1"}
+
+
 def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
         module_page):
     result = module_page.evaluate("""async () => {

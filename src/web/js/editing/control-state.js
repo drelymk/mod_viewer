@@ -156,6 +156,14 @@ export function setControlStateRules(rules, defaults, controls = null) {
  * observe values written by earlier rules, matching the game's execution. */
 export function replayControlStateRules() {
   for (const rule of stateRules) {
-    if (dnfSatisfied(rule.conditions)) values[rule.var] = rule.value;
+    if (!dnfSatisfied(rule.conditions)) continue;
+    const operation = rule.operation;
+    if (!operation || operation.kind === 'set') {
+      values[rule.var] = operation
+        ? String(operation.value) : rule.value;
+    } else if (operation.kind === 'copy') {
+      const source = values[operation.source];
+      if (source !== undefined) values[rule.var] = source;
+    }
   }
 }
