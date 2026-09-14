@@ -140,14 +140,36 @@ $\\Target\\style = $source
     assert parsed.groups[0]["draws"][0].conditions == []
 
 
+def test_present_pulse_is_not_treated_as_clickable_controller(tmp_path):
+    parsed = _forwarded_fixture(tmp_path, """
+[Present]
+$value = 1 - $value
+$\\Target\\style = $value
+""", target_default="0")
+    assert parsed.menu == {}
+    assert parsed.groups[0]["draws"][0].conditions == []
+
+
+def test_commandlist_forwarding_is_not_treated_as_continuous(tmp_path):
+    parsed = _forwarded_fixture(tmp_path, """
+[CommandListForward]
+$value = 1 - $value
+$\\Target\\style = $value
+""", target_default="0")
+    assert parsed.menu == {}
+    assert parsed.groups[0]["draws"][0].conditions == []
+
+
 def test_forwarded_state_cycle_uses_controller_default_and_wrap_limit(tmp_path):
     parsed = _forwarded_fixture(tmp_path, """
 [Constants]
 global persist $state = 3
 global $pulse = 0
 
-[Present]
+[CommandListButton]
 $pulse = 1 - $pulse
+
+[Present]
 if $state > 3
     $state = 0
 else

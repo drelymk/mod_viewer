@@ -115,7 +115,10 @@ def _extract_namespace_forwarding(record, namespace_targets):
     result = []
     seen = set()
     canonical = record["canonical_vars"]
-    for lines in record["sections"].values():
+    present_sections = (
+        lines for section, lines in record["sections"].items()
+        if str(section).casefold() == "present")
+    for lines in present_sections:
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             match = _DIRECT_FORWARD_RE.fullmatch(line)

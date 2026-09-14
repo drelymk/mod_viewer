@@ -278,10 +278,12 @@ def _parse_arrow_button(lines):
     return variable, _cycle_values(lo, hi)
 
 
-def _controller_records(sections):
-    """Return cleaned lines with their section and source provenance."""
+def _controller_records(sections, section_filter=None):
+    """Return cleaned lines from selected sections with source provenance."""
     records = []
     for section, lines in sections.items():
+        if section_filter is not None and not section_filter(str(section)):
+            continue
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             if line:
@@ -358,9 +360,12 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
     if not allowed:
         return {}
 
-    records = _controller_records(sections)
+    present_records = _controller_records(
+        sections, lambda name: name.casefold() == "present")
+    command_records = _controller_records(
+        sections, lambda name: name.casefold().startswith("commandlist"))
     flips = {}
-    for section, line, raw in records:
+    for section, line, raw in command_records:
         assignment = _ASSIGN_RE.fullmatch(line)
         if not assignment:
             continue
@@ -391,7 +396,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
         if flip:
             add(flip[0], ["0", "1"], flip[1], flip[2])
 
-    for section, line, raw in records:
+    for section, line, raw in present_records:
         match = _STATE_ADD_RE.fullmatch(line)
         if not match:
             continue
@@ -400,7 +405,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
                 or lhs.casefold() not in allowed
                 or pulse.casefold() not in flips):
             continue
-        values = _controller_wrap_values(records, lhs)
+        values = _controller_wrap_values(present_records, lhs)
         if values:
             add(lhs, values, section, raw)
     return found
