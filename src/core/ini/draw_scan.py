@@ -146,14 +146,16 @@ def gating_var_names(sections, var_prefix=None, *, toggle_keys=None,
     return toggle_vars | menu_vars | {rule["var"] for rule in state_rules}
 
 
-def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
+def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
+                             namespace_resolver=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     texture_override_index = _collect_texture_override_index(
-        sections, toggle_vars, alias_map, var_prefix)
+        sections, toggle_vars, alias_map, var_prefix,
+        namespace_resolver=namespace_resolver)
     resource_texture_hashes = texture_override_index.hashes_by_resource
     structural_slot_roles = _collect_structural_slot_role_hints(sections)
     seq_counter = [0]
@@ -192,7 +194,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         combined = DNF_TRUE
         for frame in cond_stack:
             combined = dnf_and(combined, frame["cur"])
-        cond = normalize_dnf(combined, toggle_vars, var_prefix)
+        cond = normalize_dnf(
+            combined, toggle_vars, var_prefix,
+            namespace_resolver=namespace_resolver)
         if role == "diffuse":
             if not info["diffuse"]:
                 info["diffuse"] = res
@@ -370,7 +374,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 combined = DNF_TRUE
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
-                conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+                conditions = normalize_dnf(
+                    combined, toggle_vars, var_prefix,
+                    namespace_resolver=namespace_resolver)
                 source = line_source(raw)
                 if source:
                     source = {

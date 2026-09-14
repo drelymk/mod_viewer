@@ -14,7 +14,7 @@ that renders back to the original text.
 
 import re
 
-_CLAUSE_RE = re.compile(r'\$(\w+)\s*(==|!=)\s*(-?[\w.]+)')
+_CLAUSE_RE = re.compile(r'\$([\w\\]+)\s*(==|!=)\s*(-?[\w.]+)')
 _ASSIGN_BOOL_RE = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
 _STRUCT_RE = re.compile(r'(\(|\)|&&|\|\||!(?!=))')
 
@@ -99,7 +99,7 @@ def _atom_to_dnf(atom, alias_map):
         v, op, val = m.group(1), m.group(2), m.group(3)
         dnf = [[{"var": v, "value": val, "negate": op == "!="}]]
     else:
-        m = re.fullmatch(r'\$(\w+)', atom)
+        m = re.fullmatch(r'\$([\w\\]+)', atom)
         if m:
             # Alias-map values are already DNF. A non-alias bare variable is
             # an ordinary 3DMigoto truthiness test (`if $hat` means non-zero),
@@ -164,7 +164,7 @@ def parse_condition_dnf(content, alias_map):
         return DNF_TRUE
 
 
-def normalize_dnf(dnf, toggle_vars, var_prefix=None):
+def normalize_dnf(dnf, toggle_vars, var_prefix=None, namespace_resolver=None):
     """Drop clauses on untracked variables (they're assumed satisfied, matching
     long-standing behaviour), then apply var_prefix. An alternative left with no
     clauses is unconditionally true, which makes the whole condition true -> [].
@@ -175,15 +175,40 @@ def normalize_dnf(dnf, toggle_vars, var_prefix=None):
     the draw would otherwise leave the mesh untracked, hence always visible.
     """
     tracked = {v.lower(): v for v in toggle_vars}
+
+    def resolve_var(var):
+        if not namespace_resolver:
+            return var
+        key = str(var).casefold()
+        return (namespace_resolver.get(key)
+                or namespace_resolver.get(key.lstrip("\\"))
+                or var)
+
+    def tracked_var(var):
+        key = str(var).casefold()
+        value = tracked.get(key)
+        if value is None and var_prefix and key.startswith(var_prefix.casefold()):
+            value = tracked.get(key[len(var_prefix):])
+        return value
+
     out: list = []
     for group in dnf:
-        kept = [{"var": tracked[c["var"].lower()], "value": c["value"],
-                 "negate": c["negate"]}
-                for c in group if c["var"].lower() in tracked]
+        resolved = [
+            {"var": resolve_var(c["var"]), "value": c["value"],
+             "negate": c["negate"]}
+            for c in group
+        ]
+        kept = []
+        for clause in resolved:
+            variable = tracked_var(clause["var"])
+            if variable is None:
+                continue
+            if var_prefix and not variable.startswith(var_prefix):
+                variable = f"{var_prefix}{variable}"
+            kept.append({"var": variable, "value": clause["value"],
+                         "negate": clause["negate"]})
         if not kept:
             return []
-        if var_prefix:
-            kept = [{**c, "var": f"{var_prefix}{c['var']}"} for c in kept]
         if kept not in out:
             out.append(kept)
     return out

@@ -1,14 +1,26 @@
 """Aggregate the semantic analysis of all INIs in one selected mod."""
 
 import os
+import re
 from dataclasses import dataclass
 
 from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
-from core.ini.menu import attach_menu_images
-from core.ini.sections import extract_resources, merge_sections
+from core.ini.menu import attach_menu_images, extract_controller_toggles
+from core.ini.sections import (canonical_var_names, extract_ini_namespace,
+                               extract_resources, merge_sections)
 from core.materials.game_profile import GameDetection, resolve_game_detection
+
+
+_DIRECT_FORWARD_RE = re.compile(
+    r'^\$\\(?P<namespace>[^\\\s]+)\\(?P<target>\w+)\s*=\s*\$(?P<source>\w+)$',
+    re.I)
+_EXTERNAL_NAMESPACES = {"wwmiv1", "rabbitfx"}
+_VARIANT_FIELDS = (
+    "texture_variants", "normal_map_variants", "normal_data_variants",
+    "light_map_variants", "material_map_variants", "emission_map_variants",
+)
 
 
 @dataclass
@@ -85,6 +97,71 @@ def _rebase_resources(resources, ini_path, folder_path):
     return resources
 
 
+def _mapped_value(mapping, path):
+    """Read a staged mapping using either its authored or normalized path key."""
+    if not mapping:
+        return None
+    value = mapping.get(path)
+    if value is not None:
+        return value
+    normalized = os.path.normcase(os.path.abspath(path))
+    for candidate, value in mapping.items():
+        if os.path.normcase(os.path.abspath(candidate)) == normalized:
+            return value
+    return None
+
+
+def _extract_namespace_forwarding(record, namespace_targets):
+    """Resolve direct qualified-variable assignments to known namespaces."""
+    result = []
+    seen = set()
+    canonical = record["canonical_vars"]
+    for lines in record["sections"].values():
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = _DIRECT_FORWARD_RE.fullmatch(line)
+            if not match:
+                continue
+            target_record = namespace_targets.get(
+                match.group("namespace").casefold())
+            if target_record is None:
+                continue
+            source_local = canonical.get(
+                match.group("source").casefold(), match.group("source"))
+            target_local = target_record["canonical_vars"].get(
+                match.group("target").casefold(), match.group("target"))
+            source_var = f"{record['var_prefix'] or ''}{source_local}"
+            target_var = f"{target_record['var_prefix'] or ''}{target_local}"
+            key = (source_var.casefold(), target_var.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append({
+                "source_var": source_var,
+                "source_local": source_local,
+                "destination": target_var,
+                "destination_local": target_local,
+                "namespace": match.group("namespace"),
+                "source_ini": record["ini_path"],
+                "target_ini": target_record["ini_path"],
+            })
+    return result
+
+
+def _gating_vars_from_groups(groups):
+    """Collect variables used by draw visibility and texture variants."""
+    found = set()
+    for group in groups:
+        for entry in group.get("draws", []):
+            for clauses in entry.get("conditions", []):
+                found.update(clause["var"] for clause in clauses)
+            for field in _VARIANT_FIELDS:
+                for variant in entry.get(field, []):
+                    for clauses in variant.get("conditions", []):
+                        found.update(clause["var"] for clause in clauses)
+    return found
+
+
 def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
     """Aggregate independent INI analyses into one mod semantic model.
 
@@ -100,20 +177,79 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
     texture_api_evidence = []
     multi = len(ini_paths) > 1
 
-    # Shared across every INI: duplicate generic component names are
-    # disambiguated instead of one silently overwriting another.
-    seen_labels = {}
-
+    # Parse each INI once up front so file-level namespaces and direct
+    # forwarding assignments can be resolved before semantic analysis. The
+    # section projection remains per-INI; only the namespace registry is shared.
+    ini_records = []
     for ini_path in ini_paths:
         secs = merge_sections([ini_path], overrides=overrides,
                               documents=documents)
         var_prefix, source = _ini_scope(ini_path, folder_path, multi)
+        document = _mapped_value(documents, ini_path)
+        text = _mapped_value(overrides, ini_path)
+        ini_records.append({
+            "ini_path": ini_path,
+            "sections": secs,
+            "var_prefix": var_prefix,
+            "source": source,
+            "canonical_vars": canonical_var_names(secs),
+            "namespace": extract_ini_namespace(
+                ini_path, text=text, document=document),
+            "extra_gating_vars": set(),
+        })
+
+    namespace_candidates = {}
+    for record in ini_records:
+        namespace = record["namespace"]
+        if namespace and namespace.casefold() not in _EXTERNAL_NAMESPACES:
+            namespace_candidates.setdefault(namespace.casefold(), []).append(
+                record)
+    namespace_targets = {
+        namespace: records[0]
+        for namespace, records in namespace_candidates.items()
+        if len(records) == 1
+    }
+    namespace_resolver = {}
+    for namespace, record in namespace_targets.items():
+        prefix = record["var_prefix"] or ""
+        for variable in record["canonical_vars"].values():
+            identity = f"{prefix}{variable}"
+            namespace_resolver[
+                f"\\{namespace}\\{variable}".casefold()] = identity
+
+    for record in ini_records:
+        record["forwardings"] = _extract_namespace_forwarding(
+            record, namespace_targets)
+        for forwarding in record["forwardings"]:
+            target = next(
+                item for item in ini_records
+                if item["ini_path"] == forwarding["target_ini"])
+            target["extra_gating_vars"].add(
+                forwarding["destination_local"])
+
+    # Shared across every INI: duplicate generic component names are
+    # disambiguated instead of one silently overwriting another.
+    seen_labels = {}
+
+    for record in ini_records:
+        ini_path = record["ini_path"]
+        secs = record["sections"]
+        var_prefix = record["var_prefix"]
+        source = record["source"]
 
         resources = _rebase_resources(
             extract_resources(secs), ini_path, folder_path)
         analysis = analyze_ini(
             secs, resources=resources, var_prefix=var_prefix, source=source,
-            seen=seen_labels)
+            seen=seen_labels,
+            extra_gating_vars=record["extra_gating_vars"],
+            namespace_resolver=namespace_resolver)
+        record["analysis"] = analysis
+        record["controllers"] = extract_controller_toggles(
+            secs,
+            {item["source_local"] for item in record["forwardings"]},
+            var_prefix=var_prefix, source=source,
+            canonical_vars=record["canonical_vars"])
         ini_groups = analysis.draw_groups
         identity_source = _ini_rel(ini_path, folder_path)
         for group in ini_groups:
@@ -172,6 +308,59 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
         attach_menu_images(own_menu, secs, resources)
         for var, val in analysis.defaults.items():
             toggle_defaults.setdefault(var, val)
+
+    # Namespace controllers are discovered independently from the existing
+    # clickable-slot parser. Only a resolved destination that the shared draw
+    # analysis actually retained as a visibility/texture gate becomes a
+    # viewer menu entry.
+    model_gating_vars = _gating_vars_from_groups(groups)
+    model_gating_keys = {value.casefold() for value in model_gating_vars}
+    existing_slots = [
+        int(info["slot"])
+        for info in menu_slots.values()
+        if str(info.get("slot", "")).lstrip("-").isdigit()
+    ]
+    next_controller_slot = max(existing_slots, default=0) + 1
+    for record in ini_records:
+        by_source = {}
+        for forwarding in record["forwardings"]:
+            by_source.setdefault(
+                forwarding["source_local"].casefold(), []).append(forwarding)
+        for local, info in record["controllers"].items():
+            forwardings = by_source.get(local.casefold(), [])
+            destinations = {
+                item["destination"].casefold(): item
+                for item in forwardings
+            }
+            if len(destinations) != 1:
+                continue
+            forwarding = next(iter(destinations.values()))
+            destination = forwarding["destination"]
+            if destination.casefold() not in model_gating_keys:
+                continue
+
+            controller = dict(info)
+            controller.update({
+                "name": forwarding["destination_local"],
+                "var": destination,
+                "slot": next_controller_slot,
+                "source": record["source"],
+                "ini_path": record["ini_path"],
+            })
+            next_controller_slot += 1
+            base_key = (
+                f"{record['var_prefix'] or ''}{info['section']}"
+                f"#forwarded#{local}")
+            key = base_key
+            suffix = 2
+            while key in menu_slots:
+                key = f"{base_key}_{suffix}"
+                suffix += 1
+            menu_slots[key] = controller
+
+            source_default = record["analysis"].defaults.get(info["var"])
+            if source_default is not None:
+                toggle_defaults[destination] = source_default
 
     present_items = []
     for present_info in present_infos:

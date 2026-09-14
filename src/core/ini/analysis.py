@@ -31,7 +31,7 @@ class IniAnalysis:
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
-                seen=None):
+                seen=None, extra_gating_vars=None, namespace_resolver=None):
     """Analyze ``sections`` once and return all derived semantic models.
 
     Extractors accept the shared canonical spelling map so a normal load does
@@ -50,7 +50,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         sections, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
     state_rules = extract_state_rules(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
+        namespace_resolver=namespace_resolver)
     shapes = extract_shape_sliders(
         sections, resources, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
@@ -66,6 +67,9 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         for effect in info.get("effects", [])
     )
     gating_vars.update(rule["var"] for rule in state_rules)
+    for var in extra_gating_vars or ():
+        canonical = canonical_vars.get(str(var).casefold(), str(var))
+        gating_vars.add(f"{var_prefix or ''}{canonical}")
     # Conditions are read from the source before the per-INI namespace is
     # applied by normalize_dnf, so the scanner needs the source spellings.
     # The public analysis set remains namespaced for control/panel consumers.
@@ -77,7 +81,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     }
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
-        seen=seen, gating_vars=scan_gating_vars)
+        seen=seen, gating_vars=scan_gating_vars,
+        namespace_resolver=namespace_resolver)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,

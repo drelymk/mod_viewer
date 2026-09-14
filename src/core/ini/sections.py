@@ -9,6 +9,7 @@ import re
 
 _DECL_RE = re.compile(r'^global\s+(?:persist\s+)?\$(\w+)\b', re.I)
 _VAR_RE  = re.compile(r'\$(\w+)')
+_NAMESPACE_RE = re.compile(r'^namespace\s*=\s*(.*?)\s*$', re.I)
 
 class ResourceTable(dict):
     """Resource records plus one canonical case-insensitive lookup index.
@@ -152,6 +153,41 @@ def parse_sections(ini_path, text=None):
             for line_no, raw in enumerate(f, 1):
                 feed(line_no, raw)
     return sections
+
+
+def extract_ini_namespace(ini_path=None, text=None, document=None):
+    """Return the namespace declared before the first INI section.
+
+    Namespace declarations are file-level metadata rather than section lines,
+    so they intentionally do not become part of the ``sections`` projection.
+    ``document`` is accepted for staged edits; when it is absent, ``text`` or
+    the disk-backed path supplies the same read-only view.
+    """
+    if document is not None:
+        lines = (
+            line.text for line in document.lines
+            if line.section is None
+        )
+    elif text is not None:
+        lines = iter(text.splitlines())
+    elif ini_path is not None:
+        with open(ini_path, encoding="utf-8", errors="ignore") as stream:
+            lines = iter(stream.readlines())
+    else:
+        return None
+
+    for raw in lines:
+        line = str(raw).strip().lstrip("\ufeff")
+        if not line or line.startswith(";") or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            break
+        line = line.split(";", 1)[0].strip()
+        match = _NAMESPACE_RE.fullmatch(line)
+        if match:
+            value = match.group(1).strip()
+            return value or None
+    return None
 
 
 def sections_from_document(document):
