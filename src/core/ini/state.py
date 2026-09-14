@@ -40,8 +40,7 @@ def _possible_groups(groups):
     return out
 
 
-def extract_state_rules(sections, var_prefix=None, canonical_vars=None,
-                        namespace_resolver=None):
+def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
     """Return ordered literal assignments guarded by conditions in Present.
 
     This intentionally models only deterministic numeric assignments. It is
@@ -89,9 +88,7 @@ def extract_state_rules(sections, var_prefix=None, canonical_vars=None,
         combined = DNF_TRUE
         for frame in stack:
             combined = dnf_and(combined, frame["cur"])
-        conditions = _possible_groups(normalize_dnf(
-            combined, tracked, var_prefix,
-            namespace_resolver=namespace_resolver))
+        conditions = _possible_groups(normalize_dnf(combined, tracked, var_prefix))
         if combined != DNF_TRUE and not conditions:
             continue
         var = canon.get(match.group(1).lower(), match.group(1))

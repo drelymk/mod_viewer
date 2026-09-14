@@ -31,7 +31,7 @@ class IniAnalysis:
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
-                seen=None, extra_gating_vars=None, namespace_resolver=None):
+                seen=None, extra_gating_vars=None):
     """Analyze ``sections`` once and return all derived semantic models.
 
     Extractors accept the shared canonical spelling map so a normal load does
@@ -50,8 +50,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         sections, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
     state_rules = extract_state_rules(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
-        namespace_resolver=namespace_resolver)
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
     shapes = extract_shape_sliders(
         sections, resources, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
@@ -81,8 +80,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     }
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
-        seen=seen, gating_vars=scan_gating_vars,
-        namespace_resolver=namespace_resolver)
+        seen=seen, gating_vars=scan_gating_vars)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,

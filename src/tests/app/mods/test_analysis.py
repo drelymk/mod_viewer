@@ -5,7 +5,6 @@ import tempfile
 
 from app.mods.analysis import analyze_mod_inis
 from app.mods.controls import build_menu_panel
-from core.ini.dnf import normalize_dnf, parse_condition_dnf
 from core.ini.document import IniDocument
 from core.ini.sections import extract_ini_namespace
 
@@ -129,6 +128,18 @@ $\\Target\\style = $value
     }]]
 
 
+def test_unsupported_forwarding_keeps_target_gate_fail_open(tmp_path):
+    parsed = _forwarded_fixture(tmp_path, """
+[Constants]
+global $source = 1
+
+[Present]
+$\\Target\\style = $source
+""", target_default="0")
+    assert parsed.menu == {}
+    assert parsed.groups[0]["draws"][0].conditions == []
+
+
 def test_forwarded_state_cycle_uses_controller_default_and_wrap_limit(tmp_path):
     parsed = _forwarded_fixture(tmp_path, """
 [Constants]
@@ -165,7 +176,7 @@ global persist $zoom = 0
     $\\WWMIv1\\vg_offset = $page
     $\\WWMIv1\\page = $page
     $\\WWMIv1\\zoom = $zoom
-""", target_namespace="WWMIv1")
+""")
     assert parsed.menu == {}
 
 
@@ -187,11 +198,3 @@ global $x = 0
     parsed = analyze_mod_inis(
         [str(menu), str(first), str(second)], str(tmp_path))
     assert parsed.menu == {}
-
-
-def test_read_dnf_accepts_qualified_variables_with_resolver():
-    dnf = parse_condition_dnf(r"$\Target\style == 1", {})
-    assert normalize_dnf(
-        dnf, {"mod(5)::style"},
-        namespace_resolver={r"\target\style": "mod(5)::style"},
-    ) == [[{"var": "mod(5)::style", "value": "1", "negate": False}]]

@@ -16,7 +16,6 @@ from core.materials.game_profile import GameDetection, resolve_game_detection
 _DIRECT_FORWARD_RE = re.compile(
     r'^\$\\(?P<namespace>[^\\\s]+)\\(?P<target>\w+)\s*=\s*\$(?P<source>\w+)$',
     re.I)
-_EXTERNAL_NAMESPACES = {"wwmiv1", "rabbitfx"}
 _VARIANT_FIELDS = (
     "texture_variants", "normal_map_variants", "normal_data_variants",
     "light_map_variants", "material_map_variants", "emission_map_variants",
@@ -201,7 +200,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
     namespace_candidates = {}
     for record in ini_records:
         namespace = record["namespace"]
-        if namespace and namespace.casefold() not in _EXTERNAL_NAMESPACES:
+        if namespace:
             namespace_candidates.setdefault(namespace.casefold(), []).append(
                 record)
     namespace_targets = {
@@ -209,23 +208,36 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
         for namespace, records in namespace_candidates.items()
         if len(records) == 1
     }
-    namespace_resolver = {}
-    for namespace, record in namespace_targets.items():
-        prefix = record["var_prefix"] or ""
-        for variable in record["canonical_vars"].values():
-            identity = f"{prefix}{variable}"
-            namespace_resolver[
-                f"\\{namespace}\\{variable}".casefold()] = identity
-
+    records_by_path = {record["ini_path"]: record for record in ini_records}
     for record in ini_records:
         record["forwardings"] = _extract_namespace_forwarding(
             record, namespace_targets)
+        record["controllers"] = extract_controller_toggles(
+            record["sections"],
+            {item["source_local"] for item in record["forwardings"]},
+            var_prefix=record["var_prefix"], source=record["source"],
+            canonical_vars=record["canonical_vars"])
+
+        # Do not make a forwarded target a tracked draw gate until its source
+        # has a controller shape that the viewer can actually expose. A
+        # source with multiple destinations is also left fail-open because no
+        # single menu entry can represent that fan-out safely.
+        by_source = {}
         for forwarding in record["forwardings"]:
-            target = next(
-                item for item in ini_records
-                if item["ini_path"] == forwarding["target_ini"])
-            target["extra_gating_vars"].add(
-                forwarding["destination_local"])
+            by_source.setdefault(
+                forwarding["source_local"].casefold(), []).append(forwarding)
+        for local in record["controllers"]:
+            destinations = {
+                item["destination"].casefold(): item
+                for item in by_source.get(local.casefold(), [])
+            }
+            if len(destinations) != 1:
+                continue
+            forwarding = next(iter(destinations.values()))
+            target = records_by_path.get(forwarding["target_ini"])
+            if target is not None:
+                target["extra_gating_vars"].add(
+                    forwarding["destination_local"])
 
     # Shared across every INI: duplicate generic component names are
     # disambiguated instead of one silently overwriting another.
@@ -242,14 +254,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
         analysis = analyze_ini(
             secs, resources=resources, var_prefix=var_prefix, source=source,
             seen=seen_labels,
-            extra_gating_vars=record["extra_gating_vars"],
-            namespace_resolver=namespace_resolver)
+            extra_gating_vars=record["extra_gating_vars"])
         record["analysis"] = analysis
-        record["controllers"] = extract_controller_toggles(
-            secs,
-            {item["source_local"] for item in record["forwardings"]},
-            var_prefix=var_prefix, source=source,
-            canonical_vars=record["canonical_vars"])
         ini_groups = analysis.draw_groups
         identity_source = _ini_rel(ini_path, folder_path)
         for group in ini_groups:
