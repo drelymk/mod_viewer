@@ -948,6 +948,41 @@ endif
         for action in actions)
 
 
+def test_selector_states_ignore_in_place_numeric_updates(tmp_path):
+    path = _write(tmp_path / "selector-loop.ini", r"""[Constants]
+global $slot = 0
+global $clicked = 0
+global persist $Hair = 0
+
+[CommandListDraw]
+$slot = $slot + 1
+$hovered = $slot
+$clicked = $hovered
+if $clicked == 1
+    $Hair = 1 - $Hair
+endif
+
+[TextureOverrideBody]
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+""")
+    source = source_from_path(path, str(tmp_path))
+    resolver = VariableResolver([source])
+    facts = scan_program(source, resolver)
+    hair = resolver.resolve("$Hair", source, "TextureOverrideBody")
+    clicked = resolver.resolve("$clicked", source, "CommandListDraw")
+    graph = build_control_graph(
+        [facts], [RenderEffect("visibility", (hair,))])
+
+    states = graph.selector_states({"var": clicked, "value": "1"})
+    assert {(state.variable.name, state.value) for state in states} == {
+        ("clicked", "1"), ("hovered", "1"), ("slot", "1"),
+    }
+    assert not any(edge.source == edge.target
+                   for edge in graph.selector_flow)
+
+
 def test_runtime_present_compound_action_is_not_user_facing_without_selector(
         tmp_path):
     path = _write(tmp_path / "runtime-compound.ini", r"""[Constants]

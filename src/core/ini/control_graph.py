@@ -983,6 +983,12 @@ def _build_selector_flow(facts: Iterable[ProgramFacts]):
             transform = _selector_transform(write)
             if transform is None:
                 continue
+            # In-place increments/toggles are state updates, not provenance
+            # between selector variables.  Treating them as flow edges makes
+            # numeric selector traversal unbounded (for example
+            # ``$slot = $slot + 1`` in a menu draw loop).
+            if write.dependencies[0] == write.target:
+                continue
             scale, offset = transform
             edges.append(SelectorFlowEdge(
                 source=write.dependencies[0], target=write.target,
