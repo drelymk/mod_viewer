@@ -9,6 +9,7 @@ import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.j
 import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { dnfSatisfied } from '../editing/control-state.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -39,7 +40,9 @@ function buildMenuItem(info) {
   const btn = document.createElement('button');
   btn.className = 'toggle-cycle-btn';
   btn.appendChild(createIcon('cycle'));
-  btn.title = `Cycle $${displayName(info.var)} (menu slot ${info.slot})`;
+  const slotHint = info.slot === undefined || info.slot === null
+    ? '' : ` (menu slot ${info.slot})`;
+  btn.title = `Cycle $${displayName(info.var)}${slotHint}`;
   if (info.image_slot) {
     btn.classList.add('menu-image-btn');
     btn.replaceChildren();
@@ -74,7 +77,7 @@ function buildMenuItem(info) {
   return { item, sync: () => { valSpan.textContent = getToggleValue(info.var); } };
 }
 
-function buildShapeSlider(info) {
+function buildContinuousControl(info) {
   const item = document.createElement('div');
   item.className = 'menu-item menu-slider-item';
   const nameSpan = document.createElement('span');
@@ -90,9 +93,9 @@ function buildShapeSlider(info) {
   const input = document.createElement('input');
   input.type = 'range';
   input.className = 'menu-slider';
-  input.min = info.min;
-  input.max = info.max;
-  input.step = info.step;
+  input.min = info.domain?.min ?? info.min ?? 0;
+  input.max = info.domain?.max ?? info.max ?? 1;
+  input.step = info.step ?? 0.01;
   input.value = getToggleValue(info.var) ?? info.default;
   const valSpan = document.createElement('span');
   valSpan.className = 'menu-value';
@@ -110,6 +113,70 @@ function buildShapeSlider(info) {
   } };
 }
 
+function nextAssignmentValue(assignment) {
+  if (assignment.literal !== null && assignment.literal !== undefined) {
+    return String(assignment.literal);
+  }
+  const target = assignment.target;
+  const current = getToggleValue(target);
+  if (assignment.exact_copy && assignment.dependencies?.length) {
+    return getToggleValue(assignment.dependencies[0]);
+  }
+  if (assignment.cycle_values?.length) {
+    const values = assignment.cycle_values.map(String);
+    const index = values.indexOf(String(current));
+    return values[(index + 1) % values.length];
+  }
+
+  const expression = String(assignment.expression || '').replace(/\s+/g, '');
+  const numeric = Number(current);
+  if (!Number.isFinite(numeric)) return null;
+  let match = expression.match(/^\(\$[^)]+([+-])1\)%(\d+)$/i);
+  if (match) {
+    const amount = match[1] === '+' ? 1 : -1;
+    return String((numeric + amount + Number(match[2])) % Number(match[2]));
+  }
+  match = expression.match(/^\$[^%]+%(\d+)$/i);
+  if (match) return String(numeric % Number(match[1]));
+  match = expression.match(/^\$[^)]+([+-])1\)?$/i);
+  if (match) return String(numeric + (match[1] === '+' ? 1 : -1));
+  match = expression.match(/^1-\$[^)]+$/i);
+  if (match) return String(1 - numeric);
+  return null;
+}
+
+export function applyAction(info) {
+  if (!dnfSatisfied(info?.conditions)) return false;
+  let changed = false;
+  for (const assignment of info?.assignments || []) {
+    if (!dnfSatisfied(assignment.conditions)) continue;
+    const value = nextAssignmentValue(assignment);
+    if (value === null || value === undefined) continue;
+    setToggleValue(assignment.target, value);
+    changed = true;
+  }
+  if (changed) refreshAll();
+  return changed;
+}
+
+function buildActionItem(info) {
+  const item = document.createElement('div');
+  item.className = 'menu-item menu-action-item';
+  const btn = document.createElement('button');
+  btn.className = 'menu-action-btn';
+  btn.appendChild(createIcon('cycle'));
+  btn.title = `Run ${info.trigger || 'action'}`;
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'menu-name';
+  nameSpan.textContent = info.trigger || 'Action';
+  const valueSpan = document.createElement('span');
+  valueSpan.className = 'menu-value';
+  valueSpan.textContent = `${(info.assignments || []).length} writes`;
+  btn.addEventListener('click', () => applyAction(info));
+  item.append(btn, nameSpan, valueSpan);
+  return { item, sync: () => {} };
+}
+
 // Cycling one slot can change another slot's variable via a mutual-exclusion
 // rule, so every displayed value is re-read after any click.
 let syncers = [];
@@ -121,7 +188,7 @@ export function refreshMenuValues() {
  * Build the panel from the structured controls.menu model. Hidden entirely when the
  * mod has no clickable menu, which is the common case.
  */
-export function buildMenuPanel(menu) {
+export function buildMenuPanel(menu, actions = []) {
   const list = document.getElementById('menu-list');
   const panel = document.getElementById('menu-panel');
   list.innerHTML = '';
@@ -131,7 +198,7 @@ export function buildMenuPanel(menu) {
   });
 
   const keys = Object.keys(menu || {});
-  if (!keys.length) {
+  if (!keys.length && !(actions || []).length) {
     panel.style.display = 'none';
     return;
   }
@@ -159,12 +226,19 @@ export function buildMenuPanel(menu) {
   for (const src of sources) {
     const container = (multiSource && src) ? buildSourceSection(src, list) : list;
     for (const key of bySource[src]) {
-      const { item, sync } = menu[key].kind === 'shape_slider'
-        ? buildShapeSlider(menu[key])
+      const { item, sync } = menu[key].domain?.kind === 'continuous'
+        || menu[key].kind === 'continuous'
+        ? buildContinuousControl(menu[key])
         : buildMenuItem(menu[key]);
       syncers.push(sync);
       container.appendChild(item);
     }
+  }
+
+  for (const action of actions || []) {
+    const { item, sync } = buildActionItem(action);
+    syncers.push(sync);
+    list.appendChild(item);
   }
 
 }

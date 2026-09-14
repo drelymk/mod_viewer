@@ -16,11 +16,10 @@ from core.mod_discovery import discover_ini_paths
 
 from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
 from app.mods.controls import (
-    _gating_vars,
     build_menu_panel,
-    build_toggle_panel,
     load_control_state,
     load_present_state,
+    project_toggle_panel,
     unwired_pending_sections,
 )
 from app.mods.enrichment import (
@@ -90,6 +89,7 @@ def _failure_health(context, overrides):
 
 
 def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
+                        actions=None,
                         present=None, state_rules=None, state_defaults=None,
                         health=None, error=None, game=None,
                         material_profiles=None, asset_resolution=None):
@@ -104,6 +104,7 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
         "controls": {
             "toggles": toggles or {},
             "menu": menu or {},
+            "actions": actions or [],
             "present": present or {"target_inis": [], "item": None},
         },
         "state": {
@@ -167,7 +168,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
 
     try:
         parsed = analyze_mod_inis(
-            context.ini_paths, context.mod_dir, overrides, context.docs)
+            context.ini_paths, context.mod_dir, overrides, context.docs,
+            pending_new_sections=pending_new_sections)
         if not parsed.groups:
             health = _failure_health(context, overrides)
             return _structured_payload(
@@ -198,14 +200,16 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         from .metadata import hydrate_component_material_kinds
         hydrate_component_material_kinds(mesh_payload, context.metadata)
         material_profiles = _assign_material_profiles(mesh_payload, parsed.game)
-        toggles = build_toggle_panel(
-            parsed.toggles, parsed.defaults, _gating_vars(mesh_payload),
-            context.mod_dir, pending_new_sections)
+        control_projection = parsed.control_projection
+        toggles = project_toggle_panel(
+            control_projection.get("toggles", {}), parsed.defaults,
+            context.mod_dir)
         menu = build_menu_panel(
-            parsed.menu, parsed.defaults, context.mod_dir)
+            control_projection.get("menu", {}), parsed.defaults, context.mod_dir)
         return _structured_payload(
             meshes=mesh_payload, textures=built.textures, toggles=toggles,
-            menu=menu, present=parsed.present,
+            menu=menu, actions=control_projection.get("actions", parsed.actions),
+            present=parsed.present,
             state_rules=parsed.state_rules, state_defaults=parsed.defaults,
             game=parsed.game, material_profiles=material_profiles,
             asset_resolution=asset_resolution)

@@ -23,6 +23,9 @@ from app.assets.resolver import AssetComponentBinding
 from app.bridge.api import ModViewerAPI
 from core.ini.analysis import analyze_ini
 from core.ini.document import IniDocument
+from core.ini.control_graph import (Control, ControlGraph, Controller,
+                                    RenderEffect)
+from core.ini.variables import VariableId
 from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.ini.sections import (extract_resources, sections_from_document)
 from core.geometry.draw_call import DrawCall
@@ -575,6 +578,33 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
         menu={}, defaults={"visible": "0", "phantom": "0"},
         state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
+        control_graph=ControlGraph(controls={
+            "ini:mod.ini/visible": Control(
+                VariableId("ini", "mod.ini", "visible"),
+                {"kind": "discrete", "values": ["0", "1"]},
+                effects=[RenderEffect("visibility", (), "Body-1")],
+                controllers=[Controller("direct_key")]),
+            "ini:mod.ini/phantom": Control(
+                VariableId("ini", "mod.ini", "phantom"),
+                {"kind": "discrete", "values": ["0", "1"]},
+                effects=[RenderEffect("visibility", (), "Broken-1")],
+                controllers=[Controller("direct_key")]),
+        }),
+        control_projection={
+            "toggles": {
+                "KeyVisible": {
+                    **toggle_info("KeyVisible", "visible"),
+                    "wired": True,
+                    "_semantic_ids": ["ini:mod.ini/visible"],
+                },
+                "KeyPhantom": {
+                    **toggle_info("KeyPhantom", "phantom"),
+                    "wired": True,
+                    "_semantic_ids": ["ini:mod.ini/phantom"],
+                },
+            },
+            "menu": {}, "actions": [],
+        },
     )
     context = mod_loader.ModLoadContext(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})

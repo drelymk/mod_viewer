@@ -9,15 +9,24 @@ from .dnf import DNF_TRUE, dnf_and, dnf_not, dnf_or, normalize_dnf, parse_condit
 
 def _freeze_dnf(dnf):
     return tuple(
-        tuple((clause["var"], clause["value"], bool(clause["negate"]))
+        tuple((clause["var"], clause["value"], bool(clause["negate"]),
+               clause.get("op"))
               for clause in group)
         for group in (dnf or ()))
 
 
 def _thaw_dnf(conditions):
-    return [[{"var": var, "value": value, "negate": negate}
-             for var, value, negate in group]
-            for group in (conditions or ())]
+    result = []
+    for group in (conditions or ()):
+        clauses = []
+        for item in group:
+            var, value, negate = item[:3]
+            clause = {"var": var, "value": value, "negate": negate}
+            if len(item) >= 4 and item[3]:
+                clause["op"] = item[3]
+            clauses.append(clause)
+        result.append(clauses)
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +137,11 @@ def _collect_texture_override_index(sections, toggle_vars, alias_map,
             combined = DNF_TRUE
             for frame in cond_stack:
                 combined = dnf_and(combined, frame["cur"])
-            conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+            # ``toggle_vars is None`` is the raw-effects mode used by the
+            # unified analysis.  The compatibility callers still pass a set
+            # and retain the historical early filtering behavior.
+            conditions = (combined if toggle_vars is None else
+                          normalize_dnf(combined, toggle_vars, var_prefix))
             resource = match.group(1)
             resource_key = resource.casefold()
             hashes_by_resource.setdefault(resource_key, set()).update(hashes)
@@ -205,20 +218,69 @@ _collect_slot_role_hints = _collect_structural_slot_role_hints
 
 
 def _condition_group_is_consistent(group):
-    """Return whether one DNF conjunction can be satisfied."""
+    """Return whether one DNF conjunction can be satisfied.
+
+    Texture replacement precedence uses this helper to subtract higher
+    priority rules.  It therefore has to understand numeric ranges as well
+    as the older equality-only clauses.
+    """
     equal = {}
-    not_equal = set()
+    not_equal = {}
+    bounds = {}
     for clause in group:
         key = clause["var"]
         value = clause["value"]
+        op = clause.get("op")
+        if op in ("<", "<=", ">", ">="):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            low, low_inclusive, high, high_inclusive = bounds.get(
+                key, (None, True, None, True))
+            if op == "<":
+                if high is None or number < high or (
+                        number == high and high_inclusive):
+                    high, high_inclusive = number, False
+            elif op == "<=":
+                if high is None or number < high or (
+                        number == high and not high_inclusive):
+                    high, high_inclusive = number, True
+            elif op == ">":
+                if low is None or number > low or (
+                        number == low and low_inclusive):
+                    low, low_inclusive = number, False
+            else:
+                if low is None or number > low or (
+                        number == low and not low_inclusive):
+                    low, low_inclusive = number, True
+            bounds[key] = (low, low_inclusive, high, high_inclusive)
+            continue
         if clause["negate"]:
-            not_equal.add((key, value))
+            not_equal.setdefault(key, set()).add(value)
             if equal.get(key) == value:
                 return False
         else:
             previous = equal.setdefault(key, value)
-            if previous != value or (key, value) in not_equal:
+            if previous != value or value in not_equal.get(key, ()):
                 return False
+    for key, (low, low_inclusive, high, high_inclusive) in bounds.items():
+        if low is not None and high is not None and (
+                low > high or (low == high and
+                               not (low_inclusive and high_inclusive))):
+            return False
+        if key not in equal:
+            continue
+        try:
+            number = float(equal[key])
+        except (TypeError, ValueError):
+            continue
+        if low is not None and (number < low or
+                                number == low and not low_inclusive):
+            return False
+        if high is not None and (number > high or
+                                 number == high and not high_inclusive):
+            return False
     return True
 
 

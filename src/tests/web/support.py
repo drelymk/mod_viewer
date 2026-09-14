@@ -127,8 +127,10 @@ def _payload(label="A"):
             "menu": {
                 "menu": {"name": "Menu", "slot": 1, "var": "menu",
                          "default": "0", "values": ["0", "1"], "effects": []},
-                "shape": {"name": "Shape", "var": "shape", "kind": "shape_slider",
-                          "default": "0", "min": "0", "max": "1", "step": "0.1"},
+                "shape": {"name": "Shape", "var": "shape",
+                          "domain": {"kind": "continuous", "min": 0,
+                                     "max": 1},
+                          "default": "0", "step": "0.1"},
             },
             "present": {"target_inis": []},
         },

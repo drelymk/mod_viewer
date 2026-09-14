@@ -142,7 +142,8 @@ def _declared_vertex_vg_resources_for_blend(
 
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
-                      gating_vars=None):
+                      gating_vars=None, *, raw_conditions=False,
+                      scan_result=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     if seen is None:
         seen = {}
@@ -150,7 +151,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                                                 blend_filename):
         return _declared_vertex_vg_resources_for_blend(
             resources, blend_resource_name, blend_filename)
-    section_info = _scan_sections_for_draws(sections, var_prefix, gating_vars)
+    section_info = (scan_result if scan_result is not None else
+                    _scan_sections_for_draws(
+                        sections, var_prefix, gating_vars,
+                        raw_conditions=raw_conditions))
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
         section_info, resources, resource_copy_sources, sections=sections)

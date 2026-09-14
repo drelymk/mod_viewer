@@ -8,6 +8,7 @@ from core.editing import present as present_editor
 from core.editing.toggle import ToggleEditError
 
 from app.mods import metadata
+from app.mods.analysis import analyze_mod_inis
 from app.session import edit as edit_session
 
 
@@ -57,9 +58,25 @@ def _batch_run(mod_dir, targets, mutate, metadata_change=None):
         return _unexpected_error()
 
 
-def _eligible(mod_dir):
-    return [entry for entry in _documents(mod_dir)
-            if present_editor.capturable_variables(entry[2])]
+def _capture_specs(mod_dir, entries):
+    """Build local PRESENT capture bindings from the unified graph once."""
+    paths = [path for _ini_rel, path, _doc in entries]
+    documents = {path: doc for _ini_rel, path, doc in entries}
+    parsed = analyze_mod_inis(
+        paths, mod_dir, documents=documents)
+    return {
+        target["value"]: target.get("capture_bindings", [])
+        for target in parsed.present.get("target_inis", [])
+    }
+
+
+def _eligible(mod_dir, entries=None, capture_specs=None):
+    entries = entries if entries is not None else _documents(mod_dir)
+    capture_specs = (capture_specs if capture_specs is not None else
+                     _capture_specs(mod_dir, entries))
+    return [entry for entry in entries
+            if present_editor.capturable_variables(
+                entry[2], capture_specs.get(entry[0], []))]
 
 
 def _present_docs(mod_dir):
@@ -75,7 +92,9 @@ def _snapshot(snapshots, ini_rel):
 
 
 def add_present(mod_dir, key_combo, back_combo, snapshots):
-    targets = _eligible(mod_dir)
+    entries = _documents(mod_dir)
+    capture_specs = _capture_specs(mod_dir, entries)
+    targets = _eligible(mod_dir, entries, capture_specs)
     if not targets:
         return {"error": "this mod has no INI with key or menu toggles"}
     existing = [entry for entry in targets
@@ -97,10 +116,12 @@ def add_present(mod_dir, key_combo, back_combo, snapshots):
         if doc.section(present_editor.SECTION_NAME) is not None:
             return present_editor.edit_binding(doc, key_combo, back_combo)
         result = present_editor.add(
-            doc, key_combo, back_combo, _snapshot(snapshots, ini_rel))
+            doc, key_combo, back_combo, _snapshot(snapshots, ini_rel),
+            capture_bindings=capture_specs.get(ini_rel, []))
         for _position in range(1, target_count):
             result = present_editor.capture(
-                doc, _snapshot(snapshots, ini_rel), allow_duplicate=True)
+                doc, _snapshot(snapshots, ini_rel), allow_duplicate=True,
+                capture_bindings=capture_specs.get(ini_rel, []))
         return result
 
     return _batch_run(
@@ -146,7 +167,10 @@ def _aligned_details(targets):
 def capture_present(mod_dir, snapshots, name, position=None,
                     allow_duplicate=False):
     try:
-        targets = _present_docs(mod_dir)
+        entries = _documents(mod_dir)
+        capture_specs = _capture_specs(mod_dir, entries)
+        targets = [entry for entry in entries
+                   if entry[2].section(present_editor.SECTION_NAME) is not None]
         if not targets:
             return {"error": "this mod has no PRESENT key"}
         details = _aligned_details(targets)
@@ -154,7 +178,8 @@ def capture_present(mod_dir, snapshots, name, position=None,
         for ini_rel, _info in details:
             doc = next(doc for rel, _path, doc in targets if rel == ini_rel)
             duplicate_sets.append(set(present_editor.duplicate_positions(
-                doc, _snapshot(snapshots, ini_rel), position=position)))
+                doc, _snapshot(snapshots, ini_rel), position=position,
+                capture_bindings=capture_specs.get(ini_rel, []))))
         duplicates = sorted(set.intersection(*duplicate_sets)) if duplicate_sets else []
         if duplicates and not allow_duplicate:
             return {"warning": "the captured values duplicate another present",
@@ -173,7 +198,8 @@ def capture_present(mod_dir, snapshots, name, position=None,
         mod_dir, targets,
         lambda ini_rel, doc: present_editor.capture(
             doc, _snapshot(snapshots, ini_rel), position=position,
-            allow_duplicate=True),
+            allow_duplicate=True,
+            capture_bindings=capture_specs.get(ini_rel, [])),
         metadata_change=save_name)
 
 

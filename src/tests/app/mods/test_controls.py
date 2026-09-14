@@ -145,5 +145,5 @@ def test_control_state_does_not_build_geometry(
 
     result = load_control_state(context, active_mesh_keys={"Body-1"})
 
-    assert semantic_calls
-    assert set(result["controls"]["toggles"]) == {"KeyOutfit"}
+    assert not semantic_calls
+    assert result["controls"]["toggles"] == {}

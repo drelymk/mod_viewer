@@ -254,3 +254,43 @@ def test_discard_restores_present_names_with_staged_position_delete(single_prese
           {"0": "A", "1": "Bee", "2": "C"}), ("discard restores the exported PRESENT name mapping")
     doc = edit_session.peek(folder, path)
     assert (present_editor.details(doc)["count"] == 3), ("discard reloads the matching three-position INI baseline")
+
+
+def test_namespaced_present_capture_uses_local_authored_binding(tmp_path):
+    folder = str(tmp_path)
+    model_path = os.path.join(folder, "Model.ini")
+    menu_path = os.path.join(folder, "Menu.ini")
+    with open(model_path, "w", encoding="utf-8") as stream:
+        stream.write(
+            "namespace = cx_Mod049\n\n"
+            "[Constants]\n"
+            "global $key_1 = 1\n\n"
+            "[TextureOverrideBody]\n"
+            "if $key_1 == 1\n"
+            "    Resource\\ZZMI\\Diffuse = TextureAlternate\n"
+            "endif\n")
+    with open(menu_path, "w", encoding="utf-8") as stream:
+        stream.write(
+            "[Constants]\n"
+            "global persist $key_1 = 0\n\n"
+            "[KeyClick]\n"
+            "key = x\n"
+            "type = cycle\n"
+            "$key_1 = 0,1\n\n"
+            "[KeyModViewerPresent]\n"
+            "key = p\n"
+            "type = cycle\n"
+            "$key_1 = 0\n"
+            "$\\cx_Mod049\\key_1 = $key_1\n")
+
+    edit_session.discard(folder)
+    edit_session.load_documents(folder, [model_path, menu_path])
+    result = present_api.capture_present(
+        folder, {"Menu.ini": {"key_1": "1"}}, "Preset 2")
+
+    assert result.get("ok")
+    menu_doc = edit_session.peek(folder, menu_path)
+    assert "$key_1 = 0,1" in menu_doc.to_string()
+    assert present_editor.details(menu_doc)["vars"] == {"key_1": ["0", "1"]}
+    assert edit_session.peek(folder, model_path).section(SECTION_NAME) is None
+    edit_session.discard(folder)

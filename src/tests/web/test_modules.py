@@ -145,6 +145,57 @@ def test_runtime_resets_keep_live_state_and_fresh_mutable_defaults(module_page):
     }
 
 
+def test_menu_actions_filter_conditions_and_apply_writes_in_source_order(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      document.body.insertAdjacentHTML('afterbegin',
+        '<div id="canvas-container"></div>'
+        + '<button id="open-btn"></button>'
+        + '<div id="renderer-error"></div>'
+        + '<div id="view-gizmo"></div>');
+      const state = await import('./js/editing/control-state.js');
+      const {applyAction} = await import('./js/panels/menu-panel.js');
+      state.resetControlState();
+      for (const [name, value] of [
+        ['gate', '0'], ['first', '0'], ['copied', '0'], ['cycle', '2'],
+        ['conditional', '0'], ['unsupported', '0'],
+      ]) state.setControlValue(name, value);
+
+      const action = {
+        conditions: [[{var: 'gate', value: '1', negate: false}]],
+        assignments: [
+          {target: 'first', literal: '1', expression: '1',
+           conditions: [], dependencies: [], exact_copy: false},
+          {target: 'copied', literal: null, expression: '$first',
+           conditions: [], dependencies: ['first'], exact_copy: true},
+          {target: 'cycle', literal: null, expression: '($cycle + 1) % 3',
+           conditions: [], dependencies: [], exact_copy: false},
+          {target: 'conditional', literal: '9', expression: '9',
+           conditions: [[{var: 'gate', value: '0', negate: false}]],
+           dependencies: [], exact_copy: false},
+          {target: 'unsupported', literal: null,
+           expression: '$unsupported + $other', conditions: [],
+           dependencies: ['other'], exact_copy: false},
+        ],
+      };
+      const blocked = applyAction(action);
+      const before = state.getControlState();
+      state.setControlValue('gate', '1');
+      const applied = applyAction(action);
+      return {blocked, applied, state: state.getControlState(), before};
+    }""")
+    assert result["blocked"] is False
+    assert result["applied"] is True
+    assert result["before"] == {
+        "gate": "0", "first": "0", "copied": "0", "cycle": "2",
+        "conditional": "0", "unsupported": "0",
+    }
+    assert result["state"] == {
+        "gate": "1", "first": "1", "copied": "1", "cycle": "0",
+        "conditional": "0", "unsupported": "0",
+    }
+
+
 def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
         module_page):
     result = module_page.evaluate("""async () => {

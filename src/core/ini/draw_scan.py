@@ -146,10 +146,12 @@ def gating_var_names(sections, var_prefix=None, *, toggle_keys=None,
     return toggle_vars | menu_vars | {rule["var"] for rule in state_rules}
 
 
-def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
+def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
+                             *, raw_conditions=False):
     """Scan TextureOverride and CommandList execution state into snapshots."""
-    toggle_vars = (gating_vars if gating_vars is not None else
-                   gating_var_names(sections))
+    toggle_vars = (None if raw_conditions else
+                   (gating_vars if gating_vars is not None else
+                    gating_var_names(sections)))
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     texture_override_index = _collect_texture_override_index(
@@ -192,7 +194,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         combined = DNF_TRUE
         for frame in cond_stack:
             combined = dnf_and(combined, frame["cur"])
-        cond = normalize_dnf(combined, toggle_vars, var_prefix)
+        cond = (combined if raw_conditions else
+                normalize_dnf(combined, toggle_vars, var_prefix))
         if role == "diffuse":
             if not info["diffuse"]:
                 info["diffuse"] = res
@@ -370,7 +373,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 combined = DNF_TRUE
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
-                conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+                conditions = (combined if raw_conditions else
+                              normalize_dnf(combined, toggle_vars, var_prefix))
                 source = line_source(raw)
                 if source:
                     source = {

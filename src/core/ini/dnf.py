@@ -14,8 +14,9 @@ that renders back to the original text.
 
 import re
 
-_CLAUSE_RE = re.compile(r'\$(\w+)\s*(==|!=)\s*(-?[\w.]+)')
-_ASSIGN_BOOL_RE = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
+_VAR_TOKEN = r'(?:\\[A-Za-z0-9_.-]+(?:\\[A-Za-z0-9_.${}-]+)+|\{[^}]+\}|[A-Za-z0-9_.${}-]+)'
+_CLAUSE_RE = re.compile(rf'\$({_VAR_TOKEN})\s*(==|!=|<=|>=|<|>)\s*(-?[\w.]+)')
+_ASSIGN_BOOL_RE = re.compile(rf'^\$({_VAR_TOKEN})\s*=\s*(.+)$')
 _STRUCT_RE = re.compile(r'(\(|\)|&&|\|\||!(?!=))')
 
 DNF_TRUE:  list = [[]]
@@ -46,7 +47,7 @@ def _simplify_group(group):
     an impossible condition into an unconditional one."""
     eq: dict = {}
     for c in group:
-        if not c["negate"]:
+        if not c["negate"] and c.get("op", "==") == "==":
             eq.setdefault(c["var"], set()).add(c["value"])
     redundant = {v: vals.pop() for v, vals in eq.items() if len(vals) == 1}
     if not redundant:
@@ -76,16 +77,28 @@ def dnf_not(dnf):
     and NOT(c1 AND c2) == (NOT c1) OR (NOT c2)."""
     result = DNF_TRUE
     for group in dnf:
-        neg_group = [[{"var": c["var"], "value": c["value"], "negate": not c["negate"]}]
-                     for c in group]
+        neg_group = []
+        for clause in group:
+            op = clause.get("op")
+            if op:
+                inverse = {"<": ">=", "<=": ">", ">": "<=",
+                           ">=": "<"}.get(op)
+                neg_group.append([{
+                    **clause, "op": inverse or op, "negate": False,
+                }])
+            else:
+                neg_group.append([{
+                    "var": clause["var"], "value": clause["value"],
+                    "negate": not clause["negate"],
+                }])
         result = dnf_and(result, neg_group)
     return result
 
 
 def _atom_to_dnf(atom, alias_map):
     """Convert a single comparison / bare-boolean token into DNF. Anything that
-    can't be traced to a real variable (numeric literals, DRAW_TYPE, unsupported
-    operators like <=) becomes DNF_TRUE so it never hides a mesh."""
+    can't be traced to a real variable (numeric literals, DRAW_TYPE, unknown
+    operators) becomes DNF_TRUE so it never hides a mesh."""
     atom = atom.strip()
     if not atom:
         return DNF_TRUE
@@ -97,9 +110,12 @@ def _atom_to_dnf(atom, alias_map):
     m = _CLAUSE_RE.fullmatch(atom)
     if m:
         v, op, val = m.group(1), m.group(2), m.group(3)
-        dnf = [[{"var": v, "value": val, "negate": op == "!="}]]
+        clause = {"var": v, "value": val, "negate": op == "!="}
+        if op not in ("==", "!="):
+            clause["op"] = op
+        dnf = [[clause]]
     else:
-        m = re.fullmatch(r'\$(\w+)', atom)
+        m = re.fullmatch(rf'\$({_VAR_TOKEN})', atom)
         if m:
             # Alias-map values are already DNF. A non-alias bare variable is
             # an ordinary 3DMigoto truthiness test (`if $hat` means non-zero),
@@ -164,21 +180,61 @@ def parse_condition_dnf(content, alias_map):
         return DNF_TRUE
 
 
-def normalize_dnf(dnf, toggle_vars, var_prefix=None):
-    """Drop clauses on untracked variables (they're assumed satisfied, matching
-    long-standing behaviour), then apply var_prefix. An alternative left with no
-    clauses is unconditionally true, which makes the whole condition true -> [].
+def canonicalize_dnf(dnf, canonical_vars=None):
+    """Return DNF with one authored spelling per case-insensitive variable.
 
-    Matching is case-insensitive and rewrites each clause to the tracked
-    spelling: 3DMigoto doesn't care whether a draw is gated on `$hair` or
-    `$Hair`, but a mod that spells it one way in [Constants] and the other in
-    the draw would otherwise leave the mesh untracked, hence always visible.
+    This is intentionally separate from filtering.  Render scanning needs the
+    complete authored condition first; deciding which variables are safe to
+    expose to the frontend happens after render effects and controllers are
+    known.
     """
-    tracked = {v.lower(): v for v in toggle_vars}
+    tracked = {str(v).lower().lstrip("$"): str(v)
+               for v in (canonical_vars or ())}
+    out = []
+    for group in dnf or ():
+        normalized = [{**clause,
+                       "var": tracked.get(clause["var"].lower(), clause["var"])}
+                      for clause in group]
+        if normalized not in out:
+            out.append(normalized)
+    return out
+
+
+def filter_dnf(dnf, allowed_variable_ids):
+    """Keep only clauses whose resolved variable identity is allowed.
+
+    ``allowed_variable_ids`` may contain strings or objects exposing ``key``.
+    The empty list remains the historical fail-open representation of an
+    unconstrained condition.
+    """
+    allowed = set()
+    for value in allowed_variable_ids or ():
+        key = getattr(value, "key", value)
+        allowed.add(str(key).casefold())
+    out = []
+    for group in dnf or ():
+        kept = [clause for clause in group
+                if str(clause["var"]).casefold() in allowed]
+        if not kept:
+            return []
+        if kept not in out:
+            out.append(kept)
+    return out
+
+
+def normalize_dnf(dnf, toggle_vars, var_prefix=None):
+    """Compatibility wrapper for canonicalize + filter.
+
+    New code should keep raw conditions through render analysis and call
+    :func:`filter_dnf` only after variable identities have been resolved.
+    Existing low-level callers retain the historical API and fail-open rules.
+    """
+    tracked = {str(v).lower().lstrip("$"): str(v) for v in toggle_vars}
     out: list = []
     for group in dnf:
         kept = [{"var": tracked[c["var"].lower()], "value": c["value"],
-                 "negate": c["negate"]}
+                 "negate": c["negate"],
+                 **({"op": c["op"]} if c.get("op") else {})}
                 for c in group if c["var"].lower() in tracked]
         if not kept:
             return []

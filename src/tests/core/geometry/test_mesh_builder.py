@@ -5,7 +5,8 @@ import struct
 import tempfile
 
 from core.ini.parser import (build_draw_groups, extract_resources,
-                             extract_toggle_keys, merge_sections)
+                             merge_sections)
+from core.ini.toggles import extract_toggle_keys
 from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
@@ -98,7 +99,7 @@ def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
         "ib_file": "body.ib",
         "index_size": 4,
         "draws": [draw],
-        "shape_sliders": [{
+        "shape_effects": [{
             "var": "BodyShape",
             "base_file": "position.buf",
             "shape_id": 127,

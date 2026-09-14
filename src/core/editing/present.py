@@ -3,10 +3,8 @@
 import re
 
 from ..ini.document import ASSIGN, BLANK
-from ..ini.menu import extract_menu_toggles
-from ..ini.sections import extract_resources, sections_from_document
-from ..ini.shapes import extract_shape_sliders
-from ..ini.toggles import extract_toggle_keys
+from ..ini.program import scan_program
+from ..ini.variables import source_from_path
 from .toggle import ToggleEditError, cycle_vars, is_cycle_section
 
 
@@ -60,9 +58,12 @@ def details(doc):
     }
 
 
-def capturable_variables(doc):
-    """Local variables controlled by keys, menus, or recognized sliders."""
-    sections = sections_from_document(doc)
+def capturable_variables(doc, capture_bindings=None):
+    """Local variables exposed by the shared program-fact scan.
+
+    PRESENT editing remains a local, ownership-safe operation.  Cross-INI
+    namespace variables are intentionally not returned as writable captures.
+    """
     found = []
     seen = set()
 
@@ -72,25 +73,49 @@ def capturable_variables(doc):
             seen.add(low)
             found.append(name)
 
-    for info in extract_toggle_keys(sections).values():
-        if info.get("section", "").lower() == SECTION_NAME.lower():
+    if capture_bindings is not None:
+        for binding in capture_bindings:
+            authored = (binding.get("authored_var") if isinstance(binding, dict)
+                        else None)
+            if authored:
+                add(str(authored).lstrip("$"))
+        return found
+
+    source = source_from_path(doc.path, document=doc)
+    program = scan_program(source)
+    for key in program.key_inputs:
+        if key.section.lower() == SECTION_NAME.lower():
             continue
-        for name in info.get("vars", {}):
-            add(name)
-    for info in extract_menu_toggles(sections).values():
-        add(info.get("var", ""))
-    resources = extract_resources(sections)
-    for info in extract_shape_sliders(sections, resources):
-        add(info.get("var", ""))
+        for write in program.writes:
+            if (write.section.casefold() == key.section.casefold()
+                    and write.target in key.writes
+                    and write.target.kind == "ini"):
+                add(write.authored_target or write.target.name)
     return found
 
 
-def _snapshot_values(doc, snapshot):
-    allowed = capturable_variables(doc)
+def _snapshot_values(doc, snapshot, capture_bindings=None):
+    allowed = capturable_variables(doc, capture_bindings)
     supplied = {}
     for name, value in (snapshot or {}).items():
         raw = str(name).split("::")[-1].lstrip("$")
         supplied[raw.lower()] = str(value).strip()
+    if capture_bindings is not None:
+        aliases = {}
+        for binding in capture_bindings:
+            if not isinstance(binding, dict) or not binding.get("authored_var"):
+                continue
+            authored = str(binding["authored_var"]).lstrip("$")
+            names = {authored}
+            control_id = binding.get("control_id")
+            if control_id:
+                names.add(str(control_id).lstrip("$"))
+            for name in names:
+                aliases.setdefault(name.casefold(), authored.casefold())
+        supplied = {
+            aliases.get(name, name): value
+            for name, value in supplied.items()
+        }
     values = []
     for name in allowed:
         value = supplied.get(name.lower())
@@ -124,13 +149,13 @@ def _existing_condition(doc):
     return ""
 
 
-def add(doc, key_combo, back_combo, snapshot):
+def add(doc, key_combo, back_combo, snapshot, capture_bindings=None):
     if doc.section(SECTION_NAME) is not None:
         raise ToggleEditError(f"[{SECTION_NAME}] already exists")
     key_combo = str(key_combo or "").strip()
     if not key_combo:
         raise ToggleEditError("a key binding is required")
-    captured = _snapshot_values(doc, snapshot)
+    captured = _snapshot_values(doc, snapshot, capture_bindings)
     body = [f"[{SECTION_NAME}]"]
     condition = _existing_condition(doc)
     if condition:
@@ -177,9 +202,9 @@ def edit_binding(doc, key_combo, back_combo):
     return details(doc)
 
 
-def duplicate_positions(doc, snapshot, position=None):
+def duplicate_positions(doc, snapshot, position=None, capture_bindings=None):
     current = details(doc)
-    captured = _snapshot_values(doc, snapshot)
+    captured = _snapshot_values(doc, snapshot, capture_bindings)
     if position is not None:
         position = int(position)
         if position < 0 or position >= current["count"]:
@@ -210,15 +235,17 @@ def duplicate_positions(doc, snapshot, position=None):
     return duplicates
 
 
-def capture(doc, snapshot, position=None, allow_duplicate=False):
+def capture(doc, snapshot, position=None, allow_duplicate=False,
+            capture_bindings=None):
     """Append a preset, or replace one existing position when supplied."""
     current = details(doc)
     if position is None and current["count"] >= MAX_PRESENTS:
         raise ToggleEditError(f"a PRESENT key can contain at most {MAX_PRESENTS} presents")
-    duplicates = duplicate_positions(doc, snapshot, position=position)
+    duplicates = duplicate_positions(
+        doc, snapshot, position=position, capture_bindings=capture_bindings)
     if duplicates and not allow_duplicate:
         raise DuplicatePresentError(duplicates)
-    captured = _snapshot_values(doc, snapshot)
+    captured = _snapshot_values(doc, snapshot, capture_bindings)
     if position is not None:
         position = int(position)
         if position < 0 or position >= current["count"]:

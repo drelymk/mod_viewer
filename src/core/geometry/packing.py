@@ -173,11 +173,11 @@ class _ShapeBuffer:
     low_bytes: bytearray | None = None
 
 
-def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
+def _build_shape_buffers(shape_effects, mod_dir, effective_pos_path, used,
                          buffers, sparse_shape_cache):
     """Load and prepare dense or sparse shape targets for one draw."""
     shape_buffers = []
-    for shape in shape_sliders or []:
+    for shape in shape_effects or []:
         shape_base_path = safe_resource_path(mod_dir, shape["base_file"])
         if os.path.normcase(os.path.normpath(shape_base_path or "")) != \
                 os.path.normcase(os.path.normpath(effective_pos_path)):
@@ -272,7 +272,8 @@ def pack_draw_geometry(
             normal_bytes = decode_normals(normal_source, normal_data, used)
 
     shape_buffers = _build_shape_buffers(
-        group.get("shape_sliders"), mod_dir, prepared.position_path, used,
+        group.get("shape_effects"),
+        mod_dir, prepared.position_path, used,
         buffers, sparse_shape_cache)
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
     for output_index, vertex_index in enumerate(used):

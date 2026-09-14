@@ -1,7 +1,9 @@
-"""Compatibility facade for the read-only INI draw-analysis pipeline.
+"""Public facade for the read-only INI analysis pipeline.
 
-Section parsing, condition helpers, controls, and draw analysis retain their
-historical imports here while focused modules own their implementations.
+The application control path is owned by the semantic program and control
+graph modules.  Legacy menu/toggle detectors remain available only from their
+focused low-level modules for callers that still need format-specific parsing;
+they are intentionally not part of this facade or the runtime load path.
 """
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
@@ -9,8 +11,9 @@ from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
 from ..geometry.identity import GeometryMatch, normalize_geometry_hash
 from ..geometry.vertex_attributes import VertexAttributeSource
 from ..mod_discovery import discover_ini_paths
-from .dnf import (DNF_FALSE, DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not,
-                  dnf_or, normalize_dnf, parse_condition_dnf)
+from .dnf import (DNF_FALSE, DNF_TRUE, build_bool_alias_map, canonicalize_dnf,
+                  dnf_and, dnf_not, dnf_or, filter_dnf, normalize_dnf,
+                  parse_condition_dnf)
 from .draw_groups import build_draw_groups
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
@@ -20,12 +23,9 @@ from .draw_resources import (
 from .draw_scan import (
     _RUN_SKIP_PREFIXES, _ScannedSections, _collect_legacy_scope_roles,
     _reachable_execution_sections, _run_target_name, _scan_sections_for_draws,
-    gating_var_names,
 )
-from .menu import extract_menu_toggles, extract_menu_var_names
 from .sections import (SrcLine, extract_resources, first_source, line_source,
                        merge_sections, parse_sections, sections_from_document)
-from .state import extract_state_rules
 from .texture_roles import (
     TextureOverrideIndex, TextureReplacement,
     _LEGACY_TEXTURE_RESOURCE_RE, _SEMANTIC_TEXTURE_RESOURCE_RE,
@@ -36,8 +36,12 @@ from .texture_roles import (
     _freeze_dnf, _legacy_texture_evidence, _legacy_texture_role,
     _semantic_texture_role, _thaw_dnf,
 )
-from .toggles import (extract_toggle_keys, extract_toggle_var_names,
-                      extract_variable_defaults)
+from .control_graph import (Action, ControlGraph, Controller, RenderEffect,
+                            build_control_graph)
+from .program import (KeyInput, ProgramFacts, RunEdge, VariableDeclaration,
+                      VariableWrite, scan_program)
+from .variables import (IniSource, VariableId, VariableResolver,
+                        extract_variable_references, source_from_path)
 
 
 # Compatibility name retained for tests and third-party scripts.
@@ -50,7 +54,9 @@ __all__ = [
     "sections_from_document",
     "DNF_FALSE", "DNF_TRUE", "build_bool_alias_map", "dnf_and", "dnf_not",
     "dnf_or", "normalize_dnf", "parse_condition_dnf",
-    "extract_menu_toggles", "extract_menu_var_names",
-    "extract_toggle_keys", "extract_toggle_var_names", "extract_variable_defaults",
-    "gating_var_names", "build_draw_groups",
+    "Action", "ControlGraph", "Controller", "RenderEffect",
+    "build_control_graph", "KeyInput", "ProgramFacts", "RunEdge",
+    "VariableDeclaration", "VariableWrite", "scan_program", "IniSource",
+    "VariableId", "VariableResolver", "source_from_path",
+    "build_draw_groups",
 ]

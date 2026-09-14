@@ -12,8 +12,9 @@ import pytest
 from app.mods import loader as mod_loader
 from core.geometry.draw_call import DrawCall
 from core.ini.parser import (SrcLine, build_draw_groups, extract_resources,
-                             extract_toggle_keys, line_source, merge_sections,
+                             line_source, merge_sections,
                              parse_sections)
+from core.ini.toggles import extract_toggle_keys
 from core.geometry.mesh_builder import _deduplicate_draws
 from tests.support.provenance import write
 

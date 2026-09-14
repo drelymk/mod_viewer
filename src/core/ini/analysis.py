@@ -1,95 +1,214 @@
-"""One semantic analysis pass over an INI section projection."""
+"""One independent INI scan for program facts and raw render effects."""
 
 from dataclasses import dataclass, field
+import os
 
-from .sections import canonical_var_names, extract_resources
-from .toggles import (extract_toggle_keys, extract_variable_defaults)
-from .menu import extract_menu_toggles
-from .state import extract_state_rules
-from .shapes import extract_shape_sliders
+from .sections import canonical_var_names, extract_resources, first_source
+from .program import ProgramFacts, scan_program
+from .variables import IniSource, VariableId, VariableResolver
+from .shapes import extract_shape_effects
 from .draw_groups import build_draw_groups
+from .draw_scan import _scan_sections_for_draws
+from .control_graph import RenderEffect
 from ..materials.game_profile import collect_game_evidence
 
 
 @dataclass
 class IniAnalysis:
-    """Named intermediate representation shared by controls and geometry."""
+    """Named intermediate representation shared by the mod-level assembly."""
 
     sections: dict
     canonical_vars: dict
     resources: dict
-    toggles: dict
-    menu: dict
-    state_rules: list
-    shapes: list
-    defaults: dict
-    gating_vars: set
+    # Compatibility projections are populated by the mod-level assembly. The
+    # independent scan itself does not run separate toggle/menu detectors.
+    toggles: dict = field(default_factory=dict)
+    menu: dict = field(default_factory=dict)
+    state_rules: list = field(default_factory=list)
+    shapes: list = field(default_factory=list)
+    defaults: dict = field(default_factory=dict)
+    gating_vars: set = field(default_factory=set)
     draw_groups: list = field(default_factory=list)
     game_evidence: list = field(default_factory=list)
     runtime_evidence: list = field(default_factory=list)
     texture_api_evidence: list = field(default_factory=list)
+    source: IniSource | None = None
+    program: ProgramFacts | None = None
+    render_effects: list = field(default_factory=list)
+
+
+def _memory_source(sections, resources):
+    source_info = first_source(
+        [line for lines in sections.values() for line in lines]) or {}
+    path = source_info.get("ini_path") or "<memory>/mod.ini"
+    return IniSource(
+        path=path,
+        relative_path=os.path.basename(path),
+        namespace=None,
+        sections=sections,
+        resources=resources,
+    )
+
+
+def _resolve_clause_conditions(conditions, resolver, source, section=None):
+    result = []
+    for group in conditions or ():
+        resolved = []
+        for clause in group:
+            variable = resolver.resolve(clause["var"], source, section)
+            resolved.append({**clause, "var": variable.key})
+        if resolved not in result:
+            result.append(resolved)
+    return result
+
+
+def _variables_in_conditions(conditions, resolver, source, section=None):
+    result = []
+    for group in conditions or ():
+        for clause in group:
+            value = clause["var"]
+            try:
+                variable = VariableId.from_key(value)
+            except (TypeError, ValueError):
+                variable = resolver.resolve(value, source, section)
+            if variable not in result:
+                result.append(variable)
+    return tuple(result)
+
+
+def _resolve_render_effects(groups, shapes, resolver, source, scan_result=None):
+    effects = []
+    for group in groups:
+        for draw in group.get("draws", []):
+            section = next((item.get("section") for item in draw.sources
+                            if item.get("section")), None)
+            draw.conditions = _resolve_clause_conditions(
+                draw.conditions, resolver, source, section)
+            variables = _variables_in_conditions(
+                draw.conditions, resolver, source, section)
+            if variables:
+                effects.append(RenderEffect(
+                    "visibility", variables, draw.label,
+                    draw.sources[0] if draw.sources else None,
+                    {"group": group.get("name")}))
+            for role in ("diffuse", "normal_map", "light_map",
+                         "material_map", "emission_map"):
+                variants = draw.texture_rules(role)
+                for variant in variants:
+                    variant["conditions"] = _resolve_clause_conditions(
+                        variant.get("conditions"), resolver, source, section)
+                variables = _variables_in_conditions(
+                    [group for variant in variants
+                     for group in variant.get("conditions", [])],
+                    resolver, source, section)
+                if variables:
+                    effects.append(RenderEffect(
+                        "texture", variables, draw.label,
+                        draw.sources[0] if draw.sources else None,
+                        {"role": role}))
+
+    for shape in shapes:
+        authored = shape.get("var") or shape.get("name")
+        variable = resolver.resolve(authored, source, shape.get("section"))
+        shape["var"] = variable.key
+        effects.append(RenderEffect(
+            "shape", (variable,), shape.get("base_file"),
+            {"ini_path": shape.get("ini_path"),
+             "section": shape.get("section")},
+            {"shape": shape}))
+
+    # Texture assignments are render effects even when their TextureOverride
+    # has no IB/draw call of its own.  Keeping this pass on the raw section
+    # scan prevents geometry selection from silently dropping texture-only
+    # controls.
+    if scan_result is not None:
+        for section, info in scan_result.items():
+            if not isinstance(info, dict):
+                continue
+            source_info = {"ini_path": source.path, "section": section}
+            assignments = {
+                "diffuse": info.get("diffuse_history_at_end") or [],
+            }
+            assignments.update({
+                role: state.get("history") or []
+                for role, state in (info.get("aux_maps_at_end") or {}).items()
+                if isinstance(state, dict)
+            })
+            for role, variants in assignments.items():
+                for variant in variants:
+                    conditions = _resolve_clause_conditions(
+                        variant.get("cond") or variant.get("conditions"),
+                        resolver, source, section)
+                    variables = _variables_in_conditions(
+                        conditions, resolver, source, section)
+                    if variables:
+                        effects.append(RenderEffect(
+                            "texture", variables, variant.get("res"),
+                            source_info,
+                            {"role": role, "standalone": True,
+                             "assignment_source": variant.get("source")}))
+
+        texture_index = getattr(scan_result, "texture_override_index", None)
+        for texture_hash, replacements in (
+                getattr(texture_index, "replacements_by_hash", {}) or {}).items():
+            for replacement in replacements:
+                conditions = _resolve_clause_conditions(
+                    replacement.dnf, resolver, source,
+                    replacement.source_section)
+                variables = _variables_in_conditions(
+                    conditions, resolver, source, replacement.source_section)
+                if variables:
+                    effects.append(RenderEffect(
+                        "texture", variables,
+                        replacement.file or replacement.resource,
+                        {"ini_path": source.path,
+                         "section": replacement.source_section},
+                        {"role": "texture_override", "standalone": True,
+                         "original_hash": texture_hash}))
+    return effects
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
-                seen=None):
-    """Analyze ``sections`` once and return all derived semantic models.
+                seen=None, ini_source=None, resolver=None):
+    """Analyze one INI once, producing reusable facts and raw render effects.
 
-    Extractors accept the shared canonical spelling map so a normal load does
-    not rescan every source line for each control family.  ``build_draw_groups``
-    receives the already-known gating set instead of rediscovering toggles,
-    menu variables and state rules internally.
+    ``var_prefix`` is accepted for source compatibility but ignored by the new
+    semantic path. Variable identity is resolved later against all selected
+    INIs by :func:`app.mods.analysis.analyze_mod_inis`.
     """
     canonical_vars = canonical_var_names(sections)
     resources = resources if resources is not None else extract_resources(sections)
+    if ini_source is None:
+        ini_source = _memory_source(sections, resources)
+    resolver = resolver or VariableResolver([ini_source])
+    program = scan_program(ini_source, resolver)
     game_evidence, runtime_evidence, texture_api_evidence = \
         collect_game_evidence(sections, resources)
-    toggles = extract_toggle_keys(
-        sections, var_prefix=var_prefix, source=source,
-        canonical_vars=canonical_vars)
-    menu = extract_menu_toggles(
-        sections, var_prefix=var_prefix, source=source,
-        canonical_vars=canonical_vars)
-    state_rules = extract_state_rules(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
-    shapes = extract_shape_sliders(
-        sections, resources, var_prefix=var_prefix, source=source,
-        canonical_vars=canonical_vars)
-    defaults = extract_variable_defaults(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
+    shapes = extract_shape_effects(
+        sections, resources, canonical_vars=canonical_vars)
 
-    gating_vars = {
-        var for info in toggles.values() for var in info.get("vars", {})
-    }
-    gating_vars.update(info["var"] for info in menu.values())
-    gating_vars.update(
-        effect["var"] for info in menu.values()
-        for effect in info.get("effects", [])
-    )
-    gating_vars.update(rule["var"] for rule in state_rules)
-    # Conditions are read from the source before the per-INI namespace is
-    # applied by normalize_dnf, so the scanner needs the source spellings.
-    # The public analysis set remains namespaced for control/panel consumers.
-    scan_prefix = var_prefix or ""
-    scan_gating_vars = {
-        value[len(scan_prefix):] if scan_prefix and value.startswith(scan_prefix)
-        else value
-        for value in gating_vars
-    }
+    # The scanner receives the complete authored variable set. Relevance is
+    # decided after render effects and controllers have been collected.
+    scan_result = _scan_sections_for_draws(
+        sections, var_prefix, None, raw_conditions=True)
     draw_groups = build_draw_groups(
-        sections, resources, var_prefix=var_prefix, source=source,
-        seen=seen, gating_vars=scan_gating_vars)
+        sections, resources, source=source, seen=seen,
+        raw_conditions=True, scan_result=scan_result)
+    render_effects = _resolve_render_effects(
+        draw_groups, shapes, resolver, ini_source, scan_result=scan_result)
+    defaults = {
+        declaration.var.key: declaration.default
+        for declaration in program.declarations
+        if declaration.default is not None
+    }
     return IniAnalysis(
-        sections=sections,
-        canonical_vars=canonical_vars,
-        resources=resources,
-        toggles=toggles,
-        menu=menu,
-        state_rules=state_rules,
-        shapes=shapes,
-        defaults=defaults,
-        gating_vars=gating_vars,
-        draw_groups=draw_groups,
-        game_evidence=game_evidence,
-        runtime_evidence=runtime_evidence,
-        texture_api_evidence=texture_api_evidence,
+        sections=sections, canonical_vars=canonical_vars,
+        resources=resources, defaults=defaults, draw_groups=draw_groups,
+        game_evidence=game_evidence, runtime_evidence=runtime_evidence,
+        texture_api_evidence=texture_api_evidence, source=ini_source,
+        program=program, shapes=shapes, render_effects=render_effects,
+        gating_vars={variable.key for variable in program.variables},
     )
+
+
+__all__ = ["IniAnalysis", "analyze_ini"]

@@ -493,9 +493,9 @@ def attach_menu_images(menu, sections, resources):
         if info.get("slot") in slot_images:
             info["image_file"] = slot_images[info["slot"]]
             continue
-        if info.get("kind") != "shape_slider":
+        if not (info.get("name") or info.get("var")):
             continue
-        var = compact(info["name"])
+        var = compact(info.get("name") or info.get("var"))
         needles = list(aliases.get(var, ()))
         needles += [var, var.replace("swapvarslider", ""), var.replace("size", "")]
         for resource_name, filename in image_resources:

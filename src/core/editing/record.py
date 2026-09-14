@@ -749,7 +749,7 @@ def verify_recording(path, report, text=None, document=None):
             document = (IniDocument.from_string(text, path=path)
                         if text is not None else IniDocument.load(path))
         sections = sections_from_document(document)
-        draw_info = _scan_sections_for_draws(sections)
+        draw_info = _scan_sections_for_draws(sections, raw_conditions=True)
     except Exception as e:
         return [{"var": None, "reason": f"file failed to re-parse after saving: {e!r}"}]
 

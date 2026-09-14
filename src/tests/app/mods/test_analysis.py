@@ -28,6 +28,10 @@ endif
 ps-t100 = ResourceIcon
 [ResourceIcon]
 filename = {1}.dds
+[TextureOverrideBody]
+if $swapvar == 1
+    Resource\\ZZMI\\Diffuse = ResourceIcon
+endif
 """
     with tempfile.TemporaryDirectory() as root:
         nested = os.path.join(root, "nested")
@@ -40,22 +44,16 @@ filename = {1}.dds
             paths.append(path)
 
         parsed = analyze_mod_inis(paths, root)
-        assert set(parsed.toggles) == {
+        assert set(parsed.control_projection["toggles"]) == {
             "nested/body::KeySwap", "nested/hair::KeySwap",
         }
         assert set(parsed.defaults) >= {
             "nested/body::swapvar", "nested/hair::swapvar",
         }
-        assert {item.get("source") for item in parsed.toggles.values()} == {
+        assert {item.get("source") for item in parsed.control_projection[
+            "toggles"].values()} == {
             "nested",
         }
-        images = {
-            os.path.basename(info["ini_path"]): info.get("image_file")
-            for info in parsed.menu.values()
-            if info.get("slot") == 1
-        }
-
-        assert images == {
-            "body.ini": os.path.join("nested", "body.dds"),
-            "hair.ini": os.path.join("nested", "hair.dds"),
-        }
+        assert parsed.toggles == {}
+        assert parsed.menu == {}
+        assert parsed.control_projection["menu"] == {}

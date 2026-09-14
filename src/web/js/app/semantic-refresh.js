@@ -95,11 +95,12 @@ export async function refreshControlSemantics(handlers = {}) {
     viewerState.lastToggles = controls.toggles || {};
     setStateRules(state.rules || [], state.defaults || {}, {
       toggles: controls.toggles || {}, menu: controls.menu || {},
+      actions: controls.actions || [],
     });
     buildTogglePanel(controls.toggles, {
       modPath: path, onChange: callbacks.onToggleChange,
     });
-    buildMenuPanel(controls.menu);
+    buildMenuPanel(controls.menu, controls.actions || []);
     buildPresentPanel(controls.present, {
       modPath: path, onChange: callbacks.onPresentChange,
     });

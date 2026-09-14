@@ -1,19 +1,22 @@
-"""Aggregate the semantic analysis of all INIs in one selected mod."""
+"""Assemble independent INI scans into one mod-level semantic graph."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
+from core.ini.control_graph import ControlGraph, build_control_graph
+from core.ini.dnf import filter_dnf
 from core.ini.menu import attach_menu_images
-from core.ini.sections import extract_resources, merge_sections
+from core.ini.program import _format_key_combo
+from core.ini.variables import VariableId, VariableResolver, source_from_path
 from core.materials.game_profile import GameDetection, resolve_game_detection
 
 
 @dataclass
 class ParsedModAnalysis:
-    """Named result of the shared per-INI semantic analysis pass."""
+    """Named result of one per-INI scan plus the unified control graph."""
 
     groups: list
     toggles: dict
@@ -22,6 +25,9 @@ class ParsedModAnalysis:
     state_rules: list
     present: dict
     game: GameDetection
+    control_graph: ControlGraph | None = None
+    control_projection: dict = field(default_factory=dict)
+    actions: list = field(default_factory=list)
 
     def __iter__(self):
         """Keep old six-value helper callers source-compatible."""
@@ -33,14 +39,8 @@ class ParsedModAnalysis:
         yield self.present
 
 
-def _attach_shape_sliders(groups, shape_sliders):
-    """Attach morphs to groups that use their base buffer on any draw.
-
-    Some generated mods switch ``ib``/``vb0`` halfway through one override,
-    so a group can contain draws backed by several position buffers.
-    ``mesh_builder`` performs the final per-draw filter; it needs every
-    matching morph here.
-    """
+def _attach_shape_effects(groups, shape_effects):
+    """Attach every matching morph effect to every compatible position buffer."""
     def path_key(path):
         return os.path.normcase(os.path.normpath(path)) if path else None
 
@@ -49,24 +49,21 @@ def _attach_shape_sliders(groups, shape_sliders):
         position_files.update(path_key(draw.get("position_file"))
                               for draw in group.get("draws", []))
         position_files.discard(None)
-        matches = [slider for slider in shape_sliders
-                   if path_key(slider.get("base_file")) in position_files]
+        matches = [effect for effect in shape_effects
+                   if path_key(effect.get("base_file")) in position_files]
         if matches:
-            group["shape_sliders"] = matches
+            group["shape_effects"] = matches
 
 
 def _ini_scope(ini_path, folder_path, multi):
-    """Namespace an INI's variables so sibling INIs cannot collide."""
-    if not multi:
-        return None, None
+    """Return a compact UI source label, never a semantic variable identity."""
     parent_dir = os.path.dirname(ini_path)
     if os.path.normpath(parent_dir) != os.path.normpath(folder_path):
         source = os.path.relpath(parent_dir, folder_path).replace(os.sep, "/")
     else:
         source = os.path.splitext(os.path.basename(ini_path))[0]
-    # ``source`` is a compact UI grouping label, not the parser identity.
     identity = os.path.splitext(_ini_rel(ini_path, folder_path))[0]
-    return f"{identity}::", source
+    return (f"{identity}::" if multi else None), source
 
 
 def _ini_rel(ini_path, folder_path):
@@ -85,153 +82,501 @@ def _rebase_resources(resources, ini_path, folder_path):
     return resources
 
 
-def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
-    """Aggregate independent INI analyses into one mod semantic model.
+def _staged_document(path, documents):
+    if not documents:
+        return None
+    return documents.get(path) or documents.get(
+        os.path.normcase(os.path.abspath(path)))
 
-    Each INI is parsed separately so resource definitions from sibling files
-    cannot overwrite one another. ``overrides`` and ``documents`` are passed
-    through to ``merge_sections`` so staged edits remain authoritative.
-    """
-    groups = []
-    toggle_keys, menu_slots, toggle_defaults, state_rules = {}, {}, {}, []
-    present_infos, present_sources = [], []
-    game_evidence = []
-    runtime_evidence = []
-    texture_api_evidence = []
-    multi = len(ini_paths) > 1
 
-    # Shared across every INI: duplicate generic component names are
-    # disambiguated instead of one silently overwriting another.
+def _source_for(path, folder_path, overrides, documents):
+    document = _staged_document(path, documents)
+    text = None if document is not None else (overrides or {}).get(path)
+    source = source_from_path(path, folder_path, text=text, document=document)
+    source.resources = _rebase_resources(source.resources, path, folder_path)
+    return source
+
+
+def _authored_name(graph, variable):
+    node = graph.variables.get(variable)
+    if node and node.authored_names:
+        return sorted(node.authored_names, key=lambda value: (value.casefold(), value))[0]
+    return variable.name
+
+
+def _display_ids(graph, sources, folder_path):
+    """Map internal IDs to stable UI state IDs while retaining provenance."""
+    multi = len(sources) > 1
+    namespaces = {
+        source.namespace_key: source.namespace for source in sources
+        if source.namespace
+    }
+    result = {}
+    for variable in graph.variables:
+        name = _authored_name(graph, variable)
+        if variable.kind == "namespace":
+            owner = namespaces.get(variable.owner, variable.owner)
+            result[variable.key] = f"{owner}/{name}"
+            continue
+        if not multi:
+            result[variable.key] = name
+            continue
+        owner = variable.owner.split("::", 1)[0]
+        result[variable.key] = f"{os.path.splitext(owner)[0]}::{name}"
+    return result
+
+
+def _project_conditions(conditions, ids):
+    return [[{**clause, "var": ids.get(clause["var"], clause["var"])}
+             for clause in group]
+            for group in (conditions or [])]
+
+
+def _project_source(source, folder_path):
+    """Expose source provenance without leaking absolute filesystem paths."""
+    if not source:
+        return None
+    result = dict(source)
+    path = result.get("ini_path")
+    if path and os.path.isabs(path):
+        result["ini_path"] = _ini_rel(path, folder_path)
+    return result
+
+
+def _project_capture_bindings(bindings, ids, folder_path):
+    result = []
+    for binding in bindings or ():
+        item = dict(binding)
+        ini = item.get("ini")
+        if ini and os.path.isabs(ini):
+            item["ini"] = _ini_rel(ini, folder_path)
+        control_id = item.get("control_id")
+        item["control_id"] = ids.get(control_id, control_id)
+        marker = (item.get("ini"), str(item.get("authored_var", "")).casefold(),
+                  item.get("control_id"))
+        if marker not in {(entry.get("ini"),
+                           str(entry.get("authored_var", "")).casefold(),
+                           entry.get("control_id")) for entry in result}:
+            result.append(item)
+    return result
+
+
+def _project_assignment(write, ids, folder_path=None):
+    return {
+        "target": ids.get(write.target.key, write.target.key),
+        "authored_target": write.authored_target,
+        "expression": write.expression,
+        "dependencies": [ids.get(item.key, item.key)
+                         for item in write.dependencies],
+        "literal": write.literal,
+        "cycle_values": list(write.cycle_values),
+        "conditions": _project_conditions(write.conditions, ids),
+        "section": write.section,
+        "phase": write.phase,
+        "source": _project_source(write.source, folder_path),
+        "exact_copy": write.exact_copy,
+    }
+
+
+def _filter_and_project_groups(groups, graph, ids):
+    """Drop unmodelled runtime gates only after graph classification."""
+    allowed = set(graph.control_variables)
+    allowed.update(effect_var
+                   for control in graph.controls.values()
+                   for effect in control.effects
+                   for effect_var in effect.variables)
+    allowed_keys = {variable.key for variable in allowed}
+    for group in groups:
+        for shape in group.get("shape_effects") or []:
+            # Packed shape targets share the same public state IDs as draw
+            # conditions and control panels.  Keep the graph's internal
+            # identity only until the mod-level projection is complete.
+            shape["var"] = ids.get(shape.get("var"), shape.get("var"))
+        for draw in group.get("draws", []):
+            draw.conditions = _project_conditions(
+                filter_dnf(draw.conditions, allowed_keys), ids)
+            for role in ("diffuse", "normal_map", "light_map",
+                         "material_map", "emission_map"):
+                for variant in draw.texture_rules(role):
+                    variant["conditions"] = _project_conditions(
+                        filter_dnf(variant.get("conditions"), allowed_keys), ids)
+
+
+def _write_values(program, section, variable):
+    result = []
+    for write in program.writes:
+        if write.section.casefold() != section.casefold() or write.target != variable:
+            continue
+        if write.cycle_values:
+            result.extend(write.cycle_values)
+        elif write.literal is not None:
+            result.append(write.literal)
+    return list(dict.fromkeys(result))
+
+
+def _key_projection(program, key, graph, ids, source_label, folder_path,
+                    multi, *, semantic_only=False):
+    vars_by_id = {}
+    selected = (variable for variable in key.writes
+                if not semantic_only or variable in graph.control_variables)
+    for variable in selected:
+        if variable not in graph.variables:
+            continue
+        values = _write_values(program, key.section, variable)
+        if values:
+            vars_by_id[ids.get(variable.key, variable.key)] = values
+    if not vars_by_id:
+        return None
+    prefix = f"{os.path.splitext(program.source.relative_path)[0]}::" if multi else ""
+    section_key = f"{prefix}{key.section}"
+    source = next((line.get("ini_path") for line in [key.source or {}]
+                   if line.get("ini_path")), program.source.path)
+    return section_key, {
+        "name": key.section[3:] if key.section[:3].casefold() == "key" else key.section,
+        "key": key.key,
+        "key_display": _format_key_combo(key.key),
+        "back": key.back,
+        "vars": vars_by_id,
+        "variable_kinds": {
+            ids.get(variable.key, variable.key): variable.kind
+            for variable in key.writes if variable in graph.variables
+        },
+        "source": source_label,
+        "ini_path": source,
+        "section": key.section,
+        "wired": any(variable in graph.control_variables
+                      for variable in key.writes),
+        "controller_kind": "direct_key",
+        # Internal projection metadata used by control-state filtering.  It is
+        # consumed before the public panel payload is built.
+        "_semantic_ids": [variable.key for variable in key.writes
+                           if variable in graph.variables],
+    }
+
+
+def _unified_projection(graph, sources, ids, folder_path,
+                        pending_new_sections=None):
+    toggles = {}
+    menu = {}
+    emitted_controls = set()
+    pending_new_sections = pending_new_sections or {}
+    for program in graph.facts:
+        prefix, source_label = _ini_scope(
+            program.source.path, folder_path, len(sources) > 1)
+        relative = program.source.relative_path
+        pending = {
+            str(section).casefold()
+            for section in pending_new_sections.get(relative, ())
+        }
+        for key in program.key_inputs:
+            is_pending = key.section.casefold() in pending
+            item = _key_projection(
+                program, key, graph, ids, source_label, folder_path,
+                len(sources) > 1, semantic_only=not is_pending)
+            if item is None:
+                continue
+            key_name, info = item
+            info["pending"] = is_pending
+            if (is_pending or any(controller.kind == "direct_key"
+                                  for variable in key.writes
+                                  for controller in _controllers_for(graph, variable))):
+                toggles[key_name] = info
+        for control in graph.controls.values():
+            if control.id in emitted_controls:
+                continue
+            interactive = [controller for controller in control.controllers
+                           if controller.kind == "interactive"]
+            interactive.extend(
+                controller for controller in control.controllers
+                if controller.kind == "compound_action")
+            if not interactive:
+                continue
+            controller_path = (interactive[0].source or {}).get("ini_path")
+            if not controller_path:
+                controller_path = next(
+                    (effect.source.get("ini_path")
+                     for effect in control.effects if effect.source
+                     and effect.source.get("ini_path")), None)
+            controller_source = next(
+                (candidate for candidate in sources
+                 if controller_path and os.path.normcase(
+                     os.path.abspath(candidate.path)) == os.path.normcase(
+                         os.path.abspath(controller_path))),
+                None)
+            effective_source_label = source_label
+            effective_ini_path = program.source.path
+            if controller_source is not None:
+                _unused, effective_source_label = _ini_scope(
+                    controller_source.path, folder_path, len(sources) > 1)
+                effective_ini_path = controller_source.path
+            variable_id = ids.get(control.state_var.key, control.state_var.key)
+            domain = dict(control.domain)
+            info = {
+                "name": _authored_name(graph, control.state_var),
+                "source": effective_source_label,
+                "ini_path": effective_ini_path,
+                "section": (interactive[0].source or {}).get(
+                    "section", interactive[0].trigger),
+                "var": variable_id,
+                "domain": domain,
+                "controllers": [controller.kind for controller in interactive],
+                "capture_bindings": _project_capture_bindings(
+                    control.capture_bindings, ids, folder_path),
+                "_semantic_id": control.id,
+            }
+            if domain.get("kind") == "discrete":
+                info["values"] = domain.get("values", [])
+            else:
+                info.update({key: domain.get(key)
+                             for key in ("min", "max")})
+                info["step"] = 0.01
+            key_source = controller_source or program.source
+            key = f"{key_source.relative_path}::{control.state_var.name}"
+            menu.setdefault(key, info)
+            emitted_controls.add(control.id)
+    actions = [{
+        "kind": action.kind,
+        "trigger": action.trigger,
+        "conditions": _project_conditions(action.conditions, ids),
+        "writes": [ids.get(variable.key, variable.key)
+                   for variable in action.writes],
+        "assignments": [_project_assignment(write, ids, folder_path)
+                        for write in action.assignments],
+        "source": _project_source(action.source, folder_path),
+    } for action in graph.actions]
+    return {"toggles": toggles, "menu": menu, "actions": actions}
+
+
+def _controllers_for(graph, variable):
+    control = graph.controls.get(variable.key)
+    return control.controllers if control else ()
+
+
+def _state_rules(graph, ids, folder_path):
+    rules = []
+    for program in graph.facts:
+        for write in program.writes:
+            if write.section.casefold() != "present" or write.literal is None:
+                continue
+            rules.append({
+                "var": ids.get(write.target.key, write.target.key),
+                "value": write.literal,
+                "conditions": _project_conditions(write.conditions, ids),
+                "phase": write.phase,
+                "source": _project_source(write.source, folder_path),
+            })
+    return rules
+
+
+def _present_projection(graph, sources, ids, defaults, folder_path):
+    infos = []
+    targets = []
+    for program in graph.facts:
+        rel = program.source.relative_path
+        # Capture eligibility is sourced from the unified facts, including
+        # direct Key state that may currently gate an unconditional draw. This
+        # keeps PRESENT useful without making that state an always-visible UI
+        # control.
+        local_vars = []
+        capture_bindings = []
+        forwarded_dependencies = {
+            write.dependencies[0]
+            for write in program.writes
+            if (write.section.casefold() == PRESENT_SECTION.casefold()
+                and write.exact_copy and write.dependencies
+                and write.dependencies[0].kind == "ini")
+        }
+        for key in program.key_inputs:
+            if key.section.casefold() == PRESENT_SECTION.casefold():
+                continue
+            for variable in key.writes:
+                if variable.kind != "ini" or variable in forwarded_dependencies:
+                    continue
+                public = ids.get(variable.key, variable.key)
+                local_vars.append(public)
+                capture_bindings.append({
+                    "ini": rel,
+                    "authored_var": _authored_name(graph, variable),
+                    "control_id": public,
+                })
+            for action in graph.actions:
+                action_source = (action.source or {}).get("ini_path")
+                if (action_source != program.source.path
+                        or action.trigger not in (key.key, key.section)):
+                    continue
+                for assignment in action.assignments:
+                    if (assignment.target.kind != "ini"
+                            or assignment.target in forwarded_dependencies):
+                        continue
+                    public = ids.get(assignment.target.key,
+                                     assignment.target.key)
+                    local_vars.append(public)
+                    capture_bindings.append({
+                        "ini": rel,
+                        "authored_var": _authored_name(
+                            graph, assignment.target),
+                        "control_id": public,
+                    })
+        for write in program.writes:
+            if (write.section.casefold() != PRESENT_SECTION.casefold()
+                    or not write.exact_copy or not write.dependencies):
+                continue
+            dependency = write.dependencies[0]
+            if dependency.kind != "ini":
+                continue
+            control_id = ids.get(write.target.key, write.target.key)
+            local_vars.append(control_id)
+            capture_bindings.append({
+                "ini": rel,
+                "authored_var": _authored_name(graph, dependency),
+                "control_id": control_id,
+            })
+        capture_bindings = _project_capture_bindings(
+            capture_bindings, ids, folder_path)
+        local_vars = list(dict.fromkeys(local_vars))
+        targets.append({"value": rel, "label": rel, "vars": local_vars,
+                        "capture_bindings": capture_bindings,
+                        "has_present": any(
+                            key.section.casefold() == PRESENT_SECTION.casefold()
+                            for key in program.key_inputs)})
+        for key in program.key_inputs:
+            if key.section.casefold() != PRESENT_SECTION.casefold():
+                continue
+            variables = []
+            for variable in key.writes:
+                values = _write_values(program, key.section, variable)
+                if values:
+                    public = ids.get(variable.key, variable.key)
+                    variables.append({
+                        "var": public,
+                        "values": values,
+                        "default": defaults.get(public, values[0]),
+                    })
+            if variables:
+                counts = {len(item["values"]) for item in variables}
+                infos.append({
+                    "ini": rel, "source": _project_source(
+                        key.source, folder_path),
+                    "section": key.section, "key": _format_key_combo(key.key),
+                    "key_raw": key.key, "back": key.back, "vars": variables,
+                    "capture_vars": local_vars,
+                    "capture_bindings": capture_bindings,
+                    "count": max(len(item["values"]) for item in variables),
+                    "aligned": len(counts) == 1,
+                })
+    item = None
+    if infos:
+        first = infos[0]
+        counts = {entry["count"] for entry in infos}
+        aligned = all(entry["aligned"] for entry in infos) and len(counts) == 1
+        item = {
+            "inis": [entry["ini"] for entry in infos],
+            "target_inis": targets,
+            "key": first["key"], "key_raw": first["key_raw"],
+            "back": first["back"],
+            "vars": [var for entry in infos for var in entry["vars"]],
+            "capture_vars": [var for target in targets for var in target["vars"]],
+            "capture_bindings": [binding for target in targets
+                                 for binding in target["capture_bindings"]],
+            "count": first["count"] if aligned else 0,
+            "missing_inis": [target["value"] for target in targets
+                             if not target["has_present"]],
+            "sync_error": None if aligned else (
+                "PRESENT keys have different position counts. Edit the INIs "
+                "so their cycle lists align."),
+        }
+    return {"target_inis": targets, "item": item}
+
+
+def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
+                     pending_new_sections=None):
+    """Analyze all selected INIs independently, then build one control graph."""
+    ini_paths = list(ini_paths)
+    overrides = overrides or {}
+    documents = documents or {}
+    sources = [_source_for(path, folder_path, overrides, documents)
+               for path in ini_paths]
+    resolver = VariableResolver(sources)
+    groups, programs, all_effects = [], [], []
+    game_evidence, runtime_evidence, texture_api_evidence = [], [], []
     seen_labels = {}
+    multi = len(sources) > 1
 
-    for ini_path in ini_paths:
-        secs = merge_sections([ini_path], overrides=overrides,
-                              documents=documents)
-        var_prefix, source = _ini_scope(ini_path, folder_path, multi)
-
-        resources = _rebase_resources(
-            extract_resources(secs), ini_path, folder_path)
+    for source in sources:
+        _unused_scope, source_label = _ini_scope(
+            source.path, folder_path, multi)
+        # analyze_ini performs the same per-source scan with an independent
+        # resource table; the resolver identities are already mod-stable.
         analysis = analyze_ini(
-            secs, resources=resources, var_prefix=var_prefix, source=source,
-            seen=seen_labels)
-        ini_groups = analysis.draw_groups
-        identity_source = _ini_rel(ini_path, folder_path)
-        for group in ini_groups:
-            # ``source`` is intentionally a compact UI grouping label. Keep
-            # the complete relative INI path separately for mesh identity.
-            group["identity_source"] = identity_source
-        shape_sliders = analysis.shapes
-        state_rules.extend(analysis.state_rules)
+            source.sections, resources=source.resources, source=source_label,
+            seen=seen_labels, ini_source=source, resolver=resolver)
+        for group in analysis.draw_groups:
+            group["identity_source"] = source.relative_path
+        _attach_shape_effects(analysis.draw_groups, analysis.shapes)
+        groups.extend(analysis.draw_groups)
+        programs.append(analysis.program)
+        all_effects.extend(analysis.render_effects)
         game_evidence.extend(analysis.game_evidence)
         runtime_evidence.extend(analysis.runtime_evidence)
         texture_api_evidence.extend(analysis.texture_api_evidence)
-        _attach_shape_sliders(ini_groups, shape_sliders)
-        groups.extend(ini_groups)
-        ini_toggles = analysis.toggles
-        ini_menu = analysis.menu
-        own_menu = dict(ini_menu)
-        ini_present = None
-        for key, info in ini_toggles.items():
-            if info.get("section", "").lower() == PRESENT_SECTION.lower():
-                ini_present = info
-                present_infos.append(info)
-                continue
-            toggle_keys[key] = info
-        menu_slots.update(ini_menu)
-        has_controls = (
-            any(info.get("section", "").lower() != PRESENT_SECTION.lower()
-                for info in ini_toggles.values())
-            or bool(ini_menu)
-            or bool(shape_sliders)
-        )
-        capture_vars = []
-        if has_controls:
-            rel = _ini_rel(ini_path, folder_path)
-            for info in ini_toggles.values():
-                if info.get("section", "").lower() == PRESENT_SECTION.lower():
-                    continue
-                capture_vars.extend(info.get("vars", {}))
-            capture_vars.extend(info.get("var") for info in ini_menu.values())
-            capture_vars.extend(info.get("var") for info in shape_sliders)
-            capture_vars = list(dict.fromkeys(
-                var for var in capture_vars if var))
-            present_sources.append({
-                "value": rel, "label": rel, "vars": capture_vars,
-                "has_present": ini_present is not None,
-            })
-            if ini_present is not None:
-                ini_present["capture_vars"] = capture_vars
-        seen_slider_vars = set()
-        for index, slider in enumerate(shape_sliders, 1):
-            if slider["var"].lower() in seen_slider_vars:
-                continue
-            seen_slider_vars.add(slider["var"].lower())
-            key = f"{var_prefix or ''}{slider['section']}#shape{index}"
-            menu_slots[key] = slider
-            own_menu[key] = slider
-        attach_menu_images(own_menu, secs, resources)
-        for var, val in analysis.defaults.items():
-            toggle_defaults.setdefault(var, val)
-
-    present_items = []
-    for present_info in present_infos:
-        variables = [{
-            "var": var,
-            "values": values,
-            "default": toggle_defaults.get(var, values[0]),
-        } for var, values in present_info["vars"].items()]
-        lengths = {len(var["values"]) for var in variables}
-        present_items.append({
-            "ini": _ini_rel(present_info["ini_path"], folder_path),
-            "source": present_info.get("source"),
-            "section": present_info["section"],
-            "key": present_info["key_display"] or present_info["key"],
-            "key_raw": present_info["key"],
-            "back": present_info.get("back", ""),
-            "vars": variables,
-            "capture_vars": present_info.get("capture_vars", []),
-            "count": max((len(var["values"]) for var in variables), default=0),
-            "aligned": len(lengths) == 1,
-        })
-    present_item = None
-    if present_items:
-        first = present_items[0]
-        counts = {item["count"] for item in present_items}
-        missing_inis = [source["value"] for source in present_sources
-                        if not source["has_present"]]
-        aligned = all(item["aligned"] for item in present_items)
-        sync_error = None
-        if not aligned:
-            sync_error = (
-                "A PRESENT key has variable lists with different position "
-                "counts. Edit the INI so its cycle lists align.")
-        elif len(counts) != 1:
-            sync_error = (
-                "PRESENT keys have different position counts. Edit the INIs "
-                "so their cycle lists align.")
-        present_item = {
-            "inis": [item["ini"] for item in present_items],
-            "target_inis": present_sources,
-            "key": first["key"], "key_raw": first["key_raw"],
-            "back": first["back"],
-            "vars": [var for item in present_items for var in item["vars"]],
-            "capture_vars": [var for source in present_sources
-                             for var in source["vars"]],
-            "count": first["count"] if sync_error is None else 0,
-            "missing_inis": missing_inis,
-            "sync_error": sync_error,
+    graph = build_control_graph(programs, all_effects,
+                                shape_vars=(
+                                    VariableId.from_key(shape["var"])
+                                    for program in programs
+                                    for shape in _shape_effects(program, all_effects)))
+    ids = _display_ids(graph, sources, folder_path)
+    _filter_and_project_groups(groups, graph, ids)
+    projection = _unified_projection(
+        graph, sources, ids, folder_path, pending_new_sections)
+    # Image files are optional UI enrichment. They are associated after the
+    # semantic graph is complete, so generic graph controls get the same
+    # authored menu artwork as the compatibility projection.
+    for source in sources:
+        entries = {
+            key: info for key, info in projection["menu"].items()
+            if info.get("ini_path") and os.path.normcase(
+                os.path.abspath(info["ini_path"])) == os.path.normcase(
+                    os.path.abspath(source.path))
         }
-    present = {"target_inis": present_sources, "item": present_item}
+        attach_menu_images(entries, source.sections, source.resources)
+
+    defaults = {}
+    for node in graph.variables.values():
+        for declaration in node.declarations:
+            if declaration.default is not None:
+                defaults[ids.get(node.id.key, node.id.key)] = declaration.default
+    # An exact namespace forwarding edge makes the source's initial value the
+    # effective viewer default.  The model-side declaration is still retained
+    # as provenance, but must not overwrite the Menu-side persisted state
+    # before the first Present pass runs.
+    for control in graph.controls.values():
+        target_default = ids.get(control.state_var.key, control.state_var.key)
+        node = graph.variables.get(control.state_var)
+        for write in node.writes if node else ():
+            if not write.exact_copy or not write.dependencies:
+                continue
+            source_default = defaults.get(
+                ids.get(write.dependencies[0].key, write.dependencies[0].key))
+            if source_default is not None:
+                defaults[target_default] = source_default
+                break
+    state_rules = _state_rules(graph, ids, folder_path)
+    present = _present_projection(graph, sources, ids, defaults, folder_path)
+    game = resolve_game_detection(
+        game_evidence, runtime_evidence, texture_api_evidence)
     return ParsedModAnalysis(
-        groups=groups,
-        toggles=toggle_keys,
-        menu=menu_slots,
-        defaults=toggle_defaults,
-        state_rules=state_rules,
-        present=present,
-        game=resolve_game_detection(
-            game_evidence, runtime_evidence, texture_api_evidence),
+        groups=groups, toggles={}, menu={}, defaults=defaults,
+        state_rules=state_rules, present=present, game=game,
+        control_graph=graph, control_projection=projection,
+        actions=graph.actions,
     )
+
+
+def _shape_effects(program, effects):
+    source_path = program.source.path
+    return [effect.metadata["shape"] for effect in effects
+            if effect.kind == "shape" and effect.source
+            and effect.source.get("ini_path") == source_path]
 
 
 def resolved_draws(context, overrides=None):

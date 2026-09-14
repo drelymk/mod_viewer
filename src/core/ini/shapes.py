@@ -1,4 +1,4 @@
-"""Discover simple compute-shader shape sliders.
+"""Recognize conservative compute-shader shape effects.
 
 Supported pattern: a shader receives a scalar ini variable, a file-backed base
 position buffer and a same-layout target buffer.  This is the common 3DMigoto
@@ -27,26 +27,24 @@ _BATCH_OFFSET_RE = re.compile(
     r"^global\s+\$shapekey_vertex_offset_batch(\d+)\s*=\s*(\d+)\s*$", re.I)
 
 
-def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
+def extract_shape_effects(sections, resources, var_prefix=None, source=None,
                           canonical_vars=None):
-    """Return slider descriptions for conservative two-buffer shape shaders."""
+    """Return rendering descriptions for conservative shape relationships.
+
+    This function deliberately does not decide whether a variable is a
+    user-facing slider.  Control classification belongs to the mod-level
+    control graph; the specialized logic here only proves buffer semantics.
+    ``var_prefix`` remains accepted for low-level compatibility but is not
+    used as semantic identity by the new analysis path.
+    """
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     found = []
 
-    # When a mod has authored slider drawing sections, they are a strong
-    # signal for which x88 variables are user controls. This prevents an
-    # internal remapping variable from becoming a duplicate UI slider.
-    authored_slider_vars = set()
     remapped_vars = {}
     for section, lines in sections.items():
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
-            if section.lower().startswith("commandlistdrawslider"):
-                match = _SLIDER_RE.fullmatch(line)
-                if match:
-                    authored_slider_vars.add(
-                        canon.get(match.group(1).lower(), match.group(1)).lower())
             match = _REMAP_RE.fullmatch(line)
             if match:
                 alias = canon.get(match.group(1).lower(), match.group(1))
@@ -94,14 +92,9 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             continue
 
         src = first_source(lines) or {}
-        prefix = var_prefix or ""
         found.append({
-            "kind": "shape_slider",
             "name": variable,
-            "var": f"{prefix}{variable}",
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.01,
+            "var": variable,
             "base_file": base["filename"],
             "target_file": target["filename"],
             "stride": base_stride,
@@ -170,8 +163,6 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                            item.get("base_file"), item.get("target_file"))
                           for item in found}
         for variable, base_name, target_name in candidates:
-            if authored_slider_vars and variable.lower() not in authored_slider_vars:
-                continue
             base = resource(base_name)
             target = resource(target_name)
             # A writable ResourceX commonly has a file-backed ResourceX.B
@@ -184,17 +175,15 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                     base = runtime_base
             base_stride = base.get("stride", 40)
             target_stride = target.get("stride", base_stride)
-            pair = (f"{var_prefix or ''}{variable}".lower(),
+            pair = (variable.lower(),
                     base.get("filename"), target.get("filename"))
             if (not all(pair[1:]) or pair in existing_pairs
                     or pair[1] == pair[2]
                     or base_stride != target_stride or base_stride < 12):
                 continue
             found.append({
-                "kind": "shape_slider",
                 "name": variable,
-                "var": f"{var_prefix or ''}{variable}",
-                "min": 0.0, "max": 1.0, "step": 0.01,
+                "var": variable,
                 "base_file": pair[1],
                 "target_file": pair[2],
                 "stride": base_stride,
@@ -206,8 +195,6 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
 
         for item in complete_remaps:
             variable = item["var"]
-            if authored_slider_vars and variable.lower() not in authored_slider_vars:
-                continue
             base = resource(item["base"])
             if item["base"].lower().endswith(".b"):
                 runtime_base = resource(item["base"][:-2])
@@ -222,9 +209,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                     or next(iter(strides)) < 12):
                 continue
             found.append({
-                "kind": "shape_slider", "mode": "midpoint_pair",
-                "name": variable, "var": f"{var_prefix or ''}{variable}",
-                "min": 0.0, "max": 1.0, "step": 0.01,
+                "mode": "midpoint_pair",
+                "name": variable, "var": variable,
                 "base_file": base["filename"],
                 "low_file": low["filename"],
                 "target_file": high["filename"],
@@ -232,9 +218,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "ini_path": src.get("ini_path"), "section": section,
             })
 
-    # WWMI shape keys are sparse rather than full target buffers.  The menu
-    # still advertises them with the same `$value * x87` slider idiom, while
-    # SetShapeKey command lists map each value variable to an integer key ID.
+    # WWMI shape keys are sparse rather than full target buffers.  A
+    # shapekey_id/value pair plus valid resources is sufficient render proof.
     sliders = []
     shape_ids = {}
     bindings = {}
@@ -245,15 +230,9 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 str(raw).split(";", 1)[0].strip())
             if match:
                 batch_offsets[int(match.group(1))] = int(match.group(2))
+    shape_id_sources = {}
     for section, lines in sections.items():
         cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
-        if section.lower().startswith("commandlistdrawslider"):
-            for line in cleaned:
-                match = _SLIDER_RE.fullmatch(line)
-                if match:
-                    sliders.append((canon.get(match.group(1).lower(), match.group(1)),
-                                    section, first_source(lines) or {}))
-                    break
         pending_id = None
         for line in cleaned:
             match = _SHAPE_ID_RE.fullmatch(line)
@@ -264,6 +243,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             if match and pending_id is not None:
                 var = canon.get(match.group(1).lower(), match.group(1))
                 shape_ids[var.lower()] = pending_id
+                shape_id_sources[var.lower()] = (section, first_source(lines) or {})
                 pending_id = None
             match = _BIND_RE.fullmatch(line)
             if match:
@@ -276,47 +256,40 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         "vertex_offset_file": resource(bindings.get("cs-t1")).get("filename"),
     }
     sparse_ready = all(sparse_resources.values())
+    # A WWMI shapekey id/value pair plus valid sparse resources is the render
+    # proof.  No CommandListDrawSlider/menu idiom is required.
     existing = {item["var"].lower() for item in found}
-    prefix = var_prefix or ""
+    for variable_low in shape_ids:
+        if variable_low not in {item[0].lower() for item in sliders}:
+            section, src = shape_id_sources.get(variable_low, ("", {}))
+            variable = canon.get(variable_low, variable_low)
+            sliders.append((variable, section, src))
     for variable, section, src in sliders:
-        full_var = f"{prefix}{variable}"
+        full_var = variable
         if full_var.lower() in existing:
             continue
+        shape_id = shape_ids.get(variable.lower())
+        if shape_id is None or not sparse_ready:
+            continue
         item = {
-            "kind": "shape_slider",
             "name": variable,
             "var": full_var,
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.01,
             "source": source,
             "ini_path": src.get("ini_path"),
             "section": section,
+            **sparse_resources,
         }
-        shape_id = shape_ids.get(variable.lower())
-        if shape_id is not None and sparse_ready:
-            batch = shape_id // 127
-            item.update(sparse_resources)
-            item["shape_id"] = shape_id
-            item["buffer_shape_id"] = shape_id + batch
-            item["sparse_entry_offset"] = batch_offsets.get(batch, 0)
-            item["stride"] = resource(bindings.get("cs-t6")).get("stride", 12)
+        batch = shape_id // 127
+        item["shape_id"] = shape_id
+        item["buffer_shape_id"] = shape_id + batch
+        item["sparse_entry_offset"] = batch_offsets.get(batch, 0)
+        item["stride"] = resource(bindings.get("cs-t6")).get("stride", 12)
         found.append(item)
         existing.add(full_var.lower())
 
-    # Multi-target ZZMI menus bind five full buffers and two scalar inputs:
+    # Multi-target ZZMI shaders bind five full buffers and two scalar inputs:
     # base, bigger/smaller A, bigger/smaller B. Preserve the shader's midpoint
     # curve rather than pretending these are independent base->target morphs.
-    menu_vars = set()
-    for section, lines in sections.items():
-        if not section.lower().startswith("commandlist"):
-            continue
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = _SLIDER_ANY_RE.fullmatch(line)
-            if match:
-                menu_vars.add(canon.get(match.group(1).lower(), match.group(1)))
-
     multi_sets = []
     for section, lines in sections.items():
         current = {}
@@ -353,16 +326,13 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             variable = scalar_vars.get(register)
             high = resource(buffers.get(high_slot))
             low = resource(buffers.get(low_slot))
-            if (not variable or variable not in menu_vars or
-                    not high.get("filename") or not low.get("filename")):
+            if (not variable or not high.get("filename")
+                    or not low.get("filename")):
                 continue
             src = first_source(source_lines) or {}
             found.append({
-                "kind": "shape_slider",
                 "mode": "midpoint_pair",
-                "name": variable,
-                "var": f"{var_prefix or ''}{variable}",
-                "min": 0.0, "max": 1.0, "step": 0.01,
+                "name": variable, "var": variable,
                 "base_file": base["filename"],
                 "low_file": low["filename"],
                 "target_file": high["filename"],
@@ -372,3 +342,28 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "section": "CommandListComputeShapeKeys",
             })
     return found
+
+
+def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
+                          canonical_vars=None):
+    """Compatibility projection for callers of the old read-side helper.
+
+    The application analysis uses :func:`extract_shape_effects`; this wrapper
+    only supplies the historical UI metadata to older low-level callers.
+    """
+    effects = extract_shape_effects(
+        sections, resources, source=source, canonical_vars=canonical_vars)
+    prefix = var_prefix or ""
+    result = []
+    for effect in effects:
+        item = dict(effect)
+        item["var"] = f"{prefix}{item['var']}"
+        item.setdefault("kind", "shape_slider")
+        item.setdefault("min", 0.0)
+        item.setdefault("max", 1.0)
+        item.setdefault("step", 0.01)
+        result.append(item)
+    return result
+
+
+__all__ = ["extract_shape_effects", "extract_shape_sliders"]

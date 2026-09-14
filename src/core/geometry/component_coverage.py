@@ -69,7 +69,7 @@ def collect_component_overrides(sections, ini_path):
     """
     sections = sections or {}
     section_lookup = {str(name).casefold(): name for name in sections}
-    scanned = _scan_sections_for_draws(sections)
+    scanned = _scan_sections_for_draws(sections, raw_conditions=True)
     result = []
     for section in sections:
         if not str(section).casefold().startswith("textureoverride"):

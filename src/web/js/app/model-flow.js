@@ -201,6 +201,7 @@ export async function displayMeshPayload(payload, {
   viewerState.lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {}, {
     toggles: controls.toggles || {}, menu: controls.menu || {},
+    actions: controls.actions || [],
   });
   setTextures(payload.textures);
   measureLoadStage('build_mesh_panel', () => buildMeshPanel(
@@ -220,7 +221,7 @@ export async function displayMeshPayload(payload, {
     buildTogglePanel(controls.toggles, {
       modPath: viewerState.currentModPath, onChange: onToggleChange,
     });
-    buildMenuPanel(controls.menu);
+    buildMenuPanel(controls.menu, controls.actions || []);
     buildPresentPanel(controls.present, {
       modPath: viewerState.currentModPath, onChange: onPresentChange,
     });

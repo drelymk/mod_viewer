@@ -7,8 +7,9 @@ Everything above (core.ini.toggles, core.ini.menu, core.ini.parser) consumes the
 import os
 import re
 
-_DECL_RE = re.compile(r'^global\s+(?:persist\s+)?\$(\w+)\b', re.I)
-_VAR_RE  = re.compile(r'\$(\w+)')
+_DECL_RE = re.compile(
+    r'^global\s+(?:persist\s+)?\$(\\[^=\s]+|\{[^}]+\}|\w+)\b', re.I)
+_VAR_RE  = re.compile(r'\$(\\[A-Za-z0-9_.-]+(?:\\[A-Za-z0-9_.${}-]+)+|\{[^}]+\}|[A-Za-z0-9_.${}-]+)', re.I)
 
 class ResourceTable(dict):
     """Resource records plus one canonical case-insensitive lookup index.

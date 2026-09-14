@@ -12,8 +12,10 @@ import base64, io, os, tempfile
 from core.ini.menu import (attach_menu_images, extract_menu_toggles,
                            extract_menu_var_names)
 from core.ini.parser import (build_draw_groups, extract_resources,
-                             extract_toggle_keys, find_inis, gating_var_names,
+                             find_inis,
                              merge_sections, parse_sections)
+from core.ini.draw_scan import gating_var_names
+from core.ini.toggles import extract_toggle_keys
 from app.mods.controls import build_menu_panel
 from PIL import Image
 
