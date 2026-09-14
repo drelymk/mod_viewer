@@ -86,6 +86,108 @@ def test_increment_wrap_idiom():
 
 
 
+def test_reversed_increment_wrap_matches_normal_order():
+    text = """
+[CommandListClickedSlot]
+if $clickedSlot == 1
+    $seven1 = 1 + $seven1
+    if $seven1 > 2
+        $seven1 = 0
+    endif
+elif $clickedSlot == 2
+    $normal = $normal + 1
+    if $normal > 3
+        $normal = 0
+    endif
+endif
+"""
+    slots = _by_slot(extract_menu_toggles(sections(text)))
+    assert slots[1]["var"] == "seven1"
+    assert slots[1]["values"] == ["0", "1", "2"]
+    assert slots[2]["var"] == "normal"
+    assert slots[2]["values"] == ["0", "1", "2", "3"]
+    assert slots[1]["effects"] == slots[2]["effects"] == []
+
+
+def test_binary_flip_with_wrap_guard_stays_binary():
+    text = """
+[CommandListClickedSlot]
+if $clickedSlot == 1
+    $six1 = 1 - $six1
+    if $six1 > 2
+        $six1 = 0
+    endif
+elif $clickedSlot == 2
+    $seven2 = 1 - $seven2
+    if $seven2 > 2
+        $seven2 = 0
+    endif
+endif
+"""
+    slots = _by_slot(extract_menu_toggles(sections(text)))
+    assert slots[1]["values"] == slots[2]["values"] == ["0", "1"]
+    assert slots[1]["effects"] == slots[2]["effects"] == []
+
+
+def test_reachable_flip_reset_remains_an_effect():
+    text = """
+[CommandListClickedSlot]
+if $clickedSlot == 1
+    $v = 1 - $v
+    if $v > 0
+        $v = 0
+    endif
+elif $clickedSlot == 2
+    $other = 1 - $other
+endif
+"""
+    slots = _by_slot(extract_menu_toggles(sections(text)))
+    assert slots[1]["values"] == ["0", "1"]
+    assert slots[1]["effects"] == [{
+        "when": {"var": "v", "op": ">", "value": "0"},
+        "var": "v", "value": "0",
+    }]
+
+
+def test_reduced_claret_menu_cycles():
+    text = """
+[CommandListClickedSlot]
+if $clickedSlot == 1
+    $six1 = 1 - $six1
+elif $clickedSlot == 2
+    $seven1 = 1 + $seven1
+    if $seven1 > 2
+        $seven1 = 0
+    endif
+elif $clickedSlot == 3
+    $eight1 = 1 - $eight1
+elif $clickedSlot == 14
+    if $seven > 2
+        $seven = 0
+    endif
+elif $clickedSlot == 15
+    $eight = 1 + $eight
+    if $eight > 2
+        $eight = 0
+    endif
+elif $clickedSlot == 16
+    $naked = 1 - $naked
+endif
+"""
+    slots = _by_slot(extract_menu_toggles(sections(text)))
+    assert {
+        slots[slot]["var"]: slots[slot]["values"]
+        for slot in (1, 2, 3, 15, 16)
+    } == {
+        "six1": ["0", "1"],
+        "seven1": ["0", "1", "2"],
+        "eight1": ["0", "1"],
+        "eight": ["0", "1", "2"],
+        "naked": ["0", "1"],
+    }
+    assert 14 not in slots
+
+
 # The same cycle written inside out, plus a menu that spells a variable
 # differently from its declaration.
 
