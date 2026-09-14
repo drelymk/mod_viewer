@@ -137,6 +137,62 @@ def test_belle_fixture_keeps_slider_slots_and_direct_toggle():
             "_selector_names"]}
 
 
+def test_claret_fixture_keeps_controller_domains_roles_and_affine_images():
+    parsed = analyze_mod_inis(_fixture("claret_supergui.ini"),
+                              str(FIXTURE_ROOT))
+    menu = _menu_by_var(parsed)
+    toggles = parsed.control_projection["toggles"]
+
+    assert {name for name in menu if name.startswith("swapkey")} == {
+        f"swapkey{index}" for index in range(18)}
+    assert menu["swapkey3"]["values"] == ["0", "1"]
+    assert menu["swapkey16"]["values"] == ["0", "1", "2", "3"]
+    assert menu["swapkey17"]["values"] == ["0", "1", "2", "3", "4", "5"]
+    assert toggles["KeySwap3"]["vars"]["swapkey3"] == ["0", "1", "2"]
+    assert toggles["KeySwap16"]["vars"]["swapkey16"] == [
+        "0", "1", "2", "3", "4"]
+    assert {"color", "lightmap"} <= set(menu)
+    assert not any(name.startswith("est_color_") for name in menu)
+
+    serialized = parsed.control_graph.to_dict()
+    swap3 = serialized["controls"]["ini:claret_supergui.ini/swapkey3"]
+    direct_domains = [controller["domain"]["values"]
+                      for controller in swap3["controllers"]
+                      if controller["kind"] == "direct_key"]
+    interactive_domains = [controller["domain"]["values"]
+                           for controller in swap3["controllers"]
+                           if controller["kind"] == "interactive"]
+    assert direct_domains == [["0", "1", "2"]]
+    assert ["0", "1"] in interactive_domains
+    assert "action" not in menu["swapkey3"]
+
+    routes = [action for action in parsed.control_projection["actions"]
+              if action["trigger"] == "CommandListStoreSV"]
+    assert routes and routes[0]["user_facing"] is False
+    assert {selector["role"] for selector in routes[0]["routing_selectors"]} == {
+        "routing"}
+    assert {selector["value"] for selector in routes[0]["routing_selectors"]} == {
+        "0", "1"}
+    assert any(clause["var"].casefold() == "sp_palette_target"
+               for group in routes[0]["routing_conditions"]
+               for clause in group)
+
+    flow = parsed.control_projection["provenance"]["selector_flow"]
+    assert any(edge["source"].casefold() == "sp_button_index"
+               and edge["target"].casefold() == "sp_hover"
+               and edge["offset"] == 1000 for edge in flow)
+    assert any(edge["source"].casefold() == "sp_button_index"
+               and edge["target"].casefold() == "sp_image_index"
+               and edge["offset"] == 0 for edge in flow)
+    for index in (0, 3, 16, 17):
+        assert menu[f"swapkey{index}"]["image_file"] == f"S{index}.dds"
+    states = menu["swapkey3"]["_selector_states"]
+    assert {state["value"] for state in states
+            if state["var"].casefold() == "sp_button_index"} == {"3"}
+    assert {state["value"] for state in states
+            if state["var"].casefold() == "sp_image_index"} == {"3"}
+
+
 def test_namespace_fixture_projects_one_qualified_state_and_present_capture():
     paths = _fixture("namespace_model.ini", "namespace_menu.ini")
     parsed = analyze_mod_inis(paths, str(FIXTURE_ROOT))
@@ -145,7 +201,7 @@ def test_namespace_fixture_projects_one_qualified_state_and_present_capture():
     assert set(menu) == {"fixture_shared/state"}
     assert "KeyState" not in parsed.control_projection["toggles"]
     assert "KeyModViewerPresent" not in parsed.control_projection["toggles"]
-    assert parsed.control_projection["schema_version"] == 3
+    assert parsed.control_projection["schema_version"] == 4
     roots = parsed.control_projection["provenance"]["input_roots"]
     assert any(root["kind"] == "reserved_present" for root in roots)
     assert any(root["kind"] == "present" for root in roots)
@@ -161,7 +217,7 @@ def test_namespace_fixture_projects_one_qualified_state_and_present_capture():
     }]
     state = load_control_state(
         ModLoadContext(str(FIXTURE_ROOT), paths))
-    assert state["controls"]["schema_version"] == 3
+    assert state["controls"]["schema_version"] == 4
     assert state["controls"]["provenance"]["input_roots"]
 
 

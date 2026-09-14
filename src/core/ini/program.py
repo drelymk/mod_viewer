@@ -104,6 +104,9 @@ class VariableWrite:
     source: dict | None = None
     authored_target: str = ""
     exact_copy: bool = False
+    # Input-path context is attached when a write is reached through a
+    # conditional ``run=`` edge.  It is provenance, not semantic state.
+    interaction_selectors: tuple = ()
 
 
 @dataclass(frozen=True, slots=True)

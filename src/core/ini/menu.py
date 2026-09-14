@@ -524,13 +524,22 @@ def attach_menu_images(menu, sections, resources):
             variable = str(selector.get("var", ""))
             names.add(variable.rsplit("/", 1)[-1]
                       .rsplit("::", 1)[-1].casefold().lstrip("$"))
-            value = str(selector.get("value", ""))
-            matches = {
-                filename
-                for (name, candidate), filenames in selector_images.items()
-                if candidate == value and name in names
-                for filename in filenames
-            }
+            states = info.get("_selector_states") or [{
+                "var": variable, "value": str(selector.get("value", "")),
+            }]
+            matches = set()
+            for state in states:
+                state_variable = str(state.get("var", ""))
+                state_name = state_variable.rsplit("/", 1)[-1].rsplit(
+                    "::", 1)[-1].casefold().lstrip("$")
+                state_names = names | {state_name}
+                value = str(state.get("value", ""))
+                matches.update(
+                    filename
+                    for (name, candidate), filenames in selector_images.items()
+                    if candidate == value and name in state_names
+                    for filename in filenames
+                )
             if len(matches) == 1:
                 info["image_file"] = next(iter(matches))
             # A selector was available but no exact image dispatch proved the

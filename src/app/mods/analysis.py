@@ -248,6 +248,12 @@ def _project_action(action, ids, folder_path):
         "selector_aliases": [ids.get(variable.key, variable.key)
                              for variable in action.selector_aliases],
         "user_facing": action.user_facing,
+        "routing_conditions": _project_conditions(
+            action.routing_conditions, ids),
+        "routing_selectors": [
+            _project_selector(selector, ids)
+            for selector in action.routing_selectors
+        ],
     }
 
 
@@ -284,6 +290,8 @@ def _project_provenance(graph, ids, folder_path):
             "target": ids.get(edge.target.key, edge.target.key),
             "conditions": _project_conditions(edge.conditions, ids),
             "source_info": _project_source(edge.source_info, folder_path),
+            "scale": edge.scale,
+            "offset": edge.offset,
         }
         for edge in graph.selector_flow
     ]
@@ -362,6 +370,19 @@ def _action_for_control(graph, control, controllers):
         # controller provenance.  Never use it when candidates are ambiguous.
         return candidates[0]
     return None
+
+
+def _is_pure_domain_cycle(action, variable):
+    """Use a projected controller domain for a one-state cycle action."""
+    if (action is None or action.routing_conditions
+            or len(action.writes) != 1 or action.writes[0] != variable):
+        return False
+    operations = [_project_operation(write, {})
+                  for write in action.assignments]
+    kinds = {operation.get("kind") for operation in operations if operation}
+    return (bool(operations) and kinds <= {"set", "step", "toggle", "cycle"}
+            and bool(kinds & {"step", "toggle", "cycle"})
+            and all(write.target == variable for write in action.assignments))
 
 
 def _filter_and_project_groups(groups, graph, ids):
@@ -498,7 +519,11 @@ def _unified_projection(graph, sources, ids, folder_path,
                     controller_source.path, folder_path, len(sources) > 1)
                 effective_ini_path = controller_source.path
             variable_id = ids.get(control.state_var.key, control.state_var.key)
-            domain = dict(control.domain)
+            domain = next(
+                (dict(controller.domain) for controller in interactive
+                 if controller.domain),
+                dict(control.domain),
+            )
             info = {
                 "name": _authored_name(graph, control.state_var),
                 "source": effective_source_label,
@@ -530,8 +555,29 @@ def _unified_projection(graph, sources, ids, folder_path,
                     for variable in sorted(selector_family,
                                             key=lambda item: item.key)
                 ]
+                selector_states = set()
+                for selector in selectors:
+                    selector_states.update(graph.selector_states(selector))
+                state_items = (
+                    [(state.variable, state.value) for state in selector_states]
+                    if selector_states else
+                    [(selectors[0]["var"],
+                      str(selectors[0].get("value", "")))]
+                )
+                info["_selector_states"] = []
+                for variable, value in sorted(
+                        state_items,
+                        key=lambda item: (
+                            item[0].key if isinstance(item[0], VariableId)
+                            else str(item[0]), item[1])):
+                    public = (ids.get(variable.key, variable.key)
+                              if isinstance(variable, VariableId) else variable)
+                    info["_selector_states"].append({
+                        "var": public, "value": str(value),
+                    })
             operation = _action_for_control(graph, control, interactive)
-            if operation is not None:
+            if operation is not None and not _is_pure_domain_cycle(
+                    operation, control.state_var):
                 info["action"] = _project_action(operation, ids, folder_path)
             if domain.get("kind") == "discrete":
                 info["values"] = domain.get("values", [])

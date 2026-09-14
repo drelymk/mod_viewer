@@ -798,7 +798,7 @@ endif
         {"kind": "set", "value": "2"},
     ]
     serialized = graph.to_dict()
-    assert serialized["schema_version"] == 3
+    assert serialized["schema_version"] == 4
     json.dumps(serialized)
 
 

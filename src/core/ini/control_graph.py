@@ -32,7 +32,7 @@ _EXTERNAL_ROOTS = {
 # Bump when the serialized control/action contract gains fields or changes
 # execution semantics. Consumers may continue accepting older payloads with
 # the optional fields below omitted.
-CONTROL_GRAPH_SCHEMA_VERSION = 3
+CONTROL_GRAPH_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,18 +55,29 @@ class InfluenceEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class SelectorState:
+    """A selector variable/value pair reached through UI provenance."""
+
+    variable: VariableId
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
 class SelectorFlowEdge:
-    """A UI-only exact-copy path between selector variables.
+    """A UI-only path between selector variables.
 
     This is deliberately separate from semantic aliases: a conditional copy
-    can explain how a menu hit-test value reaches an action dispatcher without
-    making the two variables interchangeable render state.
+    or a small affine transform can explain how a menu hit-test value reaches
+    an action dispatcher without making the two variables interchangeable
+    render state.
     """
 
     source: VariableId
     target: VariableId
     conditions: tuple = ()
     source_info: dict | None = None
+    scale: int = 1
+    offset: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +89,8 @@ class SelectorFlowEdge:
             ],
             "source_info": (dict(self.source_info)
                             if self.source_info else None),
+            "scale": self.scale,
+            "offset": self.offset,
         }
 
 
@@ -113,6 +126,9 @@ class Controller:
     selector: dict | None = None
     selector_aliases: tuple[VariableId, ...] = ()
     user_facing: bool = False
+    routing_conditions: tuple = ()
+    domain: dict | None = None
+    routing_selectors: tuple = ()
 
     def to_dict(self) -> dict:
         return {
@@ -124,6 +140,12 @@ class Controller:
             "selector_aliases": [variable.key
                                  for variable in self.selector_aliases],
             "user_facing": self.user_facing,
+            "routing_conditions": _conditions_to_dict(self.routing_conditions),
+            "domain": dict(self.domain) if self.domain else None,
+            "routing_selectors": [
+                _selector_to_dict(selector)
+                for selector in self.routing_selectors
+            ],
         }
 
 
@@ -139,6 +161,8 @@ class Action:
     selector: dict | None = None
     selector_aliases: tuple[VariableId, ...] = ()
     user_facing: bool = False
+    routing_conditions: tuple = ()
+    routing_selectors: tuple = ()
 
     @property
     def kind(self) -> str:
@@ -160,6 +184,11 @@ class Action:
             "selector_aliases": [variable.key
                                  for variable in self.selector_aliases],
             "user_facing": self.user_facing,
+            "routing_conditions": _conditions_to_dict(self.routing_conditions),
+            "routing_selectors": [
+                _selector_to_dict(selector)
+                for selector in self.routing_selectors
+            ],
         }
 
 
@@ -237,6 +266,18 @@ class ControlGraph:
         """Return selector-flow neighbors without changing semantic identity."""
         return _selector_family(variable, self.selector_flow)
 
+    def selector_states(self, selector) -> set[SelectorState]:
+        """Resolve a selector value through UI-only copy/affine provenance."""
+        if not selector:
+            return set()
+        variable = selector.get("var")
+        if isinstance(variable, str):
+            variable = self.variable_for(variable)
+        if variable is None:
+            return set()
+        return _selector_states(variable, str(selector.get("value", "")),
+                                self.selector_flow)
+
     def to_dict(self) -> dict:
         return {
             "schema_version": CONTROL_GRAPH_SCHEMA_VERSION,
@@ -312,6 +353,10 @@ def _write_to_dict(write: VariableWrite) -> dict:
         "source": dict(write.source) if write.source else None,
         "authored_target": write.authored_target,
         "exact_copy": write.exact_copy,
+        "interaction_selectors": [
+            _selector_to_dict(selector)
+            for selector in write.interaction_selectors
+        ],
         "operation": _write_operation(write),
     }
 
@@ -324,6 +369,13 @@ def _selector_to_dict(selector):
     if isinstance(variable, VariableId):
         result["var"] = variable.key
     return result
+
+
+def _conditions_to_dict(conditions):
+    return [
+        [_clause_to_dict(clause) for clause in group]
+        for group in (conditions or ())
+    ]
 
 
 def _write_operation(write):
@@ -524,6 +576,27 @@ def _write_domain(var: VariableId, writes: Iterable[VariableWrite],
         cycle_values + literal_values)}
 
 
+_AFFINE_VAR = r"\$[a-z0-9_.${}\\-]+"
+
+
+def _selector_transform(write: VariableWrite):
+    """Return ``target = scale * source + offset`` for safe UI copies."""
+    if len(write.dependencies) != 1:
+        return None
+    expression = re.sub(r"\s+", "", write.expression)
+    if write.exact_copy or re.fullmatch(_AFFINE_VAR, expression, re.I):
+        return 1, 0
+    match = re.fullmatch(
+        rf"{_AFFINE_VAR}([+-])(-?\d+)", expression, re.I)
+    if match:
+        amount = int(match.group(2))
+        return 1, amount if match.group(1) == "+" else -amount
+    match = re.fullmatch(rf"(-?\d+)\+({_AFFINE_VAR})", expression, re.I)
+    if match:
+        return 1, int(match.group(1))
+    return None
+
+
 def _build_indexes(facts: Iterable[ProgramFacts]):
     writes_by_target: dict[VariableId, list[VariableWrite]] = {}
     reverse: dict[VariableId, set[VariableId]] = {}
@@ -590,6 +663,31 @@ def _run_closure(program: ProgramFacts, roots: Iterable[str]):
     return paths
 
 
+def _path_selector_context(conditions):
+    """Extract one exact interaction branch inherited through ``run=``."""
+    values = {}
+    for group in conditions or ():
+        for clause in group:
+            if (clause.get("negate")
+                    or clause.get("op", "==") != "=="
+                    or _numeric(clause.get("value")) is None):
+                continue
+            variable = clause.get("var")
+            if isinstance(variable, str):
+                try:
+                    variable = VariableId.from_key(variable)
+                except ValueError:
+                    continue
+            if isinstance(variable, VariableId):
+                values.setdefault(variable, set()).add(
+                    str(clause.get("value")))
+    return tuple({"var": variable, "value": next(iter(items)),
+                  "role": "interaction"}
+                 for variable, items in sorted(
+                     values.items(), key=lambda item: item[0].key)
+                 if len(items) == 1)
+
+
 def _reachable_from_section(program: ProgramFacts, root_section: str):
     """Compatibility-friendly section closure for one authored root."""
     return _run_closure(program, (root_section,))
@@ -603,7 +701,8 @@ def _writes_from_closure(program: ProgramFacts, roots: Iterable[str]):
         if path is None or write.phase == "post":
             continue
         result.append(replace(
-            write, conditions=_combine_conditions(path, write.conditions)))
+            write, conditions=_combine_conditions(path, write.conditions),
+            interaction_selectors=_path_selector_context(path)))
     return result
 
 
@@ -708,7 +807,8 @@ def _selector_for_write(write, candidates):
             if (variable in candidates and not clause.get("negate")
                     and clause.get("op", "==") == "=="):
                 matches.append({"var": variable,
-                                "value": str(clause.get("value"))})
+                                "value": str(clause.get("value")),
+                                "role": "interaction"})
     return matches[-1] if matches else None
 
 
@@ -747,9 +847,42 @@ def _without_selector(conditions, selector):
     return tuple(tuple(group) for group in result)
 
 
-def _action_groups(assignments):
-    """Split source-ordered assignments by mutually-exclusive selectors."""
+def _action_groups(assignments, allow_context=True):
+    """Split assignments, preferring inherited interaction selectors.
+
+    A selector carried through a conditional ``run=`` is the user choice for
+    the action. Equality branches inside that action are routing context and
+    must not become additional menu controls.
+    """
     assignments = tuple(assignments)
+    if allow_context:
+        context_groups = {}
+        uncontextualized = []
+        for assignment in assignments:
+            contexts = {
+                (selector.get("var"), str(selector.get("value", ""))): selector
+                for selector in assignment.interaction_selectors
+            }
+            if len(contexts) > 1:
+                return None
+            if contexts:
+                marker, selector = next(iter(contexts.items()))
+                context_groups.setdefault(marker, (selector, []))[1].append(
+                    assignment)
+            else:
+                uncontextualized.append(assignment)
+        if context_groups:
+            result = []
+            for selector, branch in context_groups.values():
+                candidates = _selector_candidates(branch)
+                result.append((
+                    {**selector, "role": "interaction"}, tuple(branch),
+                    set(candidates) - {selector["var"]}))
+            if uncontextualized:
+                result.extend(_action_groups(
+                    uncontextualized, allow_context=False) or ())
+            return result
+
     candidates = _selector_candidates(assignments)
     if len(candidates) > 1:
         # Independent selectors require a product of branch conditions.  Do
@@ -758,7 +891,7 @@ def _action_groups(assignments):
     if not candidates:
         if _unsupported_selector_dispatch(assignments, candidates):
             return None
-        return [(None, assignments)]
+        return [(None, assignments, set())]
     groups = {}
     order = []
     positions = {id(assignment): index
@@ -773,14 +906,15 @@ def _action_groups(assignments):
     common = groups.get(None, ())
     branch_markers = [marker for marker in order if marker is not None]
     if not branch_markers:
-        return [(None, assignments)]
+        return [(None, assignments, set())]
     result = []
     for marker in branch_markers:
         branch = tuple(sorted(
             tuple(common) + tuple(groups[marker]),
             key=lambda assignment: positions[id(assignment)]))
         result.append((
-            {"var": marker[0], "value": marker[1]}, branch))
+            {"var": marker[0], "value": marker[1],
+             "role": "interaction"}, branch, set()))
     return result
 
 
@@ -842,15 +976,18 @@ def _build_influences(facts: Iterable[ProgramFacts]):
 
 
 def _build_selector_flow(facts: Iterable[ProgramFacts]):
-    """Build UI selector provenance from exact copies only."""
+    """Build UI selector provenance from exact copies and small transforms."""
     edges = []
     for program in facts:
         for write in program.writes:
-            if not write.exact_copy or len(write.dependencies) != 1:
+            transform = _selector_transform(write)
+            if transform is None:
                 continue
+            scale, offset = transform
             edges.append(SelectorFlowEdge(
                 source=write.dependencies[0], target=write.target,
-                conditions=write.conditions, source_info=write.source))
+                conditions=write.conditions, source_info=write.source,
+                scale=scale, offset=offset))
     return _dedupe(edges)
 
 
@@ -875,6 +1012,48 @@ def _selector_family(variable, edges):
     return found
 
 
+def _numeric_text(value):
+    number = _numeric(value)
+    if number is None:
+        return None
+    return str(number)
+
+
+def _selector_states(variable, value, edges):
+    """Traverse selector flow while carrying values through affine edges."""
+    start = SelectorState(variable, str(value))
+    found = {start}
+    pending = [start]
+    while pending:
+        current = pending.pop()
+        for edge in edges:
+            if current.variable == edge.source:
+                number = _numeric(current.value)
+                if number is None and (edge.scale != 1 or edge.offset != 0):
+                    continue
+                transformed = (number * edge.scale + edge.offset
+                               if number is not None else current.value)
+                candidate_value = _numeric_text(transformed)
+                if candidate_value is None:
+                    continue
+                candidate = SelectorState(edge.target, candidate_value)
+            elif current.variable == edge.target:
+                number = _numeric(current.value)
+                if number is None or not edge.scale:
+                    continue
+                transformed = (number - edge.offset) / edge.scale
+                candidate_value = _numeric_text(transformed)
+                if candidate_value is None:
+                    continue
+                candidate = SelectorState(edge.source, candidate_value)
+            else:
+                continue
+            if candidate not in found:
+                found.add(candidate)
+                pending.append(candidate)
+    return found
+
+
 def _changed_render_variables(assignments, reverse, render_vars):
     return tuple(dict.fromkeys(
         target for write in assignments
@@ -890,7 +1069,7 @@ def _actions_for_assignments(trigger, conditions, assignments, source,
     groups = _action_groups(assignments)
     if groups is None:
         return actions
-    for selector, branch in groups:
+    for selector, branch, routing_vars in groups:
         changed = _changed_render_variables(branch, reverse, render_vars)
         if not changed:
             continue
@@ -906,6 +1085,31 @@ def _actions_for_assignments(trigger, conditions, assignments, source,
             conditions, selector) if selector else conditions)
         visible = (user_facing(changed, selector)
                    if callable(user_facing) else bool(user_facing))
+        routing_keys = {variable.key for variable in routing_vars}
+        routing_conditions = (tuple(
+            tuple(clause for clause in group
+                  if str(clause.get("var")) in routing_keys)
+            for write in branch for group in (write.conditions or ())
+        ) if routing_vars else ())
+        routing_values = {variable: set() for variable in routing_vars}
+        for write in branch:
+            for group in write.conditions or ():
+                for clause in group:
+                    variable_key = str(clause.get("var"))
+                    if variable_key not in routing_keys:
+                        continue
+                    if (clause.get("negate")
+                            or clause.get("op", "==") != "=="):
+                        continue
+                    variable = next(
+                        item for item in routing_vars
+                        if item.key == variable_key)
+                    routing_values[variable].add(str(clause.get("value")))
+        routing_selectors = tuple(
+            {"var": variable, "value": value, "role": "routing"}
+            for variable in sorted(routing_values, key=lambda item: item.key)
+            for value in sorted(routing_values[variable])
+        )
         actions.append(Action(
             trigger=trigger,
             conditions=branch_conditions,
@@ -914,9 +1118,24 @@ def _actions_for_assignments(trigger, conditions, assignments, source,
             assignments=branch_assignments,
             selector=selector,
             selector_aliases=selector_aliases,
-            user_facing=bool(visible and len(changed) > 1),
+            user_facing=bool(visible and changed and not routing_vars),
+            routing_conditions=routing_conditions,
+            routing_selectors=routing_selectors,
         ))
     return actions
+
+
+def _controller_domain(variable, assignments, reverse, shape=False):
+    """Infer the values reachable by one controller's own assignments."""
+    assignments = tuple(assignments or ())
+    writes = [write for write in assignments
+              if variable in _descendants(write.target, reverse)]
+    if not writes:
+        return None
+    domain = _write_domain(variable, writes, shape=shape)
+    if domain.get("kind") == "discrete" and not domain.get("values"):
+        return None
+    return domain
 
 
 def _root_influences(program, roots, reverse, render_vars):
@@ -1013,8 +1232,14 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
             reserved_present = key.section.casefold() == "keymodviewerpresent"
             if direct and not reserved_present:
                 for var in direct:
+                    key_writes = tuple(
+                        write for write in program.writes
+                        if write.section.casefold() == key.section.casefold()
+                        and write.target == var and write.phase != "post")
                     direct_by_var.setdefault(var, []).append(Controller(
-                        "direct_key", key.source, key.key, direct))
+                        "direct_key", key.source, key.key, direct,
+                        domain=_controller_domain(
+                            var, key_writes, reverse, var in shape_set)))
             if key.runs and not reserved_present:
                 reachable_writes = _writes_from_closure(program, key.runs)
                 key_actions = _actions_for_assignments(
@@ -1023,13 +1248,20 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                     user_facing=lambda changed, selector: True)
                 actions.extend(key_actions)
                 for action in key_actions:
+                    if action.routing_conditions:
+                        continue
                     controller_kind = action.kind
                     for var in action.writes:
                         interactive_by_var.setdefault(var, []).append(Controller(
                             controller_kind, key.source,
                             key.key or key.section, action.writes,
                             action.selector, action.selector_aliases,
-                            action.user_facing))
+                            action.user_facing,
+                            action.routing_conditions,
+                            _controller_domain(
+                                var, action.assignments, reverse,
+                                var in shape_set),
+                            action.routing_selectors))
 
     # Framework menu command lists can be entry points even when their Key
     # trigger is outside the selected INI.  Their writes are still structural
@@ -1061,11 +1293,15 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
             assignments = [replace(
                 write,
                 conditions=_combine_conditions(path_conditions, write.conditions)
-                if path_conditions else write.conditions)
+                if path_conditions else write.conditions,
+                interaction_selectors=_path_selector_context(path_conditions)
+                if path_conditions else write.interaction_selectors)
                 for write in section_writes]
             section_actions = _actions_for_assignments(
                 section, (), assignments, source, reverse, render_vars, aliases,
-                user_facing=lambda changed, selector: selector is not None)
+                user_facing=lambda changed, selector: bool(
+                    changed and selector
+                    and selector.get("role") == "interaction"))
             if any(str(caller).casefold().startswith("key")
                    for caller in callers):
                 # A Key-rooted closure already has the user-facing action;
@@ -1075,10 +1311,19 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                                    for action in section_actions]
             actions.extend(section_actions)
             for action in section_actions:
+                if action.routing_conditions:
+                    # Preserve the routing action in graph diagnostics, but it
+                    # is not a standalone viewer control.
+                    continue
                 controller = Controller(
                     action.kind, source, section, action.writes,
                     action.selector, action.selector_aliases,
-                    action.user_facing)
+                    action.user_facing,
+                    action.routing_conditions,
+                    _controller_domain(
+                        action.writes[0], action.assignments, reverse)
+                    if len(action.writes) == 1 else None,
+                    action.routing_selectors)
                 for var in action.writes:
                     interactive_by_var.setdefault(var, []).append(controller)
 
@@ -1183,5 +1428,6 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
 __all__ = [
     "Action", "Control", "ControlGraph", "Controller", "RenderEffect",
     "CONTROL_GRAPH_SCHEMA_VERSION", "InfluenceEdge", "InputRoot",
-    "SelectorFlowEdge", "VariableNode", "build_control_graph",
+    "SelectorFlowEdge", "SelectorState", "VariableNode",
+    "build_control_graph",
 ]
