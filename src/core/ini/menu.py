@@ -15,6 +15,7 @@ _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
 _ASSIGN_RE  = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
 _FLIP_RE    = re.compile(r'^1\s*-\s*\$(\w+)$')       # $v = 1 - $v
 _INCR_RE    = re.compile(r'^\$(\w+)\s*\+\s*1$')      # $v = $v + 1
+_INCR_REV_RE = re.compile(r'^1\s*\+\s*\$(\w+)$')     # $v = 1 + $v
 _INCR_MOD_RE = re.compile(                              # $v = ($v + 1) % N
     r'^\(\s*\$(\w+)\s*\+\s*1\s*\)\s*%\s*(\d+)$')
 _STEP_RE    = re.compile(r'^\$(\w+)\s*([+-])\s*1$')  # $v = $v +/- 1
@@ -125,6 +126,7 @@ def _parse_branch(body):
     as [{when: {var, op, value} | None, var, value}] in source order.
     """
     var, values, effects = None, None, []
+    cycle_kind = None
     stack = []                    # {guard, branches} per open `if`
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
 
@@ -164,16 +166,19 @@ def _parse_branch(body):
         flip = _FLIP_RE.fullmatch(rhs)
         if flip and flip.group(1) == lhs:
             var, values = lhs, ["0", "1"]
+            cycle_kind = "flip"
             continue
         incr_mod = _INCR_MOD_RE.fullmatch(rhs)
         if incr_mod and incr_mod.group(1) == lhs:
             count = int(incr_mod.group(2))
             if count > 0:
                 var, values = lhs, _cycle_values(0, count - 1)
+                cycle_kind = "increment_mod"
             continue
-        incr = _INCR_RE.fullmatch(rhs)
+        incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
         if incr and incr.group(1) == lhs:
             var, values = lhs, ["0", "1"]   # replaced below once the wrap is seen
+            cycle_kind = "increment"
             if guard and guard["var"] == lhs and guard["op"] in ("<", "<="):
                 wrap = (guard, len(stack))
             continue
@@ -188,19 +193,27 @@ def _parse_branch(body):
             continue
         # `if $v < 2 / $v = $v + 1 / else / $v = 0 / endif`. Checked before the
         # trailing-`if` idiom below, which the negated else guard also matches.
-        if in_wrap_else and lhs == var and wrap[0]["var"] == var:
+        if (cycle_kind == "increment" and in_wrap_else and lhs == var
+                and wrap[0]["var"] == var):
             hi = int(wrap[0]["value"]) + (1 if wrap[0]["op"] == "<=" else 0)
             lo = int(rhs)
             if hi >= lo:
                 values = _cycle_values(lo, hi)
             continue
         # `if $v > 2 / $v = 0 / endif` closes the cycle opened by `$v = $v + 1`.
-        if (guard and lhs == var and guard["var"] == var
+        if (cycle_kind == "increment" and guard and lhs == var
+                and guard["var"] == var
                 and guard["op"] in (">", ">=")):
             hi = int(guard["value"]) - (1 if guard["op"] == ">=" else 0)
             lo = int(rhs)
             if hi >= lo:
                 values = _cycle_values(lo, hi)
+            continue
+        # A self-reset under the cycle variable's wrap guard is bookkeeping,
+        # even when the primary mutation is a binary flip whose range must not
+        # be expanded by that guard.
+        if (lhs == var and guard and guard["var"] == var
+                and guard["op"] in (">", ">=")):
             continue
         effects.append({"when": guard, "var": lhs, "value": rhs})
 
