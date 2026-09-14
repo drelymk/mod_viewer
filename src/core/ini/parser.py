@@ -22,9 +22,11 @@ from .draw_scan import (
     _reachable_execution_sections, _run_target_name, _scan_sections_for_draws,
     gating_var_names,
 )
-from .menu import extract_menu_toggles, extract_menu_var_names
-from .sections import (SrcLine, extract_resources, first_source, line_source,
-                       merge_sections, parse_sections, sections_from_document)
+from .menu import (extract_controller_toggles, extract_menu_toggles,
+                   extract_menu_var_names)
+from .sections import (SrcLine, extract_ini_namespace, extract_resources,
+                       first_source, line_source, merge_sections,
+                       parse_sections, sections_from_document)
 from .state import extract_state_rules
 from .texture_roles import (
     TextureOverrideIndex, TextureReplacement,
@@ -46,11 +48,13 @@ find_inis = discover_ini_paths
 
 __all__ = [
     "SrcLine", "extract_resources", "discover_ini_paths", "find_inis",
-    "first_source", "line_source", "merge_sections", "parse_sections",
+    "extract_ini_namespace", "first_source", "line_source", "merge_sections",
+    "parse_sections",
     "sections_from_document",
     "DNF_FALSE", "DNF_TRUE", "build_bool_alias_map", "dnf_and", "dnf_not",
     "dnf_or", "normalize_dnf", "parse_condition_dnf",
-    "extract_menu_toggles", "extract_menu_var_names",
+    "extract_controller_toggles", "extract_menu_toggles",
+    "extract_menu_var_names",
     "extract_toggle_keys", "extract_toggle_var_names", "extract_variable_defaults",
     "gating_var_names", "build_draw_groups",
 ]

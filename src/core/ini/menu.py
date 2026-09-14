@@ -7,7 +7,7 @@ layout is a convention — `$clickedSlot` is not.
 
 import re
 
-from .sections import canonical_var_names, first_source
+from .sections import canonical_var_names, first_source, line_source
 
 # A branch head that dispatches on an integer slot: `$clickedSlot == 3`.
 _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
@@ -22,6 +22,8 @@ _MOD_RE     = re.compile(r'^\$(\w+)\s*%\s*(\d+)$')   # $v = $v % N
 _GUARD_RE   = re.compile(r'^\$(\w+)\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$')
 _LITERAL_RE = re.compile(r'^-?\d+(?:\.\d+)?$')
 _ELSE_RE    = re.compile(r'(?:else\s+if|elif)\s+(.*)$', re.I)
+_STATE_ADD_RE = re.compile(
+    r'^\$(\w+)\s*=\s*\$(\w+)\s*\+\s*\$(\w+)$')
 
 _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">"}
 
@@ -274,6 +276,139 @@ def _parse_arrow_button(lines):
     if hi < lo:
         return None
     return variable, _cycle_values(lo, hi)
+
+
+def _controller_records(sections, section_filter=None):
+    """Return cleaned lines from selected sections with source provenance."""
+    records = []
+    for section, lines in sections.items():
+        if section_filter is not None and not section_filter(str(section)):
+            continue
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            if line:
+                records.append((section, line, raw))
+    return records
+
+
+def _controller_wrap_values(records, variable):
+    """Return the range from an authored ``if state > N`` reset block."""
+    ranges = []
+    variable = variable.casefold()
+    for index, (_section, line, _raw) in enumerate(records):
+        if not line.lower().startswith("if "):
+            continue
+        guard = _guard(line[3:])
+        if (not guard or guard["var"].casefold() != variable
+                or guard["op"] not in (">", ">=")):
+            continue
+        depth = 1
+        reset = None
+        for _section2, later, _raw2 in records[index + 1:]:
+            low = later.lower()
+            if low.startswith("if "):
+                depth += 1
+                continue
+            if low == "endif":
+                depth -= 1
+                if depth == 0:
+                    break
+                continue
+            if depth != 1:
+                continue
+            assignment = _ASSIGN_RE.fullmatch(later)
+            if (assignment
+                    and assignment.group(1).casefold() == variable
+                    and _LITERAL_RE.fullmatch(assignment.group(2).strip())):
+                reset = assignment.group(2).strip()
+                break
+        if reset is None:
+            continue
+        try:
+            lower = int(float(reset))
+            upper = int(guard["value"]) - (1 if guard["op"] == ">=" else 0)
+        except ValueError:
+            continue
+        if upper >= lower:
+            ranges.append(tuple(_cycle_values(lower, upper)))
+    unique = set(ranges)
+    return list(next(iter(unique))) if len(unique) == 1 else None
+
+
+def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
+                               source=None, canonical_vars=None):
+    """Find the small pulse/state controller pattern used by namespace menus.
+
+    ``forwarded_vars`` is the set of local variables that have already been
+    proven to write into a selected INI namespace. Limiting discovery to that
+    set keeps ordinary UI bookkeeping invisible and avoids interpreting the
+    broader 3DMigoto language.
+
+    The returned mapping is keyed by the controller's unprefixed canonical
+    variable. Its payload mirrors a normal menu entry; the caller can remap
+    ``var`` to the resolved destination identity after checking model gates.
+    """
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
+
+    def declared(name):
+        return canon.get(name.casefold(), name)
+
+    allowed = {
+        declared(str(name)).casefold() for name in (forwarded_vars or ())
+    }
+    if not allowed:
+        return {}
+
+    present_records = _controller_records(
+        sections, lambda name: name.casefold() == "present")
+    command_records = _controller_records(
+        sections, lambda name: name.casefold().startswith("commandlist"))
+    flips = {}
+    for section, line, raw in command_records:
+        assignment = _ASSIGN_RE.fullmatch(line)
+        if not assignment:
+            continue
+        lhs, rhs = assignment.group(1), assignment.group(2).strip()
+        flip = _FLIP_RE.fullmatch(rhs)
+        if flip and flip.group(1).casefold() == lhs.casefold():
+            flips.setdefault(lhs.casefold(), (lhs, section, raw))
+
+    found = {}
+
+    def add(local, values, section, raw):
+        local = declared(local)
+        if local.casefold() not in allowed:
+            return
+        src = line_source(raw) or first_source(sections.get(section, ())) or {}
+        found[local] = {
+            "name": local,
+            "var": _prefixed(local, var_prefix),
+            "values": values,
+            "effects": [],
+            "source": source,
+            "ini_path": src.get("ini_path"),
+            "section": section,
+        }
+
+    for local_key in allowed:
+        flip = flips.get(local_key)
+        if flip:
+            add(flip[0], ["0", "1"], flip[1], flip[2])
+
+    for section, line, raw in present_records:
+        match = _STATE_ADD_RE.fullmatch(line)
+        if not match:
+            continue
+        lhs, state, pulse = match.groups()
+        if (lhs.casefold() != state.casefold()
+                or lhs.casefold() not in allowed
+                or pulse.casefold() not in flips):
+            continue
+        values = _controller_wrap_values(present_records, lhs)
+        if values:
+            add(lhs, values, section, raw)
+    return found
 
 
 def extract_menu_toggles(sections, var_prefix=None, source=None,
