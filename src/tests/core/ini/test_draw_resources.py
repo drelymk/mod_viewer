@@ -147,6 +147,68 @@ stride = 20
     }
 
 
+def test_component_role_words_in_opaque_suffix_use_sibling_evidence():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideSunnaBodyBlendSomethingPositionFoo]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+
+[TextureOverrideSunnaBodyPositionSomethingPositionFoo]
+vb0 = ResourcePosition
+
+[TextureOverrideSunnaBodyTexcoordSomethingPositionFoo]
+vb1 = ResourceTexcoord
+
+[ResourcePosition]
+filename = Meshes/Position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = Meshes/Texcoord.buf
+stride = 20
+""")
+    resolved = _resolve_component_buffers(
+        _scan_sections_for_draws(sections), extract_resources(sections), {})
+
+    assert resolved["component_buffers"] == {
+        "sunnabody": {
+            "position": "ResourcePosition",
+            "texcoord": "ResourceTexcoord",
+        },
+    }
+
+
+def test_component_role_words_inside_component_use_sibling_evidence():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideBlendGirlBodyBlendLOD0]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+
+[TextureOverrideBlendGirlBodyPositionLOD0]
+vb0 = ResourcePosition
+
+[TextureOverrideBlendGirlBodyTexcoordLOD0]
+vb1 = ResourceTexcoord
+
+[ResourcePosition]
+filename = Meshes/Position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = Meshes/Texcoord.buf
+stride = 20
+""")
+    resolved = _resolve_component_buffers(
+        _scan_sections_for_draws(sections), extract_resources(sections), {})
+
+    assert resolved["component_buffers"] == {
+        "blendgirlbody": {
+            "position": "ResourcePosition",
+            "texcoord": "ResourceTexcoord",
+        },
+    }
+
+
 def test_legacy_component_role_names_keep_existing_resolution():
     sections = parse_sections("sample.ini", text="""
 [TextureOverrideBodyBlend]
