@@ -78,7 +78,8 @@ stride = 16
 
 
 @pytest.mark.parametrize("suffix", ("LOD0", "-LOD0", ".LOD0", "_LOD0",
-                                     "WhateverText"))
+                                     "WhateverText", "SomethingBlend",
+                                     "SomethingPosition", "SomethingTexcoord"))
 def test_component_roles_allow_trailing_text(suffix):
     sections = parse_sections("sample.ini", text=f"""
 [TextureOverrideSunnaBodyBlend{suffix}]

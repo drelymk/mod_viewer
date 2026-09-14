@@ -304,11 +304,6 @@ def _component_role_candidates(base):
     roles = ("Blend", "Position", "Texcoord")
     lowered = base.lower()
 
-    for role in roles:
-        if lowered.endswith(role.lower()):
-            index = len(base) - len(role)
-            return ((base[:index], role, index),)
-
     candidates = []
     for role in roles:
         marker = role.lower()
