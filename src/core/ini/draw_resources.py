@@ -176,9 +176,9 @@ def _collect_resource_copy_sources(sections, resources):
                 sources.append(copy_source)
 
     cs_read_re = re.compile(
-        r"^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+        r"^\s*cs-t(\d+)\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
     cs_write_re = re.compile(
-        r"^\s*cs-u0\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+        r"^\s*cs-u(\d+)\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
     for lines in sections.values():
         cs_inputs = {}
         for raw in lines:
@@ -192,19 +192,77 @@ def _collect_resource_copy_sources(sections, resources):
                     cs_inputs[slot] = resource_name
                 continue
             match = cs_write_re.match(line)
-            if not match or match.group(1).lower() == "null":
+            if not match or match.group(2).lower() == "null":
                 continue
-            output = match.group(1)
-            position = cs_inputs.get("1")
-            blend = cs_inputs.get("2")
-            if (position and blend
-                    and _res_get(resources, position).get("filename")
-                    and _res_get(resources, blend).get("stride") == 32):
+            output = match.group(2)
+            for input_resource in cs_inputs.values():
+                input_info = _res_get(resources, input_resource)
+                if not input_info.get("filename"):
+                    continue
+                if input_info.get("stride") not in (12, 40):
+                    continue
                 sources = resource_copy_sources.setdefault(output.lower(), [])
-                if all(existing.lower() != position.lower()
+                if all(existing.lower() != input_resource.lower()
                        for existing in sources):
-                    sources.append(position)
+                    sources.append(input_resource)
     return resource_copy_sources
+
+
+def _collect_resource_lineage_kinds(sections, resources):
+    """Classify authored runtime resource lineage for diagnostics and precedence."""
+    kinds = {}
+    exact_edges = {}
+    transformed = set()
+    exact_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*copy(?:\s+ref)?\s+(Resource\S+)\s*$",
+        re.I)
+    cs_read_re = re.compile(
+        r"^\s*cs-t(\d+)\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+    cs_write_re = re.compile(
+        r"^\s*cs-u(\d+)\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+
+    for lines in sections.values():
+        cs_inputs = {}
+        for raw in lines:
+            line = raw.split(";", 1)[0].strip()
+            exact = exact_re.match(line)
+            if exact:
+                destination, source = exact.groups()
+                exact_edges.setdefault(
+                    destination.casefold(), set()).add(source.casefold())
+                continue
+            read = cs_read_re.match(line)
+            if read:
+                slot, resource = read.groups()
+                if resource.casefold() == "null":
+                    cs_inputs.pop(slot, None)
+                else:
+                    cs_inputs[slot] = resource
+                continue
+            write = cs_write_re.match(line)
+            if not write or write.group(2).casefold() == "null":
+                continue
+            output = write.group(2)
+            for input_resource in cs_inputs.values():
+                input_info = _res_get(resources, input_resource)
+                if (input_info.get("filename") and
+                        input_info.get("stride") in (12, 40)):
+                    transformed.add(output.casefold())
+                    break
+    kinds.update({resource: "transformed" for resource in transformed})
+    changed = True
+    while changed:
+        changed = False
+        for destination, sources in exact_edges.items():
+            if destination in transformed:
+                continue
+            if any(source in transformed for source in sources):
+                transformed.add(destination)
+                changed = True
+    kinds.update({resource: "transformed" for resource in transformed})
+    for destination in exact_edges:
+        kinds.setdefault(destination, "exact")
+    return kinds
 
 
 def _resolve_normal_source(effective_vertex_resources, resources,
@@ -425,14 +483,6 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         if texcoord and not global_texcoord:
             global_texcoord = texcoord
 
-    if global_position and not _res_get(resources, global_position).get("filename"):
-        for resource_name, resource_info in resources.items():
-            fmt = resource_info.get("format", "")
-            if (resource_info.get("filename")
-                    and "R32G32B32" in fmt):
-                global_position = resource_name
-                break
-
     return {
         "resolve_vertex_info": resolve_vertex_info,
         "vertex_binding_index": _build_vertex_binding_index(
@@ -448,6 +498,8 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         "global_ib": global_ib,
         "global_position": global_position,
         "global_texcoord": global_texcoord,
+        "resource_lineage_kinds": _collect_resource_lineage_kinds(
+            sections or {}, resources),
     }
 
 
@@ -455,5 +507,6 @@ __all__ = [
     "_ib_res_to_component", "_ib_index_size", "_extract_hash",
     "_collect_resource_copy_sources", "_resolve_normal_source",
     "_resolve_component_buffers", "_select_draw_sections",
+    "_collect_resource_lineage_kinds",
     "VertexBindingIndex",
 ]

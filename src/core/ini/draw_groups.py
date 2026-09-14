@@ -12,7 +12,8 @@ from .draw_resources import (
     _select_draw_sections,
 )
 from .draw_scan import _scan_sections_for_draws
-from .geometry_resolution import GeometryResolution, GeometryResolver
+from .geometry_resolution import (GeometryResolution, GeometryResolver,
+                                  GeometryTargetIndex)
 from .texture_roles import TextureOverrideIndex
 
 
@@ -168,9 +169,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     global_ib = resolved_buffers["global_ib"]
     global_position = resolved_buffers["global_position"]
     global_texcoord = resolved_buffers["global_texcoord"]
+    target_index = GeometryTargetIndex(
+        section_info, sections, source=source)
     geometry_resolver = GeometryResolver(
         section_info, resources, resource_copy_sources, vertex_binding_index,
         resolve_vertex_info, mod_dir=mod_dir,
+        target_index=target_index,
+        resource_lineage_kinds=resolved_buffers.get(
+            "resource_lineage_kinds"),
         global_position=global_position, global_texcoord=global_texcoord)
     draw_sections = _select_draw_sections(section_info, global_ib)
     texture_override_index = getattr(
@@ -364,6 +370,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             draw.skinning_error = skinning_error
             draw.skinning_resolution = skinning_resolution
             draw.geometry_resolution = {
+                "target": resolution.evidence.get("target"),
                 "source": resolution.source,
                 "ib_resource": resolution.ib_resource,
                 "position_resource": resolution.position_resource,
@@ -376,6 +383,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     "coherence_selected", False),
                 "used_name_tiebreaker": resolution.evidence.get(
                     "used_name_tiebreaker", False),
+                "position_resolution": resolution.evidence.get(
+                    "position_resolution"),
+                "texcoord_resolution": resolution.evidence.get(
+                    "texcoord_resolution"),
                 "error": resolution.error,
             }
             _apply_diffuse_state(draw, authored, resolve_texture_file)

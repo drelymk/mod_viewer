@@ -1,8 +1,10 @@
 """Execution-order scanning of authored draw state."""
 
+from dataclasses import replace
 import re
 
-from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
+from ..geometry.draw_call import (AuthoredDrawCall, SlotTextureBinding,
+                                  VertexBindingEvidence)
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
                                   normalize_geometry_hash)
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
@@ -64,6 +66,15 @@ def _reachable_execution_sections(sections, root, section_lookup):
                 visiting.add(target_name)
                 pending.append(target_name)
     return reachable
+
+
+def _freeze_conditions(conditions):
+    """Keep binding-event conditions deterministic without sharing mutable DNF."""
+    return tuple(
+        tuple((clause.get("var"), clause.get("value"),
+               bool(clause.get("negate"))) for clause in group)
+        for group in (conditions or ())
+    )
 
 
 def _collect_legacy_scope_roles(sections, root, section_lookup):
@@ -317,6 +328,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             match = re.match(r"match_index_count\s*=\s*(\d+)", line, re.I)
             if match:
                 info["_match_index_count"] = int(match.group(1))
+            match = re.match(r"match_priority\s*=\s*(-?\d+)", line, re.I)
+            if match:
+                info["_match_priority"] = int(match.group(1))
             match = re.match(
                 r"override_vertex_count\s*=\s*(\d+)", line, re.I)
             if match:
@@ -358,6 +372,24 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 if slot <= 2 and value and not info[f"vb{slot}"]:
                     info[f"vb{slot}"] = value
                 info["_cur_vertex_resources"][slot] = value
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+                info["_vertex_binding_events"].append(
+                    VertexBindingEvidence(
+                        section=section_name,
+                        slot=slot,
+                        resource=value,
+                        target_hash=info.get("_geometry_hash"),
+                        match_first_index=info.get("_match_first_index"),
+                        match_index_count=info.get("_match_index_count"),
+                        conditions=_freeze_conditions(conditions),
+                        execution_path=execution_path,
+                        order=info["_binding_order"],
+                        source=line_source(raw),
+                    ))
+                info["_binding_order"] += 1
             match = re.match(r"ib\s*=\s*(\S+)", line, re.I)
             if match:
                 if not info["ib"]:
@@ -480,8 +512,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "_cur_compute_resources": {},
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
+            "_match_priority": None,
             "_cur_skinning_bone_offset": 0,
             "_vertex_count_evidence": [],
+            "_vertex_binding_events": [], "_binding_order": 0,
         }
         scan(lines, info, [], {name}, name)
         info.pop("_cur_ib", None)
@@ -492,6 +526,16 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
         info["aux_maps_at_end"] = aux_snapshot(info)
         info["texture_provenance_at_end"] = texture_provenance_snapshot(info)
         info["geometry_match_at_end"] = geometry_match(info)
+        info["match_priority"] = info.get("_match_priority")
+        info["vertex_binding_events"] = tuple(
+            replace(
+                event,
+                target_hash=info.get("_geometry_hash"),
+                match_first_index=info.get("_match_first_index"),
+                match_index_count=info.get("_match_index_count"),
+            )
+            for event in info.get("_vertex_binding_events") or ()
+        )
         info["vertex_resources_at_end"] = dict(
             info.get("_cur_vertex_resources") or {})
         info["vertex_count_evidence"] = tuple(
@@ -504,6 +548,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 "_diffuse_chain_key", "_diffuse_last_cond",
                 "_diffuse_history", "_aux_maps", "_texture_provenance"):
             info.pop(key, None)
+        info.pop("_vertex_binding_events", None)
+        info.pop("_binding_order", None)
         scanned[name] = info
     global_compute_candidates = {}
     for name, info in scanned.items():

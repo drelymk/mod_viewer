@@ -54,6 +54,22 @@ class AuthoredDrawCall:
 
 
 @dataclass(frozen=True, slots=True)
+class VertexBindingEvidence:
+    """One authored vertex-resource assignment in execution order."""
+
+    section: str
+    slot: int
+    resource: str | None
+    target_hash: str | None = None
+    match_first_index: int | None = None
+    match_index_count: int | None = None
+    conditions: tuple = ()
+    execution_path: tuple = ()
+    order: int = 0
+    source: dict | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SlotTextureBinding:
     """Raw shader texture-slot evidence before semantic role resolution."""
 

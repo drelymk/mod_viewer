@@ -1,10 +1,9 @@
-"""Evidence-based association of indexed geometry and vertex streams.
+"""Target-aware association of indexed geometry and vertex streams.
 
-The INI format does not assign semantic meaning to resource or section names.
-This module therefore treats names as compatibility evidence only.  Effective
-draw state and explicit resource relationships are considered before structural
-and file-backed evidence, and an unresolved association is left unresolved
-instead of borrowing another component's buffers.
+3DMigoto's original geometry hash is the useful identity boundary for a
+replacement family. Resource names, section names, index coverage and
+vertex-file shape remain evidence, but they are not allowed to discover a
+family across unrelated geometry targets.
 """
 
 from dataclasses import dataclass, field
@@ -14,7 +13,155 @@ import re
 import struct
 
 from ..geometry.buffers import POSITION_STRIDE, _detect_uv_best, _res_get
+from ..geometry.draw_call import VertexBindingEvidence
 from ..resource_paths import safe_resource_path
+from .draw_scan import _reachable_execution_sections
+
+
+@dataclass(frozen=True, slots=True)
+class GeometryTargetKey:
+    """Identity of one original geometry target within an INI analysis."""
+
+    source: str | None
+    hash: str
+    match_priority: int | None = None
+
+    def to_dict(self):
+        return {
+            "source": self.source,
+            "hash": self.hash,
+            "match_priority": self.match_priority,
+        }
+
+
+@dataclass
+class GeometryTarget:
+    """All authored replacement evidence belonging to one target hash."""
+
+    key: GeometryTargetKey
+    sections: set[str] = field(default_factory=set)
+    indexed_sections: set[str] = field(default_factory=set)
+    vertex_binding_sections: set[str] = field(default_factory=set)
+    ib_resources: set[str] = field(default_factory=set)
+    position_resources: set[str] = field(default_factory=set)
+    texcoord_resources: set[str] = field(default_factory=set)
+    vertex_bindings: list[VertexBindingEvidence] = field(default_factory=list)
+    declared_counts: set[int] = field(default_factory=set)
+    captured_sources: dict[str, set[int]] = field(default_factory=dict)
+
+
+class GeometryTargetIndex:
+    """INI-wide index whose candidate collections remain target-local."""
+
+    def __init__(self, section_info, sections, *, source=None):
+        self.section_info = section_info
+        self.sections = sections or {}
+        self.source = source
+        self.targets = {}
+        self.section_targets = {}
+        self._build()
+
+    def _key_for_info(self, info):
+        geometry_hash = info.get("_geometry_hash")
+        if not geometry_hash:
+            match = info.get("geometry_match_at_end")
+            geometry_hash = getattr(match, "hash", None)
+        if not geometry_hash:
+            return None
+        return GeometryTargetKey(
+            source=self.source,
+            hash=str(geometry_hash).casefold(),
+            match_priority=info.get("match_priority"),
+        )
+
+    @staticmethod
+    def _event_key(event):
+        source = event.source or {}
+        return (
+            event.section, event.slot, event.resource, event.target_hash,
+            event.match_first_index, event.match_index_count,
+            event.conditions, event.execution_path, event.order,
+            source.get("ini_path"), source.get("line_no"),
+        )
+
+    def _build(self):
+        for section, info in self.section_info.items():
+            if not str(section).casefold().startswith("textureoverride"):
+                continue
+            key = self._key_for_info(info)
+            if key is None:
+                continue
+            target = self.targets.setdefault(key, GeometryTarget(key))
+            self.section_targets[section] = key
+            target.sections.add(section)
+            target.declared_counts.update(
+                int(value) for value in info.get("vertex_count_evidence") or ()
+                if value is not None)
+            if info.get("ib") or info.get("draws"):
+                target.indexed_sections.add(section)
+            for draw in info.get("draws") or ():
+                if draw.index_resource:
+                    target.ib_resources.add(draw.index_resource)
+            if info.get("ib"):
+                target.ib_resources.add(info["ib"])
+
+            seen_events = {self._event_key(event)
+                           for event in target.vertex_bindings}
+            for event in info.get("vertex_binding_events") or ():
+                if self._event_key(event) in seen_events:
+                    continue
+                seen_events.add(self._event_key(event))
+                target.vertex_bindings.append(event)
+                target.vertex_binding_sections.add(event.section)
+                if not event.resource:
+                    continue
+                if event.slot == 0:
+                    target.position_resources.add(event.resource)
+                else:
+                    target.texcoord_resources.add(event.resource)
+
+        section_lookup = {str(name).casefold(): name
+                          for name in self.sections}
+        for root, key in self.section_targets.items():
+            reachable = _reachable_execution_sections(
+                self.sections, root, section_lookup)
+            target = self.targets[key]
+            for section in reachable:
+                for raw in self.sections.get(section, ()):
+                    line = raw.split(";", 1)[0].strip()
+                    match = re.match(
+                        r"^\s*(Resource\S+)\s*=\s*copy\s+vb(\d+)\s*$",
+                        line, re.I)
+                    if not match:
+                        continue
+                    resource, slot = match.groups()
+                    target.captured_sources.setdefault(
+                        resource.casefold(), set()).add(int(slot))
+
+    def target_for_section(self, section):
+        return self.section_targets.get(section)
+
+    def get(self, key):
+        return self.targets.get(key)
+
+    def capture_slots(self, key, resource):
+        target = self.targets.get(key)
+        if target is None or not resource:
+            return frozenset()
+        return frozenset(target.captured_sources.get(
+            str(resource).casefold(), ()))
+
+    def diagnostics(self, key):
+        target = self.targets.get(key)
+        if target is None:
+            return {"target": None}
+        return {
+            "target": target.key.to_dict(),
+            "target_sections": sorted(target.sections, key=str.casefold),
+            "target_ib_count": len(target.ib_resources),
+            "target_position_resource_count": len(target.position_resources),
+            "target_texcoord_resource_count": len(target.texcoord_resources),
+        }
 
 
 @dataclass(frozen=True)
@@ -57,38 +204,22 @@ class _Candidate:
     info: GeometryResourceEvidence
     score: int = 0
     structural: bool = False
+    target_local: bool = False
     name_tiebreaker: bool = False
     provenance: bool = False
     exact_count: bool = False
     uv_plausible: bool = True
     coherence: float | None = None
-
-
-def _lookup_component_value(mapping, component):
-    mapping = mapping or {}
-    component = str(component or "")
-    candidates = (
-        component,
-        # Keep the historical component matching as compatibility evidence,
-        # but never require it for a candidate to participate.
-        re.sub(r"[A-Za-z]+$", "", component),
-        re.sub(r"(?<=.)[A-Z][a-z]+$", "", component),
-    )
-    for candidate in candidates:
-        if candidate and mapping.get(candidate.lower()):
-            return mapping[candidate.lower()]
-    component_low = component.lower()
-    prefix = max(
-        (key for key in mapping if component_low.startswith(key)),
-        key=len, default=None)
-    return mapping.get(prefix) if prefix else None
+    source_kind: str | None = None
+    declared_counts: tuple[int, ...] = ()
 
 
 class GeometryResolver:
-    """Resolve one authored draw from progressively weaker evidence."""
+    """Resolve a draw from direct state, target evidence, and safe fallback."""
 
     def __init__(self, section_info, resources, resource_copy_sources,
                  vertex_binding_index, resolve_vertex_info, *, mod_dir=None,
+                 target_index=None, resource_lineage_kinds=None,
                  global_position=None, global_texcoord=None):
         self.section_info = section_info
         self.resources = resources
@@ -96,15 +227,21 @@ class GeometryResolver:
         self.vertex_binding_index = vertex_binding_index
         self.resolve_vertex_info = resolve_vertex_info
         self.mod_dir = mod_dir
+        self.target_index = target_index or GeometryTargetIndex(
+            section_info, {}, source=None)
+        self.resource_lineage_kinds = resource_lineage_kinds or {}
+        # Kept as constructor compatibility for callers that still provide
+        # these values. Runtime resources are never resolved from them.
         self.global_position = global_position
         self.global_texcoord = global_texcoord
         self._catalog = {}
         self._resource_cache = {}
         self._record_count_cache = {}
         self._index_bounds_cache = {}
-        self._scope_bounds_cache = {}
         self._coherence_cache = {}
         self._uv_cache = {}
+        self._target_geometry_cache = {}
+        self._scope_bounds_cache = {}
         self._build_catalog()
 
     def _build_catalog(self):
@@ -130,19 +267,19 @@ class GeometryResolver:
             for slot, resource in (info.get("vertex_resources_at_end") or
                                    {}).items():
                 add(resource, slot, section, counts)
+            for event in info.get("vertex_binding_events") or ():
+                add(event.resource, event.slot, section, counts)
             for authored in info.get("draws", ()):
                 for slot, resource in authored.vertex_resources.items():
                     add(resource, slot, section, counts)
 
         for item in records.values():
             resource = item["resource"]
-            resolved = self._resolved_info(resource)
             self._catalog[item["resource"].casefold()] = {
                 "resource": resource,
                 "slots": frozenset(item["slots"]),
                 "sections": frozenset(item["sections"]),
                 "counts": tuple(sorted(item["counts"])),
-                "info": resolved,
             }
 
     def _resolved_info(self, resource):
@@ -228,48 +365,6 @@ class GeometryResolver:
         self._index_bounds_cache[key] = result
         return result
 
-    def _draw_scope_bounds(self, section_name, ib_resource, filename,
-                           index_size):
-        """Return bounds across all authored draws using one effective IB.
-
-        A split-resource mod can contain a small first submesh whose indices
-        are also valid against an unrelated, smaller vertex stream.  When the
-        same indexed replacement contains later submeshes, resolving the
-        stream against the complete draw scope prevents that legal-looking
-        first range from selecting the wrong family.
-        """
-        key = (section_name, str(ib_resource or '').casefold(), index_size)
-        if key in self._scope_bounds_cache:
-            return self._scope_bounds_cache[key]
-        info = self.section_info.get(section_name) or {}
-        draws = info.get("draws") or ()
-        matching = []
-        target = str(ib_resource or '').casefold()
-        for authored in draws:
-            effective = str(authored.index_resource or '').casefold()
-            if effective != target:
-                continue
-            matching.append(authored)
-        if len(matching) < 2:
-            self._scope_bounds_cache[key] = None
-            return None
-        bounds = []
-        for authored in matching:
-            item = self._index_bounds(
-                filename, authored.start, authored.count, authored.base,
-                index_size)
-            if item is None or not item[2]:
-                self._scope_bounds_cache[key] = None
-                return None
-            bounds.append(item)
-        result = (
-            min(item[0] for item in bounds),
-            max(item[1] for item in bounds),
-            True,
-        )
-        self._scope_bounds_cache[key] = result
-        return result
-
     def _position_coherence(self, evidence, geometry):
         """Return a scale-normalized sampled edge-coherence score."""
         if not self.mod_dir or not evidence.file or not evidence.stride:
@@ -280,8 +375,7 @@ class GeometryResolver:
         ib_path = safe_resource_path(self.mod_dir, ib_file)
         position_path = safe_resource_path(self.mod_dir, evidence.file)
         if (not ib_path or not position_path or
-                not os.path.isfile(ib_path) or
-                not os.path.isfile(position_path)):
+                not os.path.isfile(ib_path) or not os.path.isfile(position_path)):
             return None
         key = (os.path.normcase(ib_path), start, count, base, index_size,
                os.path.normcase(position_path), int(evidence.stride))
@@ -362,6 +456,13 @@ class GeometryResolver:
     def _uv_plausible(self, evidence):
         if evidence.stride == 32:
             return False
+        format_name = str(evidence.format or "").upper()
+        if (("UINT" in format_name or "SINT" in format_name or
+             "SNORM" in format_name) and "FLOAT" not in format_name):
+            return False
+        if ("B8A8" in format_name or "B16A16" in format_name or
+                "B32A32" in format_name):
+            return False
         if not evidence.stride:
             return True
         if not self.mod_dir or not evidence.file:
@@ -375,7 +476,7 @@ class GeometryResolver:
         try:
             with open(path, "rb") as handle:
                 data = handle.read(256 * 1024)
-            if not data or not evidence.stride:
+            if not data:
                 result = False
             else:
                 offset, fmt = _detect_uv_best(
@@ -398,18 +499,32 @@ class GeometryResolver:
         self._uv_cache[key] = result
         return result
 
-    def _candidate(self, resource, *, structural=False,
-                   name_tiebreaker=False, provenance=False):
+    def _candidate(self, resource, *, structural=False, target_local=False,
+                   name_tiebreaker=False, provenance=False,
+                   declared_counts=None, source_kind=None):
         if not resource:
             return None
         evidence = self._evidence(resource)
         if (not evidence.file or
                 (evidence.stride is not None and evidence.stride <= 0)):
             return None
+        raw_info = _res_get(self.resources, resource)
+        lineage_kind = self.resource_lineage_kinds.get(
+            str(resource).casefold())
+        if lineage_kind is None and not raw_info.get("filename"):
+            lineage_kind = "exact" if evidence.file else None
+        if lineage_kind:
+            provenance = True
+            if source_kind in (None, "direct"):
+                source_kind = lineage_kind
         return _Candidate(
             resource=evidence.resource, info=evidence,
-            structural=structural, name_tiebreaker=name_tiebreaker,
-            provenance=provenance)
+            structural=structural, target_local=target_local,
+            name_tiebreaker=name_tiebreaker, provenance=provenance,
+            source_kind=source_kind,
+            declared_counts=tuple(
+                evidence.declared_counts if declared_counts is None
+                else declared_counts))
 
     @staticmethod
     def _unique_resources(values):
@@ -419,119 +534,230 @@ class GeometryResolver:
                 result.setdefault(str(value).casefold(), value)
         return list(result.values())
 
+    @staticmethod
+    def _dedupe_candidates(candidates):
+        """Collapse aliases that resolve to the same physical vertex family."""
+        result = {}
+        for candidate in candidates:
+            key = (
+                str(candidate.info.file).casefold(), candidate.info.stride,
+                str(candidate.info.format or "").casefold())
+            previous = result.get(key)
+            if previous is None:
+                result[key] = candidate
+                continue
+            previous_rank = (
+                bool(previous.target_local), bool(previous.provenance),
+                not bool(previous.source_kind))
+            current_rank = (
+                bool(candidate.target_local), bool(candidate.provenance),
+                not bool(candidate.source_kind))
+            if current_rank > previous_rank:
+                result[key] = candidate
+        return list(result.values())
+
     def _is_connected_to_current(self, resource, current_bindings):
         for current in (current_bindings or {}).values():
             if (current and str(current).casefold() !=
                     str(resource).casefold() and
                     self.vertex_binding_index._resource_connected(
-                    resource, current)):
+                        resource, current)):
                 return True
         return False
 
-    def _position_candidates(self, authored, *, legacy_position=None,
-                             hash_position=None, component_position=None):
+    def _target_candidates(self, section_name, role):
+        key = self.target_index.target_for_section(section_name)
+        if key is None:
+            return []
+        cached = self._target_geometry_cache.setdefault(key, {})
+        if role in cached:
+            return list(cached[role])
+        target = self.target_index.get(key)
+        resources = (target.position_resources if role == "position"
+                     else target.texcoord_resources)
+        candidates = []
+        for resource in self._unique_resources(sorted(
+                resources, key=lambda value: str(value).casefold())):
+            candidate = self._candidate(
+                resource, structural=True, target_local=True,
+                declared_counts=tuple(sorted(target.declared_counts)),
+                source_kind="target_binding")
+            if candidate is None:
+                continue
+            if role == "texcoord":
+                candidate.uv_plausible = self._uv_plausible(candidate.info)
+                if not candidate.uv_plausible:
+                    continue
+            candidates.append(candidate)
+        candidates = self._dedupe_candidates(candidates)
+        cached[role] = tuple(candidates)
+        return list(candidates)
+
+    def _scope_bounds(self, section_name, ib_resource, ib_file, index_size):
+        """Return complete bounds for one section's authored IB scope."""
+        key = (section_name, str(ib_resource or "").casefold(), index_size)
+        if key in self._scope_bounds_cache:
+            return self._scope_bounds_cache[key]
+        info = self.section_info.get(section_name) or {}
+        draws = [draw for draw in info.get("draws") or ()
+                 if str(draw.index_resource or "").casefold() ==
+                 str(ib_resource or "").casefold()]
+        if not draws:
+            self._scope_bounds_cache[key] = None
+            return None
+        bounds = []
+        for draw in draws:
+            item = self._index_bounds(
+                ib_file, draw.start, draw.count, draw.base, index_size)
+            if item is None or not item[2] or item[1] < 0:
+                self._scope_bounds_cache[key] = None
+                return None
+            bounds.append(item)
+        result = (min(item[0] for item in bounds),
+                  max(item[1] for item in bounds), True)
+        self._scope_bounds_cache[key] = result
+        return result
+
+    def _cross_target_candidates(self, role):
+        """Collect target families for the narrowly-proven fallback path."""
+        candidates = []
+        for target in self.target_index.targets.values():
+            resources = (target.position_resources if role == "position"
+                         else target.texcoord_resources)
+            for resource in self._unique_resources(sorted(
+                    resources, key=lambda value: str(value).casefold())):
+                candidate = self._candidate(
+                    resource, structural=False, target_local=False,
+                    declared_counts=(),
+                    source_kind="cross_target")
+                if candidate is None:
+                    continue
+                if role == "texcoord":
+                    candidate.uv_plausible = self._uv_plausible(candidate.info)
+                    if not candidate.uv_plausible:
+                        continue
+                candidates.append(candidate)
+        return self._dedupe_candidates(candidates)
+
+    def _legacy_candidates(self, resources, *, role, name_resources=()):
+        candidates = []
+        name_keys = {str(item).casefold() for item in name_resources if item}
+        for resource in self._unique_resources(resources):
+            candidate = self._candidate(
+                resource, name_tiebreaker=(str(resource).casefold() in
+                                           name_keys),
+                source_kind="legacy_compatibility")
+            if candidate is None:
+                continue
+            if role == "texcoord":
+                candidate.uv_plausible = self._uv_plausible(candidate.info)
+                if not candidate.uv_plausible:
+                    continue
+            candidates.append(candidate)
+        return self._dedupe_candidates(candidates)
+
+    def _unscoped_unique_candidates(self, role):
+        """Return a unique legacy family only when no target exists."""
+        candidates = []
+        for item in self._catalog.values():
+            resource = item["resource"]
+            candidate = self._candidate(
+                resource, source_kind="legacy_unique")
+            if candidate is None:
+                continue
+            if role == "position":
+                if candidate.info.stride == 32 or 0 not in candidate.info.bound_slots:
+                    continue
+            else:
+                if not candidate.info.bound_slots:
+                    continue
+                candidate.uv_plausible = self._uv_plausible(candidate.info)
+                if not candidate.uv_plausible:
+                    continue
+            candidates.append(candidate)
+        return self._dedupe_candidates(candidates)
+
+    def _position_candidates(self, section_name, authored, *,
+                             legacy_position=None, hash_position=None,
+                             component_position=None):
         explicit = authored.vertex_resources
         if 0 in explicit:
-            if explicit[0] is None:
-                return [], True
+            resource = explicit[0]
+            if resource is None:
+                return [], "explicit_null"
             candidate = self._candidate(
-                explicit[0],
-                provenance=self._is_connected_to_current(
-                    explicit[0], explicit))
-            # Runtime-produced vertex resources can be declared without a
-            # file.  In that case retain the safe legacy structural candidates
-            # rather than turning an otherwise resolvable draw into a hole.
-            if candidate is not None:
-                return [candidate], True
-
-        resources = []
-        for item in self._catalog.values():
-            if 0 in item["slots"]:
-                resources.append(item["resource"])
-        resources.extend((legacy_position, component_position, hash_position))
-        # A runtime-created shared resource can be observed at vb0 without a
-        # file.  In that case the component catalog contains only a
-        # non-resolvable placeholder, while _resolve_component_buffers may
-        # already have found the one file-backed structural position stream.
-        # Use that source only when no file-backed candidate is present; an
-        # unrelated file-backed candidate must not be hidden by a global one.
-        if (self.global_position and not any(
-                self._resolved_info(resource).get("filename")
-                for resource in resources if resource)):
-            resources.append(self.global_position)
-        candidates = []
-        for resource in self._unique_resources(resources):
-            candidates.append(self._candidate(
                 resource,
-                structural=(resource.casefold() == str(hash_position or "").casefold()),
-                name_tiebreaker=(resource.casefold() == str(
-                    legacy_position or component_position or "").casefold()),
-                provenance=self._is_connected_to_current(
-                    resource, explicit)))
-        return [item for item in candidates if item is not None], False
+                provenance=self._is_connected_to_current(resource, explicit),
+                source_kind="direct")
+            if candidate is not None:
+                return [candidate], "direct"
+            # A runtime resource without a file may still be the effective
+            # target binding. It is only filled from target-local evidence.
+            candidates = self._target_candidates(section_name, "position")
+            target_key = self.target_index.target_for_section(section_name)
+            if self.target_index.capture_slots(target_key, resource) & {0}:
+                for item in candidates:
+                    item.provenance = True
+                    item.source_kind = "captured_slot"
+            return candidates, "runtime"
 
-    def _texcoord_candidates(self, authored, *, legacy_texcoord=None,
-                             hash_texcoord=None, component_texcoord=None,
-                             selected_position=None):
+        candidates = self._target_candidates(section_name, "position")
+        if candidates:
+            return candidates, "target_binding"
+        if self.target_index.target_for_section(section_name) is not None:
+            return [], "target_binding"
+        return self._legacy_candidates(
+            (legacy_position, component_position, hash_position),
+            role="position", name_resources=(legacy_position,
+                                               component_position)), "legacy"
+
+    def _texcoord_candidates(self, section_name, authored, *,
+                             legacy_texcoord=None, hash_texcoord=None,
+                             component_texcoord=None, selected_position=None):
         explicit = authored.vertex_resources
         explicit_slots = [slot for slot in (2, 1) if slot in explicit]
         other_explicit_slots = [slot for slot in sorted(explicit)
-                               if slot > 2 and explicit[slot] is not None]
-        if explicit_slots:
+                                if slot > 2]
+        if explicit_slots or other_explicit_slots:
             resources = []
-            for slot in explicit_slots:
+            for slot in explicit_slots + other_explicit_slots:
+                resource = explicit[slot]
+                if resource is not None:
+                    resources.append(resource)
+            candidates = []
+            for resource in self._unique_resources(resources):
+                candidate = self._candidate(resource, source_kind="direct")
+                if candidate is None:
+                    continue
+                candidate.uv_plausible = self._uv_plausible(candidate.info)
+                if candidate.uv_plausible:
+                    candidates.append(candidate)
+            if candidates:
+                return self._dedupe_candidates(candidates), "direct"
+            # Explicit runtime slots do not authorize a global search.
+            target_candidates = self._target_candidates(
+                section_name, "texcoord")
+            target_key = self.target_index.target_for_section(section_name)
+            for slot in explicit_slots + other_explicit_slots:
                 resource = explicit[slot]
                 if resource is None:
                     continue
-                candidate = self._candidate(resource)
-                if candidate is not None and candidate.info.stride != 32:
-                    # Higher slots are preferred, but do not let an
-                    # unsupported blend-like stream hide a valid lower slot.
-                    resources = [resource]
-                    break
-                resources.append(resource)
-            if not resources:
-                return [], True
-        elif other_explicit_slots:
-            # Some generated layouts bind UVs outside the conventional 1/2
-            # slots.  Effective draw state still outranks inferred catalog
-            # candidates when the resource metadata identifies a file.
-            resources = [explicit[slot] for slot in other_explicit_slots]
-        else:
-            resources = [
-                item["resource"] for item in self._catalog.values()
-                if item["slots"] and not (
-                    selected_position and item["resource"].casefold() ==
-                    selected_position.resource.casefold())
-            ]
-            resources.extend((legacy_texcoord, component_texcoord,
-                              hash_texcoord))
-            if not resources and self.global_texcoord:
-                resources.append(self.global_texcoord)
-        candidates = []
-        for resource in self._unique_resources(resources):
-            candidate = self._candidate(
-                resource,
-                structural=(resource.casefold() == str(
-                    hash_texcoord or "").casefold()),
-                name_tiebreaker=(resource.casefold() == str(
-                    legacy_texcoord or component_texcoord or "").casefold()),
-                provenance=self._is_connected_to_current(
-                    resource, explicit))
-            if candidate is None:
-                continue
-            candidate.uv_plausible = self._uv_plausible(candidate.info)
-            if not candidate.uv_plausible:
-                continue
-            if (selected_position and candidate.info.record_count is not None
-                    and selected_position.info.record_count is not None
-                    and candidate.info.record_count !=
-                    selected_position.info.record_count):
-                # Keep the candidate as weak evidence, but prefer matching
-                # domains strongly below instead of dropping valid variants.
-                pass
-            candidates.append(candidate)
-        return candidates, bool(explicit_slots or other_explicit_slots)
+                if self.target_index.capture_slots(target_key, resource) & {
+                        1, 2}:
+                    for item in target_candidates:
+                        item.provenance = True
+                        item.source_kind = "captured_slot"
+            return target_candidates, "runtime"
+
+        candidates = self._target_candidates(section_name, "texcoord")
+        if candidates:
+            return candidates, "target_binding"
+        if self.target_index.target_for_section(section_name) is not None:
+            return [], "target_binding"
+        return self._legacy_candidates(
+            (legacy_texcoord, component_texcoord, hash_texcoord),
+            role="texcoord", name_resources=(legacy_texcoord,
+                                              component_texcoord)), "legacy"
 
     def _choose(self, candidates, *, bounds, role, selected_position=None,
                 geometry=None):
@@ -540,9 +766,6 @@ class GeometryResolver:
             if role == "texcoord" and not candidate.uv_plausible:
                 continue
             if role == "position" and candidate.info.stride == 32:
-                # A stride-32 stream is the known GIMI blend layout.  It can
-                # still be selected when explicitly bound at vb0; inferred
-                # position candidates should not steal it from geometry.
                 if 0 not in candidate.info.bound_slots:
                     continue
             if role == "position" and bounds is not None:
@@ -555,85 +778,72 @@ class GeometryResolver:
             candidate.score = 0
             if candidate.provenance:
                 candidate.score += 500
-            if candidate.structural:
+            if candidate.target_local:
                 candidate.score += 300
-            if candidate.exact_count:
-                candidate.score += 400
+            if candidate.structural:
+                candidate.score += 200
             if role == "texcoord" and selected_position:
                 if (candidate.info.record_count is not None and
                         selected_position.info.record_count is not None and
                         candidate.info.record_count ==
                         selected_position.info.record_count):
-                    candidate.score += 250
-            if role == "texcoord":
-                if 2 in candidate.info.bound_slots:
-                    candidate.score += 100
-                elif 1 in candidate.info.bound_slots:
-                    candidate.score += 80
-            if 0 in candidate.info.bound_slots and role == "position":
-                candidate.score += 100
+                    candidate.score += 120
+            if role == "position" and 0 in candidate.info.bound_slots:
+                candidate.score += 30
             if candidate.name_tiebreaker:
                 candidate.score += 10
             compatible.append(candidate)
 
         if not compatible:
-            return (None, "invalid_geometry_binding" if bounds is not None
-                    else "unresolved_geometry", False)
+            return (None, "invalid_geometry_binding"
+                    if bounds is not None and candidates
+                    else f"unresolved_{role}", False)
 
-        coherence_candidates = []
-        if role == "position" and geometry and len(compatible) > 1:
-            for candidate in compatible:
-                candidate.coherence = self._position_coherence(
-                    candidate.info, geometry)
-                if candidate.coherence is not None:
-                    coherence_candidates.append(candidate)
-            if len(coherence_candidates) >= 2:
-                best_coherence = min(
-                    candidate.coherence for candidate in coherence_candidates)
-                best = [candidate for candidate in coherence_candidates
-                        if candidate.coherence == best_coherence]
-                if len(best) == 1:
-                    return best[0], None, True
-        # A declared count is useful only within the smallest compatible
-        # vertex domain.  Split-resource INIs commonly declare the vertex
-        # count for several unrelated components, so rewarding a candidate
-        # merely because its own declaration matches its file would let an
-        # unrelated larger stream outrank the smallest indexed-valid domain.
-        recorded = [candidate for candidate in compatible
-                    if candidate.info.record_count is not None]
-        smallest_count = min(
-            (candidate.info.record_count for candidate in recorded),
-            default=None)
         declared_matches = [
             candidate for candidate in compatible
-            if role == "position"
-            and candidate.info.record_count == smallest_count
-            and any(
+            if candidate.info.record_count is not None and any(
                 count == candidate.info.record_count
-                for count in candidate.info.declared_counts)
+                for count in candidate.declared_counts)
         ]
         if len(declared_matches) == 1:
             declared_matches[0].exact_count = True
-            declared_matches[0].score += 400
+            declared_matches[0].score += 100
+
         best_score = max(item.score for item in compatible)
         best = [item for item in compatible if item.score == best_score]
-        if len(best) > 1:
-            with_counts = [item for item in best
-                           if item.info.record_count is not None]
-            if with_counts:
-                smallest = min(item.info.record_count for item in with_counts)
-                smallest_items = [item for item in with_counts
-                                  if item.info.record_count == smallest]
-                if len(smallest_items) == 1:
-                    return smallest_items[0], None, False
+        if len(best) > 1 and role == "position" and geometry:
+            measured = []
+            for candidate in best:
+                candidate.coherence = self._position_coherence(
+                    candidate.info, geometry)
+                if candidate.coherence is not None:
+                    measured.append(candidate)
+            if measured:
+                best_coherence = min(item.coherence for item in measured)
+                coherent = [item for item in measured
+                            if item.coherence == best_coherence]
+                if len(coherent) == 1:
+                    return coherent[0], None, True
+        if len(best) != 1:
             return None, f"ambiguous_{role}", False
         return best[0], None, False
+
+    def _legacy_fallback(self, resources, *, role, bounds, geometry,
+                         selected_position=None):
+        candidates = self._legacy_candidates(resources, role=role)
+        if not candidates:
+            return None, None, False
+        return self._choose(
+            candidates, bounds=bounds, role=role,
+            selected_position=selected_position, geometry=geometry)
 
     def resolve(self, section_name, authored, ib_resource, *,
                 legacy_position=None, legacy_texcoord=None,
                 component_position=None, component_texcoord=None,
                 hash_position=None, hash_texcoord=None):
         result = GeometryResolution(ib_resource=ib_resource)
+        target_key = self.target_index.target_for_section(section_name)
+        result.evidence.update(self.target_index.diagnostics(target_key))
         ib_info = _res_get(self.resources, ib_resource)
         result.ib_file = ib_info.get("filename")
         result.index_size = 2 if "R16" in str(
@@ -645,47 +855,127 @@ class GeometryResolver:
         bounds = self._index_bounds(
             result.ib_file, authored.start, authored.count,
             authored.base, result.index_size)
-        scope_bounds = self._draw_scope_bounds(
-            section_name, ib_resource, result.ib_file, result.index_size)
-        selection_bounds = scope_bounds or bounds
-        positions, explicit_position = self._position_candidates(
-            authored, legacy_position=legacy_position,
+        geometry = (result.ib_file, authored.start, authored.count,
+                    authored.base, result.index_size)
+        positions, position_mode = self._position_candidates(
+            section_name, authored, legacy_position=legacy_position,
             component_position=component_position,
             hash_position=hash_position)
+        if not positions and position_mode == "legacy":
+            positions = self._unscoped_unique_candidates("position")
+            if positions:
+                position_mode = "legacy_unique"
         result.evidence["position_candidate_count"] = len(positions)
-        if explicit_position and authored.vertex_resources.get(0) is None:
+        if position_mode == "explicit_null":
             result.error = "invalid_geometry_binding"
             return result
         position, error, coherence_selected = self._choose(
-            positions, bounds=selection_bounds, role="position",
-            geometry=(result.ib_file, authored.start, authored.count,
-                      authored.base, result.index_size))
+            positions, bounds=bounds, role="position", geometry=geometry)
+        if position is None and position_mode in ("target_binding", "runtime"):
+            fallback_position, fallback_error, fallback_coherence = \
+                self._legacy_fallback(
+                (legacy_position, component_position, hash_position),
+                role="position", bounds=bounds, geometry=geometry)
+            if fallback_position is not None:
+                position = fallback_position
+                error = fallback_error
+                coherence_selected = fallback_coherence
+                position_mode = "legacy"
+        if position is None and position_mode == "target_binding":
+            scope_bounds = self._scope_bounds(
+                section_name, ib_resource, result.ib_file, result.index_size)
+            if scope_bounds is not None:
+                cross_positions = self._cross_target_candidates("position")
+                cross_position, cross_error, cross_coherence = self._choose(
+                    cross_positions, bounds=scope_bounds, role="position",
+                    geometry=geometry)
+                result.evidence["cross_target_candidate_count"] = len(
+                    cross_positions)
+                if cross_position is not None:
+                    position = cross_position
+                    positions = [cross_position]
+                    position_mode = "cross_target"
+                    coherence_selected = cross_coherence
+                else:
+                    error = cross_error or error
         if position is None:
-            result.error = error
+            result.error = ("unresolved_runtime_position"
+                            if position_mode == "runtime" else error)
+            result.evidence["position_resolution"] = {
+                "source": position_mode,
+                "candidate_count": len(positions),
+            }
             return result
 
-        texcoords, explicit_texcoord = self._texcoord_candidates(
-            authored, legacy_texcoord=legacy_texcoord,
+        texcoords, texcoord_mode = self._texcoord_candidates(
+            section_name, authored, legacy_texcoord=legacy_texcoord,
             component_texcoord=component_texcoord,
             hash_texcoord=hash_texcoord, selected_position=position)
+        if not texcoords and texcoord_mode == "legacy":
+            texcoords = self._unscoped_unique_candidates("texcoord")
+            if texcoords:
+                texcoord_mode = "legacy_unique"
         result.evidence["texcoord_candidate_count"] = len(texcoords)
         texcoord, tc_error, _ = self._choose(
             texcoords, bounds=None, role="texcoord",
             selected_position=position)
+        if texcoord is None and texcoord_mode in ("target_binding", "runtime"):
+            fallback_texcoord, fallback_error, _ = self._legacy_fallback(
+                (legacy_texcoord, component_texcoord, hash_texcoord),
+                role="texcoord", bounds=None, geometry=None,
+                selected_position=position)
+            if fallback_texcoord is not None:
+                texcoord = fallback_texcoord
+                tc_error = fallback_error
+                texcoord_mode = "legacy"
+        if texcoord is None and texcoord_mode == "target_binding":
+            cross_texcoords = self._cross_target_candidates("texcoord")
+            if cross_texcoords:
+                texcoords = cross_texcoords
+                texcoord_mode = "cross_target"
+                result.evidence["texcoord_candidate_count"] = len(
+                    cross_texcoords)
+                texcoord, tc_error, _ = self._choose(
+                    texcoords, bounds=None, role="texcoord",
+                    selected_position=position)
         if texcoord is None:
             result.error = tc_error
+            result.evidence["texcoord_resolution"] = {
+                "source": texcoord_mode,
+                "candidate_count": len(texcoords),
+            }
             return result
 
-        result.position_resource = position.resource
+        explicit_position_resource = authored.vertex_resources.get(0)
+        explicit_texcoord_resource = next(
+            (authored.vertex_resources[slot]
+             for slot in (2, 1)
+             if slot in authored.vertex_resources
+             and authored.vertex_resources[slot] is not None), None)
+        result.position_resource = (
+            explicit_position_resource
+            if position_mode == "runtime" and explicit_position_resource
+            else position.resource)
         result.position_file = position.info.file
         result.position_stride = position.info.stride or POSITION_STRIDE
-        result.texcoord_resource = texcoord.resource
+        result.texcoord_resource = (
+            explicit_texcoord_resource
+            if texcoord_mode == "runtime" and explicit_texcoord_resource
+            else texcoord.resource)
         result.texcoord_file = texcoord.info.file
         result.texcoord_stride = texcoord.info.stride or 20
         result.evidence.update({
             "ib_resource": ib_resource,
-            "position_resource": position.resource,
-            "texcoord_resource": texcoord.resource,
+            "position_resource": result.position_resource,
+            "texcoord_resource": result.texcoord_resource,
+            "position_resolution": {
+                "source": position.source_kind or position_mode,
+                "candidate_count": len(positions),
+            },
+            "texcoord_resolution": {
+                "source": texcoord.source_kind or texcoord_mode,
+                "candidate_count": len(texcoords),
+            },
             "coherence_selected": coherence_selected,
             "used_name_tiebreaker": bool(
                 not coherence_selected and
@@ -693,18 +983,29 @@ class GeometryResolver:
             "position_record_count": position.info.record_count,
             "texcoord_record_count": texcoord.info.record_count,
         })
-        if explicit_position and explicit_texcoord:
+        if position.source_kind == "captured_slot" or \
+                texcoord.source_kind == "captured_slot":
+            result.source = "captured_slot"
+        elif position.source_kind in ("transformed", "transform_lineage") or \
+                texcoord.source_kind in ("transformed", "transform_lineage"):
+            result.source = "transform_lineage"
+        elif position_mode == "direct" and texcoord_mode == "direct":
             result.source = "direct"
-        elif position.provenance or texcoord.provenance:
-            result.source = "copy_provenance"
-        elif not coherence_selected and (
-                position.name_tiebreaker or texcoord.name_tiebreaker):
-            result.source = "name_tiebreaker"
+        elif position_mode == "cross_target" or texcoord_mode == "cross_target":
+            result.source = "cross_target"
+        elif position_mode == "target_binding" or texcoord_mode == "target_binding":
+            result.source = "target_binding"
+        elif position_mode in ("legacy", "legacy_unique") or \
+                texcoord_mode in ("legacy", "legacy_unique"):
+            result.source = "legacy_compatibility"
+        elif coherence_selected:
+            result.source = "target_binding_coherence"
         else:
             result.source = "buffer_compatibility"
         return result
 
 
 __all__ = [
+    "GeometryTargetKey", "GeometryTarget", "GeometryTargetIndex",
     "GeometryResourceEvidence", "GeometryResolution", "GeometryResolver",
 ]
