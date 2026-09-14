@@ -299,6 +299,26 @@ def _select_draw_sections(section_info, global_ib):
             and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
 
 
+def _split_component_role(base):
+    """Return the component and semantic role encoded in a section name."""
+    roles = ("Blend", "Position", "Texcoord")
+    lowered = base.lower()
+
+    for role in roles:
+        if lowered.endswith(role.lower()):
+            return base[:-len(role)], role
+
+    matches = [
+        (lowered.rfind(role.lower()), role)
+        for role in roles
+        if role.lower() in lowered
+    ]
+    if not matches:
+        return None
+    index, role = max(matches, key=lambda match: match[0])
+    return base[:index], role
+
+
 def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                                sections=None):
     """Resolve component, hash, and WWMI global buffer bindings."""
@@ -350,14 +370,9 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         if not name.lower().startswith("textureoverride"):
             continue
         base = name[len("TextureOverride"):]
-        component_name = None
-        component_suffix = None
-        for suffix in ("Blend", "Position", "Texcoord"):
-            if base.lower().endswith(suffix.lower()):
-                component_name = base[:-len(suffix)]
-                component_suffix = suffix
-                break
-        if component_name is not None:
+        parsed = _split_component_role(base)
+        if parsed:
+            component_name, component_suffix = parsed
             resources_for_component = component_vertex_resources.setdefault(
                 component_name.lower(), {})
             for slot, resource in (
@@ -371,8 +386,8 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                         info.get("vertex_resources_at_end") or {}).items():
                     if resource is not None:
                         blend_resources.setdefault(slot, resource)
-        if base.lower().endswith("texcoord"):
-            component = base[:-len("Texcoord")]
+        if parsed and component_suffix == "Texcoord":
+            component = component_name
             if info["vb1"]:
                 component_texcoords[component.lower()] = info["vb1"]
 
@@ -380,19 +395,20 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         if not name.lower().startswith("textureoverride"):
             continue
         base = name[len("TextureOverride"):]
-        if base.lower().endswith("blend"):
-            component = base[:-len("Blend")]
+        parsed = _split_component_role(base)
+        if parsed:
+            component, role = parsed
             component_key = component.lower()
-            if info["vb0"] and component_key not in component_positions:
-                component_positions[component_key] = info["vb0"]
-            if (info["vb1"] and component_key not in component_texcoords
-                    and _res_get(resources, info["vb1"]).get("stride", 0) != 32):
-                component_texcoords[component_key] = info["vb1"]
-        elif base.lower().endswith("position"):
-            component = base[:-len("Position")]
-            component_key = component.lower()
-            if info["vb0"] and component_key not in component_positions:
-                component_positions[component_key] = info["vb0"]
+            if role == "Blend":
+                if info["vb0"] and component_key not in component_positions:
+                    component_positions[component_key] = info["vb0"]
+                if (info["vb1"] and component_key not in component_texcoords
+                        and _res_get(resources, info["vb1"]).get("stride", 0)
+                        != 32):
+                    component_texcoords[component_key] = info["vb1"]
+            elif role == "Position":
+                if info["vb0"] and component_key not in component_positions:
+                    component_positions[component_key] = info["vb0"]
 
         texture_hash = _extract_hash(name)
         if texture_hash:

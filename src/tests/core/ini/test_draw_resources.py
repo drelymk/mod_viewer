@@ -1,5 +1,7 @@
 """File-backed geometry-resource resolution boundaries."""
 
+import pytest
+
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_resources import _ib_index_size, _resolve_component_buffers
 from core.ini.draw_scan import _scan_sections_for_draws
@@ -73,3 +75,104 @@ stride = 16
         "Meshes/BlendRemapVertexVG.buf"
     assert group["draws"][0].skinning_source.bone_id_namespace == \
         "wwmi_vertex_vg"
+
+
+@pytest.mark.parametrize("suffix", ("LOD0", "-LOD0", ".LOD0", "_LOD0",
+                                     "WhateverText"))
+def test_component_roles_allow_trailing_text(suffix):
+    sections = parse_sections("sample.ini", text=f"""
+[TextureOverrideSunnaBodyBlend{suffix}]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+
+[TextureOverrideSunnaBodyPosition{suffix}]
+vb0 = ResourcePosition
+
+[TextureOverrideSunnaBodyTexcoord{suffix}]
+vb1 = ResourceTexcoord
+
+[ResourcePosition]
+filename = Meshes/Position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = Meshes/Texcoord.buf
+stride = 20
+""")
+    resolved = _resolve_component_buffers(
+        _scan_sections_for_draws(sections), extract_resources(sections), {})
+
+    assert resolved["component_buffers"] == {
+        "sunnabody": {
+            "position": "ResourcePosition",
+            "texcoord": "ResourceTexcoord",
+        },
+    }
+    assert resolved["component_vertex_resources"]["sunnabody"] == {
+        0: "ResourcePosition",
+        1: "ResourceTexcoord",
+    }
+    assert resolved["component_blend_vertex_resources"]["sunnabody"] == {
+        0: "ResourcePosition",
+        1: "ResourceTexcoord",
+    }
+
+
+def test_component_role_matching_is_case_insensitive():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideSunnaBodybLeNdWhatever]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+
+[TextureOverrideSunnaBodypOsItIoNWhatever]
+vb0 = ResourcePosition
+
+[TextureOverrideSunnaBodytExCoOrDWhatever]
+vb1 = ResourceTexcoord
+
+[ResourcePosition]
+filename = Meshes/Position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = Meshes/Texcoord.buf
+stride = 20
+""")
+    resolved = _resolve_component_buffers(
+        _scan_sections_for_draws(sections), extract_resources(sections), {})
+
+    assert resolved["component_buffers"]["sunnabody"] == {
+        "position": "ResourcePosition",
+        "texcoord": "ResourceTexcoord",
+    }
+
+
+def test_legacy_component_role_names_keep_existing_resolution():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideBodyBlend]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+
+[TextureOverrideBodyPosition]
+vb0 = ResourcePosition
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceTexcoord
+
+[ResourcePosition]
+filename = Meshes/Position.buf
+stride = 12
+
+[ResourceTexcoord]
+filename = Meshes/Texcoord.buf
+stride = 20
+""")
+    resolved = _resolve_component_buffers(
+        _scan_sections_for_draws(sections), extract_resources(sections), {})
+
+    assert resolved["component_buffers"] == {
+        "body": {
+            "position": "ResourcePosition",
+            "texcoord": "ResourceTexcoord",
+        },
+    }
