@@ -129,6 +129,26 @@ endif
     assert slots[1]["effects"] == slots[2]["effects"] == []
 
 
+def test_reachable_flip_reset_remains_an_effect():
+    text = """
+[CommandListClickedSlot]
+if $clickedSlot == 1
+    $v = 1 - $v
+    if $v > 0
+        $v = 0
+    endif
+elif $clickedSlot == 2
+    $other = 1 - $other
+endif
+"""
+    slots = _by_slot(extract_menu_toggles(sections(text)))
+    assert slots[1]["values"] == ["0", "1"]
+    assert slots[1]["effects"] == [{
+        "when": {"var": "v", "op": ">", "value": "0"},
+        "var": "v", "value": "0",
+    }]
+
+
 def test_reduced_claret_menu_cycles():
     text = """
 [CommandListClickedSlot]

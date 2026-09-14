@@ -209,12 +209,20 @@ def _parse_branch(body):
             if hi >= lo:
                 values = _cycle_values(lo, hi)
             continue
-        # A self-reset under the cycle variable's wrap guard is bookkeeping,
-        # even when the primary mutation is a binary flip whose range must not
-        # be expanded by that guard.
-        if (lhs == var and guard and guard["var"] == var
+        # A binary flip's reset is bookkeeping only when its guard is
+        # demonstrably unreachable for the flip's known range. Reachable
+        # same-variable assignments are real effects and must be replayed.
+        if (cycle_kind == "flip" and lhs == var and guard
+                and guard["var"] == var
                 and guard["op"] in (">", ">=")):
-            continue
+            boundary = int(guard["value"])
+            max_value = max(int(value) for value in values)
+            unreachable = (
+                (guard["op"] == ">" and max_value <= boundary)
+                or (guard["op"] == ">=" and max_value < boundary)
+            )
+            if unreachable:
+                continue
         effects.append({"when": guard, "var": lhs, "value": rhs})
 
     if var is None:
