@@ -88,10 +88,10 @@ function controlValues(controls) {
 // Action execution has a closed-world contract: an unknown selector must not
 // accidentally execute a branch.  Rendering intentionally keeps the
 // fail-open dnfSatisfied() semantics so an unknown gate cannot hide geometry.
-export function strictDnfSatisfied(condGroups) {
+export function strictDnfSatisfied(condGroups, stateValues = values) {
   if (!condGroups || condGroups.length === 0) return true;
   return condGroups.some(group => group.every(condition => {
-    const current = values[condition.var];
+    const current = stateValues[condition.var];
     if (current === undefined) return false;
     if (condition.op && condition.op !== '==' && condition.op !== '!=') {
       const left = Number(current);

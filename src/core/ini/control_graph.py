@@ -26,6 +26,11 @@ _EXTERNAL_ROOTS = {
     "srmi1", "srmiiv1", "rabbitfx",
 }
 
+# Bump when the serialized control/action contract gains fields or changes
+# execution semantics.  Consumers may continue accepting version 1 payloads
+# with the optional fields below omitted.
+CONTROL_GRAPH_SCHEMA_VERSION = 2
+
 
 @dataclass(frozen=True, slots=True)
 class RenderEffect:
@@ -55,6 +60,8 @@ class InputRoot:
     source: dict | None = None
     writes: tuple[VariableId, ...] = ()
     runs: tuple[str, ...] = ()
+    influences: tuple[VariableId, ...] = ()
+    path_conditions: tuple = ()
 
 
 @dataclass(slots=True)
@@ -112,7 +119,7 @@ class Action:
             "kind": self.kind,
             "trigger": self.trigger,
             "conditions": [
-                [dict(clause) for clause in group]
+                [_clause_to_dict(clause) for clause in group]
                 for group in (self.conditions or ())
             ],
             "writes": [variable.key for variable in self.writes],
@@ -161,6 +168,7 @@ class ControlGraph:
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": CONTROL_GRAPH_SCHEMA_VERSION,
             "controls": {
                 key: {
                     "state_var": control.state_var.key,
@@ -184,6 +192,14 @@ class ControlGraph:
                     "source": dict(root.source) if root.source else None,
                     "writes": [variable.key for variable in root.writes],
                     "runs": list(root.runs),
+                    "influences": [variable.key for variable in root.influences],
+                    "path_conditions": {
+                        section: [
+                            [_clause_to_dict(clause) for clause in group]
+                            for group in conditions
+                        ]
+                        for section, conditions in root.path_conditions
+                    },
                 }
                 for root in self.input_roots
             ],
@@ -212,7 +228,7 @@ def _write_to_dict(write: VariableWrite) -> dict:
         "literal": write.literal,
         "cycle_values": list(write.cycle_values),
         "conditions": [
-            [dict(clause) for clause in group]
+            [_clause_to_dict(clause) for clause in group]
             for group in (write.conditions or ())
         ],
         "section": write.section,
@@ -220,6 +236,7 @@ def _write_to_dict(write: VariableWrite) -> dict:
         "source": dict(write.source) if write.source else None,
         "authored_target": write.authored_target,
         "exact_copy": write.exact_copy,
+        "operation": _write_operation(write),
     }
 
 
@@ -227,6 +244,40 @@ def _selector_to_dict(selector):
     if not selector:
         return None
     result = dict(selector)
+    variable = result.get("var")
+    if isinstance(variable, VariableId):
+        result["var"] = variable.key
+    return result
+
+
+def _write_operation(write):
+    """Serialize the safe assignment vocabulary shared by frontend actions."""
+    if write.literal is not None:
+        return {"kind": "set", "value": str(write.literal)}
+    if write.exact_copy and write.dependencies:
+        return {"kind": "copy", "source": write.dependencies[0].key}
+    if write.cycle_values:
+        return {"kind": "cycle", "values": [str(value)
+                for value in write.cycle_values]}
+    expression = re.sub(r"\s+", "", write.expression)
+    if re.fullmatch(r"1-\$[a-z0-9_.${}-]+", expression, re.I):
+        return {"kind": "toggle"}
+    match = re.fullmatch(
+        r"\(?\$[a-z0-9_.${}-]+([+-])1\)?(?:%(\d+))?", expression, re.I)
+    if match:
+        operation = {"kind": "step",
+                     "delta": 1 if match.group(1) == "+" else -1}
+        if match.group(2):
+            operation["modulo"] = int(match.group(2))
+        return operation
+    match = re.fullmatch(r"\$[a-z0-9_.${}-]+%(\d+)", expression, re.I)
+    if match:
+        return {"kind": "modulo", "modulo": int(match.group(1))}
+    return None
+
+
+def _clause_to_dict(clause):
+    result = dict(clause)
     variable = result.get("var")
     if isinstance(variable, VariableId):
         result["var"] = variable.key
@@ -484,9 +535,18 @@ def _exact_alias_map(writes_by_target):
     aliases = {}
     for target, writes in writes_by_target.items():
         for write in writes:
-            if write.phase != "post" and write.exact_copy and write.dependencies:
+            # Conditional copies are execution-dependent state forwarding,
+            # not stable aliases.  Treating them as aliases can connect two
+            # unrelated selector branches and attach the wrong artwork.
+            if (write.phase != "post" and _conditions_are_true(write.conditions)
+                    and write.exact_copy and write.dependencies):
                 aliases.setdefault(target, set()).update(write.dependencies)
     return aliases
+
+
+def _conditions_are_true(conditions):
+    """Accept both empty and normalized ``[[]]`` true DNFs."""
+    return not conditions or any(not group for group in conditions)
 
 
 def _alias_family(variable, aliases):
@@ -527,6 +587,35 @@ def _selector_candidates(writes: Iterable[VariableWrite]):
         variable: values_for_var for variable, values_for_var in values.items()
         if len(values_for_var) >= 2
     }
+
+
+def _unsupported_selector_dispatch(writes: Iterable[VariableWrite],
+                                   numeric_candidates):
+    """Detect equality dispatch that cannot be represented safely.
+
+    A nonnumeric or multi-variable selector must not silently degrade into a
+    whole-CommandList compound action.  That would expose a button whose
+    assignments are not tied to one proven branch.
+    """
+    values = {}
+    for write in writes:
+        for group in write.conditions or ():
+            for clause in group:
+                if (clause.get("negate")
+                        or clause.get("op", "==") != "=="):
+                    continue
+                variable = clause.get("var")
+                if isinstance(variable, str):
+                    try:
+                        variable = VariableId.from_key(variable)
+                    except ValueError:
+                        continue
+                if isinstance(variable, VariableId):
+                    values.setdefault(variable, set()).add(
+                        str(clause.get("value")))
+    return any(len(values_for_var) >= 2
+               and variable not in numeric_candidates
+               for variable, values_for_var in values.items())
 
 
 def _selector_for_write(write, candidates):
@@ -586,7 +675,13 @@ def _action_groups(assignments):
     """Split source-ordered assignments by mutually-exclusive selectors."""
     assignments = tuple(assignments)
     candidates = _selector_candidates(assignments)
+    if len(candidates) > 1:
+        # Independent selectors require a product of branch conditions.  Do
+        # not collapse that product into whichever clause happened to be last.
+        return None
     if not candidates:
+        if _unsupported_selector_dispatch(assignments, candidates):
+            return None
         return [(None, assignments)]
     groups = {}
     order = []
@@ -678,10 +773,14 @@ def _changed_render_variables(assignments, reverse, render_vars):
 
 
 def _actions_for_assignments(trigger, conditions, assignments, source,
-                             reverse, render_vars, aliases):
+                             reverse, render_vars, aliases,
+                             user_facing=False):
     """Create one action per selector branch, preserving write order."""
     actions = []
-    for selector, branch in _action_groups(assignments):
+    groups = _action_groups(assignments)
+    if groups is None:
+        return actions
+    for selector, branch in groups:
         changed = _changed_render_variables(branch, reverse, render_vars)
         if not changed:
             continue
@@ -691,9 +790,12 @@ def _actions_for_assignments(trigger, conditions, assignments, source,
         branch_assignments = tuple(
             replace(write, conditions=_without_selector(
                 write.conditions, selector))
-            for write in branch)
+            for write in branch
+            if _descendants(write.target, reverse) & render_vars)
         branch_conditions = (_without_selector(
             conditions, selector) if selector else conditions)
+        visible = (user_facing(changed, selector)
+                   if callable(user_facing) else bool(user_facing))
         actions.append(Action(
             trigger=trigger,
             conditions=branch_conditions,
@@ -702,9 +804,25 @@ def _actions_for_assignments(trigger, conditions, assignments, source,
             assignments=branch_assignments,
             selector=selector,
             selector_aliases=selector_aliases,
-            user_facing=len(changed) > 1,
+            user_facing=bool(visible and len(changed) > 1),
         ))
     return actions
+
+
+def _root_influences(program, roots, reverse, render_vars):
+    """Return render variables influenced by one input-root closure."""
+    paths = _run_closure(program, roots)
+    influenced = set()
+    for write in program.writes:
+        if write.phase == "post" or write.section.casefold() not in paths:
+            continue
+        influenced.update(_descendants(write.target, reverse) & render_vars)
+    return tuple(sorted(influenced, key=lambda variable: variable.key))
+
+
+def _path_conditions(program, roots):
+    paths = _run_closure(program, roots)
+    return tuple(sorted(paths.items(), key=lambda item: item[0]))
 
 
 def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderEffect],
@@ -731,9 +849,10 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
             incoming_sections.setdefault(
                 (program.source.path, edge.target_section), set()).add(
                     edge.source_section)
+        present_sections = [section for section in program.source.sections
+                            if section.casefold() == "present"]
         roots = [key.section for key in program.key_inputs]
-        roots.extend(section for section in program.source.sections
-                     if section.casefold() == "present")
+        roots.extend(present_sections)
         input_paths[program.source.path] = _run_closure(program, roots)
         for key in program.key_inputs:
             graph.input_roots.append(InputRoot(
@@ -744,6 +863,30 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                 source=key.source,
                 writes=key.writes,
                 runs=key.runs,
+                influences=_root_influences(
+                    program, (key.section,), reverse, render_vars),
+                path_conditions=_path_conditions(program, (key.section,)),
+            ))
+        for section in present_sections:
+            section_writes = tuple(
+                write.target for write in program.writes
+                if write.section.casefold() == section.casefold()
+                and write.phase != "post")
+            section_runs = tuple(
+                edge.target_section for edge in program.run_edges
+                if edge.source_section.casefold() == section.casefold())
+            source = next((write.source for write in program.writes
+                           if write.section.casefold() == section.casefold()
+                           and write.source), None)
+            graph.input_roots.append(InputRoot(
+                kind="present",
+                section=section,
+                source=source,
+                writes=section_writes,
+                runs=section_runs,
+                influences=_root_influences(
+                    program, (section,), reverse, render_vars),
+                path_conditions=_path_conditions(program, (section,)),
             ))
 
     # A Key is direct only when it writes a semantic state. A Key that merely
@@ -765,7 +908,8 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                 reachable_writes = _writes_from_closure(program, key.runs)
                 key_actions = _actions_for_assignments(
                     key.key or key.section, key.conditions, reachable_writes,
-                    key.source, reverse, render_vars, aliases)
+                    key.source, reverse, render_vars, aliases,
+                    user_facing=lambda changed, selector: True)
                 actions.extend(key_actions)
                 for action in key_actions:
                     controller_kind = action.kind
@@ -809,7 +953,8 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
                 if path_conditions else write.conditions)
                 for write in section_writes]
             section_actions = _actions_for_assignments(
-                section, (), assignments, source, reverse, render_vars, aliases)
+                section, (), assignments, source, reverse, render_vars, aliases,
+                user_facing=lambda changed, selector: selector is not None)
             if any(str(caller).casefold().startswith("key")
                    for caller in callers):
                 # A Key-rooted closure already has the user-facing action;
@@ -926,5 +1071,6 @@ def build_control_graph(facts: Iterable[ProgramFacts], effects: Iterable[RenderE
 
 __all__ = [
     "Action", "Control", "ControlGraph", "Controller", "RenderEffect",
-    "InfluenceEdge", "InputRoot", "VariableNode", "build_control_graph",
+    "CONTROL_GRAPH_SCHEMA_VERSION", "InfluenceEdge", "InputRoot",
+    "VariableNode", "build_control_graph",
 ]

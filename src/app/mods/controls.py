@@ -258,11 +258,18 @@ def load_control_state(context, overrides=None, pending_new_sections=None,
     projected_menu = graph_projection.get("menu", {})
     return {
         "controls": {
+            # Optional for older callers, but explicit for the new action and
+            # influence fields so frontend payload consumers can negotiate the
+            # execution contract without guessing from field presence.
+            "schema_version": graph_projection.get("schema_version", 1),
             "toggles": project_toggle_panel(
                 projected_toggles, parsed.defaults, context.mod_dir),
             "menu": build_menu_panel(
                 projected_menu, parsed.defaults, context.mod_dir),
             "actions": graph_projection.get("actions", []),
+            "provenance": graph_projection.get("provenance", {
+                "input_roots": [], "influences": [],
+            }),
             "present": parsed.present,
         },
         "state": {

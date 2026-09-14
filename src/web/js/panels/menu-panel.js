@@ -5,7 +5,9 @@
 // Read-only: slots can be cycled to preview what they show, but nothing here
 // edits, records or exports.
 
-import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.js';
+import {
+  refreshAll, setToggleValue, getToggleValue, getToggleState,
+} from '../mesh/visibility.js';
 import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
@@ -117,14 +119,54 @@ function buildContinuousControl(info) {
   } };
 }
 
-function nextAssignmentValue(assignment) {
+function nextAssignmentValue(assignment, state = null) {
+  const read = variable => state ? state[variable] : getToggleValue(variable);
+  if (Object.prototype.hasOwnProperty.call(assignment, 'operation')) {
+    const operation = assignment.operation;
+    if (!operation) return null;
+    const current = read(assignment.target);
+    switch (operation.kind) {
+      case 'set':
+        return String(operation.value);
+      case 'copy':
+        return read(operation.source);
+      case 'cycle': {
+        const values = (operation.values || []).map(String);
+        if (!values.length) return null;
+        const index = values.indexOf(String(current));
+        return values[(index + 1) % values.length];
+      }
+      case 'toggle': {
+        const numeric = Number(current);
+        return Number.isFinite(numeric) ? String(1 - numeric) : null;
+      }
+      case 'step': {
+        const numeric = Number(current);
+        if (!Number.isFinite(numeric)) return null;
+        const next = numeric + Number(operation.delta);
+        if (operation.modulo === undefined) return String(next);
+        const modulo = Number(operation.modulo);
+        if (!Number.isFinite(modulo) || modulo <= 0) return null;
+        return String((next % modulo + modulo) % modulo);
+      }
+      case 'modulo': {
+        const numeric = Number(current);
+        const modulo = Number(operation.modulo);
+        if (!Number.isFinite(numeric) || !Number.isFinite(modulo)
+            || modulo <= 0) return null;
+        return String((numeric % modulo + modulo) % modulo);
+      }
+      default:
+        return null;
+    }
+  }
   if (assignment.literal !== null && assignment.literal !== undefined) {
     return String(assignment.literal);
   }
   const target = assignment.target;
-  const current = getToggleValue(target);
+  const current = read(target);
   if (assignment.exact_copy && assignment.dependencies?.length) {
-    return getToggleValue(assignment.dependencies[0]);
+    return read(assignment.dependencies[0]);
   }
   if (assignment.cycle_values?.length) {
     const values = assignment.cycle_values.map(String);
@@ -150,17 +192,23 @@ function nextAssignmentValue(assignment) {
 }
 
 export function applyAction(info) {
-  if (!strictDnfSatisfied(info?.conditions)) return false;
-  let changed = false;
+  const initial = getToggleState();
+  if (!strictDnfSatisfied(info?.conditions, initial)) return false;
+  const simulated = { ...initial };
+  const pending = [];
   for (const assignment of info?.assignments || []) {
-    if (!strictDnfSatisfied(assignment.conditions)) continue;
-    const value = nextAssignmentValue(assignment);
-    if (value === null || value === undefined) continue;
-    setToggleValue(assignment.target, value);
-    changed = true;
+    if (!strictDnfSatisfied(assignment.conditions, simulated)) continue;
+    const value = nextAssignmentValue(assignment, simulated);
+    // A projected action is atomic.  Do not leave a preset half-applied when
+    // one assignment is outside the safe operation vocabulary.
+    if (value === null || value === undefined) return false;
+    pending.push([assignment.target, value]);
+    simulated[assignment.target] = value;
   }
-  if (changed) refreshAll();
-  return changed;
+  if (!pending.length) return false;
+  for (const [target, value] of pending) setToggleValue(target, value);
+  refreshAll();
+  return true;
 }
 
 function buildActionItem(info) {

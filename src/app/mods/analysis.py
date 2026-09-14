@@ -1,12 +1,15 @@
 """Assemble independent INI scans into one mod-level semantic graph."""
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
-from core.ini.control_graph import ControlGraph, build_control_graph
+from core.ini.control_graph import (
+    CONTROL_GRAPH_SCHEMA_VERSION, ControlGraph, build_control_graph,
+)
 from core.ini.dnf import filter_dnf
 from core.ini.menu import attach_menu_images
 from core.ini.program import _format_key_combo
@@ -161,6 +164,33 @@ def _project_capture_bindings(bindings, ids, folder_path):
     return result
 
 
+def _project_operation(write, ids):
+    """Project only the assignment forms the frontend can execute safely."""
+    if write.literal is not None:
+        return {"kind": "set", "value": str(write.literal)}
+    if write.exact_copy and write.dependencies:
+        return {"kind": "copy", "source": ids.get(
+            write.dependencies[0].key, write.dependencies[0].key)}
+    if write.cycle_values:
+        return {"kind": "cycle", "values": [str(value)
+                for value in write.cycle_values]}
+    expression = re.sub(r"\s+", "", write.expression)
+    if re.fullmatch(r"1-\$[a-z0-9_.${}-]+", expression, re.I):
+        return {"kind": "toggle"}
+    match = re.fullmatch(
+        r"\(?\$[a-z0-9_.${}-]+([+-])1\)?(?:%(\d+))?", expression, re.I)
+    if match:
+        operation = {"kind": "step",
+                     "delta": 1 if match.group(1) == "+" else -1}
+        if match.group(2):
+            operation["modulo"] = int(match.group(2))
+        return operation
+    match = re.fullmatch(r"\$[a-z0-9_.${}-]+%(\d+)", expression, re.I)
+    if match:
+        return {"kind": "modulo", "modulo": int(match.group(1))}
+    return None
+
+
 def _project_assignment(write, ids, folder_path=None):
     return {
         "target": ids.get(write.target.key, write.target.key),
@@ -175,6 +205,7 @@ def _project_assignment(write, ids, folder_path=None):
         "phase": write.phase,
         "source": _project_source(write.source, folder_path),
         "exact_copy": write.exact_copy,
+        "operation": _project_operation(write, ids),
     }
 
 
@@ -218,6 +249,101 @@ def _project_action(action, ids, folder_path):
                              for variable in action.selector_aliases],
         "user_facing": action.user_facing,
     }
+
+
+def _project_provenance(graph, ids, folder_path):
+    """Expose source-scoped input/influence evidence for diagnostics."""
+    roots = []
+    for root in graph.input_roots:
+        roots.append({
+            "kind": root.kind,
+            "section": root.section,
+            "source": _project_source(root.source, folder_path),
+            "writes": [ids.get(variable.key, variable.key)
+                       for variable in root.writes],
+            "runs": list(root.runs),
+            "influences": [ids.get(variable.key, variable.key)
+                           for variable in root.influences],
+            "path_conditions": {
+                section: _project_conditions(conditions, ids)
+                for section, conditions in root.path_conditions
+            },
+        })
+    influences = [
+        {
+            "source": ids.get(edge.source.key, edge.source.key),
+            "target": ids.get(edge.target.key, edge.target.key),
+            "kind": edge.kind,
+            "source_info": _project_source(edge.source_info, folder_path),
+        }
+        for edge in graph.influences
+    ]
+    return {"input_roots": roots, "influences": influences}
+
+
+def _source_path(source):
+    if not source or not source.get("ini_path"):
+        return None
+    return os.path.normcase(os.path.abspath(source["ini_path"]))
+
+
+def _selector_identity(selector):
+    if not selector:
+        return None
+    variable = selector.get("var")
+    variable = variable.key if isinstance(variable, VariableId) else variable
+    return (str(variable).casefold(), str(selector.get("value", "")))
+
+
+def _action_matches_controller(action, controller):
+    """Require action/controller provenance to agree before attaching it."""
+    if action.trigger != controller.trigger:
+        return False
+    action_source = _source_path(action.source)
+    controller_source = _source_path(controller.source)
+    if action_source and controller_source and action_source != controller_source:
+        return False
+    if controller.selector:
+        return (_selector_identity(action.selector)
+                == _selector_identity(controller.selector))
+    return action.selector is None
+
+
+def _action_for_control(graph, control, controllers):
+    """Find one unambiguous operation for a projected control.
+
+    A namespaced variable may be shared by several INIs.  Matching only the
+    target variable can therefore attach a sibling INI's command list or
+    selector.  Return no operation when provenance leaves more than one
+    possible answer; the control remains visible but cannot run a guessed
+    action.
+    """
+    candidates = [action for action in graph.actions
+                  if control.state_var in action.writes
+                  and action.assignments
+                  and (action.kind == "interactive" or action.user_facing)]
+    selector_controllers = [controller for controller in controllers
+                            if controller.selector]
+    # A slot-specific operation is the most precise menu behavior.  Do not
+    # let an unrelated preset action for the same state variable make that
+    # slot ambiguous; the preset remains available in the action list.
+    controllers = selector_controllers or list(controllers)
+    matched = []
+    for controller in controllers:
+        matched.extend(
+            action for action in candidates
+            if _action_matches_controller(action, controller))
+    unique = []
+    for action in matched:
+        if action not in unique:
+            unique.append(action)
+    if len(unique) == 1:
+        return unique[0]
+    if not matched and len(candidates) == 1:
+        # Backward-compatible fallback for old graph producers that omitted
+        # controller provenance.  Never use it when candidates are ambiguous.
+        return candidates[0]
+    return None
 
 
 def _filter_and_project_groups(groups, graph, ids):
@@ -381,11 +507,7 @@ def _unified_projection(graph, sources, ids, folder_path,
                         if variable not in aliases:
                             aliases.append(variable)
                 info["_selector_names"] = _selector_names(graph, aliases)
-            operation = next((action for action in graph.actions
-                              if control.state_var in action.writes
-                              and action.assignments
-                              and (action.kind == "interactive"
-                                   or action.selector)), None)
+            operation = _action_for_control(graph, control, interactive)
             if operation is not None:
                 info["action"] = _project_action(operation, ids, folder_path)
             if domain.get("kind") == "discrete":
@@ -400,7 +522,13 @@ def _unified_projection(graph, sources, ids, folder_path,
             emitted_controls.add(control.id)
     actions = [_project_action(action, ids, folder_path)
                for action in graph.actions]
-    return {"toggles": toggles, "menu": menu, "actions": actions}
+    return {
+        "schema_version": CONTROL_GRAPH_SCHEMA_VERSION,
+        "toggles": toggles,
+        "menu": menu,
+        "actions": actions,
+        "provenance": _project_provenance(graph, ids, folder_path),
+    }
 
 
 def _controllers_for(graph, variable):

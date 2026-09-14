@@ -158,7 +158,7 @@ def test_menu_actions_filter_conditions_and_apply_writes_in_source_order(
       state.resetControlState();
       for (const [name, value] of [
         ['gate', '0'], ['first', '0'], ['copied', '0'], ['cycle', '2'],
-        ['conditional', '0'], ['unsupported', '0'],
+        ['conditional', '0'], ['unsupported', '0'], ['other', '1'],
       ]) state.setControlValue(name, value);
 
       const action = {
@@ -173,27 +173,66 @@ def test_menu_actions_filter_conditions_and_apply_writes_in_source_order(
           {target: 'conditional', literal: '9', expression: '9',
            conditions: [[{var: 'gate', value: '0', negate: false}]],
            dependencies: [], exact_copy: false},
-          {target: 'unsupported', literal: null,
-           expression: '$unsupported + $other', conditions: [],
-           dependencies: ['other'], exact_copy: false},
         ],
       };
       const blocked = applyAction(action);
       const before = state.getControlState();
       state.setControlValue('gate', '1');
       const applied = applyAction(action);
-      return {blocked, applied, state: state.getControlState(), before};
+      const afterSupported = state.getControlState();
+      const atomic = {
+        conditions: [],
+        assignments: [
+          {target: 'first', literal: '9', expression: '9',
+           conditions: [], dependencies: [], exact_copy: false},
+          {target: 'unsupported', literal: null,
+           expression: '$unsupported + $other', conditions: [],
+           dependencies: ['other'], exact_copy: false},
+        ],
+      };
+      const rejected = applyAction(atomic);
+      const unknown = applyAction({
+        conditions: [[{var: 'never_initialized', value: '1', negate: false}]],
+        assignments: [{target: 'first', literal: '8', expression: '8',
+                        conditions: [], dependencies: [], exact_copy: false}],
+      });
+      return {
+        blocked, applied, rejected, unknown,
+        state: state.getControlState(), before, afterSupported,
+        afterRejected: state.getControlState(),
+      };
     }""")
     assert result["blocked"] is False
     assert result["applied"] is True
+    assert result["rejected"] is False
+    assert result["unknown"] is False
     assert result["before"] == {
         "gate": "0", "first": "0", "copied": "0", "cycle": "2",
-        "conditional": "0", "unsupported": "0",
+        "conditional": "0", "unsupported": "0", "other": "1",
     }
     assert result["state"] == {
         "gate": "1", "first": "1", "copied": "1", "cycle": "0",
-        "conditional": "0", "unsupported": "0",
+        "conditional": "0", "unsupported": "0", "other": "1",
     }
+    assert result["afterSupported"] == result["afterRejected"]
+
+
+def test_menu_panel_hides_internal_compound_actions(module_page):
+    result = module_page.evaluate("""async () => {
+      document.body.innerHTML = '<div id="canvas-container"></div>'
+        + '<button id="open-btn"></button>'
+        + '<div id="renderer-error"></div>'
+        + '<div id="view-gizmo"></div>'
+        + '<div id="menu-panel"></div>'
+        + '<div id="menu-list"></div>';
+      const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
+      buildMenuPanel({}, [{
+        kind: 'compound_action', user_facing: false,
+        trigger: 'CommandListInternal', assignments: [],
+      }]);
+      return document.getElementById('menu-panel').style.display;
+    }""")
+    assert result == "none"
 
 
 def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(

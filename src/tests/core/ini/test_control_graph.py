@@ -1,5 +1,7 @@
 """Regression coverage for the unified variable/control analysis path."""
 
+import json
+
 from app.mods.analysis import analyze_mod_inis
 from app.mods.controls import load_control_state
 from app.mods.loader import ModLoadContext
@@ -657,6 +659,206 @@ endif
         outfit.key, material.key]
     assert all("expression" in item and "source" in item
                for item in action["assignments"])
+    assert [item["operation"] for item in action["assignments"]] == [
+        {"kind": "set", "value": "1"},
+        {"kind": "set", "value": "2"},
+    ]
+    serialized = graph.to_dict()
+    assert serialized["schema_version"] == 2
+    json.dumps(serialized)
+
+
+def test_shared_namespace_actions_are_not_cross_attached_to_one_control(
+        tmp_path):
+    first = _write(tmp_path / "first.ini", r"""namespace = shared
+
+[Constants]
+global $State = 0
+
+[KeyFirst]
+key = f
+run = CommandListFirst
+
+[CommandListFirst]
+$State = 1
+
+[TextureOverrideFirst]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $State == 1
+    drawindexed = 3, 0, 0
+endif
+
+[ResourcePosition]
+filename = first-position.buf
+stride = 12
+[ResourceTexcoord]
+filename = first-texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = first-index.buf
+format = R32_UINT
+""")
+    second = _write(tmp_path / "second.ini", r"""namespace = shared
+
+[Constants]
+global $State = 0
+
+[KeySecond]
+key = s
+run = CommandListSecond
+
+[CommandListSecond]
+$State = 0
+
+[TextureOverrideSecond]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $State == 0
+    drawindexed = 3, 0, 0
+endif
+
+[ResourcePosition]
+filename = second-position.buf
+stride = 12
+[ResourceTexcoord]
+filename = second-texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = second-index.buf
+format = R32_UINT
+""")
+
+    parsed = analyze_mod_inis([first, second], str(tmp_path))
+    state = next(item for item in parsed.control_projection["menu"].values()
+                 if item["var"].casefold() == "shared/state")
+
+    # The shared state is one control, but two source-scoped operations are
+    # possible.  The projection must not attach whichever action happens to be
+    # first in graph order.
+    assert "action" not in state
+    sources = {
+        action["source"]["ini_path"]
+        for action in parsed.control_projection["actions"]
+        if action["trigger"] in {"f", "s"}
+    }
+    assert sources == {"first.ini", "second.ini"}
+
+
+def test_ambiguous_selector_dispatch_is_not_projected_as_one_action(tmp_path):
+    path = _write(tmp_path / "ambiguous.ini", r"""[Constants]
+global $first_choice = 0
+global $second_choice = 0
+global persist $Hair = 0
+global persist $Dress = 0
+
+[CommandListAmbiguous]
+if $first_choice == 1
+    $Hair = 1 - $Hair
+endif
+if $second_choice == 1
+    $Dress = 1 - $Dress
+endif
+
+[TextureOverrideBody]
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+[TextureOverrideDress]
+if $Dress == 1
+    drawindexed = 3, 0, 0
+endif
+""")
+    parsed = analyze_mod_inis([path], str(tmp_path))
+
+    assert parsed.control_graph.actions == []
+    assert parsed.control_projection["menu"] == {}
+
+
+def test_conditional_copy_does_not_create_selector_alias(tmp_path):
+    path = _write(tmp_path / "conditional-alias.ini", r"""[Constants]
+global $enabled = 0
+global $slot = 0
+global $clicked = 0
+global persist $Hair = 0
+
+[CommandListClicked]
+if $enabled == 1
+    $clicked = $slot
+endif
+if $clicked == 1
+    $Hair = 1 - $Hair
+elif $clicked == 2
+    $Hair = $Hair + 1
+endif
+
+[TextureOverrideBody]
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+""")
+    source = source_from_path(path, str(tmp_path))
+    resolver = VariableResolver([source])
+    facts = scan_program(source, resolver)
+    hair = resolver.resolve("$Hair", source, "Constants")
+    graph = build_control_graph(
+        [facts], [RenderEffect("visibility", (hair,))])
+
+    actions = [action for action in graph.actions
+               if action.trigger == "CommandListClicked"]
+    assert {action.selector["value"] for action in actions} == {"1", "2"}
+    assert all({"slot", "hovered"}.isdisjoint(
+        {variable.name for variable in action.selector_aliases})
+        for action in actions)
+
+
+def test_runtime_present_compound_action_is_not_user_facing_without_selector(
+        tmp_path):
+    path = _write(tmp_path / "runtime-compound.ini", r"""[Constants]
+global persist $Hair = 0
+global persist $Dress = 0
+
+[Present]
+run = CommandListRecompute
+
+[CommandListRecompute]
+$Hair = 1
+$Dress = 1
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Hair == 1
+    drawindexed = 3, 0, 0
+endif
+[TextureOverrideDress]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $Dress == 1
+    drawindexed = 3, 0, 0
+endif
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    parsed = analyze_mod_inis([path], str(tmp_path))
+    action = next(action for action in parsed.control_projection["actions"]
+                  if action["trigger"] == "CommandListRecompute")
+
+    assert action["kind"] == "compound_action"
+    assert action["user_facing"] is False
+    assert not any(item.get("action") == action
+                   for item in parsed.control_projection["menu"].values())
 
 
 def test_unified_analysis_preserves_render_contract_for_equivalent_state(
