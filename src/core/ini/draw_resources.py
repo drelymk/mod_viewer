@@ -299,6 +299,58 @@ def _select_draw_sections(section_info, global_ib):
             and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
 
 
+def _component_role_candidates(base):
+    """Return exact or relaxed component/role candidates for a section."""
+    roles = ("Blend", "Position", "Texcoord")
+    lowered = base.lower()
+
+    candidates = []
+    for role in roles:
+        marker = role.lower()
+        start = 0
+        while True:
+            index = lowered.find(marker, start)
+            if index < 0:
+                break
+            candidates.append((base[:index], role, index))
+            start = index + len(marker)
+    return tuple(candidates)
+
+
+def _component_roles_for_sections(section_info):
+    """Choose component roles using corroborating TextureOverride sections."""
+    candidates_by_name = {}
+    support = {}
+    for name in section_info:
+        if not name.lower().startswith("textureoverride"):
+            continue
+        candidates = _component_role_candidates(
+            name[len("TextureOverride"):])
+        candidates_by_name[name] = candidates
+        for component, role, _ in candidates:
+            evidence = support.setdefault(component.lower(), {
+                "roles": set(), "sections": set(),
+            })
+            evidence["roles"].add(role)
+            evidence["sections"].add(name)
+
+    result = {}
+    for name, candidates in candidates_by_name.items():
+        if not candidates:
+            continue
+        selected = max(
+            candidates,
+            key=lambda candidate: (
+                len(support[candidate[0].lower()]["roles"]),
+                len(support[candidate[0].lower()]["sections"]),
+                bool(candidate[0]),
+                -candidate[2],
+            ),
+        )
+        result[name] = selected[:2]
+    return result
+
+
 def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                                sections=None):
     """Resolve component, hash, and WWMI global buffer bindings."""
@@ -345,19 +397,14 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
     component_vertex_resources = {}
     component_blend_vertex_resources = {}
     hash_positions, hash_texcoords = {}, {}
+    component_roles = _component_roles_for_sections(section_info)
 
     for name, info in section_info.items():
         if not name.lower().startswith("textureoverride"):
             continue
-        base = name[len("TextureOverride"):]
-        component_name = None
-        component_suffix = None
-        for suffix in ("Blend", "Position", "Texcoord"):
-            if base.lower().endswith(suffix.lower()):
-                component_name = base[:-len(suffix)]
-                component_suffix = suffix
-                break
-        if component_name is not None:
+        parsed = component_roles.get(name)
+        if parsed:
+            component_name, component_suffix = parsed
             resources_for_component = component_vertex_resources.setdefault(
                 component_name.lower(), {})
             for slot, resource in (
@@ -371,28 +418,28 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                         info.get("vertex_resources_at_end") or {}).items():
                     if resource is not None:
                         blend_resources.setdefault(slot, resource)
-        if base.lower().endswith("texcoord"):
-            component = base[:-len("Texcoord")]
+        if parsed and component_suffix == "Texcoord":
+            component = component_name
             if info["vb1"]:
                 component_texcoords[component.lower()] = info["vb1"]
 
     for name, info in section_info.items():
         if not name.lower().startswith("textureoverride"):
             continue
-        base = name[len("TextureOverride"):]
-        if base.lower().endswith("blend"):
-            component = base[:-len("Blend")]
+        parsed = component_roles.get(name)
+        if parsed:
+            component, role = parsed
             component_key = component.lower()
-            if info["vb0"] and component_key not in component_positions:
-                component_positions[component_key] = info["vb0"]
-            if (info["vb1"] and component_key not in component_texcoords
-                    and _res_get(resources, info["vb1"]).get("stride", 0) != 32):
-                component_texcoords[component_key] = info["vb1"]
-        elif base.lower().endswith("position"):
-            component = base[:-len("Position")]
-            component_key = component.lower()
-            if info["vb0"] and component_key not in component_positions:
-                component_positions[component_key] = info["vb0"]
+            if role == "Blend":
+                if info["vb0"] and component_key not in component_positions:
+                    component_positions[component_key] = info["vb0"]
+                if (info["vb1"] and component_key not in component_texcoords
+                        and _res_get(resources, info["vb1"]).get("stride", 0)
+                        != 32):
+                    component_texcoords[component_key] = info["vb1"]
+            elif role == "Position":
+                if info["vb0"] and component_key not in component_positions:
+                    component_positions[component_key] = info["vb0"]
 
         texture_hash = _extract_hash(name)
         if texture_hash:

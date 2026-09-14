@@ -198,6 +198,17 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     def lookup_component_buffers(component):
         return _lookup_component_value(component_buffers, component)
 
+    def lookup_hash_buffers(value):
+        geometry_hash = _extract_hash(value) if value else None
+        if (geometry_hash
+                and geometry_hash in hash_positions
+                and geometry_hash in hash_texcoords):
+            return {
+                "position": hash_positions[geometry_hash],
+                "texcoord": hash_texcoords[geometry_hash],
+            }
+        return None
+
     def lookup_component_vertex_resources(component):
         return _lookup_component_value(component_vertex_resources, component) or {}
 
@@ -233,12 +244,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     and resolve_vertex_info(position).get("filename")):
                 buffers = {"position": position, "texcoord": texcoord}
         if not buffers:
-            texture_hash = _extract_hash(section_name) or _extract_hash(ib_resource)
-            if texture_hash and texture_hash in hash_positions and texture_hash in hash_texcoords:
-                buffers = {
-                    "position": hash_positions[texture_hash],
-                    "texcoord": hash_texcoords[texture_hash],
-                }
+            buffers = (lookup_hash_buffers(section_name)
+                       or lookup_hash_buffers(ib_resource))
         if not buffers and global_position and global_texcoord:
             buffers = {"position": global_position, "texcoord": global_texcoord}
         if not buffers:
@@ -301,6 +308,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
             draw_buffers = lookup_component_buffers(
                 _ib_res_to_component(effective_ib))
+            if not draw_buffers:
+                draw_buffers = lookup_hash_buffers(effective_ib)
             effective_position_resource = buffers["position"]
             if draw_buffers and draw_buffers != buffers:
                 position, stride = resolve_vertex_resource(

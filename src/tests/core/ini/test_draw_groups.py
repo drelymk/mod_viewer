@@ -37,6 +37,127 @@ stride = 8
         "Body", "Body", "Body_2", "Body")
 
 
+def test_per_draw_ib_switch_uses_hash_geometry_when_component_is_unknown():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverride_98ece166_Position]
+vb0 = Resource98ece166Position
+
+[TextureOverride_98ece166_Texcoord]
+vb1 = Resource98ece166Texcoord
+
+[TextureOverride_d942b3a7_Position]
+vb0 = Resourced942b3a7Position
+
+[TextureOverride_d942b3a7_Texcoord]
+vb1 = Resourced942b3a7Texcoord
+
+[TextureOverride_LOD0.98ece166_26946_0]
+ib = Resource_LOD0.98ece166_26946_0_Index
+drawindexed = 3, 0, 0
+ib = Resource_LOD0.d942b3a7_39828_0_Index
+vb0 = ResourceBodyVB_d942b3a7_0
+vb1 = Resourced942b3a7Texcoord
+vb2 = Resourced942b3a7Blend
+drawindexed = 3, 0, 0
+
+[Resource_LOD0.98ece166_26946_0_Index]
+filename = 98ece166-index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[Resource_LOD0.d942b3a7_39828_0_Index]
+filename = d942b3a7-index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[Resource98ece166Position]
+filename = 98ece166-position.buf
+stride = 40
+
+[Resource98ece166Texcoord]
+filename = 98ece166-texcoord.buf
+stride = 20
+
+[Resourced942b3a7Position]
+filename = d942b3a7-position.buf
+stride = 40
+
+[Resourced942b3a7Texcoord]
+filename = d942b3a7-texcoord.buf
+stride = 20
+
+[ResourceBodyVB_d942b3a7_0]
+stride = 40
+
+[Resourced942b3a7Blend]
+filename = d942b3a7-blend.buf
+stride = 32
+""")
+    groups = build_draw_groups(sections, extract_resources(sections))
+    draws = groups[0]["draws"]
+
+    assert [(draw.ib_file, draw.position_file, draw.texcoord_file)
+            for draw in draws] == [
+                ("98ece166-index.buf", "98ece166-position.buf",
+                 "98ece166-texcoord.buf"),
+                ("d942b3a7-index.buf", "d942b3a7-position.buf",
+                 "d942b3a7-texcoord.buf"),
+            ]
+
+
+def test_per_draw_ib_switch_prefers_component_geometry_over_hash_fallback():
+    sections = parse_sections("sample.ini", text="""
+[TextureOverrideBody]
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+ib = ResourceAltBodyIB
+drawindexed = 3, 0, 0
+
+[TextureOverrideBodyPosition]
+vb0 = ResourceBodyPosition
+
+[TextureOverrideBodyTexcoord]
+vb1 = ResourceBodyTexcoord
+
+[TextureOverrideAltBodyPosition]
+vb0 = ResourceAltBodyPosition
+
+[TextureOverrideAltBodyTexcoord]
+vb1 = ResourceAltBodyTexcoord
+
+[ResourceBodyIB]
+filename = body-index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceAltBodyIB]
+filename = alt-body-index.buf
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 40
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 20
+
+[ResourceAltBodyPosition]
+filename = alt-body-position.buf
+stride = 40
+
+[ResourceAltBodyTexcoord]
+filename = alt-body-texcoord.buf
+stride = 20
+""")
+    groups = build_draw_groups(sections, extract_resources(sections))
+    draws = groups[0]["draws"]
+
+    assert [(draw.ib_file, draw.position_file, draw.texcoord_file)
+            for draw in draws] == [
+                ("body-index.buf", "body-position.buf", "body-texcoord.buf"),
+                ("alt-body-index.buf", "alt-body-position.buf",
+                 "alt-body-texcoord.buf"),
+            ]
+
+
 def test_draw_groups_resolve_the_scanner_snapshot_for_inline_execution():
     sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
 ib = ResourceBodyIB
