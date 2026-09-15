@@ -17,6 +17,7 @@ from core.textures.color_adjustment import (
     normalize_color_adjustment as _normalize_mesh_color_adjustment,
     is_neutral_color_adjustment as _is_neutral_mesh_color_adjustment,
 )
+from core.mod_source import is_zip_path
 
 METADATA_NAME = ".mod_viewer.json"
 MODEL_RIG_METADATA_NAME = ".mod_viewer.rig.json"
@@ -92,16 +93,25 @@ def _mesh_metadata_keys(name, entry, legacy_key_counts=None):
     return (legacy,)
 
 
-def load(folder_path):
+def load(folder_path, source=None):
     try:
-        with open(os.path.join(folder_path, METADATA_NAME), encoding="utf-8") as fh:
-            data = json.load(fh)
+        if source is not None:
+            data = json.loads(source.read_text(
+                source.resolve_resource(METADATA_NAME)))
+        elif is_zip_path(folder_path):
+            return {}
+        else:
+            with open(os.path.join(folder_path, METADATA_NAME), encoding="utf-8") as fh:
+                data = json.load(fh)
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnicodeError):
         return {}
 
 
 def _save(folder_path, data):
+    if is_zip_path(folder_path):
+        return {"saved": False,
+                "error": "Viewer metadata cannot be saved for compressed mods."}
     path = os.path.join(folder_path, METADATA_NAME)
     temp_path = path + ".tmp"
     with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
@@ -274,10 +284,18 @@ def _normalized_model_rig(value, *, include_text=False):
     return (normalized, text) if include_text else normalized
 
 
-def load_model_rig(folder_path):
+def load_model_rig(folder_path, source=None):
     """Load a validated cached ModelRig sidecar, if one is present."""
-    path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
     try:
+        if source is not None:
+            path = source.resolve_resource(MODEL_RIG_METADATA_NAME)
+            if not path or not source.is_file(path) \
+                    or source.size(path) > MODEL_RIG_MAX_BYTES:
+                return None
+            return _normalized_model_rig(json.loads(source.read_text(path)))
+        if is_zip_path(folder_path):
+            return None
+        path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
         if os.path.getsize(path) > MODEL_RIG_MAX_BYTES:
             return None
         with open(path, encoding="utf-8") as fh:
@@ -291,6 +309,9 @@ def save_model_rig(folder_path, model_rig):
     normalized_result = _normalized_model_rig(model_rig, include_text=True)
     if normalized_result is None:
         return {"saved": False, "error": "Invalid ModelRig metadata."}
+    if is_zip_path(folder_path):
+        return {"saved": False,
+                "error": "Viewer metadata cannot be saved for compressed mods."}
     normalized, text = normalized_result
     with _LOCK:
         path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
@@ -1071,7 +1092,7 @@ def hydrate_component_material_kinds(meshes, data=None):
 
 
 def hydrate_textures(folder_path, payload, data=None, texture_source=None,
-                     texture_profile=None):
+                     texture_profile=None, source=None):
     """Restore sparse highlighted boundaries, then rebuild component pools.
 
     ``payload`` is the structured application payload; only its ``meshes``
@@ -1235,7 +1256,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                     continue
                 encoded = encode_texture_key(
                     folder_path, key, role, texture_source=texture_source,
-                    texture_profile=texture_profile)
+                    texture_profile=texture_profile, source=source)
                 if encoded and not encoded.get("error"):
                     textures[encoded["tex_key"]] = encoded["uri"]
 

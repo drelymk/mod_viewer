@@ -39,14 +39,16 @@ import os
 from copy import deepcopy
 
 from core.ini.document import IniDocument
+from core.mod_source import mod_source_for_path
 
 
 class _Session:
-    __slots__ = ("mod_dir", "docs", "baselines", "dirty", "new_sections",
+    __slots__ = ("mod_dir", "source", "docs", "baselines", "dirty", "new_sections",
                  "present_names_baseline", "revision", "diagnostics_cache")
 
-    def __init__(self, mod_dir):
+    def __init__(self, mod_dir, source=None):
         self.mod_dir = mod_dir
+        self.source = source or mod_source_for_path(mod_dir)
         self.docs = {}          # ini basename -> authoritative in-memory IniDocument
         self.baselines = {}     # ini basename -> text last loaded/exported
         self.dirty = set()      # ini basenames whose text differs from baseline
@@ -65,15 +67,28 @@ def _same_mod(mod_dir):
     return _session is not None and os.path.normpath(_session.mod_dir) == os.path.normpath(mod_dir)
 
 
-def _get_or_create(mod_dir):
+def _get_or_create(mod_dir, source=None):
     global _session
     if not _same_mod(mod_dir):
-        _session = _Session(mod_dir)
+        _session = _Session(mod_dir, source=source)
+    elif source is not None:
+        current = _session.source
+        if (getattr(current, "kind", None) != getattr(source, "kind", None)
+                or getattr(current, "source_path", None)
+                != getattr(source, "source_path", None)):
+            _session.source = source
     return _session
 
 
-def _key(mod_dir, path):
+def _key(mod_dir, path, source=None):
     """Stable, browser-safe identity for an INI, including nested folders."""
+    source = source or (getattr(_session, "source", None)
+                        if _same_mod(mod_dir) else None)
+    if source is not None and source.is_resource_reference(path):
+        return source.logical_path(path)
+    if "::" in str(path) and str(path).startswith(
+            os.path.abspath(os.fspath(mod_dir)) + "::"):
+        return str(path).split("::", 1)[1].replace("\\", "/")
     return os.path.relpath(os.path.abspath(path), os.path.abspath(mod_dir)).replace(os.sep, "/")
 
 
@@ -83,7 +98,7 @@ def _touch(sess):
     sess.diagnostics_cache = None
 
 
-def load_documents(mod_dir, ini_paths):
+def load_documents(mod_dir, ini_paths, *, source=None):
     """Load every active INI into the authoritative in-memory session.
 
     Re-loading the same mod never re-reads disk: text edits and toggle edits
@@ -91,13 +106,17 @@ def load_documents(mod_dir, ini_paths):
     Discard, a mod switch, or application restart. A new mod replaces the old
     session; the frontend confirms before allowing that switch when dirty.
     """
-    sess = _get_or_create(mod_dir)
+    sess = _get_or_create(mod_dir, source=source)
     added = False
     for path in ini_paths:
-        key = _key(mod_dir, path)
+        key = _key(mod_dir, path, source=sess.source)
         if key in sess.docs:
             continue
-        doc = IniDocument.load(path)
+        if sess.source.kind == "directory":
+            doc = IniDocument.load(path)
+        else:
+            doc = IniDocument.from_string(
+                sess.source.read_text(path), path=path)
         sess.docs[key] = doc
         sess.baselines[key] = doc.to_string()
         added = True
@@ -171,6 +190,11 @@ def document_paths(mod_dir):
     if not _same_mod(mod_dir):
         return []
     return [doc.path for doc in _session.docs.values()]
+
+
+def source_for(mod_dir):
+    """Return the source object owned by the active edit session."""
+    return _session.source if _same_mod(mod_dir) else None
 
 
 def documents_for(mod_dir):
@@ -338,6 +362,14 @@ def export(mod_dir):
     """
     if not _same_mod(mod_dir):
         return {"saved": [], "failed": []}
+    if _session.source.read_only:
+        return {
+            "saved": [],
+            "failed": [{"ini": key, "error":
+                        "Export is unavailable for compressed mods."}
+                       for key in _session.dirty],
+            "error": "Export is unavailable for compressed mods.",
+        }
     if not _session.dirty:
         _session.present_names_baseline = _NO_METADATA_BASELINE
         return {"saved": [], "failed": []}

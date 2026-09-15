@@ -210,13 +210,21 @@ def inspect_dds(path):
     return layout.info if layout is not None else None
 
 
-def inspect_dds_layout(path):
-    """Inspect a DDS and return the exact byte layout of its mip payload."""
+def _header_and_size(path):
+    if isinstance(path, (bytes, bytearray, memoryview)):
+        data = bytes(path)
+        return data[:148], len(data)
     try:
         with open(path, "rb") as stream:
-            header = stream.read(148)
-            file_size = os.fstat(stream.fileno()).st_size
+            return stream.read(148), os.fstat(stream.fileno()).st_size
     except (OSError, TypeError):
+        return None, None
+
+
+def inspect_dds_layout(path):
+    """Inspect a DDS and return the exact byte layout of its mip payload."""
+    header, file_size = _header_and_size(path)
+    if header is None:
         return None
     info = _inspect_header(header)
     if info is None:
@@ -228,10 +236,12 @@ def inspect_dds_layout(path):
     return layout
 
 
-def native_dds_info(path, max_size=2048, transform="passthrough"):
+def native_dds_info(path, max_size=2048, transform="passthrough",
+                    source_name=None):
     """Return native-delivery metadata when the source meets PR21 rules."""
     try:
-        path_string = os.fsdecode(os.fspath(path))
+        path_string = (source_name if isinstance(source_name, str)
+                       else os.fsdecode(os.fspath(path)))
     except (TypeError, ValueError):
         return None
     if (not isinstance(path, (str, bytes, os.PathLike))

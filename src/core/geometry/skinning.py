@@ -470,7 +470,7 @@ def _error_for_draw(draw):
 
 def build_skinning_preview(draw, group, mod_dir, *, buffers,
                            default_streams, default_index_size,
-                           geometry_convention, timing=None):
+                           geometry_convention, timing=None, source=None):
     """Prepare the selected draw, decode its source, and return canonical data."""
     from .packing import _prepare_draw_vertices
     from ..resource_paths import safe_resource_path
@@ -478,16 +478,18 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
     error = _error_for_draw(draw)
     if error:
         raise error
-    source_path = safe_resource_path(mod_dir, draw.skinning_source.file)
-    if not source_path or not os.path.exists(source_path):
+    resolve = source.resolve_resource if source is not None \
+        else lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    source_path = resolve(draw.skinning_source.file)
+    if not source_path or not exists(source_path):
         raise SkinningPreviewError(
             "skinning_not_available",
             "The skin-weight buffer could not be found.")
     remap_path = None
     if draw.skinning_source.vertex_vg_file:
-        remap_path = safe_resource_path(
-            mod_dir, draw.skinning_source.vertex_vg_file)
-        if not remap_path or not os.path.exists(remap_path):
+        remap_path = resolve(draw.skinning_source.vertex_vg_file)
+        if not remap_path or not exists(remap_path):
             raise SkinningPreviewError(
                 "skinning_remap_unavailable",
                 "The WWMI VertexVG remap buffer could not be found.")
@@ -495,7 +497,7 @@ def build_skinning_preview(draw, group, mod_dir, *, buffers,
     prepared = _prepare_draw_vertices(
         draw, group, mod_dir=mod_dir, default_streams=default_streams,
         default_index_size=default_index_size, buffers=buffers,
-        geometry_convention=geometry_convention)
+        geometry_convention=geometry_convention, source=source)
     if timing is not None:
         timing["prepare_draw_vertices_seconds"] += (
             time.perf_counter() - prepare_started)

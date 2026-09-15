@@ -1,10 +1,12 @@
 """Bounded geometry-buffer access regressions."""
 
 from unittest.mock import patch
+import zipfile
 
 import pytest
 
 from core.geometry import buffers
+from core.mod_source import ZipModSource
 
 
 def test_buffer_store_reads_shared_file_once(tmp_path):
@@ -41,3 +43,13 @@ def test_buffer_store_preserves_cumulative_limit_but_not_shared_reads(
     store.raw(str(first))
     with pytest.raises(ValueError, match="2 GiB safety limit"):
         store.raw(str(second))
+
+
+def test_buffer_store_reads_zip_members_through_the_source(tmp_path):
+    archive_path = tmp_path / "mod.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("Mod/mesh.buf", b"mesh")
+    source = ZipModSource(archive_path)
+    member = source.resolve_resource("mesh.buf")
+
+    assert buffers.BufferStore(source=source).raw(member) == b"mesh"

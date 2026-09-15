@@ -81,6 +81,14 @@ export function canSaveTexture(mesh) {
   if (!editable.editable || !parsed || parsed.role !== 'diffuse') {
     return { editable: false, reason: 'no-diffuse', message: 'Select a diffuse texture before saving.' };
   }
+  if (viewerState.currentSource?.kind === 'mod'
+      && viewerState.currentSource?.readOnly === true) {
+    return {
+      editable: false,
+      reason: 'compressed-mod',
+      message: 'Save to Texture is unavailable for compressed mods.',
+    };
+  }
   if (!viewerState.currentModPath || !samePath(data.modPath, viewerState.currentModPath)) {
     return { editable: false, reason: 'different-mod', message: 'The selected mesh belongs to a different mod.' };
   }

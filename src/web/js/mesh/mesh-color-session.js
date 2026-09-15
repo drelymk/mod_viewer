@@ -1,6 +1,7 @@
 // Viewer-owned per-mesh diffuse color adjustment state.
 
 import { isAssetTextureKey, splitTextureKey } from '../textures/texture-key.js';
+import { viewerState } from '../app/state.js';
 import { setGameMaterialColorAdjustment } from './material-profile.js';
 import {
   DEFAULT_COLOR_ADJUSTMENT, isNeutralColorAdjustment,
@@ -29,6 +30,8 @@ function persistenceValue(adjustment) {
 }
 
 function persistMeshColorAdjustment(mesh, adjustment = getMeshColorAdjustment(mesh)) {
+  if (viewerState.currentSource?.kind === 'mod'
+      && viewerState.currentSource?.readOnly === true) return null;
   const path = mesh?.userData?.modPath;
   const key = mesh?.userData?.metadataKey;
   const save = window.pywebview?.api?.save_mesh_color_adjustment;

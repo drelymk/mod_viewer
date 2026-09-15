@@ -59,8 +59,12 @@ export async function refreshPendingState(
   }
   $('pending-indicator').classList.toggle('show', pending);
   const blocked = pending && hasUnwiredToggle();
-  $('export-btn').disabled = !pending || blocked;
-  $('export-btn').title = blocked
+  const readOnlySource = viewerState.currentSource?.kind === 'mod'
+    && viewerState.currentSource?.readOnly === true;
+  $('export-btn').disabled = readOnlySource || !pending || blocked;
+  $('export-btn').title = readOnlySource
+    ? 'Export is unavailable for compressed mods.'
+    : blocked
     ? 'A newly-added toggle isn\'t wired to any mesh yet — Record (⏺) or delete it before exporting.'
     : '';
 }
@@ -121,7 +125,7 @@ function beginModLoad(path, message, {
   beginLoadBenchmark();
   viewerState.assetFill.epoch += 1;
   viewerState.currentModPath = path;
-  viewerState.currentSource = { kind: 'mod', path };
+  viewerState.currentSource = { kind: 'mod', path, readOnly: false };
   setSourceUi('mod');
   viewerState.semanticRefreshEpoch += 1;
   clearScene({ preserveModelOrientation });
@@ -186,6 +190,15 @@ export async function displayMeshPayload(payload, {
   const meshes = payload.meshes || {};
   const assetMode = viewerState.currentSource?.kind === 'asset'
     || payload.metadata?.source_kind === 'asset';
+  const sourceReadOnly = !assetMode
+    && payload.metadata?.source_read_only === true;
+  if (!assetMode && viewerState.currentSource?.kind === 'mod') {
+    viewerState.currentSource = {
+      ...viewerState.currentSource,
+      readOnly: sourceReadOnly,
+      sourceKind: payload.metadata?.source_kind || 'directory',
+    };
+  }
   viewerState.assetFill.available = !assetMode
     && Number(payload.asset_resolution?.configured_roots || 0) > 0;
   if (assetMode && viewerState.currentSource?.kind !== 'asset') {
@@ -211,7 +224,7 @@ export async function displayMeshPayload(payload, {
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,
-      readOnlySource: assetMode,
+      readOnlySource: assetMode || sourceReadOnly,
       texturePicker: assetMode
         ? (role => window.pywebview.api.pick_asset_texture_file(
           viewerState.currentSource.path, role)) : null,
@@ -291,7 +304,7 @@ async function loadModAt(path, disabledIni, handlers = {}) {
   $('mod-path').textContent = folderName;
   $('mod-path').title = path;
   viewerState.displayedModPath = path;
-  viewerState.displayedSource = { kind: 'mod', path };
+  viewerState.displayedSource = { ...viewerState.currentSource };
   window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
     detail: { path },
   }));
@@ -413,7 +426,7 @@ export async function switchMod(path, handlers = {}) {
 export async function openMod(handlers = {}) {
   return await runModTransition(async () => {
     try {
-      const path = await window.pywebview.api.select_folder();
+      const path = await window.pywebview.api.select_mod_source();
       if (!path) return false;
       return await performModSwitch(path, handlers);
     } catch (error) {

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
+from core.ini.document import IniDocument
 from core.ini.menu import attach_menu_images, extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, merge_sections)
@@ -66,27 +67,36 @@ def _attach_shape_sliders(groups, shape_sliders):
             group["shape_sliders"] = matches
 
 
-def _ini_scope(ini_path, folder_path, multi):
+def _ini_scope(ini_path, folder_path, multi, source=None):
     """Namespace an INI's variables so sibling INIs cannot collide."""
     if not multi:
         return None, None
-    parent_dir = os.path.dirname(ini_path)
-    if os.path.normpath(parent_dir) != os.path.normpath(folder_path):
-        source = os.path.relpath(parent_dir, folder_path).replace(os.sep, "/")
+    ini_rel = _ini_rel(ini_path, folder_path, source=source)
+    rel_dir = os.path.dirname(ini_rel)
+    if rel_dir not in ("", "."):
+        source_name = rel_dir.replace("\\", "/")
     else:
-        source = os.path.splitext(os.path.basename(ini_path))[0]
+        source_name = os.path.splitext(os.path.basename(ini_rel))[0]
     # ``source`` is a compact UI grouping label, not the parser identity.
-    identity = os.path.splitext(_ini_rel(ini_path, folder_path))[0]
-    return f"{identity}::", source
+    identity = os.path.splitext(ini_rel)[0]
+    return f"{identity}::", source_name
 
 
-def _ini_rel(ini_path, folder_path):
+def _ini_rel(ini_path, folder_path, source=None):
+    if source is None:
+        source = getattr(ini_path, "source", None)
+    if source is not None and source.is_resource_reference(ini_path):
+        return source.logical_path(ini_path)
     return os.path.relpath(ini_path, folder_path).replace(os.sep, "/")
 
 
-def _rebase_resources(resources, ini_path, folder_path):
+def _rebase_resources(resources, ini_path, folder_path, source=None):
     """Make filenames authored relative to a nested INI root-relative."""
-    rel_dir = os.path.relpath(os.path.dirname(ini_path), folder_path)
+    if source is None:
+        source = getattr(ini_path, "source", None)
+    rel_dir = (os.path.dirname(_ini_rel(ini_path, folder_path, source=source))
+               if source is not None
+               else os.path.relpath(os.path.dirname(ini_path), folder_path))
     if rel_dir == os.curdir:
         return resources
     for info in resources.values():
@@ -164,7 +174,8 @@ def _gating_vars_from_groups(groups):
     return found
 
 
-def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
+def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
+                     source=None):
     """Aggregate independent INI analyses into one mod semantic model.
 
     Each INI is parsed separately so resource definitions from sibling files
@@ -178,6 +189,15 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
     runtime_evidence = []
     texture_api_evidence = []
     multi = len(ini_paths) > 1
+    if source is None and ini_paths:
+        source = getattr(ini_paths[0], "source", None)
+    if source is not None and getattr(source, "kind", None) == "zip":
+        documents = dict(documents or {})
+        for ini_path in ini_paths:
+            if source.is_resource_reference(ini_path) \
+                    and ini_path not in documents:
+                documents[ini_path] = IniDocument.from_string(
+                    source.read_text(ini_path), path=ini_path)
 
     # Parse each INI once up front so file-level namespaces and direct
     # forwarding assignments can be resolved before semantic analysis. The
@@ -186,14 +206,15 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
     for ini_path in ini_paths:
         secs = merge_sections([ini_path], overrides=overrides,
                               documents=documents)
-        var_prefix, source = _ini_scope(ini_path, folder_path, multi)
+        var_prefix, source_name = _ini_scope(
+            ini_path, folder_path, multi, source=source)
         document = _mapped_value(documents, ini_path)
         text = _mapped_value(overrides, ini_path)
         ini_records.append({
             "ini_path": ini_path,
             "sections": secs,
             "var_prefix": var_prefix,
-            "source": source,
+            "source": source_name,
             "canonical_vars": canonical_var_names(secs),
             "namespace": extract_ini_namespace(
                 ini_path, text=text, document=document),
@@ -250,17 +271,17 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
         ini_path = record["ini_path"]
         secs = record["sections"]
         var_prefix = record["var_prefix"]
-        source = record["source"]
+        source_name = record["source"]
 
         resources = _rebase_resources(
-            extract_resources(secs), ini_path, folder_path)
+            extract_resources(secs), ini_path, folder_path, source=source)
         analysis = analyze_ini(
-            secs, resources=resources, var_prefix=var_prefix, source=source,
+            secs, resources=resources, var_prefix=var_prefix, source=source_name,
             seen=seen_labels,
             extra_gating_vars=record["extra_gating_vars"])
         record["analysis"] = analysis
         ini_groups = analysis.draw_groups
-        identity_source = _ini_rel(ini_path, folder_path)
+        identity_source = _ini_rel(ini_path, folder_path, source=source)
         for group in ini_groups:
             # ``source`` is intentionally a compact UI grouping label. Keep
             # the complete relative INI path separately for mesh identity.
@@ -291,7 +312,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
         )
         capture_vars = []
         if has_controls:
-            rel = _ini_rel(ini_path, folder_path)
+            rel = _ini_rel(ini_path, folder_path, source=source)
             for info in ini_toggles.values():
                 if info.get("section", "").lower() == PRESENT_SECTION.lower():
                     continue
@@ -435,7 +456,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None):
 def resolved_draws(context, overrides=None):
     """Resolve the current staged draw map once for analysis consumers."""
     parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs)
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source)
     draws = {}
     for group in parsed.groups:
         for draw in deduplicate_draws(group):

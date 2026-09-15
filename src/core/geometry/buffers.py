@@ -133,21 +133,29 @@ class VertexStreams:
 class BufferStore:
     """Build-scoped raw-buffer cache with the existing safety limits."""
 
-    def __init__(self):
+    def __init__(self, source=None):
         self._raw = {}
         self._streams = {}
         self._total_bytes = 0
+        self.source = source
 
     def raw(self, path):
         if path not in self._raw:
-            size = os.path.getsize(path)
+            source_backed = (self.source is not None
+                             and getattr(self.source, "kind", None) == "zip"
+                             and self.source.is_resource_reference(path))
+            size = (self.source.size(path)
+                    if source_backed else os.path.getsize(path))
             if size > _MAX_BUFFER_FILE_BYTES:
                 raise ValueError(
                     f"Buffer file is too large ({size / 1048576:.1f} MiB).")
             if self._total_bytes + size > _MAX_TOTAL_BUFFER_BYTES:
                 raise ValueError("Mod buffer data exceeds the 2 GiB safety limit.")
-            with open(path, "rb") as file:
-                data = file.read()
+            if source_backed:
+                data = self.source.read_bytes(path)
+            else:
+                with open(path, "rb") as stream:
+                    data = stream.read()
             self._raw[path] = data
             self._total_bytes += len(data)
         return self._raw[path]

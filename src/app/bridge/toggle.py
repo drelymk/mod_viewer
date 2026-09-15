@@ -17,6 +17,7 @@ import os
 import traceback
 
 from core.mod_discovery import discover_ini_paths
+from core.mod_source import mod_source_for_path
 from core.editing import record as record_editor
 from core.editing import toggle as te
 from app.mods import loader as mod_loader
@@ -32,9 +33,14 @@ def _ini_path(mod_dir, ini_rel):
     """Resolve a payload's relative ini name back to an absolute path,
     constrained to actually be one of this mod folder's own ini files (never
     an arbitrary path the JS side might pass in)."""
-    paths = edit_session.document_paths(mod_dir) or discover_ini_paths(mod_dir)
-    candidates = {os.path.relpath(p, mod_dir).replace(os.sep, "/"): p
-                  for p in paths}
+    paths = edit_session.document_paths(mod_dir)
+    source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
+    paths = paths or discover_ini_paths(mod_dir, source=source)
+    candidates = {(
+        source.logical_path(p)
+        if source.is_resource_reference(p)
+        else os.path.relpath(p, mod_dir).replace(os.sep, "/")): p
+        for p in paths}
     name = str(ini_rel or "").replace("\\", "/")
     path = candidates.get(name)
     if path is None:
@@ -58,10 +64,16 @@ def list_source_inis(mod_dir):
     offered when adding a new toggle to a multi-ini ("AllInOne") mod. Lists
     every ini regardless of whether it has any toggles yet, unlike deriving
     the list from an already-loaded payload."""
-    return [{"value": os.path.relpath(p, mod_dir).replace(os.sep, "/"),
-             "label": os.path.relpath(p, mod_dir).replace(os.sep, "/")}
-            for p in (edit_session.document_paths(mod_dir)
-                      or discover_ini_paths(mod_dir))]
+    paths = edit_session.document_paths(mod_dir)
+    source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
+    paths = paths or discover_ini_paths(mod_dir, source=source)
+    return [{"value": (source.logical_path(p)
+                        if source.is_resource_reference(p)
+                        else os.path.relpath(p, mod_dir).replace(os.sep, "/")),
+             "label": (source.logical_path(p)
+                        if source.is_resource_reference(p)
+                        else os.path.relpath(p, mod_dir).replace(os.sep, "/"))}
+            for p in paths]
 
 
 def get_toggle_details(mod_dir, ini_rel, section_name):
@@ -157,6 +169,9 @@ def export_changes(mod_dir):
     ...]}}, writes nothing) if a toggle added this session still isn't
     wired to any mesh — Record it (or delete it) first.
     """
+    source = mod_source_for_path(mod_dir)
+    if source.read_only:
+        return {"error": "Export is unavailable for compressed mods."}
     pending_new = edit_session.new_sections_for(mod_dir)
     if pending_new:
         unwired = mod_loader.unwired_pending_sections(

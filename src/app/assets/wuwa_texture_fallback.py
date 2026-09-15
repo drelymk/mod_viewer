@@ -67,14 +67,18 @@ def _slot_candidates(group):
     return result
 
 
-def _record_discovered(group, candidates, mod_dir):
+def _record_discovered(group, candidates, mod_dir, source=None):
     """Store safe, associated files for the viewer's manual texture pool."""
     discovered = {}
     for candidate in candidates:
-        path = safe_resource_path(mod_dir, candidate.file)
-        if path is None or not os.path.isfile(path):
+        path = (source.resolve_resource(candidate.file)
+                if source is not None
+                else safe_resource_path(mod_dir, candidate.file))
+        exists = source.is_file if source is not None else os.path.isfile
+        if path is None or not exists(path):
             continue
-        key = _file_key(path)
+        key = (source.logical_path(path).casefold()
+               if source is not None else _file_key(path))
         discovered.setdefault(key, {
             "file": candidate.file,
             "source": candidate.source,
@@ -83,7 +87,7 @@ def _record_discovered(group, candidates, mod_dir):
     group["discovered_textures"] = list(discovered.values())
 
 
-def apply(groups, mod_dir):
+def apply(groups, mod_dir, source=None):
     """Discover WuWa texture files without assigning semantic texture roles."""
     for group in groups or ():
         candidates = _slot_candidates(group)
@@ -94,4 +98,4 @@ def apply(groups, mod_dir):
                 texture_index, TextureOverrideIndex):
             candidates.extend(_filename_candidates(ordinal, texture_index))
 
-        _record_discovered(group, candidates, mod_dir)
+        _record_discovered(group, candidates, mod_dir, source=source)

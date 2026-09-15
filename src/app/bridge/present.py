@@ -4,6 +4,7 @@ import os
 import traceback
 
 from core.mod_discovery import discover_ini_paths
+from core.mod_source import mod_source_for_path
 from core.editing import present as present_editor
 from core.editing.toggle import ToggleEditError
 
@@ -11,16 +12,21 @@ from app.mods import metadata
 from app.session import edit as edit_session
 
 
-def _ini_rel(mod_dir, path):
+def _ini_rel(mod_dir, path, source=None):
+    if source is None:
+        source = getattr(path, "source", None)
+    if source is not None and source.is_resource_reference(path):
+        return source.logical_path(path)
     return os.path.relpath(path, mod_dir).replace(os.sep, "/")
 
 
 def _documents(mod_dir):
     paths = edit_session.document_paths(mod_dir)
+    source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
     if not paths:
-        paths = discover_ini_paths(mod_dir)
-        edit_session.load_documents(mod_dir, paths)
-    return [(_ini_rel(mod_dir, path), path, edit_session.peek(mod_dir, path))
+        paths = discover_ini_paths(mod_dir, source=source)
+        edit_session.load_documents(mod_dir, paths, source=source)
+    return [(_ini_rel(mod_dir, path, source), path, edit_session.peek(mod_dir, path))
             for path in paths]
 
 
@@ -30,6 +36,9 @@ def _unexpected_error():
 
 
 def _batch_run(mod_dir, targets, mutate, metadata_change=None):
+    source = mod_source_for_path(mod_dir)
+    if metadata_change is not None and source.read_only:
+        return {"error": "Edits are unavailable for compressed mods."}
     records = []
     try:
         for ini_rel, path, _doc in targets:

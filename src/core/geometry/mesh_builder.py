@@ -47,7 +47,7 @@ def _geometry_ref(raw, geometry):
 
 
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
-                      texture_source=None, game_profile=None):
+                      texture_source=None, game_profile=None, source=None):
     """Build mesh draw entries and a shared texture registry.
 
     Geometry packing and texture publication are delegated to focused stages;
@@ -58,23 +58,27 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     texture_profile = texture_profile_for(game_profile)
     geometry_convention = geometry_convention_for(game_profile)
     validate_draw_count(groups)
-    registry = TextureRegistry(mod_dir, texture_profile, texture_source)
-    buffers = BufferStore()
+    registry = TextureRegistry(
+        mod_dir, texture_profile, texture_source, source=source)
+    buffers = BufferStore(source=source)
     sparse_shape_cache = {}
     result = {}
     skinning_manifest = {}
 
     for group in groups:
-        pos_path = safe_resource_path(mod_dir, group["position_file"])
-        tc_path = safe_resource_path(mod_dir, group["texcoord_file"])
-        ib_path = safe_resource_path(mod_dir, group["ib_file"])
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        exists = source.is_file if source is not None else os.path.exists
+        pos_path = resolve(group["position_file"])
+        tc_path = resolve(group["texcoord_file"])
+        ib_path = resolve(group["ib_file"])
         tc_stride = group["texcoord_stride"]
         pos_stride = group.get("position_stride", POSITION_STRIDE)
         index_size = group.get("index_size", INDEX_SIZE)
-        source = group.get("source")
+        source_name = group.get("source")
         component = group.get("display_name") or group.get("name")
 
-        if not all(path and os.path.exists(path)
+        if not all(path and exists(path)
                    for path in (pos_path, tc_path, ib_path)):
             continue
 
@@ -94,6 +98,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 buffers=buffers,
                 geometry_convention=geometry_convention,
                 sparse_shape_cache=sparse_shape_cache,
+                source=source,
             )
             if packed is None:
                 continue
@@ -134,7 +139,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if draw.conditions:
                 entry["conditions"] = draw.conditions
             if draw.sources:
-                entry["sources"] = [_rel_source(item, mod_dir)
+                entry["sources"] = [_rel_source(item, mod_dir, source=source)
                                     for item in draw.sources]
             if texture_options:
                 entry["texture_options"] = texture_options
@@ -142,8 +147,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             # show a meaningful per-draw label instead of a bare index.
             if draw.count is not None:
                 entry["drawindexed"] = [draw.count, draw.start, draw.base]
-            if source:
-                entry["source"] = source
+            if source_name:
+                entry["source"] = source_name
             if component:
                 entry["component"] = component
             entry["identity"] = mesh_identity_for_draw(draw, group).to_dict()
@@ -165,11 +170,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
 
 def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
-                       texture_source=None, game_profile=None):
+                       texture_source=None, game_profile=None, source=None):
     """Legacy flat payload wrapper retaining the ``__textures__`` field."""
     built = build_mesh_result(
         groups, mod_dir, max_draws=max_draws, geometry=geometry,
-        texture_source=texture_source, game_profile=game_profile)
+        texture_source=texture_source, game_profile=game_profile,
+        source=source)
     payload = dict(built.meshes)
     payload["__textures__"] = built.textures
     return payload

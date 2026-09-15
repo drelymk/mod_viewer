@@ -310,16 +310,32 @@ def _unique_evidence(items):
     return result
 
 
-def _cached_dds_classification(path, cache):
-    key = classification_cache_key(path)
+def _cached_dds_classification(path, cache, source=None):
+    source_backed = (source is not None
+                     and getattr(source, "kind", None) == "zip"
+                     and source.is_resource_reference(path))
+    if source_backed:
+        try:
+            key = ("mod-source", source.source_path,
+                   source.logical_path(path), source.size(path))
+        except (OSError, ValueError, TypeError):
+            key = None
+    else:
+        key = classification_cache_key(path)
     if key is None:
         return DDSClassification(None, "unknown", "low", ("unavailable",))
     if key not in cache:
-        cache[key] = classify_dds(path)
+        if source_backed:
+            cache[key] = classify_dds(
+                source.read_bytes(path),
+                source_name=source.logical_path(path))
+        else:
+            cache[key] = classify_dds(path)
     return cache[key]
 
 
-def _classify_replacements(texture_hash, replacements, mod_dir, cache):
+def _classify_replacements(texture_hash, replacements, mod_dir, cache,
+                            source=None):
     """Classify all files replacing one original hash.
 
     A single original hash may have conditional variants. A role is accepted
@@ -332,9 +348,13 @@ def _classify_replacements(texture_hash, replacements, mod_dir, cache):
         result = DDSClassification(None, "unknown", "low", ("unavailable",))
         if (mod_dir and replacement.file
                 and str(replacement.file).casefold().endswith(".dds")):
-            path = safe_resource_path(mod_dir, replacement.file)
-            if path:
-                result = _cached_dds_classification(path, cache)
+            path = (source.resolve_resource(replacement.file)
+                    if source is not None
+                    else safe_resource_path(mod_dir, replacement.file))
+            exists = source.is_file if source is not None else os.path.isfile
+            if path and exists(path):
+                result = _cached_dds_classification(
+                    path, cache, source=source)
         classifications.append(result)
         by_replacement[id(replacement)] = result
     def analysis_role(result):
@@ -446,7 +466,8 @@ def _apply_slot_hashes(draw, evidence):
 
 
 def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
-          texture_index=None, mod_dir=None, dds_classification_cache=None):
+          texture_index=None, mod_dir=None, dds_classification_cache=None,
+          source=None):
     """Apply Asset diagnostics and exact-component texture evidence.
 
     A not-found binding is published only when at least one ready index was
@@ -580,7 +601,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                         classified_by_hash[texture_hash] = \
                             _classify_replacements(
                                 texture_hash, replacements, mod_dir,
-                                dds_classification_cache)
+                                dds_classification_cache, source=source)
 
                 role_hashes = {}
                 for texture_hash, (role, _details, conflict) in \

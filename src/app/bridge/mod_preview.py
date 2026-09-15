@@ -18,6 +18,7 @@ from core.geometry.skinning import (
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_file, texture_cache_stats
 from core.mod_discovery import discover_ini_paths
+from core.mod_source import ModSourceError, mod_source_for_path
 from core.ini.health import analyze_mod
 from app.mods.analysis import resolved_draws
 from app.mods.texture_save.service import save_texture_color
@@ -62,14 +63,25 @@ class ModPreview:
     def authoritative_context(self, folder_path, disabled_ini=False):
         """Load selected INI documents while preserving the current session."""
         folder_path = self._access.mod_folder(folder_path)
+        source = edit_session.source_for(folder_path) or \
+            mod_source_for_path(folder_path)
+        discovery_kwargs = {"disabled": disabled_ini}
+        if getattr(source, "kind", None) == "zip":
+            discovery_kwargs["source"] = source
         ini_paths = (edit_session.document_paths(folder_path)
-                     or discover_ini_paths(folder_path, disabled=disabled_ini))
-        edit_session.load_documents(folder_path, ini_paths)
+                     or discover_ini_paths(folder_path, **discovery_kwargs))
+        if getattr(source, "kind", None) == "zip":
+            edit_session.load_documents(folder_path, ini_paths, source=source)
+        else:
+            edit_session.load_documents(folder_path, ini_paths)
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
         context = mod_loader.ModLoadContext(
             folder_path, ini_paths, edit_session.documents_for(folder_path),
-            metadata.load(folder_path))
+            metadata.load(folder_path, source=source)
+            if getattr(source, "kind", None) == "zip"
+            else metadata.load(folder_path),
+            source=source)
         cache_key = os.path.normcase(os.path.abspath(folder_path))
         with self._model_state_lock:
             cache = self._dds_classification_caches.pop(cache_key, None)
@@ -135,10 +147,18 @@ class ModPreview:
 
     def load_mod(self, folder_path, disabled_ini=False):
         self.clear_loaded_model()
-        folder_path, overrides, pending_new_sections, context = \
-            self.authoritative_context(folder_path, disabled_ini=disabled_ini)
+        try:
+            folder_path, overrides, pending_new_sections, context = \
+                self.authoritative_context(folder_path, disabled_ini=disabled_ini)
+        except ModSourceError as error:
+            return {"error": str(error)}
         geometry = GeometryBlob()
-        publication = server.begin_texture_publication(folder_path)
+        context_source = getattr(context, "source", None)
+        if getattr(context_source, "kind", None) == "zip":
+            publication = server.begin_texture_publication(
+                folder_path, source=context_source)
+        else:
+            publication = server.begin_texture_publication(folder_path)
         try:
             result = mod_loader.load_mod(
                 context=context, overrides=overrides,
@@ -171,7 +191,8 @@ class ModPreview:
             metadata.hydrate_textures(
                 folder_path, result, saved_metadata,
                 texture_source=publication.register,
-                texture_profile=game_metadata.get("id"))
+                texture_profile=game_metadata.get("id"),
+                source=getattr(context, "source", None))
             controls = result.setdefault("controls", {})
             metadata.hydrate_present(folder_path, controls.get("present"),
                                      saved_metadata)
@@ -183,6 +204,12 @@ class ModPreview:
             with self._model_state_lock:
                 self._current_model_folder = folder_path
             return result
+        except ModSourceError as error:
+            publication.discard()
+            self._active_mesh_keys.pop(folder_path, None)
+            self._skinning_manifests.pop(folder_path, None)
+            self._last_skinning_diagnostics.pop(folder_path, None)
+            return {"error": str(error)}
         except Exception:
             publication.discard()
             self._active_mesh_keys.pop(folder_path, None)
@@ -249,13 +276,16 @@ class ModPreview:
 
     @staticmethod
     def _decode_skinning_draw(draw, group, mod_dir, buffers,
-                              geometry_convention, timing=None):
+                              geometry_convention, timing=None, source=None):
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        exists = source.is_file if source is not None else os.path.exists
         paths = [
-            safe_resource_path(mod_dir, group["position_file"]),
-            safe_resource_path(mod_dir, group["texcoord_file"]),
-            safe_resource_path(mod_dir, group["ib_file"]),
+            resolve(group["position_file"]),
+            resolve(group["texcoord_file"]),
+            resolve(group["ib_file"]),
         ]
-        if not all(path and os.path.exists(path) for path in paths):
+        if not all(path and exists(path) for path in paths):
             raise SkinningPreviewError(
                 "geometry_not_available",
                 "The rendered draw geometry could not be prepared.")
@@ -267,7 +297,8 @@ class ModPreview:
             draw, group, mod_dir, buffers=buffers,
             default_streams=default_streams,
             default_index_size=group.get("index_size", 4),
-            geometry_convention=geometry_convention, timing=timing)
+            geometry_convention=geometry_convention, timing=timing,
+            source=source)
 
     @staticmethod
     def _skinning_source_descriptor(draw_or_source):
@@ -359,7 +390,7 @@ class ModPreview:
             meshes = {}
             pieces = []
             offset = 0
-            buffers = BufferStore()
+            buffers = BufferStore(source=getattr(context, "source", None))
             convention = (geometry_convention_for(parsed.game.game)
                           if parsed is not None else None)
             for mesh_key in sorted(selected_items):
@@ -370,14 +401,16 @@ class ModPreview:
                 try:
                     if manifest is not None:
                         decoded = self._decode_skinning_manifest_entry(
-                            selected, context.mod_dir, buffers, timing)
+                            selected, context.mod_dir, buffers, timing,
+                            source=getattr(context, "source", None))
                         entry, blob = self._skin_entry(
                             decoded, selected.skinning_source, offset)
                     else:
                         draw, group = selected
                         decoded = self._decode_skinning_draw(
                             draw, group, context.mod_dir, buffers, convention,
-                            timing=timing)
+                            timing=timing,
+                            source=getattr(context, "source", None))
                         entry, blob = self._skin_entry(decoded, draw, offset)
                 except SkinningPreviewError as error:
                     meshes[mesh_key] = {
@@ -456,23 +489,27 @@ class ModPreview:
         }
 
     @staticmethod
-    def _decode_skinning_manifest_entry(entry, mod_dir, buffers, timing):
-        source = entry.skinning_source
-        source_path = safe_resource_path(mod_dir, source.file)
-        if not source_path or not os.path.exists(source_path):
+    def _decode_skinning_manifest_entry(entry, mod_dir, buffers, timing,
+                                        source=None):
+        skin_source = entry.skinning_source
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        exists = source.is_file if source is not None else os.path.exists
+        source_path = resolve(skin_source.file)
+        if not source_path or not exists(source_path):
             raise SkinningPreviewError(
                 "skinning_not_available",
                 "The skin-weight buffer could not be found.")
         remap_path = None
-        if source.vertex_vg_file:
-            remap_path = safe_resource_path(mod_dir, source.vertex_vg_file)
-            if not remap_path or not os.path.exists(remap_path):
+        if skin_source.vertex_vg_file:
+            remap_path = resolve(skin_source.vertex_vg_file)
+            if not remap_path or not exists(remap_path):
                 raise SkinningPreviewError(
                     "skinning_remap_unavailable",
                     "The WWMI VertexVG remap buffer could not be found.")
         decode_started = time.perf_counter()
         decoded = decode_skinning(
-            source, buffers.raw(source_path), entry.used_vertices,
+            skin_source, buffers.raw(source_path), entry.used_vertices,
             buffers.raw(remap_path) if remap_path else None)
         timing["decode_skinning_seconds"] += (
             time.perf_counter() - decode_started)
@@ -498,13 +535,19 @@ class ModPreview:
             return cached
         ini_paths = edit_session.document_paths(folder_path)
         if not ini_paths:
-            ini_paths = discover_ini_paths(folder_path)
-            edit_session.load_documents(folder_path, ini_paths)
+            source = mod_source_for_path(folder_path)
+            ini_paths = discover_ini_paths(
+                folder_path, source=source)
+            edit_session.load_documents(folder_path, ini_paths, source=source)
+        else:
+            source = edit_session.source_for(folder_path) or \
+                mod_source_for_path(folder_path)
         try:
             report = analyze_mod(
                 folder_path, ini_paths=ini_paths,
                 overrides=edit_session.overrides_for(folder_path),
-                documents=edit_session.documents_for(folder_path))
+                documents=edit_session.documents_for(folder_path),
+                source=source)
             return edit_session.cache_diagnostics(folder_path, report)
         except Exception:
             return edit_session.cache_diagnostics(folder_path, {
@@ -559,7 +602,8 @@ class ModPreview:
 
     def load_model_rig(self, folder_path):
         folder_path = self._access.mod_folder(folder_path)
-        return metadata.load_model_rig(folder_path)
+        return metadata.load_model_rig(
+            folder_path, source=mod_source_for_path(folder_path))
 
     def save_model_rig(self, folder_path, model_rig):
         folder_path = self._access.mod_folder(folder_path)

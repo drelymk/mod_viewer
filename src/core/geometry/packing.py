@@ -55,10 +55,14 @@ def _prepare_draw_vertices(
     default_index_size,
     buffers: BufferStore,
     geometry_convention: GeometryConvention,
+    source=None,
 ):
     """Select, validate, wind, and compact the vertices used by one draw."""
-    draw_ib_path = safe_resource_path(mod_dir, draw.ib_file)
-    if not draw_ib_path or not os.path.exists(draw_ib_path):
+    resolve = source.resolve_resource if source is not None \
+        else lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    draw_ib_path = resolve(draw.ib_file)
+    if not draw_ib_path or not exists(draw_ib_path):
         return None
     raw = buffers.indices(
         draw_ib_path, draw.start, draw.count,
@@ -74,11 +78,11 @@ def _prepare_draw_vertices(
     if any(index < 0 for index in raw):
         return None
 
-    draw_pos_path = safe_resource_path(mod_dir, draw.position_file)
-    draw_tc_path = safe_resource_path(mod_dir, draw.texcoord_file)
+    draw_pos_path = resolve(draw.position_file)
+    draw_tc_path = resolve(draw.texcoord_file)
     if not (draw_pos_path and draw_tc_path
-            and os.path.exists(draw_pos_path)
-            and os.path.exists(draw_tc_path)):
+            and exists(draw_pos_path)
+            and exists(draw_tc_path)):
         return None
     draw_position_stride = (
         draw.position_stride
@@ -86,8 +90,10 @@ def _prepare_draw_vertices(
     draw_texcoord_stride = (
         draw.texcoord_stride
         if draw.texcoord_stride is not None else default_streams.texcoord_stride)
-    if (draw_pos_path != safe_resource_path(mod_dir, group["position_file"])
-            or draw_tc_path != safe_resource_path(mod_dir, group["texcoord_file"])
+    same = source.same_reference if source is not None \
+        else lambda left, right: left == right
+    if (not same(draw_pos_path, resolve(group["position_file"]))
+            or not same(draw_tc_path, resolve(group["texcoord_file"]))
             or draw_position_stride != default_streams.position_stride
             or draw_texcoord_stride != default_streams.texcoord_stride):
         draw_streams = buffers.vertex_streams(
@@ -174,18 +180,23 @@ class _ShapeBuffer:
 
 
 def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
-                         buffers, sparse_shape_cache):
+                         buffers, sparse_shape_cache, source=None):
     """Load and prepare dense or sparse shape targets for one draw."""
     shape_buffers = []
     for shape in shape_sliders or []:
-        shape_base_path = safe_resource_path(mod_dir, shape["base_file"])
-        if os.path.normcase(os.path.normpath(shape_base_path or "")) != \
-                os.path.normcase(os.path.normpath(effective_pos_path)):
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        exists = source.is_file if source is not None else os.path.exists
+        shape_base_path = resolve(shape["base_file"])
+        same = source.same_reference if source is not None \
+            else lambda left, right: os.path.normcase(os.path.normpath(left or "")) == \
+                os.path.normcase(os.path.normpath(right or ""))
+        if not same(shape_base_path, effective_pos_path):
             continue
         if shape.get("shape_id") is not None:
-            paths = tuple(safe_resource_path(mod_dir, shape[key]) for key in
+            paths = tuple(resolve(shape[key]) for key in
                           ("offset_file", "vertex_id_file", "vertex_offset_file"))
-            if not all(path and os.path.exists(path) for path in paths):
+            if not all(path and exists(path) for path in paths):
                 continue
             # WWMI aligns each 127-key batch to a 128-entry container;
             # user-facing IDs omit that padding slot (SkapeKeySetter.hlsl).
@@ -214,15 +225,15 @@ def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
                 shape, sparse_shape_cache[cache_key],
                 bytearray(len(used) * 12), True))
         else:
-            target_path = safe_resource_path(mod_dir, shape["target_file"])
-            if not target_path or not os.path.exists(target_path):
+            target_path = resolve(shape["target_file"])
+            if not target_path or not exists(target_path):
                 continue
             target_data = buffers.raw(target_path)
             low_data = None
             low_bytes = None
             if shape.get("low_file"):
-                low_path = safe_resource_path(mod_dir, shape["low_file"])
-                if not low_path or not os.path.exists(low_path):
+                low_path = resolve(shape["low_file"])
+                if not low_path or not exists(low_path):
                     continue
                 low_data = buffers.raw(low_path)
                 low_bytes = bytearray(len(used) * 12)
@@ -242,6 +253,7 @@ def pack_draw_geometry(
     buffers: BufferStore,
     geometry_convention: GeometryConvention,
     sparse_shape_cache,
+    source=None,
 ):
     """Pack one resolved draw into compact raw geometry bytes.
 
@@ -252,7 +264,7 @@ def pack_draw_geometry(
     prepared = _prepare_draw_vertices(
         draw, group, mod_dir=mod_dir, default_streams=default_streams,
         default_index_size=default_index_size, buffers=buffers,
-        geometry_convention=geometry_convention)
+        geometry_convention=geometry_convention, source=source)
     if prepared is None:
         return None
     raw = prepared.raw_indices
@@ -265,15 +277,20 @@ def pack_draw_geometry(
     normal_bytes = None
     normal_source = draw.normal_source
     if normal_source is not None:
-        normal_path = safe_resource_path(mod_dir, normal_source.file)
-        if normal_path and os.path.exists(normal_path):
-            normal_data = (pos_data if normal_path == prepared.position_path
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        exists = source.is_file if source is not None else os.path.exists
+        same = source.same_reference if source is not None \
+            else lambda left, right: left == right
+        normal_path = resolve(normal_source.file)
+        if normal_path and exists(normal_path):
+            normal_data = (pos_data if same(normal_path, prepared.position_path)
                            else buffers.raw(normal_path))
             normal_bytes = decode_normals(normal_source, normal_data, used)
 
     shape_buffers = _build_shape_buffers(
         group.get("shape_sliders"), mod_dir, prepared.position_path, used,
-        buffers, sparse_shape_cache)
+        buffers, sparse_shape_cache, source=source)
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
     for output_index, vertex_index in enumerate(used):
         x, y, z, u, v = prepared.decoded_vertices[vertex_index]

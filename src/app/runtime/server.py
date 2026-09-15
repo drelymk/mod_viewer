@@ -51,26 +51,29 @@ _texture_encode_semaphore = threading.BoundedSemaphore(
 
 @dataclass(frozen=True)
 class TextureSource:
-    """One filesystem source registered in a committed texture publication."""
+    """One source registered in a committed texture publication."""
 
-    path: str
+    path: str | None = None
     role: str = "diffuse"
     max_size: int = 2048
     preserve_alpha: bool = False
     transform: str = "passthrough"
     native_dds: bool = False
     dds_info: DDSInfo | None = None
+    data: bytes | None = None
+    logical_path: str | None = None
 
 
 class TexturePublication:
     """Transactional, opaque URL registry for one application model load."""
 
-    def __init__(self, mod_dir=None):
+    def __init__(self, mod_dir=None, source=None):
         self.token = uuid.uuid4().hex
         self.mod_dir = (os.path.normcase(os.path.abspath(mod_dir))
                         if mod_dir else None)
         self._sources = {}
         self._dedupe = {}
+        self.source = source
         self._state = "pending"
         self.game_profile = "unknown"
 
@@ -92,9 +95,22 @@ class TexturePublication:
         """
         if not path:
             return None
-        path = os.path.abspath(path)
-        if not os.path.isfile(path):
-            return None
+        source_ref = (self.source is not None
+                      and getattr(self.source, "kind", None) == "zip"
+                      and self.source.is_resource_reference(path))
+        if source_ref:
+            if not self.source.is_file(path):
+                return None
+            logical_path = self.source.logical_path(path)
+            data = self.source.read_bytes(path)
+            path_identity = ("mod", logical_path.casefold())
+        else:
+            path = os.path.abspath(path)
+            if not os.path.isfile(path):
+                return None
+            logical_path = None
+            data = None
+            path_identity = ("file", os.path.normcase(path))
         role = normalize_texture_role(role)
         if transform is None:
             transform = texture_profile_for(self.game_profile).recipe_for(role)
@@ -106,7 +122,7 @@ class TexturePublication:
         if max_size <= 0:
             return None
         preserve_alpha = bool(preserve_alpha)
-        dedupe_key = (os.path.normcase(path), role, max_size, preserve_alpha,
+        dedupe_key = (path_identity, role, max_size, preserve_alpha,
                       transform)
         existing_source = None
         with _texture_lock:
@@ -119,9 +135,12 @@ class TexturePublication:
                 if not validate:
                     return _texture_url(self.token, source_id, existing_source)
 
-        dds_info = native_dds_info(path, max_size, transform)
+        dds_info = native_dds_info(
+            data if source_ref else path, max_size, transform,
+            source_name=logical_path)
         source = existing_source or TextureSource(
-            path=path, role=role, max_size=max_size,
+            path=None if source_ref else path, data=data,
+            logical_path=logical_path, role=role, max_size=max_size,
             preserve_alpha=preserve_alpha, transform=transform,
             dds_info=dds_info, native_dds=dds_info is not None)
         if validate and _render_texture_source(source) is None:
@@ -176,9 +195,9 @@ class TexturePublication:
             return True
 
 
-def begin_texture_publication(mod_dir=None):
+def begin_texture_publication(mod_dir=None, source=None):
     """Create a pending texture publication without changing the active one."""
-    publication = TexturePublication(mod_dir)
+    publication = TexturePublication(mod_dir, source=source)
     with _texture_lock:
         _texture_publications[publication.token] = publication
     return publication
@@ -214,11 +233,12 @@ def _render_texture_source(source):
     """Render one source while bounding concurrent image decode/encoding."""
     with _texture_encode_semaphore:
         return render_texture_png(
-            source.path,
+            source.data if source.data is not None else source.path,
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
             texture_role=source.role,
             texture_transform=source.transform,
+            source_name=source.logical_path,
         )
 
 
@@ -228,11 +248,12 @@ def _render_texture_request(token, source_id, source):
         if _lookup_texture(token, source_id) is not source:
             return None
         return render_texture_png(
-            source.path,
+            source.data if source.data is not None else source.path,
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
             texture_role=source.role,
             texture_transform=source.transform,
+            source_name=source.logical_path,
         )
 
 
@@ -464,6 +485,17 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     def _send_native_dds(self, token, source_id, source):
         """Stream the registered DDS without entering the PNG semaphore."""
+        if source.data is not None:
+            if _lookup_texture(token, source_id) is not source:
+                self.send_error(404, "Texture unavailable")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/vnd-ms.dds")
+            self.send_header("Content-Length", str(len(source.data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(source.data)
+            return
         try:
             stream = open(source.path, "rb")
             size = os.fstat(stream.fileno()).st_size

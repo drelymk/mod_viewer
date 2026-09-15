@@ -182,29 +182,36 @@ def _srgb_dds_as_unorm(data):
     return bytes(rewritten)
 
 
-def _open_texture_image(path, image_module):
+def _open_texture_image(path, image_module, source_name=None):
     """Open a texture, retrying typed sRGB DDS files as unorm in memory."""
     try:
-        image = image_module.open(path)
+        image = image_module.open(
+            io.BytesIO(bytes(path)) if isinstance(
+                path, (bytes, bytearray, memoryview)) else path)
         image.load()
         return image
     except Exception:
         try:
-            filename = os.fspath(path)
+            filename = (source_name if isinstance(source_name, str)
+                        else os.fspath(path))
         except TypeError:
             return None
         if not filename.casefold().endswith(".dds"):
             return None
         try:
-            with open(path, "rb") as stream:
-                header = stream.read(148)
-                rewritten_header = _srgb_dds_as_unorm(header)
-                if rewritten_header is None:
-                    return None
-                stream.seek(0)
-                data = bytearray(stream.read())
+            if isinstance(path, (bytes, bytearray, memoryview)):
+                data = bytes(path)
+                header = data[:148]
+            else:
+                with open(path, "rb") as stream:
+                    header = stream.read(148)
+                    data = header + stream.read()
+            rewritten_header = _srgb_dds_as_unorm(header)
+            if rewritten_header is None:
+                return None
             if len(data) < 148:
                 return None
+            data = bytearray(data)
             data[128:132] = rewritten_header[128:132]
             image = image_module.open(io.BytesIO(data))
             image.load()
@@ -213,7 +220,8 @@ def _open_texture_image(path, image_module):
             return None
 
 
-def _decode_texture_image(path, max_size=None, preserve_alpha=False):
+def _decode_texture_image(path, max_size=None, preserve_alpha=False,
+                          source_name=None):
     """Decode a texture with the shared DDS and decompression safeguards."""
     try:
         if max_size is not None:
@@ -227,7 +235,10 @@ def _decode_texture_image(path, max_size=None, preserve_alpha=False):
         Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            image = _open_texture_image(path, Image)
+            image = (_open_texture_image(path, Image)
+                     if source_name is None
+                     else _open_texture_image(
+                         path, Image, source_name=source_name))
             if image is None:
                 return None
         image = image.convert("RGBA" if preserve_alpha else "RGB")
@@ -238,26 +249,37 @@ def _decode_texture_image(path, max_size=None, preserve_alpha=False):
         return None
 
 
-def load_texture_image(path, max_size=2048, preserve_alpha=False):
+def load_texture_image(path, max_size=2048, preserve_alpha=False,
+                       source_name=None):
     """Decode a texture once and return its bounded Pillow image."""
-    return _decode_texture_image(path, max_size, preserve_alpha)
+    return _decode_texture_image(
+        path, max_size, preserve_alpha, source_name=source_name)
 
 
-def load_texture_image_full(path, preserve_alpha=True):
+def load_texture_image_full(path, preserve_alpha=True, source_name=None):
     """Decode a texture at its authored dimensions without preview resizing."""
-    return _decode_texture_image(path, None, preserve_alpha)
+    return _decode_texture_image(
+        path, None, preserve_alpha, source_name=source_name)
 
 
 def render_texture_png(path, max_size=2048, preserve_alpha=False,
-                       texture_role=None, texture_transform="passthrough"):
+                       texture_role=None, texture_transform="passthrough",
+                       source_name=None):
     """Decode and explicitly transform an image into PNG bytes."""
     try:
         texture_role = normalize_texture_role(texture_role)
         texture_transform = normalize_texture_transform(texture_transform)
-        stat = os.stat(path)
-        cache_key = (os.path.normcase(os.path.abspath(path)), stat.st_size,
-                     stat.st_mtime_ns, max_size, preserve_alpha, texture_role,
-                     texture_transform)
+        if isinstance(path, (bytes, bytearray, memoryview)):
+            cache_identity = ("bytes", source_name or "", hash(bytes(path)))
+            cache_size = len(path)
+            cache_mtime = None
+        else:
+            stat = os.stat(path)
+            cache_identity = os.path.normcase(os.path.abspath(path))
+            cache_size = stat.st_size
+            cache_mtime = stat.st_mtime_ns
+        cache_key = (cache_identity, cache_size, cache_mtime, max_size,
+                     preserve_alpha, texture_role, texture_transform)
         cache_started = _profile_started()
         with _texture_cache_lock:
             cached = _texture_cache.pop(cache_key, None)
@@ -277,7 +299,8 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
         keep_source_alpha = preserve_alpha or packed_passthrough
         stage_started = _profile_started()
         img = load_texture_image(
-            path, max_size=max_size, preserve_alpha=keep_source_alpha)
+            path, max_size=max_size, preserve_alpha=keep_source_alpha,
+            source_name=source_name)
         if img is None:
             return None
         _profile_elapsed("decode", stage_started,
@@ -326,11 +349,12 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
 
 def encode_texture_data_uri(path, max_size=2048, preserve_alpha=False,
                             texture_role=None,
-                            texture_transform="passthrough"):
+                            texture_transform="passthrough", source_name=None):
     """Return the historical base64 data URI compatibility representation."""
     png = render_texture_png(
         path, max_size=max_size, preserve_alpha=preserve_alpha,
-        texture_role=texture_role, texture_transform=texture_transform)
+        texture_role=texture_role, texture_transform=texture_transform,
+        source_name=source_name)
     if png is None:
         return None
     return "data:image/png;base64," + base64.b64encode(png).decode()
@@ -351,7 +375,7 @@ def _texture_source_uri(texture_source, path, role, transform):
 
 def encode_texture_file(mod_dir, abs_path, texture_role=None,
                         texture_source=None, texture_profile=None,
-                        texture_transform=None):
+                        texture_transform=None, source=None):
     """Resolve a picked file into ``{tex_key, file, role, uri}``."""
     texture_role = normalize_texture_role(texture_role)
     if texture_transform is None and (texture_source is None
@@ -362,38 +386,56 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     if texture_transform is not None:
         texture_transform = normalize_texture_transform(texture_transform)
     _begin_texture_cache(mod_dir)
-    try:
-        rel = os.path.relpath(abs_path, mod_dir)
-    except ValueError:
-        return {"error": "Selected file is not inside the mod folder."}
-    resolved = safe_resource_path(mod_dir, rel)
-    selected = _canonical(abs_path)
-    if (not resolved
-            or _canonical(resolved) != selected):
-        return {"error": "Selected file is not inside the mod folder."}
-    if not os.path.isfile(abs_path):
+    if source is not None and source.is_resource_reference(abs_path):
+        resolved = abs_path
+        rel = source.logical_path(abs_path)
+        exists = source.is_file(resolved)
+    else:
+        try:
+            rel = os.path.relpath(abs_path, mod_dir)
+        except ValueError:
+            return {"error": "Selected file is not inside the mod folder."}
+        resolved = safe_resource_path(mod_dir, rel)
+        selected = _canonical(abs_path)
+        if (not resolved or _canonical(resolved) != selected):
+            return {"error": "Selected file is not inside the mod folder."}
+        exists = os.path.isfile(abs_path)
+    if not exists:
         return {"error": "Selected file does not exist."}
     if texture_source is None:
-        uri = encode_texture_data_uri(
-            abs_path, texture_role=texture_role,
-            texture_transform=texture_transform)
+        if (source is not None and source.kind == "zip"
+                and source.is_resource_reference(resolved)):
+            uri = encode_texture_data_uri(
+                source.read_bytes(resolved), texture_role=texture_role,
+                texture_transform=texture_transform,
+                source_name=source.logical_path(resolved))
+        else:
+            uri = encode_texture_data_uri(
+                resolved, texture_role=texture_role,
+                texture_transform=texture_transform,
+                source_name=(source.logical_path(resolved)
+                             if source is not None else None))
     else:
         uri = _texture_source_uri(
-            texture_source, abs_path, texture_role, texture_transform)
+            texture_source, resolved, texture_role, texture_transform)
     if not uri:
         return {"error": "Could not read this file as an image."}
-    relative_path = rel.replace(os.sep, "/")
+    relative_path = str(rel).replace("\\", "/")
     return {"tex_key": texture_key(relative_path, texture_role),
             "file": relative_path, "role": texture_role, "uri": uri}
 
 
 def encode_texture_key(mod_dir, key, texture_role=None, texture_source=None,
-                       texture_profile=None, texture_transform=None):
+                       texture_profile=None, texture_transform=None,
+                       source=None):
     """Encode a role-aware registry key, accepting legacy path-only keys."""
     role, relative_path = split_texture_key(key, texture_role)
-    resolved = safe_resource_path(mod_dir, relative_path)
+    resolved = (source.resolve_resource(relative_path)
+                if source is not None
+                else safe_resource_path(mod_dir, relative_path))
     if not resolved:
         return {"error": "Selected file is not inside the mod folder."}
     return encode_texture_file(
         mod_dir, resolved, role, texture_source=texture_source,
-        texture_profile=texture_profile, texture_transform=texture_transform)
+        texture_profile=texture_profile, texture_transform=texture_transform,
+        source=source)

@@ -7,6 +7,7 @@ only this class's deliberate bridge contract.
 
 import json
 import logging
+import os
 import traceback
 
 import webview
@@ -58,6 +59,23 @@ class ModViewerAPI:
 
     def select_folder(self):
         """Open a native folder-picker dialog. Returns None if cancelled."""
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        if not result:
+            return None
+        return self._access.remember_mod_picker_selection(result[0])
+
+    def select_mod_source(self):
+        """Pick a ZIP mod, or fall back to the existing folder picker."""
+        result = self._window.create_file_dialog(
+            webview.FileDialog.OPEN,
+            file_types=("Compressed mods (*.zip)",))
+        if result:
+            selected = result[0]
+            if isinstance(selected, str) and selected.casefold().endswith(".zip") \
+                    and os.path.isfile(selected):
+                return self._access.remember_mod_picker_selection(selected)
+            return None
+
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if not result:
             return None
