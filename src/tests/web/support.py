@@ -328,12 +328,21 @@ def module_document(frontend_url):
     return f"<!doctype html><html><head>{import_map[0]}</head><body></body></html>"
 
 
-@pytest.fixture
-def module_page(edge_browser, frontend_url, module_document):
-    """Isolate module contracts without starting the viewer or its GPU scene."""
+@pytest.fixture(scope="module")
+def module_context(edge_browser):
+    """Reuse browser setup while keeping module pages independently isolated."""
     context = edge_browser.new_context(bypass_csp=True)
     try:
-        page = context.new_page()
+        yield context
+    finally:
+        context.close()
+
+
+@pytest.fixture
+def module_page(module_context, frontend_url, module_document):
+    """Isolate module contracts without starting the viewer or its GPU scene."""
+    page = module_context.new_page()
+    try:
         # Import subjects explicitly on the real server's origin, with no app
         # entrypoint, editor scripts, UI stylesheet, or renderer startup.
         url = frontend_url.rstrip("/") + "/__module_test__.html"
@@ -342,7 +351,7 @@ def module_page(edge_browser, frontend_url, module_document):
         page.goto(url)
         yield page
     finally:
-        context.close()
+        page.close()
 
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,

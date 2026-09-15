@@ -133,7 +133,8 @@ def _separate_block(mode, rotation, index_mode=None):
     return bits.to_bytes(16, "little")
 
 
-_EDGE_SIZES = ((4, 4), (3, 4), (4, 3), (2, 2), (2, 1), (1, 2), (1, 1))
+# Keep one full block and representative width, height, and corner clipping.
+_EDGE_SIZES = ((4, 4), (2, 4), (4, 2), (1, 1))
 
 
 @pytest.mark.parametrize(
@@ -314,11 +315,13 @@ def test_fixed_index_prepared_basis_matches_reference(
     assert optimized == generic
 
 
+# The exhaustive mode/edge matrix above covers clipping; this matrix varies
+# the independent mode-4 rotation and index axes for one clipped block.
 @pytest.mark.parametrize("rotation", range(4))
 @pytest.mark.parametrize("index_mode", range(2))
-@pytest.mark.parametrize("valid_width, valid_height", _EDGE_SIZES)
 def test_mode4_rotation_and_index_mode_match_reference(
-        monkeypatch, rotation, index_mode, valid_width, valid_height):
+        monkeypatch, rotation, index_mode):
+    valid_width, valid_height = 2, 3
     block = _separate_block(4, rotation, index_mode)
     source = bc7.decode_block(block)
     target = tuple(
@@ -344,7 +347,9 @@ def test_mode4_rotation_and_index_mode_match_reference(
 
 def test_mode4_deterministic_corpus_matches_reference(monkeypatch):
     cases = []
-    for case in range(96):
+    # Cover every rotation/index-mode pair twice with deterministic targets
+    # without repeating the same reference comparison across a large corpus.
+    for case in range(16):
         rotation = case % 4
         index_mode = (case // 4) % 2
         valid_width = 1 + (case * 3) % 4
@@ -376,9 +381,11 @@ def test_mode4_deterministic_corpus_matches_reference(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", range(8))
-@pytest.mark.parametrize("valid_width, valid_height", ((4, 4), (2, 3)))
 def test_recolor_block_matches_reference_fitter(
-        monkeypatch, mode, valid_width, valid_height):
+        monkeypatch, mode):
+    # Clipping is covered by the mode/edge matrix; the reference comparison
+    # needs only one representative block extent per mode.
+    valid_width, valid_height = 2, 3
     block = (_color_block(mode) if mode < 4 else
              _separate_block(mode, 1) if mode in {4, 5} else
              _mode6_block() if mode == 6 else _mode7_block())

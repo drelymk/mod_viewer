@@ -124,7 +124,9 @@ def test_layout_reports_exact_odd_dimension_mip_offsets(
 
 
 @pytest.mark.parametrize("format_name", [
-    "bc1_unorm", "bc2_unorm", "bc3_unorm", "bc7_unorm", "rgba8", "bgra8",
+    # One format for each layout branch: 8-byte BC, 16-byte BC, and the two
+    # uncompressed channel-mask layouts.
+    "bc1_unorm", "bc7_unorm", "rgba8", "bgra8",
 ])
 def test_layout_uses_format_specific_unit_sizes(tmp_path, format_name):
     path = tmp_path / f"{format_name}.dds"

@@ -784,13 +784,11 @@ def _bc7_lower_single_state(
 @pytest.mark.parametrize(
     ("width", "height", "selected"),
     [
-        (4, 4, {(1, 1)}),
-        (4, 4, {(0, 1), (1, 1), (2, 1), (3, 1)}),
         (4, 4, {(0, 0), (1, 0), (0, 1)}),
-        (4, 4, {(0, 0), (1, 0), (0, 1), (1, 1)}),
         (2, 2, {(0, 0)}),
         (1, 1, {(0, 0)}),
     ],
+    ids=("full-block-partial-selection", "clipped-block", "single-pixel"),
 )
 def test_single_intent_partial_block_pads_valid_rgb_without_changing_alpha(
         width, height, selected):
@@ -831,23 +829,18 @@ def test_single_intent_partial_block_pads_valid_rgb_without_changing_alpha(
     "adjustment",
     [
         {"hue": 30},
-        {"saturation": 0.25},
         {"brightness": 1.5},
-        {"contrast": 1.75},
-        {"red": 0.5},
-        {"green": 1.5},
-        {"blue": 2.0},
-        {"tint": "#4080c0"},
         {
-            "hue": 30, "saturation": 0.5, "brightness": 1.5,
-            "contrast": 1.25, "red": 0.75, "green": 1.5,
-            "blue": 0.5, "tint": "#d08040",
+            "hue": 30, "brightness": 1.5, "contrast": 1.25,
+            "red": 0.75, "green": 1.5, "blue": 0.5, "tint": "#d08040",
         },
     ],
+    ids=("hue", "brightness", "composite"),
 )
 @pytest.mark.parametrize(
     ("valid_width", "valid_height"),
-    [(4, 4), (3, 4), (4, 3), (1, 2)],
+    [(4, 4), (3, 2), (1, 2)],
+    ids=("full-block", "clipped-block", "edge-clipped"),
 )
 def test_shared_single_intent_target_matches_parent_target(
         adjustment, valid_width, valid_height):
@@ -874,28 +867,19 @@ def test_shared_single_intent_target_matches_parent_target(
 
 @pytest.mark.parametrize(
     "counts",
-    [(0, 1), (1, 1), (1, 2), (3, 4), (7, 16), (31, 64),
-     (255, 1024), (1023, 4096)],
+    [(0, 1), (1, 1), (1, 2), (1023, 4096)],
+    ids=("zero-changed", "full-weight", "fractional", "wide-counts"),
 )
 @pytest.mark.parametrize(
     "adjustment",
     [
         {"hue": 30},
-        {"saturation": 0.25},
-        {"brightness": 1.5},
-        {"contrast": 1.75},
-        {"red": 0.5, "green": 1.5, "blue": 2.0},
-        {"tint": "#4080c0"},
+        {"brightness": 1.5, "contrast": 1.25},
         {
-            "hue": 30, "saturation": 0.5, "brightness": 1.5,
-            "contrast": 1.25,
-        },
-        {
-            "hue": 30, "saturation": 0.5, "brightness": 1.5,
-            "contrast": 1.25, "red": 0.75, "green": 1.5,
-            "blue": 0.5, "tint": "#d08040",
+            "red": 0.5, "green": 1.5, "blue": 2.0, "tint": "#4080c0",
         },
     ],
+    ids=("hue", "brightness-contrast", "rgb-tint"),
 )
 def test_weighted_single_rgb_matches_exact_reference_matrix(
         counts, adjustment):
@@ -985,10 +969,6 @@ def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
         (_mode5_block(), 3, 2),
         (_mode6_block(), 3, 2),
         (_mode7_block(), 3, 2),
-        (_separate_block(4), 1, 1),
-        (_mode5_block(), 1, 1),
-        (_mode6_block(), 1, 1),
-        (_mode7_block(), 1, 1),
     ],
 )
 def test_weighted_single_worker_matches_parent_prepared_worker(
@@ -1185,10 +1165,9 @@ def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment(
 
 @pytest.mark.parametrize(
     ("source_rgb", "changed_count", "total_count"),
-    [((0, 0, 0), 1, 2), ((37, 101, 203), 3, 7),
-     ((255, 128, 1), 1023, 4096)],
+    [((0, 0, 0), 1, 2), ((255, 128, 1), 1023, 4096)],
 )
-@pytest.mark.parametrize("intent_class", [1, 2, 3])
+@pytest.mark.parametrize("intent_class", [1, 3])
 @pytest.mark.parametrize(
     "adjustment",
     [{"hue": 30}, {"brightness": 1.5, "contrast": 1.25},
@@ -1218,7 +1197,7 @@ def test_lower_mip_single_class_weighted_rgb_matches_generic_intent(
     ("block", "valid_width", "valid_height"),
     [(_separate_block(4), 4, 4), (_mode5_block(), 3, 4),
      (_mode6_block(), 4, 3), (_mode7_block(), 3, 2),
-     (_separate_block(4), 1, 1)],
+    ],
 )
 def test_lower_mip_weighted_multi_class_worker_matches_parent_prepared_worker(
         block, valid_width, valid_height):

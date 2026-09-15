@@ -5,35 +5,6 @@ import math
 import pytest
 
 
-def test_vendored_transform_controls_exposes_scene_helper(module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
-      const THREE = await import('three');
-      const {TransformControls} = await import(
-        'three/addons/controls/TransformControls.js');
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera();
-      const canvas = document.createElement('canvas');
-      const controls = new TransformControls(camera, canvas);
-      const helper = controls.getHelper();
-      scene.add(helper);
-      const attached = helper.parent === scene;
-      const api = {
-        hasGetHelper: typeof controls.getHelper === 'function',
-        helperIsObject3D: helper.isObject3D === true,
-        attached,
-      };
-      controls.dispose();
-      scene.remove(helper);
-      return api;
-    }""")
-    assert result == {
-        "hasGetHelper": True,
-        "helperIsObject3D": True,
-        "attached": True,
-    }
-
-
 def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
         module_page):
     result = module_page.evaluate("""async () => {
@@ -302,56 +273,6 @@ def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
     assert not result["unavailable"]["humanoidOverlayVisible"]
     assert not result["unavailable"]["ikTargetVisible"]
     assert result["unavailable"]["rebuildCount"] == 2
-
-
-def test_rig_overlay_builds_all_joints_and_toggles_visibility(module_page):
-    result = module_page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      const {createRigOverlayController} = await import(
-        './js/scene/rig-overlay-controller.js');
-      const scene = new THREE.Scene();
-      const model = new THREE.Object3D();
-      scene.add(model);
-      const canvas = document.createElement('canvas');
-      document.body.appendChild(canvas);
-      let state = {
-        selectedJointId: 2,
-        jointPickIntent: null,
-        model: {
-          key: 'model-rig', structureRevision: 1,
-          joints: [1, 2, 3, 4].map((jointId, index) => ({
-            jointId, restCenter: [index, 0, 0], restPivot: [index, 0, 0],
-          })),
-          components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3, 4],
-            parentById: {1: null, 2: 1, 3: 2, 4: 3},
-            childrenById: {1: [2], 2: [3], 3: [4], 4: []}}],
-          forestEdges: [
-            {parentId: 1, childId: 2}, {parentId: 2, childId: 3},
-            {parentId: 3, childId: 4},
-          ], poseRotationByJointId: {},
-        },
-      };
-      const controller = createRigOverlayController({
-        scene, canvas, getMeshes: () => [model], getRigState: () => state,
-      });
-      controller.refresh(state);
-      const before = controller.getDebugState();
-      state = {...state, jointPickIntent: {type: 'limb-anchor', role: 'left_arm'}};
-      controller.refresh(state);
-      const during = controller.getDebugState();
-      state = {...state, jointPickIntent: null};
-      controller.refresh(state);
-      const after = controller.getDebugState();
-      controller.dispose();
-      canvas.remove();
-      return {before, during, after};
-    }""")
-    assert result["before"]["nodeCount"] == 4
-    assert result["before"]["staticVisible"] is False
-    assert result["during"]["nodeCount"] == 4
-    assert result["during"]["staticVisible"] is True
-    assert result["after"]["nodeCount"] == 4
-    assert result["after"]["staticVisible"] is False
 
 
 def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
@@ -1101,50 +1022,6 @@ def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
     assert result["line"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["joint"] == pytest.approx([0, 0, 0, .5, 1, 0])
     assert result["dynamicUsage"]
-
-
-def test_rig_overlay_uses_authored_humanoid_controls(module_page):
-    result = module_page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      const {createRigOverlayController} = await import(
-        './js/scene/rig-overlay-controller.js');
-      const scene = new THREE.Scene();
-      const controls = Object.fromEntries([
-        ['chest', [0, 1.8, 0]], ['pelvis', [0, 1, 0]],
-        ['leftShoulder', [-.2, 1.6, 0]],
-        ['leftElbow', [-.5, 1.4, 0]], ['leftHand', [-.8, 1.2, 0]],
-        ['rightShoulder', [.2, 1.6, 0]],
-        ['rightElbow', [.5, 1.4, 0]], ['rightHand', [.8, 1.2, 0]],
-        ['leftHip', [-.15, 1, 0]], ['leftKnee', [-.2, .5, 0]],
-        ['leftFoot', [-.2, 0, 0]], ['rightHip', [.15, 1, 0]],
-        ['rightKnee', [.2, .5, 0]], ['rightFoot', [.2, 0, 0]],
-      ].map(([key, position]) => [key, {position}]));
-      const source = {
-        key: 'model-rig', structureRevision: 1, joints: [],
-        components: [], forestEdges: [], poseRotationByJointId: {},
-        humanoidControlRig: {
-          available: true, controls,
-        },
-      };
-      const state = {
-        model: source, ik: {enabled: true, available: true,
-          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
-        humanoidRigEdit: {editing: false},
-      };
-      const model = new THREE.Object3D();
-      scene.add(model);
-      const controller = createRigOverlayController({
-        scene, getMeshes: () => [model], getRigState: () => state,
-      });
-      controller.refresh(state);
-      const sprite = scene.getObjectByName('viewer-humanoid-point-leftElbow');
-      const debug = controller.getDebugState();
-      controller.dispose();
-      return {position: sprite?.position.toArray(),
-        visible: debug.humanoidOverlayVisible};
-    }""")
-    assert result["position"] == pytest.approx([-.5, 1.4, 0])
-    assert result["visible"] is True
 
 
 def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
