@@ -60,7 +60,7 @@ class FolderAccess:
         return folder
 
     def remember_mod_launch_selection(self, folder_path):
-        """Authorize one existing absolute folder for this process only."""
+        """Authorize one existing absolute folder or ZIP for this process."""
         try:
             raw_path = os.fspath(folder_path)
         except TypeError as error:
@@ -70,7 +70,8 @@ class FolderAccess:
             raise ValueError("Startup mod path must be absolute.")
 
         folder = mod_folders.normalize_path(raw_path)
-        if not os.path.isdir(folder):
+        if not (os.path.isdir(folder)
+                or (os.path.isfile(folder) and folder.casefold().endswith(".zip"))):
             raise ValueError(f"Startup mod folder does not exist: {folder}")
         self._authorized_folders.add(folder)
         return folder

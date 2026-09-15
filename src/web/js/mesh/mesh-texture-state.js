@@ -1,6 +1,7 @@
 // Component texture propagation, lazy loading and viewer-only persistence.
 
 import { activeMeshes } from './mesh-state.js';
+import { viewerState } from '../app/state.js';
 import { usesPackedNormal } from './material-profile.js';
 import { setHealthReport } from '../panels/health-report.js';
 
@@ -16,6 +17,8 @@ export function legacyMeshMetadataKey(name, entry) {
 }
 
 export function saveTextureState(modPath) {
+  if (viewerState.currentSource?.kind === 'mod'
+      && viewerState.currentSource?.readOnly === true) return;
   if (!modPath || !window.pywebview?.api?.save_mesh_textures) return;
   const state = {};
   for (const mesh of activeMeshes) {

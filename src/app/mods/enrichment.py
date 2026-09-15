@@ -38,10 +38,12 @@ def _apply_texture_enrichment(parsed, context, bindings, complete_index):
     asset_enrichment.apply(
         parsed.groups, bindings, include_not_found=complete_index,
         mod_dir=context.mod_dir,
-        dds_classification_cache=context.dds_classification_cache)
+        dds_classification_cache=context.dds_classification_cache,
+        source=getattr(context, "source", None))
     if str(getattr(parsed.game, "game", "")).casefold() == "wuwa":
         wuwa_texture_fallback.apply(
-            parsed.groups, context.mod_dir)
+            parsed.groups, context.mod_dir,
+            source=getattr(context, "source", None))
 
 
 def _assign_material_profiles(meshes, game):

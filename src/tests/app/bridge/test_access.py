@@ -1,5 +1,6 @@
 import json
 import os
+import zipfile
 
 import pytest
 
@@ -104,3 +105,25 @@ def test_launch_selection_rejects_relative_and_missing_paths(
         access.remember_mod_launch_selection("relative-mod")
     with pytest.raises(ValueError, match="Startup mod folder does not exist"):
         access.remember_mod_launch_selection(str(tmp_path / "missing"))
+
+
+def test_launch_selection_accepts_absolute_zip_without_granting_siblings(
+        tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    root = tmp_path / "mods"
+    root.mkdir()
+    archive = root / "packed.zip"
+    with zipfile.ZipFile(archive, "w") as value:
+        value.writestr("mod.ini", "[TextureOverrideBody]\n")
+    sibling = root / "other.zip"
+    with zipfile.ZipFile(sibling, "w") as value:
+        value.writestr("mod.ini", "[TextureOverrideOther]\n")
+    monkeypatch.setattr(paths, "config_path", lambda: str(config))
+
+    access = FolderAccess()
+    selected = access.remember_mod_launch_selection(str(archive))
+
+    assert selected == mod_folders.normalize_path(str(archive))
+    assert access.mod_folder(str(archive)) == selected
+    with pytest.raises(PermissionError):
+        access.mod_folder(str(sibling))

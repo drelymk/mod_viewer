@@ -12,16 +12,21 @@ from ..textures.pipeline import (
 class TextureRegistry:
     """Build-scoped role-aware texture registry."""
 
-    def __init__(self, mod_dir, profile, texture_source=None):
+    def __init__(self, mod_dir, profile, texture_source=None, source=None):
         _begin_texture_cache(mod_dir)
         self.mod_dir = mod_dir
         self.profile = profile
         self.texture_source = texture_source
+        self.source = source
         self._sources = {}
         self._keys = {}
 
     def key(self, path, role=None, *, identity=None, transform=None):
-        if not path or not os.path.exists(path):
+        exists = (self.source.is_file(path)
+                  if self.source is not None
+                  and self.source.is_resource_reference(path)
+                  else os.path.exists(path) if path else False)
+        if not path or not exists:
             return None
         role = normalize_texture_role(role)
         if transform is None:
@@ -29,8 +34,11 @@ class TextureRegistry:
         transform = normalize_texture_transform(transform)
         cache_key = (path, role, transform, identity)
         if cache_key not in self._keys:
-            relative_path = identity or os.path.relpath(
-                path, self.mod_dir).replace(os.sep, "/")
+            relative_path = identity or (
+                self.source.logical_path(path)
+                if self.source is not None
+                and self.source.is_resource_reference(path)
+                else os.path.relpath(path, self.mod_dir).replace(os.sep, "/"))
             self._keys[cache_key] = texture_key(relative_path, role)
         return self._keys[cache_key]
 
@@ -40,8 +48,17 @@ class TextureRegistry:
         key = self.key(path, role, identity=identity, transform=transform)
         if key and key not in self._sources:
             if self.texture_source is None:
-                value = encode_texture_data_uri(
-                    path, texture_role=role, texture_transform=transform)
+                if (self.source is not None
+                        and getattr(self.source, "virtual", False)
+                        and self.source.is_resource_reference(path)):
+                    value = encode_texture_data_uri(
+                        self.source.read_bytes(path),
+                        texture_role=role,
+                        texture_transform=transform,
+                        source_name=self.source.logical_path(path))
+                else:
+                    value = encode_texture_data_uri(
+                        path, texture_role=role, texture_transform=transform)
             else:
                 value = _texture_source_uri(
                     self.texture_source, path, role, transform)
@@ -51,6 +68,11 @@ class TextureRegistry:
     @property
     def sources(self):
         return {key: value for key, value in self._sources.items() if value}
+
+    def resolve(self, filename):
+        if self.source is not None:
+            return self.source.resolve_resource(filename)
+        return safe_resource_path(self.mod_dir, filename)
 
 
 def build_texture_options(group, registry):
@@ -67,7 +89,7 @@ def build_texture_options(group, registry):
         texture_options.append(option)
 
     for pool_entry in group.get("diffuse_pool_files") or []:
-        path = safe_resource_path(registry.mod_dir, pool_entry["file"])
+        path = registry.resolve(pool_entry["file"])
         key = registry.key(path)
         if key:
             res_name = pool_entry["res"]
@@ -76,7 +98,7 @@ def build_texture_options(group, registry):
 
     for candidate in group.get("discovered_textures") or []:
         filename = candidate.get("file")
-        path = safe_resource_path(registry.mod_dir, filename)
+        path = registry.resolve(filename)
         if path is None:
             continue
         key = registry.key(path)
@@ -95,8 +117,8 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
 
     asset_default = draw.asset_texture_defaults.get("diffuse") or {}
     default_key = registry.ensure(
-        asset_default.get("path") or safe_resource_path(
-            mod_dir, draw.texture_default("diffuse")),
+        asset_default.get("path") or registry.resolve(
+            draw.texture_default("diffuse")),
         "diffuse", identity=asset_default.get("key"))
     entry["tex_key"] = default_key
     entry["normal_map_y_sign"] = profile.normal_y_sign
@@ -106,8 +128,8 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
     # profile-owned. WuWa publishes the intact packed source as normal_data;
     # Genshin/ZZZ retain the derived normal_map path.
     asset_normal = draw.asset_texture_defaults.get("normal_map") or {}
-    normal_path = asset_normal.get("path") or safe_resource_path(
-        mod_dir, draw.texture_default("normal_map"))
+    normal_path = asset_normal.get("path") or registry.resolve(
+        draw.texture_default("normal_map"))
     normal_role = profile.normal_transport_role
     normal_key = registry.ensure(
         normal_path, normal_role, identity=asset_normal.get("key"))
@@ -116,8 +138,8 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
     for channel in ("light_map", "material_map", "emission_map"):
         asset_default = draw.asset_texture_defaults.get(channel) or {}
         key = registry.ensure(
-            asset_default.get("path") or safe_resource_path(
-                mod_dir, draw.texture_default(channel)),
+            asset_default.get("path") or registry.resolve(
+                draw.texture_default(channel)),
             channel, identity=asset_default.get("key"))
         if key:
             entry[f"{channel}_key"] = key
@@ -143,7 +165,7 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
         variants = []
         for variant in texture_rules:
             key = registry.ensure(
-                safe_resource_path(mod_dir, variant["file"]))
+                registry.resolve(variant["file"]))
             if key:
                 # Auxiliary assignments after a conditional diffuse branch
                 # belong to every branch reaching this draw.
@@ -159,7 +181,7 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
         variants = []
         for variant in rules:
             key = registry.ensure(
-                safe_resource_path(mod_dir, variant["file"]), channel)
+                registry.resolve(variant["file"]), channel)
             if key:
                 variants.append({
                     "conditions": variant["conditions"], "tex_key": key,
@@ -170,7 +192,7 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
     normal_variants = []
     for variant in draw.texture_rules("normal_map"):
         key = registry.ensure(
-            safe_resource_path(mod_dir, variant["file"]), normal_role)
+            registry.resolve(variant["file"]), normal_role)
         if key:
             normal_variants.append({
                 "conditions": variant["conditions"], "tex_key": key,

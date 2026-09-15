@@ -97,7 +97,7 @@ def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
     return panel
 
 
-def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
+def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None):
     """Build the read-only projection of a mod's clickable menu."""
     panel = {}
     for key in sorted(menu_slots, key=lambda k: (
@@ -121,11 +121,20 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
                 "step": info["step"],
                 "default": toggle_defaults.get(info["var"], "0"),
             }
-            image_path = safe_resource_path(mod_dir, info.get("image_file"))
-            if image_path and os.path.isfile(image_path):
+            resolve = source.resolve_resource if source is not None \
+                else lambda value: safe_resource_path(mod_dir, value)
+            image_path = resolve(info.get("image_file"))
+            exists = source.is_file if source is not None else os.path.isfile
+            if image_path and exists(image_path):
                 panel[key]["image_slot"] = True
+                source_backed = (source is not None
+                                 and getattr(source, "virtual", False))
+                image = (source.read_bytes(image_path)
+                         if source_backed else image_path)
                 panel[key]["image"] = encode_texture_data_uri(
-                    image_path, max_size=256, preserve_alpha=True)
+                    image, max_size=256, preserve_alpha=True,
+                    source_name=(source.logical_path(image_path)
+                                 if source_backed else None))
             continue
         panel[key] = {
             "name": info["name"],
@@ -141,20 +150,29 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None):
             "default": toggle_defaults.get(info["var"], info["values"][0]),
             "effects": info["effects"],
         }
-        image_path = safe_resource_path(mod_dir, info.get("image_file"))
-        if image_path and os.path.isfile(image_path):
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        image_path = resolve(info.get("image_file"))
+        exists = source.is_file if source is not None else os.path.isfile
+        if image_path and exists(image_path):
             panel[key]["image_slot"] = True
+            source_backed = (source is not None
+                             and getattr(source, "virtual", False))
+            image = (source.read_bytes(image_path)
+                     if source_backed else image_path)
             panel[key]["image"] = encode_texture_data_uri(
-                image_path, max_size=256, preserve_alpha=True)
+                image, max_size=256, preserve_alpha=True,
+                source_name=(source.logical_path(image_path)
+                             if source_backed else None))
     return panel
 
 
 def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
-                             active_mesh_keys=None):
+                             active_mesh_keys=None, source=None):
     """Collect gating variables without requiring geometry files."""
     if active_mesh_keys is not None:
         semantics = build_mesh_semantics(
-            groups, mod_dir, game_profile=game_profile)
+            groups, mod_dir, game_profile=game_profile, source=source)
         draws = (entry for label, entry in semantics.items()
                  if label in active_mesh_keys)
         return _gating_vars_from_entries(draws)
@@ -166,23 +184,27 @@ def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
 def load_present_state(context, overrides=None):
     """Read only the logical PRESENT projection from authoritative INIs."""
     return analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs).present
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source).present
 
 
 def load_control_state(context, overrides=None, pending_new_sections=None,
                        active_mesh_keys=None):
     """Read control semantics without constructing mesh geometry."""
     parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs)
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source)
     gating_vars = _gating_vars_from_groups(
-        parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys)
+                parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
+                source=context.source)
     return {
         "controls": {
             "toggles": build_toggle_panel(
                 parsed.toggles, parsed.defaults, gating_vars,
                 context.mod_dir, pending_new_sections),
             "menu": build_menu_panel(
-                parsed.menu, parsed.defaults, context.mod_dir),
+                parsed.menu, parsed.defaults, context.mod_dir,
+                source=context.source),
             "present": parsed.present,
         },
         "state": {

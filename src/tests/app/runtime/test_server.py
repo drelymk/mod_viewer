@@ -1,9 +1,12 @@
 """CSP and template isolation contracts for the localhost UI server."""
 
 import re
+import zipfile
 import urllib.request
+from unittest.mock import patch
 
 from app.runtime import server as server
+from core.mod_source import ZipModSource
 
 
 def _read_index(tmp_path, monkeypatch, feature_flags=None):
@@ -50,3 +53,42 @@ def test_server_marks_disabled_mod_feature_as_hidden(tmp_path, monkeypatch):
     )
 
     assert "feature-open-disabled-mod-off" in body
+
+
+def test_zip_texture_publication_keeps_member_bytes_private(tmp_path):
+    archive_path = tmp_path / "mod.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("Mod/body.png", b"png-bytes")
+    source = ZipModSource(archive_path)
+    reads = []
+    original_read_bytes = source.read_bytes
+
+    def read_bytes(reference):
+        reads.append(reference)
+        return original_read_bytes(reference)
+
+    source.read_bytes = read_bytes
+    publication = server.begin_texture_publication(
+        str(archive_path), source=source)
+    try:
+        member = source.resolve_resource("body.png")
+        url = publication.register(member)
+        duplicate = publication.register(member)
+        entry = server._lookup_texture(publication.token, "0")
+
+        assert url.endswith(".png")
+        assert duplicate == url
+        assert entry.path is None
+        assert entry.data is None
+        assert entry.logical_path == "body.png"
+        assert entry.mod_source is source
+        assert entry.source_ref is member
+        assert reads == []
+
+        with patch("app.runtime.server.render_texture_png",
+                   return_value=b"PNG"):
+            assert server._render_texture_request(
+                publication.token, "0", entry) == b"PNG"
+        assert reads == [member]
+    finally:
+        publication.discard()

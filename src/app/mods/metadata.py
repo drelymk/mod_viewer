@@ -17,6 +17,7 @@ from core.textures.color_adjustment import (
     normalize_color_adjustment as _normalize_mesh_color_adjustment,
     is_neutral_color_adjustment as _is_neutral_mesh_color_adjustment,
 )
+from core.mod_source import is_zip_path
 
 METADATA_NAME = ".mod_viewer.json"
 MODEL_RIG_METADATA_NAME = ".mod_viewer.rig.json"
@@ -92,16 +93,25 @@ def _mesh_metadata_keys(name, entry, legacy_key_counts=None):
     return (legacy,)
 
 
-def load(folder_path):
+def load(folder_path, source=None):
     try:
-        with open(os.path.join(folder_path, METADATA_NAME), encoding="utf-8") as fh:
-            data = json.load(fh)
+        if source is not None:
+            data = json.loads(source.read_text(
+                source.resolve_resource(METADATA_NAME)))
+        elif is_zip_path(folder_path):
+            return {}
+        else:
+            with open(os.path.join(folder_path, METADATA_NAME), encoding="utf-8") as fh:
+                data = json.load(fh)
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnicodeError):
         return {}
 
 
 def _save(folder_path, data):
+    if is_zip_path(folder_path):
+        return {"saved": False,
+                "error": "Viewer metadata cannot be saved for compressed mods."}
     path = os.path.join(folder_path, METADATA_NAME)
     temp_path = path + ".tmp"
     with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
@@ -274,10 +284,18 @@ def _normalized_model_rig(value, *, include_text=False):
     return (normalized, text) if include_text else normalized
 
 
-def load_model_rig(folder_path):
+def load_model_rig(folder_path, source=None):
     """Load a validated cached ModelRig sidecar, if one is present."""
-    path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
     try:
+        if source is not None:
+            path = source.resolve_resource(MODEL_RIG_METADATA_NAME)
+            if not path or not source.is_file(path) \
+                    or source.size(path) > MODEL_RIG_MAX_BYTES:
+                return None
+            return _normalized_model_rig(json.loads(source.read_text(path)))
+        if is_zip_path(folder_path):
+            return None
+        path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
         if os.path.getsize(path) > MODEL_RIG_MAX_BYTES:
             return None
         with open(path, encoding="utf-8") as fh:
@@ -291,6 +309,9 @@ def save_model_rig(folder_path, model_rig):
     normalized_result = _normalized_model_rig(model_rig, include_text=True)
     if normalized_result is None:
         return {"saved": False, "error": "Invalid ModelRig metadata."}
+    if is_zip_path(folder_path):
+        return {"saved": False,
+                "error": "Viewer metadata cannot be saved for compressed mods."}
     normalized, text = normalized_result
     with _LOCK:
         path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
@@ -929,9 +950,9 @@ def present_names(folder_path, ini_rel, data=None):
             if str(index).isdigit() and isinstance(name, str) and name.strip()}
 
 
-def all_present_names(folder_path):
+def all_present_names(folder_path, source=None):
     """Return a detached snapshot suitable for edit-session rollback."""
-    names = load(folder_path).get("present_names")
+    names = load(folder_path, source=source).get("present_names")
     return deepcopy(names) if isinstance(names, dict) else None
 
 
@@ -946,84 +967,105 @@ def restore_present_names(folder_path, names):
         return _save(folder_path, data)
 
 
-def save_present_name(folder_path, ini_rel, position, name):
-    """Persist only names that differ from their implicit ``Present N``."""
+def apply_present_name(data, ini_rel, position, name):
+    """Apply one sparse PRESENT name to an in-memory metadata mapping."""
     position = int(position)
     name = str(name or "").strip()
     if not name:
         raise ValueError("a present name is required")
     default = f"Present {position + 1}"
+    all_names = data.get("present_names")
+    if not isinstance(all_names, dict):
+        all_names = {}
+    names = all_names.get(ini_rel)
+    if not isinstance(names, dict):
+        names = {}
+    if name == default:
+        if str(position) not in names:
+            return False
+        names.pop(str(position), None)
+    else:
+        if names.get(str(position)) == name:
+            return False
+        names[str(position)] = name
+    if names:
+        all_names[ini_rel] = names
+    else:
+        all_names.pop(ini_rel, None)
+    if all_names:
+        data["present_names"] = all_names
+    else:
+        data.pop("present_names", None)
+    return True
+
+
+def save_present_name(folder_path, ini_rel, position, name):
+    """Persist only names that differ from their implicit ``Present N``."""
     with _LOCK:
         data = load(folder_path)
-        all_names = data.get("present_names")
-        if not isinstance(all_names, dict):
-            all_names = {}
-        names = all_names.get(ini_rel)
-        if not isinstance(names, dict):
-            names = {}
-        if name == default:
-            if str(position) not in names:
-                return {"saved": False}
-            names.pop(str(position), None)
-        else:
-            if names.get(str(position)) == name:
-                return {"saved": False}
-            names[str(position)] = name
-        if names:
-            all_names[ini_rel] = names
-        else:
-            all_names.pop(ini_rel, None)
-        if all_names:
-            data["present_names"] = all_names
-        else:
-            data.pop("present_names", None)
+        if not apply_present_name(data, ini_rel, position, name):
+            return {"saved": False}
         return _save(folder_path, data)
+
+
+def apply_clear_present_names(data, ini_rel):
+    """Remove one PRESENT name mapping from an in-memory metadata mapping."""
+    all_names = data.get("present_names")
+    if not isinstance(all_names, dict) or ini_rel not in all_names:
+        return False
+    all_names.pop(ini_rel, None)
+    if all_names:
+        data["present_names"] = all_names
+    else:
+        data.pop("present_names", None)
+    return True
 
 
 def clear_present_names(folder_path, ini_rel):
     with _LOCK:
         data = load(folder_path)
-        all_names = data.get("present_names")
-        if not isinstance(all_names, dict) or ini_rel not in all_names:
+        if not apply_clear_present_names(data, ini_rel):
             return {"saved": False}
-        all_names.pop(ini_rel, None)
-        if all_names:
-            data["present_names"] = all_names
-        else:
-            data.pop("present_names", None)
         return _save(folder_path, data)
+
+
+def apply_delete_present_name(data, ini_rel, position, old_count):
+    """Shift sparse PRESENT names after deleting one position in memory."""
+    position = int(position)
+    old_count = int(old_count)
+    all_names = data.get("present_names")
+    if not isinstance(all_names, dict):
+        return False
+    names = all_names.get(ini_rel)
+    if not isinstance(names, dict):
+        return False
+    shifted = {}
+    for old_index in range(old_count):
+        if old_index == position:
+            continue
+        old_name = names.get(str(old_index))
+        if not old_name:
+            continue
+        new_index = old_index if old_index < position else old_index - 1
+        if old_name != f"Present {new_index + 1}":
+            shifted[str(new_index)] = old_name
+    if shifted:
+        all_names[ini_rel] = shifted
+    else:
+        all_names.pop(ini_rel, None)
+    if all_names:
+        data["present_names"] = all_names
+    else:
+        data.pop("present_names", None)
+    return True
 
 
 def delete_present_name(folder_path, ini_rel, position, old_count):
     """Remove one name and shift sparse overrides with their value positions."""
-    position = int(position)
-    old_count = int(old_count)
     with _LOCK:
         data = load(folder_path)
-        all_names = data.get("present_names")
-        if not isinstance(all_names, dict):
+        if not apply_delete_present_name(data, ini_rel, position, old_count):
             return {"saved": False}
-        names = all_names.get(ini_rel)
-        if not isinstance(names, dict):
-            return {"saved": False}
-        shifted = {}
-        for old_index in range(old_count):
-            if old_index == position:
-                continue
-            old_name = names.get(str(old_index))
-            if not old_name:
-                continue
-            new_index = old_index if old_index < position else old_index - 1
-            if old_name != f"Present {new_index + 1}":
-                shifted[str(new_index)] = old_name
-        if shifted:
-            all_names[ini_rel] = shifted
-        else:
-            all_names.pop(ini_rel, None)
-        if all_names:
-            data["present_names"] = all_names
-        else:
-            data.pop("present_names", None)
         return _save(folder_path, data)
 
 
@@ -1071,7 +1113,7 @@ def hydrate_component_material_kinds(meshes, data=None):
 
 
 def hydrate_textures(folder_path, payload, data=None, texture_source=None,
-                     texture_profile=None):
+                     texture_profile=None, source=None):
     """Restore sparse highlighted boundaries, then rebuild component pools.
 
     ``payload`` is the structured application payload; only its ``meshes``
@@ -1235,7 +1277,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                     continue
                 encoded = encode_texture_key(
                     folder_path, key, role, texture_source=texture_source,
-                    texture_profile=texture_profile)
+                    texture_profile=texture_profile, source=source)
                 if encoded and not encoded.get("error"):
                     textures[encoded["tex_key"]] = encoded["uri"]
 

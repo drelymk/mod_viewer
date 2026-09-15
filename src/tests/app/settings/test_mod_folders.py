@@ -2,6 +2,7 @@
 
 import json
 import os
+import zipfile
 
 import pytest
 
@@ -131,11 +132,17 @@ def test_list_subfolders_is_immediate_sorted_and_non_recursive(tmp_path):
     nested = tmp_path / "root" / "Alpha" / "nested"
     nested.mkdir()
     open(tmp_path / "root" / "file.txt", "w", encoding="utf-8").close()
+    with zipfile.ZipFile(tmp_path / "root" / "packed.zip", "w") as archive:
+        archive.writestr("mod.ini", "[TextureOverrideBody]\n")
     mod_folders.add_folder("Root", root, filename)
 
     result = mod_folders.list_subfolders(root, root)
 
-    assert [item["name"] for item in result] == ["Alpha", "zeta"]
+    assert [item["name"] for item in result] == [
+        "Alpha", "packed.zip", "zeta"]
+    archive = next(item for item in result if item["name"] == "packed.zip")
+    assert archive["kind"] == "archive"
+    assert archive["expandable"] is False
     assert all("nested" not in item["path"] for item in result)
 
 

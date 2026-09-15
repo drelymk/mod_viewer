@@ -132,10 +132,15 @@ export function createFolderRegistryPanel({
     arrow.dataset.folderName = entry.name || entry.path;
     arrow.setAttribute('aria-label', `Expand ${arrow.dataset.folderName}`);
     arrow.setAttribute('aria-expanded', 'false');
-    arrow.addEventListener('click', event => {
-      event.stopPropagation();
-      void expandNode(node, entry.path, arrow);
-    });
+    const expandable = entry.expandable !== false && entry.kind !== 'archive';
+    arrow.classList.toggle('leaf', !expandable);
+    arrow.disabled = !expandable;
+    if (expandable) {
+      arrow.addEventListener('click', event => {
+        event.stopPropagation();
+        void expandNode(node, entry.path, arrow);
+      });
+    }
 
     const select = document.createElement('button');
     select.type = 'button';

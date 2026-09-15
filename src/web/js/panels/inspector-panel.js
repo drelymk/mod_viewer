@@ -319,6 +319,12 @@ function buildRangeControl({
 function syncTextureSaveAction(section, mesh) {
   const action = section?.querySelector('.inspector-texture-bake');
   if (!action) return;
+  const eligibility = canSaveTexture(mesh);
+  if (eligibility.reason === 'compressed-mod') {
+    action.disabled = true;
+    action.title = eligibility.message;
+    return;
+  }
   const hasTargets = getTextureSaveTargets(mesh).length > 0;
   action.disabled = !hasTargets;
   action.title = hasTargets ? '' : 'Adjust a mesh color before saving.';
@@ -354,6 +360,14 @@ function buildTextureSaveAction(section, mesh) {
     });
     section.appendChild(bake);
     syncTextureSaveAction(section, mesh);
+  } else if (eligibility.reason === 'compressed-mod') {
+    const bake = document.createElement('button');
+    bake.type = 'button';
+    bake.className = 'ui-button inspector-texture-bake';
+    bake.textContent = 'Save to Texture...';
+    bake.disabled = true;
+    bake.title = eligibility.message;
+    section.appendChild(bake);
   } else if (eligibility.reason === 'unsupported-texture-type') {
     addText(section, 'inspector-texture-bake-hint', eligibility.message);
   }

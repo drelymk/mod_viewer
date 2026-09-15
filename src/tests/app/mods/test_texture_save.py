@@ -17,6 +17,18 @@ from core.textures.dds import inspect_dds_layout
 from core.textures.uv_coverage import UVCoverage
 
 
+def test_save_texture_color_rejects_read_only_zip_source_before_io():
+    result = service.save_texture_color(
+        SimpleNamespace(source=SimpleNamespace(read_only=True)), {}, None,
+        "diffuse::body.dds", [], [],)
+
+    assert result == {
+        "status": "unsupported",
+        "code": "read_only_source",
+        "error": "Save to Texture is unavailable for compressed mods.",
+    }
+
+
 def _dx10_dds(payload, dxgi_format=98, width=4, height=4, mip_count=1):
     header = bytearray(148)
     header[:4] = b"DDS "

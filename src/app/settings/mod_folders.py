@@ -148,7 +148,7 @@ def delete_folder(folder, config_file=None):
 
 
 def list_subfolders(folder, authorized_root):
-    """Return immediate safe directory children of one authorized root."""
+    """Return immediate safe directory and ZIP children of one root."""
     folder = normalize_path(folder)
     authorized_root = normalize_path(authorized_root)
     if not is_within(folder, authorized_root):
@@ -161,11 +161,15 @@ def list_subfolders(folder, authorized_root):
         with os.scandir(folder) as entries:
             for entry in entries:
                 try:
-                    if not entry.is_dir(follow_symlinks=True):
-                        continue
                     child = normalize_path(entry.path)
-                    if is_within(child, authorized_root):
+                    if not is_within(child, authorized_root):
+                        continue
+                    if entry.is_dir(follow_symlinks=True):
                         children.append({"name": entry.name, "path": child})
+                    elif (entry.is_file(follow_symlinks=True)
+                          and entry.name.casefold().endswith(".zip")):
+                        children.append({"name": entry.name, "path": child,
+                                         "kind": "archive", "expandable": False})
                 except OSError:
                     # A disappearing or inaccessible child should not make
                     # the entire registered root unusable.

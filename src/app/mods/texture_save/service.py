@@ -127,6 +127,11 @@ def save_texture_color(
         context, overrides, active_mesh_keys, selected_texture_key, targets,
         texture_usage, progress_callback=None):
     """Save captured Color changes by editing authorized BC7 blocks."""
+    if getattr(getattr(context, "source", None), "read_only", False):
+        return _error(
+            "read_only_source",
+            "Save to Texture is unavailable for compressed mods.",
+            "unsupported")
     committed = False
     success_result = None
     saved_meshes = ()

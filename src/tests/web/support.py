@@ -375,6 +375,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                    "removeMissingAssetParts": [],
                    "discardChanges": [], "switches": [], "diagnostics": [],
                    "consumeStartupRequest": [],
+                   "selectFolder": [], "selectZipMod": [],
                    "panelOpacity": [], "presentState": [],
                    "controlState": [], "meshSemantics": [],
                    "deleteToggle": [], "recordToggle": [], "exportChanges": [],
@@ -401,6 +402,13 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             select_folder: async () => {
               const path = state.nextPath || null;
               state.nextPath = null;
+              state.calls.selectFolder.push(path);
+              return path;
+            },
+            select_zip_mod: async () => {
+              const path = state.nextPath || null;
+              state.nextPath = null;
+              state.calls.selectZipMod.push(path);
               return path;
             },
             select_asset_folder: async () => {

@@ -13,6 +13,9 @@ from core.geometry.mesh_builder import build_mesh_result, build_mesh_semantics
 from core.ini.health import analyze_mod
 from core.materials.profiles import material_profile_for
 from core.mod_discovery import discover_ini_paths
+from core.mod_source import (
+    ModSource, ModSourceError, is_zip_path, mod_source_for_path,
+)
 
 from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
 from app.mods.controls import (
@@ -53,19 +56,67 @@ class ModLoadContext:
     dds_classification_cache: dict = field(default_factory=dict)
     # Private state retained by the bridge for the exact loaded model.
     skinning_manifest: dict = field(default_factory=dict)
+    source: ModSource | None = None
 
 
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
     if context is not None:
+        if (getattr(context, "source", None) is None
+                and is_zip_path(context.mod_dir)):
+            context.source = mod_source_for_path(context.mod_dir)
+        _normalize_virtual_context(context)
         return context
     if folder_path is None:
         raise ValueError("folder_path is required")
     if ini_paths is None:
         # Direct callers retain the convenience form. The application passes
         # an explicit context so the normal open path never rediscovers INIs.
-        ini_paths = find_inis(folder_path)
+        source = mod_source_for_path(folder_path)
+        ini_paths = find_inis(folder_path, source=source)
+    else:
+        source = (getattr(ini_paths[0], "source", None)
+                  if ini_paths else None) or mod_source_for_path(folder_path)
+    if getattr(source, "virtual", False):
+        normalized_paths = []
+        for path in ini_paths:
+            logical = getattr(path, "logical_path", None)
+            if not logical:
+                logical = str(path).split("::", 1)[-1]
+            normalized_paths.append(source.document_path(logical))
+        ini_paths = normalized_paths
     return ModLoadContext(
-        folder_path, list(ini_paths), documents or {}, {})
+        folder_path, list(ini_paths), documents or {}, {}, source=source)
+
+
+def _normalize_virtual_context(context):
+    """Keep direct ModLoadContext callers on logical source identities."""
+    source = getattr(context, "source", None)
+    if not getattr(source, "virtual", False):
+        return context
+    normalized_paths = []
+    for path in context.ini_paths:
+        if source.is_resource_reference(path):
+            normalized_paths.append(path)
+            continue
+        logical = getattr(path, "logical_path", None)
+        if not logical:
+            logical = str(path).split("::", 1)[-1]
+        normalized_paths.append(source.document_path(logical))
+    context.ini_paths = normalized_paths
+
+    documents = dict(getattr(context, "docs", None) or {})
+    for path, document in list(documents.items()):
+        if source.is_resource_reference(path):
+            continue
+        logical = getattr(path, "logical_path", None)
+        if not logical:
+            logical = str(path).split("::", 1)[-1]
+        try:
+            documents[source.document_path(logical)] = document
+        except ModSourceError:
+            continue
+    context.docs = documents
+    return context
 
 
 def _failure_health(context, overrides):
@@ -73,7 +124,7 @@ def _failure_health(context, overrides):
     try:
         return analyze_mod(
             context.mod_dir, ini_paths=context.ini_paths, overrides=overrides,
-            documents=context.docs)
+            documents=context.docs, source=context.source)
     except Exception:
         traceback.print_exc()
         return {
@@ -92,7 +143,8 @@ def _failure_health(context, overrides):
 def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
                         present=None, state_rules=None, state_defaults=None,
                         health=None, error=None, game=None,
-                        material_profiles=None, asset_resolution=None):
+                        material_profiles=None, asset_resolution=None,
+                        source=None):
     """Create the stable application-to-frontend payload shape."""
     profile_table = dict(material_profiles or {})
     if game is not None:
@@ -121,6 +173,11 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
     }
     if game is not None:
         payload["metadata"]["game"] = game.to_metadata()
+    if source is not None:
+        payload["metadata"].update({
+            "source_kind": source.kind,
+            "source_read_only": bool(source.read_only),
+        })
     if error:
         payload["error"] = error
     return payload
@@ -129,11 +186,12 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
 def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     """Read draw and material semantics without building geometry."""
     parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs)
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source)
     _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
     mesh_payload = build_mesh_semantics(
         parsed.groups, context.mod_dir, game_profile=parsed.game.game,
-        active_mesh_keys=active_mesh_keys)
+        active_mesh_keys=active_mesh_keys, source=context.source)
     # Keep semantic refresh on the same authoritative material-resolution
     # chain as a full model load. Viewer-only choices affect evidence here but
     # never edit the source INI.
@@ -163,24 +221,26 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         health = _failure_health(context, overrides)
         return _structured_payload(
             health=health,
-            error="No active .ini files found in this folder.")
+            error="No active .ini files found in this folder.",
+            source=context.source)
 
     try:
         parsed = analyze_mod_inis(
-            context.ini_paths, context.mod_dir, overrides, context.docs)
+            context.ini_paths, context.mod_dir, overrides, context.docs,
+            source=context.source)
         if not parsed.groups:
             health = _failure_health(context, overrides)
             return _structured_payload(
                 health=health,
                 error=(f"No mesh geometry found across "
                        f"{len(context.ini_paths)} ini file(s)."),
-                game=parsed.game)
+                game=parsed.game, source=context.source)
 
         _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
         built = build_mesh_result(
             parsed.groups, context.mod_dir, geometry=geometry,
             texture_source=texture_source,
-            game_profile=parsed.game.game)
+            game_profile=parsed.game.game, source=context.source)
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}
@@ -188,7 +248,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             return _structured_payload(
                 health=health,
                 error="No mesh data could be extracted (buffer files missing?).",
-                game=parsed.game)
+                game=parsed.game, source=context.source)
 
         context.skinning_manifest = getattr(
             built, "skinning_manifest", None) or {}
@@ -202,17 +262,24 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             parsed.toggles, parsed.defaults, _gating_vars(mesh_payload),
             context.mod_dir, pending_new_sections)
         menu = build_menu_panel(
-            parsed.menu, parsed.defaults, context.mod_dir)
+            parsed.menu, parsed.defaults, context.mod_dir,
+            source=context.source)
         return _structured_payload(
             meshes=mesh_payload, textures=built.textures, toggles=toggles,
             menu=menu, present=parsed.present,
             state_rules=parsed.state_rules, state_defaults=parsed.defaults,
             game=parsed.game, material_profiles=material_profiles,
-            asset_resolution=asset_resolution)
+            asset_resolution=asset_resolution, source=context.source)
+    except ModSourceError as error:
+        context.skinning_manifest = {}
+        return _structured_payload(
+            health=_failure_health(context, overrides),
+            error=str(error), source=context.source)
     except Exception:
         context.skinning_manifest = {}
         traceback.print_exc()
         health = _failure_health(context, overrides)
         return _structured_payload(
             health=health,
-            error="Unexpected backend error. See the application log for details.")
+            error="Unexpected backend error. See the application log for details.",
+            source=context.source)

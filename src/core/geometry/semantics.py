@@ -11,12 +11,15 @@ from ..textures.pipeline import normalize_texture_role, texture_key
 _MAX_DRAWS = 10_000
 
 
-def _rel_source(src, mod_dir):
+def _rel_source(src, mod_dir, source=None):
     """Project absolute INI provenance to a browser-safe relative path."""
     path = src.get("ini_path")
     if path:
+        if source is None:
+            source = getattr(path, "source", None)
         try:
-            path = os.path.relpath(path, mod_dir).replace(os.sep, "/")
+            path = (source.logical_path(path) if source is not None
+                    else os.path.relpath(path, mod_dir).replace(os.sep, "/"))
         except ValueError:
             path = os.path.basename(path)
     result = {
@@ -74,12 +77,16 @@ def deduplicate_draws(group, max_draws=0):
 _deduplicate_draws = deduplicate_draws
 
 
-def _semantic_texture_key(mod_dir, authored_path, role):
+def _semantic_texture_key(mod_dir, authored_path, role, source=None):
     """Resolve a texture identity without opening or decoding the source."""
-    path = safe_resource_path(mod_dir, authored_path)
-    if not path or not os.path.exists(path):
+    resolve = source.resolve_resource if source is not None \
+        else lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    path = resolve(authored_path)
+    if not path or not exists(path):
         return None
-    relative_path = os.path.relpath(path, mod_dir).replace(os.sep, "/")
+    relative_path = (source.logical_path(path) if source is not None
+                     else os.path.relpath(path, mod_dir).replace(os.sep, "/"))
     return texture_key(relative_path, normalize_texture_role(role))
 
 
@@ -93,17 +100,19 @@ def _semantic_asset_key(draw, role, transport_role=None):
     return texture_key(key, role)
 
 
-def _semantic_texture_variants(draw, mod_dir, authored_role, transport_role=None):
+def _semantic_texture_variants(draw, mod_dir, authored_role, transport_role=None,
+                               source=None):
     role = transport_role or authored_role
     variants = []
     for variant in draw.texture_rules(authored_role):
-        key = _semantic_texture_key(mod_dir, variant.get("file"), role)
+        key = _semantic_texture_key(
+            mod_dir, variant.get("file"), role, source=source)
         if key:
             variants.append({"conditions": variant["conditions"], "tex_key": key})
     return variants
 
 
-def authored_texture_keys_for_draw(draw, mod_dir, game_profile=None):
+def authored_texture_keys_for_draw(draw, mod_dir, game_profile=None, source=None):
     """Return every authored texture identity owned by a resolved draw.
 
     This includes inactive conditional variants because they still identify
@@ -126,12 +135,12 @@ def authored_texture_keys_for_draw(draw, mod_dir, game_profile=None):
         default = (_semantic_asset_key(draw, authored_role, transport_role)
                    or _semantic_texture_key(
                        mod_dir, draw.texture_default(authored_role),
-                       transport_role))
+                       transport_role, source=source))
         if default:
             result[transport_role].add(default)
         for variant in draw.texture_rules(authored_role):
             key = _semantic_texture_key(
-                mod_dir, variant.get("file"), transport_role)
+                mod_dir, variant.get("file"), transport_role, source=source)
             if key:
                 result[transport_role].add(key)
     return result
@@ -145,7 +154,7 @@ def validate_draw_count(groups):
 
 
 def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
-                         active_mesh_keys=None):
+                         active_mesh_keys=None, source=None):
     """Return draw visibility semantics without resolving any geometry."""
     validate_draw_count(groups)
     from ..textures.profiles import texture_profile_for
@@ -162,48 +171,50 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
                 "tex_key": (_semantic_asset_key(draw, "diffuse") or
                             _semantic_texture_key(
                                 mod_dir, draw.texture_default("diffuse"),
-                                "diffuse")),
+                                "diffuse", source=source)),
                 "normal_map_key": None,
                 "normal_data_key": None,
                 "light_map_key": (_semantic_asset_key(draw, "light_map") or
                                   _semantic_texture_key(
                                       mod_dir, draw.texture_default("light_map"),
-                                      "light_map")),
+                                      "light_map", source=source)),
                 "material_map_key": (_semantic_asset_key(
                     draw, "material_map") or _semantic_texture_key(
                         mod_dir, draw.texture_default("material_map"),
-                        "material_map")),
+                        "material_map", source=source)),
                 "emission_map_key": (_semantic_asset_key(
                     draw, "emission_map") or _semantic_texture_key(
                         mod_dir, draw.texture_default("emission_map"),
-                        "emission_map")),
+                        "emission_map", source=source)),
             }
-            source = group.get("source")
+            group_source = group.get("source")
             component = group.get("display_name") or group.get("name")
-            if source:
-                entry["source"] = source
+            if group_source:
+                entry["source"] = group_source
             if component:
                 entry["component"] = component
             entry["identity"] = mesh_identity_for_draw(draw, group).to_dict()
             normal_key = _semantic_texture_key(
-                mod_dir, draw.texture_default("normal_map"), normal_role)
+                mod_dir, draw.texture_default("normal_map"), normal_role,
+                source=source)
             normal_key = (_semantic_asset_key(
                 draw, "normal_map", normal_role) or normal_key)
             entry[f"{normal_role}_key"] = normal_key
             if draw.sources:
-                entry["sources"] = [_rel_source(source, mod_dir)
-                                     for source in draw.sources]
+                entry["sources"] = [_rel_source(item, mod_dir, source=source)
+                                     for item in draw.sources]
 
             texture_variants = _semantic_texture_variants(
-                draw, mod_dir, "diffuse")
+                draw, mod_dir, "diffuse", source=source)
             if len(texture_variants) > 1:
                 entry["texture_variants"] = texture_variants
             for channel in ("light_map", "material_map", "emission_map"):
-                variants = _semantic_texture_variants(draw, mod_dir, channel)
+                variants = _semantic_texture_variants(
+                    draw, mod_dir, channel, source=source)
                 if variants:
                     entry[f"{channel}_variants"] = variants
             normal_variants = _semantic_texture_variants(
-                draw, mod_dir, "normal_map", normal_role)
+                draw, mod_dir, "normal_map", normal_role, source=source)
             if normal_variants:
                 entry[f"{normal_role}_variants"] = normal_variants
             binding = draw.asset_binding

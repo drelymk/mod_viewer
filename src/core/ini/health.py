@@ -10,6 +10,8 @@ import os
 import re
 
 from .document import IniDocument, OTHER
+from ..mod_discovery import discover_ini_paths
+from ..mod_source import ModSourceError
 from ..resource_paths import safe_resource_path
 from ..textures import split_texture_key
 
@@ -49,7 +51,11 @@ def _issue(code, severity, category, message, ini=None, section=None,
     return value
 
 
-def _relative(path, root):
+def _relative(path, root, source=None):
+    if source is None:
+        source = getattr(path, "source", None)
+    if source is not None and source.is_resource_reference(path):
+        return source.logical_path(path)
     return os.path.relpath(path, root).replace("\\", "/")
 
 
@@ -57,11 +63,14 @@ def _path_key(path):
     return os.path.normcase(os.path.abspath(path))
 
 
-def _load_document(path, override=None, document=None):
+def _load_document(path, override=None, document=None, source=None):
     if document is not None:
         return document
-    return (IniDocument.from_string(override, path=path)
-            if override is not None else IniDocument.load(path))
+    if override is not None:
+        return IniDocument.from_string(override, path=path)
+    if source is not None:
+        return IniDocument.from_string(source.read_text(path), path=path)
+    return IniDocument.load(path)
 
 
 def _resource_sections(doc):
@@ -92,8 +101,13 @@ def _tokens(lines):
         yield line, [match.group(0) for match in _RESOURCE_TOKEN_RE.finditer(line.text)]
 
 
-def _rebased_filename(filename, ini_path, mod_dir):
-    rel_dir = os.path.relpath(os.path.dirname(ini_path), mod_dir)
+def _rebased_filename(filename, ini_path, mod_dir, source=None):
+    if source is None:
+        source = getattr(ini_path, "source", None)
+    ini_name = (source.logical_path(ini_path)
+                if source is not None else ini_path)
+    rel_dir = os.path.dirname(ini_name) if source is not None \
+        else os.path.relpath(os.path.dirname(ini_path), mod_dir)
     return filename if rel_dir == os.curdir else os.path.join(rel_dir, filename)
 
 
@@ -193,7 +207,8 @@ def _analyze_statements(doc, ini_rel, issues):
                     }
 
 
-def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
+def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
+                      source=None):
     for problem in doc.structure_errors():
         issues.append(_issue(
             "malformed_condition_nesting", "error", "conditions",
@@ -275,7 +290,10 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
         owned = []
         for filename, line in resource["filenames"]:
             resolved = safe_resource_path(
-                mod_dir, _rebased_filename(filename, ini_path, mod_dir))
+                mod_dir, _rebased_filename(
+                    filename, ini_path, mod_dir, source=source)) \
+                if source is None else source.resolve_resource(
+                    _rebased_filename(filename, ini_path, mod_dir, source=source))
             if resolved is None:
                 if key in reachable:
                     issues.append(_issue(
@@ -287,7 +305,8 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
                 continue
             declared_files.add(_path_key(resolved))
             owned.append(filename.replace("\\", "/"))
-            if key in reachable and not os.path.isfile(resolved):
+            exists = source.is_file if source is not None else os.path.isfile
+            if key in reachable and not exists(resolved):
                 issues.append(_issue(
                     "missing_resource_file", "error", "resources",
                     f"{resource['name']} references a file that does not exist: {filename}.",
@@ -306,7 +325,7 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files):
             ))
 
 
-def _filename_paths(doc, mod_dir, ini_path=None):
+def _filename_paths(doc, mod_dir, ini_path=None, source=None):
     result = set()
     for sec in doc.sections:
         for line in sec.lines:
@@ -315,19 +334,27 @@ def _filename_paths(doc, mod_dir, ini_path=None):
             lhs, rhs = (part.strip() for part in line.text.split("=", 1))
             if lhs.lower() != "filename":
                 continue
-            relative = (_rebased_filename(rhs, ini_path, mod_dir)
+            relative = (_rebased_filename(rhs, ini_path, mod_dir, source=source)
                         if ini_path else rhs)
-            resolved = safe_resource_path(mod_dir, relative)
+            resolved = (source.resolve_resource(relative)
+                        if source is not None
+                        else safe_resource_path(mod_dir, relative))
             if resolved is not None:
                 result.add(_path_key(resolved))
     return result
 
 
-def _viewer_texture_paths(mod_dir):
+def _viewer_texture_paths(mod_dir, source=None):
     result = set()
     try:
-        with open(os.path.join(mod_dir, ".mod_viewer.json"), encoding="utf-8") as fh:
-            data = json.load(fh)
+        if source is not None:
+            path = source.resolve_resource(".mod_viewer.json")
+            if not path or not source.is_file(path):
+                return result
+            data = json.loads(source.read_text(path))
+        else:
+            with open(os.path.join(mod_dir, ".mod_viewer.json"), encoding="utf-8") as fh:
+                data = json.load(fh)
         textures = data.get("textures", {}) if isinstance(data, dict) else {}
         for state in textures.values() if isinstance(textures, dict) else ():
             if not isinstance(state, dict):
@@ -336,15 +363,25 @@ def _viewer_texture_paths(mod_dir):
                           "light_map", "material_map", "emission_map"):
                 key = state.get(field)
                 _role, relative_path = split_texture_key(key)
-                resolved = safe_resource_path(mod_dir, relative_path)
+                resolved = (source.resolve_resource(relative_path)
+                            if source is not None
+                            else safe_resource_path(mod_dir, relative_path))
                 if resolved is not None:
                     result.add(_path_key(resolved))
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnicodeError):
         pass
     return result
 
 
-def _inventory_files(mod_dir):
+def _inventory_files(mod_dir, source=None):
+    if source is not None:
+        for relative in source.list_files():
+            name = relative.rsplit("/", 1)[-1]
+            if name.lower() in _IGNORED_FILES or name.lower().endswith(".bak"):
+                continue
+            if os.path.splitext(name)[1].lower() in _ASSET_EXTENSIONS:
+                yield source.resolve_resource(relative)
+        return
     for base, dirs, files in os.walk(mod_dir):
         dirs.sort()
         files.sort()
@@ -355,7 +392,8 @@ def _inventory_files(mod_dir):
                 yield os.path.join(base, name)
 
 
-def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None):
+def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
+                source=None):
     """Return a JSON-ready health report for active INIs in ``mod_dir``.
 
     Any staged text in ``overrides`` is analyzed instead of the disk version.
@@ -364,41 +402,44 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None):
     """
     overrides = overrides or {}
     documents = documents or {}
+    if source is None and str(mod_dir).lower().endswith(".zip"):
+        from ..mod_source import mod_source_for_path
+        source = mod_source_for_path(mod_dir)
     if ini_paths is None:
-        ini_paths = [os.path.join(mod_dir, name) for name in sorted(os.listdir(mod_dir))
-                     if name.lower().endswith(".ini")
-                     and not name.upper().startswith("DISABLED")]
+        ini_paths = discover_ini_paths(mod_dir, source=source)
 
     issues, declared_files = [], set()
     for path in ini_paths:
-        ini_rel = _relative(path, mod_dir)
+        ini_rel = _relative(path, mod_dir, source=source)
         try:
             doc = documents.get(path)
             if doc is None:
                 doc = documents.get(_path_key(path))
-            doc = _load_document(path, overrides.get(path), document=doc)
-        except (OSError, UnicodeError) as exc:
+            doc = _load_document(
+                path, overrides.get(path), document=doc, source=source)
+        except (OSError, UnicodeError, ModSourceError) as exc:
             issues.append(_issue(
                 "unreadable_ini", "error", "ini",
                 f"Could not read this INI as UTF-8: {exc}", ini=ini_rel,
             ))
             continue
-        declared_files.update(_filename_paths(doc, mod_dir, path))
-        _analyze_document(doc, ini_rel, path, mod_dir, issues, declared_files)
+        declared_files.update(_filename_paths(
+            doc, mod_dir, path, source=source))
+        _analyze_document(
+            doc, ini_rel, path, mod_dir, issues, declared_files, source=source)
 
     inactive_files = set()
-    for name in sorted(os.listdir(mod_dir)):
-        if not (name.lower().endswith(".ini") and name.upper().startswith("DISABLED")):
-            continue
+    for path in discover_ini_paths(mod_dir, disabled=True, source=source):
         try:
             inactive_files.update(_filename_paths(
-                IniDocument.load(os.path.join(mod_dir, name)), mod_dir))
-        except (OSError, UnicodeError):
+                _load_document(path, source=source), mod_dir, path,
+                source=source))
+        except (OSError, UnicodeError, ModSourceError):
             pass
 
-    viewer_files = _viewer_texture_paths(mod_dir)
+    viewer_files = _viewer_texture_paths(mod_dir, source=source)
     file_counts = {"unreferenced": 0, "inactive_only": 0, "viewer_only": 0, "referenced": 0}
-    for path in _inventory_files(mod_dir):
+    for path in _inventory_files(mod_dir, source=source):
         key = _path_key(path)
         if key in declared_files:
             file_counts["referenced"] += 1
@@ -408,7 +449,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None):
             file_counts["inactive_only"] += 1
         else:
             file_counts["unreferenced"] += 1
-            rel = _relative(path, mod_dir)
+            rel = _relative(path, mod_dir, source=source)
             issues.append(_issue(
                 "unreferenced_asset_file", "warning", "files",
                 f"{rel} is not declared by any active INI.", filename=rel,

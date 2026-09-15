@@ -1,5 +1,35 @@
 from .support import *
 
+
+def test_open_mod_source_menu_uses_shared_load_flow_for_folder_and_zip(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url,
+        {"Folder": _payload("Folder"), "Archive.zip": _payload("Archive")})
+    try:
+        page.evaluate("window.__fakeApi.nextPath = 'Folder'")
+        page.locator("#open-menu-btn").click()
+        page.locator("#open-folder-choice").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 1")
+        assert page.evaluate("window.__fakeApi.calls.selectFolder") == ["Folder"]
+        assert page.evaluate("window.__fakeApi.calls.selectZipMod") == []
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Folder"]
+
+        page.evaluate("window.__fakeApi.nextPath = 'Archive.zip'")
+        page.locator("#open-menu-btn").click()
+        page.locator("#open-zip-choice").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 2")
+        assert page.evaluate("window.__fakeApi.calls.selectZipMod") == [
+            "Archive.zip"]
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == [
+            "Folder", "Archive.zip"]
+        assert page.evaluate("window.modViewer.getCurrentSource().path") == (
+            "Archive.zip")
+    finally:
+        context.close()
+
 def test_startup_mod_uses_switch_flow_and_disabled_ini_setting(
         edge_browser, frontend_url):
     context, page = _page(
