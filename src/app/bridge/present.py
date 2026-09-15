@@ -37,8 +37,6 @@ def _unexpected_error():
 
 def _batch_run(mod_dir, targets, mutate, metadata_change=None):
     source = mod_source_for_path(mod_dir)
-    if metadata_change is not None and source.read_only:
-        return {"error": "Edits are unavailable for compressed mods."}
     records = []
     try:
         for ini_rel, path, _doc in targets:
@@ -48,7 +46,7 @@ def _batch_run(mod_dir, targets, mutate, metadata_change=None):
         try:
             for _sess, _key, doc, _was, _snapshot, _path, ini_rel in records:
                 results.append(mutate(ini_rel, doc))
-            if metadata_change:
+            if metadata_change and not source.read_only:
                 edit_session.stage_present_metadata(mod_dir)
                 metadata_change(results)
         except BaseException:

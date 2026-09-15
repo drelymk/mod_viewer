@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-import webview
-
 from app.bridge.api import ModViewerAPI
 from app.session import edit as edit_session
 from app.settings import mod_folders
@@ -64,7 +62,6 @@ EXPECTED_API_METHODS = {
     "save_humanoid_control_rig",
     "save_model_rig",
     "save_weight_selection",
-    "select_mod_source",
     "select_asset_folder",
     "select_folder",
     "set_asset_folder_enabled",
@@ -149,44 +146,6 @@ def test_facade_composes_picker_registry_preview_and_editing(tmp_path, monkeypat
         assert "$Value = 0" in ini.read_text(encoding="utf-8")
     finally:
         edit_session.discard(selected)
-
-
-def test_select_mod_source_picks_zip_without_changing_folder_picker(
-        tmp_path, monkeypatch):
-    archive = tmp_path / "packed.zip"
-    archive.write_bytes(b"zip")
-    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
-
-    calls = []
-    api = ModViewerAPI()
-    api._window = SimpleNamespace(
-        create_file_dialog=lambda dialog_type, **kwargs: calls.append(
-            (dialog_type, kwargs)) or [str(archive)])
-
-    selected = api.select_mod_source()
-
-    assert selected == mod_folders.normalize_path(str(archive))
-    assert calls[0][0] == webview.FileDialog.OPEN
-    assert calls[0][1]["file_types"] == ("Compressed mods (*.zip)",)
-
-
-def test_select_mod_source_falls_back_to_directory_picker(tmp_path, monkeypatch):
-    folder = tmp_path / "folder"
-    folder.mkdir()
-    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
-
-    responses = [None, [str(folder)]]
-    calls = []
-    api = ModViewerAPI()
-    api._window = SimpleNamespace(
-        create_file_dialog=lambda dialog_type, **kwargs: calls.append(
-            (dialog_type, kwargs)) or responses.pop(0))
-
-    selected = api.select_mod_source()
-
-    assert selected == mod_folders.normalize_path(str(folder))
-    assert [call[0] for call in calls] == [
-        webview.FileDialog.OPEN, webview.FileDialog.FOLDER]
 
 
 def test_missing_asset_parts_preserves_unauthorized_folder_error(

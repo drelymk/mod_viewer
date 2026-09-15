@@ -50,6 +50,8 @@ def test_zip_discovery_uses_wrapper_relative_depth_and_disabled_selection(tmp_pa
         "Export/variants/deep/too-deep/fourth.ini": b"[KeyFourth]\n",
         "Export/DISABLED-old.ini": b"[TextureOverrideBody]\n"
         b"drawindexed = 3, 0, 0\n",
+        "Export/variants/deep/too-deep/DISABLED-fourth.ini":
+            b"[KeyFourth]\nkey = F4\n",
     })
     source = ZipModSource(archive_path)
 
@@ -58,9 +60,10 @@ def test_zip_discovery_uses_wrapper_relative_depth_and_disabled_selection(tmp_pa
         str(archive_path), disabled=True, source=source)
 
     assert [source.logical_path(path) for path in active] == [
-        "mod.ini", "variants/deep/third.ini", "variants/extra.ini"]
+        "mod.ini", "variants/deep/third.ini",
+        "variants/deep/too-deep/fourth.ini", "variants/extra.ini"]
     assert [source.logical_path(path) for path in disabled] == [
-        "DISABLED-old.ini"]
+        "DISABLED-old.ini", "variants/deep/too-deep/DISABLED-fourth.ini"]
 
 
 @pytest.mark.parametrize("member", [
@@ -95,6 +98,22 @@ def test_zip_source_enforces_member_and_aggregate_limits(tmp_path, monkeypatch):
     monkeypatch.setattr("core.mod_source._MAX_ZIP_READ_BYTES", 6)
 
     assert source.read_bytes("one.bin") == b"12345"
+    with pytest.raises(ModSourceError, match="2 GiB safety limit"):
+        source.read_bytes("two.bin")
+
+
+def test_zip_source_does_not_recount_member_reads_across_reloads(
+        tmp_path, monkeypatch):
+    archive_path = _write_zip(tmp_path / "reloads.zip", {
+        "one.bin": b"12345",
+        "two.bin": b"67890",
+    })
+    source = ZipModSource(archive_path)
+    monkeypatch.setattr("core.mod_source._MAX_ZIP_MEMBER_BYTES", 5)
+    monkeypatch.setattr("core.mod_source._MAX_ZIP_READ_BYTES", 6)
+
+    for _ in range(3):
+        assert source.read_bytes("one.bin") == b"12345"
     with pytest.raises(ModSourceError, match="2 GiB safety limit"):
         source.read_bytes("two.bin")
 

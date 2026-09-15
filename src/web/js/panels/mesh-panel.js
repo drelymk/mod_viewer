@@ -307,6 +307,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   const texturePools = options.texturePools || {};
   const colorAdjustments = options.colorAdjustments || {};
   const readOnlySource = options.readOnlySource === true;
+  const canPersistMetadata = options.canPersistMetadata !== false;
   const texturePicker = options.texturePicker || null;
 
   const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
@@ -352,9 +353,24 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
       componentDescriptor.assetResolution = options.assetResolution || null;
       let materialKind = componentKind;
       let materialKindInFlight = false;
-      const canPersist = !readOnlySource && !!modPath;
+      const canPersist = !readOnlySource && canPersistMetadata && !!modPath;
+      const canEdit = !readOnlySource && !!componentIdentity && !!modPath;
       const setMaterialKind = async kind => {
-        if (!canPersist || !componentIdentity || materialKindInFlight) return false;
+        if (!canEdit || materialKindInFlight) return false;
+        if (!canPersist) {
+          // Compressed mods have no writable metadata sidecar. Keep this
+          // viewer-only choice in mesh state so the control remains useful,
+          // while the read-only source still prevents persistence/export.
+          materialKind = kind === 'auto' ? null : kind;
+          itemObjs.forEach(mesh => {
+            mesh.userData.materialKindOverride = materialKind;
+          });
+          notifyMeshStateChanged(itemObjs);
+          window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
+            detail: { component: componentDescriptor, reason: 'material-kind' },
+          }));
+          return true;
+        }
         const previousKind = materialKind;
         materialKindInFlight = true;
         try {
@@ -408,7 +424,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
       Object.assign(componentDescriptor, {
         getMaterialKind: () => itemObjs[0]?.userData.materialKindOverride
           || materialKind,
-        setMaterialKind: canPersist ? setMaterialKind : undefined,
+        setMaterialKind: canEdit ? setMaterialKind : undefined,
         openTextureManager: () => openTextureModal(
           groupName, texturePool, modPath, onPoolChange, texturePicker),
         getTextureOverride,

@@ -4626,6 +4626,33 @@ def test_material_kind_control_reverts_when_semantic_refresh_fails(
         context.close()
 
 
+def test_zip_material_kind_control_stays_session_local(
+        edge_browser, frontend_url):
+    payload = _packed_material_payload("wuwa:rabbitfx")
+    payload["metadata"]["source_kind"] = "zip"
+    payload["metadata"]["source_read_only"] = True
+    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    try:
+        _open(page, "Packed")
+        page.locator(".draw-item").wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        select = page.locator(".inspector-material-kind-control")
+        select.wait_for()
+
+        assert select.is_enabled()
+        select.select_option("body")
+        page.wait_for_function(
+            "document.querySelector('.inspector-material-kind-control')?.value === 'body'")
+        assert page.evaluate(
+            "window.modViewer.getMaterialState(0).materialKindOverride") == "body"
+        assert page.evaluate("window.__fakeApi.calls.materialKind || []") == []
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
+        assert page.locator("#export-btn").is_disabled()
+    finally:
+        context.close()
+
+
 def test_each_mesh_resolves_its_own_profile_and_packed_source(
         edge_browser, frontend_url):
     payload = _packed_material_payload("zzz:zzmi")

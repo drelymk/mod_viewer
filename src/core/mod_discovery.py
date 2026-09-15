@@ -72,15 +72,26 @@ def _has_geometry_sections(path, source):
 
 
 def discover_ini_paths(mod_dir, *, disabled=False, source=None):
-    """Return selected direct INIs and bounded nested INIs for ``mod_dir``.
+    """Return selected INIs from a directory or every ZIP archive depth.
 
-    Direct files are always retained.  Nested files are considered only when
-    a direct INI contains a geometry command, and are capped at two directory
-    levels and ten total files.  ``disabled`` selects only filenames beginning
-    with ``DISABLED`` (case-insensitively); active and disabled files are never
-    combined.
+    Directory discovery retains its historical bounded nested search.  ZIP
+    discovery has no filesystem root to infer, so it scans all archive members
+    deterministically and caps the result at ten files.  ``disabled`` selects
+    only filenames beginning with ``DISABLED`` (case-insensitively); active and
+    disabled files are never combined.
     """
     source = source or DirectoryModSource(mod_dir)
+    if source.kind == "zip":
+        found = []
+        for logical in source.list_files():
+            name = logical.rsplit("/", 1)[-1]
+            if not _selected(name, disabled=disabled):
+                continue
+            found.append(source.document_path(logical))
+            if len(found) >= _MAX_INI_FILES:
+                break
+        return found
+
     direct = _ini_names(mod_dir if source.kind == "directory" else "",
                         source, disabled=disabled)
     if not any(_has_geometry_sections(path, source) for path in direct):
@@ -100,14 +111,4 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None):
                 found.append(path)
                 if len(found) >= _MAX_INI_FILES:
                     return found
-    else:
-        for logical in source.list_files():
-            parent, _, name = logical.rpartition("/")
-            depth = 0 if not parent else len(parent.split("/"))
-            if depth == 0 or depth > _MAX_INI_DEPTH \
-                    or not _selected(name, disabled=disabled):
-                continue
-            found.append(source.document_path(logical))
-            if len(found) >= _MAX_INI_FILES:
-                return found
     return found

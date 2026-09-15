@@ -237,6 +237,10 @@ class ZipModSource(ModSource):
             # name is only the virtual/logical identity exposed to callers.
             self._members[logical] = (info.filename, info)
             self._folded.setdefault(logical.casefold(), []).append(logical)
+        # Count each archive member only once.  The same source is reused by
+        # staged editing and reloads, so charging repeated reads against a
+        # lifetime budget would eventually reject an otherwise safe reload.
+        self._requested_members = set()
         self._requested_bytes = 0
 
     @staticmethod
@@ -349,7 +353,8 @@ class ZipModSource(ModSource):
         if info.flag_bits & 0x1:
             raise ModSourceError("Encrypted ZIP members are not supported.")
         size = self.size(reference)
-        if self._requested_bytes + size > _MAX_ZIP_READ_BYTES:
+        additional = 0 if member in self._requested_members else size
+        if self._requested_bytes + additional > _MAX_ZIP_READ_BYTES:
             raise ModSourceError(
                 "Requested ZIP member data exceeds the 2 GiB safety limit.")
         try:
@@ -360,7 +365,9 @@ class ZipModSource(ModSource):
             raise ModSourceError(f"Could not read ZIP member {member!r}: {error}") from error
         if len(data) > _MAX_ZIP_MEMBER_BYTES or len(data) != size:
             raise ModSourceError(f"ZIP member {member!r} has an invalid size.")
-        self._requested_bytes += len(data)
+        if member not in self._requested_members:
+            self._requested_members.add(member)
+            self._requested_bytes += len(data)
         return data
 
     def read_text(self, reference):

@@ -403,11 +403,6 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.nextPath = null;
               return path;
             },
-            select_mod_source: async () => {
-              const path = state.nextPath || null;
-              state.nextPath = null;
-              return path;
-            },
             select_asset_folder: async () => {
               const path = state.nextPath || null;
               state.nextPath = null;

@@ -224,7 +224,11 @@ export async function displayMeshPayload(payload, {
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,
-      readOnlySource: assetMode || sourceReadOnly,
+      // Asset Preview has no editing session at all. A ZIP mod is read-only
+      // only at the persistence boundary; viewer controls can still stage
+      // session-local state while Export remains disabled.
+      readOnlySource: assetMode,
+      canPersistMetadata: !assetMode && !sourceReadOnly,
       texturePicker: assetMode
         ? (role => window.pywebview.api.pick_asset_texture_file(
           viewerState.currentSource.path, role)) : null,
@@ -426,7 +430,7 @@ export async function switchMod(path, handlers = {}) {
 export async function openMod(handlers = {}) {
   return await runModTransition(async () => {
     try {
-      const path = await window.pywebview.api.select_mod_source();
+      const path = await window.pywebview.api.select_folder();
       if (!path) return false;
       return await performModSwitch(path, handlers);
     } catch (error) {

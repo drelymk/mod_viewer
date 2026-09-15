@@ -6,7 +6,7 @@ import zipfile
 from app.mods import loader
 
 
-def test_load_mod_reads_geometry_and_reports_zip_source_metadata(tmp_path):
+def test_load_mod_reads_deep_geometry_and_reports_zip_source_metadata(tmp_path):
     ini = (
         "[TextureOverrideBodyPosition]\n"
         "vb0 = ResourceBodyPosition\n"
@@ -26,11 +26,12 @@ def test_load_mod_reads_geometry_and_reports_zip_source_metadata(tmp_path):
         "format = R32_UINT\n")
     archive_path = tmp_path / "packed.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("Export/mod.ini", ini)
-        archive.writestr("Export/i.buf", struct.pack("<3I", 0, 1, 2))
-        archive.writestr("Export/p.buf", struct.pack(
+        archive.writestr("Export/some/random/deep/mod.ini", ini)
+        archive.writestr("Export/some/random/deep/i.buf", struct.pack(
+            "<3I", 0, 1, 2))
+        archive.writestr("Export/some/random/deep/p.buf", struct.pack(
             "<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
-        archive.writestr("Export/t.buf", struct.pack(
+        archive.writestr("Export/some/random/deep/t.buf", struct.pack(
             "<6f", 0, 0, 1, 0, 0, 1))
 
     payload = loader.load_mod(str(archive_path))
@@ -39,4 +40,5 @@ def test_load_mod_reads_geometry_and_reports_zip_source_metadata(tmp_path):
     assert payload["metadata"]["source_kind"] == "zip"
     assert payload["metadata"]["source_read_only"] is True
     assert len(payload["meshes"]) == 1
-    assert payload["meshes"]["Body-1"]["identity"]["source"] == "mod.ini"
+    assert payload["meshes"]["Body-1"]["identity"]["source"] \
+        == "some/random/deep/mod.ini"
