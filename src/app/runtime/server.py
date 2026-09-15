@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from core.textures.dds import DDSInfo, native_dds_info
 from core.textures import (render_texture_png, normalize_texture_role,
                            normalize_texture_transform)
+from core.mod_source import ModSourceError
 from core.textures.profiles import texture_profile_for
 from app.settings import features, paths
 
@@ -62,6 +63,8 @@ class TextureSource:
     dds_info: DDSInfo | None = None
     data: bytes | None = None
     logical_path: str | None = None
+    mod_source: object | None = None
+    source_ref: object | None = None
 
 
 class TexturePublication:
@@ -102,7 +105,7 @@ class TexturePublication:
             if not self.source.is_file(path):
                 return None
             logical_path = self.source.logical_path(path)
-            data = self.source.read_bytes(path)
+            data = None
             path_identity = ("mod", logical_path.casefold())
         else:
             path = os.path.abspath(path)
@@ -135,14 +138,15 @@ class TexturePublication:
                 if not validate:
                     return _texture_url(self.token, source_id, existing_source)
 
-        dds_info = native_dds_info(
-            data if source_ref else path, max_size, transform,
-            source_name=logical_path)
+        dds_info = (None if source_ref else native_dds_info(
+            path, max_size, transform, source_name=logical_path))
         source = existing_source or TextureSource(
             path=None if source_ref else path, data=data,
             logical_path=logical_path, role=role, max_size=max_size,
             preserve_alpha=preserve_alpha, transform=transform,
-            dds_info=dds_info, native_dds=dds_info is not None)
+            dds_info=dds_info, native_dds=dds_info is not None,
+            mod_source=self.source if source_ref else None,
+            source_ref=path if source_ref else None)
         if validate and _render_texture_source(source) is None:
             return None
 
@@ -231,9 +235,13 @@ def _texture_url(token, source_id, source):
 
 def _render_texture_source(source):
     """Render one source while bounding concurrent image decode/encoding."""
+    try:
+        data = _texture_source_data(source)
+    except (OSError, ModSourceError):
+        return None
     with _texture_encode_semaphore:
         return render_texture_png(
-            source.data if source.data is not None else source.path,
+            data,
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
             texture_role=source.role,
@@ -247,14 +255,27 @@ def _render_texture_request(token, source_id, source):
     with _texture_encode_semaphore:
         if _lookup_texture(token, source_id) is not source:
             return None
+        try:
+            data = _texture_source_data(source)
+        except (OSError, ModSourceError):
+            return None
         return render_texture_png(
-            source.data if source.data is not None else source.path,
+            data,
             max_size=source.max_size,
             preserve_alpha=source.preserve_alpha,
             texture_role=source.role,
             texture_transform=source.transform,
             source_name=source.logical_path,
         )
+
+
+def _texture_source_data(source):
+    """Resolve a registered source only when a render actually needs bytes."""
+    if source.data is not None:
+        return source.data
+    if source.mod_source is not None:
+        return source.mod_source.read_bytes(source.source_ref)
+    return source.path
 
 
 def publish_geometry(blob, *, replace=True):

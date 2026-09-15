@@ -44,7 +44,8 @@ from core.mod_source import mod_source_for_path
 
 class _Session:
     __slots__ = ("mod_dir", "source", "docs", "baselines", "dirty", "new_sections",
-                 "present_names_baseline", "revision", "diagnostics_cache")
+                 "present_names_baseline", "present_names", "revision",
+                 "diagnostics_cache")
 
     def __init__(self, mod_dir, source=None):
         self.mod_dir = mod_dir
@@ -55,6 +56,7 @@ class _Session:
         self.new_sections = {}  # ini basename -> {section name, ...} added via add_toggle
                                  # this session and not yet exported -- see mark_added
         self.present_names_baseline = _NO_METADATA_BASELINE
+        self.present_names = _NO_METADATA_BASELINE
         self.revision = 0
         self.diagnostics_cache = None
 
@@ -334,11 +336,37 @@ def stage_present_metadata(mod_dir):
     from app.mods import metadata
     sess = _get_or_create(mod_dir)
     if sess.present_names_baseline is _NO_METADATA_BASELINE:
-        sess.present_names_baseline = metadata.all_present_names(mod_dir)
+        source = sess.source if sess.source.read_only else None
+        sess.present_names_baseline = metadata.all_present_names(
+            mod_dir, source=source)
+        sess.present_names = deepcopy(sess.present_names_baseline) \
+            if isinstance(sess.present_names_baseline, dict) else {}
+
+
+def update_present_names(mod_dir, mutate):
+    """Apply a PRESENT metadata mutation without writing a read-only source."""
+    sess = _get_or_create(mod_dir)
+    stage_present_metadata(mod_dir)
+    data = {}
+    if isinstance(sess.present_names, dict) and sess.present_names:
+        data["present_names"] = deepcopy(sess.present_names)
+    result = mutate(data)
+    current = data.get("present_names")
+    sess.present_names = deepcopy(current) if isinstance(current, dict) else {}
+    _touch(sess)
+    return result
+
+
+def staged_present_names(mod_dir):
+    """Return current staged PRESENT names, or None when none are staged."""
+    if not _same_mod(mod_dir) or _session.present_names is _NO_METADATA_BASELINE:
+        return None
+    return deepcopy(_session.present_names)
 
 
 def _restore_present_metadata(sess):
-    if sess.present_names_baseline is _NO_METADATA_BASELINE:
+    if (sess.source.read_only
+            or sess.present_names_baseline is _NO_METADATA_BASELINE):
         return
     from app.mods import metadata
     metadata.restore_present_names(sess.mod_dir, sess.present_names_baseline)
@@ -372,6 +400,7 @@ def export(mod_dir):
         }
     if not _session.dirty:
         _session.present_names_baseline = _NO_METADATA_BASELINE
+        _session.present_names = _NO_METADATA_BASELINE
         return {"saved": [], "failed": []}
 
     saved, failed = [], []
@@ -387,4 +416,5 @@ def export(mod_dir):
             failed.append({"ini": key, "error": str(e)})
     if not _session.dirty:
         _session.present_names_baseline = _NO_METADATA_BASELINE
+        _session.present_names = _NO_METADATA_BASELINE
     return {"saved": saved, "failed": failed}

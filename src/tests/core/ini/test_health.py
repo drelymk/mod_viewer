@@ -3,10 +3,12 @@
 import json
 import os
 import tempfile
+import zipfile
 
 
 from app.mods import loader as mod_loader
 from core.ini.health import analyze_mod
+from core.mod_source import ZipModSource
 
 
 def _write(path, value, binary=False):
@@ -130,6 +132,24 @@ def test_file_classification_and_overrides():
     assert (report["files"] == {"unreferenced": 2, "inactive_only": 1,
                               "viewer_only": 1, "referenced": 1}), (f"active, inactive-only, viewer-only and unused assets classify separately ({report['files']})")
     assert ("malformed_condition_nesting" in _codes(report)), ("staged in-memory INI text is analyzed instead of stale disk text")
+
+
+def test_zip_health_counts_deep_disabled_assets_as_inactive(tmp_path):
+    archive_path = tmp_path / "health.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "Export/active.ini",
+            "[TextureOverrideBody]\ndrawindexed = 3, 0, 0\n")
+        archive.writestr(
+            "Export/variants/DISABLED-old.ini",
+            "[ResourceOld]\nfilename = inactive.dds\n")
+        archive.writestr("Export/variants/inactive.dds", b"inactive")
+
+    source = ZipModSource(archive_path)
+    report = analyze_mod(str(archive_path), source=source)
+
+    assert report["files"]["inactive_only"] == 1
+    assert report["files"]["unreferenced"] == 0
 
 
 def test_unsafe_paths_and_namespaced_resources():

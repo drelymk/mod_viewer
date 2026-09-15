@@ -76,11 +76,19 @@ class ModPreview:
             edit_session.load_documents(folder_path, ini_paths)
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
+        saved_metadata = (metadata.load(folder_path, source=source)
+                          if getattr(source, "kind", None) == "zip"
+                          else metadata.load(folder_path))
+        staged_names = edit_session.staged_present_names(folder_path)
+        if (getattr(source, "kind", None) == "zip"
+                and staged_names is not None):
+            if staged_names:
+                saved_metadata["present_names"] = staged_names
+            else:
+                saved_metadata.pop("present_names", None)
         context = mod_loader.ModLoadContext(
             folder_path, ini_paths, edit_session.documents_for(folder_path),
-            metadata.load(folder_path, source=source)
-            if getattr(source, "kind", None) == "zip"
-            else metadata.load(folder_path),
+            saved_metadata,
             source=source)
         cache_key = os.path.normcase(os.path.abspath(folder_path))
         with self._model_state_lock:

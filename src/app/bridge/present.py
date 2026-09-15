@@ -35,6 +35,13 @@ def _unexpected_error():
     return {"error": "Unexpected backend error. See the application log for details."}
 
 
+def _metadata_change(mod_dir, source, mutate, persist):
+    """Keep read-only metadata staged while persisting directory metadata."""
+    if source.read_only:
+        return edit_session.update_present_names(mod_dir, mutate)
+    return persist()
+
+
 def _batch_run(mod_dir, targets, mutate, metadata_change=None):
     source = mod_source_for_path(mod_dir)
     records = []
@@ -46,9 +53,9 @@ def _batch_run(mod_dir, targets, mutate, metadata_change=None):
         try:
             for _sess, _key, doc, _was, _snapshot, _path, ini_rel in records:
                 results.append(mutate(ini_rel, doc))
-            if metadata_change and not source.read_only:
+            if metadata_change:
                 edit_session.stage_present_metadata(mod_dir)
-                metadata_change(results)
+                metadata_change(results, source)
         except BaseException:
             for sess, key, _doc, was_pending, snapshot, path, _ini_rel in reversed(records):
                 edit_session.rollback(sess, key, was_pending, snapshot, path)
@@ -110,11 +117,16 @@ def add_present(mod_dir, key_combo, back_combo, snapshots):
                 doc, _snapshot(snapshots, ini_rel), allow_duplicate=True)
         return result
 
-    return _batch_run(
-        mod_dir, targets, mutate,
-        metadata_change=(None if existing else lambda _results:
-                         metadata.clear_present_names(
-                             mod_dir, metadata.PRESENT_NAMES_KEY)))
+    def clear_names(_results, source):
+        return _metadata_change(
+            mod_dir, source,
+            lambda data: metadata.apply_clear_present_names(
+                data, metadata.PRESENT_NAMES_KEY),
+            lambda: metadata.clear_present_names(
+                mod_dir, metadata.PRESENT_NAMES_KEY))
+
+    return _batch_run(mod_dir, targets, mutate,
+                      metadata_change=None if existing else clear_names)
 
 
 def edit_present(mod_dir, key_combo, back_combo):
@@ -131,10 +143,19 @@ def delete_present(mod_dir):
     if not targets:
         return {"error": "this mod has no PRESENT key"}
 
-    def clear_names(_results):
-        metadata.clear_present_names(mod_dir, metadata.PRESENT_NAMES_KEY)
-        for ini_rel, _path, _doc in targets:
-            metadata.clear_present_names(mod_dir, ini_rel)
+    def clear_names(_results, source):
+        def mutate(data):
+            metadata.apply_clear_present_names(
+                data, metadata.PRESENT_NAMES_KEY)
+            for ini_rel, _path, _doc in targets:
+                metadata.apply_clear_present_names(data, ini_rel)
+        return _metadata_change(
+            mod_dir, source, mutate,
+            lambda: (
+                metadata.clear_present_names(
+                    mod_dir, metadata.PRESENT_NAMES_KEY),
+                [metadata.clear_present_names(mod_dir, ini_rel)
+                 for ini_rel, _path, _doc in targets]))
 
     return _batch_run(mod_dir, targets,
                       lambda _ini_rel, doc: present_editor.delete(doc),
@@ -171,10 +192,14 @@ def capture_present(mod_dir, snapshots, name, position=None,
     except Exception:
         return _unexpected_error()
 
-    def save_name(results):
+    def save_name(results, source):
         target = results[0]["count"] - 1 if position is None else int(position)
-        metadata.save_present_name(
-            mod_dir, metadata.PRESENT_NAMES_KEY, target, name)
+        return _metadata_change(
+            mod_dir, source,
+            lambda data: metadata.apply_present_name(
+                data, metadata.PRESENT_NAMES_KEY, target, name),
+            lambda: metadata.save_present_name(
+                mod_dir, metadata.PRESENT_NAMES_KEY, target, name))
 
     return _batch_run(
         mod_dir, targets,
@@ -199,5 +224,9 @@ def delete_present_position(mod_dir, position):
     return _batch_run(
         mod_dir, targets,
         lambda _ini_rel, doc: present_editor.delete_position(doc, position),
-        metadata_change=lambda _results: metadata.delete_present_name(
-            mod_dir, metadata.PRESENT_NAMES_KEY, position, old_count))
+        metadata_change=lambda _results, source: _metadata_change(
+            mod_dir, source,
+            lambda data: metadata.apply_delete_present_name(
+                data, metadata.PRESENT_NAMES_KEY, position, old_count),
+            lambda: metadata.delete_present_name(
+                mod_dir, metadata.PRESENT_NAMES_KEY, position, old_count)))

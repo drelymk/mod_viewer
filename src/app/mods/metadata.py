@@ -950,9 +950,9 @@ def present_names(folder_path, ini_rel, data=None):
             if str(index).isdigit() and isinstance(name, str) and name.strip()}
 
 
-def all_present_names(folder_path):
+def all_present_names(folder_path, source=None):
     """Return a detached snapshot suitable for edit-session rollback."""
-    names = load(folder_path).get("present_names")
+    names = load(folder_path, source=source).get("present_names")
     return deepcopy(names) if isinstance(names, dict) else None
 
 
@@ -967,84 +967,105 @@ def restore_present_names(folder_path, names):
         return _save(folder_path, data)
 
 
-def save_present_name(folder_path, ini_rel, position, name):
-    """Persist only names that differ from their implicit ``Present N``."""
+def apply_present_name(data, ini_rel, position, name):
+    """Apply one sparse PRESENT name to an in-memory metadata mapping."""
     position = int(position)
     name = str(name or "").strip()
     if not name:
         raise ValueError("a present name is required")
     default = f"Present {position + 1}"
+    all_names = data.get("present_names")
+    if not isinstance(all_names, dict):
+        all_names = {}
+    names = all_names.get(ini_rel)
+    if not isinstance(names, dict):
+        names = {}
+    if name == default:
+        if str(position) not in names:
+            return False
+        names.pop(str(position), None)
+    else:
+        if names.get(str(position)) == name:
+            return False
+        names[str(position)] = name
+    if names:
+        all_names[ini_rel] = names
+    else:
+        all_names.pop(ini_rel, None)
+    if all_names:
+        data["present_names"] = all_names
+    else:
+        data.pop("present_names", None)
+    return True
+
+
+def save_present_name(folder_path, ini_rel, position, name):
+    """Persist only names that differ from their implicit ``Present N``."""
     with _LOCK:
         data = load(folder_path)
-        all_names = data.get("present_names")
-        if not isinstance(all_names, dict):
-            all_names = {}
-        names = all_names.get(ini_rel)
-        if not isinstance(names, dict):
-            names = {}
-        if name == default:
-            if str(position) not in names:
-                return {"saved": False}
-            names.pop(str(position), None)
-        else:
-            if names.get(str(position)) == name:
-                return {"saved": False}
-            names[str(position)] = name
-        if names:
-            all_names[ini_rel] = names
-        else:
-            all_names.pop(ini_rel, None)
-        if all_names:
-            data["present_names"] = all_names
-        else:
-            data.pop("present_names", None)
+        if not apply_present_name(data, ini_rel, position, name):
+            return {"saved": False}
         return _save(folder_path, data)
+
+
+def apply_clear_present_names(data, ini_rel):
+    """Remove one PRESENT name mapping from an in-memory metadata mapping."""
+    all_names = data.get("present_names")
+    if not isinstance(all_names, dict) or ini_rel not in all_names:
+        return False
+    all_names.pop(ini_rel, None)
+    if all_names:
+        data["present_names"] = all_names
+    else:
+        data.pop("present_names", None)
+    return True
 
 
 def clear_present_names(folder_path, ini_rel):
     with _LOCK:
         data = load(folder_path)
-        all_names = data.get("present_names")
-        if not isinstance(all_names, dict) or ini_rel not in all_names:
+        if not apply_clear_present_names(data, ini_rel):
             return {"saved": False}
-        all_names.pop(ini_rel, None)
-        if all_names:
-            data["present_names"] = all_names
-        else:
-            data.pop("present_names", None)
         return _save(folder_path, data)
+
+
+def apply_delete_present_name(data, ini_rel, position, old_count):
+    """Shift sparse PRESENT names after deleting one position in memory."""
+    position = int(position)
+    old_count = int(old_count)
+    all_names = data.get("present_names")
+    if not isinstance(all_names, dict):
+        return False
+    names = all_names.get(ini_rel)
+    if not isinstance(names, dict):
+        return False
+    shifted = {}
+    for old_index in range(old_count):
+        if old_index == position:
+            continue
+        old_name = names.get(str(old_index))
+        if not old_name:
+            continue
+        new_index = old_index if old_index < position else old_index - 1
+        if old_name != f"Present {new_index + 1}":
+            shifted[str(new_index)] = old_name
+    if shifted:
+        all_names[ini_rel] = shifted
+    else:
+        all_names.pop(ini_rel, None)
+    if all_names:
+        data["present_names"] = all_names
+    else:
+        data.pop("present_names", None)
+    return True
 
 
 def delete_present_name(folder_path, ini_rel, position, old_count):
     """Remove one name and shift sparse overrides with their value positions."""
-    position = int(position)
-    old_count = int(old_count)
     with _LOCK:
         data = load(folder_path)
-        all_names = data.get("present_names")
-        if not isinstance(all_names, dict):
+        if not apply_delete_present_name(data, ini_rel, position, old_count):
             return {"saved": False}
-        names = all_names.get(ini_rel)
-        if not isinstance(names, dict):
-            return {"saved": False}
-        shifted = {}
-        for old_index in range(old_count):
-            if old_index == position:
-                continue
-            old_name = names.get(str(old_index))
-            if not old_name:
-                continue
-            new_index = old_index if old_index < position else old_index - 1
-            if old_name != f"Present {new_index + 1}":
-                shifted[str(new_index)] = old_name
-        if shifted:
-            all_names[ini_rel] = shifted
-        else:
-            all_names.pop(ini_rel, None)
-        if all_names:
-            data["present_names"] = all_names
-        else:
-            data.pop("present_names", None)
         return _save(folder_path, data)
 
 

@@ -76,21 +76,17 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None):
 
     Directory discovery retains its historical bounded nested search.  ZIP
     discovery has no filesystem root to infer, so it scans all archive members
-    deterministically and caps the result at ten files.  ``disabled`` selects
+    deterministically.  ``disabled`` selects
     only filenames beginning with ``DISABLED`` (case-insensitively); active and
     disabled files are never combined.
     """
     source = source or DirectoryModSource(mod_dir)
     if source.kind == "zip":
-        found = []
-        for logical in source.list_files():
-            name = logical.rsplit("/", 1)[-1]
-            if not _selected(name, disabled=disabled):
-                continue
-            found.append(source.document_path(logical))
-            if len(found) >= _MAX_INI_FILES:
-                break
-        return found
+        return [
+            source.document_path(logical)
+            for logical in source.list_files()
+            if _selected(logical.rsplit("/", 1)[-1], disabled=disabled)
+        ]
 
     direct = _ini_names(mod_dir if source.kind == "directory" else "",
                         source, disabled=disabled)

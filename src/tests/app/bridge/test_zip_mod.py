@@ -2,6 +2,7 @@
 
 import zipfile
 
+from app.bridge.api import ModViewerAPI
 from app.bridge import present as present_api
 from app.bridge import toggle as toggle_api
 from app.session import edit as edit_session
@@ -49,29 +50,38 @@ def test_zip_present_lifecycle_stages_ini_without_metadata_or_archive_write(
     original_archive = archive_path.read_bytes()
     source = ZipModSource(archive_path)
     paths = discover_ini_paths(str(archive_path), source=source)
+    api = ModViewerAPI()
+    mod_dir = api._access.remember_mod_picker_selection(str(archive_path))
 
     try:
-        edit_session.load_documents(str(archive_path), paths, source=source)
+        edit_session.load_documents(mod_dir, paths, source=source)
         snapshot = {"deep/variant/mod.ini": {"Hat": "0"}}
 
-        added = present_api.add_present(str(archive_path), "p", "shift p", snapshot)
+        added = present_api.add_present(mod_dir, "p", "shift p", snapshot)
         assert added["ok"] is True
-        assert present_api.edit_present(
-            str(archive_path), "ctrl p", "")["ok"] is True
+        assert present_api.edit_present(mod_dir, "ctrl p", "")["ok"] is True
         captured = present_api.capture_present(
-            str(archive_path), {"deep/variant/mod.ini": {"Hat": "1"}},
+            mod_dir, {"deep/variant/mod.ini": {"Hat": "1"}},
             "Alternate")
         assert captured["ok"] is True
-        removed = present_api.delete_present_position(str(archive_path), 0)
+        renamed = present_api.capture_present(
+            mod_dir, {"deep/variant/mod.ini": {"Hat": "1"}},
+            "Renamed", position=1)
+        assert renamed["ok"] is True
+        removed = present_api.delete_present_position(mod_dir, 0)
         assert removed["ok"] is True
 
-        doc = edit_session.peek(str(archive_path), paths[0])
+        state = api.get_present_state(mod_dir)
+        assert state["present"]["item"]["names"] == ["Renamed"]
+
+        doc = edit_session.peek(mod_dir, paths[0])
         assert doc.section(SECTION_NAME) is not None
         assert "key = ctrl p" in doc.to_string()
         assert "$Hat = 1" in doc.to_string()
-        assert edit_session.has_pending(str(archive_path))
-        assert toggle_api.export_changes(str(archive_path))["error"] \
+        assert edit_session.has_pending(mod_dir)
+        assert toggle_api.export_changes(mod_dir)["error"] \
             == "Export is unavailable for compressed mods."
         assert archive_path.read_bytes() == original_archive
+        assert not (tmp_path / ".mod_viewer.json").exists()
     finally:
-        edit_session.discard(str(archive_path))
+        edit_session.discard(mod_dir)

@@ -184,14 +184,16 @@ def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
 def load_present_state(context, overrides=None):
     """Read only the logical PRESENT projection from authoritative INIs."""
     return analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs).present
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source).present
 
 
 def load_control_state(context, overrides=None, pending_new_sections=None,
                        active_mesh_keys=None):
     """Read control semantics without constructing mesh geometry."""
     parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs)
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source)
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
                 source=context.source)

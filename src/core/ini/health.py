@@ -10,6 +10,7 @@ import os
 import re
 
 from .document import IniDocument, OTHER
+from ..mod_discovery import discover_ini_paths
 from ..mod_source import ModSourceError
 from ..resource_paths import safe_resource_path
 from ..textures import split_texture_key
@@ -405,14 +406,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
         from ..mod_source import mod_source_for_path
         source = mod_source_for_path(mod_dir)
     if ini_paths is None:
-        if source is not None:
-            ini_paths = [source.document_path(name) for name in source.list_files()
-                         if "/" not in name and name.lower().endswith(".ini")
-                         and not name.upper().startswith("DISABLED")]
-        else:
-            ini_paths = [os.path.join(mod_dir, name) for name in sorted(os.listdir(mod_dir))
-                         if name.lower().endswith(".ini")
-                         and not name.upper().startswith("DISABLED")]
+        ini_paths = discover_ini_paths(mod_dir, source=source)
 
     issues, declared_files = [], set()
     for path in ini_paths:
@@ -435,15 +429,8 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
             doc, ini_rel, path, mod_dir, issues, declared_files, source=source)
 
     inactive_files = set()
-    inactive_names = (source.list_files() if source is not None
-                      else sorted(os.listdir(mod_dir)))
-    for name in inactive_names:
-        if "/" in name or not (name.lower().endswith(".ini")
-                                and name.upper().startswith("DISABLED")):
-            continue
+    for path in discover_ini_paths(mod_dir, disabled=True, source=source):
         try:
-            path = (source.document_path(name) if source is not None
-                    else os.path.join(mod_dir, name))
             inactive_files.update(_filename_paths(
                 _load_document(path, source=source), mod_dir, path,
                 source=source))

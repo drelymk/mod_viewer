@@ -66,6 +66,22 @@ def test_zip_discovery_uses_wrapper_relative_depth_and_disabled_selection(tmp_pa
         "DISABLED-old.ini", "variants/deep/too-deep/DISABLED-fourth.ini"]
 
 
+def test_zip_discovery_does_not_drop_late_geometry_ini(tmp_path):
+    members = {
+        f"Export/{index:02}.ini": b"[KeyUnused]\nkey = F1\n"
+        for index in range(10)
+    }
+    members["Export/zz-geometry.ini"] = (
+        b"[TextureOverrideBody]\n"
+        b"drawindexed = 3, 0, 0\n")
+    source = ZipModSource(_write_zip(tmp_path / "many-inis.zip", members))
+
+    paths = discover_ini_paths(str(tmp_path / "many-inis.zip"), source=source)
+
+    assert len(paths) == 11
+    assert source.logical_path(paths[-1]) == "zz-geometry.ini"
+
+
 @pytest.mark.parametrize("member", [
     "../escape.buf", "..\\escape.buf", "/absolute.buf", "C:\\absolute.buf",
 ])
