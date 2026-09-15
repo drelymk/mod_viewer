@@ -427,10 +427,10 @@ export async function switchMod(path, handlers = {}) {
   });
 }
 
-export async function openMod(handlers = {}) {
+async function openModFromPicker(picker, handlers = {}) {
   return await runModTransition(async () => {
     try {
-      const path = await window.pywebview.api.select_folder();
+      const path = await picker();
       if (!path) return false;
       return await performModSwitch(path, handlers);
     } catch (error) {
@@ -439,6 +439,16 @@ export async function openMod(handlers = {}) {
       return false;
     }
   });
+}
+
+export async function openMod(handlers = {}) {
+  return await openModFromPicker(
+    () => window.pywebview.api.select_folder(), handlers);
+}
+
+export async function openZipMod(handlers = {}) {
+  return await openModFromPicker(
+    () => window.pywebview.api.select_zip_mod(), handlers);
 }
 
 // Re-render the current authoritative edit session after a staged authoring

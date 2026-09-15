@@ -48,6 +48,7 @@ import {
   displayMeshPayload as displayMeshPayloadFlow,
   exportChanges as exportChangesFlow,
   openMod as openModFlow,
+  openZipMod as openZipModFlow,
   refreshPendingState,
   reloadCurrentMod as reloadCurrentModFlow,
   switchAsset as switchAssetFlow,
@@ -137,6 +138,44 @@ function openMod() {
   return openModFlow(modelHandlers());
 }
 
+function openZipMod() {
+  return openZipModFlow(modelHandlers());
+}
+
+function initOpenModMenu() {
+  const trigger = $('open-menu-btn');
+  const menu = $('open-mod-menu');
+  if (!trigger || !menu) return;
+
+  const close = () => {
+    menu.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+  };
+  const open = () => {
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+  };
+
+  trigger.addEventListener('click', event => {
+    event.stopPropagation();
+    if (menu.hidden) open();
+    else close();
+  });
+  menu.addEventListener('click', event => {
+    const choice = event.target.closest('[data-open-source]');
+    if (!choice) return;
+    close();
+    if (choice.dataset.openSource === 'zip') void openZipMod();
+    else void openMod();
+  });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#open-mod-control, #open-mod-menu')) close();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') close();
+  });
+}
+
 function switchMod(path) {
   return switchModFlow(path, modelHandlers());
 }
@@ -210,11 +249,13 @@ function syncBloomControl() {
 
 initToolbarOverflow();
 initPanelOpacityControl();
+initOpenModMenu();
 
 rendererReady.then(ready => {
   if (!ready || !isRendererAvailable()) return;
 
   $('open-btn').addEventListener('click', openMod);
+  $('open-menu-btn').disabled = false;
   $('export-btn').addEventListener('click', exportChanges);
   $('asset-fill-btn').addEventListener('click', event => {
     event.stopPropagation();

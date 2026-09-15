@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import webview
+
 from app.bridge.api import ModViewerAPI
 from app.session import edit as edit_session
 from app.settings import mod_folders
@@ -64,6 +66,7 @@ EXPECTED_API_METHODS = {
     "save_weight_selection",
     "select_asset_folder",
     "select_folder",
+    "select_zip_mod",
     "set_asset_folder_enabled",
     "set_panel_opacity",
     "update_ini_text",
@@ -146,6 +149,32 @@ def test_facade_composes_picker_registry_preview_and_editing(tmp_path, monkeypat
         assert "$Value = 0" in ini.read_text(encoding="utf-8")
     finally:
         edit_session.discard(selected)
+
+
+def test_select_zip_mod_uses_open_filter_and_authorizes_only_selected_zip(
+        tmp_path, monkeypatch):
+    archive = tmp_path / "packed.zip"
+    sibling = tmp_path / "sibling.zip"
+    archive.write_bytes(b"zip")
+    sibling.write_bytes(b"zip")
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+
+    responses = [None, [str(archive)]]
+    calls = []
+    api = ModViewerAPI()
+    api._window = SimpleNamespace(
+        create_file_dialog=lambda dialog_type, **kwargs: calls.append(
+            (dialog_type, kwargs)) or responses.pop(0))
+
+    assert api.select_zip_mod() is None
+    selected = api.select_zip_mod()
+
+    assert selected == mod_folders.normalize_path(str(archive))
+    assert all(call[0] == webview.FileDialog.OPEN for call in calls)
+    assert all(call[1]["file_types"] == ("ZIP mods (*.zip)",)
+               for call in calls)
+    assert api._access.was_picker_selected(str(archive))
+    assert not api._access.was_picker_selected(str(sibling))
 
 
 def test_missing_asset_parts_preserves_unauthorized_folder_error(

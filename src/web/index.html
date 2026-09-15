@@ -49,7 +49,23 @@
   <span id="pending-indicator" class="pending-indicator" role="status">Edited</span>
   <input id="open-disabled-mod" type="checkbox" title="Open disabled mod"
          aria-label="Open disabled mod">
-  <button id="open-btn" class="ui-button" disabled>Open Mod</button>
+  <div id="open-mod-control" class="open-mod-control">
+    <button id="open-btn" class="ui-button" disabled>Open Mod</button>
+    <button id="open-menu-btn" class="open-menu-btn" type="button"
+            aria-label="Choose mod source" aria-expanded="false"
+            aria-haspopup="menu" disabled>▾</button>
+    <div id="open-mod-menu" class="open-mod-menu" role="menu"
+         aria-label="Open mod source" hidden>
+      <button id="open-folder-choice" type="button" role="menuitem"
+              data-open-source="folder">
+        Open Folder…
+      </button>
+      <button id="open-zip-choice" type="button" role="menuitem"
+              data-open-source="zip">
+        Open ZIP…
+      </button>
+    </div>
+  </div>
   <div class="ini-view-wrap toolbar-secondary">
     <button id="ini-view-btn" class="ui-button" disabled>View INI</button>
     <div id="ini-file-menu" class="ini-file-menu" role="menu"></div>
