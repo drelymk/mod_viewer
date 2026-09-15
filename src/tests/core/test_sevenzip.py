@@ -133,6 +133,24 @@ def test_parse_listing_ignores_archive_record_and_directories():
     ]
 
 
+def test_parse_listing_accepts_blank_line_record_separators():
+    listing = (
+        "Path = Wrapper\\mod.ini\n"
+        "Folder = -\n"
+        "Size = 12\n"
+        "Attributes = A\n"
+        "\n"
+        "Path = Wrapper\\nested\n"
+        "Folder = +\n"
+        "Size = 0\n"
+        "Attributes = D\n")
+
+    assert sevenzip.parse_listing(listing) == [
+        sevenzip.SevenZipEntry("Wrapper\\mod.ini", 12),
+        sevenzip.SevenZipEntry("Wrapper\\nested", 0, True),
+    ]
+
+
 def test_sevenzip_cli_passes_exact_binary_commands_without_shell(monkeypatch):
     seen = {}
 

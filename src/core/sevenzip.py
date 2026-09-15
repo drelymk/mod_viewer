@@ -86,6 +86,9 @@ def parse_listing(output):
 
     for line in str(output).splitlines():
         stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
         if stripped and set(stripped) == {"-"}:
             flush()
             continue
