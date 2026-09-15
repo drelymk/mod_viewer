@@ -265,7 +265,7 @@ def test_resolver_marks_duplicate_enabled_roots_ambiguous(tmp_path, monkeypatch)
     assert binding.geometry_hash == "73c8cae2"
 
 
-def test_unknown_game_uses_one_exact_match_from_any_asset_type(
+def test_unknown_game_accepts_exact_match_but_rejects_hash_only_enrichment(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
     entries = [{"type": "ZZMI", "path": root, "enabled": True}]
@@ -273,11 +273,14 @@ def test_unknown_game_uses_one_exact_match_from_any_asset_type(
         asset_index, "load_index",
         lambda asset_type, path: _index(path, asset_type=asset_type))
 
-    binding = resolve_component(
+    exact_binding = resolve_component(
         GeometryMatch("73c8cae2", 43845, 24), "unknown", entries)
+    hash_only_binding = resolve_component(
+        GeometryMatch("73c8cae2"), "unknown", entries)
 
-    assert binding.status == "exact"
-    assert binding.asset_type == "ZZMI"
+    assert exact_binding.status == "exact"
+    assert exact_binding.asset_type == "ZZMI"
+    assert hash_only_binding.status == "not_found"
 
 
 def test_unknown_game_cross_type_exact_matches_are_ambiguous(
@@ -296,20 +299,6 @@ def test_unknown_game_cross_type_exact_matches_are_ambiguous(
 
     assert binding.status == "ambiguous"
     assert binding.asset_type is None
-
-
-def test_unknown_game_hash_only_match_is_not_bound_for_enrichment(
-        tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
-    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
-    monkeypatch.setattr(
-        asset_index, "load_index",
-        lambda asset_type, path: _index(path, asset_type=asset_type))
-
-    binding = resolve_component(
-        GeometryMatch("73c8cae2"), "unknown", entries)
-
-    assert binding.status == "not_found"
 
 
 def test_known_genshin_does_not_probe_matching_zzmi_index(
@@ -542,7 +531,7 @@ def test_resolve_groups_keeps_conflicting_exact_assets_ambiguous(
         "exact", "exact", "ambiguous"]
 
 
-def test_same_hash_same_range_remains_ambiguous(tmp_path, monkeypatch):
+def test_same_hash_ambiguity_reports_range_evidence_status(tmp_path, monkeypatch):
     roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
              for name in ("one", "two")]
     entries = [{"type": "GIMI", "path": root, "enabled": True}
@@ -550,27 +539,16 @@ def test_same_hash_same_range_remains_ambiguous(tmp_path, monkeypatch):
     monkeypatch.setattr(
         asset_index, "load_index", lambda asset_type, path: _index(path))
 
-    binding = resolve_component(
+    same_range = resolve_component(
         GeometryMatch("73c8cae2", 43845), "genshin", entries)
-
-    assert binding.status == "ambiguous"
-    assert binding.range_status == "ambiguous"
-
-
-def test_same_hash_without_range_evidence_remains_ambiguous(tmp_path,
-                                                            monkeypatch):
-    roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
-             for name in ("one", "two")]
-    entries = [{"type": "GIMI", "path": root, "enabled": True}
-               for root in roots]
-    monkeypatch.setattr(
-        asset_index, "load_index", lambda asset_type, path: _index(path))
-
-    binding = resolve_component(
+    without_range = resolve_component(
         GeometryMatch("73c8cae2"), "genshin", entries)
 
-    assert binding.status == "ambiguous"
-    assert binding.range_status == "unknown"
+    assert [(binding.status, binding.range_status) for binding in
+            (same_range, without_range)] == [
+                ("ambiguous", "ambiguous"),
+                ("ambiguous", "unknown"),
+            ]
 
 
 def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
@@ -1068,7 +1046,8 @@ def test_legacy_slot_role_hash_conflict_preserves_legacy_source(tmp_path):
     }]
 
 
-def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
+def test_wwmi_slot_context_preserves_evidence_without_overriding_mod_role(
+        tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Alice"
     asset_dir.mkdir(parents=True)
@@ -1076,34 +1055,9 @@ def test_wwmi_slot_context_is_retained_without_guessing_a_role(tmp_path):
     detail.write_text(json.dumps({"Component 1": {
         "ps-t1": ["11111111-vs=aaaaaaaa-ps=bbbbbbbb"],
     }}), encoding="utf-8")
-    draw = DrawCall(
+    mystery_draw = DrawCall(
         slot_textures=[SlotTextureBinding(1, "ResourceMystery")])
-    binding = AssetComponentBinding(
-        status="exact", asset_type="WWMI", asset="Alice", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="73c8cae2", component_ordinal=1,
-        detail_metadata="Alice/TextureUsage.json",
-    )
-
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.asset_slot_evidence == [{
-        "resource": "ResourceMystery", "slot": 1,
-        "texture_hash": "11111111", "vs_hash": "aaaaaaaa",
-        "ps_hash": "bbbbbbbb",
-    }]
-    assert draw.asset_texture_defaults == {}
-
-
-def test_wwmi_slot_context_preserves_mod_role_hint(tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Alice"
-    asset_dir.mkdir(parents=True)
-    detail = asset_dir / "TextureUsage.json"
-    detail.write_text(json.dumps({"Component 1": {
-        "ps-t1": ["11111111-vs=aaaaaaaa-ps=bbbbbbbb"],
-    }}), encoding="utf-8")
-    draw = DrawCall(slot_textures=[SlotTextureBinding(
+    hinted_draw = DrawCall(slot_textures=[SlotTextureBinding(
         slot=1, resource="ResourceOpaque", role_hint="normal_map")])
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Alice", root=root,
@@ -1112,9 +1066,18 @@ def test_wwmi_slot_context_preserves_mod_role_hint(tmp_path):
         detail_metadata="Alice/TextureUsage.json",
     )
 
-    apply([{"draws": [draw]}], [[binding]])
+    apply([{"draws": [mystery_draw]}], [[binding]])
 
-    assert draw.asset_slot_evidence == [{
+    assert mystery_draw.asset_slot_evidence == [{
+        "resource": "ResourceMystery", "slot": 1,
+        "texture_hash": "11111111", "vs_hash": "aaaaaaaa",
+        "ps_hash": "bbbbbbbb",
+    }]
+    assert mystery_draw.asset_texture_defaults == {}
+
+    apply([{"draws": [hinted_draw]}], [[binding]])
+
+    assert hinted_draw.asset_slot_evidence == [{
         "resource": "ResourceOpaque", "slot": 1,
         "texture_hash": "11111111", "vs_hash": "aaaaaaaa",
         "ps_hash": "bbbbbbbb", "role": "normal_map",

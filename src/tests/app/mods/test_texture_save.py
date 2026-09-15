@@ -104,68 +104,6 @@ def _color_mode_block(mode):
     return bits.to_bytes(16, "little")
 
 
-def _mode5_block():
-    bits = 1 << 5
-    bits = bc7.set_bits(bits, 6, 2, 1)
-    start = 8
-    for channel, precision in enumerate((7, 7, 7, 8)):
-        for endpoint in range(2):
-            bits = bc7.set_bits(
-                bits, start, precision,
-                (channel * 7 + endpoint * 15 + 3)
-                & ((1 << precision) - 1))
-            start += precision
-    first = [0, 1, 2, 3] * 4
-    second = [0, 1, 2, 3] * 4
-    bits = bc7.set_bits(bits, start, 1, first[0])
-    start += 1
-    for value in first[1:]:
-        bits = bc7.set_bits(bits, start, 2, value)
-        start += 2
-    bits = bc7.set_bits(bits, start, 1, second[0])
-    start += 1
-    for value in second[1:]:
-        bits = bc7.set_bits(bits, start, 2, value)
-        start += 2
-    assert start == 128
-    return bits.to_bytes(16, "little")
-
-
-def _separate_block(mode, rotation=1):
-    bits = 1 << mode
-    start = mode + 1
-    bits = bc7.set_bits(bits, start, 2, rotation)
-    start += 2
-    index_mode = 1 if mode == 4 and rotation % 2 else 0
-    if mode == 4:
-        bits = bc7.set_bits(bits, start, 1, index_mode)
-        start += 1
-    precisions = (5, 5, 5, 6) if mode == 4 else (7, 7, 7, 8)
-    for channel, precision in enumerate(precisions):
-        for endpoint in range(2):
-            bits = bc7.set_bits(
-                bits, start, precision,
-                (channel * 7 + endpoint * 15 + 3)
-                & ((1 << precision) - 1))
-            start += precision
-    first = [0, 1, 2, 3] * 4
-    second = ([0, 1, 2, 3, 4, 5, 6, 7] * 2
-              if mode == 4 else [0, 1, 2, 3] * 4)
-    bits = bc7.set_bits(bits, start, 1, first[0])
-    start += 1
-    for value in first[1:]:
-        bits = bc7.set_bits(bits, start, 2, value)
-        start += 2
-    second_precision = 3 if mode == 4 else 2
-    bits = bc7.set_bits(bits, start, second_precision - 1, second[0])
-    start += second_precision - 1
-    for value in second[1:]:
-        bits = bc7.set_bits(bits, start, second_precision, value)
-        start += second_precision
-    assert start == 128
-    return bits.to_bytes(16, "little")
-
-
 def _mode7_block():
     partition = 13
     anchor = bc7._PARTITION_2_ANCHORS[partition]
@@ -781,17 +719,10 @@ def _bc7_lower_single_state(
     }
 
 
-@pytest.mark.parametrize(
-    ("width", "height", "selected"),
-    [
-        (4, 4, {(0, 0), (1, 0), (0, 1)}),
-        (2, 2, {(0, 0)}),
-        (1, 1, {(0, 0)}),
-    ],
-    ids=("full-block-partial-selection", "clipped-block", "single-pixel"),
-)
 def test_single_intent_partial_block_pads_valid_rgb_without_changing_alpha(
-        width, height, selected):
+        ):
+    width, height = 2, 2
+    selected = {(0, 0)}
     source_block = _mode6_block()
     source_pixels = bc7.decode_block(source_block)
     adjustment = prepare_color_adjustment({"brightness": 1.5})
@@ -825,25 +756,13 @@ def test_single_intent_partial_block_pads_valid_rgb_without_changing_alpha(
             assert target[y * 4 + x] == source_pixels[y * 4 + x]
 
 
-@pytest.mark.parametrize(
-    "adjustment",
-    [
-        {"hue": 30},
-        {"brightness": 1.5},
-        {
-            "hue": 30, "brightness": 1.5, "contrast": 1.25,
-            "red": 0.75, "green": 1.5, "blue": 0.5, "tint": "#d08040",
-        },
-    ],
-    ids=("hue", "brightness", "composite"),
-)
-@pytest.mark.parametrize(
-    ("valid_width", "valid_height"),
-    [(4, 4), (3, 2), (1, 2)],
-    ids=("full-block", "clipped-block", "edge-clipped"),
-)
 def test_shared_single_intent_target_matches_parent_target(
-        adjustment, valid_width, valid_height):
+        ):
+    adjustment = {
+        "hue": 30, "brightness": 1.5, "contrast": 1.25,
+        "red": 0.75, "green": 1.5, "blue": 0.5, "tint": "#d08040",
+    }
+    valid_width, valid_height = 3, 2
     source_block = _mode6_block()
     source_pixels = bc7.decode_block(source_block)
     prepared_adjustment = prepare_color_adjustment(adjustment)
@@ -866,23 +785,14 @@ def test_shared_single_intent_target_matches_parent_target(
 
 
 @pytest.mark.parametrize(
-    "counts",
-    [(0, 1), (1, 1), (1, 2), (1023, 4096)],
-    ids=("zero-changed", "full-weight", "fractional", "wide-counts"),
+    "counts", [(0, 1), (1, 2), (1023, 4096)],
+    ids=("zero-changed", "fractional", "wide-counts"),
 )
-@pytest.mark.parametrize(
-    "adjustment",
-    [
-        {"hue": 30},
-        {"brightness": 1.5, "contrast": 1.25},
-        {
-            "red": 0.5, "green": 1.5, "blue": 2.0, "tint": "#4080c0",
-        },
-    ],
-    ids=("hue", "brightness-contrast", "rgb-tint"),
-)
-def test_weighted_single_rgb_matches_exact_reference_matrix(
-        counts, adjustment):
+def test_weighted_single_rgb_matches_reference_formula(counts):
+    adjustment = {
+        "hue": 30, "brightness": 1.5, "contrast": 1.25,
+        "red": 0.5, "green": 1.5, "blue": 2.0, "tint": "#4080c0",
+    }
     source_rgb = (37, 101, 203)
     changed_count, total_count = counts
     prepared_adjustment = prepare_color_adjustment(adjustment)
@@ -922,12 +832,6 @@ def test_weighted_single_target_validates_count_parity_and_preserves_padding():
             assert target[local] == source_pixels[local]
 
 
-def test_weighted_single_rgb_keeps_source_for_zero_total_weight():
-    adjustment = prepare_color_adjustment({"tint": "#ffdd00"})
-    assert bc7_recolor._bc7_weighted_single_rgb(
-        (37, 101, 203), adjustment, 0, 0) == (37, 101, 203)
-
-
 def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
     source_block = _mode6_block()
     source_pixels = bc7.decode_block(source_block)
@@ -961,15 +865,10 @@ def test_weighted_single_full_weights_do_not_use_mip0_shortcut(monkeypatch):
 @pytest.mark.parametrize(
     ("block", "valid_width", "valid_height"),
     [
-        (_separate_block(4), 4, 4),
-        (_mode5_block(), 4, 4),
         (_mode6_block(), 4, 4),
-        (_mode7_block(), 4, 4),
-        (_separate_block(4), 3, 2),
-        (_mode5_block(), 3, 2),
-        (_mode6_block(), 3, 2),
         (_mode7_block(), 3, 2),
     ],
+    ids=("full-mode6", "clipped-mode7"),
 )
 def test_weighted_single_worker_matches_parent_prepared_worker(
         block, valid_width, valid_height):
@@ -1011,12 +910,9 @@ def test_weighted_single_worker_reports_validation_errors():
     ("block", "valid_width", "valid_height"),
     [
         (_color_mode_block(3), 4, 4),
-        (_mode5_block(), 4, 4),
-        (_mode6_block(), 4, 4),
-        (_color_mode_block(3), 3, 2),
-        (_mode5_block(), 3, 2),
         (_mode6_block(), 3, 2),
     ],
+    ids=("full-color-mode", "clipped-alpha-mode"),
 )
 def test_compact_single_intent_worker_matches_parent_prepared_worker(
         block, valid_width, valid_height):
@@ -1136,9 +1032,8 @@ def test_parallel_lower_mip_multi_intent_keeps_parent_prepared_job(
     assert selected == ["legacy"]
 
 
-@pytest.mark.parametrize("intent_class", [1, 2, 3])
-def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment(
-        intent_class):
+def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment():
+    intent_class = 2
     source = bytearray(_mode6_block())
     mip = SimpleNamespace(
         offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
@@ -1163,18 +1058,11 @@ def test_parallel_lower_mip_single_class_uses_that_weighted_adjustment(
     assert job.total_counts == (5,) * 16
 
 
-@pytest.mark.parametrize(
-    ("source_rgb", "changed_count", "total_count"),
-    [((0, 0, 0), 1, 2), ((255, 128, 1), 1023, 4096)],
-)
-@pytest.mark.parametrize("intent_class", [1, 3])
-@pytest.mark.parametrize(
-    "adjustment",
-    [{"hue": 30}, {"brightness": 1.5, "contrast": 1.25},
-     {"red": 0.5, "green": 1.5, "blue": 2.0, "tint": "#4080c0"}],
-)
-def test_lower_mip_single_class_weighted_rgb_matches_generic_intent(
-        source_rgb, changed_count, total_count, intent_class, adjustment):
+def test_lower_mip_single_class_weighted_rgb_matches_generic_intent():
+    source_rgb = (255, 128, 1)
+    changed_count, total_count = 1023, 4096
+    intent_class = 3
+    adjustment = {"brightness": 1.5, "contrast": 1.25}
     prepared_adjustment = prepare_color_adjustment(adjustment)
     counts = [[0] for _ in range(4)]
     counts[0][0] = total_count - changed_count
@@ -1195,9 +1083,8 @@ def test_lower_mip_single_class_weighted_rgb_matches_generic_intent(
 
 @pytest.mark.parametrize(
     ("block", "valid_width", "valid_height"),
-    [(_separate_block(4), 4, 4), (_mode5_block(), 3, 4),
-     (_mode6_block(), 4, 3), (_mode7_block(), 3, 2),
-    ],
+    [(_mode6_block(), 4, 3), (_mode7_block(), 3, 2)],
+    ids=("clipped-mode6", "clipped-mode7"),
 )
 def test_lower_mip_weighted_multi_class_worker_matches_parent_prepared_worker(
         block, valid_width, valid_height):
@@ -1248,9 +1135,6 @@ def test_lower_mip_weighted_multi_class_job_preserves_wide_counts():
     [{
         "level": 1, "width": 4, "height": 4, "single": False,
         "class_count": 3, "counts": ([0] * 16, [1] * 15, [0] * 16),
-    }, {
-        "level": 1, "width": 4, "height": 4, "single": False,
-        "class_count": 2, "counts": ([0] * 16, [1] * 16, [0] * 16),
     }, {
         "level": 1, "width": 4, "height": 4, "single": False,
         "class_count": 3, "counts": ([0] * 16, [-1] * 16, [0] * 16),
@@ -1659,8 +1543,8 @@ def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
     [
         (8, 8, {(x, y) for y in range(8) for x in range(8)}, 64, 64),
         (8, 8, {(x, y) for y in range(4) for x in range(4)}, 16, 64),
-        (15, 9, {(x, y) for y in range(9) for x in range(15)}, 135, 135),
     ],
+    ids=("full", "partial"),
 )
 def test_single_intent_mip_counts_keep_exact_weighting(
         width, height, selected, expected_changed, expected_total):

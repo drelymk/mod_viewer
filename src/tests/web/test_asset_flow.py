@@ -1,7 +1,15 @@
 import pytest
 
-from .support import _open, _page
+from .support import _open, _page as _create_page
 from .payloads import _f32, _payload
+
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    features = {"asset", "asset_fill", "asset_folders"}
+    features.update(kwargs.pop("api_features", ()))
+    return _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
 
 def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         edge_browser, frontend_url):

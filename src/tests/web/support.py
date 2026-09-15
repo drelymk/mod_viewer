@@ -74,7 +74,7 @@ def module_page(module_context, frontend_url, module_document):
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
           panel_opacity_api=True, asset_folders=None, asset_subfolders=None,
-          startup_request=None, startup_api_ready=True):
+          startup_request=None, startup_api_ready=True, api_features=()):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
     # do not require weakening the served application's policy.
@@ -93,6 +93,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "panelOpacityApi": panel_opacity_api,
         "startupRequest": startup_request,
         "startupApiReady": startup_api_ready,
+        "apiFeatures": list(api_features),
     }
     encoded_state = json.dumps(json.dumps(state))
     context.add_init_script(
@@ -373,6 +374,32 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               return copy({ok: true, result: {}});
             },
           }};
+          const optionalApiMethods = {
+            asset: ['load_asset'],
+            asset_fill: ['load_missing_asset_parts',
+              'remove_missing_asset_parts'],
+            panel: ['get_panel_opacity', 'set_panel_opacity'],
+            mod_folders: ['add_mod_folder', 'edit_mod_folder',
+              'delete_mod_folder', 'list_subfolders'],
+            asset_folders: ['get_asset_folders', 'add_asset_folder',
+              'edit_asset_folder', 'delete_asset_folder',
+              'set_asset_folder_enabled', 'rebuild_asset_index',
+              'list_asset_subfolders', 'select_asset_folder'],
+            ini: ['list_ini_files', 'get_ini_text', 'update_ini_text'],
+            mesh: ['save_mesh_textures', 'save_mesh_color_adjustment',
+              'save_mesh_names', 'save_component_material_kind'],
+            texture: ['save_texture_color', 'pick_texture_file'],
+            record: ['get_record_positions', 'record_toggle'],
+            toggle: ['delete_toggle', 'list_toggle_source_inis'],
+            skinning: ['get_model_skinning_preview',
+              'save_weight_selection'],
+          };
+          const features = new Set(state.apiFeatures || []);
+          for (const [feature, names] of Object.entries(optionalApiMethods)) {
+            if (!features.has(feature)) {
+              for (const name of names) delete window.pywebview.api[name];
+            }
+          }
           if (!state.panelOpacityApi) {
             delete window.pywebview.api.get_panel_opacity;
             delete window.pywebview.api.set_panel_opacity;
@@ -386,12 +413,6 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
     page = context.new_page()
     page.goto(frontend_url)
     page.wait_for_function("window.modViewer !== undefined")
-    # Weight/Rig integration tests import their module directly. The app's
-    # public browser object intentionally contains no Weight/Rig internals.
-    page.evaluate("""async () => {
-      window.__testWeightRigRuntime = await import(
-        './js/mesh/weight-rig-runtime.js');
-    }""")
     return context, page
 
 

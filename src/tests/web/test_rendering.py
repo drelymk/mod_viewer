@@ -11,10 +11,23 @@ from PIL import Image, ImageChops
 from app.runtime import server
 from core.materials.profiles import material_profile_for
 from .support import (
-    _open, _page, _sample_mesh_pixel, _sample_mesh_pixel_at,
+    _open, _page as _create_page, _sample_mesh_pixel, _sample_mesh_pixel_at,
     _sample_mesh_pixels_at,
 )
 from .payloads import _PNG_URI, _f32, _payload, _u32
+
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    features = {"mesh", "skinning"}
+    features.update(kwargs.pop("api_features", ()))
+    context, page = _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
+    page.evaluate("""async () => {
+      window.__testWeightRigRuntime = await import(
+        './js/mesh/weight-rig-runtime.js');
+    }""")
+    return context, page
 
 
 def _flat_png_uri(rgba, size=4):
@@ -3732,7 +3745,8 @@ def test_texture_save_awaits_in_place_native_dds_reload(
     first_dds[148] = 0x11
     requests = []
     context, page = _page(
-        edge_browser, frontend_url, {"BakeNativeReload": payload})
+        edge_browser, frontend_url, {"BakeNativeReload": payload},
+        api_features={"texture"})
     try:
         supported = page.evaluate("""
           async () => {
@@ -4545,12 +4559,12 @@ def _skinning_material_transition_payload():
     payload["meshSemantics"] = {mesh_name: initial_semantic}
     payload["metadata"]["material_profiles"]["wuwa:rabbitfx:body"] = \
         material_profile_for("wuwa", "rabbitfx", "body").to_metadata()
-    return payload, mesh_name, explicit_semantic
+    return payload, mesh_name, initial_semantic, explicit_semantic
 
 
 def test_material_hot_swap_updates_loaded_skinning_baseline(
         edge_browser, frontend_url):
-    payload, mesh_name, explicit_semantic = \
+    payload, mesh_name, automatic_semantic, explicit_semantic = \
         _skinning_material_transition_payload()
     context, page = _page(edge_browser, frontend_url, {"Packed": payload})
     try:
@@ -4562,7 +4576,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
             [data.mesh]: data.semantic,
           };
         }""", {"mesh": mesh_name, "semantic": explicit_semantic})
-        result = page.evaluate("""async () => {
+        result = page.evaluate("""async data => {
           const mesh = window.modViewer.activeMeshes[0];
           const bytes = new Uint8Array(48);
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
@@ -4593,10 +4607,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
           const refreshed = await window.modViewer.refreshMeshSemantics();
           const afterSwap = getSkinningState(mesh);
           const newMaterial = afterSwap.originalMaterial;
-          setControlValue('shape', '1');
-          refreshMeshes();
-          URL.revokeObjectURL(url);
-          return {
+          const baseline = {
             refreshed,
             oldMaterialDisposals,
             newProfile: newMaterial.userData.gameMaterial.profile.id,
@@ -4605,72 +4616,27 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
             activeMaterialIsNew: mesh.material === newMaterial,
             activeProfile: mesh.material.userData.gameMaterial.profile.id,
           };
-        }""")
-        assert result == {
-            "refreshed": True,
-            "oldMaterialDisposals": 1,
-            "newProfile": "wuwa:rabbitfx:body",
-            "originalTracksNew": True,
-            "stateDisposed": False,
-            "activeMaterialIsNew": True,
-            "activeProfile": "wuwa:rabbitfx:body",
-        }
-    finally:
-        context.close()
+          setControlValue('shape', '1');
+          refreshMeshes();
 
-
-def test_material_hot_swap_preserves_active_skinning_heatmap(
-        edge_browser, frontend_url):
-    payload, mesh_name, explicit_semantic = \
-        _skinning_material_transition_payload()
-    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
-    try:
-        _open(page, "Packed")
-        page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
-        page.evaluate("""data => {
-          window.__fakeApi.responses.Packed.meshSemantics = {
-            [data.mesh]: data.semantic,
-          };
-        }""", {"mesh": mesh_name, "semantic": explicit_semantic})
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
-          const {setSelectedBones} = await import('./js/mesh/weight-model-session.js');
-          await experiment.ensureModelRigLoaded();
+          const {setSelectedBones} =
+            await import('./js/mesh/weight-model-session.js');
           setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          const oldMaterial = mesh.material;
-          let oldMaterialDisposals = 0;
-          oldMaterial.addEventListener('dispose',
-            () => oldMaterialDisposals += 1);
           experiment.setModelWeightHeatmap(true);
           const heatmapMaterial = mesh.material;
           let heatmapDisposals = 0;
           heatmapMaterial.addEventListener('dispose',
             () => heatmapDisposals += 1);
-          const refreshed = await window.modViewer.refreshMeshSemantics();
-          const afterSwap = getSkinningState(mesh);
-          const newMaterial = afterSwap.originalMaterial;
+          window.__fakeApi.responses.Packed.meshSemantics = {
+            [data.mesh]: data.automatic,
+          };
+          const heatmapRefreshed =
+            await window.modViewer.refreshMeshSemantics();
+          const heatmapState = getSkinningState(mesh);
+          const heatmapOriginal = heatmapState.originalMaterial;
           const displayedAfterSwap = mesh.material === heatmapMaterial;
           experiment.setBoneSelected('test/bodyblend.buf|offset=0', 1, true);
           const selectedBoneKeepsHeatmap =
@@ -4679,32 +4645,43 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           const disabled = experiment.setModelWeightHeatmap(false);
           URL.revokeObjectURL(url);
           return {
-            refreshed,
-            oldMaterialDisposals,
+            baseline,
+            heatmapRefreshed,
             heatmapDisposals,
             displayedAfterSwap,
             selectedBoneKeepsHeatmap,
-            originalTracksNew: afterSwap.originalMaterial === newMaterial,
-            newProfile: newMaterial.userData.gameMaterial.profile.id,
+            originalTracksNew: heatmapState.originalMaterial === heatmapOriginal,
+            newProfile: heatmapOriginal.userData.gameMaterial.profile.id,
             disabled,
-            restoredAfterDisable: mesh.material === newMaterial,
-            heatmapCleared: afterSwap.debugMaterial === null
-              && afterSwap.heatmapMode === null,
+            restoredAfterDisable: mesh.material === heatmapOriginal,
+            heatmapCleared: heatmapState.debugMaterial === null
+              && heatmapState.heatmapMode === null,
             activeProfile: mesh.material.userData.gameMaterial.profile.id,
           };
-        }""")
+        }""", {
+            "mesh": mesh_name,
+            "automatic": automatic_semantic,
+        })
         assert result == {
-            "refreshed": True,
-            "oldMaterialDisposals": 1,
+            "baseline": {
+                "refreshed": True,
+                "oldMaterialDisposals": 1,
+                "newProfile": "wuwa:rabbitfx:body",
+                "originalTracksNew": True,
+                "stateDisposed": False,
+                "activeMaterialIsNew": True,
+                "activeProfile": "wuwa:rabbitfx:body",
+            },
+            "heatmapRefreshed": True,
             "heatmapDisposals": 1,
             "displayedAfterSwap": True,
             "selectedBoneKeepsHeatmap": True,
             "originalTracksNew": True,
-            "newProfile": "wuwa:rabbitfx:body",
+            "newProfile": "wuwa:rabbitfx",
             "disabled": False,
             "restoredAfterDisable": True,
             "heatmapCleared": True,
-            "activeProfile": "wuwa:rabbitfx:body",
+            "activeProfile": "wuwa:rabbitfx",
         }
     finally:
         context.close()
@@ -5873,7 +5850,9 @@ def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_change
         "tex_key": "diffuse::added.png", "file": "added.png", "uri":
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLkWQAAAABJRU5ErkJggg==",
     }
-    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")}, picks=[pick])
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")}, picks=[pick],
+        api_features={"texture"})
     try:
         _open(page, "A")
         page.locator(".draw-item").wait_for()

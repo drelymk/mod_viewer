@@ -3,10 +3,22 @@ import copy
 import json
 
 from app.settings import paths
-from .support import _open, _open_library, _page
+from .support import _open, _open_library, _page as _create_page
 from .payloads import (
     _MOD_LIBRARY, _PNG_URI, _f32, _payload, _source_payload,
 )
+
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    features = {"asset_folders", "mesh", "mod_folders", "panel"}
+    features.update(kwargs.pop("api_features", ()))
+    if any("textureSaveResult" in payload
+           for payload in responses.values()
+           if isinstance(payload, dict)):
+        features.add("texture")
+    return _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
 
 def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
@@ -1059,7 +1071,9 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
     second["component"] = "Face Bake"
     second["display_name"] = "Friendly Face"
     payload["meshes"]["Face-Bake-0"] = second
-    context, page = _page(edge_browser, frontend_url, {"Bake": payload})
+    context, page = _page(
+        edge_browser, frontend_url, {"Bake": payload},
+        api_features={"texture"})
     try:
         _open(page, "Bake")
         page.locator(".draw-item").first.wait_for()

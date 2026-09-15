@@ -3,11 +3,21 @@ import copy
 import pytest
 
 from .support import (
-    _open, _open_library, _page,
+    _open, _open_library, _page as _create_page,
 )
 from .payloads import (
     _MOD_LIBRARY, _construction_failure_payload, _payload, _present_payload,
 )
+
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    features = {
+        "asset", "mod_folders", "present", "record", "toggle",
+    }
+    features.update(kwargs.pop("api_features", ()))
+    return _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
 
 
 def test_open_mod_source_menu_uses_shared_load_flow_for_folder_and_archive(
@@ -294,30 +304,12 @@ def test_shared_control_values_reconcile_as_a_union(
     finally:
         context.close()
 
-def test_delete_reloads_model_for_geometry_safety(
+def test_export_and_delete_use_their_distinct_load_lifecycles(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"Delete": _payload("Delete")},
-        pending={"Delete": True})
-    try:
-        _open(page, "Delete")
-        page.locator(".draw-item").wait_for()
-        page.evaluate("window.__deleteMesh = window.modViewer.activeMeshes[0]")
-        page.locator("#toggle-list [title='Delete toggle']").click()
-        page.locator("#dialog-backdrop.show").wait_for()
-        page.locator("#dialog-ok").click()
-        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 2")
-
-        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
-        assert page.evaluate("window.modViewer.activeMeshes[0] !== window.__deleteMesh")
-    finally:
-        context.close()
-
-def test_export_refreshes_status_without_reloading_model(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"Export": _payload("Export")},
-        pending={"Export": True})
+        edge_browser, frontend_url,
+        {"Export": _payload("Export"), "Delete": _payload("Delete")},
+        pending={"Export": True, "Delete": True})
     try:
         _open(page, "Export")
         page.locator(".draw-item").wait_for()
@@ -325,10 +317,21 @@ def test_export_refreshes_status_without_reloading_model(
         page.locator("#export-btn").click()
         page.wait_for_function("window.__fakeApi.calls.exportChanges.length === 1")
         page.wait_for_function("!window.__fakeApi.pending.Export")
-
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Export"]
         assert page.evaluate(
             "window.modViewer.activeMeshes[0] === window.__exportMesh")
+
+        _open(page, "Delete")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("window.__deleteMesh = window.modViewer.activeMeshes[0]")
+        page.locator("#toggle-list [title='Delete toggle']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
+        page.wait_for_function("window.__fakeApi.calls.loadMod.length === 3")
+
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] !== window.__deleteMesh")
     finally:
         context.close()
 

@@ -4510,6 +4510,19 @@ def test_model_rig_sidecar_serialization_and_hydration(module_page):
         continuations: mapValues(value.restContinuationChildByJointId),
         sourceMap: [...value.sourceBoneToModelJointId].sort(),
       });
+      let stored = null;
+      let buildCount = 0;
+      const loadOrBuild = () => persistence.loadOrBuildModelRig({
+        load: async () => stored,
+        hydrate: value => persistence.hydrateModelRig(value, sourceRigs),
+        build: async () => {
+          buildCount += 1;
+          stored = saved;
+          return stored;
+        },
+      });
+      const firstLoad = await loadOrBuild();
+      const secondLoad = await loadOrBuild();
       return {
         version: saved.version,
         fields: Object.keys(saved).sort(),
@@ -4520,6 +4533,12 @@ def test_model_rig_sidecar_serialization_and_hydration(module_page):
         edgePivots: saved.edges.map(edge => edge.edge_pivot),
         equivalent: JSON.stringify(state(rig)) === JSON.stringify(state(hydrated)),
         fresh: state(rig), cached: state(hydrated),
+        loadLifecycle: {
+          firstFromCache: firstLoad.hydratedFromCache,
+          secondFromCache: secondLoad.hydratedFromCache,
+          buildCount,
+          sameIds: secondLoad.modelRig.joints.map(joint => joint.jointId),
+        },
       };
     }""")
     assert result["version"] == 1
@@ -4533,46 +4552,19 @@ def test_model_rig_sidecar_serialization_and_hydration(module_page):
     assert result["edgePivots"] == [[0, .5, 0], [.5, .5, 0], [0, 1.5, 0]]
     assert result["equivalent"] is True
     assert result["fresh"] == result["cached"]
-
-
-def test_model_rig_second_load_skips_reconciliation(module_page):
-    result = module_page.evaluate("""async () => {
-      const persistence = await import('./js/mesh/model-rig-persistence.js');
-      const sourceRigs = [{sourceKey: 'body|offset=0', sourceFile: 'Body.buf',
-        boneIdOffset: 0}];
-      const rig = {sourceRigs, modelReferenceRadius: 1,
-        joints: [{jointId: 0, parentId: null,
-        members: [{sourceKey: sourceRigs[0].sourceKey,
-          sourceBoneKey: 'body|offset=0#bone=7', boneId: 7}],
-        representativeMember: {sourceKey: sourceRigs[0].sourceKey,
-          sourceBoneKey: 'body|offset=0#bone=7', boneId: 7},
-        restCenter: [0, 0, 0], restPivot: [0, 0, 0],
-        restFrame: [0, 0, 0, 1]}], edges: []};
-      let saved = null;
-      let buildCount = 0;
-      const build = async () => {
-        buildCount += 1;
-        const value = persistence.serializeModelRig(rig, {sourceRigs});
-        saved = value;
-        return value;
-      };
-      const run = () => persistence.loadOrBuildModelRig({
-        load: async () => saved,
-        hydrate: value => persistence.hydrateModelRig(value, sourceRigs),
-        build,
-      });
-      const first = await run();
-      const second = await run();
-      return {first: first.hydratedFromCache, second: second.hydratedFromCache,
-        buildCount, sameIds: second.modelRig.joints.map(joint => joint.jointId)};
-    }""")
-    assert result == {
-        "first": False, "second": True, "buildCount": 1, "sameIds": [0],
+    assert result["loadLifecycle"] == {
+        "firstFromCache": False, "secondFromCache": True,
+        "buildCount": 1, "sameIds": [0, 1, 2, 3],
     }
 
-
-def test_invalid_humanoid_joint_id_does_not_fall_back_to_proximity(module_page):
-    result = module_page.evaluate("""async () => {
+@pytest.mark.parametrize(
+    ("builder_version", "joint_id"),
+    [(1, 999), (0, 4)],
+    ids=("invalid-joint-id", "stale-builder-version"),
+)
+def test_humanoid_overrides_never_fall_back_to_proximity(
+        module_page, builder_version, joint_id):
+    result = module_page.evaluate("""async config => {
       const control = await import('./js/mesh/humanoid-control-rig.js');
       const binding = await import('./js/mesh/humanoid-rig-binding.js');
       const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(
@@ -4584,8 +4576,8 @@ def test_invalid_humanoid_joint_id_does_not_fall_back_to_proximity(module_page):
         restFrame: [0, 0, 0, 1]}]};
       const overrides = {version: 2, controls: {
         leftHand: {semantic: {sideN: 0, height01: 0, depthN: 0},
-          joint_id: 999},
-      }, model_rig_builder_version: 1};
+          joint_id: config.jointId},
+      }, model_rig_builder_version: config.builderVersion};
       const mappings = control.resolveHumanoidControlMappings({
         savedOverrides: overrides, modelRig: model});
       const rigBinding = binding.buildHumanoidRigBinding({
@@ -4597,43 +4589,11 @@ def test_invalid_humanoid_joint_id_does_not_fall_back_to_proximity(module_page):
         mapped: [...mappings.keys()],
         leftHand: rigBinding.diagnostics.bindingsByControl.leftHand,
       };
-    }""")
+    }""", {"builderVersion": builder_version, "jointId": joint_id})
     assert result["rejected"] == ["leftHand"]
     assert result["mapped"] == []
     assert result["leftHand"]["source"] == "unresolved"
     assert result["leftHand"]["rootJointId"] is None
-
-
-def test_stale_humanoid_builder_mapping_does_not_fall_back_to_proximity(
-        module_page):
-    result = module_page.evaluate("""async () => {
-      const control = await import('./js/mesh/humanoid-control-rig.js');
-      const binding = await import('./js/mesh/humanoid-rig-binding.js');
-      const controls = Object.fromEntries(control.HUMANOID_CONTROL_KEYS.map(
-        key => [key, {position: [0, 0, 0],
-          semantic: {sideN: 0, height01: 0, depthN: 0}}]));
-      const automatic = {accepted: true, frame: {up: [0, 1, 0],
-        right: [1, 0, 0], forward: [0, 0, 1], height: 1}, controls};
-      const model = {joints: [{jointId: 4, restPivot: [0, 0, 0],
-        restFrame: [0, 0, 0, 1]}]};
-      const overrides = {version: 2, model_rig_builder_version: 0,
-        controls: {leftHand: {semantic: {sideN: 0, height01: 0, depthN: 0},
-          joint_id: 4}}};
-      const mappings = control.resolveHumanoidControlMappings({
-        savedOverrides: overrides, modelRig: model});
-      const rigBinding = binding.buildHumanoidRigBinding({
-        controlRig: automatic, modelRig: model, controlMappings: mappings,
-        options: {pointDistanceRatio: 10},
-      });
-      return {rejected: [...mappings.rejectedControlKeys],
-        mapped: [...mappings.keys()],
-        leftHand: rigBinding.diagnostics.bindingsByControl.leftHand};
-    }""")
-    assert result["rejected"] == ["leftHand"]
-    assert result["mapped"] == []
-    assert result["leftHand"]["source"] == "unresolved"
-    assert result["leftHand"]["rootJointId"] is None
-
 
 def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page):
     result = module_page.evaluate("""async () => {
@@ -5069,7 +5029,7 @@ def test_camera_frame_known_game_orientation_policy(module_page):
         ordinaryUnknown: shouldApplyUprightRotation({gameId: null,
           rawSize: {x: 1, y: 2, z: 1}}),
       };
-      const createFrame = () => {
+      const createFrame = onOrientationChanged => {
         const camera = new THREE.PerspectiveCamera(45, 4 / 3, .01, 100);
         const controls = {
           target: new THREE.Vector3(), update() {}, setCamera() {},
@@ -5083,7 +5043,7 @@ def test_camera_frame_known_game_orientation_policy(module_page):
         const grid = {scale: new THREE.Vector3(1, 1, 1),
           position: new THREE.Vector3()};
         return createCameraFrame({camera, renderer, controls, grid,
-          cancelViewSnap() {}});
+          cancelViewSnap() {}, onOrientationChanged});
       };
       const zzzFrame = createFrame();
       const zzzMesh = new THREE.Mesh(new THREE.BoxGeometry(4, .8, 2));
@@ -5095,6 +5055,21 @@ def test_camera_frame_known_game_orientation_policy(module_page):
       wuwaFrame.fitTo([wuwaMesh], {
         gameId: 'wuwa', initialRotationY: Math.PI,
       });
+      const events = [];
+      const stateFrame = createFrame(state => events.push(state));
+      const stateBefore = stateFrame.getModelTransformState();
+      const stateMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1));
+      stateFrame.fitTo([stateMesh], {initialRotationY: Math.PI / 2});
+      const stateFitted = stateFrame.getModelTransformState();
+      stateFrame.rotateModelQuarterTurn([stateMesh]);
+      const stateTurned = stateFrame.getModelTransformState();
+      const arrays = state => ({
+        orientation: state.orientation.toArray(),
+        baseOrientation: state.baseOrientation.toArray(),
+        userRotation: state.userRotation.toArray(),
+        orientationInitialized: state.orientationInitialized,
+        modelOrientationRevision: state.modelOrientationRevision,
+      });
       return {
         decisions,
         zzzHeight: zzzSize.y,
@@ -5102,6 +5077,10 @@ def test_camera_frame_known_game_orientation_policy(module_page):
           .baseOrientation.toArray(),
         wuwaOrientation: wuwaFrame.getModelTransformState()
           .baseOrientation.toArray(),
+        state: {
+          before: arrays(stateBefore), fitted: arrays(stateFitted),
+          turned: arrays(stateTurned), eventCount: events.length,
+        },
       };
     }""")
     assert result["decisions"] == {
@@ -5117,63 +5096,23 @@ def test_camera_frame_known_game_orientation_policy(module_page):
         [-2 ** -0.5, 0, 0, 2 ** -0.5])
     assert result["wuwaOrientation"] == pytest.approx(
         [0, 2 ** -0.5, 2 ** -0.5, 0])
-
-
-def test_camera_frame_exposes_stable_base_orientation_state(module_page):
-    result = module_page.evaluate("""async () => {
-      const THREE = await import('three');
-      const {createCameraFrame} = await import('./js/scene/camera-frame.js');
-      const camera = new THREE.PerspectiveCamera(45, 4 / 3, .01, 100);
-      const controls = {
-        target: new THREE.Vector3(),
-        update() {},
-        setCamera() {},
-        saveState() {},
-      };
-      const renderer = {
-        domElement: {getBoundingClientRect: () => ({
-          width: 800, height: 600, left: 0, right: 800,
-        })},
-        setSize() {},
-      };
-      const grid = {scale: new THREE.Vector3(1, 1, 1), position: new THREE.Vector3()};
-      const events = [];
-      const frame = createCameraFrame({camera, renderer, controls, grid,
-        cancelViewSnap() {}, onOrientationChanged: state => events.push(state)});
-      const before = frame.getModelTransformState();
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1));
-      frame.fitTo([mesh], {initialRotationY: Math.PI / 2});
-      const fitted = frame.getModelTransformState();
-      frame.rotateModelQuarterTurn([mesh]);
-      const turned = frame.getModelTransformState();
-      mesh.geometry.dispose();
-      const arrays = state => ({
-        orientation: state.orientation.toArray(),
-        baseOrientation: state.baseOrientation.toArray(),
-        userRotation: state.userRotation.toArray(),
-        orientationInitialized: state.orientationInitialized,
-        modelOrientationRevision: state.modelOrientationRevision,
-      });
-      return {before: arrays(before), fitted: arrays(fitted),
-        turned: arrays(turned), eventCount: events.length};
-    }""")
-    assert result["before"] == {
+    assert result["state"]["before"] == {
         "orientation": [0, 0, 0, 1],
         "baseOrientation": [0, 0, 0, 1],
         "userRotation": [0, 0, 0, 1],
         "orientationInitialized": False,
         "modelOrientationRevision": 0,
     }
-    assert result["fitted"]["orientationInitialized"]
-    assert result["fitted"]["modelOrientationRevision"] == 1
-    assert result["fitted"]["baseOrientation"] == pytest.approx(
+    assert result["state"]["fitted"]["orientationInitialized"]
+    assert result["state"]["fitted"]["modelOrientationRevision"] == 1
+    assert result["state"]["fitted"]["baseOrientation"] == pytest.approx(
         [0, 2 ** -0.5, 0, 2 ** -0.5])
-    assert result["turned"]["modelOrientationRevision"] == 1
-    assert result["turned"]["baseOrientation"] == pytest.approx(
-        result["fitted"]["baseOrientation"])
-    assert result["turned"]["userRotation"] != pytest.approx(
-        result["fitted"]["userRotation"])
-    assert result["eventCount"] == 1
+    assert result["state"]["turned"]["modelOrientationRevision"] == 1
+    assert result["state"]["turned"]["baseOrientation"] == pytest.approx(
+        result["state"]["fitted"]["baseOrientation"])
+    assert result["state"]["turned"]["userRotation"] != pytest.approx(
+        result["state"]["fitted"]["userRotation"])
+    assert result["state"]["eventCount"] == 1
 
 
 @pytest.mark.parametrize("arm_drop", [.03, .25, .5],
