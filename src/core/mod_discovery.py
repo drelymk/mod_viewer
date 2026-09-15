@@ -81,14 +81,14 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None):
     disabled files are never combined.
     """
     source = source or DirectoryModSource(mod_dir)
-    if source.kind == "zip":
+    if source.virtual:
         return [
             source.document_path(logical)
             for logical in source.list_files()
             if _selected(logical.rsplit("/", 1)[-1], disabled=disabled)
         ]
 
-    direct = _ini_names(mod_dir if source.kind == "directory" else "",
+    direct = _ini_names(mod_dir if not source.virtual else "",
                         source, disabled=disabled)
     if not any(_has_geometry_sections(path, source) for path in direct):
         return direct
@@ -96,7 +96,7 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None):
     found = list(direct)
     if len(found) >= _MAX_INI_FILES:
         return found
-    if source.kind == "directory":
+    if not source.virtual:
         for base, dirs, _files in os.walk(mod_dir):
             rel = os.path.relpath(base, mod_dir)
             depth = 0 if rel == os.curdir else len(rel.split(os.sep))

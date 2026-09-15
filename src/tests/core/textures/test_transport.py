@@ -5,6 +5,7 @@ import os
 import socketserver
 import struct
 import threading
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -19,6 +20,7 @@ from app.runtime import server as server
 from app.bridge.api import ModViewerAPI
 from core.ini.document import IniDocument
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.mod_source import ZipModSource
 from core.textures import (encode_texture_data_uri, render_texture_png,
                            set_texture_profile_hook)
 
@@ -343,6 +345,105 @@ def test_native_eligibility_is_role_and_transform_aware(tmp_path):
     assert server._lookup_texture(publication.token, "0").native_dds is False
     assert server._lookup_texture(publication.token, "1").native_dds is True
     assert server._lookup_texture(publication.token, "2").native_dds is False
+
+
+def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_request(
+        tmp_path):
+    dds = tmp_path / "native.dds"
+    _write_bc7_dds(dds)
+    dds_bytes = dds.read_bytes()
+    archive_path = tmp_path / "mod.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("Mod/native.dds", dds_bytes)
+
+    source = ZipModSource(archive_path)
+    prefix_reads = []
+    full_reads = []
+    original_read_prefix = source.read_prefix
+    original_read_bytes = source.read_bytes
+
+    def read_prefix(reference, length):
+        prefix_reads.append((reference, length))
+        return original_read_prefix(reference, length)
+
+    def read_bytes(reference):
+        full_reads.append(reference)
+        return original_read_bytes(reference)
+
+    source.read_prefix = read_prefix
+    source.read_bytes = read_bytes
+    publication = server.begin_texture_publication(
+        str(archive_path), source=source)
+    httpd = None
+    try:
+        member = source.resolve_resource("native.dds")
+        url = publication.register(member)
+        entry = server._lookup_texture(publication.token, "0")
+
+        assert url.endswith(".dds")
+        assert entry.native_dds is True
+        assert prefix_reads == [(member, 148)]
+        assert full_reads == []
+
+        publication.commit()
+        handler = functools.partial(server._Handler, directory=str(tmp_path))
+        httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+        with urlopen(base_url + url) as response:
+            assert response.headers["Content-Type"] == "image/vnd-ms.dds"
+            assert response.read() == dds_bytes
+        assert full_reads == [member]
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+        publication.discard()
+
+
+def test_zip_transformed_dds_stays_lazy_until_png_render(tmp_path):
+    dds = tmp_path / "normal.dds"
+    _write_bc7_dds(dds)
+    archive_path = tmp_path / "mod.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("Mod/normal.dds", dds.read_bytes())
+
+    source = ZipModSource(archive_path)
+    prefix_reads = []
+    full_reads = []
+    original_read_prefix = source.read_prefix
+    original_read_bytes = source.read_bytes
+
+    def read_prefix(reference, length):
+        prefix_reads.append((reference, length))
+        return original_read_prefix(reference, length)
+
+    def read_bytes(reference):
+        full_reads.append(reference)
+        return original_read_bytes(reference)
+
+    source.read_prefix = read_prefix
+    source.read_bytes = read_bytes
+    publication = server.begin_texture_publication(
+        str(archive_path), source=source)
+    try:
+        member = source.resolve_resource("normal.dds")
+        url = publication.register(
+            member, transform="normal_xy_reconstruct")
+        entry = server._lookup_texture(publication.token, "0")
+
+        assert url.endswith(".png")
+        assert entry.native_dds is False
+        assert prefix_reads == []
+        assert full_reads == []
+
+        with patch("app.runtime.server.render_texture_png", return_value=b"PNG"):
+            assert server._render_texture_request(
+                publication.token, "0", entry) == b"PNG"
+        assert full_reads == [member]
+    finally:
+        publication.discard()
 
 
 def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):

@@ -49,7 +49,7 @@ class TextureRegistry:
         if key and key not in self._sources:
             if self.texture_source is None:
                 if (self.source is not None
-                        and self.source.kind == "zip"
+                        and getattr(self.source, "virtual", False)
                         and self.source.is_resource_reference(path)):
                     value = encode_texture_data_uri(
                         self.source.read_bytes(path),

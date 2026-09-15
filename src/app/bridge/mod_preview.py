@@ -66,21 +66,21 @@ class ModPreview:
         source = edit_session.source_for(folder_path) or \
             mod_source_for_path(folder_path)
         discovery_kwargs = {"disabled": disabled_ini}
-        if getattr(source, "kind", None) == "zip":
+        if getattr(source, "virtual", False):
             discovery_kwargs["source"] = source
         ini_paths = (edit_session.document_paths(folder_path)
                      or discover_ini_paths(folder_path, **discovery_kwargs))
-        if getattr(source, "kind", None) == "zip":
+        if getattr(source, "virtual", False):
             edit_session.load_documents(folder_path, ini_paths, source=source)
         else:
             edit_session.load_documents(folder_path, ini_paths)
         overrides = edit_session.overrides_for(folder_path)
         pending_new_sections = edit_session.new_sections_for(folder_path)
         saved_metadata = (metadata.load(folder_path, source=source)
-                          if getattr(source, "kind", None) == "zip"
+                          if getattr(source, "virtual", False)
                           else metadata.load(folder_path))
         staged_names = edit_session.staged_present_names(folder_path)
-        if (getattr(source, "kind", None) == "zip"
+        if (getattr(source, "virtual", False)
                 and staged_names is not None):
             if staged_names:
                 saved_metadata["present_names"] = staged_names
@@ -162,7 +162,7 @@ class ModPreview:
             return {"error": str(error)}
         geometry = GeometryBlob()
         context_source = getattr(context, "source", None)
-        if getattr(context_source, "kind", None) == "zip":
+        if getattr(context_source, "virtual", False):
             publication = server.begin_texture_publication(
                 folder_path, source=context_source)
         else:

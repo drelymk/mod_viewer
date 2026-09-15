@@ -25,6 +25,7 @@ def test_zip_source_strips_one_wrapper_and_keeps_logical_paths(tmp_path):
 
     source = ZipModSource(archive_path)
 
+    assert source.virtual is True
     assert source.wrapper_root == "SampleMod"
     assert source.list_files() == [
         "main.ini", "nested/mesh.buf", "textures/body.dds"]
@@ -34,6 +35,7 @@ def test_zip_source_strips_one_wrapper_and_keeps_logical_paths(tmp_path):
     assert source.exists("nested/mesh.buf")
     assert source.read_text(ini).startswith("[TextureOverrideBody]")
     assert source.read(mesh) == b"mesh-data"
+    assert source.read_prefix(mesh, 4) == b"mesh"
     assert source.size(mesh) == 9
     assert source.logical_path(mesh) == "nested/mesh.buf"
     casefolded = source.resolve("NESTED/MESH.BUF")

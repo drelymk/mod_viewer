@@ -64,7 +64,7 @@ def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
         if (getattr(context, "source", None) is None
                 and is_zip_path(context.mod_dir)):
             context.source = mod_source_for_path(context.mod_dir)
-        _normalize_zip_context(context)
+        _normalize_virtual_context(context)
         return context
     if folder_path is None:
         raise ValueError("folder_path is required")
@@ -76,7 +76,7 @@ def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
     else:
         source = (getattr(ini_paths[0], "source", None)
                   if ini_paths else None) or mod_source_for_path(folder_path)
-    if getattr(source, "kind", None) == "zip":
+    if getattr(source, "virtual", False):
         normalized_paths = []
         for path in ini_paths:
             logical = getattr(path, "logical_path", None)
@@ -88,10 +88,10 @@ def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
         folder_path, list(ini_paths), documents or {}, {}, source=source)
 
 
-def _normalize_zip_context(context):
-    """Keep direct ModLoadContext callers on logical ZIP identities."""
+def _normalize_virtual_context(context):
+    """Keep direct ModLoadContext callers on logical source identities."""
     source = getattr(context, "source", None)
-    if getattr(source, "kind", None) != "zip":
+    if not getattr(source, "virtual", False):
         return context
     normalized_paths = []
     for path in context.ini_paths:

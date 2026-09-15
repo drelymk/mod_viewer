@@ -114,7 +114,7 @@ def load_documents(mod_dir, ini_paths, *, source=None):
         key = _key(mod_dir, path, source=sess.source)
         if key in sess.docs:
             continue
-        if sess.source.kind == "directory":
+        if not sess.source.virtual:
             doc = IniDocument.load(path)
         else:
             doc = IniDocument.from_string(

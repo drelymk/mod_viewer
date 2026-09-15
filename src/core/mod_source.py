@@ -10,6 +10,7 @@ from __future__ import annotations
 import ntpath
 import os
 import posixpath
+import threading
 import zipfile
 
 from .resource_paths import safe_resource_path
@@ -29,6 +30,7 @@ class ModSource:
 
     kind = None
     source_path = None
+    virtual = False
     read_only = True
 
     def exists(self, reference):
@@ -39,6 +41,12 @@ class ModSource:
 
     def resolve(self, relative_path):
         return self.resolve_resource(relative_path)
+
+    def size(self, reference):
+        raise NotImplementedError
+
+    def read_prefix(self, reference, length):
+        raise NotImplementedError
 
 
 class SourcePath(str):
@@ -103,6 +111,7 @@ def _normalized_relative(value, *, allow_parent=False):
 
 class DirectoryModSource(ModSource):
     kind = "directory"
+    virtual = False
     read_only = False
 
     def __init__(self, source_path):
@@ -164,6 +173,10 @@ class DirectoryModSource(ModSource):
         with open(os.fspath(reference), "rb") as stream:
             return stream.read()
 
+    def read_prefix(self, reference, length):
+        with open(os.fspath(reference), "rb") as stream:
+            return stream.read(int(length))
+
     def read_text(self, reference):
         return self.read_bytes(reference).decode("utf-8")
 
@@ -177,6 +190,7 @@ class DirectoryModSource(ModSource):
 
 class ZipModSource(ModSource):
     kind = "zip"
+    virtual = True
     read_only = True
 
     def __init__(self, source_path):
@@ -242,6 +256,7 @@ class ZipModSource(ModSource):
         # lifetime budget would eventually reject an otherwise safe reload.
         self._requested_members = set()
         self._requested_bytes = 0
+        self._read_lock = threading.RLock()
 
     @staticmethod
     def _normalize_member_name(name):
@@ -346,29 +361,45 @@ class ZipModSource(ModSource):
         return info.file_size
 
     def read_bytes(self, reference):
-        lookup = self._lookup(reference)
-        if lookup is None:
-            raise FileNotFoundError(str(reference))
-        _logical, (member, info) = lookup
-        if info.flag_bits & 0x1:
-            raise ModSourceError("Encrypted ZIP members are not supported.")
-        size = self.size(reference)
-        additional = 0 if member in self._requested_members else size
-        if self._requested_bytes + additional > _MAX_ZIP_READ_BYTES:
-            raise ModSourceError(
-                "Requested ZIP member data exceeds the 2 GiB safety limit.")
-        try:
-            with zipfile.ZipFile(self.source_path) as archive:
-                with archive.open(member, "r") as stream:
-                    data = stream.read(_MAX_ZIP_MEMBER_BYTES + 1)
-        except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
-            raise ModSourceError(f"Could not read ZIP member {member!r}: {error}") from error
-        if len(data) > _MAX_ZIP_MEMBER_BYTES or len(data) != size:
-            raise ModSourceError(f"ZIP member {member!r} has an invalid size.")
-        if member not in self._requested_members:
-            self._requested_members.add(member)
-            self._requested_bytes += len(data)
-        return data
+        with self._read_lock:
+            lookup = self._lookup(reference)
+            if lookup is None:
+                raise FileNotFoundError(str(reference))
+            _logical, (member, info) = lookup
+            if info.flag_bits & 0x1:
+                raise ModSourceError("Encrypted ZIP members are not supported.")
+            size = self.size(reference)
+            additional = 0 if member in self._requested_members else size
+            if self._requested_bytes + additional > _MAX_ZIP_READ_BYTES:
+                raise ModSourceError(
+                    "Requested ZIP member data exceeds the 2 GiB safety limit.")
+            try:
+                with zipfile.ZipFile(self.source_path) as archive:
+                    with archive.open(member, "r") as stream:
+                        data = stream.read(_MAX_ZIP_MEMBER_BYTES + 1)
+            except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
+                raise ModSourceError(f"Could not read ZIP member {member!r}: {error}") from error
+            if len(data) > _MAX_ZIP_MEMBER_BYTES or len(data) != size:
+                raise ModSourceError(f"ZIP member {member!r} has an invalid size.")
+            if member not in self._requested_members:
+                self._requested_members.add(member)
+                self._requested_bytes += len(data)
+            return data
+
+    def read_prefix(self, reference, length):
+        with self._read_lock:
+            lookup = self._lookup(reference)
+            if lookup is None:
+                raise FileNotFoundError(str(reference))
+            _logical, (member, info) = lookup
+            if info.flag_bits & 0x1:
+                raise ModSourceError("Encrypted ZIP members are not supported.")
+            try:
+                with zipfile.ZipFile(self.source_path) as archive:
+                    with archive.open(member, "r") as stream:
+                        return stream.read(int(length))
+            except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
+                raise ModSourceError(f"Could not read ZIP member {member!r}: {error}") from error
 
     def read_text(self, reference):
         try:

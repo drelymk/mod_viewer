@@ -26,7 +26,8 @@ import threading
 import uuid
 from dataclasses import dataclass
 
-from core.textures.dds import DDSInfo, native_dds_info
+from core.textures.dds import (DDSInfo, native_dds_info,
+                               native_dds_info_from_header)
 from core.textures import (render_texture_png, normalize_texture_role,
                            normalize_texture_transform)
 from core.mod_source import ModSourceError
@@ -99,7 +100,7 @@ class TexturePublication:
         if not path:
             return None
         source_ref = (self.source is not None
-                      and getattr(self.source, "kind", None) == "zip"
+                      and getattr(self.source, "virtual", False)
                       and self.source.is_resource_reference(path))
         if source_ref:
             if not self.source.is_file(path):
@@ -138,8 +139,22 @@ class TexturePublication:
                 if not validate:
                     return _texture_url(self.token, source_id, existing_source)
 
-        dds_info = (None if source_ref else native_dds_info(
-            path, max_size, transform, source_name=logical_path))
+        if source_ref:
+            dds_info = None
+            if (logical_path.lower().endswith(".dds")
+                    and transform == "passthrough"):
+                try:
+                    header = self.source.read_prefix(path, 148)
+                    file_size = self.source.size(path)
+                except (OSError, ModSourceError):
+                    pass
+                else:
+                    dds_info = native_dds_info_from_header(
+                        header, file_size, max_size, transform,
+                        source_name=logical_path)
+        else:
+            dds_info = native_dds_info(
+                path, max_size, transform, source_name=logical_path)
         source = existing_source or TextureSource(
             path=None if source_ref else path, data=data,
             logical_path=logical_path, role=role, max_size=max_size,
@@ -506,16 +521,27 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     def _send_native_dds(self, token, source_id, source):
         """Stream the registered DDS without entering the PNG semaphore."""
-        if source.data is not None:
+        if source.data is not None or source.mod_source is not None:
+            if _lookup_texture(token, source_id) is not source:
+                self.send_error(404, "Texture unavailable")
+                return
+            if source.data is not None:
+                data = source.data
+            else:
+                try:
+                    data = source.mod_source.read_bytes(source.source_ref)
+                except (OSError, ModSourceError):
+                    self.send_error(404, "Texture unavailable")
+                    return
             if _lookup_texture(token, source_id) is not source:
                 self.send_error(404, "Texture unavailable")
                 return
             self.send_response(200)
             self.send_header("Content-Type", "image/vnd-ms.dds")
-            self.send_header("Content-Length", str(len(source.data)))
+            self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(source.data)
+            self.wfile.write(data)
             return
         try:
             stream = open(source.path, "rb")

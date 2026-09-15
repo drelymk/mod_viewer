@@ -128,7 +128,7 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None):
             if image_path and exists(image_path):
                 panel[key]["image_slot"] = True
                 source_backed = (source is not None
-                                 and getattr(source, "kind", None) == "zip")
+                                 and getattr(source, "virtual", False))
                 image = (source.read_bytes(image_path)
                          if source_backed else image_path)
                 panel[key]["image"] = encode_texture_data_uri(
@@ -157,7 +157,7 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None):
         if image_path and exists(image_path):
             panel[key]["image_slot"] = True
             source_backed = (source is not None
-                             and getattr(source, "kind", None) == "zip")
+                             and getattr(source, "virtual", False))
             image = (source.read_bytes(image_path)
                      if source_backed else image_path)
             panel[key]["image"] = encode_texture_data_uri(

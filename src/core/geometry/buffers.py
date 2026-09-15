@@ -142,7 +142,7 @@ class BufferStore:
     def raw(self, path):
         if path not in self._raw:
             source_backed = (self.source is not None
-                             and getattr(self.source, "kind", None) == "zip"
+                             and getattr(self.source, "virtual", False)
                              and self.source.is_resource_reference(path))
             size = (self.source.size(path)
                     if source_backed else os.path.getsize(path))

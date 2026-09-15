@@ -403,7 +403,7 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     if not exists:
         return {"error": "Selected file does not exist."}
     if texture_source is None:
-        if (source is not None and source.kind == "zip"
+        if (source is not None and getattr(source, "virtual", False)
                 and source.is_resource_reference(resolved)):
             uri = encode_texture_data_uri(
                 source.read_bytes(resolved), texture_role=texture_role,

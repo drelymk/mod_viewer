@@ -191,7 +191,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     multi = len(ini_paths) > 1
     if source is None and ini_paths:
         source = getattr(ini_paths[0], "source", None)
-    if source is not None and getattr(source, "kind", None) == "zip":
+    if source is not None and getattr(source, "virtual", False):
         documents = dict(documents or {})
         for ini_path in ini_paths:
             if source.is_resource_reference(ini_path) \

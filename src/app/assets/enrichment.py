@@ -312,7 +312,7 @@ def _unique_evidence(items):
 
 def _cached_dds_classification(path, cache, source=None):
     source_backed = (source is not None
-                     and getattr(source, "kind", None) == "zip"
+                     and getattr(source, "virtual", False)
                      and source.is_resource_reference(path))
     if source_backed:
         try:

@@ -236,6 +236,24 @@ def inspect_dds_layout(path):
     return layout
 
 
+def inspect_dds_header(header, file_size=None):
+    """Inspect a DDS header without requiring the full payload in memory."""
+    if not isinstance(header, (bytes, bytearray, memoryview)):
+        return None
+    info = _inspect_header(bytes(header))
+    if info is None:
+        return None
+    if file_size is not None:
+        try:
+            file_size = int(file_size)
+        except (TypeError, ValueError):
+            return None
+        data_offset = 148 if _fourcc(header, 84) == _DX10_FOURCC else 128
+        if file_size < _layout(info, data_offset).payload_end:
+            return None
+    return info
+
+
 def native_dds_info(path, max_size=2048, transform="passthrough",
                     source_name=None):
     """Return native-delivery metadata when the source meets PR21 rules."""
@@ -260,7 +278,31 @@ def native_dds_info(path, max_size=2048, transform="passthrough",
     return info
 
 
+def native_dds_info_from_header(header, file_size, max_size=2048,
+                                transform="passthrough", source_name=None):
+    """Return native-delivery metadata from a bounded header read."""
+    try:
+        path_string = (source_name if isinstance(source_name, str)
+                       else os.fsdecode(os.fspath(source_name)))
+    except (TypeError, ValueError):
+        return None
+    if (not path_string.lower().endswith(".dds")
+            or transform != "passthrough"):
+        return None
+    try:
+        max_size = int(max_size)
+    except (TypeError, ValueError):
+        return None
+    if max_size <= 0:
+        return None
+    info = inspect_dds_header(header, file_size)
+    if info is None or max(info.width, info.height) > max_size:
+        return None
+    return info
+
+
 __all__ = [
     "DDSInfo", "DDSMipLayout", "DDSLayout", "dds_layout_for_info",
-    "inspect_dds", "inspect_dds_layout", "native_dds_info",
+    "inspect_dds", "inspect_dds_header", "inspect_dds_layout",
+    "native_dds_info", "native_dds_info_from_header",
 ]
