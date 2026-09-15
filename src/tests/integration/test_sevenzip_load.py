@@ -1,5 +1,6 @@
 """7-Zip-backed model loading through the ordinary mod pipeline."""
 
+import os
 import struct
 
 import pytest
@@ -12,16 +13,21 @@ from core.sevenzip import SevenZipEntry, SevenZipError
 class FakeSevenZipClient:
     def __init__(self, members):
         self.members = members
+        self.calls = []
 
     def list_members(self, _archive_path):
+        self.calls.append("list")
         return [SevenZipEntry(name, len(data))
                 for name, data in self.members.items()]
 
-    def read_member(self, _archive_path, member_name):
-        return self.members[member_name]
-
-    def read_prefix(self, _archive_path, member_name, length):
-        return self.members[member_name][:length]
+    def extract_all(self, _archive_path, output_dir):
+        self.calls.append("extract")
+        for name, data in self.members.items():
+            target = os.path.join(
+                output_dir, *name.replace("\\", "/").split("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as stream:
+                stream.write(data)
 
 
 @pytest.mark.parametrize("extension,kind", [(".7z", "7z"), (".rar", "rar")])
@@ -65,6 +71,7 @@ def test_load_mod_uses_the_normal_pipeline_for_7zip_formats(
     assert len(payload["meshes"]) == 1
     assert payload["meshes"]["Body-1"]["identity"]["source"] == (
         "some/random/deep/mod.ini")
+    assert client.calls == ["list", "extract"]
 
 
 def test_load_mod_reports_missing_sevenzip_as_a_structured_error(

@@ -1,5 +1,7 @@
 """Read-only staged editing contracts for 7z and RAR sources."""
 
+import os
+
 import pytest
 
 from app.bridge import toggle as toggle_api
@@ -13,16 +15,21 @@ from core.mod_source import SevenZipModSource
 class FakeSevenZipClient:
     def __init__(self, members):
         self.members = members
+        self.calls = []
 
     def list_members(self, _archive_path):
+        self.calls.append("list")
         return [SevenZipEntry(name, len(data))
                 for name, data in self.members.items()]
 
-    def read_member(self, _archive_path, member_name):
-        return self.members[member_name]
-
-    def read_prefix(self, _archive_path, member_name, length):
-        return self.members[member_name][:length]
+    def extract_all(self, _archive_path, output_dir):
+        self.calls.append("extract")
+        for name, data in self.members.items():
+            target = os.path.join(
+                output_dir, *name.replace("\\", "/").split("/"))
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as stream:
+                stream.write(data)
 
 
 @pytest.mark.parametrize("extension", [".7z", ".rar"])
@@ -48,5 +55,6 @@ def test_sevenzip_edits_stay_staged_and_export_never_writes(
         assert edit_session.has_pending(str(archive_path))
         assert archive_path.read_bytes() == archive_bytes
         assert not (tmp_path / ".mod_viewer.json").exists()
+        assert client.calls == ["list", "extract"]
     finally:
         edit_session.discard(str(archive_path))

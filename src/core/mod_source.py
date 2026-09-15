@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import ntpath
 import os
 import posixpath
+import tempfile
 import threading
 import zipfile
 
@@ -554,7 +555,7 @@ class ZipModSource(_VirtualArchiveModSource):
 
 
 class SevenZipModSource(_VirtualArchiveModSource):
-    """Virtual source backed by the user's installed 7-Zip executable."""
+    """Memory-backed source initialized by one 7-Zip archive extraction."""
 
     def __init__(self, source_path, *, client=None):
         path = _as_path(source_path)
@@ -583,27 +584,102 @@ class SevenZipModSource(_VirtualArchiveModSource):
         ]
         super().__init__(absolute, members, kind=kind,
                          member_count=len(entries))
+        self._data = self._load_all_members()
+
+    @staticmethod
+    def _extracted_member_path(output_dir, raw_name):
+        relative = _VirtualArchiveModSource._normalize_member_name(raw_name)
+        if not relative:
+            raise ModSourceError(
+                f"Archive member {raw_name!r} has no safe extracted path.")
+        root = os.path.normcase(os.path.realpath(
+            os.path.abspath(output_dir)))
+        candidate = os.path.abspath(os.path.join(
+            output_dir, *relative.split("/")))
+        resolved = os.path.normcase(os.path.realpath(candidate))
+        try:
+            inside = os.path.commonpath((root, resolved)) == root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise ModSourceError(
+                f"Archive member {raw_name!r} escapes the extraction root.")
+        if os.path.islink(candidate):
+            raise ModSourceError(
+                f"Archive member {raw_name!r} is a symbolic link.")
+        return candidate
+
+    def _load_all_members(self):
+        total_size = 0
+        for entry in self._members.values():
+            if entry.encrypted:
+                raise ModSourceError(
+                    f"Encrypted {self.kind} members are not supported.")
+            total_size += self._member_size(entry)
+        if total_size > self._max_read_bytes():
+            raise ModSourceError(
+                f"Total {self.kind} archive member data exceeds the 2 GiB "
+                "safety limit.")
+
+        data = {}
+        try:
+            with tempfile.TemporaryDirectory(
+                    prefix="mod_viewer_archive_") as output_dir:
+                try:
+                    self._client.extract_all(self.source_path, output_dir)
+                except SevenZipError as error:
+                    detail = str(error)
+                    if detail == (
+                            "Password-protected archives are not supported."):
+                        raise ModSourceError(detail) from error
+                    raise ModSourceError(
+                        f"Could not read {self.kind} mod source: {detail}") \
+                        from error
+
+                for entry in self._members.values():
+                    member_path = self._extracted_member_path(
+                        output_dir, entry.raw_name)
+                    expected_size = self._member_size(entry)
+                    if not os.path.isfile(member_path):
+                        raise ModSourceError(
+                            f"{self._archive_label} member {entry.raw_name!r} "
+                            "was not extracted as a regular file.")
+                    try:
+                        actual_size = os.path.getsize(member_path)
+                    except OSError as error:
+                        raise ModSourceError(
+                            f"Could not inspect {self.kind} member "
+                            f"{entry.raw_name!r}: {error}") from error
+                    if actual_size != expected_size:
+                        raise ModSourceError(
+                            f"{self.kind} member {entry.raw_name!r} has an "
+                            "invalid size after extraction.")
+                    try:
+                        with open(member_path, "rb") as stream:
+                            member_data = stream.read(expected_size)
+                    except OSError as error:
+                        raise ModSourceError(
+                            f"Could not read {self.kind} member "
+                            f"{entry.raw_name!r}: {error}") from error
+                    if (len(member_data) != expected_size
+                            or os.path.getsize(member_path) != expected_size):
+                        raise ModSourceError(
+                            f"{self.kind} member {entry.raw_name!r} has an "
+                            "invalid size after extraction.")
+                    data[entry.raw_name.casefold()] = member_data
+        except ModSourceError:
+            raise
+        except OSError as error:
+            raise ModSourceError(
+                f"Could not prepare {self.kind} mod source: {error}") \
+                from error
+        return data
 
     def _read_member(self, entry):
-        try:
-            return self._client.read_member(self.source_path, entry.raw_name)
-        except SevenZipError as error:
-            if str(error) == "Password-protected archives are not supported.":
-                raise ModSourceError(str(error)) from error
-            raise ModSourceError(
-                f"Could not read {self.kind} member {entry.raw_name!r}: "
-                f"{error}") from error
+        return self._data[entry.raw_name.casefold()]
 
     def _read_prefix_member(self, entry, length):
-        try:
-            return self._client.read_prefix(
-                self.source_path, entry.raw_name, length)
-        except SevenZipError as error:
-            if str(error) == "Password-protected archives are not supported.":
-                raise ModSourceError(str(error)) from error
-            raise ModSourceError(
-                f"Could not read {self.kind} member {entry.raw_name!r}: "
-                f"{error}") from error
+        return self._data[entry.raw_name.casefold()][:length]
 
 
 def mod_source_for_path(path):

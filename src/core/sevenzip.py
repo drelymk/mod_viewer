@@ -125,7 +125,7 @@ def parse_listing(output):
 
 
 class SevenZipCLI:
-    """Run exact-member 7-Zip operations with binary stdout transport."""
+    """Run 7-Zip listing and bulk extraction operations."""
 
     def __init__(self, executable=None):
         self.executable = executable or find_7zip()
@@ -154,77 +154,14 @@ class SevenZipCLI:
             raise _error(_diagnostic(result.stderr))
         return parse_listing(result.stdout)
 
-    def _extract_command(self, archive_path, member_name):
-        return [
-            "x", "-so", "-bd", "-bb0", "-spd", "-sccUTF-8", "--",
-            os.fspath(archive_path), os.fspath(member_name),
-        ]
-
-    def read_member(self, archive_path, member_name):
-        result = self._run(self._extract_command(archive_path, member_name))
+    def extract_all(self, archive_path, output_dir):
+        """Extract an archive into a caller-owned temporary directory."""
+        result = self._run([
+            "x", "-y", "-bd", "-bb0", "-sccUTF-8", "-sns-",
+            f"-o{os.fspath(output_dir)}", "--", os.fspath(archive_path),
+        ])
         if result.returncode != 0:
             raise _error(_diagnostic(result.stderr))
-        return result.stdout
-
-    def read_prefix(self, archive_path, member_name, length):
-        try:
-            length = int(length)
-        except (TypeError, ValueError) as error:
-            raise SevenZipError("Invalid prefix length.") from error
-        if length < 0:
-            raise SevenZipError("Invalid prefix length.")
-        if length == 0:
-            return b""
-
-        try:
-            process = subprocess.Popen(
-                [self.executable, *self._extract_command(
-                    archive_path, member_name)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                creationflags=_CREATE_NO_WINDOW,
-            )
-        except OSError as error:
-            raise SevenZipError(str(error)) from error
-
-        intentionally_stopped = False
-        try:
-            prefix = process.stdout.read(length)
-            if process.poll() is None and len(prefix) == length:
-                intentionally_stopped = True
-                try:
-                    process.terminate()
-                except OSError:
-                    pass
-            stdout_tail, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired as error:
-            try:
-                process.kill()
-            except OSError:
-                pass
-            _stdout_tail, stderr = process.communicate()
-            raise SevenZipError("7-Zip did not finish reading the archive member.") \
-                from error
-        except OSError as error:
-            try:
-                process.kill()
-            except OSError:
-                pass
-            try:
-                process.communicate()
-            except OSError:
-                pass
-            raise SevenZipError(str(error)) from error
-
-        if process.returncode != 0 and not intentionally_stopped:
-            raise _error(_diagnostic(stderr))
-        if not isinstance(prefix, bytes):
-            prefix = bytes(prefix)
-        if process.returncode == 0 and stdout_tail:
-            prefix += stdout_tail
-        return prefix[:length]
 
 
 __all__ = [

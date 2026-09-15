@@ -457,19 +457,18 @@ def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
 
     class Client:
         def __init__(self):
-            self.prefix_reads = []
-            self.full_reads = []
+            self.calls = []
 
         def list_members(self, _path):
+            self.calls.append("list")
             return [SevenZipEntry("Wrapper/native.dds", len(dds_bytes))]
 
-        def read_prefix(self, _path, name, length):
-            self.prefix_reads.append((name, length))
-            return dds_bytes[:length]
-
-        def read_member(self, _path, name):
-            self.full_reads.append(name)
-            return dds_bytes
+        def extract_all(self, _path, output_dir):
+            self.calls.append("extract")
+            target = os.path.join(output_dir, "Wrapper", "native.dds")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as stream:
+                stream.write(dds_bytes)
 
     client = Client()
     source = SevenZipModSource(archive_path, client=client)
@@ -480,8 +479,7 @@ def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
         member = source.resolve_resource("native.dds")
         url = publication.register(member)
         assert url.endswith(".dds")
-        assert client.prefix_reads == [("Wrapper/native.dds", 148)]
-        assert client.full_reads == []
+        assert client.calls == ["list", "extract"]
 
         publication.commit()
         handler = functools.partial(server._Handler, directory=str(tmp_path))
@@ -492,7 +490,7 @@ def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
         with urlopen(base_url + url) as response:
             assert response.headers["Content-Type"] == "image/vnd-ms.dds"
             assert response.read() == dds_bytes
-        assert client.full_reads == ["Wrapper/native.dds"]
+        assert client.calls == ["list", "extract"]
     finally:
         if httpd is not None:
             httpd.shutdown()
@@ -509,17 +507,18 @@ def test_sevenzip_transformed_dds_stays_lazy_until_png_render(tmp_path):
 
     class Client:
         def __init__(self):
-            self.full_reads = []
+            self.calls = []
 
         def list_members(self, _path):
+            self.calls.append("list")
             return [SevenZipEntry("Wrapper/normal.dds", len(dds_bytes))]
 
-        def read_prefix(self, _path, _name, _length):
-            raise AssertionError("transformed DDS must not inspect its header")
-
-        def read_member(self, _path, name):
-            self.full_reads.append(name)
-            return dds_bytes
+        def extract_all(self, _path, output_dir):
+            self.calls.append("extract")
+            target = os.path.join(output_dir, "Wrapper", "normal.dds")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as stream:
+                stream.write(dds_bytes)
 
     client = Client()
     source = SevenZipModSource(archive_path, client=client)
@@ -532,11 +531,11 @@ def test_sevenzip_transformed_dds_stays_lazy_until_png_render(tmp_path):
         entry = server._lookup_texture(publication.token, "0")
 
         assert url.endswith(".png")
-        assert client.full_reads == []
+        assert client.calls == ["list", "extract"]
         with patch("app.runtime.server.render_texture_png", return_value=b"PNG"):
             assert server._render_texture_request(
                 publication.token, "0", entry) == b"PNG"
-        assert client.full_reads == ["Wrapper/normal.dds"]
+        assert client.calls == ["list", "extract"]
     finally:
         publication.discard()
 

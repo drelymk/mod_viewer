@@ -49,21 +49,25 @@ def _entries(*items):
 
 class FakeClient:
     def __init__(self, entries, data=None):
-        self.entries = entries
-        self.data = data or {}
+        self.entries = list(entries)
+        self.data = data if data is not None else {
+            entry.raw_name: b"\0" * entry.size
+            for entry in self.entries if not entry.is_dir
+        }
         self.calls = []
 
     def list_members(self, archive_path):
         self.calls.append(("list", archive_path))
         return self.entries
 
-    def read_member(self, archive_path, member_name):
-        self.calls.append(("read", archive_path, member_name))
-        return self.data[member_name]
-
-    def read_prefix(self, archive_path, member_name, length):
-        self.calls.append(("prefix", archive_path, member_name, length))
-        return self.data[member_name][:length]
+    def extract_all(self, archive_path, output_dir):
+        self.calls.append(("extract", archive_path, output_dir))
+        for raw_name, member_data in self.data.items():
+            member_path = os.path.join(
+                output_dir, *raw_name.replace("\\", "/").split("/"))
+            os.makedirs(os.path.dirname(member_path), exist_ok=True)
+            with open(member_path, "wb") as stream:
+                stream.write(member_data)
 
 
 @pytest.mark.parametrize(
@@ -151,7 +155,7 @@ def test_parse_listing_accepts_blank_line_record_separators():
     ]
 
 
-def test_sevenzip_cli_passes_exact_binary_commands_without_shell(monkeypatch):
+def test_sevenzip_cli_extracts_to_a_private_directory_without_shell(monkeypatch):
     seen = {}
 
     def run(command, **kwargs):
@@ -162,10 +166,10 @@ def test_sevenzip_cli_passes_exact_binary_commands_without_shell(monkeypatch):
     monkeypatch.setattr(sevenzip.subprocess, "run", run)
     cli = sevenzip.SevenZipCLI("7z.exe")
 
-    assert cli.read_member("mod.7z", "-odd@name.bin") == b"payload"
+    cli.extract_all("mod.7z", "C:/temp/private output")
     assert seen["command"] == [
-        "7z.exe", "x", "-so", "-bd", "-bb0", "-spd", "-sccUTF-8",
-        "--", "mod.7z", "-odd@name.bin"]
+        "7z.exe", "x", "-y", "-bd", "-bb0", "-sccUTF-8", "-sns-",
+        "-oC:/temp/private output", "--", "mod.7z"]
     assert seen["kwargs"]["shell"] is False
     assert seen["kwargs"]["stdin"] is sevenzip.subprocess.DEVNULL
     assert seen["kwargs"]["stdout"] is sevenzip.subprocess.PIPE
@@ -174,7 +178,7 @@ def test_sevenzip_cli_passes_exact_binary_commands_without_shell(monkeypatch):
 @pytest.mark.parametrize(
     "stderr, message",
     [
-        (b"ERROR: Can not open encrypted archive. Wrong password?", 
+        (b"ERROR: Can not open encrypted archive. Wrong password?",
          "Password-protected archives are not supported."),
         (b"ERROR: Data Error", "ERROR: Data Error"),
     ],
@@ -187,41 +191,7 @@ def test_sevenzip_cli_translates_nonzero_exit(monkeypatch, stderr, message):
     cli = sevenzip.SevenZipCLI("7z.exe")
 
     with pytest.raises(sevenzip.SevenZipError, match=message):
-        cli.read_member("mod.7z", "body.buf")
-
-
-def test_sevenzip_cli_prefix_terminates_after_bounded_read(monkeypatch):
-    state = {}
-
-    class FakeStdout:
-        def read(self, length):
-            state["length"] = length
-            return b"header-data"[:length]
-
-    class FakeProcess:
-        stdout = FakeStdout()
-        returncode = None
-
-        def poll(self):
-            return None
-
-        def terminate(self):
-            state["terminated"] = True
-            self.returncode = -15
-
-        def communicate(self, **kwargs):
-            state["communicate"] = kwargs
-            return b"discarded-tail", b""
-
-    monkeypatch.setattr(sevenzip.subprocess, "Popen", lambda *args, **kwargs: (
-        state.update(command=args[0], kwargs=kwargs) or FakeProcess()))
-    cli = sevenzip.SevenZipCLI("7z.exe")
-
-    assert cli.read_prefix("mod.7z", "body.dds", 4) == b"head"
-    assert state["length"] == 4
-    assert state["terminated"] is True
-    assert state["command"][0:2] == ["7z.exe", "x"]
-    assert state["kwargs"]["shell"] is False
+        cli.extract_all("mod.7z", "C:/temp")
 
 
 def test_sevenzip_source_reuses_virtual_archive_contract_for_7z_and_rar(
@@ -255,6 +225,9 @@ def test_sevenzip_source_reuses_virtual_archive_contract_for_7z_and_rar(
         assert source.read(member) == b"body"
         assert source.same_reference(member, "deep/body.buf")
         assert source.read(source.resolve_resource("-odd@name.bin")) == b"name"
+
+    assert [call[0] for call in client.calls] == [
+        "list", "extract", "list", "extract"]
 
 
 @pytest.mark.parametrize("extension", [".7z", ".rar"])
@@ -315,7 +288,7 @@ def test_sevenzip_source_rejects_duplicate_or_ambiguous_members(
         SevenZipModSource(path, client=FakeClient(_entries(*entries), values))
 
 
-def test_sevenzip_source_prefix_is_bounded_and_full_reads_validate_size(
+def test_sevenzip_source_reads_and_prefixes_from_memory_after_extraction(
         tmp_path):
     path = tmp_path / "sample.7z"
     path.write_bytes(b"placeholder")
@@ -325,14 +298,34 @@ def test_sevenzip_source_prefix_is_bounded_and_full_reads_validate_size(
     member = source.resolve_resource("body.dds")
 
     assert source.read_prefix(member, 3) == b"123"
-    assert [call[0] for call in client.calls] == ["list", "prefix"]
+    assert [call[0] for call in client.calls] == ["list", "extract"]
     assert source.read_bytes(member) == b"12345678"
     assert source.read_bytes(member) == b"12345678"
     assert [call[0] for call in client.calls] == [
-        "list", "prefix", "read", "read"]
+        "list", "extract"]
 
 
-def test_sevenzip_source_repeated_reads_do_not_reconsume_budget(
+def test_sevenzip_source_rejects_extraction_symlink_escape(tmp_path):
+    path = tmp_path / "escape.7z"
+    path.write_bytes(b"placeholder")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"data")
+
+    class EscapingClient:
+        def list_members(self, _archive_path):
+            return _entries(("body.bin", 4, False, False))
+
+        def extract_all(self, _archive_path, output_dir):
+            try:
+                os.symlink(outside, os.path.join(output_dir, "body.bin"))
+            except OSError:
+                pytest.skip("symbolic links are unavailable in this environment")
+
+    with pytest.raises(ModSourceError, match="escapes the extraction root"):
+        SevenZipModSource(path, client=EscapingClient())
+
+
+def test_sevenzip_source_repeated_reads_do_not_call_backend(
         tmp_path, monkeypatch):
     path = tmp_path / "repeat.7z"
     path.write_bytes(b"placeholder")
@@ -344,39 +337,36 @@ def test_sevenzip_source_repeated_reads_do_not_reconsume_budget(
     member = source.resolve_resource("body.buf")
     assert source.read_bytes(member) == b"12345"
     assert source.read_bytes(member) == b"12345"
+    assert [call[0] for call in client.calls] == ["list", "extract"]
 
 
 def test_sevenzip_source_rejects_advertised_oversize_member(tmp_path, monkeypatch):
     path = tmp_path / "large.7z"
     path.write_bytes(b"placeholder")
     monkeypatch.setattr(mod_source, "_MAX_ARCHIVE_MEMBER_BYTES", 4)
-    source = SevenZipModSource(
-        path,
-        client=FakeClient(_entries(("body.buf", 5, False, False)),
-                          {"body.buf": b"12345"}))
-
     with pytest.raises(ModSourceError, match="too large"):
-        source.read_bytes(source.resolve_resource("body.buf"))
+        SevenZipModSource(
+            path,
+            client=FakeClient(_entries(("body.buf", 5, False, False)),
+                              {"body.buf": b"12345"}))
 
 
 def test_sevenzip_source_rejects_encrypted_and_wrong_sized_members(tmp_path):
     encrypted_path = tmp_path / "encrypted.rar"
     encrypted_path.write_bytes(b"placeholder")
-    encrypted = SevenZipModSource(
-        encrypted_path,
-        client=FakeClient(_entries(("secret.bin", 4, False, True)),
-                          {"secret.bin": b"data"}))
     with pytest.raises(ModSourceError, match="Encrypted rar members"):
-        encrypted.read_bytes(encrypted.resolve_resource("secret.bin"))
+        SevenZipModSource(
+            encrypted_path,
+            client=FakeClient(_entries(("secret.bin", 4, False, True)),
+                              {"secret.bin": b"data"}))
 
     wrong_path = tmp_path / "wrong.7z"
     wrong_path.write_bytes(b"placeholder")
-    wrong = SevenZipModSource(
-        wrong_path,
-        client=FakeClient(_entries(("body.buf", 5, False, False)),
-                          {"body.buf": b"data"}))
     with pytest.raises(ModSourceError, match="invalid size"):
-        wrong.read_bytes(wrong.resolve_resource("body.buf"))
+        SevenZipModSource(
+            wrong_path,
+            client=FakeClient(_entries(("body.buf", 5, False, False)),
+                              {"body.buf": b"data"}))
 
 
 def test_sevenzip_source_applies_archive_safety_limits(tmp_path, monkeypatch):
@@ -385,12 +375,10 @@ def test_sevenzip_source_applies_archive_safety_limits(tmp_path, monkeypatch):
     client = FakeClient(_entries(
         ("one.bin", 5, False, False), ("two.bin", 5, False, False)),
         {"one.bin": b"12345", "two.bin": b"67890"})
-    source = SevenZipModSource(path, client=client)
     monkeypatch.setattr(mod_source, "_MAX_ARCHIVE_READ_BYTES", 6)
 
-    assert source.read_bytes("one.bin") == b"12345"
     with pytest.raises(ModSourceError, match="2 GiB safety limit"):
-        source.read_bytes("two.bin")
+        SevenZipModSource(path, client=client)
 
     monkeypatch.setattr(mod_source, "_MAX_ARCHIVE_MEMBERS", 1)
     with pytest.raises(ModSourceError, match="too many members"):

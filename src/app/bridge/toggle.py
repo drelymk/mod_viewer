@@ -169,7 +169,7 @@ def export_changes(mod_dir):
     ...]}}, writes nothing) if a toggle added this session still isn't
     wired to any mesh — Record it (or delete it) first.
     """
-    source = mod_source_for_path(mod_dir)
+    source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
     if source.read_only:
         return {"error": "Export is unavailable for compressed mods."}
     pending_new = edit_session.new_sections_for(mod_dir)
@@ -177,7 +177,7 @@ def export_changes(mod_dir):
         unwired = mod_loader.unwired_pending_sections(
             mod_dir, edit_session.overrides_for(mod_dir), pending_new,
             ini_paths=edit_session.document_paths(mod_dir),
-            documents=edit_session.documents_for(mod_dir))
+            documents=edit_session.documents_for(mod_dir), source=source)
         if unwired:
             names = ", ".join(f"{sec} ({ini})" for ini, secs in unwired.items() for sec in secs)
             return {"error": "Can't export yet: newly-added toggle(s) aren't wired to any "

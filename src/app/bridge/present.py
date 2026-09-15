@@ -43,7 +43,7 @@ def _metadata_change(mod_dir, source, mutate, persist):
 
 
 def _batch_run(mod_dir, targets, mutate, metadata_change=None):
-    source = mod_source_for_path(mod_dir)
+    source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
     records = []
     try:
         for ini_rel, path, _doc in targets:

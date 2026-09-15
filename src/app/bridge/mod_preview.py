@@ -542,14 +542,13 @@ class ModPreview:
         if cached is not None:
             return cached
         ini_paths = edit_session.document_paths(folder_path)
-        if not ini_paths:
+        source = edit_session.source_for(folder_path)
+        if source is None:
             source = mod_source_for_path(folder_path)
+        if not ini_paths:
             ini_paths = discover_ini_paths(
                 folder_path, source=source)
             edit_session.load_documents(folder_path, ini_paths, source=source)
-        else:
-            source = edit_session.source_for(folder_path) or \
-                mod_source_for_path(folder_path)
         try:
             report = analyze_mod(
                 folder_path, ini_paths=ini_paths,
@@ -610,8 +609,10 @@ class ModPreview:
 
     def load_model_rig(self, folder_path):
         folder_path = self._access.mod_folder(folder_path)
+        source = edit_session.source_for(folder_path) or \
+            mod_source_for_path(folder_path)
         return metadata.load_model_rig(
-            folder_path, source=mod_source_for_path(folder_path))
+            folder_path, source=source)
 
     def save_model_rig(self, folder_path, model_rig):
         folder_path = self._access.mod_folder(folder_path)
