@@ -114,25 +114,26 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             state.blockLoads[path] = false;
             (loadWaiters[path] || []).splice(0).forEach(resolve => resolve());
           };
+          const stub = (callName, result,
+              record = args => args.length === 1 ? args[0] : args) =>
+            async (...args) => {
+            if (callName) {
+              state.calls[callName].push(record(args));
+            }
+            const value = typeof result === 'function'
+              ? result(...args) : result;
+            return copy(value);
+          };
+          const pickPath = callName => async () => {
+            const path = state.nextPath || null;
+            state.nextPath = null;
+            state.calls[callName].push(path);
+            return path;
+          };
           window.pywebview = { api: {
-            select_folder: async () => {
-              const path = state.nextPath || null;
-              state.nextPath = null;
-              state.calls.selectFolder.push(path);
-              return path;
-            },
-            select_archive_mod: async () => {
-              const path = state.nextPath || null;
-              state.nextPath = null;
-              state.calls.selectArchiveMod.push(path);
-              return path;
-            },
-            select_asset_folder: async () => {
-              const path = state.nextPath || null;
-              state.nextPath = null;
-              state.calls.selectAssetFolder.push(path);
-              return path;
-            },
+            select_folder: pickPath('selectFolder'),
+            select_archive_mod: pickPath('selectArchiveMod'),
+            select_asset_folder: pickPath('selectAssetFolder'),
             consume_startup_request: async () => {
               state.calls.consumeStartupRequest.push(true);
               const request = state.startupRequest;
@@ -149,26 +150,21 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               }
               return copy(state.responses[path]);
             },
-            load_asset: async path => {
-              state.calls.loadAsset.push(path);
-              return copy(state.responses[path]);
-            },
-            load_missing_asset_parts: async path => {
-              state.calls.loadMissingAssetParts.push(path);
-              return copy(state.responses[path]?.assetFillResponse || {
-                status: 'nothing_missing',
-              });
-            },
-            remove_missing_asset_parts: async path => {
-              state.calls.removeMissingAssetParts.push(path);
-              return {status: 'removed', removed: true};
-            },
-            get_present_state: async path => {
-              state.calls.presentState.push(path);
-              return copy({present: state.responses[path]?.controls?.present || {
-                target_inis: [], item: null,
-              }});
-            },
+            load_asset: stub('loadAsset', path => state.responses[path]),
+            load_missing_asset_parts: stub(
+              'loadMissingAssetParts', path =>
+                state.responses[path]?.assetFillResponse || {
+                  status: 'nothing_missing',
+                }),
+            remove_missing_asset_parts: stub(
+              'removeMissingAssetParts', {status: 'removed', removed: true},
+              args => args[0]),
+            get_present_state: stub(
+              'presentState', path => ({
+                present: state.responses[path]?.controls?.present || {
+                  target_inis: [], item: null,
+                },
+              })),
             get_control_state: async path => {
               state.calls.controlState.push(path);
               const payload = state.responses[path] || {};
@@ -210,22 +206,20 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   ?? payload.asset_resolution ?? null,
               });
             },
-            save_texture_color: async (path, texKey, targets, usage, requestId) => {
-              state.calls.saveTextureColor.push([
-                path, texKey, targets, usage, requestId,
-              ]);
-              return copy(state.responses[path]?.textureSaveResult || {
-                status: 'ok',
-                tex_key: texKey,
-                affected_tex_keys: texKey ? [texKey] : [],
-                saved_meshes: (targets || []).map(target => ({
-                  semantic_key: target.semantic_key,
-                  metadata_key: target.metadata_key,
-                })),
-                texture: {file: 'body.dds'},
-                backup: {file: 'body.modviewer.bak'},
-              });
-            },
+            save_texture_color: stub(
+              'saveTextureColor',
+              (path, texKey, targets) =>
+                state.responses[path]?.textureSaveResult || {
+                  status: 'ok',
+                  tex_key: texKey,
+                  affected_tex_keys: texKey ? [texKey] : [],
+                  saved_meshes: (targets || []).map(target => ({
+                    semantic_key: target.semantic_key,
+                    metadata_key: target.metadata_key,
+                  })),
+                  texture: {file: 'body.dds'},
+                  backup: {file: 'body.modviewer.bak'},
+                }),
             get_model_skinning_preview: async path => {
               const single = window.__testSkinningPreview;
               if (typeof single !== 'function') {
@@ -280,10 +274,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                 status: 'ok', saved_bones: [], meshes, data,
               });
             },
-            delete_toggle: async (path, ini, section) => {
-              state.calls.deleteToggle.push([path, ini, section]);
-              return copy({ok: true, result: {}});
-            },
+            delete_toggle: stub('deleteToggle', {ok: true, result: {}}),
             export_changes: async path => {
               state.calls.exportChanges.push(path);
               state.pending[path] = false;
@@ -314,11 +305,11 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.modFolders = state.modFolders.filter(folder => folder.path !== path);
               return copy({folders: state.modFolders});
             },
-            list_subfolders: async path => {
-              state.calls.listSubfolders.push(path);
-              return copy({folders: state.subfolders[path] || []});
-            },
-            get_asset_folders: async () => copy({folders: state.assetFolders}),
+            list_subfolders: stub(
+              'listSubfolders', path => ({
+                folders: state.subfolders[path] || [],
+              })),
+            get_asset_folders: stub(null, () => ({folders: state.assetFolders})),
             add_asset_folder: async (type, path) => {
               state.assetFolders.push({type, path, enabled: true, exists: true});
               return copy({folders: state.assetFolders});
@@ -341,19 +332,19 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.calls.rebuildAssetIndex.push(path);
               return copy({folders: state.assetFolders});
             },
-            list_asset_subfolders: async path => {
-              state.calls.listAssetSubfolders.push(path);
-              return copy({folders: state.assetSubfolders[path] || []});
-            },
-            get_diagnostics: async path => {
-              state.calls.diagnostics.push(path);
-              return copy(state.diagnostics);
-            },
-            list_toggle_source_inis: async () => [{value: 'A.ini', label: 'A.ini'}],
-            list_ini_files: async () => [{value: 'A.ini', label: 'A.ini', dirty: false}],
-            get_ini_text: async () => ({ini: 'A.ini', text: '[Test]\\nkey = 1\\n', dirty: false}),
-            update_ini_text: async () => ({pending: true}),
-            save_mesh_textures: async () => ({}),
+            list_asset_subfolders: stub(
+              'listAssetSubfolders', path => ({
+                folders: state.assetSubfolders[path] || [],
+              })),
+            get_diagnostics: stub('diagnostics', () => state.diagnostics),
+            list_toggle_source_inis: stub(null,
+              () => [{value: 'A.ini', label: 'A.ini'}]),
+            list_ini_files: stub(null,
+              () => [{value: 'A.ini', label: 'A.ini', dirty: false}]),
+            get_ini_text: stub(null,
+              () => ({ini: 'A.ini', text: '[Test]\\nkey = 1\\n', dirty: false})),
+            update_ini_text: stub(null, () => ({pending: true})),
+            save_mesh_textures: stub(null, () => ({})),
             save_mesh_color_adjustment: async (path, key, adjustment) => {
               state.calls.saveMeshColorAdjustment.push([path, key, adjustment]);
               if (state.blockColorSaves) {
@@ -361,18 +352,15 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               }
               return {};
             },
-            save_mesh_names: async () => ({}),
-            save_weight_selection: async (_path, bones) => ({
+            save_mesh_names: stub(null, () => ({})),
+            save_weight_selection: stub(null, (_path, bones) => ({
               saved: true, selected_bones: [...bones],
-            }),
-            save_component_material_kind: async () => ({}),
-            pick_texture_file: async () => copy(state.picks.shift() || null),
-            get_record_positions: async () => ({positions: 2, vars: ['toggle']}),
-            record_toggle: async (path, ini, section, positionLines, targetLines) => {
-              state.calls.recordToggle.push(
-                [path, ini, section, positionLines, targetLines]);
-              return copy({ok: true, result: {}});
-            },
+            })),
+            save_component_material_kind: stub(null, () => ({})),
+            pick_texture_file: stub(null, () => state.picks.shift() || null),
+            get_record_positions: stub(null,
+              () => ({positions: 2, vars: ['toggle']})),
+            record_toggle: stub('recordToggle', {ok: true, result: {}}),
           }};
           const optionalApiMethods = {
             asset: ['load_asset'],

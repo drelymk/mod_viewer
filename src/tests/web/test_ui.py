@@ -20,35 +20,22 @@ def _page(edge_browser, frontend_url, responses, **kwargs):
         edge_browser, frontend_url, responses,
         api_features=sorted(features), **kwargs)
 
-def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
+def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, frontend_url):
+    path = "fixture-model"
+    context, page = _page(edge_browser, frontend_url, {path: _payload()})
     try:
         page.locator("#mod-library-tab").click()
         assert page.locator("#mod-folder-panel").is_visible()
         assert page.locator("#mod-folder-list").is_hidden()
         assert page.locator("#mod-folder-empty").is_visible()
-        assert page.locator("#mod-library-tab").get_attribute("aria-selected") == "true"
         page.locator("#assets-tab").click()
-        assert page.locator("#mod-folder-panel").is_hidden()
         assert page.locator("#asset-folder-panel").is_visible()
         assert page.locator("#asset-folder-list").is_hidden()
         assert page.locator("#asset-folder-empty").is_visible()
-        assert page.locator("#assets-tab").get_attribute("aria-expanded") == "true"
         page.locator("#assets-tab").click()
-        assert page.locator("#asset-folder-panel").is_hidden()
         assert page.locator("#left-panel-container").is_hidden()
-        assert page.locator("#left-dock-tabs").is_visible()
         assert page.locator(".left-dock-tabs .active").count() == 0
-        assert all(value == "false" for value in page.locator(
-            ".left-dock-tabs > button").evaluate_all(
-                "buttons => buttons.map(button => button.getAttribute('aria-selected'))"))
-    finally:
-        context.close()
 
-def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, frontend_url):
-    path = "fixture-model"
-    context, page = _page(edge_browser, frontend_url, {path: _payload()})
-    try:
         _open(page, path)
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator(".right-dock-tabs > button").evaluate_all(

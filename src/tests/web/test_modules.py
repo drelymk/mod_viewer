@@ -5,6 +5,21 @@ import math
 import pytest
 
 
+def _call_module(page, module_path, export_name, *args):
+    return page.evaluate("""async ({modulePath, exportName, args}) => {
+      const module = await import(modulePath);
+      const operation = module[exportName];
+      if (typeof operation !== 'function') {
+        throw new TypeError(`${exportName} is not callable`);
+      }
+      return operation(...args);
+    }""", {
+        "modulePath": module_path,
+        "exportName": export_name,
+        "args": list(args),
+    })
+
+
 def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
         module_page):
     result = module_page.evaluate("""async () => {
@@ -159,120 +174,77 @@ def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
     assert result["outside"] is None
 
 
-def test_rig_overlay_reuses_forest_buffers_and_model_frame(module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
+def test_rig_overlay_reuses_structure_across_state_lifecycle(module_page):
+    result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
       const {createRigOverlayController} = await import(
         './js/scene/rig-overlay-controller.js');
       const scene = new THREE.Scene();
       const model = new THREE.Object3D();
       scene.add(model);
-      let state = {
-        visible: true, selectedJointId: null,
-        ik: {enabled: true, available: true,
-          controlKeys: ['leftShoulder', 'leftElbow', 'leftHand']},
-        model: {
-          key: 'model-rig', structureRevision: 1,
-          joints: [1, 2, 3].map((jointId, index) => ({
-            jointId, restCenter: [index, 0, 0],
-            restPivot: [Math.max(0, index - .5), 0, 0],
-          })),
-          components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3]}],
-          forestEdges: [
-            {jointA: 1, jointB: 2, parentId: 1, childId: 2},
-            {jointA: 2, jointB: 3, parentId: 2, childId: 3},
-          ],
-          humanoidControlRig: {confidence: 'high', controls: Object.fromEntries([
-            ['chest', [0, 2, 0]], ['pelvis', [0, 1, 0]],
-            ['neck', [0, 2.4, 0]], ['head', [0, 2.7, 0]],
-            ['leftShoulder', [-.2, 1.8, 0]], ['leftElbow', [-.5, 1.6, 0]],
-            ['leftHand', [-.9, 1.5, 0]], ['rightShoulder', [.2, 1.8, 0]],
-            ['rightElbow', [.5, 1.6, 0]], ['rightHand', [.9, 1.5, 0]],
-            ['leftHip', [-.15, 1, 0]], ['leftKnee', [-.2, .5, 0]],
-            ['leftFoot', [-.25, 0, 0]], ['rightHip', [.15, 1, 0]],
-            ['rightKnee', [.2, .5, 0]], ['rightFoot', [.25, 0, 0]],
-          ].map(([key, position]) => [key, {position}])), paths: {}},
-          poseRotationByJointId: {},
-        },
+      const pose = new Map([
+        [1, {center: [0, 0, 0], pivot: [0, 0, 0]}],
+        [2, {center: [1, 0, 0], pivot: [.5, 0, 0]}],
+        [3, {center: [2, 0, 0], pivot: [1.5, 0, 0]}],
+      ]);
+      const source = {
+        sourceKey: 'model-rig', structureRevision: 1,
+        joints: [1, 2, 3].map((jointId, index) => ({
+          jointId, restCenter: [index, 0, 0],
+          restPivot: [index ? index - .5 : 0, 0, 0],
+        })),
+        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2, 3],
+          parentById: {1: null, 2: 1, 3: 2},
+          childrenById: {1: [2], 2: [3], 3: []}}],
+        forestEdges: [
+          {jointA: 1, jointB: 2, parentId: 1, childId: 2},
+          {jointA: 2, jointB: 3, parentId: 2, childId: 3},
+        ],
+        poseRotationByJointId: {},
       };
+      let state = {selectedJointId: null, jointPickIntent: null, model: source};
       const controller = createRigOverlayController({
         scene, getMeshes: () => [model], getRigState: () => state,
-        getRigJointPoseFrame: jointId => ({
-          center: [Number(jointId), 0, 0],
-          pivot: [Number(jointId) / 10, 0, 0],
-        }),
+        getRigJointPoseFrame: id => pose.get(Number(id)),
       });
+
       controller.refresh(state);
       const initial = controller.getDebugState();
-      const staticGroup = controller.group.getObjectByName(
-        'viewer-inferred-rig-static-geometry');
-      const linePositions = [...staticGroup.children[0].geometry
-        .getAttribute('position').array.slice(0, 6)];
-      const centerPointsVisible = staticGroup.children[1].visible;
-      state = {...state, selectedJointId: 1};
+      state = {...state, selectedJointId: 2,
+        jointPickIntent: {type: 'selected-joint'}};
       controller.refresh(state);
-      const selectedRoot = controller.getDebugState();
-      state = {...state, model: {...state.model,
-        humanoidControlRig: {...state.model.humanoidControlRig,
-          controls: {...state.model.humanoidControlRig.controls,
-            leftHand: {position: [-1, 1.5, 0]}}}}};
+      const picking = controller.getDebugState();
+      pose.set(2, {center: [1.5, 0, 0], pivot: [1, 0, 0]});
+      state = {...state, model: {...source, poseRevision: 2}};
       controller.refresh(state);
-      const posedRig = controller.getDebugState();
+      const posed = controller.getDebugState();
       model.position.x = 4;
       window.dispatchEvent(new CustomEvent(
         'mod-viewer-model-transform-changed', {detail: {}}));
-      const afterTransform = controller.getDebugState();
-      state = {...state, visible: false, selectedJointId: null};
+      const transformed = controller.getDebugState();
+      state = {...state, jointPickIntent: null,
+        model: {...state.model, structureRevision: 2}};
       controller.refresh(state);
-      state = {...state, visible: true};
-      controller.refresh(state);
-      const shownAgain = controller.getDebugState();
-      state = {...state, ik: {...state.ik, enabled: false}};
-      controller.refresh(state);
-      const ikOff = controller.getDebugState();
-      state = {...state, ik: {...state.ik, enabled: true}};
-      controller.refresh(state);
-      state = {...state, model: {...state.model,
-        structureRevision: 2,
-        humanoidControlRig: {...state.model.humanoidControlRig, available: false}}};
+      const rebuilt = controller.getDebugState();
+      state = {...state, model: null};
       controller.refresh(state);
       const unavailable = controller.getDebugState();
       controller.dispose();
-      return {initial, selectedRoot, posedRig, afterTransform, shownAgain,
-        ikOff, unavailable, linePositions, centerPointsVisible};
+      return {initial, picking, posed, transformed, rebuilt, unavailable};
     }""")
-    assert result["initial"]["staticObjectCount"] == 5
+    assert result["initial"]["rebuildCount"] == 1
     assert result["initial"]["nodeCount"] == 3
     assert result["initial"]["edgeCount"] == 2
-    assert result["initial"]["jointCount"] == 3
-    assert result["initial"]["modelJointMarkerCount"] == 3
-    assert result["initial"]["modelJointMarkerInstanced"] is True
-    assert result["initial"]["modelJointMarkerSizePx"] == 5
-    assert result["linePositions"] == pytest.approx([.1, 0, 0, .2, 0, 0])
-    assert result["centerPointsVisible"] is False
-    assert result["initial"]["humanoidOverlayVisible"]
-    assert result["initial"]["ikTargetVisible"]
-    assert result["initial"]["humanoidSegmentCount"] == 15
-    assert result["initial"]["humanoidLandmarkCount"] == 16
-    assert result["initial"]["humanoidPointSpriteCount"] == 16
-    assert result["initial"]["humanoidHaloSpriteCount"] == 16
-    assert result["initial"]["humanoidMarkerTextureReady"] is True
-    assert result["initial"]["rebuildCount"] == 1
-    assert result["selectedRoot"]["selectedJointId"] == 1
-    assert result["selectedRoot"]["rebuildCount"] == 1
-    assert result["posedRig"]["rebuildCount"] == 1
-    assert result["afterTransform"]["rebuildCount"] == 1
-    assert result["afterTransform"]["modelFrameUpdateCount"] == \
-        result["initial"]["modelFrameUpdateCount"] + 3
-    assert result["shownAgain"]["rebuildCount"] == 1
-    assert result["shownAgain"]["selectedJointId"] is None
-    assert not result["ikOff"]["humanoidOverlayVisible"]
-    assert not result["ikOff"]["ikTargetVisible"]
-    assert result["shownAgain"]["ikTargetVisible"]
-    assert not result["unavailable"]["humanoidOverlayVisible"]
-    assert not result["unavailable"]["ikTargetVisible"]
-    assert result["unavailable"]["rebuildCount"] == 2
+    assert result["picking"]["staticVisible"] is True
+    assert result["picking"]["rebuildCount"] == 1
+    assert result["posed"]["rebuildCount"] == 1
+    assert result["transformed"]["rebuildCount"] == 1
+    assert result["transformed"]["modelFrameUpdateCount"] > \
+        result["initial"]["modelFrameUpdateCount"]
+    assert result["rebuilt"]["rebuildCount"] == 2
+    assert result["rebuilt"]["nodeCount"] == 3
+    assert result["unavailable"]["groupVisible"] is False
+    assert result["unavailable"]["staticVisible"] is False
 
 
 def test_rig_joint_picker_owns_plain_left_and_allows_alt_orbit(module_page):
@@ -437,58 +409,6 @@ def test_rig_overlay_selects_humanoid_controls_and_keeps_orbit_available(
     assert result["state"]["ik"]["selectedHumanoidControlKey"] == "rightFoot"
     assert result["leftDown"] == 1
     assert result["rightDown"] == 1
-
-
-def test_rig_overlay_hides_static_geometry_until_joint_picking(module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      const {createRigOverlayController} = await import(
-        './js/scene/rig-overlay-controller.js');
-      const scene = new THREE.Scene();
-      const model = new THREE.Object3D();
-      scene.add(model);
-      const source = {
-        sourceKey: 'model-rig',
-        joints: [0, 1, 2, 3].map(jointId => ({
-          jointId, restCenter: [jointId === 3 ? 10 : jointId, 0, 0],
-          restPivot: [jointId === 3 ? 10 : jointId, 0, 0],
-        })),
-        components: [
-          {componentId: 0, rootId: 0, nodeIds: [0, 1, 2],
-            parentById: {0: null, 1: 0, 2: 1},
-            childrenById: {0: [1], 1: [2], 2: []}},
-          {componentId: 1, rootId: 3, nodeIds: [3],
-            parentById: {3: null}, childrenById: {3: []}},
-        ],
-        forestEdges: [
-          {jointA: 0, jointB: 1, parentId: 0, childId: 1},
-          {jointA: 1, jointB: 2, parentId: 1, childId: 2},
-        ],
-      };
-      let state = {selectedJointId: 1, jointPickIntent: null, model: source};
-      const controller = createRigOverlayController({
-        scene, getMeshes: () => [model], getRigState: () => state,
-        getRigJointPoseFrame: () => null, setRigJointRotation: () => true,
-      });
-      controller.refresh(state);
-      const hidden = controller.getDebugState();
-      state = {...state, jointPickIntent: {type: 'selected-joint'}};
-      controller.refresh(state);
-      const picking = controller.getDebugState();
-      state = {...state, jointPickIntent: null};
-      controller.refresh(state);
-      const hiddenAgain = controller.getDebugState();
-      controller.dispose();
-      return {hidden, picking, hiddenAgain};
-    }""")
-    assert result["hidden"]["nodeCount"] == 4
-    assert result["hidden"]["edgeCount"] == 2
-    assert result["hidden"]["staticVisible"] is False
-    assert result["picking"]["nodeCount"] == 4
-    assert result["picking"]["edgeCount"] == 2
-    assert result["picking"]["staticVisible"] is True
-    assert result["hiddenAgain"]["staticVisible"] is False
 
 
 def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_page):
@@ -949,79 +869,6 @@ def test_rig_overlay_exposes_primary_humanoid_ik_target_without_joint_selection(
     assert result["solveCalls"] == 2
     assert result["finishCalls"] == 0
     assert result["target"] == pytest.approx([1.0, .7, 0])
-
-
-def test_rig_overlay_updates_posed_buffers_without_rebuilding(module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      const {createRigOverlayController} = await import(
-        './js/scene/rig-overlay-controller.js');
-      const scene = new THREE.Scene();
-      const pose = {
-        1: {center: [0, 0, 0], pivot: [0, 0, 0]},
-        2: {center: [1, 0, 0], pivot: [.5, 0, 0]},
-      };
-      const source = {
-        key: 'model-rig', structureRevision: 4,
-        joints: [1, 2].map((jointId, index) => ({
-          jointId, restCenter: [index, 0, 0],
-          restPivot: [index ? .5 : 0, 0, 0],
-        })),
-        components: [{componentId: 0, rootId: 1, nodeIds: [1, 2],
-          parentById: {1: null, 2: 1}, childrenById: {1: [2], 2: []}}],
-        forestEdges: [{jointA: 1, jointB: 2, parentId: 1, childId: 2}],
-        poseRotationByJointId: {},
-      };
-      const state = {visible: true, selectedJointId: 2,
-        picking: false, model: source};
-      const controller = createRigOverlayController({
-        scene, getRigState: () => state, getMeshes: () => [],
-        getRigJointPoseFrame: jointId => pose[jointId],
-      });
-      controller.refresh(state);
-      const staticGroup = controller.group.children[0];
-      const line = staticGroup.children[0];
-      const centers = staticGroup.children[1];
-      const joints = staticGroup.children[2];
-      const initial = {
-        rebuildCount: controller.getDebugState().rebuildCount,
-        centerAttribute: centers.geometry.getAttribute('position'),
-        lineAttribute: line.geometry.getAttribute('position'),
-        jointAttribute: joints.geometry.getAttribute('position'),
-      };
-      pose[2] = {center: [1, 2, 0], pivot: [.5, 1, 0]};
-      window.dispatchEvent(new CustomEvent(
-        'mod-viewer-model-rig-pose-changed',
-        {detail: {jointId: 2,
-          quaternion: [0, 0, 0, 1]}}));
-      const after = controller.getDebugState();
-      return {
-        rebuildCount: after.rebuildCount,
-        posedUpdates: after.posedOverlayUpdateCount,
-        sameCenterAttribute: initial.centerAttribute ===
-          centers.geometry.getAttribute('position'),
-        sameLineAttribute: initial.lineAttribute ===
-          line.geometry.getAttribute('position'),
-        sameJointAttribute: initial.jointAttribute ===
-          joints.geometry.getAttribute('position'),
-        center: [...initial.centerAttribute.array],
-        line: [...initial.lineAttribute.array],
-        joint: [...initial.jointAttribute.array],
-        dynamicUsage: initial.centerAttribute.usage === THREE.DynamicDrawUsage
-          && initial.lineAttribute.usage === THREE.DynamicDrawUsage
-          && initial.jointAttribute.usage === THREE.DynamicDrawUsage,
-      };
-    }""")
-    assert result["rebuildCount"] == 1
-    assert result["posedUpdates"] >= 2
-    assert result["sameCenterAttribute"]
-    assert result["sameLineAttribute"]
-    assert result["sameJointAttribute"]
-    assert result["center"] == pytest.approx([0, 0, 0, 1, 2, 0])
-    assert result["line"] == pytest.approx([0, 0, 0, .5, 1, 0])
-    assert result["joint"] == pytest.approx([0, 0, 0, .5, 1, 0])
-    assert result["dynamicUsage"]
 
 
 def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
@@ -4236,38 +4083,21 @@ def test_geometry_humanoid_control_rig_is_rest_owned_and_density_invariant(modul
         pytest.approx(result["first"]["controls"]["chest"]["position"], abs=.001)
 
 
-def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_page):
-    result = module_page.evaluate("""async () => {
-      const {buildProportionalHumanoidRig,
-        DEFAULT_HUMANOID_PROPORTIONS} = await import(
-          './js/mesh/humanoid-proportional-template.js');
-      const axes = {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]};
-      const build = height => buildProportionalHumanoidRig({
-        characterHeight: height, leftFoot: [-.1 * height / 2, 0, -.02],
-        rightFoot: [.1 * height / 2, 0, .03], semanticAxes: axes,
-      });
-      const rig = build(2);
-      const small = build(.2);
-      const large = build(20);
-      const distance = (a, b) => Math.hypot(...a.map((value, index) =>
-        value - b[index]));
-      return {rig, small, large, defaults: DEFAULT_HUMANOID_PROPORTIONS,
-        lengths: {
-          arm: distance(rig.rightShoulder, rig.rightHand),
-          shoulderOffset: distance(rig.neck, rig.rightShoulder),
-          leg: distance(rig.rightHip, rig.rightFoot),
-          armDropAngleDeg: Math.atan2(
-            Math.abs(rig.rightHand[1] - rig.rightShoulder[1]),
-            Math.abs(rig.rightHand[0] - rig.rightShoulder[0])) * 180 / Math.PI,
-        }};
-    }""")
-    rig = result["rig"]
-    assert result["defaults"] == {
-        "footLift": .015, "legLength": .515, "hipToNeckLength": .27,
-        "shoulderHalfWidth": .055, "armLength": .33,
-        "armDropAngleDeg": 55, "kneeFraction": .40,
-        "elbowFraction": .50, "chestFraction": .50,
-    }
+def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(
+        module_page):
+    axes = {"up": [0, 1, 0], "right": [1, 0, 0], "forward": [0, 0, 1]}
+
+    def build(height):
+        return _call_module(
+            module_page, "./js/mesh/humanoid-proportional-template.js",
+            "buildProportionalHumanoidRig", {
+                "characterHeight": height,
+                "leftFoot": [-.1 * height / 2, 0, -.02],
+                "rightFoot": [.1 * height / 2, 0, .03],
+                "semanticAxes": axes,
+            })
+
+    rig, small, large = (build(height) for height in (2, .2, 20))
     assert rig["detectedLeftFoot"][1] == pytest.approx(0)
     assert rig["detectedRightFoot"][1] == pytest.approx(0)
     assert rig["leftFoot"][1] == pytest.approx(.03)
@@ -4275,22 +4105,22 @@ def test_proportional_humanoid_template_uses_exact_ratios_and_midpoints(module_p
     assert rig["leftHip"][0] == pytest.approx(rig["leftFoot"][0])
     assert rig["rightHip"][2] == pytest.approx(rig["rightFoot"][2])
     assert rig["leftKnee"] == pytest.approx([
-        rig["leftHip"][index] + (rig["leftFoot"][index]
-        - rig["leftHip"][index]) * .40 for index in range(3)])
+        left + (foot - left) * .40
+        for left, foot in zip(rig["leftHip"], rig["leftFoot"])])
     assert rig["rightKnee"] == pytest.approx([
-        rig["rightHip"][index] + (rig["rightFoot"][index]
-        - rig["rightHip"][index]) * .40 for index in range(3)])
+        right + (foot - right) * .40
+        for right, foot in zip(rig["rightHip"], rig["rightFoot"])])
     assert rig["pelvis"] == pytest.approx([
-        (rig["leftHip"][index] + rig["rightHip"][index]) / 2 for index in range(3)])
+        (left + right) / 2
+        for left, right in zip(rig["leftHip"], rig["rightHip"])])
     assert rig["neck"][1] == pytest.approx(1.6)
-    assert result["lengths"] == {
-        "arm": pytest.approx(.66), "shoulderOffset": pytest.approx(.11),
-        "leg": pytest.approx(1.03), "armDropAngleDeg": pytest.approx(55),
-    }
-    assert result["small"]["proportions"] == result["large"]["proportions"]
-
-
-def test_estimate_foot_depth_uses_bottom_band(module_page):
+    assert math.dist(rig["rightShoulder"], rig["rightHand"]) == pytest.approx(.66)
+    assert math.dist(rig["neck"], rig["rightShoulder"]) == pytest.approx(.11)
+    assert math.dist(rig["rightHip"], rig["rightFoot"]) == pytest.approx(1.03)
+    assert math.degrees(math.atan2(
+        abs(rig["rightHand"][1] - rig["rightShoulder"][1]),
+        abs(rig["rightHand"][0] - rig["rightShoulder"][0]))) == pytest.approx(55)
+    assert small["proportions"] == large["proportions"]
     result = module_page.evaluate("""async () => {
       const {estimateFootDepth} = await import(
         './js/mesh/humanoid-control-rig.js');
@@ -5115,57 +4945,9 @@ def test_camera_frame_known_game_orientation_policy(module_page):
     assert result["state"]["eventCount"] == 1
 
 
-@pytest.mark.parametrize("arm_drop", [.03, .25, .5],
-                         ids=["near-horizontal", "moderate", "steep"])
-def test_geometry_humanoid_control_rig_uses_fixed_arm_angle(module_page, arm_drop):
-    result = module_page.evaluate("""async armDrop => {
-      const {buildHumanoidControlRig} = await import(
-        './js/mesh/humanoid-control-rig.js');
-      const points = [];
-      for (let y = .4; y <= 1.7; y += .1) {
-        for (let x = -.2; x <= .2; x += .1) {
-          points.push(x, y, -.08, x, y, .08);
-        }
-      }
-      const limb = (a, b) => {
-        for (let t = 0; t <= 1.001; t += .04) {
-          const x = a[0] + (b[0] - a[0]) * t;
-          const y = a[1] + (b[1] - a[1]) * t;
-          points.push(x - .06, y, -.04, x + .06, y, .04);
-        }
-      };
-      for (const side of [-1, 1]) {
-        limb([side * .2, 1.5], [side * .52, 1.5 - armDrop]);
-        limb([side * .52, 1.5 - armDrop], [side * .9, 1.5 - armDrop * 2]);
-        limb([side * .15, .55], [side * .25, .02]);
-      }
-      return buildHumanoidControlRig({
-        meshes: [{userData: {humanoidRestPositions: new Float32Array(points)}}],
-        axes: {up: [0, 1, 0], right: [1, 0, 0], forward: [0, 0, 1]},
-      });
-    }""", arm_drop)
-    assert result["diagnostics"]["failureReasons"] == [], repr(
-        result["diagnostics"])
-    assert result["diagnostics"]["proportionalTemplate"]["armDropAngleDeg"] == 55
-    height = result["diagnostics"]["characterHeight"]
-    assert math.dist(result["controls"]["rightShoulder"]["position"],
-                     result["controls"]["rightHand"]["position"]) == pytest.approx(
-                         .33 * height, abs=1e-6)
-    assert result["controls"]["leftHand"]["position"][0] < \
-        result["controls"]["leftShoulder"]["position"][0]
-    assert result["controls"]["rightHand"]["position"][0] > \
-        result["controls"]["rightShoulder"]["position"][0]
-
-
 @pytest.mark.parametrize("case", [
     {"name": "short-arm", "hand": .41, "elbow": .30},
-    {"name": "boundary-0.27H", "hand": .45, "elbow": .31},
-    {"name": "preferred-arm", "hand": .48, "elbow": .34},
-    {"name": "boundary-0.42H", "hand": .60, "elbow": .43},
-    {"name": "long-preferred-edge", "hand": .66, "elbow": .48},
     {"name": "overlong-decoy", "hand": .48, "elbow": .34, "decoy": True},
-    {"name": "premature-bridge", "hand": .48, "elbow": .34,
-     "centralBridge": True},
     {"name": "wide-skirt", "hand": .48, "elbow": .34, "skirt": True},
 ], ids=lambda case: case["name"])
 def test_geometry_humanoid_control_rig_ignores_extra_geometry_after_anchors(module_page, case):

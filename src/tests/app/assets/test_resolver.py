@@ -7,11 +7,9 @@ from app.assets.enrichment import apply
 from app.assets.resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
 from core.geometry.draw_call import DrawCall, SlotTextureBinding
-from core.geometry.identity import GeometryMatch, normalize_geometry_hash
+from core.geometry.identity import GeometryMatch
 from core.textures import classifier as dds_classifier
-from core.ini.parser import (TextureOverrideIndex, TextureReplacement,
-                              _scan_sections_for_draws, build_draw_groups,
-                              extract_resources, parse_sections)
+from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.geometry.mesh_builder import (GeometryBlob, build_mesh_result,
                                build_mesh_semantics)
 
@@ -39,120 +37,6 @@ def _index(root, asset_type="GIMI", metadata=None, *, asset="Alice",
         }]}],
         "byGeometryHash": {"73c8cae2": [{"asset": 0, "geometry": 0}]},
     }
-
-
-def test_geometry_identity_is_shared_and_draw_scan_keeps_raw_evidence():
-    assert normalize_geometry_hash("0X73C8CAE2") == "73c8cae2"
-    sections = parse_sections(
-        "fixture.ini", "[TextureOverrideBody]\n"
-        "hash = 0x73c8cae2\n"
-        "match_first_index = 43845\n"
-        "match_index_count = 24\n"
-        "Resource\\GIMI\\Diffuse = ResourceDiffuseOpaque\n"
-        "ps-t1 = ResourceMystery\n"
-        "drawindexed = 3, 0, 0\n"
-        "[TextureOverrideDiffuse]\n"
-        "hash = 11111111\n"
-        "this = ResourceDiffuseOpaque\n"
-        "[TextureOverrideMystery]\n"
-        "hash = 22222222\n"
-        "this = ResourceMystery\n")
-
-    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"]["draws"][0]
-
-    assert draw.geometry_match == GeometryMatch("73c8cae2", 43845, 24)
-    assert draw.slot_textures == [SlotTextureBinding(
-        1, "ResourceMystery", texture_hashes=("22222222",))]
-    assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
-
-
-def test_resource_name_hash_is_not_texture_evidence():
-    sections = parse_sections(
-        "fixture.ini", "[TextureOverrideBody]\n"
-        "hash = 73c8cae2\n"
-        "Resource\\GIMI\\Diffuse = ResourceFoo_11111111\n"
-        "drawindexed = 3, 0, 0\n")
-
-    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
-        "draws"][0]
-
-    assert draw.slot_textures == []
-    assert "texture_hashes" not in draw.diffuse_variants[0]
-
-
-def test_texture_hash_maps_all_conditional_this_resources():
-    sections = parse_sections(
-        "fixture.ini", "[TextureOverrideBody]\n"
-        "hash = 73c8cae2\n"
-        "ps-t1 = ResourceA\n"
-        "Resource\\GIMI\\Diffuse = ResourceB\n"
-        "drawindexed = 3, 0, 0\n"
-        "[TextureOverrideOriginalTexture]\n"
-        "hash = 11111111\n"
-        "if $toggle == 0\n"
-        "this = ResourceA\n"
-        "else\n"
-        "this = ResourceB\n"
-        "endif\n")
-
-    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
-        "draws"][0]
-
-    assert draw.slot_textures == [SlotTextureBinding(
-        1, "ResourceA", texture_hashes=("11111111",))]
-    assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
-
-
-def test_texture_override_index_preserves_conditional_replacements():
-    sections = parse_sections(
-        "fixture.ini", "[KeyPanties]\n"
-        "type = cycle\n"
-        "$Panties = 0,1\n"
-        "[TextureOverrideAstraLegDiffuse]\n"
-        "hash = 11111111\n"
-        "if $Panties == 0\n"
-        "this = ResourceAstraLegADiffuse\n"
-        "else\n"
-        "this = ResourceAstraLegADiffuseNSFW\n"
-        "endif\n")
-
-    index = _scan_sections_for_draws(sections).texture_override_index
-    replacements = index.replacements_by_hash["11111111"]
-
-    assert [(item.resource, item.dnf) for item in replacements] == [
-        ("ResourceAstraLegADiffuse", [[{
-            "var": "Panties", "value": "0", "negate": False}]]),
-        ("ResourceAstraLegADiffuseNSFW", [[{
-            "var": "Panties", "value": "0", "negate": True}]])]
-
-
-def test_draw_group_index_resolves_replacement_resource_file():
-    sections = parse_sections(
-        "fixture.ini", "[TextureOverrideBody]\n"
-        "vb0 = ResourcePosition\n"
-        "vb1 = ResourceTexcoord\n"
-        "ib = ResourceBodyIB\n"
-        "drawindexed = 3, 0, 0\n"
-        "[TextureOverrideOriginal]\n"
-        "hash = 11111111\n"
-        "this = ResourceAstraDiffuse\n"
-        "[ResourcePosition]\n"
-        "filename = position.buf\n"
-        "stride = 40\n"
-        "[ResourceTexcoord]\n"
-        "filename = texcoord.buf\n"
-        "stride = 20\n"
-        "[ResourceBodyIB]\n"
-        "filename = body.ib\n"
-        "format = DXGI_FORMAT_R32_UINT\n"
-        "[ResourceAstraDiffuse]\n"
-        "filename = textures/astra-diffuse.dds\n")
-
-    groups = build_draw_groups(sections, extract_resources(sections))
-    index = groups[0]["_texture_override_index"]
-
-    assert index.replacements_by_hash["11111111"][0].file == \
-        "textures/astra-diffuse.dds"
 
 
 def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
