@@ -107,17 +107,17 @@ def test_launch_selection_rejects_relative_and_missing_paths(
         access.remember_mod_launch_selection(str(tmp_path / "missing"))
 
 
-def test_launch_selection_accepts_absolute_zip_without_granting_siblings(
+@pytest.mark.parametrize("extension", [".zip", ".7z", ".rar"])
+def test_launch_selection_accepts_supported_archive_without_granting_siblings(
+        extension,
         tmp_path, monkeypatch):
     config = _config(tmp_path)
     root = tmp_path / "mods"
     root.mkdir()
-    archive = root / "packed.zip"
-    with zipfile.ZipFile(archive, "w") as value:
-        value.writestr("mod.ini", "[TextureOverrideBody]\n")
-    sibling = root / "other.zip"
-    with zipfile.ZipFile(sibling, "w") as value:
-        value.writestr("mod.ini", "[TextureOverrideOther]\n")
+    archive = root / f"packed{extension}"
+    sibling = root / f"other{extension}"
+    archive.write_bytes(b"archive")
+    sibling.write_bytes(b"archive")
     monkeypatch.setattr(paths, "config_path", lambda: str(config))
 
     access = FolderAccess()

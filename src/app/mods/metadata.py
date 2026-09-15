@@ -17,7 +17,7 @@ from core.textures.color_adjustment import (
     normalize_color_adjustment as _normalize_mesh_color_adjustment,
     is_neutral_color_adjustment as _is_neutral_mesh_color_adjustment,
 )
-from core.mod_source import is_zip_path
+from core.mod_source import is_archive_path
 
 METADATA_NAME = ".mod_viewer.json"
 MODEL_RIG_METADATA_NAME = ".mod_viewer.rig.json"
@@ -98,7 +98,7 @@ def load(folder_path, source=None):
         if source is not None:
             data = json.loads(source.read_text(
                 source.resolve_resource(METADATA_NAME)))
-        elif is_zip_path(folder_path):
+        elif is_archive_path(folder_path):
             return {}
         else:
             with open(os.path.join(folder_path, METADATA_NAME), encoding="utf-8") as fh:
@@ -109,7 +109,7 @@ def load(folder_path, source=None):
 
 
 def _save(folder_path, data):
-    if is_zip_path(folder_path):
+    if is_archive_path(folder_path):
         return {"saved": False,
                 "error": "Viewer metadata cannot be saved for compressed mods."}
     path = os.path.join(folder_path, METADATA_NAME)
@@ -293,7 +293,7 @@ def load_model_rig(folder_path, source=None):
                     or source.size(path) > MODEL_RIG_MAX_BYTES:
                 return None
             return _normalized_model_rig(json.loads(source.read_text(path)))
-        if is_zip_path(folder_path):
+        if is_archive_path(folder_path):
             return None
         path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
         if os.path.getsize(path) > MODEL_RIG_MAX_BYTES:
@@ -309,7 +309,7 @@ def save_model_rig(folder_path, model_rig):
     normalized_result = _normalized_model_rig(model_rig, include_text=True)
     if normalized_result is None:
         return {"saved": False, "error": "Invalid ModelRig metadata."}
-    if is_zip_path(folder_path):
+    if is_archive_path(folder_path):
         return {"saved": False,
                 "error": "Viewer metadata cannot be saved for compressed mods."}
     normalized, text = normalized_result

@@ -10,6 +10,7 @@ changed.
 import os
 
 from . import config
+from core.mod_source import is_archive_path
 
 
 CONFIG_VERSION = config.CONFIG_VERSION
@@ -148,7 +149,7 @@ def delete_folder(folder, config_file=None):
 
 
 def list_subfolders(folder, authorized_root):
-    """Return immediate safe directory and ZIP children of one root."""
+    """Return immediate safe directory and archive children of one root."""
     folder = normalize_path(folder)
     authorized_root = normalize_path(authorized_root)
     if not is_within(folder, authorized_root):
@@ -167,7 +168,7 @@ def list_subfolders(folder, authorized_root):
                     if entry.is_dir(follow_symlinks=True):
                         children.append({"name": entry.name, "path": child})
                     elif (entry.is_file(follow_symlinks=True)
-                          and entry.name.casefold().endswith(".zip")):
+                          and is_archive_path(entry.name)):
                         children.append({"name": entry.name, "path": child,
                                          "kind": "archive", "expandable": False})
                 except OSError:

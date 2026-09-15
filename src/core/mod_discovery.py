@@ -1,10 +1,11 @@
-"""Discovery of selected INI files from a directory or ZIP mod source."""
+"""Discovery of selected INI files from a directory or virtual archive."""
 
 import os
 import re
 
 from .ini.sections import parse_sections
-from .mod_source import DirectoryModSource, ModSourceError
+from .mod_source import (DirectoryModSource, ModSourceError,
+                         mod_source_for_path)
 
 _MAX_INI_FILES = 10
 _MAX_INI_DEPTH = 2
@@ -72,15 +73,15 @@ def _has_geometry_sections(path, source):
 
 
 def discover_ini_paths(mod_dir, *, disabled=False, source=None):
-    """Return selected INIs from a directory or every ZIP archive depth.
+    """Return selected INIs from a directory or virtual archive.
 
-    Directory discovery retains its historical bounded nested search.  ZIP
-    discovery has no filesystem root to infer, so it scans all archive members
-    deterministically.  ``disabled`` selects
+    Directory discovery retains its historical bounded nested search. Virtual
+    archives have no filesystem root to infer, so they scan all members
+    deterministically. ``disabled`` selects
     only filenames beginning with ``DISABLED`` (case-insensitively); active and
     disabled files are never combined.
     """
-    source = source or DirectoryModSource(mod_dir)
+    source = source or mod_source_for_path(mod_dir)
     if source.virtual:
         return [
             source.document_path(logical)

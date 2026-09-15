@@ -66,7 +66,7 @@ EXPECTED_API_METHODS = {
     "save_weight_selection",
     "select_asset_folder",
     "select_folder",
-    "select_zip_mod",
+    "select_archive_mod",
     "set_asset_folder_enabled",
     "set_panel_opacity",
     "update_ini_text",
@@ -151,12 +151,12 @@ def test_facade_composes_picker_registry_preview_and_editing(tmp_path, monkeypat
         edit_session.discard(selected)
 
 
-def test_select_zip_mod_uses_open_filter_and_authorizes_only_selected_zip(
+def test_select_archive_mod_uses_archive_filter_and_authorizes_only_selected_file(
         tmp_path, monkeypatch):
-    archive = tmp_path / "packed.zip"
-    sibling = tmp_path / "sibling.zip"
-    archive.write_bytes(b"zip")
-    sibling.write_bytes(b"zip")
+    archive = tmp_path / "packed.7z"
+    sibling = tmp_path / "sibling.rar"
+    archive.write_bytes(b"archive")
+    sibling.write_bytes(b"archive")
     monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
 
     responses = [None, [str(archive)]]
@@ -166,12 +166,13 @@ def test_select_zip_mod_uses_open_filter_and_authorizes_only_selected_zip(
         create_file_dialog=lambda dialog_type, **kwargs: calls.append(
             (dialog_type, kwargs)) or responses.pop(0))
 
-    assert api.select_zip_mod() is None
-    selected = api.select_zip_mod()
+    assert api.select_archive_mod() is None
+    selected = api.select_archive_mod()
 
     assert selected == mod_folders.normalize_path(str(archive))
     assert all(call[0] == webview.FileDialog.OPEN for call in calls)
-    assert all(call[1]["file_types"] == ("ZIP mods (*.zip)",)
+    assert all(call[1]["file_types"] == (
+        "Compressed mods (*.zip;*.7z;*.rar)",)
                for call in calls)
     assert api._access.was_picker_selected(str(archive))
     assert not api._access.was_picker_selected(str(sibling))

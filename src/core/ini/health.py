@@ -11,7 +11,7 @@ import re
 
 from .document import IniDocument, OTHER
 from ..mod_discovery import discover_ini_paths
-from ..mod_source import ModSourceError
+from ..mod_source import ModSourceError, mod_source_for_path
 from ..resource_paths import safe_resource_path
 from ..textures import split_texture_key
 
@@ -402,8 +402,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
     """
     overrides = overrides or {}
     documents = documents or {}
-    if source is None and str(mod_dir).lower().endswith(".zip"):
-        from ..mod_source import mod_source_for_path
+    if source is None:
         source = mod_source_for_path(mod_dir)
     if ini_paths is None:
         ini_paths = discover_ini_paths(mod_dir, source=source)

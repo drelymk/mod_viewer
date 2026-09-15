@@ -215,12 +215,14 @@ def load_control_state(context, overrides=None, pending_new_sections=None,
 
 
 def unwired_pending_sections(folder_path, overrides, pending_new_sections,
-                             ini_paths=None, documents=None):
+                             ini_paths=None, documents=None, source=None):
     """Find newly-added toggle sections that still gate no mesh."""
     if not pending_new_sections:
         return {}
+    source = source or (getattr(ini_paths[0], "source", None)
+                        if ini_paths else None)
     ini_paths = (list(ini_paths) if ini_paths is not None
-                 else discover_ini_paths(folder_path))
+                 else discover_ini_paths(folder_path, source=source))
     by_name = {_ini_rel(p, folder_path): p for p in ini_paths}
 
     result = {}
@@ -231,7 +233,7 @@ def unwired_pending_sections(folder_path, overrides, pending_new_sections,
         if ini_path is None:
             continue
         parsed = analyze_mod_inis(
-            [ini_path], folder_path, overrides, documents)
+            [ini_path], folder_path, overrides, documents, source=source)
         gating = _gating_vars_from_groups(parsed.groups)
         still_unwired = [
             section for section in sections
