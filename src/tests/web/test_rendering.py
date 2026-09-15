@@ -1,5 +1,141 @@
-from .support import *
-from PIL import ImageChops
+import base64
+import copy
+import io
+import math
+import struct
+import zlib
+
+import pytest
+from PIL import Image, ImageChops
+
+from app.runtime import server
+from core.materials.profiles import material_profile_for
+from .support import (
+    _open, _page as _create_page, _sample_mesh_pixel, _sample_mesh_pixel_at,
+    _sample_mesh_pixels_at,
+)
+from .payloads import _PNG_URI, _f32, _payload, _u32
+
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    load_weight_runtime = kwargs.pop("load_weight_runtime", False)
+    features = {"mesh"}
+    if load_weight_runtime:
+        features.add("skinning")
+    features.update(kwargs.pop("api_features", ()))
+    context, page = _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
+    if load_weight_runtime:
+        page.evaluate("""async () => {
+          window.__testWeightRigRuntime = await import(
+            './js/mesh/weight-rig-runtime.js');
+        }""")
+    return context, page
+
+
+def _flat_png_uri(rgba, size=4):
+    """Build a real multi-pixel PNG so WebGPU texture mip sampling is tested."""
+    raw = b"".join(b"\x00" + bytes(rgba) * size for _ in range(size))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _banded_png_uri(rgba_columns, height=4):
+    """Build a nearest-column diagnostic texture for per-pixel debug tests."""
+    width = len(rgba_columns)
+    raw_row = b"".join(bytes(rgba) for rgba in rgba_columns)
+    raw = b"".join(b"\x00" + raw_row for _ in range(height))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _bc7_dds_bytes(width=8, height=4, mip_count=2):
+    data = bytearray(148)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, height, width)
+    struct.pack_into("<I", data, 28, mip_count)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
+    struct.pack_into("<IIIII", data, 128, 98, 3, 0, 1, 0)
+    w, h = width, height
+    for level in range(mip_count):
+        data.extend(bytes([level + 1]) * (((w + 3) // 4) * ((h + 3) // 4) * 16))
+        w, h = max(1, w // 2), max(1, h // 2)
+    return bytes(data)
+
+
+def _dxt1_vertical_gradient():
+    """One DXT1 block with red top rows and blue bottom rows."""
+    data = bytearray(136)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, 4, 4)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DXT1", "little"))
+    struct.pack_into("<HHI", data, 128, 0xF800, 0x001F, 0x55550000)
+    return bytes(data)
+
+
+def _parity_payload(uri):
+    payload = _payload("Parity")
+    entry = payload["meshes"]["Body-Parity-0"]
+    entry["drawindexed"] = [6, 0, 0]
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0)
+    # Exercise the sampler outside the nominal range so DDS and PNG transport
+    # must agree on their default clamp-to-edge wrapping.
+    entry["uv"] = _f32(-0.25, -0.25, 1.25, -0.25,
+                       1.25, 1.25, -0.25, 1.25)
+    entry["idx"] = _u32(0, 1, 2, 0, 2, 3)
+    payload["textures"] = {"diffuse::Parity-one.png": uri}
+    return payload
+
+
+def _packed_material_payload(profile_id="zzz:zzmi"):
+    payload = _payload("Packed")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["light_map_key"] = "light_map::Packed-light.png"
+    entry["material_map_key"] = "material_map::Packed-material.png"
+    entry["normal_data_key"] = "normal_data::Packed-normal.png"
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _PNG_URI,
+        "light_map::Packed-light.png": _PNG_URI,
+        "material_map::Packed-material.png": _PNG_URI,
+        "normal_data::Packed-normal.png": _PNG_URI,
+    }
+    profile_args = {
+        "zzz:zzmi": ("zzz", "zzmi"),
+        "genshin:gimi": ("genshin", "gimi"),
+        "wuwa:rabbitfx": ("wuwa", "rabbitfx"),
+        "wuwa:rabbitfx:body": ("wuwa", "rabbitfx", "body"),
+        "wuwa:raw": ("wuwa", "raw"),
+    }
+    profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
+               if profile_id in profile_args
+               else material_profile_for("unknown", "unknown").to_metadata())
+    entry["material_kind"] = "body"
+    entry["material_kind_reliable"] = False
+    entry["material_profile_id"] = profile["id"]
+    payload["metadata"]["material_profiles"] = {profile["id"]: profile}
+    return payload
 
 def _set_ao_level(page, level):
     before = page.evaluate("""async () => {
@@ -840,7 +976,9 @@ def test_environment_preparation_notifies_only_for_active_visual_upgrade(
 def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"ArcballPhysics": _payload("ArcballPhysics")})
+        edge_browser, frontend_url,
+        {"ArcballPhysics": _payload("ArcballPhysics")},
+        load_weight_runtime=True)
     try:
         _open(page, "ArcballPhysics")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -929,7 +1067,9 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
 def test_weight_load_rejects_missing_source_identity(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"WeightSourceRequired": _payload("WeightSourceRequired")})
+        edge_browser, frontend_url,
+        {"WeightSourceRequired": _payload("WeightSourceRequired")},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightSourceRequired")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -972,7 +1112,8 @@ def test_weight_load_rejects_missing_source_identity(
 def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"RigPanel": _payload("RigPanel")})
+        edge_browser, frontend_url, {"RigPanel": _payload("RigPanel")},
+        load_weight_runtime=True)
     try:
         _open(page, "RigPanel")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -1067,7 +1208,8 @@ def test_rig_panel_does_not_start_rig_for_model_without_weights(
     payload = _payload("NoWeights")
     payload["meshes"]["Body-NoWeights-0"]["skinning_available"] = False
     context, page = _page(
-        edge_browser, frontend_url, {"NoWeights": payload})
+        edge_browser, frontend_url, {"NoWeights": payload},
+        load_weight_runtime=True)
     try:
         _open(page, "NoWeights")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -1093,7 +1235,8 @@ def test_rig_panel_does_not_start_rig_for_model_without_weights(
 def test_weight_ready_state_has_no_eager_rig_preparation(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"WeightFirst": _payload("WeightFirst")})
+        edge_browser, frontend_url, {"WeightFirst": _payload("WeightFirst")},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightFirst")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -1183,7 +1326,8 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
                               "component": "Cross source C"},
     }
     context, page = _page(
-        edge_browser, frontend_url, {"CrossSourceRig": payload})
+        edge_browser, frontend_url, {"CrossSourceRig": payload},
+        load_weight_runtime=True)
     try:
         _open(page, "CrossSourceRig")
         page.wait_for_function("window.modViewer.activeMeshes.length === 3")
@@ -1355,7 +1499,9 @@ def test_model_rest_frames_use_oriented_edge_pivots(
 def test_skinning_load_is_invalidated_by_shape_change(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"SkinningLoadRace": _payload("SkinningLoadRace")})
+        edge_browser, frontend_url,
+        {"SkinningLoadRace": _payload("SkinningLoadRace")},
+        load_weight_runtime=True)
     try:
         _open(page, "SkinningLoadRace")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -1411,7 +1557,8 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url,
-        {"RigRaceA": _payload("RigRaceA"), "RigRaceB": _payload("RigRaceB")})
+        {"RigRaceA": _payload("RigRaceA"), "RigRaceB": _payload("RigRaceB")},
+        load_weight_runtime=True)
     try:
         _open(page, "RigRaceA")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -1472,230 +1619,6 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
         context.close()
 
 
-def _invalidation_payload():
-    payload = _payload("Invalidation")
-    template = next(iter(payload["meshes"].values()))
-
-    def condition(variable, value):
-        return [[{"var": variable, "value": value, "negate": False}]]
-
-    def mesh(name, *, conditions=None, texture_variants=None, shape=None):
-        entry = copy.deepcopy(template)
-        entry["component"] = name
-        entry["conditions"] = conditions or []
-        entry["texture_variants"] = texture_variants or []
-        entry["shape_targets"] = [] if shape is None else [{
-            "var": shape,
-            "pos": _f32(0, 0, 0, 1.5, 0, 0, 0, 1.5, 0),
-        }]
-        return entry
-
-    alt_texture = payload["texture_pools"]["p0"][1]["tex_key"]
-    payload["meshes"] = {
-        "Mesh-A": mesh("Mesh A", conditions=condition("visibleA", "1"),
-                        shape="shapeA"),
-        "Mesh-B": mesh("Mesh B", texture_variants=[{
-            "conditions": condition("textureB", "1"),
-            "tex_key": alt_texture,
-        }], shape="shapeB"),
-        "Mesh-C": mesh("Mesh C"),
-    }
-    payload["controls"]["menu"] = {}
-    payload["state"]["defaults"].update({
-        "visibleA": "1", "textureB": "0", "shapeA": "0", "shapeB": "0",
-    })
-    return payload
-
-def test_control_dependency_and_snapshot_helpers(edge_browser, frontend_url):
-
-
-    context, page = _page(edge_browser, frontend_url, {"Deps": _payload("Deps")})
-    try:
-        result = page.evaluate("""async () => {
-          const visibility = await import('./js/mesh/visibility.js');
-          const controls = await import('./js/editing/control-state.js');
-          const mesh = {userData: {
-            conditions: [[{var: 'A'}, {var: 'B'}], [{var: 'C'}]],
-            textureVariants: [{conditions: [[{var: 'D'}]]}],
-            normalMapVariants: [{conditions: [[{var: 'E'}]]}],
-            emissionMapVariants: [{conditions: [[{var: 'F'}]]}],
-            shapeTargets: [{var: 'ShapeA'}, {var: 'ShapeB'}, {var: 'ShapeA'}],
-          }};
-          const first = visibility.dependenciesFor(mesh);
-          const cached = visibility.dependenciesFor(mesh) === first;
-          mesh.userData.conditions = [[{var: 'NewVisibility'}]];
-          const beforeInvalidate = [...visibility.dependenciesFor(mesh).visibility];
-          visibility.invalidateControlDependencies(mesh);
-          const afterInvalidate = [...visibility.dependenciesFor(mesh).visibility];
-          const changed = [...controls.changedControlVariables(
-            {A: '0', B: '1'}, {A: '1', B: '1', C: '0'})];
-          const removed = [...controls.changedControlVariables(
-            {A: '1', B: '1'}, {A: '1'})];
-          return {
-            conditionVariables: [...visibility.variablesFromConditions(
-              mesh.userData.conditions)],
-            textureVariables: [...first.textures],
-            shapeVariables: [...first.shapes],
-            cached, beforeInvalidate, afterInvalidate, changed, removed,
-          };
-        }""")
-        assert result == {
-            "conditionVariables": ["NewVisibility"],
-            "textureVariables": ["D", "E", "F"],
-            "shapeVariables": ["ShapeA", "ShapeB"],
-            "cached": True,
-            "beforeInvalidate": ["A", "B", "C"],
-            "afterInvalidate": ["NewVisibility"],
-            "changed": ["A", "C"],
-            "removed": ["B"],
-        }
-    finally:
-        context.close()
-
-
-def test_control_refresh_updates_only_affected_mesh_categories(
-        edge_browser, frontend_url):
-    context, page = _page(
-        edge_browser, frontend_url, {"Invalidation": _invalidation_payload()})
-    try:
-        _open(page, "Invalidation")
-        page.locator(".draw-item").nth(2).wait_for()
-        page.wait_for_timeout(100)
-        result = page.evaluate("""async () => {
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshAll} = await import('./js/mesh/visibility.js');
-          const meshes = window.modViewer.activeMeshes;
-          const refs = meshes.map(mesh => ({
-            mesh, geometry: mesh.geometry, material: mesh.material,
-          }));
-          const pool = meshes[0].userData.texturePool;
-          const refresh = () => {
-            pool[0].light_map = 'light::reconciliation-marker';
-            const result = refreshAll();
-            return {...result, poolUntouched: Object.hasOwn(pool[0], 'light_map')};
-          };
-          const capture = () => meshes.map(mesh => ({
-            name: mesh.userData.semanticKey,
-            visible: mesh.visible,
-            positionVersion: mesh.geometry.attributes.position.version,
-            resolved: mesh.userData.resolvedTexKey,
-          }));
-          const initial = capture();
-          const stable = refresh();
-          const noOp = capture();
-
-          setControlValue('visibleA', '0');
-          const visibility = refresh();
-          const afterVisibility = capture();
-
-          setControlValue('shapeA', '1');
-          const shape = refresh();
-          const afterShape = capture();
-
-          setControlValue('textureB', '1');
-          const texture = refresh();
-          const afterTexture = capture();
-          const sameObjects = refs.every((ref, index) =>
-            meshes[index] === ref.mesh && meshes[index].geometry === ref.geometry
-              && meshes[index].material === ref.material);
-          const names = result => result.changedMeshes.map(mesh => mesh.userData.semanticKey);
-          return {
-            stable: {
-              visibilityChanged: stable.visibilityChanged,
-              texturesChanged: stable.texturesChanged,
-              shapesChanged: stable.shapesChanged,
-              state: noOp,
-            },
-            visibility: {
-              names: names(visibility), state: afterVisibility,
-            },
-            shape: {names: names(shape), state: afterShape},
-            texture: {names: names(texture), state: afterTexture},
-            poolUntouched: [stable, visibility, shape, texture]
-              .map(result => result.poolUntouched),
-            initial, sameObjects,
-          };
-        }""")
-        assert result["stable"] == {
-            "visibilityChanged": False, "texturesChanged": False,
-            "shapesChanged": False, "state": result["initial"],
-        }
-        assert result["visibility"]["names"] == ["Mesh-A"]
-        assert result["visibility"]["state"][0]["visible"] is False
-        assert [item["positionVersion"] for item in result["visibility"]["state"]] == [
-            item["positionVersion"] for item in result["initial"]]
-        assert result["shape"]["names"] == ["Mesh-A"]
-        assert result["shape"]["state"][0]["positionVersion"] > \
-            result["initial"][0]["positionVersion"]
-        assert [item["positionVersion"] for item in result["shape"]["state"][1:]] == [
-            item["positionVersion"] for item in result["initial"][1:]]
-        assert result["texture"]["names"] == ["Mesh-B"]
-        assert result["texture"]["state"][1]["resolved"] == \
-            "diffuse::Invalidation-two.png"
-        assert [item["positionVersion"] for item in result["texture"]["state"]] == [
-            item["positionVersion"] for item in result["shape"]["state"]]
-        assert result["sameObjects"]
-        assert result["poolUntouched"] == [True, True, True, False]
-        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Invalidation"]
-    finally:
-        context.close()
-
-
-def test_control_refresh_plans_all_final_values_from_derived_rules(
-        edge_browser, frontend_url):
-    payload = _invalidation_payload()
-    payload["state"]["defaults"].update({
-        "root": "0", "visibleA": "1", "shapeA": "0", "textureB": "0",
-    })
-    payload["state"]["rules"] = [
-        {"conditions": [[{"var": "root", "value": "1"}]],
-         "var": "visibleA", "value": "0"},
-        {"conditions": [[{"var": "visibleA", "value": "0"}]],
-         "var": "shapeA", "value": "1"},
-        {"conditions": [[{"var": "shapeA", "value": "1"}]],
-         "var": "textureB", "value": "1"},
-    ]
-    context, page = _page(
-        edge_browser, frontend_url, {"Derived": payload})
-    try:
-        _open(page, "Derived")
-        page.locator(".draw-item").nth(2).wait_for()
-        result = page.evaluate("""async () => {
-          const {setControlValue} = await import('./js/editing/control-state.js');
-          const {refreshAll} = await import('./js/mesh/visibility.js');
-          const before = window.modViewer.activeMeshes.map(mesh => ({
-            visible: mesh.visible,
-            positionVersion: mesh.geometry.attributes.position.version,
-            texture: mesh.userData.resolvedTexKey,
-          }));
-          setControlValue('root', '1');
-          const refresh = refreshAll();
-          const after = window.modViewer.activeMeshes.map(mesh => ({
-            visible: mesh.visible,
-            positionVersion: mesh.geometry.attributes.position.version,
-            texture: mesh.userData.resolvedTexKey,
-          }));
-          return {
-            changed: [...refresh.changedMeshes].map(mesh => mesh.userData.semanticKey),
-            visibilityChanged: refresh.visibilityChanged,
-            shapesChanged: refresh.shapesChanged,
-            texturesChanged: refresh.texturesChanged,
-            before, after,
-          };
-        }""")
-        assert result["changed"] == ["Mesh-A", "Mesh-B"]
-        assert result["visibilityChanged"]
-        assert result["shapesChanged"]
-        assert result["texturesChanged"]
-        assert not result["after"][0]["visible"]
-        assert result["after"][0]["positionVersion"] > \
-            result["before"][0]["positionVersion"]
-        assert result["after"][1]["texture"] == "diffuse::Invalidation-two.png"
-        assert result["after"][2] == result["before"][2]
-    finally:
-        context.close()
-
-
 def test_noop_control_refresh_does_not_request_render(edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"NoOp": _payload("NoOp")})
     try:
@@ -1722,7 +1645,8 @@ def test_noop_control_refresh_does_not_request_render(edge_browser, frontend_url
 def test_weight_picker_discovers_influences_without_mutating_selection(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"WeightPick": _payload("WeightPick")})
+        edge_browser, frontend_url, {"WeightPick": _payload("WeightPick")},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightPick")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -1893,7 +1817,8 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
 def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"WeightStable": _payload("WeightStable")})
+        edge_browser, frontend_url, {"WeightStable": _payload("WeightStable")},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightStable")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -2006,7 +1931,8 @@ def test_weight_panel_preserves_picker_and_slider_dom_during_state_changes(
 def test_weight_saved_selection_applies_once_and_controls_physics(
         edge_browser, frontend_url):
     context, page = _page(
-        edge_browser, frontend_url, {"WeightSaved": _payload("WeightSaved")})
+        edge_browser, frontend_url, {"WeightSaved": _payload("WeightSaved")},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightSaved")
         page.wait_for_function("window.modViewer.activeMeshes.length === 1")
@@ -2130,7 +2056,8 @@ def test_weight_picker_ignores_mesh_selection(
     second["component"] = "Hair"
     payload["meshes"] = {first_name: first, "Hair-WeightMeshFilter-0": second}
     context, page = _page(
-        edge_browser, frontend_url, {"WeightMeshFilter": payload})
+        edge_browser, frontend_url, {"WeightMeshFilter": payload},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightMeshFilter")
         page.wait_for_function("window.modViewer.activeMeshes.length === 2")
@@ -2210,7 +2137,8 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         first_name: first, "Coat-WeightSources-0": second,
     }
     context, page = _page(
-        edge_browser, frontend_url, {"WeightSources": payload})
+        edge_browser, frontend_url, {"WeightSources": payload},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightSources")
         page.wait_for_function("window.modViewer.activeMeshes.length === 2")
@@ -2335,7 +2263,8 @@ def test_weight_selection_shared_source_participates_per_mesh(
         first_name: first, "Hair-WeightSharedSource-0": second,
     }
     context, page = _page(
-        edge_browser, frontend_url, {"WeightSharedSource": payload})
+        edge_browser, frontend_url, {"WeightSharedSource": payload},
+        load_weight_runtime=True)
     try:
         _open(page, "WeightSharedSource")
         page.wait_for_function("window.modViewer.activeMeshes.length === 2")
@@ -3449,7 +3378,8 @@ def test_diffuse_normal_mode_keeps_only_color_and_normal_bindings(
         normal_key = "normal_map::Packed-surface-normal.png"
         entry["normal_map_key"] = normal_key
         payload["textures"][normal_key] = _PNG_URI
-    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    context, page = _page(
+        edge_browser, frontend_url, {"Packed": payload})
     try:
         _open(page, "Packed")
         page.wait_for_function("""normalRole => {
@@ -3613,7 +3543,8 @@ def test_texture_save_awaits_in_place_native_dds_reload(
     first_dds[148] = 0x11
     requests = []
     context, page = _page(
-        edge_browser, frontend_url, {"BakeNativeReload": payload})
+        edge_browser, frontend_url, {"BakeNativeReload": payload},
+        api_features={"texture"})
     try:
         supported = page.evaluate("""
           async () => {
@@ -4426,14 +4357,16 @@ def _skinning_material_transition_payload():
     payload["meshSemantics"] = {mesh_name: initial_semantic}
     payload["metadata"]["material_profiles"]["wuwa:rabbitfx:body"] = \
         material_profile_for("wuwa", "rabbitfx", "body").to_metadata()
-    return payload, mesh_name, explicit_semantic
+    return payload, mesh_name, initial_semantic, explicit_semantic
 
 
 def test_material_hot_swap_updates_loaded_skinning_baseline(
         edge_browser, frontend_url):
-    payload, mesh_name, explicit_semantic = \
+    payload, mesh_name, automatic_semantic, explicit_semantic = \
         _skinning_material_transition_payload()
-    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
+    context, page = _page(
+        edge_browser, frontend_url, {"Packed": payload},
+        load_weight_runtime=True)
     try:
         _open(page, "Packed")
         page.wait_for_function(
@@ -4443,7 +4376,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
             [data.mesh]: data.semantic,
           };
         }""", {"mesh": mesh_name, "semantic": explicit_semantic})
-        result = page.evaluate("""async () => {
+        result = page.evaluate("""async data => {
           const mesh = window.modViewer.activeMeshes[0];
           const bytes = new Uint8Array(48);
           new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
@@ -4474,10 +4407,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
           const refreshed = await window.modViewer.refreshMeshSemantics();
           const afterSwap = getSkinningState(mesh);
           const newMaterial = afterSwap.originalMaterial;
-          setControlValue('shape', '1');
-          refreshMeshes();
-          URL.revokeObjectURL(url);
-          return {
+          const baseline = {
             refreshed,
             oldMaterialDisposals,
             newProfile: newMaterial.userData.gameMaterial.profile.id,
@@ -4486,72 +4416,27 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
             activeMaterialIsNew: mesh.material === newMaterial,
             activeProfile: mesh.material.userData.gameMaterial.profile.id,
           };
-        }""")
-        assert result == {
-            "refreshed": True,
-            "oldMaterialDisposals": 1,
-            "newProfile": "wuwa:rabbitfx:body",
-            "originalTracksNew": True,
-            "stateDisposed": False,
-            "activeMaterialIsNew": True,
-            "activeProfile": "wuwa:rabbitfx:body",
-        }
-    finally:
-        context.close()
+          setControlValue('shape', '1');
+          refreshMeshes();
 
-
-def test_material_hot_swap_preserves_active_skinning_heatmap(
-        edge_browser, frontend_url):
-    payload, mesh_name, explicit_semantic = \
-        _skinning_material_transition_payload()
-    context, page = _page(edge_browser, frontend_url, {"Packed": payload})
-    try:
-        _open(page, "Packed")
-        page.wait_for_function(
-            "window.modViewer.activeMeshes[0]?.material?.userData?.gameMaterial")
-        page.evaluate("""data => {
-          window.__fakeApi.responses.Packed.meshSemantics = {
-            [data.mesh]: data.semantic,
-          };
-        }""", {"mesh": mesh_name, "semantic": explicit_semantic})
-        result = page.evaluate("""async () => {
-          const mesh = window.modViewer.activeMeshes[0];
-          const bytes = new Uint8Array(48);
-          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
-          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
-          const url = URL.createObjectURL(new Blob([bytes]));
-          window.__testSkinningPreview = async () => ({
-            status: 'ok', vertex_count: 3, influence_count: 2,
-            bone_ids: [0, 1, 2], encoding: 'test', source: {
-              key: 'test/bodyblend.buf|offset=0', file: 'Test/BodyBlend.buf',
-              bone_id_offset: 0,
-            },
-            data: {
-              url, length: 48,
-              indices: {offset: 0, length: 24, type: 'u32'},
-              weights: {offset: 24, length: 24, type: 'f32'},
-            }, diagnostics: {},
-          });
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
-          const {setSelectedBones} = await import('./js/mesh/weight-model-session.js');
-          await experiment.ensureModelRigLoaded();
+          const {setSelectedBones} =
+            await import('./js/mesh/weight-model-session.js');
           setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],
           }]);
-          const oldMaterial = mesh.material;
-          let oldMaterialDisposals = 0;
-          oldMaterial.addEventListener('dispose',
-            () => oldMaterialDisposals += 1);
           experiment.setModelWeightHeatmap(true);
           const heatmapMaterial = mesh.material;
           let heatmapDisposals = 0;
           heatmapMaterial.addEventListener('dispose',
             () => heatmapDisposals += 1);
-          const refreshed = await window.modViewer.refreshMeshSemantics();
-          const afterSwap = getSkinningState(mesh);
-          const newMaterial = afterSwap.originalMaterial;
+          window.__fakeApi.responses.Packed.meshSemantics = {
+            [data.mesh]: data.automatic,
+          };
+          const heatmapRefreshed =
+            await window.modViewer.refreshMeshSemantics();
+          const heatmapState = getSkinningState(mesh);
+          const heatmapOriginal = heatmapState.originalMaterial;
           const displayedAfterSwap = mesh.material === heatmapMaterial;
           experiment.setBoneSelected('test/bodyblend.buf|offset=0', 1, true);
           const selectedBoneKeepsHeatmap =
@@ -4560,32 +4445,43 @@ def test_material_hot_swap_preserves_active_skinning_heatmap(
           const disabled = experiment.setModelWeightHeatmap(false);
           URL.revokeObjectURL(url);
           return {
-            refreshed,
-            oldMaterialDisposals,
+            baseline,
+            heatmapRefreshed,
             heatmapDisposals,
             displayedAfterSwap,
             selectedBoneKeepsHeatmap,
-            originalTracksNew: afterSwap.originalMaterial === newMaterial,
-            newProfile: newMaterial.userData.gameMaterial.profile.id,
+            originalTracksNew: heatmapState.originalMaterial === heatmapOriginal,
+            newProfile: heatmapOriginal.userData.gameMaterial.profile.id,
             disabled,
-            restoredAfterDisable: mesh.material === newMaterial,
-            heatmapCleared: afterSwap.debugMaterial === null
-              && afterSwap.heatmapMode === null,
+            restoredAfterDisable: mesh.material === heatmapOriginal,
+            heatmapCleared: heatmapState.debugMaterial === null
+              && heatmapState.heatmapMode === null,
             activeProfile: mesh.material.userData.gameMaterial.profile.id,
           };
-        }""")
+        }""", {
+            "mesh": mesh_name,
+            "automatic": automatic_semantic,
+        })
         assert result == {
-            "refreshed": True,
-            "oldMaterialDisposals": 1,
+            "baseline": {
+                "refreshed": True,
+                "oldMaterialDisposals": 1,
+                "newProfile": "wuwa:rabbitfx:body",
+                "originalTracksNew": True,
+                "stateDisposed": False,
+                "activeMaterialIsNew": True,
+                "activeProfile": "wuwa:rabbitfx:body",
+            },
+            "heatmapRefreshed": True,
             "heatmapDisposals": 1,
             "displayedAfterSwap": True,
             "selectedBoneKeepsHeatmap": True,
             "originalTracksNew": True,
-            "newProfile": "wuwa:rabbitfx:body",
+            "newProfile": "wuwa:rabbitfx",
             "disabled": False,
             "restoredAfterDisable": True,
             "heatmapCleared": True,
-            "activeProfile": "wuwa:rabbitfx:body",
+            "activeProfile": "wuwa:rabbitfx",
         }
     finally:
         context.close()
@@ -5748,53 +5644,6 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
     finally:
         context.close()
 
-def test_texture_rows_are_reused_for_control_changes_and_rebuilt_for_pool_changes(
-        edge_browser, frontend_url):
-    pick = {
-        "tex_key": "diffuse::added.png", "file": "added.png", "uri":
-        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLkWQAAAABJRU5ErkJggg==",
-    }
-    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")}, picks=[pick])
-    try:
-        _open(page, "A")
-        page.locator(".draw-item").wait_for()
-        page.locator("#inspector-tab").click()
-        page.locator(".group-hdr .group-name").first.click()
-        page.locator(".draw-item").first.click()
-        page.evaluate("""() => {
-          window.__meshStateEvents = 0;
-          window.addEventListener('mod-viewer-mesh-state-changed', () => {
-            window.__meshStateEvents += 1;
-          });
-        }""")
-        page.locator(".inspector-texture-option", has_text="A two").click()
-        assert page.evaluate("window.__meshStateEvents") == 1
-        assert page.evaluate(
-            "window.modViewer.activeMeshes[0].userData.manualTexOverride"
-            " === 'diffuse::A-two.png'")
-        page.evaluate("window.__textureRows = [...document.querySelectorAll('.inspector-texture-option')]")
-
-        page.locator("#controls-tab").click()
-        page.locator("#toggle-list .toggle-cycle-btn").click()
-        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.inspector-texture-option')[i])")
-        page.locator("#menu-list .toggle-cycle-btn").click()
-        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.inspector-texture-option')[i])")
-        page.locator("#menu-list .menu-slider").evaluate(
-            "input => { input.value = '0.5'; input.dispatchEvent(new Event('input', {bubbles: true})); }")
-        assert page.evaluate("window.__textureRows.every((row, i) => row === document.querySelectorAll('.inspector-texture-option')[i])")
-
-        page.locator("#inspector-tab").click()
-        page.locator(".inspector-manage-textures").click()
-        page.locator("#texm-add").click()
-        page.wait_for_function("document.querySelectorAll('.inspector-texture-option').length === 5")
-        assert not page.evaluate("window.__textureRows[0] === document.querySelector('.inspector-texture-option')")
-        page.evaluate("window.__textureRows = [...document.querySelectorAll('.inspector-texture-option')]")
-        page.locator(".texm-row .toggle-icon-btn").last.click()
-        page.wait_for_function("document.querySelectorAll('.inspector-texture-option').length === 4")
-        assert not page.evaluate("window.__textureRows[0] === document.querySelector('.inspector-texture-option')")
-    finally:
-        context.close()
-
 def test_authored_normals_survive_render_modes_and_neutral_shape(
         edge_browser, frontend_url):
     payload = _payload("Normals")
@@ -5851,39 +5700,6 @@ def test_authored_normals_survive_render_modes_and_neutral_shape(
         restored = page.evaluate(
             "() => [...window.modViewer.activeMeshes[0].geometry.attributes.normal.array]")
         assert restored == initial["normals"]
-    finally:
-        context.close()
-
-def test_glossy_tool_applies_to_all_mesh_materials(
-        edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
-    try:
-        _open(page, "A")
-        page.locator(".draw-item").wait_for()
-        assert page.locator("#glossy-btn").get_attribute("class") == "tool-btn off"
-        assert page.locator("#glossy-btn").get_attribute("aria-pressed") == "false"
-        before = page.evaluate("""
-          () => window.modViewer.activeMeshes.map(mesh => mesh.material.roughness)
-        """)
-        assert before == [1]
-
-        page.locator("#glossy-btn").click()
-        glossy = page.evaluate("""
-          () => window.modViewer.activeMeshes.map(mesh => mesh.material.roughness)
-        """)
-        assert glossy == [0.2]
-        assert page.locator("#glossy-btn").get_attribute("aria-label") == (
-            "Glossy materials: on")
-        assert "off" not in (page.locator("#glossy-btn").get_attribute("class") or "")
-        assert page.locator("#glossy-btn").get_attribute("aria-pressed") == "true"
-
-        page.locator("#glossy-btn").click()
-        restored = page.evaluate("""
-          () => window.modViewer.activeMeshes.map(mesh => mesh.material.roughness)
-        """)
-        assert restored == [1]
-        assert "off" in (page.locator("#glossy-btn").get_attribute("class") or "")
-        assert page.locator("#glossy-btn").get_attribute("aria-pressed") == "false"
     finally:
         context.close()
 
@@ -6257,66 +6073,6 @@ def test_outline_width_is_perspective_correct_and_material_stable(
         context.close()
 
 
-def test_wuwa_models_start_with_a_180_degree_base_turn(
-        edge_browser, frontend_url):
-    payload = _payload("WuWa")
-    payload["metadata"]["game"] = {
-        "id": "wuwa", "runtime": "wwmi", "texture_api": "raw",
-        "confidence": "high",
-    }
-    context, page = _page(edge_browser, frontend_url, {"WuWa": payload})
-    try:
-        _open(page, "WuWa")
-        page.locator(".draw-item").wait_for()
-
-        initial = page.evaluate("""() => ({
-          position: window.modViewer.activeMeshes[0].position.toArray(),
-          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
-        })""")
-        assert initial["quaternion"] == pytest.approx(
-            [0, 2 ** -0.5, 2 ** -0.5, 0])
-
-        page.locator("#camera-reset-view-btn").click()
-        reset = page.evaluate("""() => ({
-          position: window.modViewer.activeMeshes[0].position.toArray(),
-          quaternion: window.modViewer.activeMeshes[0].quaternion.toArray(),
-        })""")
-        assert reset["position"] == pytest.approx(initial["position"])
-        assert reset["quaternion"] == pytest.approx(initial["quaternion"])
-
-        reloaded = page.evaluate("""async () => {
-          await window.modViewer.reloadCurrentMod();
-          return window.modViewer.activeMeshes[0].quaternion.toArray();
-        }""")
-        assert reloaded == pytest.approx(
-            [0, 2 ** -0.5, 2 ** -0.5, 0])
-    finally:
-        context.close()
-
-def test_conditional_only_texture_survives_component_run_reconciliation(
-        edge_browser, frontend_url):
-    payload = _payload("ConditionalOnly")
-    entry = payload["meshes"]["Body-ConditionalOnly-0"]
-    entry["tex_key"] = None
-    entry["texture_variants"] = [{
-        "conditions": [[{
-            "var": "menu", "value": "0", "negate": False,
-        }]],
-        "tex_key": "diffuse::ConditionalOnly-two.png",
-    }]
-    context, page = _page(
-        edge_browser, frontend_url, {"ConditionalOnly": payload})
-    try:
-        _open(page, "ConditionalOnly")
-        page.locator(".draw-item").wait_for()
-        assert page.evaluate("window.modViewer.activeMeshes[0].userData.resolvedTexKey") == \
-            "diffuse::ConditionalOnly-two.png"
-        assert page.evaluate("window.modViewer.activeMeshes[0].userData.texKey") == \
-            "diffuse::ConditionalOnly-two.png"
-    finally:
-        context.close()
-
-
 def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"Shadow": _payload("Shadow")})
@@ -6371,40 +6127,6 @@ def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         assert after["debug"]["fitCount"] > updated["fitCount"]
         assert after["debug"]["shadowUpdateCount"] > updated["shadowUpdateCount"]
         assert after["groundY"] == pytest.approx(initial["ground"][0]["y"])
-    finally:
-        context.close()
-
-
-def test_wireframe_toggles_rim_uniform_without_rebuilding_material(
-        edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {"Rim": _payload("Rim")})
-    try:
-        _open(page, "Rim")
-        page.locator(".draw-item").wait_for()
-        initial = page.evaluate("""() => {
-          const material = window.modViewer.activeMeshes[0].material;
-          window.__rimMaterial = material;
-          const state = material.userData.gameMaterial;
-          return {
-            version: material.version,
-            enabled: state.rimEnabledNode.value,
-            strength: state.rimStrengthNode.value,
-            power: state.rimPowerNode.value,
-          };
-        }""")
-        assert initial["enabled"] is True
-        assert initial["strength"] > 0
-        assert initial["power"] > 0
-        page.locator("#wire-btn").click()
-        disabled = page.evaluate("""() => {
-          const material = window.modViewer.activeMeshes[0].material;
-          return {same: material === window.__rimMaterial, version: material.version,
-            enabled: material.userData.gameMaterial.rimEnabledNode.value};
-        }""")
-        assert disabled == {"same": True, "version": initial["version"], "enabled": False}
-        page.locator("#wire-btn").click()
-        assert page.evaluate(
-            "window.modViewer.activeMeshes[0].material.userData.gameMaterial.rimEnabledNode.value")
     finally:
         context.close()
 
