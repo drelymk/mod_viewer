@@ -1,5 +1,124 @@
-from .support import *
-from PIL import ImageChops
+import base64
+import copy
+import io
+import math
+import struct
+import zlib
+
+import pytest
+from PIL import Image, ImageChops
+
+from app.runtime import server
+from core.materials.profiles import material_profile_for
+from .support import (
+    _open, _page, _sample_mesh_pixel, _sample_mesh_pixel_at,
+    _sample_mesh_pixels_at,
+)
+from .payloads import _PNG_URI, _f32, _payload, _u32
+
+
+def _flat_png_uri(rgba, size=4):
+    """Build a real multi-pixel PNG so WebGPU texture mip sampling is tested."""
+    raw = b"".join(b"\x00" + bytes(rgba) * size for _ in range(size))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _banded_png_uri(rgba_columns, height=4):
+    """Build a nearest-column diagnostic texture for per-pixel debug tests."""
+    width = len(rgba_columns)
+    raw_row = b"".join(bytes(rgba) for rgba in rgba_columns)
+    raw = b"".join(b"\x00" + raw_row for _ in range(height))
+
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw))
+           + chunk(b"IEND", b""))
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def _bc7_dds_bytes(width=8, height=4, mip_count=2):
+    data = bytearray(148)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, height, width)
+    struct.pack_into("<I", data, 28, mip_count)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
+    struct.pack_into("<IIIII", data, 128, 98, 3, 0, 1, 0)
+    w, h = width, height
+    for level in range(mip_count):
+        data.extend(bytes([level + 1]) * (((w + 3) // 4) * ((h + 3) // 4) * 16))
+        w, h = max(1, w // 2), max(1, h // 2)
+    return bytes(data)
+
+
+def _dxt1_vertical_gradient():
+    """One DXT1 block with red top rows and blue bottom rows."""
+    data = bytearray(136)
+    data[:4] = b"DDS "
+    struct.pack_into("<I", data, 4, 124)
+    struct.pack_into("<II", data, 12, 4, 4)
+    struct.pack_into("<I", data, 76, 32)
+    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DXT1", "little"))
+    struct.pack_into("<HHI", data, 128, 0xF800, 0x001F, 0x55550000)
+    return bytes(data)
+
+
+def _parity_payload(uri):
+    payload = _payload("Parity")
+    entry = payload["meshes"]["Body-Parity-0"]
+    entry["drawindexed"] = [6, 0, 0]
+    entry["pos"] = _f32(-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0)
+    # Exercise the sampler outside the nominal range so DDS and PNG transport
+    # must agree on their default clamp-to-edge wrapping.
+    entry["uv"] = _f32(-0.25, -0.25, 1.25, -0.25,
+                       1.25, 1.25, -0.25, 1.25)
+    entry["idx"] = _u32(0, 1, 2, 0, 2, 3)
+    payload["textures"] = {"diffuse::Parity-one.png": uri}
+    return payload
+
+
+def _packed_material_payload(profile_id="zzz:zzmi"):
+    payload = _payload("Packed")
+    entry = payload["meshes"]["Body-Packed-0"]
+    entry["uv"] = _f32(0, 0, 1, 0, 0, 1)
+    entry["light_map_key"] = "light_map::Packed-light.png"
+    entry["material_map_key"] = "material_map::Packed-material.png"
+    entry["normal_data_key"] = "normal_data::Packed-normal.png"
+    payload["textures"] = {
+        "diffuse::Packed-one.png": _PNG_URI,
+        "light_map::Packed-light.png": _PNG_URI,
+        "material_map::Packed-material.png": _PNG_URI,
+        "normal_data::Packed-normal.png": _PNG_URI,
+    }
+    profile_args = {
+        "zzz:zzmi": ("zzz", "zzmi"),
+        "genshin:gimi": ("genshin", "gimi"),
+        "wuwa:rabbitfx": ("wuwa", "rabbitfx"),
+        "wuwa:rabbitfx:body": ("wuwa", "rabbitfx", "body"),
+        "wuwa:raw": ("wuwa", "raw"),
+    }
+    profile = (material_profile_for(*profile_args[profile_id]).to_metadata()
+               if profile_id in profile_args
+               else material_profile_for("unknown", "unknown").to_metadata())
+    entry["material_kind"] = "body"
+    entry["material_kind_reliable"] = False
+    entry["material_profile_id"] = profile["id"]
+    payload["metadata"]["material_profiles"] = {profile["id"]: profile}
+    return payload
 
 def _set_ao_level(page, level):
     before = page.evaluate("""async () => {

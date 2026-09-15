@@ -1,4 +1,7 @@
-from .support import *
+import pytest
+
+from .support import _open, _page
+from .payloads import _f32, _payload
 
 def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         edge_browser, frontend_url):

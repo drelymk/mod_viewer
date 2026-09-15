@@ -2,7 +2,11 @@ import base64
 import copy
 import json
 
-from .support import *
+from app.settings import paths
+from .support import _open, _open_library, _page
+from .payloads import (
+    _MOD_LIBRARY, _PNG_URI, _f32, _payload, _source_payload,
+)
 
 def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
