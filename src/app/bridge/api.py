@@ -63,11 +63,11 @@ class ModViewerAPI:
             return None
         return self._access.remember_mod_picker_selection(result[0])
 
-    def select_zip_mod(self):
-        """Open a native ZIP-file picker and authorize its exact selection."""
+    def select_archive_mod(self):
+        """Open a native archive picker and authorize its exact selection."""
         result = self._window.create_file_dialog(
             webview.FileDialog.OPEN,
-            file_types=("ZIP mods (*.zip)",))
+            file_types=("Compressed mods (*.zip;*.7z;*.rar)",))
         if not result:
             return None
         return self._access.remember_mod_picker_selection(result[0])

@@ -224,7 +224,7 @@ export async function displayMeshPayload(payload, {
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,
-      // Asset Preview has no editing session at all. A ZIP mod is read-only
+      // Asset Preview has no editing session at all. An archive mod is read-only
       // only at the persistence boundary; viewer controls can still stage
       // session-local state while Export remains disabled.
       readOnlySource: assetMode,
@@ -446,9 +446,9 @@ export async function openMod(handlers = {}) {
     () => window.pywebview.api.select_folder(), handlers);
 }
 
-export async function openZipMod(handlers = {}) {
+export async function openArchiveMod(handlers = {}) {
   return await openModFromPicker(
-    () => window.pywebview.api.select_zip_mod(), handlers);
+    () => window.pywebview.api.select_archive_mod(), handlers);
 }
 
 // Re-render the current authoritative edit session after a staged authoring

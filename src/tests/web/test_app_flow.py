@@ -1,11 +1,11 @@
 from .support import *
 
 
-def test_open_mod_source_menu_uses_shared_load_flow_for_folder_and_zip(
+def test_open_mod_source_menu_uses_shared_load_flow_for_folder_and_archive(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url,
-        {"Folder": _payload("Folder"), "Archive.zip": _payload("Archive")})
+        {"Folder": _payload("Folder"), "Archive.7z": _payload("Archive")})
     try:
         page.evaluate("window.__fakeApi.nextPath = 'Folder'")
         page.locator("#open-menu-btn").click()
@@ -13,20 +13,20 @@ def test_open_mod_source_menu_uses_shared_load_flow_for_folder_and_zip(
         page.wait_for_function(
             "window.__fakeApi.calls.loadMod.length === 1")
         assert page.evaluate("window.__fakeApi.calls.selectFolder") == ["Folder"]
-        assert page.evaluate("window.__fakeApi.calls.selectZipMod") == []
+        assert page.evaluate("window.__fakeApi.calls.selectArchiveMod") == []
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Folder"]
 
-        page.evaluate("window.__fakeApi.nextPath = 'Archive.zip'")
+        page.evaluate("window.__fakeApi.nextPath = 'Archive.7z'")
         page.locator("#open-menu-btn").click()
-        page.locator("#open-zip-choice").click()
+        page.locator("#open-archive-choice").click()
         page.wait_for_function(
             "window.__fakeApi.calls.loadMod.length === 2")
-        assert page.evaluate("window.__fakeApi.calls.selectZipMod") == [
-            "Archive.zip"]
+        assert page.evaluate("window.__fakeApi.calls.selectArchiveMod") == [
+            "Archive.7z"]
         assert page.evaluate("window.__fakeApi.calls.loadMod") == [
-            "Folder", "Archive.zip"]
+            "Folder", "Archive.7z"]
         assert page.evaluate("window.modViewer.getCurrentSource().path") == (
-            "Archive.zip")
+            "Archive.7z")
     finally:
         context.close()
 

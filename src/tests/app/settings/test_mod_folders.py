@@ -134,12 +134,14 @@ def test_list_subfolders_is_immediate_sorted_and_non_recursive(tmp_path):
     open(tmp_path / "root" / "file.txt", "w", encoding="utf-8").close()
     with zipfile.ZipFile(tmp_path / "root" / "packed.zip", "w") as archive:
         archive.writestr("mod.ini", "[TextureOverrideBody]\n")
+    (tmp_path / "root" / "packed.7z").write_bytes(b"7z")
+    (tmp_path / "root" / "packed.rar").write_bytes(b"rar")
     mod_folders.add_folder("Root", root, filename)
 
     result = mod_folders.list_subfolders(root, root)
 
     assert [item["name"] for item in result] == [
-        "Alpha", "packed.zip", "zeta"]
+        "Alpha", "packed.7z", "packed.rar", "packed.zip", "zeta"]
     archive = next(item for item in result if item["name"] == "packed.zip")
     assert archive["kind"] == "archive"
     assert archive["expandable"] is False

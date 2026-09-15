@@ -48,7 +48,7 @@ import {
   displayMeshPayload as displayMeshPayloadFlow,
   exportChanges as exportChangesFlow,
   openMod as openModFlow,
-  openZipMod as openZipModFlow,
+  openArchiveMod as openArchiveModFlow,
   refreshPendingState,
   reloadCurrentMod as reloadCurrentModFlow,
   switchAsset as switchAssetFlow,
@@ -138,8 +138,8 @@ function openMod() {
   return openModFlow(modelHandlers());
 }
 
-function openZipMod() {
-  return openZipModFlow(modelHandlers());
+function openArchiveMod() {
+  return openArchiveModFlow(modelHandlers());
 }
 
 function initOpenModMenu() {
@@ -165,7 +165,7 @@ function initOpenModMenu() {
     const choice = event.target.closest('[data-open-source]');
     if (!choice) return;
     close();
-    if (choice.dataset.openSource === 'zip') void openZipMod();
+    if (choice.dataset.openSource === 'archive') void openArchiveMod();
     else void openMod();
   });
   document.addEventListener('click', event => {

@@ -20,7 +20,8 @@ from app.runtime import server as server
 from app.bridge.api import ModViewerAPI
 from core.ini.document import IniDocument
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
-from core.mod_source import ZipModSource
+from core.mod_source import SevenZipModSource, ZipModSource
+from core.sevenzip import SevenZipEntry
 from core.textures import (encode_texture_data_uri, render_texture_png,
                            set_texture_profile_hook)
 
@@ -442,6 +443,100 @@ def test_zip_transformed_dds_stays_lazy_until_png_render(tmp_path):
             assert server._render_texture_request(
                 publication.token, "0", entry) == b"PNG"
         assert full_reads == [member]
+    finally:
+        publication.discard()
+
+
+def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
+        tmp_path):
+    dds = tmp_path / "native.dds"
+    _write_bc7_dds(dds)
+    dds_bytes = dds.read_bytes()
+    archive_path = tmp_path / "mod.7z"
+    archive_path.write_bytes(b"mock archive")
+
+    class Client:
+        def __init__(self):
+            self.prefix_reads = []
+            self.full_reads = []
+
+        def list_members(self, _path):
+            return [SevenZipEntry("Wrapper/native.dds", len(dds_bytes))]
+
+        def read_prefix(self, _path, name, length):
+            self.prefix_reads.append((name, length))
+            return dds_bytes[:length]
+
+        def read_member(self, _path, name):
+            self.full_reads.append(name)
+            return dds_bytes
+
+    client = Client()
+    source = SevenZipModSource(archive_path, client=client)
+    publication = server.begin_texture_publication(
+        str(archive_path), source=source)
+    httpd = None
+    try:
+        member = source.resolve_resource("native.dds")
+        url = publication.register(member)
+        assert url.endswith(".dds")
+        assert client.prefix_reads == [("Wrapper/native.dds", 148)]
+        assert client.full_reads == []
+
+        publication.commit()
+        handler = functools.partial(server._Handler, directory=str(tmp_path))
+        httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+        with urlopen(base_url + url) as response:
+            assert response.headers["Content-Type"] == "image/vnd-ms.dds"
+            assert response.read() == dds_bytes
+        assert client.full_reads == ["Wrapper/native.dds"]
+    finally:
+        if httpd is not None:
+            httpd.shutdown()
+            httpd.server_close()
+        publication.discard()
+
+
+def test_sevenzip_transformed_dds_stays_lazy_until_png_render(tmp_path):
+    dds = tmp_path / "normal.dds"
+    _write_bc7_dds(dds)
+    dds_bytes = dds.read_bytes()
+    archive_path = tmp_path / "mod.rar"
+    archive_path.write_bytes(b"mock archive")
+
+    class Client:
+        def __init__(self):
+            self.full_reads = []
+
+        def list_members(self, _path):
+            return [SevenZipEntry("Wrapper/normal.dds", len(dds_bytes))]
+
+        def read_prefix(self, _path, _name, _length):
+            raise AssertionError("transformed DDS must not inspect its header")
+
+        def read_member(self, _path, name):
+            self.full_reads.append(name)
+            return dds_bytes
+
+    client = Client()
+    source = SevenZipModSource(archive_path, client=client)
+    publication = server.begin_texture_publication(
+        str(archive_path), source=source)
+    try:
+        member = source.resolve_resource("normal.dds")
+        url = publication.register(
+            member, transform="normal_xy_reconstruct")
+        entry = server._lookup_texture(publication.token, "0")
+
+        assert url.endswith(".png")
+        assert client.full_reads == []
+        with patch("app.runtime.server.render_texture_png", return_value=b"PNG"):
+            assert server._render_texture_request(
+                publication.token, "0", entry) == b"PNG"
+        assert client.full_reads == ["Wrapper/normal.dds"]
     finally:
         publication.discard()
 

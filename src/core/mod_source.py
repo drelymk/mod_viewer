@@ -1,12 +1,13 @@
 """Lazy sources for files owned by the currently opened mod.
 
-The model pipeline deals in source-relative resource names.  This module is
-the narrow boundary that maps those names to either ordinary files or ZIP
-members; callers do not need an archive-specific loading path.
+The model pipeline deals in source-relative resource names. This module is
+the narrow boundary that maps those names to either ordinary files or virtual
+archive members; callers do not need an archive-specific loading path.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import ntpath
 import os
 import posixpath
@@ -14,11 +15,24 @@ import threading
 import zipfile
 
 from .resource_paths import safe_resource_path
+from .sevenzip import SevenZipCLI, SevenZipError
 
 
-_MAX_ZIP_MEMBERS = 100_000
-_MAX_ZIP_MEMBER_BYTES = 512 * 1024 * 1024
-_MAX_ZIP_READ_BYTES = 2 * 1024 * 1024 * 1024
+ARCHIVE_EXTENSIONS = {
+    ".zip": "zip",
+    ".7z": "7z",
+    ".rar": "rar",
+}
+_ARCHIVE_LABELS = {"zip": "ZIP", "7z": "7z", "rar": "RAR"}
+_MAX_ARCHIVE_MEMBERS = 100_000
+_MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
+_MAX_ARCHIVE_READ_BYTES = 2 * 1024 * 1024 * 1024
+
+# Keep the old names available for tests and compatibility with existing ZIP
+# limit tuning.
+_MAX_ZIP_MEMBERS = _MAX_ARCHIVE_MEMBERS
+_MAX_ZIP_MEMBER_BYTES = _MAX_ARCHIVE_MEMBER_BYTES
+_MAX_ZIP_READ_BYTES = _MAX_ARCHIVE_READ_BYTES
 
 
 class ModSourceError(ValueError):
@@ -26,7 +40,7 @@ class ModSourceError(ValueError):
 
 
 class ModSource:
-    """Minimal source contract shared by directory and ZIP-backed mods."""
+    """Minimal source contract shared by directory and archive-backed mods."""
 
     kind = None
     source_path = None
@@ -50,7 +64,7 @@ class ModSource:
 
 
 class SourcePath(str):
-    """A string-compatible source reference with its logical ZIP identity."""
+    """A string-compatible source reference with its logical identity."""
 
     __slots__ = ("source", "logical_path", "member_name")
 
@@ -62,11 +76,17 @@ class SourcePath(str):
         return result
 
 
-def is_zip_path(path):
+def archive_kind_for_path(path):
+    """Return the supported archive kind for a path, or ``None``."""
     try:
-        return os.fspath(path).casefold().endswith(".zip")
+        value = os.fsdecode(os.fspath(path))
     except (TypeError, ValueError):
-        return False
+        return None
+    return ARCHIVE_EXTENSIONS.get(os.path.splitext(value)[1].casefold())
+
+
+def is_archive_path(path):
+    return archive_kind_for_path(path) is not None
 
 
 def _as_path(value):
@@ -107,6 +127,15 @@ def _normalized_relative(value, *, allow_parent=False):
     if result == ".." and not allow_parent:
         return None
     return result
+
+
+@dataclass(frozen=True)
+class _ArchiveMember:
+    raw_name: str
+    size: int
+    encrypted: bool = False
+    is_dir: bool = False
+    backend_data: object = None
 
 
 class DirectoryModSource(ModSource):
@@ -188,72 +217,63 @@ class DirectoryModSource(ModSource):
             return False
 
 
-class ZipModSource(ModSource):
-    kind = "zip"
+class _VirtualArchiveModSource(ModSource):
+    """Shared logical path and safety behavior for virtual archives."""
+
     virtual = True
     read_only = True
 
-    def __init__(self, source_path):
-        path = _as_path(source_path)
-        if not path:
-            raise ModSourceError("ZIP source path is required.")
-        if not path.casefold().endswith(".zip"):
-            raise ModSourceError("Only .zip mod sources are supported.")
-        self.source_path = os.path.abspath(path)
-        if not os.path.isfile(self.source_path):
-            raise ModSourceError("ZIP mod source does not exist.")
-        try:
-            with zipfile.ZipFile(self.source_path) as archive:
-                infos = archive.infolist()
-        except (OSError, zipfile.BadZipFile, RuntimeError) as error:
-            raise ModSourceError(f"Could not read ZIP mod source: {error}") from error
-        if len(infos) > _MAX_ZIP_MEMBERS:
+    def __init__(self, source_path, members, *, kind, member_count=None):
+        self.source_path = os.path.abspath(source_path)
+        self.kind = kind
+        self._archive_label = _ARCHIVE_LABELS.get(kind, kind)
+        members = list(members)
+        count = len(members) if member_count is None else int(member_count)
+        if count > self._max_members():
             raise ModSourceError(
-                f"ZIP contains too many members (limit {_MAX_ZIP_MEMBERS:,}).")
+                f"{self._archive_label} contains too many members "
+                f"(limit {self._max_members():,}).")
 
         normalized = []
         seen = set()
         seen_folded = set()
-        for info in infos:
-            name = self._normalize_member_name(info.filename)
+        for entry in members:
+            name = self._normalize_member_name(entry.raw_name)
             if name is None:
                 raise ModSourceError(
-                    f"ZIP contains an unsafe member name: {info.filename!r}.")
-            if not name:
-                continue
-            if info.is_dir() or info.filename.replace("\\", "/").endswith("/"):
+                    f"{self._archive_label} contains an unsafe member name: "
+                    f"{entry.raw_name!r}.")
+            if not name or entry.is_dir:
                 continue
             if name in seen:
-                raise ModSourceError(f"ZIP contains duplicate member: {name}.")
+                raise ModSourceError(
+                    f"{self._archive_label} contains duplicate member: {name}.")
             if name.casefold() in seen_folded:
                 raise ModSourceError(
-                    f"ZIP contains case-ambiguous members: {name}.")
+                    f"{self._archive_label} contains case-ambiguous members: "
+                    f"{name}.")
             seen.add(name)
             seen_folded.add(name.casefold())
-            normalized.append((name, info))
+            normalized.append((name, entry))
 
-        top_levels = {name.split("/", 1)[0] for name, _info in normalized}
+        top_levels = {name.split("/", 1)[0] for name, _entry in normalized}
         wrapper = ""
         if len(top_levels) == 1:
             candidate = next(iter(top_levels))
-            if all(name.startswith(candidate + "/") for name, _info in normalized):
+            if all(name.startswith(candidate + "/")
+                   for name, _entry in normalized):
                 wrapper = candidate
         self.wrapper_root = wrapper
         self._members = {}
         self._folded = {}
-        for full_name, info in normalized:
+        for full_name, entry in normalized:
             logical = full_name
             if wrapper:
                 logical = full_name[len(wrapper) + 1:]
             if not logical:
                 continue
-            # Keep the archive spelling for ZipFile.open(); the normalized
-            # name is only the virtual/logical identity exposed to callers.
-            self._members[logical] = (info.filename, info)
+            self._members[logical] = entry
             self._folded.setdefault(logical.casefold(), []).append(logical)
-        # Count each archive member only once.  The same source is reused by
-        # staged editing and reloads, so charging repeated reads against a
-        # lifetime budget would eventually reject an otherwise safe reload.
         self._requested_members = set()
         self._requested_bytes = 0
         self._read_lock = threading.RLock()
@@ -291,8 +311,6 @@ class ZipModSource(ModSource):
         logical = self._logical_name(reference)
         if logical is None:
             return None
-        # A resource reference may contain one parent segment when a wrapper
-        # directory was detected. It must still land inside the ZIP.
         if logical.startswith("../") or logical == "..":
             if not self.wrapper_root:
                 return None
@@ -317,11 +335,12 @@ class ZipModSource(ModSource):
         logical = _normalized_relative(logical_path)
         lookup = self._lookup(logical) if logical else None
         if lookup is None:
-            raise ModSourceError(f"ZIP member is not a file: {logical_path!r}")
-        resolved_logical, (member, _info) = lookup
+            raise ModSourceError(
+                f"{self._archive_label} member is not a file: {logical_path!r}")
+        resolved_logical, entry = lookup
         return SourcePath(
             f"{self.source_path}::{resolved_logical}", self,
-            resolved_logical, member)
+            resolved_logical, entry.raw_name)
 
     def logical_path(self, reference):
         value = self._logical_name(reference)
@@ -336,13 +355,12 @@ class ZipModSource(ModSource):
             return None
         lookup = self._lookup(logical)
         if lookup is None:
-            # Resolution is also used for existence checks; an absent member
-            # remains a valid, source-contained reference.
             if logical.startswith("../") and not self.wrapper_root:
                 return None
             return SourcePath(logical, self, logical, None)
-        resolved_logical, (member, _info) = lookup
-        return SourcePath(resolved_logical, self, resolved_logical, member)
+        resolved_logical, entry = lookup
+        return SourcePath(
+            resolved_logical, self, resolved_logical, entry.raw_name)
 
     def exists(self, reference):
         return self.is_file(reference)
@@ -350,39 +368,60 @@ class ZipModSource(ModSource):
     def is_file(self, reference):
         return self._lookup(reference) is not None
 
+    def _member_size(self, entry):
+        try:
+            size = int(entry.size)
+        except (TypeError, ValueError) as error:
+            raise ModSourceError(
+                f"{self._archive_label} member {entry.raw_name!r} has an "
+                "invalid size.") from error
+        if size < 0:
+            raise ModSourceError(
+                f"{self._archive_label} member {entry.raw_name!r} has an "
+                "invalid size.")
+        if size > self._max_member_bytes():
+            raise ModSourceError(
+                f"{self._archive_label} member is too large "
+                f"({size / 1048576:.1f} MiB).")
+        return size
+
     def size(self, reference):
         lookup = self._lookup(reference)
         if lookup is None:
             raise FileNotFoundError(str(reference))
-        _logical, (_member, info) = lookup
-        if info.file_size > _MAX_ZIP_MEMBER_BYTES:
-            raise ModSourceError(
-                f"ZIP member is too large ({info.file_size / 1048576:.1f} MiB).")
-        return info.file_size
+        return self._member_size(lookup[1])
 
     def read_bytes(self, reference):
         with self._read_lock:
             lookup = self._lookup(reference)
             if lookup is None:
                 raise FileNotFoundError(str(reference))
-            _logical, (member, info) = lookup
-            if info.flag_bits & 0x1:
-                raise ModSourceError("Encrypted ZIP members are not supported.")
-            size = self.size(reference)
-            additional = 0 if member in self._requested_members else size
-            if self._requested_bytes + additional > _MAX_ZIP_READ_BYTES:
+            _logical, entry = lookup
+            if entry.encrypted:
                 raise ModSourceError(
-                    "Requested ZIP member data exceeds the 2 GiB safety limit.")
+                    f"Encrypted {self.kind} members are not supported.")
+            size = self._member_size(entry)
+            member_key = entry.raw_name.casefold()
+            additional = (0 if member_key in self._requested_members else size)
+            if self._requested_bytes + additional > self._max_read_bytes():
+                raise ModSourceError(
+                    f"Requested {self.kind} member data exceeds the 2 GiB "
+                    "safety limit.")
             try:
-                with zipfile.ZipFile(self.source_path) as archive:
-                    with archive.open(member, "r") as stream:
-                        data = stream.read(_MAX_ZIP_MEMBER_BYTES + 1)
-            except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
-                raise ModSourceError(f"Could not read ZIP member {member!r}: {error}") from error
-            if len(data) > _MAX_ZIP_MEMBER_BYTES or len(data) != size:
-                raise ModSourceError(f"ZIP member {member!r} has an invalid size.")
-            if member not in self._requested_members:
-                self._requested_members.add(member)
+                data = self._read_member(entry)
+                data = bytes(data)
+            except ModSourceError:
+                raise
+            except (OSError, TypeError, ValueError) as error:
+                raise ModSourceError(
+                    f"Could not read {self.kind} member "
+                    f"{self.logical_path(reference)!r}: {error}") from error
+            if len(data) != size:
+                raise ModSourceError(
+                    f"{self.kind} member {self.logical_path(reference)!r} "
+                    "has an invalid size.")
+            if member_key not in self._requested_members:
+                self._requested_members.add(member_key)
                 self._requested_bytes += len(data)
             return data
 
@@ -391,40 +430,197 @@ class ZipModSource(ModSource):
             lookup = self._lookup(reference)
             if lookup is None:
                 raise FileNotFoundError(str(reference))
-            _logical, (member, info) = lookup
-            if info.flag_bits & 0x1:
-                raise ModSourceError("Encrypted ZIP members are not supported.")
+            _logical, entry = lookup
+            if entry.encrypted:
+                raise ModSourceError(
+                    f"Encrypted {self.kind} members are not supported.")
+            self._member_size(entry)
             try:
-                with zipfile.ZipFile(self.source_path) as archive:
-                    with archive.open(member, "r") as stream:
-                        return stream.read(int(length))
-            except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
-                raise ModSourceError(f"Could not read ZIP member {member!r}: {error}") from error
+                length = int(length)
+                if length < 0:
+                    raise ValueError("prefix length must not be negative")
+                data = bytes(self._read_prefix_member(entry, length))
+            except ModSourceError:
+                raise
+            except (OSError, TypeError, ValueError) as error:
+                raise ModSourceError(
+                    f"Could not read {self.kind} member "
+                    f"{self.logical_path(reference)!r}: {error}") from error
+            if len(data) > length:
+                raise ModSourceError(
+                    f"{self.kind} member {self.logical_path(reference)!r} "
+                    "returned an invalid prefix.")
+            return data
 
     def read_text(self, reference):
         try:
             return self.read_bytes(reference).decode("utf-8")
         except UnicodeDecodeError as error:
             raise ModSourceError(
-                f"ZIP member {self.logical_path(reference)!r} is not UTF-8.") \
-                from error
+                f"{self._archive_label} member {self.logical_path(reference)!r} "
+                "is not UTF-8.") from error
 
     def same_reference(self, left, right):
         left_lookup = self._lookup(left)
         right_lookup = self._lookup(right)
         return bool(left_lookup and right_lookup
-                    and left_lookup[1][0].casefold()
-                    == right_lookup[1][0].casefold())
+                    and left_lookup[1].raw_name.casefold()
+                    == right_lookup[1].raw_name.casefold())
+
+    def _read_member(self, entry):
+        raise NotImplementedError
+
+    def _read_prefix_member(self, entry, length):
+        raise NotImplementedError
+
+    @staticmethod
+    def _max_members():
+        return _MAX_ARCHIVE_MEMBERS
+
+    @staticmethod
+    def _max_member_bytes():
+        return _MAX_ARCHIVE_MEMBER_BYTES
+
+    @staticmethod
+    def _max_read_bytes():
+        return _MAX_ARCHIVE_READ_BYTES
+
+
+class ZipModSource(_VirtualArchiveModSource):
+    kind = "zip"
+
+    def __init__(self, source_path):
+        path = _as_path(source_path)
+        if not path:
+            raise ModSourceError("ZIP source path is required.")
+        if archive_kind_for_path(path) != "zip":
+            raise ModSourceError("Only .zip mod sources are supported.")
+        absolute = os.path.abspath(path)
+        if not os.path.isfile(absolute):
+            raise ModSourceError("ZIP mod source does not exist.")
+        try:
+            with zipfile.ZipFile(absolute) as archive:
+                infos = archive.infolist()
+        except (OSError, zipfile.BadZipFile, RuntimeError) as error:
+            raise ModSourceError(
+                f"Could not read ZIP mod source: {error}") from error
+        entries = [
+            _ArchiveMember(
+                raw_name=info.filename, size=info.file_size,
+                encrypted=bool(info.flag_bits & 0x1),
+                is_dir=(info.is_dir()
+                        or info.filename.replace("\\", "/").endswith("/")),
+                backend_data=info)
+            for info in infos
+        ]
+        super().__init__(absolute, entries, kind="zip",
+                         member_count=len(infos))
+
+    @staticmethod
+    def _max_members():
+        return _MAX_ZIP_MEMBERS
+
+    @staticmethod
+    def _max_member_bytes():
+        return _MAX_ZIP_MEMBER_BYTES
+
+    @staticmethod
+    def _max_read_bytes():
+        return _MAX_ZIP_READ_BYTES
+
+    def _read_member(self, entry):
+        try:
+            with zipfile.ZipFile(self.source_path) as archive:
+                with archive.open(entry.raw_name, "r") as stream:
+                    data = stream.read(self._max_member_bytes() + 1)
+        except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
+            raise ModSourceError(
+                f"Could not read ZIP member {entry.raw_name!r}: {error}") \
+                from error
+        if len(data) > self._max_member_bytes():
+            raise ModSourceError(
+                f"ZIP member {entry.raw_name!r} has an invalid size.")
+        return data
+
+    def _read_prefix_member(self, entry, length):
+        try:
+            with zipfile.ZipFile(self.source_path) as archive:
+                with archive.open(entry.raw_name, "r") as stream:
+                    return stream.read(length)
+        except (OSError, KeyError, RuntimeError, zipfile.BadZipFile) as error:
+            raise ModSourceError(
+                f"Could not read ZIP member {entry.raw_name!r}: {error}") \
+                from error
+
+
+class SevenZipModSource(_VirtualArchiveModSource):
+    """Virtual source backed by the user's installed 7-Zip executable."""
+
+    def __init__(self, source_path, *, client=None):
+        path = _as_path(source_path)
+        kind = archive_kind_for_path(path)
+        if kind not in {"7z", "rar"}:
+            raise ModSourceError("Only .7z and .rar mod sources are supported.")
+        absolute = os.path.abspath(path)
+        if not os.path.isfile(absolute):
+            raise ModSourceError(
+                f"{_ARCHIVE_LABELS[kind]} mod source does not exist.")
+        try:
+            self._client = SevenZipCLI() if client is None else client
+            entries = self._client.list_members(absolute)
+        except SevenZipError as error:
+            detail = str(error)
+            if detail == "Password-protected archives are not supported.":
+                raise ModSourceError(detail) from error
+            raise ModSourceError(
+                f"Could not read {kind} mod source: {detail}") from error
+        members = [
+            _ArchiveMember(
+                raw_name=entry.raw_name, size=entry.size,
+                encrypted=entry.encrypted, is_dir=entry.is_dir,
+                backend_data=entry)
+            for entry in entries
+        ]
+        super().__init__(absolute, members, kind=kind,
+                         member_count=len(entries))
+
+    def _read_member(self, entry):
+        try:
+            return self._client.read_member(self.source_path, entry.raw_name)
+        except SevenZipError as error:
+            if str(error) == "Password-protected archives are not supported.":
+                raise ModSourceError(str(error)) from error
+            raise ModSourceError(
+                f"Could not read {self.kind} member {entry.raw_name!r}: "
+                f"{error}") from error
+
+    def _read_prefix_member(self, entry, length):
+        try:
+            return self._client.read_prefix(
+                self.source_path, entry.raw_name, length)
+        except SevenZipError as error:
+            if str(error) == "Password-protected archives are not supported.":
+                raise ModSourceError(str(error)) from error
+            raise ModSourceError(
+                f"Could not read {self.kind} member {entry.raw_name!r}: "
+                f"{error}") from error
 
 
 def mod_source_for_path(path):
     """Create the source selected by a filesystem path."""
-    return ZipModSource(path) if is_zip_path(path) else DirectoryModSource(path)
+    kind = archive_kind_for_path(path)
+    if kind == "zip":
+        return ZipModSource(path)
+    if kind in {"7z", "rar"}:
+        return SevenZipModSource(path)
+    return DirectoryModSource(path)
 
 
 __all__ = [
-    "DirectoryModSource", "ModSource", "ZipModSource", "SourcePath",
-    "ModSourceError",
-    "is_zip_path", "mod_source_for_path", "_MAX_ZIP_MEMBERS",
-    "_MAX_ZIP_MEMBER_BYTES", "_MAX_ZIP_READ_BYTES",
+    "ARCHIVE_EXTENSIONS", "DirectoryModSource", "ModSource",
+    "SevenZipModSource", "SourcePath", "ZipModSource", "ModSourceError",
+    "archive_kind_for_path", "is_archive_path",
+    "mod_source_for_path", "_MAX_ARCHIVE_MEMBERS",
+    "_MAX_ARCHIVE_MEMBER_BYTES", "_MAX_ARCHIVE_READ_BYTES",
+    "_MAX_ZIP_MEMBERS", "_MAX_ZIP_MEMBER_BYTES", "_MAX_ZIP_READ_BYTES",
 ]

@@ -14,7 +14,7 @@ from core.ini.health import analyze_mod
 from core.materials.profiles import material_profile_for
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import (
-    ModSource, ModSourceError, is_zip_path, mod_source_for_path,
+    ModSource, ModSourceError, mod_source_for_path,
 )
 
 from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
@@ -61,8 +61,7 @@ class ModLoadContext:
 
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
     if context is not None:
-        if (getattr(context, "source", None) is None
-                and is_zip_path(context.mod_dir)):
+        if getattr(context, "source", None) is None:
             context.source = mod_source_for_path(context.mod_dir)
         _normalize_virtual_context(context)
         return context
@@ -213,8 +212,12 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     Errors are returned as ``{"error": ...}`` rather than raised, since this
     function is called across the JS bridge where an exception is opaque.
     """
-    context = _resolve_context(
-        folder_path, ini_paths=ini_paths, documents=documents, context=context)
+    try:
+        context = _resolve_context(
+            folder_path, ini_paths=ini_paths, documents=documents,
+            context=context)
+    except ModSourceError as error:
+        return _structured_payload(error=str(error))
     context.skinning_manifest = {}
     overrides = overrides or {}
     if not context.ini_paths:
