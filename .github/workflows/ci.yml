@@ -40,10 +40,14 @@ jobs:
         run: python -m pytest -q src/tests --ignore=src/tests/web
 
   browser:
-    name: Browser and UI tests
+    name: Browser and UI tests (${{ matrix.shard }}/2)
     needs: prepare-assets
     runs-on: windows-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     steps:
       - name: Check out repository
@@ -75,17 +79,22 @@ jobs:
 
       - name: Run browser and UI tests
         run: >-
-          python -m pytest -x -vv
+          python -m pytest -q --test-shard ${{ matrix.shard }}
+          --test-shard-count 2
           src/tests/web/test_app_flow.py
           src/tests/web/test_asset_flow.py
           src/tests/web/test_modules.py
           src/tests/web/test_ui.py
 
   rendering:
-    name: WebGPU and rendering tests
+    name: WebGPU and rendering tests (${{ matrix.shard }}/2)
     needs: prepare-assets
     runs-on: windows-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     steps:
       - name: Check out repository
@@ -116,7 +125,9 @@ jobs:
           build.verify_assets()"
 
       - name: Run WebGPU and rendering tests
-        run: python -m pytest -x -vv src/tests/web/test_rendering.py
+        run: >-
+          python -m pytest -q --test-shard ${{ matrix.shard }}
+          --test-shard-count 2 src/tests/web/test_rendering.py
 
   prepare-assets:
     name: Prepare verified browser assets
