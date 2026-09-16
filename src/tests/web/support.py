@@ -26,10 +26,13 @@ def edge_browser():
         try:
             # Tests use the local server directly. Ambient proxy discovery can
             # otherwise delay the first request in every isolated context.
+            # D3D11 keeps WebGPU available on hosted Windows runners without
+            # requiring a physical adapter.
             browser = runtime.chromium.launch(
                 channel="msedge", headless=True,
                 args=["--no-proxy-server", "--enable-unsafe-webgpu",
-                      "--disable-gpu-sandbox", "--ignore-gpu-blocklist"])
+                      "--disable-gpu-sandbox", "--ignore-gpu-blocklist",
+                      "--use-webgpu-adapter=d3d11"])
         except playwright.Error:
             pytest.skip("frontend smoke tests require a compatible browser runtime")
         yield browser
