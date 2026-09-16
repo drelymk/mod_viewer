@@ -7,6 +7,104 @@ from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
 
 
+def test_draw_scanner_keeps_geometry_and_texture_hash_evidence_separate():
+    sections = parse_sections("fixture.ini", text="""[TextureOverrideBody]
+hash = 0x73c8cae2
+match_first_index = 43845
+match_index_count = 24
+Resource\\GIMI\\Diffuse = ResourceDiffuseOpaque
+ps-t1 = ResourceMystery
+drawindexed = 3, 0, 0
+
+[TextureOverrideDiffuse]
+hash = 11111111
+this = ResourceDiffuseOpaque
+
+[TextureOverrideMystery]
+hash = 22222222
+this = ResourceMystery
+""")
+
+    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
+        "draws"][0]
+
+    assert (draw.geometry_match.hash,
+            draw.geometry_match.first_index,
+            draw.geometry_match.index_count) == ("73c8cae2", 43845, 24)
+    assert [(item.slot, item.resource, item.texture_hashes)
+            for item in draw.slot_textures] == [
+                (1, "ResourceMystery", ("22222222",))]
+    assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
+
+
+def test_draw_scanner_does_not_infer_texture_hash_from_resource_name():
+    sections = parse_sections("fixture.ini", text="""[TextureOverrideBody]
+hash = 73c8cae2
+Resource\\GIMI\\Diffuse = ResourceFoo_11111111
+drawindexed = 3, 0, 0
+""")
+
+    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
+        "draws"][0]
+
+    assert draw.slot_textures == []
+    assert "texture_hashes" not in draw.diffuse_variants[0]
+
+
+def test_texture_override_index_preserves_conditions_and_resolves_files():
+    sections = parse_sections("fixture.ini", text="""[KeyStyle]
+type = cycle
+$Style = 0,1
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[TextureOverrideOriginal]
+hash = 11111111
+if $Style == 0
+this = ResourceA
+else
+this = ResourceB
+endif
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 20
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceA]
+filename = textures/a.dds
+
+[ResourceB]
+filename = textures/b.dds
+""")
+    scanned = _scan_sections_for_draws(sections)
+    replacements = scanned.texture_override_index.replacements_by_hash[
+        "11111111"]
+
+    assert [(item.resource, item.dnf) for item in replacements] == [
+        ("ResourceA", [[{
+            "var": "Style", "value": "0", "negate": False}]]),
+        ("ResourceB", [[{
+            "var": "Style", "value": "0", "negate": True}]])]
+
+    group = build_draw_groups(sections, extract_resources(sections))[0]
+    resolved = group["_texture_override_index"].replacements_by_hash[
+        "11111111"]
+    assert [item.file for item in resolved] == [
+        "textures/a.dds", "textures/b.dds"]
+
+
 def test_draw_groups_keep_clean_display_names_with_shared_seen_labels():
     sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
 ib = ResourceBodyIB

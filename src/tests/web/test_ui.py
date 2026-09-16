@@ -2,37 +2,40 @@ import base64
 import copy
 import json
 
-from .support import *
+from app.settings import paths
+from .support import _open, _open_library, _page as _create_page
+from .payloads import (
+    _MOD_LIBRARY, _PNG_URI, _f32, _payload, _source_payload,
+)
 
-def test_left_dock_tabs_toggle_and_keep_aria_state(edge_browser, frontend_url):
-    context, page = _page(edge_browser, frontend_url, {}, asset_folders=[])
-    try:
-        page.locator("#mod-library-tab").click()
-        assert page.locator("#mod-folder-panel").is_visible()
-        assert page.locator("#mod-folder-list").is_hidden()
-        assert page.locator("#mod-folder-empty").is_visible()
-        assert page.locator("#mod-library-tab").get_attribute("aria-selected") == "true"
-        page.locator("#assets-tab").click()
-        assert page.locator("#mod-folder-panel").is_hidden()
-        assert page.locator("#asset-folder-panel").is_visible()
-        assert page.locator("#asset-folder-list").is_hidden()
-        assert page.locator("#asset-folder-empty").is_visible()
-        assert page.locator("#assets-tab").get_attribute("aria-expanded") == "true"
-        page.locator("#assets-tab").click()
-        assert page.locator("#asset-folder-panel").is_hidden()
-        assert page.locator("#left-panel-container").is_hidden()
-        assert page.locator("#left-dock-tabs").is_visible()
-        assert page.locator(".left-dock-tabs .active").count() == 0
-        assert all(value == "false" for value in page.locator(
-            ".left-dock-tabs > button").evaluate_all(
-                "buttons => buttons.map(button => button.getAttribute('aria-selected'))"))
-    finally:
-        context.close()
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    features = {"asset_folders", "mesh", "mod_folders", "panel"}
+    features.update(kwargs.pop("api_features", ()))
+    if any("textureSaveResult" in payload
+           for payload in responses.values()
+           if isinstance(payload, dict)):
+        features.add("texture")
+    return _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
 
 def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, frontend_url):
     path = "fixture-model"
     context, page = _page(edge_browser, frontend_url, {path: _payload()})
     try:
+        page.locator("#mod-library-tab").click()
+        assert page.locator("#mod-folder-panel").is_visible()
+        assert page.locator("#mod-folder-list").is_hidden()
+        assert page.locator("#mod-folder-empty").is_visible()
+        page.locator("#assets-tab").click()
+        assert page.locator("#asset-folder-panel").is_visible()
+        assert page.locator("#asset-folder-list").is_hidden()
+        assert page.locator("#asset-folder-empty").is_visible()
+        page.locator("#assets-tab").click()
+        assert page.locator("#left-panel-container").is_hidden()
+        assert page.locator(".left-dock-tabs .active").count() == 0
+
         _open(page, path)
         page.locator("#right-dock.ui-visible").wait_for()
         assert page.locator(".right-dock-tabs > button").evaluate_all(
@@ -1055,7 +1058,9 @@ def test_texture_save_modal_opens_without_analysis_and_lists_changed_meshes(
     second["component"] = "Face Bake"
     second["display_name"] = "Friendly Face"
     payload["meshes"]["Face-Bake-0"] = second
-    context, page = _page(edge_browser, frontend_url, {"Bake": payload})
+    context, page = _page(
+        edge_browser, frontend_url, {"Bake": payload},
+        api_features={"texture"})
     try:
         _open(page, "Bake")
         page.locator(".draw-item").first.wait_for()

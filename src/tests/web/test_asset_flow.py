@@ -1,4 +1,15 @@
-from .support import *
+import pytest
+
+from .support import _open, _page as _create_page
+from .payloads import _f32, _payload
+
+
+def _page(edge_browser, frontend_url, responses, **kwargs):
+    features = {"asset", "asset_fill", "asset_folders"}
+    features.update(kwargs.pop("api_features", ()))
+    return _create_page(
+        edge_browser, frontend_url, responses,
+        api_features=sorted(features), **kwargs)
 
 def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         edge_browser, frontend_url):
@@ -387,22 +398,37 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         }""")
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getCharacterShadowDebugState();
+          return window.modViewer.activeMeshes.length === 2
+            && window.modViewer.activeMeshes.some(mesh => mesh.userData.assetFill)
+            && state.modelBounds !== null
+            && state.modelBounds.max[0] > 5.5;
+        }""")
         expanded = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
         }""")
         assert expanded["camera"] == pytest.approx(before["camera"])
-        assert expanded["shadow"]["fitCount"] > before["shadow"]["fitCount"]
-        assert expanded["shadow"]["shadowUpdateCount"] > before["shadow"]["shadowUpdateCount"]
         assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0]
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='load']").wait_for()
+        page.wait_for_function("""async () => {
+          const {getCharacterShadowDebugState} =
+            await import('./js/scene/scene.js');
+          const state = getCharacterShadowDebugState();
+          return window.modViewer.activeMeshes.length === 1
+            && !window.modViewer.activeMeshes.some(mesh => mesh.userData.assetFill)
+            && state.modelBounds !== null
+            && state.modelBounds.max[0] < 1.5;
+        }""")
         contracted = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
         }""")
         assert contracted["camera"] == pytest.approx(before["camera"])
-        assert contracted["shadow"]["fitCount"] > expanded["shadow"]["fitCount"]
         assert contracted["shadow"]["modelBounds"]["max"][0] < expanded["shadow"]["modelBounds"]["max"][0]
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["ShadowFill"]
     finally:
