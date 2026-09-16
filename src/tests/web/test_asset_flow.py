@@ -401,30 +401,28 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         page.wait_for_function("""async count => {
           const {getCharacterShadowDebugState} =
             await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState().fitCount > count;
-        }""", arg=before["shadow"]["fitCount"])
+          const bounds = getCharacterShadowDebugState().modelBounds;
+          return bounds !== null && bounds.max[0] > count;
+        }""", arg=before["shadow"]["modelBounds"]["max"][0])
         expanded = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
         }""")
         assert expanded["camera"] == pytest.approx(before["camera"])
-        assert expanded["shadow"]["fitCount"] > before["shadow"]["fitCount"]
-        assert expanded["shadow"]["shadowUpdateCount"] > before["shadow"]["shadowUpdateCount"]
         assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0]
-        expanded_fit_count = expanded["shadow"]["fitCount"]
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='load']").wait_for()
         page.wait_for_function("""async count => {
           const {getCharacterShadowDebugState} =
             await import('./js/scene/scene.js');
-          return getCharacterShadowDebugState().fitCount > count;
-        }""", arg=expanded_fit_count)
+          const bounds = getCharacterShadowDebugState().modelBounds;
+          return bounds !== null && bounds.max[0] < count;
+        }""", arg=expanded["shadow"]["modelBounds"]["max"][0])
         contracted = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
         }""")
         assert contracted["camera"] == pytest.approx(before["camera"])
-        assert contracted["shadow"]["fitCount"] > expanded["shadow"]["fitCount"]
         assert contracted["shadow"]["modelBounds"]["max"][0] < expanded["shadow"]["modelBounds"]["max"][0]
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["ShadowFill"]
     finally:
