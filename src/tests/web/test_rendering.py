@@ -5355,7 +5355,7 @@ def test_wuwa_body_missing_toon_mask_keeps_physical_direct_specular(
     base_payload = copy.deepcopy(body_payload)
     base_entry = base_payload["meshes"]["Body-Packed-0"]
     base_entry["material_profile_id"] = "wuwa:rabbitfx"
-    base_entry["light_map_key"] = None
+    base_entry["light_map_key"] = endpoint_light_key
     base_profile = material_profile_for("wuwa", "rabbitfx").to_metadata()
     base_payload["metadata"]["material_profiles"] = {
         base_profile["id"]: base_profile,
