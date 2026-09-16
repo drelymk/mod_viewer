@@ -81,10 +81,7 @@ jobs:
         run: >-
           python -m pytest -q --test-shard ${{ matrix.shard }}
           --test-shard-count 2
-          src/tests/web/test_app_flow.py
-          src/tests/web/test_asset_flow.py
-          src/tests/web/test_modules.py
-          src/tests/web/test_ui.py
+          --ignore=src/tests/web/test_rendering.py src/tests/web
 
   rendering:
     name: WebGPU and rendering tests (${{ matrix.shard }}/2)
