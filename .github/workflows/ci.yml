@@ -75,7 +75,7 @@ jobs:
 
       - name: Run browser and UI tests
         run: >-
-          python -m pytest -q
+          python -m pytest -x -vv
           src/tests/web/test_app_flow.py
           src/tests/web/test_asset_flow.py
           src/tests/web/test_modules.py
@@ -116,7 +116,7 @@ jobs:
           build.verify_assets()"
 
       - name: Run WebGPU and rendering tests
-        run: python -m pytest -q src/tests/web/test_rendering.py
+        run: python -m pytest -x -vv src/tests/web/test_rendering.py
 
   prepare-assets:
     name: Prepare verified browser assets
