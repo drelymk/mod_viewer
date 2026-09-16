@@ -398,6 +398,11 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         }""")
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='remove']").wait_for()
+        page.wait_for_function("""async count => {
+          const {getCharacterShadowDebugState} =
+            await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().fitCount > count;
+        }""", arg=before["shadow"]["fitCount"])
         expanded = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
@@ -406,8 +411,14 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         assert expanded["shadow"]["fitCount"] > before["shadow"]["fitCount"]
         assert expanded["shadow"]["shadowUpdateCount"] > before["shadow"]["shadowUpdateCount"]
         assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0]
+        expanded_fit_count = expanded["shadow"]["fitCount"]
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='load']").wait_for()
+        page.wait_for_function("""async count => {
+          const {getCharacterShadowDebugState} =
+            await import('./js/scene/scene.js');
+          return getCharacterShadowDebugState().fitCount > count;
+        }""", arg=expanded_fit_count)
         contracted = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};

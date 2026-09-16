@@ -404,14 +404,35 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         """.replace("__STATE__", encoded_state),
     )
     page = context.new_page()
-    page.goto(frontend_url)
-    page.wait_for_function("window.modViewer !== undefined")
-    return context, page
+    try:
+        for attempt in range(2):
+            try:
+                if attempt:
+                    page.reload(wait_until="domcontentloaded")
+                else:
+                    page.goto(frontend_url)
+                page.wait_for_function(
+                    "window.modViewer !== undefined", timeout=30_000)
+                return context, page
+            except playwright.TimeoutError:
+                if attempt:
+                    raise
+    except Exception:
+        context.close()
+        raise
 
 
 def _open(page, path):
     page.evaluate("path => { window.__fakeApi.nextPath = path; }", path)
     page.locator("#open-btn").click()
+
+
+def _wait_for_render(page, previous=None):
+    """Wait for a viewport render scheduled by the preceding action."""
+    if previous is None:
+        previous = page.evaluate("window.modViewer.getRenderCount()")
+    page.wait_for_function(
+        "count => window.modViewer.getRenderCount() > count", arg=previous)
 
 
 def _open_library(page):

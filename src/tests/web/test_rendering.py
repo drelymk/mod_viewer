@@ -12,7 +12,7 @@ from app.runtime import server
 from core.materials.profiles import material_profile_for
 from .support import (
     _open, _page as _create_page, _sample_mesh_pixel, _sample_mesh_pixel_at,
-    _sample_mesh_pixels_at,
+    _sample_mesh_pixels_at, _wait_for_render,
 )
 from .payloads import _PNG_URI, _f32, _payload, _u32
 
@@ -4815,11 +4815,26 @@ def test_genshin_toon_uses_n_dot_l_when_light_map_is_missing(
             page.wait_for_function(
                 "window.modViewer.activeMeshes[0]?.material?.userData"
                 "?.gameMaterial")
+            page.wait_for_function("""
+              () => window.modViewer.activeMeshes[0]?.material?.userData
+                ?.gameMaterial?.bindings?.diffuse?.textureNode?.value?.image
+                ?.width === 4
+            """)
+            page.wait_for_function("""
+              () => {
+                const game = window.modViewer.activeMeshes[0]?.material
+                  ?.userData?.gameMaterial;
+                return !game?.bindings?.light_map?.enabledNode?.value
+                  || game.bindings.light_map.textureNode.value?.image?.width === 4;
+              }
+            """)
             _set_test_key_light(page)
+            before_render = page.evaluate("window.modViewer.getRenderCount()")
             page.locator("#toon-btn").click()
             page.wait_for_function(
                 "window.modViewer.activeMeshes[0].material.userData"
                 ".gameMaterial.toonEnabledNode.value === true")
+            _wait_for_render(page, before_render)
             state = page.evaluate("""() => {
               const mesh = window.modViewer.activeMeshes[0];
               const material = mesh.material;
@@ -5034,12 +5049,13 @@ def test_wuwa_toon_shadow_toggle_uses_stable_uniform(
         }""")
         off_pixel = _sample_mesh_pixel(page)
 
+        before_render = page.evaluate("window.modViewer.getRenderCount()")
         page.locator("#toon-btn").click()
         page.wait_for_function("""
           () => window.modViewer.activeMeshes[0].material.userData
             .gameMaterial.toonEnabledNode.value === true
         """)
-        page.wait_for_timeout(250)
+        _wait_for_render(page, before_render)
         toon_pixel = _sample_mesh_pixel(page)
         toon = page.evaluate("""version => {
           const mesh = window.modViewer.activeMeshes[0];
@@ -5053,12 +5069,13 @@ def test_wuwa_toon_shadow_toggle_uses_stable_uniform(
           };
         }""", before["version"])
 
+        before_render = page.evaluate("window.modViewer.getRenderCount()")
         page.locator("#toon-btn").click()
         page.wait_for_function("""
           () => window.modViewer.activeMeshes[0].material.userData
             .gameMaterial.toonEnabledNode.value === false
         """)
-        page.wait_for_timeout(250)
+        _wait_for_render(page, before_render)
         off_again_pixel = _sample_mesh_pixel(page)
 
         assert before["profile"] == profile_id
@@ -5422,6 +5439,7 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
     derived_uri = _flat_png_uri((red, green, blue, 255))
 
     def configure_light(page):
+        before = page.evaluate("window.modViewer.getRenderCount()")
         page.evaluate("""
           async () => {
                 const THREE = await import('three');
@@ -5445,7 +5463,7 @@ def test_wuwa_packed_rg_normal_matches_derived_reference_and_y_sign(
             requestRender();
           }
         """)
-        page.wait_for_timeout(400)
+        _wait_for_render(page, before)
 
     def sample_quad(page):
         return _sample_mesh_pixels_at(page, [
@@ -5598,19 +5616,28 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
             requestRender();
           }
         """)
-        page.wait_for_timeout(400)
+        before_render = page.evaluate("window.modViewer.getRenderCount()")
+        page.evaluate("""
+          async () => {
+            const {requestRender} = await import('./js/scene/render-scheduler.js');
+            requestRender();
+          }
+        """)
+        _wait_for_render(page, before_render)
+        before_render = page.evaluate("window.modViewer.getRenderCount()")
         page.locator("#toon-btn").click()
         page.wait_for_function("""
           () => window.modViewer.activeMeshes[0]?.material?.userData
             ?.gameMaterial?.toonEnabledNode?.value === true
         """)
-        page.wait_for_timeout(250)
+        _wait_for_render(page, before_render)
         shadowed_pixel = _sample_mesh_pixel(page)
         before_version = page.evaluate("""() => {
           const mesh = window.modViewer.activeMeshes[0];
           window.__missingLightmapMaterial = mesh.material;
           return mesh.material.version;
         }""")
+        before_render = page.evaluate("window.modViewer.getRenderCount()")
         page.evaluate("""async () => {
           const {setMeshTextureState} = await import('./js/mesh/mesh-factory.js');
           const mesh = window.modViewer.activeMeshes[0];
@@ -5626,6 +5653,7 @@ def test_wuwa_missing_lightmap_disables_shadow_mask_without_rebuilding(
           () => window.modViewer.activeMeshes[0]?.material?.userData
             ?.gameMaterial?.bindings?.light_map?.enabledNode?.value === false
         """)
+        _wait_for_render(page, before_render)
         state = page.evaluate("""() => {
           const mesh = window.modViewer.activeMeshes[0];
           return {
