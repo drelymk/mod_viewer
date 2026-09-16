@@ -28,7 +28,8 @@ def edge_browser():
             # otherwise delay the first request in every isolated context.
             browser = runtime.chromium.launch(
                 channel="msedge", headless=True,
-                args=["--no-proxy-server", "--enable-unsafe-webgpu"])
+                args=["--no-proxy-server", "--enable-unsafe-webgpu",
+                      "--disable-gpu-sandbox"])
         except playwright.Error:
             pytest.skip("frontend smoke tests require a compatible browser runtime")
         yield browser
