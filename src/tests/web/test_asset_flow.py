@@ -398,12 +398,15 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         }""")
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='remove']").wait_for()
-        page.wait_for_function("""async count => {
+        page.wait_for_function("""async () => {
           const {getCharacterShadowDebugState} =
             await import('./js/scene/scene.js');
-          const bounds = getCharacterShadowDebugState().modelBounds;
-          return bounds !== null && bounds.max[0] > count;
-        }""", arg=before["shadow"]["modelBounds"]["max"][0])
+          const state = getCharacterShadowDebugState();
+          return window.modViewer.activeMeshes.length === 2
+            && window.modViewer.activeMeshes.some(mesh => mesh.userData.assetFill)
+            && state.modelBounds !== null
+            && state.modelBounds.max[0] > 5.5;
+        }""")
         expanded = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
@@ -412,12 +415,15 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0]
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='load']").wait_for()
-        page.wait_for_function("""async count => {
+        page.wait_for_function("""async () => {
           const {getCharacterShadowDebugState} =
             await import('./js/scene/scene.js');
-          const bounds = getCharacterShadowDebugState().modelBounds;
-          return bounds !== null && bounds.max[0] < count;
-        }""", arg=expanded["shadow"]["modelBounds"]["max"][0])
+          const state = getCharacterShadowDebugState();
+          return window.modViewer.activeMeshes.length === 1
+            && !window.modViewer.activeMeshes.some(mesh => mesh.userData.assetFill)
+            && state.modelBounds !== null
+            && state.modelBounds.max[0] < 1.5;
+        }""")
         contracted = page.evaluate("""async () => {
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
           return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};

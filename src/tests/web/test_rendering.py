@@ -6019,6 +6019,8 @@ def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         assert initial["debug"]["modelBounds"] is not None
         assert initial["debug"]["casterBounds"] is not None
 
+        render_before_visibility = page.evaluate(
+            "window.modViewer.getRenderCount()")
         updated = page.evaluate("""async () => {
           const {applyMeshVisibility} = await import('./js/mesh/mesh-state.js');
           const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
@@ -6029,7 +6031,7 @@ def test_character_shadows_are_on_demand_and_visibility_keeps_stable_ground(
         }""")
         page.wait_for_function(
             "previous => window.modViewer.getRenderCount() > previous",
-            arg=page.evaluate("window.modViewer.getRenderCount()"))
+            arg=render_before_visibility)
         after = page.evaluate("""async () => {
           const {getCharacterShadowDebugState, scene} = await import('./js/scene/scene.js');
           let ground = null;
