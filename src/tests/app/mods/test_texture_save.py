@@ -85,6 +85,24 @@ def _write_prepared_save(path):
     )
 
 
+def _prepared_bc7(path, layout, claims, adjustments, affected_blocks):
+    return SimpleNamespace(
+        selected_path=str(path), info=layout.info, layout=layout,
+        mip0_claims=claims, intent_adjustments=adjustments,
+        mip0_affected_blocks=affected_blocks,
+    )
+
+
+class _InlineExecutor:
+    def submit(self, function, argument):
+        future = Future()
+        future.set_result(function(argument))
+        return future
+
+    def shutdown(self, **_kwargs):
+        pass
+
+
 def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatch):
     source = tmp_path / "body.dds"
     original = _dx10_dds(bytes(16))
@@ -475,6 +493,170 @@ def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
     assert not hasattr(prepared.targets[0], "pixel_coverage")
     assert not hasattr(prepared, "safe_masks")
     assert not hasattr(prepared, "target_pixel_masks")
+
+
+def test_bc7_single_intent_is_weighted_when_propagated_to_lower_mip(
+        tmp_path, monkeypatch):
+    source_block = _mode6_block()
+    source = tmp_path / "body.dds"
+    source.write_bytes(_dx10_dds(
+        source_block + source_block, width=4, height=4, mip_count=2))
+    layout = inspect_dds_layout(source)
+    adjustment = prepare_color_adjustment({"brightness": 1.5})
+    prepared = _prepared_bc7(
+        source, layout, bytearray([1] + [0] * 15),
+        (None, adjustment), (0,))
+    captured = []
+
+    def capture_target(block, target, *_args):
+        captured.append(target)
+        return SimpleNamespace(
+            block=block, source_error=2, candidate_error=0)
+
+    monkeypatch.setattr(
+        bc7_recolor._bc7_codec, "recolor_block", capture_target)
+    bc7_recolor._save_bc7_blocks(source.read_bytes(), prepared)
+
+    lower_source = bc7.decode_block(source_block)
+    assert len(captured) == 2
+    assert captured[1][0][:3] == bc7_recolor._bc7_weighted_single_rgb(
+        lower_source[0][:3], adjustment, 1, 4)
+    assert captured[1][1][:3] == lower_source[1][:3]
+    assert captured[1][0][3] == lower_source[0][3]
+
+
+def test_bc7_lower_intent_rejects_changed_weight_above_total():
+    state = {
+        "level": 0, "width": 2, "height": 2, "single": True,
+        "changed_counts": (2, 0, 0, 0),
+        "total_counts": (1, 1, 1, 1),
+    }
+
+    with pytest.raises(errors.TextureSaveError) as raised:
+        bc7_recolor._bc7_next_intent_level(state, 1, 1, 2)
+
+    assert raised.value.code == "texture_validation_failed"
+    assert raised.value.message == "Changed color intent exceeds total mip weight."
+
+
+@pytest.mark.parametrize(
+    ("level", "single", "classes", "expected_type"),
+    [
+        (0, True, (1,), "_BC7SingleIntentJob"),
+        (1, True, (1,), "_BC7WeightedSingleIntentJob"),
+        (1, False, (1, 2), "_BC7BlockJob"),
+    ],
+    ids=("compact", "weighted", "general"),
+)
+def test_bc7_parallel_job_selection_keeps_three_job_shapes(
+        level, single, classes, expected_type):
+    source = _mode6_block()
+    mip = SimpleNamespace(
+        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
+    adjustments = (
+        None, prepare_color_adjustment({"hue": 30}),
+        prepare_color_adjustment({"hue": 120}),
+    )
+    if level == 0:
+        state = {
+            "level": 0, "width": 4, "height": 4,
+            "claims": bytearray([1] * 16), "class_count": 3,
+        }
+    elif single:
+        state = {
+            "level": 1, "width": 4, "height": 4, "single": True,
+            "changed_counts": (1,) * 16, "total_counts": (2,) * 16,
+        }
+    else:
+        state = {
+            "level": 1, "width": 4, "height": 4, "single": False,
+            "class_count": 3,
+            "counts": ((0,) * 16, (1,) * 16, (1,) * 16),
+        }
+
+    job = bc7_recolor._prepare_bc7_parallel_job(
+        source, mip, 0, state, adjustments,
+        bc7_recolor._BC7BlockIntent(classes))
+
+    assert type(job).__name__ == expected_type
+
+
+def test_bc7_serial_and_parallel_single_mip_results_match(
+        tmp_path, monkeypatch):
+    blocks = _mode6_block() + _mode6_block(
+        ((30, 120), (50, 150), (70, 180)))
+    source = tmp_path / "body.dds"
+    original = _dx10_dds(blocks, width=8, height=4)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _prepared_bc7(
+        source, layout, bytearray([1] * 32),
+        (None, prepare_color_adjustment({"hue": 120})), (0, 1))
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(
+        bc7_recolor, "ProcessPoolExecutor",
+        lambda **_kwargs: _InlineExecutor())
+
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial = bc7_recolor._save_bc7_blocks(original, prepared)
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel = bc7_recolor._save_bc7_blocks(original, prepared)
+
+    assert parallel == serial
+
+
+def test_bc7_serial_and_parallel_multi_mip_results_match(
+        tmp_path, monkeypatch):
+    block = _mode6_block()
+    source = tmp_path / "body.dds"
+    original = _dx10_dds(block * 3, width=4, height=4, mip_count=3)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    prepared = _prepared_bc7(
+        source, layout, bytearray([1] * 16),
+        (None, prepare_color_adjustment({"hue": 120})), (0,))
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(
+        bc7_recolor, "ProcessPoolExecutor",
+        lambda **_kwargs: _InlineExecutor())
+
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial = bc7_recolor._save_bc7_blocks(original, prepared)
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel = bc7_recolor._save_bc7_blocks(original, prepared)
+
+    assert parallel == serial
+
+
+def test_bc7_serial_and_parallel_multi_adjustment_lower_mips_match(
+        tmp_path, monkeypatch):
+    width, height = 8, 4
+    source = tmp_path / "body.dds"
+    blocks = _mode6_block() * 3
+    original = _dx10_dds(blocks, width=width, height=height, mip_count=2)
+    source.write_bytes(original)
+    layout = inspect_dds_layout(source)
+    claims = bytearray(
+        1 if x < width // 2 else 2
+        for _y in range(height)
+        for x in range(width))
+    adjustments = (
+        None, prepare_color_adjustment({"hue": 60}),
+        prepare_color_adjustment({"brightness": 1.5}),
+    )
+    prepared = _prepared_bc7(
+        source, layout, claims, adjustments, (0, 1))
+    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
+    monkeypatch.setattr(
+        bc7_recolor, "ProcessPoolExecutor",
+        lambda **_kwargs: _InlineExecutor())
+
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
+    serial = bc7_recolor._save_bc7_blocks(original, prepared)
+    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
+    parallel = bc7_recolor._save_bc7_blocks(original, prepared)
+
+    assert parallel == serial
 
 
 def test_save_rejects_target_on_different_physical_dds(tmp_path, monkeypatch):
