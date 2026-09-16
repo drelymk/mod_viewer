@@ -27,7 +27,8 @@ def edge_browser():
             # Tests use the local server directly. Ambient proxy discovery can
             # otherwise delay the first request in every isolated context.
             browser = runtime.chromium.launch(
-                channel="msedge", headless=True, args=["--no-proxy-server"])
+                channel="msedge", headless=True,
+                args=["--no-proxy-server", "--enable-unsafe-webgpu"])
         except playwright.Error:
             pytest.skip("frontend smoke tests require a compatible browser runtime")
         yield browser
