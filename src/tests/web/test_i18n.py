@@ -71,3 +71,33 @@ def test_catalog_placeholders_match_english(module_page):
       return mismatches;
     }""")
     assert result == []
+
+
+def test_asset_resolution_count_phrases_are_complete_for_each_locale(module_page):
+    result = module_page.evaluate("""async () => {
+      const i18n = await import('./js/i18n/index.js');
+      const expected = {
+        en: ['Partial: 2', 'Ambiguous: 2', 'Not found: 2'],
+        'zh-CN': ['部分匹配：2', '有歧义：2', '未找到：2'],
+        ja: ['部分一致：2', '曖昧：2', '未検出：2'],
+        ko: ['부분 일치: 2', '모호함: 2', '찾지 못함: 2'],
+        es: ['Parciales: 2', 'Ambiguos: 2', 'No encontrados: 2'],
+        ru: ['Частичных совпадений: 2', 'Неоднозначных: 2', 'Не найдено: 2'],
+      };
+      return Object.fromEntries(Object.entries(expected).map(([locale]) => {
+        i18n.setLocale(locale);
+        return [locale, [
+          i18n.t('health.partialDraws', {count: 2}),
+          i18n.t('health.ambiguousDraws', {count: 2}),
+          i18n.t('health.notFoundDraws', {count: 2}),
+        ]];
+      }));
+    }""")
+    assert result == {
+        "en": ["Partial: 2", "Ambiguous: 2", "Not found: 2"],
+        "zh-CN": ["部分匹配：2", "有歧义：2", "未找到：2"],
+        "ja": ["部分一致：2", "曖昧：2", "未検出：2"],
+        "ko": ["부분 일치: 2", "모호함: 2", "찾지 못함: 2"],
+        "es": ["Parciales: 2", "Ambiguos: 2", "No encontrados: 2"],
+        "ru": ["Частичных совпадений: 2", "Неоднозначных: 2", "Не найдено: 2"],
+    }
