@@ -840,16 +840,27 @@ export function createRigOverlayController({
   }
 
   function updateHumanoidCandidateMarker() {
-    const edit = currentSnapshot?.humanoidRigEdit;
-    const joint = edit?.editing && Number.isInteger(Number(
-      edit.candidateJointId))
-      ? currentSource?.joints?.find(item => Number(item.jointId)
-        === Number(edit.candidateJointId)) : null;
-    const point = getRigJointPoseFrame?.(Number(edit?.candidateJointId))?.pivot
-      || joint?.restPivot || joint?.restCenter;
     humanoidCandidate.visible = false;
-    humanoidCandidateSprite.visible = !!point;
+    humanoidCandidateSprite.visible = false;
+
+    const edit = currentSnapshot?.humanoidRigEdit;
+    const rawCandidateId = edit?.candidateJointId;
+    if (!edit?.editing
+        || rawCandidateId === null
+        || rawCandidateId === undefined
+        || rawCandidateId === '') {
+      return;
+    }
+
+    const candidateId = Number(rawCandidateId);
+    if (!Number.isInteger(candidateId)) return;
+
+    const joint = currentSource?.joints?.find(item => Number(item.jointId)
+      === candidateId);
+    const point = getRigJointPoseFrame?.(candidateId)?.pivot
+      || joint?.restPivot || joint?.restCenter;
     if (!point) return;
+    humanoidCandidateSprite.visible = true;
     setHumanoidSpritePosition(humanoidCandidateSprite, point);
     setHumanoidSpriteColor(humanoidCandidateSprite, [1, .78, .08]);
     const attribute = humanoidCandidate.geometry.getAttribute('position');

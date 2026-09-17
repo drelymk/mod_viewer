@@ -438,7 +438,9 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
         ([key, position]) => [key, {position}]));
       const source = {key: 'model-rig', structureRevision: 1,
         joints: [{jointId: 7, restCenter: [-.2, 1.6, 0],
-          restPivot: [-.2, 1.6, 0]}], components: [], forestEdges: []};
+            restPivot: [-.2, 1.6, 0]},
+          {jointId: 0, restCenter: [0, 0, 0], restPivot: [0, 0, 0]}],
+        components: [], forestEdges: []};
       let state = {
         selectedJointId: null, jointPickIntent: {type: 'selected-joint'},
         ik: {enabled: true, available: true,
@@ -467,8 +469,10 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
       const controller = createRigOverlayController({
         scene, camera, canvas, arcballControls: arcball,
         getMeshes: () => [], getRigState: () => state,
-        getRigJointPoseFrame: jointId => Number(jointId) === 7
-          ? {center: [-.2, 1.3, 0], pivot: [-.2, 1.2, 0]} : null,
+        getRigJointPoseFrame: jointId => Number(jointId) === 0
+          ? {center: [0, 0, 0], pivot: [0, 0, 0]}
+          : Number(jointId) === 7
+            ? {center: [-.2, 1.3, 0], pivot: [-.2, 1.2, 0]} : null,
         beginHumanoidControlCarry: key => {
           events.began.push(key);
           state.humanoidRigEdit = {...state.humanoidRigEdit,
@@ -495,6 +499,16 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
       });
       controller.refresh(state);
       const initial = controller.getDebugState();
+      const initialCandidateVisible = controller.group.getObjectByName(
+        'viewer-humanoid-candidate-marker')?.visible;
+      state = {...state, humanoidRigEdit: {...state.humanoidRigEdit,
+        candidateJointId: 0}};
+      controller.refresh(state);
+      const zeroCandidateVisible = controller.group.getObjectByName(
+        'viewer-humanoid-candidate-marker')?.visible;
+      state = {...state, humanoidRigEdit: {...state.humanoidRigEdit,
+        candidateJointId: null}};
+      controller.refresh(state);
       const screen = projectRigPointToClient({point: positions.leftShoulder,
         camera, canvas});
       canvas.dispatchEvent(new PointerEvent('pointerdown', {
@@ -546,6 +560,7 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
         arcballActions: arcball.actions, arcballCalls: arcball.calls,
         beforePan, afterPan, afterPanMove,
         pointType: pointSprite?.type, haloType: haloSprite?.type,
+        initialCandidateVisible, zeroCandidateVisible,
         pointScale: pointSprite?.scale?.x || 0,
         haloScale: haloSprite?.scale?.x || 0, markerPosition};
     }""")
@@ -557,6 +572,8 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
     assert result["initial"]["humanoidMarkerTextureReady"] is True
     assert result["pointType"] == "Sprite"
     assert result["haloType"] == "Sprite"
+    assert result["initialCandidateVisible"] is False
+    assert result["zeroCandidateVisible"] is True
     assert result["pointScale"] > 0
     assert result["haloScale"] > result["pointScale"]
     assert result["markerPosition"] == pytest.approx([-.2, 1.2, 0])
