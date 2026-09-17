@@ -4,6 +4,27 @@ import { createIcon } from './ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let sourceSectionId = 0;
+const sourceSections = new Set();
+
+function syncSourceSection(section) {
+  const collapsed = section.items.classList.contains('collapsed');
+  section.chevron.setAttribute('aria-label', t(
+    collapsed ? 'panel.expandSource' : 'panel.collapseSource', {
+      source: section.source,
+    }));
+}
+
+function syncSourceSections() {
+  for (const section of sourceSections) {
+    if (!section.header.isConnected) {
+      sourceSections.delete(section);
+      continue;
+    }
+    syncSourceSection(section);
+  }
+}
+
+window.addEventListener(LANGUAGE_CHANGED, syncSourceSections);
 
 export function groupKeysBySource(records, keys = Object.keys(records || {})) {
   const grouped = {};
@@ -29,11 +50,6 @@ export function buildSourceSection(source, container, {
   chevron.type = 'button';
   chevron.className = 'group-toggle';
   chevron.setAttribute('aria-expanded', 'true');
-  const syncLabel = () => {
-    const collapsed = items.classList.contains('collapsed');
-    chevron.setAttribute('aria-label', t(
-      collapsed ? 'panel.expandSource' : 'panel.collapseSource', {source}));
-  };
   chevron.appendChild(createIcon('chevron-down'));
   const name = document.createElement('span');
   name.className = 'group-name';
@@ -43,16 +59,17 @@ export function buildSourceSection(source, container, {
   const items = document.createElement('div');
   items.className = itemsClass;
   items.id = `source-section-${++sourceSectionId}`;
-  syncLabel();
+  const section = {header, items, chevron, source};
+  syncSourceSection(section);
   chevron.setAttribute('aria-controls', items.id);
   header.addEventListener('click', () => {
     const collapsed = !items.classList.contains('collapsed');
     chevron.classList.toggle('collapsed', collapsed);
     chevron.setAttribute('aria-expanded', String(!collapsed));
     items.classList.toggle('collapsed', collapsed);
-    syncLabel();
+    syncSourceSection(section);
   });
-  window.addEventListener(LANGUAGE_CHANGED, syncLabel);
+  sourceSections.add(section);
   container.append(header, items);
   return items;
 }

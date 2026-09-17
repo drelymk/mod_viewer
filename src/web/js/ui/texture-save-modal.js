@@ -96,9 +96,17 @@ function formatSaveError(result) {
     pending_color_metadata_failed: 'texture.reason.metadataFailed',
     texture_save_failed: 'texture.reason.saveFailed',
     texture_refresh_failed: 'texture.reason.refreshFailed',
+    read_only_source: 'texture.reason.readOnlySource',
+    asset_texture_read_only: 'texture.reason.assetTexture',
+    stale_mesh_state: 'texture.reason.staleMeshState',
+    mesh_has_no_uv: 'texture.reason.noUv',
+    texture_read_failed: 'texture.reason.readFailed',
+    texture_changed_during_save: 'texture.reason.changedDuringSave',
+    texture_validation_failed: 'texture.reason.validationFailed',
   };
-  const message = result?.error
-    || (errorKeys[result?.error_code] ? t(errorKeys[result.error_code]) : '')
+  const code = result?.error_code ?? result?.code;
+  const message = (errorKeys[code] ? t(errorKeys[code]) : '')
+    || result?.error
     || t('texture.saveFailed');
   const details = result?.details;
   const meshes = Array.isArray(details?.meshes) ? details.meshes : [];

@@ -250,11 +250,48 @@ export function createFolderRegistryPanel({
     return true;
   }
 
-  function render(entries) {
+  function expandedNodePaths() {
+    return [...listElement.querySelectorAll(selector('node'))]
+      .filter(node => node.classList.contains('expanded'))
+      .map(node => node.querySelector(`:scope > ${selector('row')}`)
+        ?.getAttribute(pathAttribute))
+      .filter(Boolean);
+  }
+
+  function findNode(path) {
+    const key = canonicalPath(path);
+    return [...listElement.querySelectorAll(selector('node'))].find(node => {
+      const row = node.querySelector(`:scope > ${selector('row')}`);
+      return row && canonicalPath(row.getAttribute(pathAttribute)) === key;
+    });
+  }
+
+  function restoreExpanded(paths) {
+    const ordered = [...new Set(paths.map(canonicalPath))]
+      .sort((left, right) => left.split('/').length - right.split('/').length);
+    ordered.forEach(path => {
+      const node = findNode(path);
+      const arrow = node?.querySelector(
+        `:scope > ${selector('row')} ${selector('expand')}`);
+      const children = node?.querySelector(`:scope > ${selector('children')}`);
+      if (!node || !arrow || arrow.disabled || !children) return;
+      node.classList.add('expanded');
+      arrow.classList.add('expanded');
+      arrow.setAttribute('aria-expanded', 'true');
+      arrow.setAttribute('aria-label', t('folder.collapse', {
+        name: arrow.dataset.folderName,
+      }));
+      children.hidden = false;
+      if (childCache.has(path)) renderChildren(node, childCache.get(path));
+    });
+  }
+
+  function render(entries, {expandedPaths = []} = {}) {
     roots = entries || [];
     listElement.innerHTML = '';
     listElement.hidden = roots.length === 0;
     roots.forEach(entry => listElement.appendChild(createNode(entry, true)));
+    restoreExpanded(expandedPaths);
     if (emptyElement) emptyElement.hidden = roots.length !== 0;
     setActivePath(activePath);
   }
@@ -311,7 +348,10 @@ export function createFolderRegistryPanel({
     return true;
   }
 
-  window.addEventListener(LANGUAGE_CHANGED, () => render(roots));
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    const expandedPaths = expandedNodePaths();
+    render(roots, {expandedPaths});
+  });
 
   return {
     render,

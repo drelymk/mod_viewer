@@ -2,7 +2,7 @@
 
 import { confirmDialog } from '../ui/dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = id => document.getElementById(id);
 
@@ -82,6 +82,13 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
   function openAddDialog() {
     openEditor('add');
   }
+
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    if (!backdrop.classList.contains('show')) return;
+    title.textContent = editorMode === 'edit'
+      ? t('folder.editMod') : t('folder.addMod');
+    save.textContent = editorMode === 'edit' ? t('common.save') : t('common.add');
+  });
 
   async function removeFolder(entry) {
     const confirmed = await confirmDialog(t('folder.removeMod', {name: entry.name}));

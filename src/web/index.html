@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title data-i18n="app.title">3DMigoto Mod Viewer</title>
+<title data-i18n="app.windowTitle">3DMigoto Mod Viewer</title>
 <link rel="stylesheet" href="css/app.css"/>
 </head>
 <!-- __BODY_CLASS__ is rewritten at serve time to a feature-flag-off class per
@@ -321,7 +321,8 @@
     <div class="panel-hdr">
       <button type="button" class="group-toggle" aria-expanded="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
       <h3 data-i18n="panels.keyToggle">Key Toggle</h3>
-      <button id="toggle-add-btn" class="icon-btn" title="Add toggle" aria-label="Add toggle"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
+      <button id="toggle-add-btn" class="icon-btn" title="Add toggle" aria-label="Add toggle"
+              data-i18n-title="toggle.addTitle" data-i18n-aria-label="toggle.addTitle"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
     </div>
     <div id="toggle-list"></div>
   </div>

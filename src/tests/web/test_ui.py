@@ -180,6 +180,16 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         assert page.locator("#toggle-list .toggle-src-hdr").count() == 0
         assert page.locator("#menu-list .toggle-src-hdr").count() == 0
 
+        page.evaluate("""() => {
+          const addEventListener = window.addEventListener;
+          window.__sourceLanguageListenerCount = 0;
+          window.addEventListener = function(type, ...args) {
+            if (type === 'mod-viewer-language-changed') {
+              window.__sourceLanguageListenerCount += 1;
+            }
+            return addEventListener.call(this, type, ...args);
+          };
+        }""")
         page.evaluate("window.__oldDrawRow = document.querySelector('.draw-item')")
         _open(page, "Sources")
         page.wait_for_function(
@@ -205,6 +215,19 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         assert pool_identity["poolCount"] == 2
         assert pool_identity["nestedShared"]
         assert pool_identity["rootDistinct"]
+
+        assert page.evaluate("window.__sourceLanguageListenerCount") == 0
+
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        assert page.locator("#mesh-list .mesh-src-hdr").first.locator(
+            ".group-toggle").get_attribute("aria-label") == "折叠 Root.ini"
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
 
         first_header = page.locator("#mesh-list .mesh-src-hdr").first
         first_header.click()
@@ -367,6 +390,25 @@ def test_mod_folder_panel_browses_children_lazily(
         alice_node.locator(".mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Summer").wait_for()
         assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root, alice]
+
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert root_node.locator(
+            ":scope > .mod-folder-row > .mod-folder-expand").get_attribute(
+                "aria-expanded") == "true"
+        assert alice_node.locator(
+            ":scope > .mod-folder-row > .mod-folder-expand").get_attribute(
+                "aria-expanded") == "true"
+        assert page.locator(".mod-folder-select", has_text="Summer").is_visible()
+
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
 
         root_arrow = root_node.locator(":scope > .mod-folder-row > .mod-folder-expand")
         root_children = root_node.locator(":scope > .mod-folder-children")
@@ -559,6 +601,20 @@ def test_mod_folder_add_edit_delete_modal_flow(
         assert page.locator(
             "[aria-label='More actions for Original']").get_attribute(
                 "aria-expanded") == "false"
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#mfm-title").inner_text() == "编辑 MOD 文件夹"
+        assert page.locator("#mfm-save").inner_text() == "保存"
+        assert page.locator("#mfm-name").input_value() == "Original"
+        assert page.locator("#mfm-path").input_value() == original
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
         page.locator("#mfm-name").fill("Renamed")
         page.locator("#mfm-save").click()
         page.locator(".mod-folder-select", has_text="Renamed").wait_for()
@@ -717,6 +773,9 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         page.locator("#app-language").select_option("zh-CN")
         page.wait_for_function("document.documentElement.lang === 'zh-CN'")
         assert page.locator("#open-btn").text_content() == "打开 MOD"
+        assert page.evaluate("document.title") == "3DMigoto Mod Viewer"
+        assert page.locator("#toggle-add-btn").get_attribute("title") == "添加切换"
+        assert page.locator("#toggle-add-btn").get_attribute("aria-label") == "添加切换"
         assert page.locator(".health-label").text_content() == "诊断"
         assert page.locator("#appearance-popover label[for='panel-opacity']").text_content() == "面板透明度"
         assert page.locator("#ao-btn").get_attribute("aria-label").startswith("环境光遮蔽")
@@ -1460,6 +1519,31 @@ def test_texture_save_error_hides_consumed_save_action(
             "#texture-bake-body").inner_text()
 
         page.locator("#texture-bake-close").click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async () => ({
+            status: 'error',
+            code: 'mesh_has_no_uv',
+            error: 'The mesh has no UV coordinates.',
+          });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("document.querySelector('#texture-bake-error').textContent")
+        assert page.locator("#texture-bake-error").inner_text() == (
+            "网格没有 UV 坐标。")
+
+        page.locator("#texture-bake-close").click()
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""() => {

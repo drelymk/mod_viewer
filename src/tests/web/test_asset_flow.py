@@ -53,8 +53,14 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#health-close").click()
 
         summary = page.evaluate("""async () => {
-          const {summarizeAssetBindings} = await import('./js/panels/asset-diagnostics.js');
-          return summarizeAssetBindings([
+          const {assetMatchLabel, componentMatchLabel, summarizeAssetBindings} =
+            await import('./js/panels/asset-diagnostics.js');
+          const notFound = {asset_binding: {
+            status: 'not_found', component_status: 'not_found',
+            range_status: 'unknown',
+          }};
+          return {
+            summary: summarizeAssetBindings([
             {asset_binding: {
               status: 'exact', component_status: 'exact', range_status: 'exact',
               asset: 'Alice', component_name: 'Body', classification: 'A',
@@ -67,12 +73,17 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
               status: 'not_found', component_status: 'not_found',
               range_status: 'unknown',
             }},
-          ]);
+            ]),
+            assetLabel: assetMatchLabel(notFound),
+            componentLabel: componentMatchLabel(notFound),
+          };
         }""")
-        assert summary["status"] == "partial"
-        assert summary["assets"] == ["Alice"]
-        assert summary["matchedDraws"] == 2
-        assert summary["rangesVary"] is False
+        assert summary["summary"]["status"] == "partial"
+        assert summary["summary"]["assets"] == ["Alice"]
+        assert summary["summary"]["matchedDraws"] == 2
+        assert summary["summary"]["rangesVary"] is False
+        assert summary["assetLabel"] == "Not found"
+        assert summary["componentLabel"] == "Not found"
 
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()

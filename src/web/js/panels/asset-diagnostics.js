@@ -87,7 +87,7 @@ export function assetMatchLabel(binding) {
   const normalized = normalizedBinding(binding);
   if (!normalized) return label(MATCH_LABELS.unavailable);
   if (normalized.status === 'ambiguous') return label(MATCH_LABELS.ambiguous);
-  if (normalized.status === 'not_found') return label(MATCH_LABELS.notFound);
+  if (normalized.status === 'not_found') return label(MATCH_LABELS.not_found);
   if (normalized.status === 'exact'
       && normalized.componentStatus === 'exact'
       && normalized.rangeStatus === 'exact') return label(MATCH_LABELS.exact);
@@ -111,7 +111,7 @@ export function componentMatchLabel(binding) {
   if (!normalized) return label(MATCH_LABELS.unavailable);
   if (normalized.componentStatus === 'exact') return label(MATCH_LABELS.exact);
   if (normalized.componentStatus === 'ambiguous') return label(MATCH_LABELS.ambiguous);
-  if (normalized.componentStatus === 'not_found') return label(MATCH_LABELS.notFound);
+  if (normalized.componentStatus === 'not_found') return label(MATCH_LABELS.not_found);
   return label(MATCH_LABELS.unknown);
 }
 
