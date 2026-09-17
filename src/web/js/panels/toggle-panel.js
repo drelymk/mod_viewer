@@ -280,7 +280,11 @@ export function buildTogglePanel(toggles, ctx = {}) {
   if (!sections.length) {
     const empty = document.createElement('div');
     empty.className = 'toggle-empty';
-    empty.textContent = t('toggle.noToggles');
+    const syncEmptyLabel = () => {
+      empty.textContent = t('toggle.noToggles');
+    };
+    syncEmptyLabel();
+    labelSyncers.push(syncEmptyLabel);
     list.appendChild(empty);
     return;
   }

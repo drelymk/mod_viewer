@@ -817,6 +817,32 @@ def test_language_switch_updates_no_source_label_without_reload(
         context.close()
 
 
+def test_language_switch_updates_empty_toggle_label(
+        edge_browser, frontend_url):
+    payload = _payload("EmptyToggles")
+    payload["controls"]["toggles"] = {}
+    context, page = _page(edge_browser, frontend_url, {"EmptyToggles": payload})
+    try:
+        _open(page, "EmptyToggles")
+        page.locator(".draw-item").wait_for()
+        assert page.locator("#toggle-list .toggle-empty").text_content() == (
+            "No toggles yet — click Add to create one.")
+
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#toggle-list .toggle-empty").text_content() == (
+            "暂无切换——点击“添加”创建一个。")
+
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#toggle-list .toggle-empty").text_content() == (
+            "No toggles yet — click Add to create one.")
+    finally:
+        context.close()
+
+
 def test_header_setting_popovers_are_mutually_exclusive(
         edge_browser, frontend_url):
     context, page = _page(
