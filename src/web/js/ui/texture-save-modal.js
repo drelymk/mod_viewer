@@ -2,7 +2,7 @@
 
 import { bindModalDismiss, setModalError } from './modal-shell.js';
 import { createTextureSaveSession } from '../mesh/texture-save-session.js';
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = id => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
@@ -11,6 +11,7 @@ const error = $('texture-bake-error');
 const saveButton = $('texture-bake-confirm');
 
 let saveProgressElements = null;
+let currentView = null;
 
 const saveStageLabels = {
   preparing: 'texture.saveStage.preparing',
@@ -55,6 +56,7 @@ function textureFileForKey(key) {
 }
 
 function renderSavePrompt(state) {
+  currentView = {kind: 'prompt', state};
   setModalError(error, '');
   saveProgressElements = null;
   body.replaceChildren();
@@ -89,7 +91,15 @@ function renderSavePrompt(state) {
 }
 
 function formatSaveError(result) {
-  const message = result?.error || t('texture.saveFailed');
+  const errorKeys = {
+    texture_saving_unavailable: 'texture.reason.unavailable',
+    pending_color_metadata_failed: 'texture.reason.metadataFailed',
+    texture_save_failed: 'texture.reason.saveFailed',
+    texture_refresh_failed: 'texture.reason.refreshFailed',
+  };
+  const message = result?.error
+    || (errorKeys[result?.error_code] ? t(errorKeys[result.error_code]) : '')
+    || t('texture.saveFailed');
   const details = result?.details;
   const meshes = Array.isArray(details?.meshes) ? details.meshes : [];
   if (!meshes.length) return message;
@@ -99,6 +109,7 @@ function formatSaveError(result) {
 }
 
 function renderSaveError(result) {
+  currentView = {kind: 'error', result};
   saveProgressElements = null;
   body.replaceChildren();
   setModalError(error, formatSaveError(result));
@@ -106,6 +117,7 @@ function renderSaveError(result) {
 }
 
 function renderSaveSuccess(result, targetCount) {
+  currentView = {kind: 'success', result, targetCount};
   setModalError(error, '');
   saveProgressElements = null;
   body.replaceChildren();
@@ -140,6 +152,7 @@ function renderSaveSuccess(result, targetCount) {
 }
 
 function renderSaveProgress(detail = {stage: 'preparing'}) {
+  currentView = {...currentView, kind: 'progress', detail};
   if (!saveProgressElements) {
     body.replaceChildren();
     const view = document.createElement('div');
@@ -168,10 +181,8 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
   const stage = typeof detail?.stage === 'string'
     ? detail.stage : 'preparing';
   const label = t(saveStageLabels[stage] || 'texture.saveStage.saving');
-  if (saveProgressElements.stage !== stage) {
-    saveProgressElements.status.textContent = label;
-    saveProgressElements.stage = stage;
-  }
+  saveProgressElements.status.textContent = label;
+  saveProgressElements.stage = stage;
   const completed = Number(detail?.completed_blocks);
   const total = Number(detail?.total_blocks);
   if (stage === 'processing' && Number.isFinite(completed)
@@ -216,6 +227,7 @@ export function openTextureSaveModal(mesh, {isCurrent} = {}) {
     renderSavePrompt(state);
   } else {
     body.replaceChildren();
+    currentView = {kind: 'empty'};
     setSaveAction();
     setModalError(error, t('texture.noChangedMeshes'));
   }
@@ -243,3 +255,14 @@ window.addEventListener('mod-viewer-mesh-selected', () => {
 window.addEventListener(
   'mod-viewer-texture-save-progress', event =>
     textureSaveSession.handleProgress(event));
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (!backdrop?.classList.contains('show') || !currentView) return;
+  if (currentView.kind === 'prompt') renderSavePrompt(currentView.state);
+  else if (currentView.kind === 'progress') renderSaveProgress(currentView.detail);
+  else if (currentView.kind === 'error') renderSaveError(currentView.result);
+  else if (currentView.kind === 'success') {
+    renderSaveSuccess(currentView.result, currentView.targetCount);
+  }
+  saveButton?.setAttribute('aria-label', t('common.save'));
+});

@@ -231,12 +231,27 @@ function summarizeSkips(report) {
   const skipped = report.skipped || [];
   if (!skipped.length) return '';
   const shown = skipped.slice(0, 10).map((s) => t('record.line', {
-    line: s.line ?? '?', reason: s.reason,
+    line: s.line ?? '?', reason: skipReason(s),
   }));
   if (skipped.length > shown.length) shown.push(t('record.more', {
     count: skipped.length - shown.length,
   }));
   return shown.join('\n');
+}
+
+const SKIP_REASON_KEYS = Object.freeze({
+  command_path: 'record.reason.commandPath',
+  ambiguous_nesting: 'record.reason.ambiguousNesting',
+  unsupported: 'record.reason.unsupported',
+  outer_gate: 'record.reason.outerGate',
+  multiple_variables: 'record.reason.multipleVariables',
+  nested_rewrite: 'record.reason.nestedRewrite',
+  same_value: 'record.reason.sameValue',
+});
+
+function skipReason(item) {
+  const key = SKIP_REASON_KEYS[item?.reason_code];
+  return key ? t(key, item?.reason_params || {detail: item.reason}) : item?.reason;
 }
 
 function recordTargetRef(mesh, src) {

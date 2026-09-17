@@ -131,7 +131,9 @@ export function createFolderRegistryPanel({
     arrow.className = className('expand');
     arrow.textContent = '›';
     arrow.dataset.folderName = entry.name || entry.path;
-    arrow.setAttribute('aria-label', `Expand ${arrow.dataset.folderName}`);
+    arrow.setAttribute('aria-label', t('folder.assetTreeExpand', {
+      name: arrow.dataset.folderName,
+    }));
     arrow.setAttribute('aria-expanded', 'false');
     const expandable = entry.expandable !== false && entry.kind !== 'archive';
     arrow.classList.toggle('leaf', !expandable);

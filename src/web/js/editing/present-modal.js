@@ -2,11 +2,20 @@
 
 import { getToggleState } from '../mesh/visibility.js';
 import { bindModalDismiss, setModalError } from '../ui/modal-shell.js';
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
 let context = null;
+
+function syncLabels() {
+  if (!context) return;
+  const editing = context.mode === 'edit';
+  const completing = context.mode === 'complete';
+  $('pm-title').textContent = editing ? t('present.editTitle')
+    : (completing ? t('present.completeTitle') : t('present.addTitle'));
+  $('pm-save').textContent = t('common.save');
+}
 
 export function presentSnapshots(present) {
   const state = getToggleState();
@@ -32,8 +41,7 @@ export function openPresentModal({ mode, modPath, present, item, onSaved }) {
   const editing = mode === 'edit';
   const completing = mode === 'complete';
   item = context.item;
-  $('pm-title').textContent = editing ? t('present.editTitle')
-    : (completing ? t('present.completeTitle') : t('present.addTitle'));
+  syncLabels();
   $('pm-key').value = (editing || completing) ? item.key_raw : '';
   $('pm-back').value = (editing || completing) ? item.back : '';
   setError('');
@@ -84,3 +92,5 @@ bindModalDismiss({
   close,
   buttons: [$('pm-cancel')],
 });
+
+window.addEventListener(LANGUAGE_CHANGED, syncLabels);

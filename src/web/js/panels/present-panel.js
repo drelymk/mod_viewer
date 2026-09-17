@@ -5,13 +5,17 @@ import { alertDialog, confirmDialog, inputConfirmDialog } from '../ui/dialogs.js
 import { openPresentModal, presentSnapshots } from '../editing/present-modal.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { createIcon } from '../ui/ui-icons.js';
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_PRESENTS = 10;
 let current = { modPath: null, present: null, onChange: null };
 let presentViewState = { modPath: null, selectedPosition: 0 };
 let syncCurrentValue = () => {};
+
+function presentName(item, index) {
+  return item?.names?.[index] || t('present.defaultName', {number: index + 1});
+}
 
 function clampPosition(item, position) {
   if (!item?.count) return 0;
@@ -78,9 +82,9 @@ async function capture(item, position, name, allowDuplicate = false) {
     current.modPath, presentSnapshots(current.present), name, position, allowDuplicate);
   if (result.warning) {
     const labels = (result.duplicate_positions || [])
-      .map((index) => item.names[index] || `Present ${index + 1}`).join(', ');
+      .map((index) => presentName(item, index)).join(', ');
     const confirmed = await confirmDialog(t('present.duplicateConfirm', {
-      labels: labels || 'another present',
+      labels: labels || t('present.another'),
     }));
     return confirmed ? capture(item, position, name, true) : null;
   }
@@ -110,11 +114,14 @@ function buildItem(item, { applySelection = false } = {}) {
   header.className = 'toggle-hdr';
   const fields = document.createElement('div');
   fields.className = 'present-fields';
-  for (const [label, value] of [['Key', item.key], ['Back', item.back]]) {
+  for (const [label, value] of [
+    [t('present.keyLabel', {value: item.key}), item.key],
+    [t('present.backLabel', {value: item.back}), item.back],
+  ]) {
     if (!value) continue;
     const badge = document.createElement('span');
     badge.className = 'toggle-key';
-    badge.textContent = `${label}: ${value}`;
+    badge.textContent = label;
     fields.appendChild(badge);
   }
   header.append(fields);
@@ -131,7 +138,7 @@ function buildItem(item, { applySelection = false } = {}) {
   name.className = 'toggle-value';
   const showName = () => {
     name.textContent = synchronized
-      ? (item.names[position] || `Present ${position + 1}`)
+      ? presentName(item, position)
       : t('present.unavailable');
   };
   const sync = () => {
@@ -175,7 +182,7 @@ function buildItem(item, { applySelection = false } = {}) {
     ? t('present.limit', {count: MAX_PRESENTS})
     : (add.disabled ? t('present.noCapture') : '');
   add.addEventListener('click', async () => {
-    const defaultName = `Present ${item.count + 1}`;
+    const defaultName = presentName({names: []}, item.count);
     const chosen = await inputConfirmDialog(
       t('present.namePrompt'), defaultName);
     if (chosen === null) return;
@@ -192,8 +199,8 @@ function buildItem(item, { applySelection = false } = {}) {
   replace.title = replace.disabled ? t('present.noCapture') : t('present.replace');
   replace.addEventListener('click', async () => {
     const chosen = await inputConfirmDialog(
-      `Replace ${item.names[position] || `Present ${position + 1}`} with the current key and menu toggle states?`,
-      item.names[position] || `Present ${position + 1}`);
+      t('present.replacePrompt', {name: presentName(item, position)}),
+      presentName(item, position));
     if (chosen === null) return;
     if (!chosen) return alertDialog(t('present.nameRequired'));
     if (!await capture(item, position, chosen)) return;
@@ -207,7 +214,7 @@ function buildItem(item, { applySelection = false } = {}) {
   remove.disabled = item.count <= 1;
   remove.title = remove.disabled ? t('present.only') : '';
   remove.addEventListener('click', async () => {
-    const label = item.names[position] || `Present ${position + 1}`;
+    const label = presentName(item, position);
     if (!await confirmDialog(t('present.deletePosition', {name: label}))) return;
     const result = await window.pywebview.api.delete_present_position(
       current.modPath, position);
@@ -282,3 +289,13 @@ export function buildPresentPanel(present, context = {}) {
   if (current.applySelection) refreshAll();
   else syncCurrentValue();
 }
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (!current.modPath || !current.present) return;
+  buildPresentPanel(current.present, {
+    modPath: current.modPath,
+    onChange: current.onChange,
+    selectedPosition: presentViewState.selectedPosition,
+    applySelection: false,
+  });
+});

@@ -720,6 +720,10 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         assert page.locator(".health-label").text_content() == "诊断"
         assert page.locator("#appearance-popover label[for='panel-opacity']").text_content() == "面板透明度"
         assert page.locator("#ao-btn").get_attribute("aria-label").startswith("环境光遮蔽")
+        assert page.locator("#shading-btn").get_attribute("title").startswith("平滑着色")
+        assert page.locator("#trackball-btn").get_attribute("aria-label").startswith("切换导航控件")
+        assert page.locator(".gizmo-axis.axis-x.positive").get_attribute("aria-label") == "从正 X 轴查看"
+        assert page.locator("#empty-add-folder-btn").text_content() == "添加 MOD 文件夹"
         assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN"]
         assert page.evaluate("window.__fakeApi.calls.loadMod.length") == load_count
 

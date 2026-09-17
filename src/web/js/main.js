@@ -365,10 +365,12 @@ rendererReady.then(ready => {
   const updateEmptyFolderAction = hasFolders => {
     hasModFolders = !!hasFolders;
     emptyFolderAction.textContent = hasModFolders
-      ? 'Open Mod Folder' : 'Add Mod Folder';
+      ? t('empty.openModFolder') : t('empty.addModFolder');
     emptyFolderAction.setAttribute('aria-label', emptyFolderAction.textContent);
   };
   updateEmptyFolderAction(false);
+  window.addEventListener(LANGUAGE_CHANGED, () =>
+    updateEmptyFolderAction(hasModFolders));
   const modFolderPanel = initModFolderPanel({
     switchMod,
     onRegistryChanged: updateEmptyFolderAction,

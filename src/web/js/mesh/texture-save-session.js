@@ -76,26 +76,25 @@ export function canSaveTexture(mesh) {
   const parsed = splitTextureKey(key);
   const editable = canEditMeshColor(mesh);
   if (data.assetFill === true || isAssetTextureKey(key)) {
-    return { editable: false, reason: 'asset-texture', message: 'Asset textures are read-only.' };
+    return { editable: false, reason: 'asset-texture' };
   }
   if (!editable.editable || !parsed || parsed.role !== 'diffuse') {
-    return { editable: false, reason: 'no-diffuse', message: 'Select a diffuse texture before saving.' };
+    return { editable: false, reason: 'no-diffuse' };
   }
   if (viewerState.currentSource?.kind === 'mod'
       && viewerState.currentSource?.readOnly === true) {
     return {
       editable: false,
       reason: 'compressed-mod',
-      message: 'Save to Texture is unavailable for compressed mods.',
     };
   }
   if (!viewerState.currentModPath || !samePath(data.modPath, viewerState.currentModPath)) {
-    return { editable: false, reason: 'different-mod', message: 'The selected mesh belongs to a different mod.' };
+    return { editable: false, reason: 'different-mod' };
   }
   if (!parsed.path.toLowerCase().endsWith('.dds')) {
-    return { editable: false, reason: 'unsupported-texture-type', message: 'Texture saving currently requires a DDS source.' };
+    return { editable: false, reason: 'unsupported-texture-type' };
   }
-  return { editable: true, reason: null, message: '' };
+  return { editable: true, reason: null };
 }
 
 /** Return every changed, color-editable mesh using the selected physical DDS. */
@@ -324,7 +323,7 @@ export function createTextureSaveSession({
   async function runSave(job) {
     const api = window.pywebview?.api?.save_texture_color;
     if (typeof api !== 'function') {
-      onError({status: 'error', error: 'Texture saving is unavailable.'});
+      onError({status: 'error', error_code: 'texture_saving_unavailable'});
       return null;
     }
     saving = true;
@@ -340,8 +339,7 @@ export function createTextureSaveSession({
       activeSaveRequestId = null;
       onError({
         status: 'error',
-        error: 'The pending Color metadata could not be saved. '
-          + 'Texture saving was cancelled.',
+        error_code: 'pending_color_metadata_failed',
       });
       return null;
     }
@@ -366,7 +364,7 @@ export function createTextureSaveSession({
         textureSaveTargetsPayload(job.state), job.state.textureUsage,
         requestId);
     } catch (_requestError) {
-      result = {status: 'error', error: 'Texture save failed.'};
+      result = {status: 'error', error_code: 'texture_save_failed'};
     }
     if (result?.status !== 'ok') {
       saving = false;
@@ -380,7 +378,7 @@ export function createTextureSaveSession({
     } catch (_refreshError) {
       onError({
         status: 'error',
-        error: 'Texture saved, but the viewer could not refresh it.',
+        error_code: 'texture_refresh_failed',
       });
       return result;
     } finally {

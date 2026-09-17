@@ -439,6 +439,8 @@ def test_record_refuses_path_owned_target_without_mutation():
         "reason": "draw is reached through a run= command-list execution "
                   "path without a physical owner for this variable; edit the "
                   "caller branch manually",
+        "reason_code": "command_path",
+        "reason_params": {},
     }]
     assert d.to_string() == before
 

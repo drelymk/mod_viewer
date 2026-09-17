@@ -1,16 +1,26 @@
 // Custom confirm/alert dialogs.
 
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
 let resolveActive = null;
+let activeHasInput = false;
+
+function syncActiveLabels() {
+  if (!$('dialog-backdrop').classList.contains('show')) return;
+  const button = $('dialog-ok');
+  button.textContent = activeHasInput ? t('common.yes') : t('common.ok');
+  button.dataset.i18n = activeHasInput ? 'common.yes' : 'dialog.ok';
+}
 
 function close(result) {
   $('dialog-backdrop').classList.remove('show');
   $('dialog-input').style.display = 'none';
   const resolve = resolveActive;
   resolveActive = null;
+  activeHasInput = false;
+  $('dialog-ok').dataset.i18n = 'dialog.ok';
   if (resolve) resolve(result);
 }
 
@@ -21,10 +31,11 @@ function open(message, { cancelable, inputValue } = {}) {
     $('dialog-cancel').style.display = cancelable ? '' : 'none';
     const input = $('dialog-input');
     const hasInput = inputValue !== undefined;
+    activeHasInput = hasInput;
     input.style.display = hasInput ? 'block' : 'none';
     input.value = hasInput ? inputValue : '';
-    $('dialog-ok').textContent = hasInput ? t('common.yes') : t('common.ok');
     $('dialog-backdrop').classList.add('show');
+    syncActiveLabels();
     (hasInput ? input : $('dialog-ok')).focus();
     if (hasInput) input.select();
   });
@@ -55,3 +66,5 @@ document.addEventListener('keydown', (evt) => {
   if (!$('dialog-backdrop').classList.contains('show')) return;
   if (evt.key === 'Escape') close(false);
 });
+
+window.addEventListener(LANGUAGE_CHANGED, syncActiveLabels);

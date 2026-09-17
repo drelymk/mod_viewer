@@ -1,6 +1,7 @@
 // Exact shared source grouping/collapse behavior used by the three panels.
 
 import { createIcon } from './ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let sourceSectionId = 0;
 
@@ -28,7 +29,11 @@ export function buildSourceSection(source, container, {
   chevron.type = 'button';
   chevron.className = 'group-toggle';
   chevron.setAttribute('aria-expanded', 'true');
-  chevron.setAttribute('aria-label', `Collapse ${source}`);
+  const syncLabel = () => {
+    const collapsed = items.classList.contains('collapsed');
+    chevron.setAttribute('aria-label', t(
+      collapsed ? 'panel.expandSource' : 'panel.collapseSource', {source}));
+  };
   chevron.appendChild(createIcon('chevron-down'));
   const name = document.createElement('span');
   name.className = 'group-name';
@@ -38,14 +43,16 @@ export function buildSourceSection(source, container, {
   const items = document.createElement('div');
   items.className = itemsClass;
   items.id = `source-section-${++sourceSectionId}`;
+  syncLabel();
   chevron.setAttribute('aria-controls', items.id);
   header.addEventListener('click', () => {
     const collapsed = !items.classList.contains('collapsed');
     chevron.classList.toggle('collapsed', collapsed);
     chevron.setAttribute('aria-expanded', String(!collapsed));
-    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${source}`);
     items.classList.toggle('collapsed', collapsed);
+    syncLabel();
   });
+  window.addEventListener(LANGUAGE_CHANGED, syncLabel);
   container.append(header, items);
   return items;
 }
@@ -60,7 +67,9 @@ export function initPanelCollapse(panel, contentId) {
     chevron.classList.toggle('collapsed', collapsed);
     content.classList.toggle('collapsed', collapsed);
     chevron.setAttribute('aria-expanded', String(!collapsed));
-    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${panel.querySelector('h3')?.textContent || 'panel'}`);
+    const name = panel.querySelector('h3')?.textContent || t('panel.default');
+    chevron.setAttribute('aria-label', t(
+      collapsed ? 'panel.expandPanel' : 'panel.collapsePanel', {name}));
     if (persist) {
       try { localStorage.setItem(storageKey, String(collapsed)); } catch (_) { /* private mode */ }
     }
@@ -79,4 +88,6 @@ export function initPanelCollapse(panel, contentId) {
     setCollapsed(!content.classList.contains('collapsed'));
   });
   chevron.addEventListener('click', toggle);
+  window.addEventListener(LANGUAGE_CHANGED, () =>
+    setCollapsed(content.classList.contains('collapsed'), false));
 }

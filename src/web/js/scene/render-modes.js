@@ -51,6 +51,12 @@ function updateRenderModeLabels() {
     toonButton.title = label;
     toonButton.setAttribute('aria-label', label);
   }
+  const shadingButton = document.getElementById('shading-btn');
+  if (shadingButton) {
+    const label = t('render.shading', {state: stateWord(smoothShading)});
+    shadingButton.title = label;
+    shadingButton.setAttribute('aria-label', label);
+  }
   const textureButton = document.getElementById('texture-btn');
   if (textureButton) {
     const mode = textureModes[textureModeIndex];

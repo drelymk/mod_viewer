@@ -64,9 +64,9 @@ export async function refreshPendingState(
     && viewerState.currentSource?.readOnly === true;
   $('export-btn').disabled = readOnlySource || !pending || blocked;
   $('export-btn').title = readOnlySource
-    ? t('errors.exportBlocked', {detail: 'Export is unavailable for compressed mods.'})
+    ? t('errors.exportBlocked', {detail: t('model.exportCompressedDetail')})
     : blocked
-    ? t('errors.exportBlocked', {detail: 'A newly-added toggle isn\'t wired to any mesh yet — Record (⏺) or delete it before exporting.'})
+    ? t('errors.exportBlocked', {detail: t('model.unwiredToggleDetail')})
     : '';
 }
 
@@ -144,7 +144,7 @@ function beginModLoad(path, message, {
   showLoading(true, message);
 }
 
-function beginAssetLoad(path, entry, message = 'Loading Asset…', {
+function beginAssetLoad(path, entry, message = t('status.loadingAsset'), {
   preserveModelOrientation = false,
 } = {}) {
   viewerState.assetFill.epoch += 1;
@@ -161,7 +161,7 @@ function beginAssetLoad(path, entry, message = 'Loading Asset…', {
   }));
   $('hint').style.display = 'none';
   $('empty-actions').style.display = 'none';
-  $('mod-path').textContent = `Asset Preview  —  ${path}`;
+  $('mod-path').textContent = t('model.assetPreviewSeparator', {name: path});
   $('mod-path').title = path;
   setAssetResolution(null);
   showLoading(true, message);
@@ -350,7 +350,7 @@ async function loadAssetAt(path, entry = {}, handlers = {}) {
     return false;
   }
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
-  $('mod-path').textContent = `Asset Preview  —  ${folderName}`;
+  $('mod-path').textContent = t('model.assetPreviewSeparator', {name: folderName});
   $('mod-path').title = path;
   viewerState.displayedModPath = null;
   viewerState.displayedSource = { ...viewerState.currentSource };

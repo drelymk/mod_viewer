@@ -9,6 +9,7 @@ import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.j
 import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -39,7 +40,12 @@ function buildMenuItem(info) {
   const btn = document.createElement('button');
   btn.className = 'toggle-cycle-btn';
   btn.appendChild(createIcon('cycle'));
-  btn.title = `Cycle $${displayName(info.var)} (menu slot ${info.slot})`;
+  const syncLabel = () => {
+    btn.title = t('menu.cycle', {
+      variable: displayName(info.var), slot: info.slot,
+    });
+  };
+  syncLabel();
   if (info.image_slot) {
     btn.classList.add('menu-image-btn');
     btn.replaceChildren();
@@ -71,7 +77,10 @@ function buildMenuItem(info) {
   });
 
   item.append(btn, nameSpan, valSpan);
-  return { item, sync: () => { valSpan.textContent = getToggleValue(info.var); } };
+  return { item, sync: () => {
+    syncLabel();
+    valSpan.textContent = getToggleValue(info.var);
+  } };
 }
 
 function buildShapeSlider(info) {
@@ -116,6 +125,8 @@ let syncers = [];
 export function refreshMenuValues() {
   syncView('menu-panel');
 }
+
+window.addEventListener(LANGUAGE_CHANGED, refreshMenuValues);
 
 /**
  * Build the panel from the structured controls.menu model. Hidden entirely when the

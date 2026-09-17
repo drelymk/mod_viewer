@@ -136,7 +136,7 @@ export async function refreshMeshSemantics(handlers = {}) {
     });
     if (!update.success) {
       await alertDialog(t('errors.refreshSemantics', {
-        detail: 'The staged draw set no longer matches the displayed model.',
+        detail: t('semanticRefresh.drawMismatch'),
       }));
       return false;
     }

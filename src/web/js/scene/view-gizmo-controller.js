@@ -1,6 +1,7 @@
 // Blender-style DOM view gizmo: snap, orbit drag, keyboard and wheel zoom.
 
 import * as THREE from 'three';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 export function createViewGizmoController({ camera, controls, element, onChange }) {
   const axes = [...element.querySelectorAll('.gizmo-axis')];
@@ -14,6 +15,26 @@ export function createViewGizmoController({ camera, controls, element, onChange 
   let visible = true;
   let snap = null;
   let drag = null;
+
+  function syncAxisLabels() {
+    axes.forEach(axis => {
+      const key = Number(axis.dataset.sign) < 0
+        ? 'gizmo.viewNegative' : 'gizmo.viewPositive';
+      axis.setAttribute('aria-label', t(key, {axis: axis.dataset.axis.toUpperCase()}));
+    });
+  }
+
+  function syncToggleLabel() {
+    const button = document.getElementById('trackball-btn');
+    if (!button) return;
+    const label = t('gizmo.toggle', {
+      state: visible ? t('common.on') : t('common.off'),
+    });
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  }
+  syncAxisLabels();
+  syncToggleLabel();
 
   function snapToAxis(axisName, sign) {
     const targetDirection = axisVectors[axisName].clone().multiplyScalar(sign);
@@ -167,12 +188,17 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     button.classList.toggle('active', visible);
     button.classList.toggle('off', !visible);
     button.setAttribute('aria-pressed', String(visible));
-    button.setAttribute('aria-label', `Toggle navigation gizmo: ${visible ? 'on' : 'off'}`);
+    syncToggleLabel();
   }
 
   function cancelSnap() {
     snap = null;
   }
+
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    syncAxisLabels();
+    syncToggleLabel();
+  });
 
   return { cancelSnap, toggle, updateAxes, updateSnap };
 }

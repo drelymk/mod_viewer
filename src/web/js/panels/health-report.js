@@ -207,7 +207,7 @@ export function setHealthLoader(loader) {
   if (!currentReport) setHealthReport(null);
 }
 
-function fallbackReport(message = 'The INI diagnostics could not be completed.') {
+function fallbackReport(message = t('health.incomplete')) {
   return {
     summary: { errors: 0, warnings: 1, issues: 1 },
     files: {},

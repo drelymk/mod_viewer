@@ -14,7 +14,7 @@ import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { cyclePositionCount, cycleValueAt } from '../editing/cycle-values.js';
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -42,6 +42,12 @@ function findCyclePosition(vars, positions, preferred = -1) {
 // panel header is wired once below and reads the latest ctx at click time.
 let currentCtx = { modPath: null, onChange: null };
 let valueSyncers = [];
+let labelSyncers = [];
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  labelSyncers.forEach(sync => sync());
+  syncView('toggle-panel');
+});
 
 export function refreshToggleValues() {
   syncView('toggle-panel');
@@ -65,9 +71,12 @@ function setOthersEnabled(enabled, exceptItem) {
 
 function summarizeReport(report) {
   const lines = [
-    ...(report.always_false_gates || []).map((l) => `always-false gate at line ${l}`),
-    ...(report.always_true_gates || []).map((l) => `always-true gate at line ${l}`),
-    ...(report.unsafe_gates || []).map((l) => `unresolved gate at line ${l}`),
+    ...(report.always_false_gates || []).map((line) => t(
+      'toggle.reportAlwaysFalse', {line})),
+    ...(report.always_true_gates || []).map((line) => t(
+      'toggle.reportAlwaysTrue', {line})),
+    ...(report.unsafe_gates || []).map((line) => t(
+      'toggle.reportUnsafe', {line})),
   ];
   return lines.join('\n');
 }
@@ -106,6 +115,7 @@ function buildToggleItem(info, ctx) {
   nameSpan.className = 'toggle-name';
   nameSpan.textContent = info.name;
   left.appendChild(nameSpan);
+  let warnBadge = null;
   if (info.key) {
     const keyBadge = document.createElement('span');
     keyBadge.className = 'toggle-key';
@@ -113,9 +123,10 @@ function buildToggleItem(info, ctx) {
     left.appendChild(keyBadge);
   }
   if (info.wired === false) {
-    const warnBadge = document.createElement('span');
+    warnBadge = document.createElement('span');
     warnBadge.className = 'toggle-unwired-badge';
     warnBadge.appendChild(createIcon('diagnostics'));
+    warnBadge.dataset.i18nTitle = 'toggle.unwired';
     warnBadge.title = t('toggle.unwired');
     left.appendChild(warnBadge);
   }
@@ -197,10 +208,12 @@ function buildToggleItem(info, ctx) {
   recordRow.style.display = 'none';
   const saveBtn = document.createElement('button');
   saveBtn.className = 'toggle-record-save';
-  saveBtn.textContent = 'Save';
+  saveBtn.dataset.i18n = 'common.save';
+  saveBtn.textContent = t('common.save');
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'toggle-record-cancel';
-  cancelBtn.textContent = 'Cancel';
+  cancelBtn.dataset.i18n = 'common.cancel';
+  cancelBtn.textContent = t('common.cancel');
   recordRow.append(saveBtn, cancelBtn);
   item.appendChild(recordRow);
 
@@ -212,6 +225,23 @@ function buildToggleItem(info, ctx) {
       enableOthers: () => setOthersEnabled(true, item),
     });
   });
+
+  const syncLabels = () => {
+    editBtn.title = t('toggle.edit');
+    editBtn.setAttribute('aria-label', t('toggle.edit'));
+    deleteBtn.title = t('toggle.delete');
+    deleteBtn.setAttribute('aria-label', t('toggle.delete'));
+    recordBtn.title = t('toggle.record');
+    recordBtn.setAttribute('aria-label', t('toggle.recordAria'));
+    if (!item.classList.contains('recording')) {
+      btn.title = t('toggle.cycle');
+      btn.setAttribute('aria-label', t('toggle.cycle'));
+    }
+    if (warnBadge) warnBadge.title = t('toggle.unwired');
+    saveBtn.textContent = t('common.save');
+    cancelBtn.textContent = t('common.cancel');
+  };
+  labelSyncers.push(syncLabels);
 
   return item;
 }
@@ -235,6 +265,7 @@ export function buildTogglePanel(toggles, ctx = {}) {
   const panel = document.getElementById('toggle-panel');
   list.innerHTML = '';
   valueSyncers = [];
+  labelSyncers = [];
   registerViewSync('toggle-panel', () => {
     valueSyncers.forEach(sync => sync());
   });
