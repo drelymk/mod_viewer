@@ -11,6 +11,7 @@ import {
   canSaveTexture, getTextureSaveTargets,
 } from '../mesh/texture-save-session.js';
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
+import { t } from '../i18n/index.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -63,15 +64,15 @@ function basename(value) {
 function textureOptionLabel(option) {
   return option?.label || basename(option?.file)
     || basename(String(option?.tex_key || '').split('::').slice(1).join('::'))
-    || 'Texture';
+    || t('inspector.texture');
 }
 
 function automaticTextureLabel(resolved, pool) {
-  if (!resolved) return 'Automatic';
+  if (!resolved) return t('inspector.automatic');
   const option = pool.find(item => item.tex_key === resolved);
   if (option) return `Automatic · ${textureOptionLabel(option)}`;
   const file = String(resolved).split('::').slice(1).join('::');
-  return file ? `Automatic · ${basename(file)}` : 'Automatic';
+  return file ? `${t('inspector.automatic')} · ${basename(file)}` : t('inspector.automatic');
 }
 
 function componentContext(record) {
@@ -97,7 +98,7 @@ function buildHeader(content, title, context, titleHint = '') {
 function buildMaterialControl(record) {
   const select = document.createElement('select');
   select.className = 'inspector-material-kind-control material-kind-select';
-  select.setAttribute('aria-label', 'Material kind');
+  select.setAttribute('aria-label', t('inspector.materialKind'));
   MATERIAL_KIND_OPTIONS.forEach(([value, label]) => {
     const option = document.createElement('option');
     option.value = value;
@@ -124,12 +125,12 @@ function buildMaterialSection(content, record) {
   section.className = 'inspector-section inspector-material-section';
   const title = document.createElement('div');
   title.className = 'inspector-section-title';
-  title.textContent = 'Material';
+  title.textContent = t('inspector.material');
   section.appendChild(title);
   if (record.getMaterialKind || record.setMaterialKind) {
     section.appendChild(buildMaterialControl(record));
   } else {
-    addText(section, 'inspector-muted', 'Auto');
+    addText(section, 'inspector-muted', t('inspector.automatic'));
   }
   content.appendChild(section);
 }
@@ -139,7 +140,7 @@ function buildManageTexturesButton(openTextureManager) {
   const manage = document.createElement('button');
   manage.type = 'button';
   manage.className = 'ui-button inspector-manage-textures';
-  manage.textContent = 'Manage textures';
+  manage.textContent = t('inspector.manageTextures');
   manage.addEventListener('click', () => openTextureManager());
   return manage;
 }
@@ -149,11 +150,11 @@ function buildComponentTextureSection(content, record) {
   section.className = 'inspector-section inspector-textures-section';
   const title = document.createElement('div');
   title.className = 'inspector-section-title';
-  title.textContent = 'Textures';
+  title.textContent = t('inspector.textures');
   section.appendChild(title);
   const pool = record.texturePool || [];
   addText(section, 'inspector-texture-count', pool.length
-    ? `${pool.length} available` : 'No textures discovered');
+    ? t('inspector.available', {count: pool.length}) : t('inspector.noneDiscovered'));
   const manage = buildManageTexturesButton(record.openTextureManager);
   if (manage) section.appendChild(manage);
   content.appendChild(section);
@@ -165,13 +166,13 @@ function buildTextureControls(content, record, mesh) {
   section.className = 'inspector-section inspector-texture-section';
   const title = document.createElement('div');
   title.className = 'inspector-section-title';
-  title.textContent = 'Texture';
+  title.textContent = t('inspector.texture');
   section.appendChild(title);
   const pool = component?.texturePool || [];
   const override = component?.getTextureOverride?.(mesh) || {
     value: undefined, automatic: true, resolved: null,
   };
-  if (!pool.length) addText(section, 'inspector-muted', 'No textures discovered');
+  if (!pool.length) addText(section, 'inspector-muted', t('inspector.noneDiscovered'));
   const list = document.createElement('div');
   list.className = 'inspector-texture-list';
   const addOption = (label, value, selected, choice, titleText = '') => {
@@ -194,7 +195,7 @@ function buildTextureControls(content, record, mesh) {
     textureOptionLabel(option), option.tex_key,
     !override.automatic && override.value === option.tex_key,
     'texture', option.file || option.label || option.tex_key));
-  addOption('None', null, !override.automatic && override.value === null, 'none');
+  addOption(t('inspector.none'), null, !override.automatic && override.value === null, 'none');
   section.appendChild(list);
   const manage = buildManageTexturesButton(component?.openTextureManager);
   if (manage) section.appendChild(manage);
@@ -209,7 +210,7 @@ function updateTextureControlState(content, mesh, component) {
     '.inspector-texture-option[data-texture-choice="automatic"]');
   if (automatic) {
     automatic.textContent = automaticTextureLabel(override.resolved, pool);
-    automatic.title = override.resolved || 'Automatic';
+    automatic.title = override.resolved || t('inspector.automatic');
   }
   content.querySelectorAll('.inspector-texture-option').forEach(option => {
     const selected = option.dataset.textureChoice === 'automatic'
@@ -327,7 +328,7 @@ function syncTextureSaveAction(section, mesh) {
   }
   const hasTargets = getTextureSaveTargets(mesh).length > 0;
   action.disabled = !hasTargets;
-  action.title = hasTargets ? '' : 'Adjust a mesh color before saving.';
+    action.title = hasTargets ? '' : t('inspector.adjustBeforeSave');
 }
 
 function updateColorAdjustment(section, mesh, field, controlValue,
@@ -344,10 +345,10 @@ function buildTextureSaveAction(section, mesh) {
     const bake = document.createElement('button');
     bake.type = 'button';
     bake.className = 'ui-button inspector-texture-bake';
-    bake.textContent = 'Save to Texture...';
+    bake.textContent = t('inspector.saveTexture');
     const hasTargets = getTextureSaveTargets(mesh).length > 0;
     bake.disabled = !hasTargets;
-    if (!hasTargets) bake.title = 'Adjust a mesh color before saving.';
+    if (!hasTargets) bake.title = t('inspector.adjustBeforeSave');
     bake.addEventListener('click', async () => {
       bake.disabled = true;
       try {
@@ -364,7 +365,7 @@ function buildTextureSaveAction(section, mesh) {
     const bake = document.createElement('button');
     bake.type = 'button';
     bake.className = 'ui-button inspector-texture-bake';
-    bake.textContent = 'Save to Texture...';
+    bake.textContent = t('inspector.saveTexture');
     bake.disabled = true;
     bake.title = eligibility.message;
     section.appendChild(bake);
@@ -378,7 +379,7 @@ function buildColorSection(content, mesh) {
   section.className = 'inspector-section inspector-color-section';
   const title = document.createElement('div');
   title.className = 'inspector-section-title';
-  title.textContent = 'Color';
+  title.textContent = t('inspector.color');
   section.appendChild(title);
 
   const eligibility = canEditMeshColor(mesh);
@@ -417,7 +418,7 @@ function buildColorSection(content, mesh) {
 
   const rgbTitle = document.createElement('div');
   rgbTitle.className = 'inspector-color-subtitle';
-  rgbTitle.textContent = 'RGB';
+  rgbTitle.textContent = t('inspector.rgb');
   section.appendChild(rgbTitle);
   addSlider('red', 'R', 0, 200, 1);
   addSlider('green', 'G', 0, 200, 1);
@@ -427,7 +428,7 @@ function buildColorSection(content, mesh) {
   tint.className = 'inspector-color-tint';
   const tintLabel = document.createElement('span');
   tintLabel.className = 'inspector-color-control-heading';
-  tintLabel.textContent = 'Tint';
+  tintLabel.textContent = t('inspector.tint');
   const tintInput = document.createElement('input');
   tintInput.type = 'color';
   tintInput.setAttribute('aria-label', 'Tint color');
@@ -440,7 +441,7 @@ function buildColorSection(content, mesh) {
   const clearTint = document.createElement('button');
   clearTint.type = 'button';
   clearTint.className = 'ui-button inspector-color-tint-clear';
-  clearTint.textContent = 'Clear';
+  clearTint.textContent = t('common.clear');
   clearTint.disabled = adjustment.tint === null;
   clearTint.setAttribute('aria-label', 'Clear tint');
   const applyTint = persist => {
@@ -465,7 +466,7 @@ function buildColorSection(content, mesh) {
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'ui-button inspector-color-reset';
-  reset.textContent = 'Reset Color';
+  reset.textContent = t('inspector.resetColor');
   reset.addEventListener('click', () => {
     resetMeshColorAdjustment(mesh, { persist: true, render: true });
     updateColorControlState(content, mesh);

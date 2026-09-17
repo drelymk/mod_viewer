@@ -3,6 +3,7 @@
 
 import { openIniEditor } from '../editing/ini-editor.js';
 import { bindModalDismiss } from '../ui/modal-shell.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,23 +39,25 @@ function renderAssetResolution() {
   const exact = Number(summary.exact_draws) || 0;
   const total = Number(summary.total_draws) || 0;
   const parts = summary.index_status === 'unavailable'
-    ? ['Asset resolution: index unavailable']
+    ? [t('health.assetIndexUnavailable')]
     : summary.index_status === 'partial'
-      ? [`Asset resolution: ${summary.ready_roots || 0} of `
-        `${summary.configured_roots || 0} indexes available`]
-      : [`Asset resolution: ${exact} / ${total} draws exact`];
+      ? [t('health.assetIndexesAvailable', {
+        ready: summary.ready_roots || 0,
+        configured: summary.configured_roots || 0,
+      })]
+      : [t('health.assetDrawsExact', {exact, total})];
   for (const [key, label] of [
-    ['partial_draws', 'partial'],
-    ['ambiguous_draws', 'ambiguous'],
-    ['unmatched_draws', 'not found'],
+    ['partial_draws', 'health.partial'],
+    ['ambiguous_draws', 'health.ambiguous'],
+    ['unmatched_draws', 'health.notFound'],
   ]) {
     const count = Number(summary[key]) || 0;
-    if (count) parts.push(`${count} ${label}`);
+    if (count) parts.push(`${count} ${t(label)}`);
   }
   const components = Array.isArray(summary.components)
     ? summary.components : [];
   const mixed = components.filter(item => item.status === 'mixed').length;
-  if (mixed) parts.push(`${mixed} mixed component${mixed === 1 ? '' : 's'}`);
+  if (mixed) parts.push(`${mixed} ${t('health.mixed')}${mixed === 1 ? '' : 's'}`);
   node.textContent = parts.join(' · ');
   node.hidden = false;
 }
@@ -63,10 +66,11 @@ function renderReport() {
   const report = currentReport || { summary: {}, files: {}, issues: [] };
   const summary = report.summary || {};
   const files = report.files || {};
-  $('health-summary').textContent =
-    `${summary.errors || 0} errors · ${summary.warnings || 0} warnings · ` +
-    `${files.referenced || 0} referenced assets · ${files.inactive_only || 0} inactive-only · ` +
-    `${files.viewer_only || 0} viewer-only`;
+  $('health-summary').textContent = t('health.summary', {
+    errors: summary.errors || 0, warnings: summary.warnings || 0,
+    referenced: files.referenced || 0, inactive: files.inactive_only || 0,
+    viewer: files.viewer_only || 0,
+  });
   renderAssetResolution();
 
   const issues = (report.issues || []).filter(matchesFilter);
@@ -76,8 +80,8 @@ function renderReport() {
     const empty = document.createElement('div');
     empty.className = 'health-empty';
     empty.textContent = currentFilter === 'all'
-      ? 'No INI issues found.'
-      : 'No issues match this filter.';
+      ? t('health.noIssues')
+      : t('health.noFilterIssues');
     list.appendChild(empty);
     return;
   }
@@ -98,7 +102,7 @@ function renderReport() {
       item.className = `health-item ${issue.severity || 'warning'}`;
       if (issue.ini) {
         item.classList.add('navigable');
-        item.title = 'Double-click to open this INI at the reported line';
+        item.title = t('health.openAtLine');
         item.addEventListener('dblclick', () => {
           closeReport();
           openIniEditor(issue.ini, issue.line || 1);
@@ -126,7 +130,7 @@ function renderReport() {
       if (Array.isArray(issue.files) && issue.files.length) {
         const detail = document.createElement('div');
         detail.className = 'health-detail';
-        detail.textContent = `Files: ${issue.files.join(', ')}`;
+        detail.textContent = t('health.files', {files: issue.files.join(', ')});
         body.appendChild(detail);
       }
       if (issue.source) {
@@ -153,12 +157,12 @@ export function setHealthReport(report, assetResolution = undefined) {
   button.classList.toggle('warning', !!report && count > 0 && errors === 0);
   button.classList.toggle('error', errors > 0);
   $('health-count').textContent = String(count);
-  button.title = !report ? (reportLoader ? 'Run INI diagnostics' : 'Open a mod to run INI diagnostics')
-    : count ? `${count} INI diagnostic issue${count === 1 ? '' : 's'}`
-      : 'No INI issues found';
+  button.title = !report ? (reportLoader ? t('health.run') : t('health.open'))
+    : count ? t('health.issue', {count, suffix: count === 1 ? '' : 's'})
+      : t('health.noIssues');
   button.setAttribute('aria-label', !report
-    ? (reportLoader ? 'Run INI diagnostics' : 'Open a mod to run INI diagnostics')
-    : `${count} INI diagnostic issue${count === 1 ? '' : 's'}. Open diagnostics`);
+    ? (reportLoader ? t('health.run') : t('health.open'))
+    : t('health.issueOpen', {count, suffix: count === 1 ? '' : 's'}));
   if ($('health-modal-backdrop').classList.contains('show')) renderReport();
 }
 
@@ -197,7 +201,7 @@ export function refreshHealthReport({force = false} = {}) {
   entry.promise = (async () => {
     const button = $('health-btn');
     button.disabled = true;
-    button.title = 'Running INI diagnostics…';
+    button.title = t('health.running');
     try {
       const report = await loader();
       if (generation !== reportGeneration || loader !== reportLoader
@@ -210,7 +214,7 @@ export function refreshHealthReport({force = false} = {}) {
           || requestId !== healthRequestId) return null;
       const detail = error?.message ? `: ${error.message}` : '';
       const fallback = fallbackReport(
-        `The INI diagnostics could not be completed${detail}`);
+        t('health.incomplete', {detail}));
       setHealthReport(fallback);
       return fallback;
     } finally {
@@ -220,6 +224,10 @@ export function refreshHealthReport({force = false} = {}) {
   activeReportLoad = entry;
   return entry.promise;
 }
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (currentReport) setHealthReport(currentReport);
+});
 
 async function openReport() {
   if (!currentReport) await refreshHealthReport();

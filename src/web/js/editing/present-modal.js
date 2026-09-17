@@ -2,6 +2,7 @@
 
 import { getToggleState } from '../mesh/visibility.js';
 import { bindModalDismiss, setModalError } from '../ui/modal-shell.js';
+import { t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -31,8 +32,8 @@ export function openPresentModal({ mode, modPath, present, item, onSaved }) {
   const editing = mode === 'edit';
   const completing = mode === 'complete';
   item = context.item;
-  $('pm-title').textContent = editing ? 'Edit PRESENT'
-    : (completing ? 'Complete PRESENT' : 'Add PRESENT');
+  $('pm-title').textContent = editing ? t('present.editTitle')
+    : (completing ? t('present.completeTitle') : t('present.addTitle'));
   $('pm-key').value = (editing || completing) ? item.key_raw : '';
   $('pm-back').value = (editing || completing) ? item.back : '';
   setError('');

@@ -90,6 +90,12 @@ class ModViewerAPI:
     def set_panel_opacity(self, value):
         return self._mod_registry.set_panel_opacity(value)
 
+    def get_language(self):
+        return self._mod_registry.get_language()
+
+    def set_language(self, value):
+        return self._mod_registry.set_language(value)
+
     def add_mod_folder(self, name, folder_path):
         return self._mod_registry.add_mod_folder(name, folder_path)
 

@@ -38,6 +38,19 @@ class ModFolderRegistry:
         except mod_folders.ModFolderError as error:
             return {"error": str(error)}
 
+    def get_language(self):
+        try:
+            return {"value": mod_folders.load_language()}
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error),
+                    "value": mod_folders.DEFAULT_LANGUAGE}
+
+    def set_language(self, value):
+        try:
+            return {"value": mod_folders.save_language(value)}
+        except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
+
     def add_mod_folder(self, name, folder_path):
         folder_path = mod_folders.normalize_path(folder_path)
         if not self._access.was_picker_selected(folder_path):

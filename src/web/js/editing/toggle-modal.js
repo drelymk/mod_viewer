@@ -8,6 +8,7 @@
 
 import { confirmDialog } from '../ui/dialogs.js';
 import { bindModalDismiss, setModalError } from '../ui/modal-shell.js';
+import { t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -84,7 +85,8 @@ export async function openToggleModal({ mode, modPath, info, onSaved: cb }) {
 
   $('tm-var-single').style.display = mode === 'add' ? '' : 'none';
   $('tm-vars-multi').style.display = mode === 'edit' ? '' : 'none';
-  $('tm-title').textContent = mode === 'add' ? 'Add Toggle' : `Edit ${info.name}`;
+  $('tm-title').textContent = mode === 'add'
+    ? t('toggle.addTitle') : t('toggle.editTitle', {name: info.name});
   $('toggle-modal-backdrop').classList.add('show');
 
   if (mode === 'add') {

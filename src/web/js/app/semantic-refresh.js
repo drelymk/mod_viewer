@@ -5,6 +5,7 @@ import { refreshAll, setStateRules, updateMeshSemantics } from '../mesh/visibili
 import { refreshMeshAssetDiagnostics } from '../panels/mesh-panel.js';
 import { buildMenuPanel } from '../panels/menu-panel.js';
 import { buildPresentPanel } from '../panels/present-panel.js';
+import { t } from '../i18n/index.js';
 import { buildTogglePanel } from '../panels/toggle-panel.js';
 import { refreshHealthReport, setAssetResolution } from '../panels/health-report.js';
 import { alertDialog } from '../ui/dialogs.js';
@@ -49,13 +50,13 @@ export async function refreshPresentState(change = {}, handlers = {}) {
       result = await window.pywebview.api.get_present_state(path);
     } catch (error) {
       if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog('Could not refresh PRESENT:\n\n' + error);
+        await alertDialog(t('errors.refreshPresent', {detail: error}));
       }
       return false;
     }
     if (!semanticRefreshIsCurrent(path, epoch)) return false;
     if (result?.error) {
-      await alertDialog('Could not refresh PRESENT:\n\n' + result.error);
+      await alertDialog(t('errors.refreshPresent', {detail: result.error}));
       return false;
     }
     const context = { modPath: path, onChange: callbacks.onPresentChange };
@@ -81,13 +82,13 @@ export async function refreshControlSemantics(handlers = {}) {
       result = await window.pywebview.api.get_control_state(path);
     } catch (error) {
       if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog('Could not refresh controls:\n\n' + error);
+        await alertDialog(t('errors.refreshControls', {detail: error}));
       }
       return false;
     }
     if (!semanticRefreshIsCurrent(path, epoch)) return false;
     if (result?.error) {
-      await alertDialog('Could not refresh controls:\n\n' + result.error);
+      await alertDialog(t('errors.refreshControls', {detail: result.error}));
       return false;
     }
     const controls = result.controls || {};
@@ -121,21 +122,22 @@ export async function refreshMeshSemantics(handlers = {}) {
       result = await window.pywebview.api.get_mesh_semantics(path);
     } catch (error) {
       if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog('Could not refresh mesh render semantics:\n\n' + error);
+        await alertDialog(t('errors.refreshSemantics', {detail: error}));
       }
       return false;
     }
     if (!semanticRefreshIsCurrent(path, epoch)) return false;
     if (result?.error) {
-      await alertDialog('Could not refresh mesh render semantics:\n\n' + result.error);
+      await alertDialog(t('errors.refreshSemantics', {detail: result.error}));
       return false;
     }
     const update = updateMeshSemantics(result.meshes, {
       materialProfiles: result.material_profiles || {},
     });
     if (!update.success) {
-      await alertDialog('Could not refresh mesh render semantics:\n\n' +
-        'The staged draw set no longer matches the displayed model.');
+      await alertDialog(t('errors.refreshSemantics', {
+        detail: 'The staged draw set no longer matches the displayed model.',
+      }));
       return false;
     }
     const assetResolution = result.asset_resolution || null;

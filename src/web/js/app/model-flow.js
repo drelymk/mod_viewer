@@ -31,6 +31,7 @@ import {
   beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage,
   measureLoadStage,
 } from './load-benchmark.js';
+import { t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -63,9 +64,9 @@ export async function refreshPendingState(
     && viewerState.currentSource?.readOnly === true;
   $('export-btn').disabled = readOnlySource || !pending || blocked;
   $('export-btn').title = readOnlySource
-    ? 'Export is unavailable for compressed mods.'
+    ? t('errors.exportBlocked', {detail: 'Export is unavailable for compressed mods.'})
     : blocked
-    ? 'A newly-added toggle isn\'t wired to any mesh yet — Record (⏺) or delete it before exporting.'
+    ? t('errors.exportBlocked', {detail: 'A newly-added toggle isn\'t wired to any mesh yet — Record (⏺) or delete it before exporting.'})
     : '';
 }
 
@@ -265,7 +266,7 @@ export async function displayMeshPayload(payload, {
 
 async function loadModAt(path, disabledIni, handlers = {}) {
   const preserveViewerPose = samePath(viewerState.displayedModPath, path);
-  beginModLoad(path, 'Loading Model…', {
+  beginModLoad(path, t('status.loadingModel'), {
     preserveModelOrientation: preserveViewerPose,
     onReload: handlers.onReload,
   });
@@ -284,7 +285,7 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     showLoading(false);
     await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
     finishLoadBenchmark({success: false, error: data.error});
-    await alertDialog('Could not load mod:\n\n' + data.error);
+    await alertDialog(t('errors.loadMod', {detail: data.error}));
     return false;
   }
   try {
@@ -298,7 +299,7 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     showLoading(false);
     await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
     finishLoadBenchmark({success: false, error: error?.message || String(error)});
-    await alertDialog('Could not load mod geometry:\n\n' + error.message);
+    await alertDialog(t('errors.loadGeometry', {detail: error.message}));
     return false;
   }
   await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
@@ -327,13 +328,13 @@ async function loadModAt(path, disabledIni, handlers = {}) {
 async function loadAssetAt(path, entry = {}, handlers = {}) {
   const preserveViewerPose = viewerState.displayedSource?.kind === 'asset'
     && samePath(viewerState.displayedSource.path, path);
-  beginAssetLoad(path, entry, 'Loading Asset…', {
+  beginAssetLoad(path, entry, t('status.loadingAsset'), {
     preserveModelOrientation: preserveViewerPose,
   });
   const data = await window.pywebview.api.load_asset(path);
   if (data && data.error) {
     showLoading(false);
-    await alertDialog('Could not load Asset:\n\n' + data.error);
+    await alertDialog(t('errors.loadAsset', {detail: data.error}));
     return false;
   }
   try {
@@ -345,7 +346,7 @@ async function loadAssetAt(path, entry = {}, handlers = {}) {
     clearScene({ preserveModelOrientation: preserveViewerPose });
     clearPendingState();
     showLoading(false);
-    await alertDialog('Could not load Asset geometry:\n\n' + error.message);
+    await alertDialog(t('errors.loadAssetGeometry', {detail: error.message}));
     return false;
   }
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
@@ -365,9 +366,7 @@ async function performModSwitch(path, handlers = {}) {
   if (viewerState.currentSource?.kind === 'mod' && viewerState.currentModPath
       && !samePath(viewerState.currentModPath, path)
       && await window.pywebview.api.has_pending_changes(viewerState.currentModPath)) {
-    const proceed = await confirmDialog(
-      'This mod has unsaved changes that haven\'t been exported.\n\n' +
-      'Opening a different mod folder will discard them. Continue?');
+    const proceed = await confirmDialog(t('confirm.unsavedSwitch'));
     if (!proceed) return false;
     await window.pywebview.api.discard_changes(viewerState.currentModPath);
   }
@@ -379,9 +378,7 @@ async function performModSwitch(path, handlers = {}) {
 async function confirmLeaveCurrentModIfDirty() {
   if (viewerState.currentSource?.kind !== 'mod' || !viewerState.currentModPath) return true;
   if (!await window.pywebview.api.has_pending_changes(viewerState.currentModPath)) return true;
-  const proceed = await confirmDialog(
-    'This mod has unsaved changes that haven\'t been exported.\n\n' +
-    'Opening an Asset preview will discard them. Continue?');
+  const proceed = await confirmDialog(t('confirm.unsavedAsset'));
   if (!proceed) return false;
   await window.pywebview.api.discard_changes(viewerState.currentModPath);
   return true;
@@ -395,7 +392,7 @@ export async function switchAsset(path, entry = {}, handlers = {}) {
       return await loadAssetAt(path, entry, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog('Unexpected error while loading Asset:\n\n' + error);
+      await alertDialog(t('errors.unexpectedAsset', {detail: error}));
       return false;
     }
   });
@@ -421,7 +418,7 @@ export async function switchMod(path, handlers = {}) {
       return await performModSwitch(path, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog('Unexpected error:\n\n' + error);
+      await alertDialog(t('errors.unexpected', {detail: error}));
       return false;
     }
   });
@@ -435,7 +432,7 @@ async function openModFromPicker(picker, handlers = {}) {
       return await performModSwitch(path, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog('Unexpected error:\n\n' + error);
+      await alertDialog(t('errors.unexpected', {detail: error}));
       return false;
     }
   });
@@ -460,7 +457,7 @@ export async function reloadCurrentMod(handlers = {}) {
       return await loadModAt(viewerState.currentModPath, undefined, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog('Unexpected error while reloading:\n\n' + error);
+      await alertDialog(t('errors.unexpectedReload', {detail: error}));
       return false;
     }
   });
@@ -476,13 +473,13 @@ export async function exportChanges() {
       // Refused outright — e.g. a newly-added toggle is still unwired. The
       // button is normally already disabled for this case, so reaching here
       // means the panel was momentarily stale; nothing was written either way.
-      await alertDialog('Export was blocked:\n\n' + result.error);
+      await alertDialog(t('errors.exportBlocked', {detail: result.error}));
     } else if (result.failed && result.failed.length) {
       const detail = result.failed.map((failure) =>
         `${failure.ini}: ${failure.error}`).join('\n');
-      await alertDialog(
-        `${result.saved.length} ini file(s) exported, but ${result.failed.length} failed ` +
-        `and are still pending:\n\n${detail}`);
+      await alertDialog(t('errors.exportPartial', {
+        saved: result.saved.length, failed: result.failed.length, detail,
+      }));
     }
     // Export writes the authoritative staged documents but does not change
     // the current model or control semantics. Refresh only session status;
@@ -490,7 +487,7 @@ export async function exportChanges() {
     await refreshPendingState();
     void refreshHealthReport();
   } catch (error) {
-    await alertDialog('Unexpected error while exporting:\n\n' + error);
+    await alertDialog(t('errors.export', {detail: error}));
     await refreshPendingState();
   }
 }

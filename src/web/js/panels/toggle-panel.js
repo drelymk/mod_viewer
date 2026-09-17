@@ -14,6 +14,7 @@ import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { cyclePositionCount, cycleValueAt } from '../editing/cycle-values.js';
+import { t } from '../i18n/index.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -72,18 +73,16 @@ function summarizeReport(report) {
 }
 
 async function handleDelete(info, ctx) {
-  const ok = await confirmDialog(
-    `Delete toggle "${info.name}"?\n\nThis only stages the change — nothing is written to the ` +
-    `ini file until you click Export.`);
+  const ok = await confirmDialog(t('toggle.deleteConfirm', {name: info.name}));
   if (!ok) return;
 
   const result = await window.pywebview.api.delete_toggle(ctx.modPath, info.ini, info.section);
   if (result.error) {
-    await alertDialog('Could not delete toggle:\n\n' + result.error);
+    await alertDialog(t('toggle.deleteError', {detail: result.error}));
     return;
   }
   const summary = summarizeReport(result.result || {});
-  if (summary) await alertDialog('Toggle deleted, but review these lines by hand:\n\n' + summary);
+  if (summary) await alertDialog(t('toggle.deletedReview', {detail: summary}));
   if (ctx.onChange) await ctx.onChange({ type: 'delete' });
 }
 
@@ -117,9 +116,7 @@ function buildToggleItem(info, ctx) {
     const warnBadge = document.createElement('span');
     warnBadge.className = 'toggle-unwired-badge';
     warnBadge.appendChild(createIcon('diagnostics'));
-    warnBadge.title = 'Not wired to any mesh yet — click ⏺ Record below and check/uncheck ' +
-      'meshes at each position to assign what this toggle shows. Export is disabled until ' +
-      'this toggle is wired (or deleted).';
+    warnBadge.title = t('toggle.unwired');
     left.appendChild(warnBadge);
   }
   hdr.appendChild(left);
@@ -127,8 +124,8 @@ function buildToggleItem(info, ctx) {
   const editBtn = document.createElement('button');
   editBtn.className = 'toggle-icon-btn';
   editBtn.appendChild(createIcon('edit'));
-  editBtn.title = 'Edit toggle';
-  editBtn.setAttribute('aria-label', 'Edit toggle');
+  editBtn.title = t('toggle.edit');
+  editBtn.setAttribute('aria-label', t('toggle.edit'));
   editBtn.addEventListener('click', () => {
     openToggleModal({ mode: 'edit', modPath: ctx.modPath, info, onSaved: ctx.onChange });
   });
@@ -136,15 +133,15 @@ function buildToggleItem(info, ctx) {
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'toggle-icon-btn';
   deleteBtn.appendChild(createIcon('delete'));
-  deleteBtn.title = 'Delete toggle';
-  deleteBtn.setAttribute('aria-label', 'Delete toggle');
+  deleteBtn.title = t('toggle.delete');
+  deleteBtn.setAttribute('aria-label', t('toggle.delete'));
   deleteBtn.addEventListener('click', () => handleDelete(info, ctx));
 
   const recordBtn = document.createElement('button');
   recordBtn.className = 'toggle-icon-btn';
   recordBtn.appendChild(createIcon('record'));
-  recordBtn.title = 'Record which meshes show at each position';
-  recordBtn.setAttribute('aria-label', 'Record toggle mesh visibility');
+  recordBtn.title = t('toggle.record');
+  recordBtn.setAttribute('aria-label', t('toggle.recordAria'));
 
   const actions = document.createElement('span');
   actions.className = 'toggle-actions';
@@ -165,8 +162,8 @@ function buildToggleItem(info, ctx) {
   const btn = document.createElement('button');
   btn.className = 'toggle-cycle-btn';
   btn.appendChild(createIcon('cycle'));
-  btn.title = 'Cycle value';
-  btn.setAttribute('aria-label', 'Cycle toggle value');
+  btn.title = t('toggle.cycle');
+  btn.setAttribute('aria-label', t('toggle.cycle'));
 
   const valSpan = document.createElement('span');
   valSpan.className = 'toggle-value';
@@ -252,7 +249,7 @@ export function buildTogglePanel(toggles, ctx = {}) {
   if (!sections.length) {
     const empty = document.createElement('div');
     empty.className = 'toggle-empty';
-    empty.textContent = 'No toggles yet — click Add to create one.';
+    empty.textContent = t('toggle.noToggles');
     list.appendChild(empty);
     return;
   }

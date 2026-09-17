@@ -1,5 +1,7 @@
 // Custom confirm/alert dialogs.
 
+import { t } from '../i18n/index.js';
+
 const $ = (id) => document.getElementById(id);
 
 let resolveActive = null;
@@ -21,7 +23,7 @@ function open(message, { cancelable, inputValue } = {}) {
     const hasInput = inputValue !== undefined;
     input.style.display = hasInput ? 'block' : 'none';
     input.value = hasInput ? inputValue : '';
-    $('dialog-ok').textContent = hasInput ? 'Yes' : 'OK';
+    $('dialog-ok').textContent = hasInput ? t('common.yes') : t('common.ok');
     $('dialog-backdrop').classList.add('show');
     (hasInput ? input : $('dialog-ok')).focus();
     if (hasInput) input.select();

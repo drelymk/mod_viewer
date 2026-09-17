@@ -1,6 +1,11 @@
-// Global floating-panel opacity control backed by the app config.
+// Global appearance preferences backed by the app config.
+
+import {
+  LANGUAGE_CHANGED, getLocale, setLocale, t,
+} from '../i18n/index.js';
 
 const DEFAULT_PANEL_OPACITY = 58;
+const DEFAULT_LANGUAGE = 'en';
 
 const $ = id => document.getElementById(id);
 
@@ -8,6 +13,10 @@ function normalizeOpacity(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_PANEL_OPACITY;
   return Math.min(100, Math.max(0, Math.round(number)));
+}
+
+function normalizeLanguage(value) {
+  return value === 'zh-CN' ? value : DEFAULT_LANGUAGE;
 }
 
 export function initPanelOpacityControl() {
@@ -21,6 +30,13 @@ export function initPanelOpacityControl() {
   let pendingOpacity = null;
   let userChanged = false;
 
+  const updateOpacityLabels = opacity => {
+    const label = t('toolbar.panelOpacityValue', {opacity});
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    const labelNode = popover.querySelector('label[for="panel-opacity"]');
+    if (labelNode) labelNode.textContent = t('toolbar.panelOpacity');
+  };
   const apply = value => {
     const opacity = normalizeOpacity(value);
     const factor = opacity / 100;
@@ -31,8 +47,7 @@ export function initPanelOpacityControl() {
     document.documentElement.style.setProperty('--panel-blur', `${factor * 10}px`);
     document.documentElement.style.setProperty(
       '--panel-shadow-opacity', String(factor * 0.22));
-    button.setAttribute('aria-label', `Panel opacity: ${opacity}%`);
-    button.title = `Panel opacity: ${opacity}%`;
+    updateOpacityLabels(opacity);
     return opacity;
   };
   const close = (restoreFocus = false) => {
@@ -78,6 +93,9 @@ export function initPanelOpacityControl() {
       const result = await load.call(window.pywebview.api);
       if (result?.error) {
         console.error(result.error);
+        loadedLanguage = normalizeLanguage(result?.value);
+        if (!userChanged) apply(loadedLanguage);
+        else if (pendingLanguage !== null) await saveLanguage(pendingLanguage);
         return true;
       }
       loadedOpacity = normalizeOpacity(result?.value);
@@ -104,8 +122,76 @@ export function initPanelOpacityControl() {
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !popover.hidden) close(true);
   });
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    updateOpacityLabels(normalizeOpacity(slider.value));
+  });
 
   void loadOpacity().then(loaded => {
     if (!loaded) window.addEventListener('pywebviewready', loadOpacity, {once: true});
+  });
+}
+
+export function initLanguageControl() {
+  const select = $('app-language');
+  if (!select) return;
+
+  let loadedLanguage = null;
+  let pendingLanguage = null;
+  let userChanged = false;
+
+  const apply = value => {
+    const language = setLocale(normalizeLanguage(value));
+    select.value = language;
+    return language;
+  };
+  const saveLanguage = async language => {
+    if (loadedLanguage === null) {
+      pendingLanguage = language;
+      return;
+    }
+    if (language === loadedLanguage) return;
+    const save = window.pywebview?.api?.set_language;
+    if (typeof save !== 'function') {
+      pendingLanguage = language;
+      return;
+    }
+    try {
+      const result = await save.call(window.pywebview.api, language);
+      if (result?.error) {
+        console.error(result.error);
+        return;
+      }
+      loadedLanguage = normalizeLanguage(result?.value ?? language);
+      pendingLanguage = null;
+    } catch (error) {
+      console.error(error);
+    }
+  };
+  const loadLanguage = async () => {
+    const load = window.pywebview?.api?.get_language;
+    if (typeof load !== 'function') return false;
+    try {
+      const result = await load.call(window.pywebview.api);
+      if (result?.error) {
+        console.error(result.error);
+        return true;
+      }
+      loadedLanguage = normalizeLanguage(result?.value);
+      if (!userChanged) apply(loadedLanguage);
+      else if (pendingLanguage !== null) await saveLanguage(pendingLanguage);
+    } catch (error) {
+      console.error(error);
+    }
+    return true;
+  };
+
+  apply(getLocale());
+  select.addEventListener('change', () => {
+    userChanged = true;
+    const language = apply(select.value);
+    void saveLanguage(language);
+  });
+  void loadLanguage().then(loaded => {
+    if (!loaded) window.addEventListener('pywebviewready', loadLanguage, {once: true});
   });
 }

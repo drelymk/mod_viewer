@@ -16,6 +16,9 @@ from core.mod_source import is_archive_path
 CONFIG_VERSION = config.CONFIG_VERSION
 DEFAULT_PANEL_OPACITY = 58
 PANEL_OPACITY_KEY = "panelOpacity"
+DEFAULT_LANGUAGE = "en"
+LANGUAGE_KEY = "language"
+SUPPORTED_LANGUAGES = frozenset({"en", "zh-CN"})
 
 
 class ModFolderError(ValueError):
@@ -107,6 +110,27 @@ def save_panel_opacity(value, config_file=None):
     config[PANEL_OPACITY_KEY] = opacity
     _write_config(config, config_file)
     return opacity
+
+
+def _validated_language(value):
+    if value not in SUPPORTED_LANGUAGES:
+        raise ModFolderError("Language must be one of: en, zh-CN.")
+    return value
+
+
+def load_language(config_file=None):
+    """Return the configured UI language, using English when it is absent."""
+    value = _read_config(config_file).get(LANGUAGE_KEY, DEFAULT_LANGUAGE)
+    return _validated_language(value)
+
+
+def save_language(value, config_file=None):
+    """Persist a supported UI language without changing other preferences."""
+    language = _validated_language(value)
+    config = _read_config(config_file)
+    config[LANGUAGE_KEY] = language
+    _write_config(config, config_file)
+    return language
 
 
 def add_folder(name, folder, config_file=None):

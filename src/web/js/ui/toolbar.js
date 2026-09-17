@@ -8,6 +8,7 @@ import {
 } from '../scene/scene.js';
 import { KEY_LIGHT_MAX_INTENSITY } from '../scene/key-light-controller.js';
 import { setTextureDisplayMode } from '../scene/render-modes.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 const AO_MAX_STRENGTH = 1;
@@ -37,17 +38,15 @@ function intensityToKeyLightLevel(value) {
 export function initEnvironmentControl() {
   const button = $('environment-btn');
   const icon = $('environment-icon');
-  const labels = Object.fromEntries(
-    Object.values(ENVIRONMENT_PRESETS).map(preset => [preset.id, preset.label]));
   const popover = $('environment-popover');
   let currentId = getEnvironmentPreset().id;
 
   function updateControl(id) {
-    const name = labels[id] || id;
+    const name = t(`environment.preset.${id}`);
     icon.dataset.environment = id;
     button.dataset.environment = id;
-    button.setAttribute('aria-label', `Environment: ${name}. Click to change.`);
-    button.title = `Environment: ${name} (click to change)`;
+    button.setAttribute('aria-label', t('toolbar.environment', {name}));
+    button.title = t('toolbar.environmentTitle', {name});
   }
 
   function applyEnvironmentPreset(id) {
@@ -71,7 +70,7 @@ export function initEnvironmentControl() {
       option.type = 'button';
       option.className = 'ui-popover-option';
       option.setAttribute('role', 'menuitem');
-      option.textContent = preset.label;
+      option.textContent = t(`environment.preset.${preset.id}`);
       option.classList.toggle('selected', preset.id === currentId);
       option.addEventListener('click', () => {
         applyEnvironmentPreset(preset.id);
@@ -96,6 +95,10 @@ export function initEnvironmentControl() {
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') closePopover();
+  });
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    updateControl(currentId);
+    if (!popover?.hidden) openPopover();
   });
 
   return applyEnvironmentPreset;
@@ -149,7 +152,7 @@ export function initToolPopovers() {
     }
     aoButton?.classList.toggle('active', level === 100);
     aoButton?.classList.toggle('partial', level > 0 && level < 100);
-    const label = `Ambient occlusion: ${level}%`;
+    const label = t('render.ambientOcclusion', {level});
     aoButton?.setAttribute('aria-label', label);
     if (aoButton) aoButton.title = label;
     return level;
@@ -162,29 +165,34 @@ export function initToolPopovers() {
       strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   };
 
-  function toggleTexturePopover() {
+  function renderTextureOptions() {
     if (!texturePopover) return;
-    const wasOpen = !texturePopover.hidden;
-    closeAll();
-    if (wasOpen) return;
     texturePopover.replaceChildren();
     [
-      ['all', 'All maps'],
-      ['diffuse-normal', 'Diffuse and NormalMap'],
-      ['diffuse', 'Diffuse only'],
-      ['none', 'No textures'],
-    ].forEach(([mode, label]) => {
+      ['all', 'render.allMaps'],
+      ['diffuse-normal', 'render.diffuseNormal'],
+      ['diffuse', 'render.diffuseOnly'],
+      ['none', 'render.noTextures'],
+    ].forEach(([mode, key]) => {
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'ui-popover-option';
       option.setAttribute('role', 'menuitem');
-      option.textContent = label;
+      option.textContent = t(key);
       option.addEventListener('click', () => {
         setTextureDisplayMode(mode, activeMeshes);
         closeAll();
       });
       texturePopover.appendChild(option);
     });
+  }
+
+  function toggleTexturePopover() {
+    if (!texturePopover) return;
+    const wasOpen = !texturePopover.hidden;
+    closeAll();
+    if (wasOpen) return;
+    renderTextureOptions();
     texturePopover.hidden = false;
     textureButton?.setAttribute('aria-expanded', 'true');
     activeToolPopover = { popover: texturePopover, button: textureButton };
@@ -201,7 +209,9 @@ export function initToolPopovers() {
     lightButton?.classList.toggle('active', level === 100);
     lightButton?.classList.toggle('partial', level > 0 && level < 100);
     lightButton?.classList.toggle('off', level === 0);
-    const label = 'Key light: ' + (level === 0 ? 'Off' : level + '%');
+    const label = level === 0
+      ? t('render.keyLightOff')
+      : `${t('render.keyLight')}: ${level}%`;
     lightButton?.setAttribute('aria-label', label);
     if (lightButton) lightButton.title = label;
     return level;
@@ -250,6 +260,19 @@ export function initToolPopovers() {
   updateAmbientOcclusionControl(
     strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    updateAmbientOcclusionControl(
+      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+    updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
+    if (texturePopover && !texturePopover.hidden) {
+      closeAll();
+      renderTextureOptions();
+      texturePopover.hidden = false;
+      textureButton?.setAttribute('aria-expanded', 'true');
+      activeToolPopover = {popover: texturePopover, button: textureButton};
+      positionPopover(texturePopover, textureButton);
+    }
+  });
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
   aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);

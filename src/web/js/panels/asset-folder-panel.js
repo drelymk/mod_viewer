@@ -3,6 +3,7 @@
 import { confirmDialog } from '../ui/dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { t } from '../i18n/index.js';
 
 const $ = id => document.getElementById(id);
 const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
@@ -186,8 +187,8 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     editorMode = mode;
     originalPath = entry?.path || null;
     selectedPath = entry?.path || null;
-    title.textContent = mode === 'edit' ? 'Edit Asset Folder' : 'Add Asset Folder';
-    save.textContent = mode === 'edit' ? 'Save' : 'Add';
+    title.textContent = mode === 'edit' ? t('folder.editAsset') : t('folder.addAsset');
+    save.textContent = mode === 'edit' ? t('common.save') : t('common.add');
     typeInput.value = entry?.type || ASSET_TYPES[0];
     pathInput.value = entry?.path || '';
     setTextError(modalError, '');
@@ -200,9 +201,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
   }
 
   async function removeFolder(entry) {
-    const confirmed = await confirmDialog(
-      'Remove this Asset Folder?\n\n' +
-      'This only removes it from Mod Viewer.\nFiles on disk will not be deleted.');
+    const confirmed = await confirmDialog(t('folder.removeAsset'));
     if (!confirmed) return;
     const response = await window.pywebview.api.delete_asset_folder(entry.path);
     applyRegistryResponse(response);
@@ -223,17 +222,17 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     event.preventDefault();
     const path = selectedPath || pathInput.value.trim();
     if (!path) {
-      setTextError(modalError, 'Choose a folder with Browse.');
+      setTextError(modalError, t('folder.chooseBrowse'));
       return;
     }
-    const originalSaveText = editorMode === 'edit' ? 'Save' : 'Add';
+    const originalSaveText = editorMode === 'edit' ? t('common.save') : t('common.add');
     editorBusy = true;
     typeInput.disabled = true;
     pathInput.disabled = true;
     browse.disabled = true;
     cancel.disabled = true;
     save.disabled = true;
-    save.textContent = 'Building index…';
+    save.textContent = t('folder.buildingIndex');
     try {
       const response = editorMode === 'edit'
         ? await window.pywebview.api.edit_asset_folder(

@@ -75,11 +75,31 @@ def test_panel_opacity_persists_explicit_values_and_survives_registry_edits(
     saved = json.loads(open(filename, encoding="utf-8").read())
     assert saved["panelOpacity"] == 35
     assert len(saved["modFolders"]) == 1
-
     assert mod_folders.save_panel_opacity(58, filename) == 58
     saved = json.loads(open(filename, encoding="utf-8").read())
     assert saved["panelOpacity"] == 58
     assert len(saved["modFolders"]) == 1
+
+
+def test_language_defaults_and_preserves_other_preferences(tmp_path):
+    filename = _config(tmp_path)
+    assert mod_folders.load_language(filename) == "en"
+    assert mod_folders.save_panel_opacity(35, filename) == 35
+    assert mod_folders.save_language("zh-CN", filename) == "zh-CN"
+    assert mod_folders.load_language(filename) == "zh-CN"
+
+    root = _directory(tmp_path, "root")
+    mod_folders.add_folder("Root", root, filename)
+    saved = json.loads(open(filename, encoding="utf-8").read())
+    assert saved["language"] == "zh-CN"
+    assert saved["panelOpacity"] == 35
+    assert len(saved["modFolders"]) == 1
+
+
+@pytest.mark.parametrize("value", ["fr", "ZH-CN", None, 1])
+def test_language_rejects_unsupported_values(tmp_path, value):
+    with pytest.raises(mod_folders.ModFolderError, match="Language"):
+        mod_folders.save_language(value, _config(tmp_path))
 
 
 @pytest.mark.parametrize("value", [-1, 101, 42.5, True, "50"])

@@ -686,6 +686,68 @@ def test_panel_opacity_control_applies_and_saves_whole_percent(
     finally:
         context.close()
 
+
+def test_language_switch_updates_static_and_dynamic_labels_without_reload(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Language": _payload("Language")})
+    try:
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        _open(page, "Language")
+        page.locator(".draw-item").wait_for()
+        load_count = page.evaluate("window.__fakeApi.calls.loadMod.length")
+
+        page.locator("#appearance-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#open-btn").text_content() == "打开 MOD"
+        assert page.locator(".health-label").text_content() == "诊断"
+        assert page.locator("#appearance-popover label[for='panel-opacity']").text_content() == "面板透明度"
+        assert page.locator("#ao-btn").get_attribute("aria-label").startswith("环境光遮蔽")
+        assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN"]
+        assert page.evaluate("window.__fakeApi.calls.loadMod.length") == load_count
+
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#open-btn").text_content() == "Open Mod"
+        assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN", "en"]
+    finally:
+        context.close()
+
+
+def test_saved_language_is_restored_and_late_bridge_cannot_overwrite_new_choice(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Language": _payload("Language")},
+        language="zh-CN")
+    try:
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#open-btn").text_content() == "打开 MOD"
+    finally:
+        context.close()
+
+    context, page = _page(
+        edge_browser, frontend_url, {"Language": _payload("Language")},
+        language="en", language_api=False)
+    try:
+        page.locator("#appearance-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.get_language = async () => ({value: state.language});
+          window.pywebview.api.set_language = async value => {
+            state.language = value;
+            state.calls.language.push(value);
+            return {value};
+          };
+          window.dispatchEvent(new Event('pywebviewready'));
+        }""")
+        page.wait_for_function("window.__fakeApi.calls.language.length === 1")
+        assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN"]
+        assert page.evaluate("document.documentElement.lang") == "zh-CN"
+    finally:
+        context.close()
+
 def test_inspector_follows_component_and_mesh_selection(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"A": _payload("A")})
