@@ -404,6 +404,8 @@ def verify_web():
         "index.html", "css/app.css", "js/main.js",
         "js/i18n/index.js", "js/i18n/locales/en.js",
         "js/i18n/locales/zh-CN.js",
+        "js/i18n/locales/ja.js", "js/i18n/locales/ko.js",
+        "js/i18n/locales/es.js", "js/i18n/locales/ru.js",
         "js/scene/environment.js",
         "lib/ace/ace.js", "lib/ace/mode-ini.js",
         "lib/ace/theme-tomorrow_night.js", "lib/ace/ext-searchbox.js",

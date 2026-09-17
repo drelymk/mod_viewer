@@ -18,7 +18,7 @@ DEFAULT_PANEL_OPACITY = 58
 PANEL_OPACITY_KEY = "panelOpacity"
 DEFAULT_LANGUAGE = "en"
 LANGUAGE_KEY = "language"
-SUPPORTED_LANGUAGES = frozenset({"en", "zh-CN"})
+SUPPORTED_LANGUAGES = ("en", "zh-CN", "ja", "ko", "es", "ru")
 
 
 class ModFolderError(ValueError):
@@ -114,7 +114,8 @@ def save_panel_opacity(value, config_file=None):
 
 def _validated_language(value):
     if value not in SUPPORTED_LANGUAGES:
-        raise ModFolderError("Language must be one of: en, zh-CN.")
+        allowed = ", ".join(SUPPORTED_LANGUAGES)
+        raise ModFolderError(f"Language must be one of: {allowed}.")
     return value
 
 

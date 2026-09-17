@@ -37,8 +37,6 @@ export default {
   'toolbar.panelOpacity': 'Panel opacity',
   'toolbar.panelOpacityValue': 'Panel opacity: {opacity}%',
   'toolbar.language': 'Language',
-  'toolbar.english': 'English',
-  'toolbar.simplifiedChinese': '简体中文',
   'environment.preset.default': 'Default',
   'environment.preset.studio': 'Studio',
   'environment.preset.indoor': 'Indoor',

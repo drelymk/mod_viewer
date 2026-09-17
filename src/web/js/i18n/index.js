@@ -1,7 +1,11 @@
 import en from './locales/en.js';
 import zhCN from './locales/zh-CN.js';
+import ja from './locales/ja.js';
+import ko from './locales/ko.js';
+import es from './locales/es.js';
+import ru from './locales/ru.js';
 
-const LOCALES = Object.freeze({en, 'zh-CN': zhCN});
+const LOCALES = Object.freeze({en, 'zh-CN': zhCN, ja, ko, es, ru});
 const DEFAULT_LOCALE = 'en';
 const LANGUAGE_CHANGED = 'mod-viewer-language-changed';
 let activeLocale = DEFAULT_LOCALE;

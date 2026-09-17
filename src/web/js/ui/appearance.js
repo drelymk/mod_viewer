@@ -1,7 +1,7 @@
 // Global appearance preferences backed by the app config.
 
 import {
-  LANGUAGE_CHANGED, getLocale, setLocale, t,
+  LANGUAGE_CHANGED, LOCALES, getLocale, setLocale, t,
 } from '../i18n/index.js';
 import { closeHeaderPopovers } from './header-popovers.js';
 
@@ -17,7 +17,7 @@ function normalizeOpacity(value) {
 }
 
 function normalizeLanguage(value) {
-  return value === 'zh-CN' ? value : DEFAULT_LANGUAGE;
+  return Object.hasOwn(LOCALES, value) ? value : DEFAULT_LANGUAGE;
 }
 
 export function initPanelOpacityControl() {
@@ -143,8 +143,7 @@ export function initLanguageControl() {
   let userChanged = false;
 
   const updateLabels = () => {
-    const name = select.value === 'zh-CN'
-      ? t('toolbar.simplifiedChinese') : t('toolbar.english');
+    const name = select.selectedOptions[0]?.textContent || 'English';
     const label = t('toolbar.languageValue', {name});
     button.setAttribute('aria-label', label);
     button.title = label;
