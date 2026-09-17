@@ -798,6 +798,77 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         context.close()
 
 
+def test_language_selector_supports_all_locales_without_reloading(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Languages": _payload("Languages")},
+        panel_opacity=35)
+    try:
+        _open(page, "Languages")
+        page.locator(".draw-item").wait_for()
+        page.locator("#environment-btn").click()
+        page.locator("#environment-popover .ui-popover-option", has_text="Studio").click()
+        assert page.evaluate("window.modViewer.getEnvironmentPreset().id") == "studio"
+        assert page.locator("#panel-opacity").input_value() == "35"
+
+        assert page.locator("#app-language option").all_inner_texts() == [
+            "English", "简体中文", "日本語", "한국어", "Español", "Русский"]
+        assert page.locator("#app-language option").evaluate_all(
+            "options => options.map(option => option.value)") == [
+                "en", "zh-CN", "ja", "ko", "es", "ru"]
+        load_count = page.evaluate("window.__fakeApi.calls.loadMod.length")
+        expected_open_labels = {
+            "ja": "MODを開く",
+            "ko": "MOD 열기",
+            "es": "Abrir MOD",
+            "ru": "Открыть MOD",
+            "en": "Open Mod",
+        }
+        for locale in ("ja", "ko", "es", "ru", "en"):
+            page.locator("#language-btn").click()
+            page.locator("#app-language").select_option(locale)
+            page.wait_for_function(
+                f"document.documentElement.lang === '{locale}'")
+            assert page.locator("#app-language").input_value() == locale
+            assert page.locator("#open-btn").text_content() == expected_open_labels[locale]
+            assert page.locator("#mod-path").text_content() == "Languages"
+            assert page.evaluate(
+                "window.modViewer.getEnvironmentPreset().id") == "studio"
+            assert page.locator("#panel-opacity").input_value() == "35"
+            assert page.evaluate("window.__fakeApi.calls.loadMod.length") == load_count
+        assert page.evaluate("window.__fakeApi.calls.language") == [
+            "ja", "ko", "es", "ru", "en"]
+    finally:
+        context.close()
+
+
+def test_long_locales_keep_header_and_toolbar_within_viewport(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Layout": _payload("Layout")})
+    try:
+        _open(page, "Layout")
+        page.locator(".draw-item").wait_for()
+        page.set_viewport_size({"width": 640, "height": 720})
+        for locale in ("es", "ru"):
+            page.locator("#language-btn").click()
+            page.locator("#app-language").select_option(locale)
+            page.wait_for_function(
+                f"document.documentElement.lang === '{locale}'")
+            assert page.locator("#toolbar-more").is_visible()
+            assert page.locator("#tool-panel").evaluate(
+                "panel => getComputedStyle(panel).overflowX") == "auto"
+            assert page.evaluate("""() => {
+              const ids = ['environment-btn', 'appearance-btn',
+                'language-btn', 'toolbar-more'];
+              return ids.every(id => {
+                const box = document.getElementById(id).getBoundingClientRect();
+                return box.left >= 0 && box.right <= window.innerWidth;
+              });
+            }""")
+    finally:
+        context.close()
+
+
 def test_language_switch_updates_no_source_label_without_reload(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})
@@ -887,10 +958,10 @@ def test_saved_language_is_restored_and_late_bridge_cannot_overwrite_new_choice(
         edge_browser, frontend_url):
     context, page = _page(
         edge_browser, frontend_url, {"Language": _payload("Language")},
-        language="zh-CN")
+        language="ja")
     try:
-        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
-        assert page.locator("#open-btn").text_content() == "打开 MOD"
+        page.wait_for_function("document.documentElement.lang === 'ja'")
+        assert page.locator("#open-btn").text_content() == "MODを開く"
     finally:
         context.close()
 

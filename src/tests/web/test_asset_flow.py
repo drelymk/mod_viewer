@@ -172,7 +172,7 @@ def test_asset_diagnostics_refresh_with_semantic_updates(
         page.locator("#health-modal-backdrop.show").wait_for()
         health_asset_summary = page.locator("#health-asset-summary").inner_text()
         assert "Asset resolution: 0 / 1 draws exact" in health_asset_summary
-        assert "1 not found" in health_asset_summary
+        assert "Not found: 1" in health_asset_summary
     finally:
         context.close()
 

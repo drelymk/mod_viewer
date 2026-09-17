@@ -77,12 +77,12 @@ function renderAssetResolution() {
       })]
       : [t('health.assetDrawsExact', {exact, total})];
   for (const [key, label] of [
-    ['partial_draws', 'health.partial'],
-    ['ambiguous_draws', 'health.ambiguous'],
-    ['unmatched_draws', 'health.notFound'],
+    ['partial_draws', 'health.partialDraws'],
+    ['ambiguous_draws', 'health.ambiguousDraws'],
+    ['unmatched_draws', 'health.notFoundDraws'],
   ]) {
     const count = Number(summary[key]) || 0;
-    if (count) parts.push(`${count} ${t(label)}`);
+    if (count) parts.push(t(label, {count}));
   }
   const components = Array.isArray(summary.components)
     ? summary.components : [];
