@@ -231,6 +231,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
       min: box.min.toArray(), max: box.max.toArray(),
     } : null;
     return {
+      meshCount: meshes.length,
       modelBounds: serialize(modelBounds),
       casterBounds: serialize(casterBounds),
       fitCount,

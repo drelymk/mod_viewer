@@ -393,43 +393,54 @@ def test_asset_fill_refits_character_shadows_without_moving_camera(
         _open(page, "ShadowFill")
         page.locator(".draw-item").wait_for()
         before = page.evaluate("""async () => {
+          const THREE = await import('three');
           const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
+          window.__shadowLifecycleSnapshot = () => {
+            const meshes = window.modViewer.activeMeshes;
+            return {
+              camera: camera.matrixWorld.toArray(),
+              activeMeshCount: meshes.length,
+              meshes: meshes.map(mesh => {
+                mesh.updateWorldMatrix(true, true);
+                const bounds = new THREE.Box3().setFromObject(mesh);
+                return {
+                  assetFill: mesh.userData.assetFill === true,
+                  worldBounds: {
+                    min: bounds.min.toArray(), max: bounds.max.toArray(),
+                  },
+                };
+              }),
+              shadow: getCharacterShadowDebugState(),
+            };
+          };
+          return window.__shadowLifecycleSnapshot();
         }""")
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='remove']").wait_for()
-        page.wait_for_function("""async () => {
-          const {getCharacterShadowDebugState} =
-            await import('./js/scene/scene.js');
-          const state = getCharacterShadowDebugState();
-          return window.modViewer.activeMeshes.length === 2
-            && window.modViewer.activeMeshes.some(mesh => mesh.userData.assetFill)
-            && state.modelBounds !== null
-            && state.modelBounds.max[0] > 5.5;
-        }""")
-        expanded = page.evaluate("""async () => {
-          const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
-        }""")
+        expanded = page.wait_for_function("""() => {
+          const state = window.__shadowLifecycleSnapshot();
+          return state.activeMeshCount === 2
+            && state.meshes.some(mesh => mesh.assetFill)
+            && state.shadow.modelBounds !== null
+            && state.shadow.modelBounds.max[0] > 5.5
+            ? state : false;
+        }""").json_value()
         assert expanded["camera"] == pytest.approx(before["camera"])
-        assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0]
+        assert expanded["shadow"]["modelBounds"]["max"][0] > before["shadow"]["modelBounds"]["max"][0], (
+            before, expanded)
         page.locator("#asset-fill-btn").click()
         page.locator("#asset-fill-btn[data-state='load']").wait_for()
-        page.wait_for_function("""async () => {
-          const {getCharacterShadowDebugState} =
-            await import('./js/scene/scene.js');
-          const state = getCharacterShadowDebugState();
-          return window.modViewer.activeMeshes.length === 1
-            && !window.modViewer.activeMeshes.some(mesh => mesh.userData.assetFill)
-            && state.modelBounds !== null
-            && state.modelBounds.max[0] < 1.5;
-        }""")
-        contracted = page.evaluate("""async () => {
-          const {camera, getCharacterShadowDebugState} = await import('./js/scene/scene.js');
-          return {camera: camera.matrixWorld.toArray(), shadow: getCharacterShadowDebugState()};
-        }""")
+        contracted = page.wait_for_function("""() => {
+          const state = window.__shadowLifecycleSnapshot();
+          return state.activeMeshCount === 1
+            && !state.meshes.some(mesh => mesh.assetFill)
+            && state.shadow.modelBounds !== null
+            && state.shadow.modelBounds.max[0] < 1.5
+            ? state : false;
+        }""").json_value()
         assert contracted["camera"] == pytest.approx(before["camera"])
-        assert contracted["shadow"]["modelBounds"]["max"][0] < expanded["shadow"]["modelBounds"]["max"][0]
+        assert contracted["shadow"]["modelBounds"]["max"][0] < expanded["shadow"]["modelBounds"]["max"][0], (
+            before, expanded, contracted)
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["ShadowFill"]
     finally:
         context.close()
