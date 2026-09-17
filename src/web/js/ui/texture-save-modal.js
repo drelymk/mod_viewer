@@ -2,6 +2,7 @@
 
 import { bindModalDismiss, setModalError } from './modal-shell.js';
 import { createTextureSaveSession } from '../mesh/texture-save-session.js';
+import { t } from '../i18n/index.js';
 
 const $ = id => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
@@ -12,19 +13,19 @@ const saveButton = $('texture-bake-confirm');
 let saveProgressElements = null;
 
 const saveStageLabels = {
-  preparing: 'Preparing texture…',
-  reading: 'Reading source texture…',
-  processing: 'Processing texture…',
-  writing: 'Writing texture…',
-  refreshing: 'Refreshing viewer…',
-  complete: 'Texture saved…',
+  preparing: 'texture.saveStage.preparing',
+  reading: 'texture.saveStage.reading',
+  processing: 'texture.saveStage.processing',
+  writing: 'texture.saveStage.writing',
+  refreshing: 'texture.saveStage.refreshing',
+  complete: 'texture.saveStage.complete',
 };
 
 function displayNameForTarget(target) {
   return target?.mesh?.userData?.displayName
     || target?.mesh?.userData?.semanticKey
     || target?.semanticKey
-    || 'Mesh';
+    || t('weightRig.mesh');
 }
 
 function closeTextureSaveModal() {
@@ -32,7 +33,8 @@ function closeTextureSaveModal() {
   backdrop?.classList.remove('show');
 }
 
-function setSaveAction({visible = false, disabled = true, label = 'Save'} = {}) {
+function setSaveAction({visible = false, disabled = true,
+                        label = t('common.save')} = {}) {
   if (!saveButton) return;
   saveButton.hidden = !visible;
   saveButton.disabled = disabled;
@@ -49,7 +51,7 @@ function addDetail(rows, label, value) {
 
 function textureFileForKey(key) {
   const path = key?.split('::').slice(1).join('::') || '';
-  return path.replaceAll('\\', '/').split('/').pop() || 'Unknown';
+  return path.replaceAll('\\', '/').split('/').pop() || t('texture.unknown');
 }
 
 function renderSavePrompt(state) {
@@ -58,17 +60,17 @@ function renderSavePrompt(state) {
   body.replaceChildren();
   const heading = document.createElement('div');
   heading.className = 'texture-bake-state';
-  heading.textContent = 'SAVE TO TEXTURE';
+  heading.textContent = t('texture.savePromptTitle');
   body.appendChild(heading);
 
   const rows = document.createElement('dl');
   rows.className = 'texture-bake-details';
-  addDetail(rows, 'Texture', textureFileForKey(state?.texKey));
+  addDetail(rows, t('texture.textureLabel'), textureFileForKey(state?.texKey));
   body.appendChild(rows);
 
   const label = document.createElement('p');
   label.className = 'texture-bake-summary';
-  label.textContent = 'Meshes with Color changes';
+  label.textContent = t('texture.meshesColorChanges');
   body.appendChild(label);
   const targets = document.createElement('ul');
   targets.className = 'texture-bake-targets';
@@ -81,17 +83,19 @@ function renderSavePrompt(state) {
 
   const note = document.createElement('p');
   note.className = 'texture-bake-summary';
-  note.textContent = 'The texture file will be modified and a backup will be created.';
+  note.textContent = t('texture.backupNotice');
   body.appendChild(note);
-  setSaveAction({visible: true, disabled: !(state?.targets?.length), label: 'Save'});
+  setSaveAction({visible: true, disabled: !(state?.targets?.length)});
 }
 
 function formatSaveError(result) {
-  const message = result?.error || 'Texture save failed.';
+  const message = result?.error || t('texture.saveFailed');
   const details = result?.details;
   const meshes = Array.isArray(details?.meshes) ? details.meshes : [];
   if (!meshes.length) return message;
-  return `${message} Conflicting meshes: ${meshes.join(', ')}.`;
+  return `${message} ${t('texture.conflictingMeshes', {
+    meshes: meshes.join(', '),
+  })}`;
 }
 
 function renderSaveError(result) {
@@ -107,28 +111,29 @@ function renderSaveSuccess(result, targetCount) {
   body.replaceChildren();
   const heading = document.createElement('div');
   heading.className = 'texture-bake-state';
-  heading.textContent = 'TEXTURE SAVED';
+  heading.textContent = t('texture.savedTitle');
   body.appendChild(heading);
   const file = document.createElement('p');
   file.className = 'texture-bake-summary';
-  file.textContent = result.texture?.file || 'Texture';
+  file.textContent = result.texture?.file || t('texture.textureLabel');
   body.appendChild(file);
   const summary = document.createElement('p');
   summary.className = 'texture-bake-summary';
   const count = Array.isArray(result.saved_meshes)
     ? result.saved_meshes.length : targetCount;
-  summary.textContent = `Color changes saved for ${count} mesh${count === 1 ? '' : 'es'}.`;
+  summary.textContent = t(
+    count === 1 ? 'texture.colorSavedOne' : 'texture.colorSavedMany',
+    {count});
   body.appendChild(summary);
   const rows = document.createElement('dl');
   rows.className = 'texture-bake-details';
-  addDetail(rows, 'Backup', result.backup?.file || 'Created');
+  addDetail(rows, t('texture.backupLabel'),
+    result.backup?.file || t('texture.created'));
   body.appendChild(rows);
   if (result.warning === 'color_state_reset_failed') {
     const warning = document.createElement('p');
     warning.className = 'texture-bake-warning texture-bake-warning-unknown';
-    warning.textContent = 'The texture was saved, but its Color metadata could '
-      + 'not be cleared. Resolve the metadata write failure before reopening '
-      + 'the mod.';
+    warning.textContent = t('texture.colorMetadataWarning');
     body.appendChild(warning);
   }
   setSaveAction();
@@ -141,7 +146,7 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
     view.className = 'texture-bake-progress-view';
     const heading = document.createElement('div');
     heading.className = 'texture-bake-state';
-    heading.textContent = 'SAVING TO TEXTURE';
+    heading.textContent = t('texture.savingTitle');
     const status = document.createElement('p');
     status.className = 'texture-bake-progress-status';
     status.setAttribute('role', 'status');
@@ -150,7 +155,7 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
     progress.id = 'texture-bake-progress';
     progress.className = 'texture-bake-progress';
     progress.max = 100;
-    progress.setAttribute('aria-label', 'Texture save progress');
+    progress.setAttribute('aria-label', t('texture.saveProgress'));
     const progressDetail = document.createElement('p');
     progressDetail.className = 'texture-bake-progress-detail';
     view.append(heading, status, progress, progressDetail);
@@ -162,7 +167,7 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
 
   const stage = typeof detail?.stage === 'string'
     ? detail.stage : 'preparing';
-  const label = saveStageLabels[stage] || 'Saving texture…';
+  const label = t(saveStageLabels[stage] || 'texture.saveStage.saving');
   if (saveProgressElements.stage !== stage) {
     saveProgressElements.status.textContent = label;
     saveProgressElements.stage = stage;
@@ -174,13 +179,18 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
     const boundedCompleted = Math.max(0, Math.min(completed, total));
     saveProgressElements.progress.value = boundedCompleted / total * 100;
     saveProgressElements.progress.setAttribute(
-      'aria-valuetext', `${boundedCompleted} of ${total} blocks`);
+      'aria-valuetext', t('texture.blocks', {
+        completed: boundedCompleted, total,
+      }));
     const mip = Number(detail?.mip);
     const mipCount = Number(detail?.mip_count);
     const mipLabel = mipCount > 1 && Number.isInteger(mip)
       ? `Mip ${mip + 1} of ${mipCount} · ` : '';
-    saveProgressElements.progressDetail.textContent =
-      `${mipLabel}${boundedCompleted} / ${total} blocks`;
+    saveProgressElements.progressDetail.textContent = mipLabel
+      ? t('texture.mipBlocks', {
+        mip: mip + 1, mips: mipCount, completed: boundedCompleted, total,
+      })
+      : t('texture.blocks', {completed: boundedCompleted, total});
   } else {
     saveProgressElements.progress.removeAttribute('value');
     saveProgressElements.progress.removeAttribute('aria-valuetext');
@@ -207,7 +217,7 @@ export function openTextureSaveModal(mesh, {isCurrent} = {}) {
   } else {
     body.replaceChildren();
     setSaveAction();
-    setModalError(error, 'No changed, editable meshes use this DDS.');
+    setModalError(error, t('texture.noChangedMeshes'));
   }
   return state;
 }

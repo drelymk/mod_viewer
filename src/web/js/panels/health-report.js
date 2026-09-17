@@ -3,7 +3,7 @@
 
 import { openIniEditor } from '../editing/ini-editor.js';
 import { bindModalDismiss } from '../ui/modal-shell.js';
-import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, LOCALES, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -15,6 +15,36 @@ let healthRequestId = 0;
 let activeReportLoad = null;
 let currentAssetResolution = null;
 
+function diagnosticReason(issue) {
+  const key = issue?.reason ? `diagnostics.reason.${issue.reason}` : '';
+  if (key && Object.hasOwn(LOCALES.en, key)) {
+    return t(key, {count: issue.count});
+  }
+  return issue?.problem || issue?.message || '';
+}
+
+export function diagnosticMessage(issue = {}) {
+  const key = `diagnostics.issue.${issue.code || ''}`;
+  if (!Object.hasOwn(LOCALES.en, key)) {
+    return issue.message || issue.problem || '';
+  }
+  return t(key, {
+    section: issue.section || '',
+    source: issue.source || '',
+    arguments: issue.arguments || '',
+    lhs: issue.lhs || '',
+    prefix: issue.prefix || '',
+    target: issue.target || '',
+    key: issue.key || '',
+    otherSection: issue.other_section || '',
+    resource: issue.resource || '',
+    stride: issue.stride || '',
+    filename: issue.filename || '',
+    detail: issue.detail || issue.message || '',
+    reason: diagnosticReason(issue),
+  });
+}
+
 function matchesFilter(issue) {
   if (currentFilter === 'all') return true;
   if (currentFilter === 'error') return issue.severity === 'error';
@@ -25,7 +55,7 @@ function locationText(issue) {
   const parts = [];
   if (issue.ini) parts.push(issue.ini);
   if (issue.section) parts.push(`[${issue.section}]`);
-  if (issue.line) parts.push(`line ${issue.line}`);
+  if (issue.line) parts.push(t('health.line', {line: issue.line}));
   return parts.join(' · ');
 }
 
@@ -57,7 +87,7 @@ function renderAssetResolution() {
   const components = Array.isArray(summary.components)
     ? summary.components : [];
   const mixed = components.filter(item => item.status === 'mixed').length;
-  if (mixed) parts.push(`${mixed} ${t('health.mixed')}${mixed === 1 ? '' : 's'}`);
+  if (mixed) parts.push(t('health.mixedComponents', {count: mixed}));
   node.textContent = parts.join(' · ');
   node.hidden = false;
 }
@@ -88,7 +118,7 @@ function renderReport() {
 
   const groups = new Map();
   for (const issue of issues) {
-    const group = issue.ini || 'Asset files';
+    const group = issue.ini || t('health.assetFiles');
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(issue);
   }
@@ -118,7 +148,7 @@ function renderReport() {
       body.className = 'health-item-body';
       const message = document.createElement('div');
       message.className = 'health-message';
-      message.textContent = issue.message;
+      message.textContent = diagnosticMessage(issue);
       body.appendChild(message);
       const location = locationText(issue);
       if (location) {
@@ -158,11 +188,11 @@ export function setHealthReport(report, assetResolution = undefined) {
   button.classList.toggle('error', errors > 0);
   $('health-count').textContent = String(count);
   button.title = !report ? (reportLoader ? t('health.run') : t('health.open'))
-    : count ? t('health.issue', {count, suffix: count === 1 ? '' : 's'})
+    : count ? t(count === 1 ? 'health.issueOne' : 'health.issueMany', {count})
       : t('health.noIssues');
   button.setAttribute('aria-label', !report
     ? (reportLoader ? t('health.run') : t('health.open'))
-    : t('health.issueOpen', {count, suffix: count === 1 ? '' : 's'}));
+    : t(count === 1 ? 'health.issueOpenOne' : 'health.issueOpenMany', {count}));
   if ($('health-modal-backdrop').classList.contains('show')) renderReport();
 }
 

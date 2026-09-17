@@ -78,7 +78,8 @@ def module_page(module_context, frontend_url, module_document):
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
-          panel_opacity_api=True, language='en', language_api=True,
+          panel_opacity_api=True, panel_opacity_error=None, language='en',
+          language_api=True,
           asset_folders=None, asset_subfolders=None,
           startup_request=None, startup_api_ready=True, api_features=()):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
@@ -96,6 +97,7 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "diagnostics": diagnostics or {
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "panelOpacity": panel_opacity,
+        "panelOpacityError": panel_opacity_error,
         "panelOpacityApi": panel_opacity_api,
         "language": language,
         "languageApi": language_api,
@@ -294,7 +296,9 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.pending[path] = false;
             },
             get_mod_folders: async () => copy({folders: state.modFolders}),
-            get_panel_opacity: async () => ({value: state.panelOpacity}),
+            get_panel_opacity: async () => state.panelOpacityError
+              ? {error: state.panelOpacityError}
+              : {value: state.panelOpacity},
             set_panel_opacity: async value => {
               state.panelOpacity = value;
               state.calls.panelOpacity.push(value);

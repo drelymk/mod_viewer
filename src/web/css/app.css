@@ -1022,11 +1022,16 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .range-control-slider {
   width: 100%; accent-color: var(--accent); cursor: pointer;
 }
-.appearance-language-row {
+.language-popover {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 260;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; margin-top: 12px; font-size: 11px; font-weight: 600;
+  gap: 12px; width: 190px; padding: 10px 12px; color: var(--text);
+  background: rgba(22,27,34,.98); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: 0 10px 28px rgba(0,0,0,.45);
+  font-size: 11px; font-weight: 600;
 }
-.appearance-language-row select {
+.language-popover[hidden] { display: none; }
+.language-popover select {
   min-width: 104px; padding: 3px 5px; color: var(--text);
   background: var(--bg-control); border: 1px solid var(--border);
   border-radius: var(--radius-sm); font-size: 11px;

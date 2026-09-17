@@ -687,6 +687,20 @@ def test_panel_opacity_control_applies_and_saves_whole_percent(
         context.close()
 
 
+def test_panel_opacity_load_error_keeps_default_and_page_usable(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        panel_opacity_error="read failed")
+    try:
+        page.wait_for_function("document.querySelector('#panel-opacity').value === '58'")
+        assert page.locator("#open-btn").is_enabled()
+        assert page.locator("#appearance-btn").get_attribute("aria-label") == (
+            "Panel opacity: 58%")
+    finally:
+        context.close()
+
+
 def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {"Language": _payload("Language")})
@@ -696,7 +710,10 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         page.locator(".draw-item").wait_for()
         load_count = page.evaluate("window.__fakeApi.calls.loadMod.length")
 
-        page.locator("#appearance-btn").click()
+        assert page.locator("#app-language").count() == 1
+        assert page.locator("#appearance-popover #app-language").count() == 0
+        page.locator("#language-btn").click()
+        assert not page.locator("#language-popover").is_hidden()
         page.locator("#app-language").select_option("zh-CN")
         page.wait_for_function("document.documentElement.lang === 'zh-CN'")
         assert page.locator("#open-btn").text_content() == "打开 MOD"
@@ -706,6 +723,7 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN"]
         assert page.evaluate("window.__fakeApi.calls.loadMod.length") == load_count
 
+        page.locator("#language-btn").click()
         page.locator("#app-language").select_option("en")
         page.wait_for_function("document.documentElement.lang === 'en'")
         assert page.locator("#open-btn").text_content() == "Open Mod"
@@ -729,7 +747,7 @@ def test_saved_language_is_restored_and_late_bridge_cannot_overwrite_new_choice(
         edge_browser, frontend_url, {"Language": _payload("Language")},
         language="en", language_api=False)
     try:
-        page.locator("#appearance-btn").click()
+        page.locator("#language-btn").click()
         page.locator("#app-language").select_option("zh-CN")
         page.wait_for_function("document.documentElement.lang === 'zh-CN'")
         page.evaluate("""() => {

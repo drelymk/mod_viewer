@@ -12,6 +12,7 @@ import {
   jointPivotMap,
 } from './weight-rig.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
+import {weightRigStatus} from './weight-rig-status.js';
 
 function clockNow() {
   return typeof globalThis.performance?.now === 'function'
@@ -648,7 +649,7 @@ function createSession({state, modelWeightState, getGeneration,
     }
     cancelWeightPicking?.();
     state.jointPickIntent = next;
-    state.pickStatus = 'Pick a Rig joint.';
+    state.pickStatus = weightRigStatus('weightRig.status.pickRigJoint');
     notifyChanged();
     requestRender();
     return true;
@@ -687,7 +688,8 @@ function createSession({state, modelWeightState, getGeneration,
     if (!next) return false;
     const jointId = pickFromSurface?.(point, next);
     if (!Number.isInteger(Number(jointId))) {
-      state.pickStatus = 'No usable Rig joint was found at this point.';
+      state.pickStatus = weightRigStatus(
+        'weightRig.status.noRigJointAtPoint');
       notifyChanged();
       requestRender();
       return false;

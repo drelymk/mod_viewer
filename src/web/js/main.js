@@ -37,6 +37,7 @@ import {
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { initWeightRigPanel } from './panels/weight-rig-panel.js';
+import {weightRigStatus} from './mesh/weight-rig-status.js';
 import { createRigOverlayController } from './scene/rig-overlay-controller.js';
 import { initLanguageControl, initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
@@ -343,7 +344,7 @@ rendererReady.then(ready => {
     finishHumanoidControlCarry,
     cancelHumanoidControlCarry,
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
-      'Pose gizmo is unavailable in this build.'),
+      weightRigStatus('weightRig.status.poseGizmoUnavailable')),
     requestRender,
   });
   initWeightRigPanel();

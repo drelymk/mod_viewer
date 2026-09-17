@@ -1,5 +1,11 @@
 """Focused contracts for the first-party frontend localization layer."""
 
+import re
+from pathlib import Path
+
+
+_CATALOG_KEY = re.compile(r"^\s*'([^']+)'\s*:")
+
 
 def test_catalogs_have_matching_keys_and_support_lookup_fallback(module_page):
     result = module_page.evaluate("""async () => {
@@ -27,3 +33,15 @@ def test_catalogs_have_matching_keys_and_support_lookup_fallback(module_page):
     assert result["unknown"] == "missing.example"
     assert result["fallbackLocale"] == "en"
     assert result["lang"] == "en"
+
+
+def test_catalog_source_keys_are_unique():
+    root = Path(__file__).resolve().parents[3]
+    for name in ("en.js", "zh-CN.js"):
+        keys = []
+        for line in (root / "src" / "web" / "js" / "i18n" / "locales" / name).read_text(encoding="utf-8").splitlines():
+            match = _CATALOG_KEY.match(line)
+            if match:
+                keys.append(match.group(1))
+        duplicates = sorted({key for key in keys if keys.count(key) > 1})
+        assert not duplicates, f"duplicate keys in {name}: {duplicates}"

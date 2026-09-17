@@ -93,9 +93,6 @@ export function initPanelOpacityControl() {
       const result = await load.call(window.pywebview.api);
       if (result?.error) {
         console.error(result.error);
-        loadedLanguage = normalizeLanguage(result?.value);
-        if (!userChanged) apply(loadedLanguage);
-        else if (pendingLanguage !== null) await saveLanguage(pendingLanguage);
         return true;
       }
       loadedOpacity = normalizeOpacity(result?.value);
@@ -132,17 +129,34 @@ export function initPanelOpacityControl() {
 }
 
 export function initLanguageControl() {
+  const control = $('language-control');
+  const button = $('language-btn');
+  const popover = $('language-popover');
   const select = $('app-language');
-  if (!select) return;
+  if (!control || !button || !popover || !select) return;
 
   let loadedLanguage = null;
   let pendingLanguage = null;
   let userChanged = false;
 
+  const updateLabels = () => {
+    const name = select.value === 'zh-CN'
+      ? t('toolbar.simplifiedChinese') : t('toolbar.english');
+    const label = t('toolbar.languageValue', {name});
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    popover.setAttribute('aria-label', t('toolbar.language'));
+  };
   const apply = value => {
     const language = setLocale(normalizeLanguage(value));
     select.value = language;
+    updateLabels();
     return language;
+  };
+  const close = (restoreFocus = false) => {
+    popover.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) button.focus();
   };
   const saveLanguage = async language => {
     if (loadedLanguage === null) {
@@ -186,11 +200,27 @@ export function initLanguageControl() {
   };
 
   apply(getLocale());
+  button.setAttribute('aria-haspopup', 'dialog');
+  button.setAttribute('aria-expanded', 'false');
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    popover.hidden = !popover.hidden;
+    button.setAttribute('aria-expanded', String(!popover.hidden));
+    if (!popover.hidden) select.focus();
+  });
   select.addEventListener('change', () => {
     userChanged = true;
     const language = apply(select.value);
     void saveLanguage(language);
+    close();
   });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('#language-control')) close();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !popover.hidden) close(true);
+  });
+  window.addEventListener(LANGUAGE_CHANGED, updateLabels);
   void loadLanguage().then(loaded => {
     if (!loaded) window.addEventListener('pywebviewready', loadLanguage, {once: true});
   });

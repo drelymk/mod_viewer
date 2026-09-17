@@ -247,8 +247,10 @@ class IniDocument:
         structure ambiguous, and rewriting a gate inside one could change
         which draws are conditional.
 
-        Returns [{section, line, problem}]; callers that rewrite gates should
-        refuse to touch any section named here.
+        Returns [{section, line, problem, reason, count?}]; callers that
+        rewrite gates should refuse to touch any section named here. ``reason``
+        is a stable machine-readable classification; ``problem`` remains the
+        human-readable compatibility field.
         """
         problems = []
         for sec in self.sections:
@@ -261,18 +263,22 @@ class IniDocument:
                         open_ifs.pop()
                     else:
                         problems.append({"section": sec.name, "line": line.no,
-                                         "problem": "endif without a matching if"})
+                                         "problem": "endif without a matching if",
+                                         "reason": "endif_without_if"})
                 elif line.kind in (ELIF, ELSE):
                     if not open_ifs:
                         problems.append({"section": sec.name, "line": line.no,
-                                         "problem": f"{line.kind} without an open if"})
+                                         "problem": f"{line.kind} without an open if",
+                                         "reason": "branch_without_if"})
                     elif line.kind == ELIF and open_ifs[-1]["saw_else"]:
                         problems.append({"section": sec.name, "line": line.no,
-                                         "problem": "elif after else"})
+                                         "problem": "elif after else",
+                                         "reason": "elif_after_else"})
                     elif line.kind == ELSE:
                         if open_ifs[-1]["saw_else"]:
                             problems.append({"section": sec.name, "line": line.no,
-                                             "problem": "duplicate else"})
+                                             "problem": "duplicate else",
+                                             "reason": "duplicate_else"})
                         else:
                             open_ifs[-1]["saw_else"] = True
             if open_ifs:
@@ -280,7 +286,8 @@ class IniDocument:
                 # than the section boundary. The latter made a blank line or
                 # the next header look responsible for the error.
                 problems.append({"section": sec.name, "line": open_ifs[0]["line"].no,
-                                 "problem": f"{len(open_ifs)} unclosed if"})
+                                 "problem": f"{len(open_ifs)} unclosed if",
+                                 "reason": "unclosed_if", "count": len(open_ifs)})
         return problems
 
     def syntax_errors(self):
@@ -288,18 +295,23 @@ class IniDocument:
 
         This intentionally does not validate arbitrary assignments or section
         types: 3DMigoto extensions evolve, and unfamiliar syntax is not proof
-        of an error. Returns [{code, section, line, problem}].
+        of an error. Returns [{code, section, line, problem, reason, count?}].
         """
         problems = []
 
-        def add(code, line, problem, section=True):
-            problems.append({
+        def add(code, line, problem, section=True, reason=None, count=None):
+            entry = {
                 "code": code,
                 "section": (line.section.name
                             if section and line.section is not None else None),
                 "line": line.no,
                 "problem": problem,
-            })
+            }
+            if reason is not None:
+                entry["reason"] = reason
+            if count is not None:
+                entry["count"] = count
+            problems.append(entry)
 
         for line in self.lines:
             text = line.text
@@ -312,35 +324,43 @@ class IniDocument:
                 close = text.find("]")
                 if close < 0:
                     add("malformed_section_header", line,
-                        "section header is missing a closing ]", section=False)
+                        "section header is missing a closing ]", section=False,
+                        reason="section_missing_closing_bracket")
                 elif not text[1:close].strip():
                     add("malformed_section_header", line,
-                        "section header has an empty name", section=False)
+                        "section header has an empty name", section=False,
+                        reason="section_empty_name")
                 elif text[close + 1:].strip():
                     add("malformed_section_header", line,
-                        "unexpected content after section header", section=False)
+                        "unexpected content after section header", section=False,
+                        reason="section_trailing_content")
                 continue
 
             lowered = text.lower()
             if re.match(r"^elseif\b", lowered):
                 add("malformed_condition_syntax", line,
-                    "use 'elif' or 'else if', not 'elseif'")
+                    "use 'elif' or 'else if', not 'elseif'",
+                    reason="elseif_not_allowed")
                 continue
             if re.match(r"^(?:if|elif)\s*$", lowered):
                 add("malformed_condition_syntax", line,
-                    "condition is missing an expression")
+                    "condition is missing an expression",
+                    reason="condition_missing_expression")
                 continue
             if re.match(r"^else\s+if\s*$", lowered):
                 add("malformed_condition_syntax", line,
-                    "else if is missing an expression")
+                    "else if is missing an expression",
+                    reason="else_if_missing_expression")
                 continue
             if re.match(r"^(?:if|elif)(?=[$!(])", lowered):
                 add("malformed_condition_syntax", line,
-                    "condition keyword must be followed by a space")
+                    "condition keyword must be followed by a space",
+                    reason="condition_keyword_missing_space")
                 continue
             if re.match(r"^else\s+if(?=[$!(])", lowered):
                 add("malformed_condition_syntax", line,
-                    "else if must be followed by a space")
+                    "else if must be followed by a space",
+                    reason="else_if_missing_space")
                 continue
             if re.match(r"^else\s+if\b", lowered):
                 condition = re.sub(r"^else\s+if\s+", "", text,
@@ -364,18 +384,22 @@ class IniDocument:
                         depth -= 1
                 if unmatched_close:
                     add("unbalanced_condition_parentheses", line,
-                        "condition has a closing ) without a matching (")
+                        "condition has a closing ) without a matching (",
+                        reason="unmatched_close_parenthesis")
                 elif depth:
                     add("unbalanced_condition_parentheses", line,
-                        f"condition has {depth} unclosed (")
+                        f"condition has {depth} unclosed (",
+                        reason="unclosed_parenthesis", count=depth)
                 continue
 
             if re.match(r"^else\s+.+", lowered):
                 add("malformed_condition_syntax", line,
-                    "else must not have trailing content")
+                    "else must not have trailing content",
+                    reason="else_trailing_content")
             elif re.match(r"^endif\s+.+", lowered):
                 add("malformed_condition_syntax", line,
-                    "endif must not have trailing content")
+                    "endif must not have trailing content",
+                    reason="endif_trailing_content")
 
         return problems
 

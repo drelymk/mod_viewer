@@ -3,6 +3,7 @@
 // operation, keeping pose state transitions here.
 
 import * as THREE from 'three';
+import {weightRigStatus} from './weight-rig-status.js';
 
 let activeSession = null;
 
@@ -69,18 +70,21 @@ function createSession({state, getRig, getJoint, getParent,
       const component = getComponentForJoint(jointId);
       if (!Number.isInteger(jointId) || !joint || !component
           || seen.has(jointId)) {
-        state.pickStatus = 'Could not apply the Rig pose.';
+        state.pickStatus = weightRigStatus(
+          'weightRig.status.couldNotApplyRigPose');
         notifyChanged();
         return false;
       }
       if (Number(component.rootId) === jointId) {
-        state.pickStatus = 'Component root / anchor cannot be rotated.';
+        state.pickStatus = weightRigStatus(
+          'weightRig.status.rootCannotRotate');
         notifyChanged();
         return false;
       }
       const quaternion = strictQuaternion(value);
       if (!quaternion) {
-        state.pickStatus = 'Could not apply the Rig pose.';
+        state.pickStatus = weightRigStatus(
+          'weightRig.status.couldNotApplyRigPose');
         notifyChanged();
         return false;
       }
@@ -130,7 +134,8 @@ function createSession({state, getRig, getJoint, getParent,
       return false;
     }
     if (Number(modelComponent.rootId) === resolvedJointId) {
-      state.pickStatus = 'Component root / anchor cannot be rotated.';
+      state.pickStatus = weightRigStatus(
+        'weightRig.status.rootCannotRotate');
       notifyChanged();
       return false;
     }
@@ -185,7 +190,9 @@ function createSession({state, getRig, getJoint, getParent,
     },
     setRotation,
     setStatus(message = '') {
-      state.pickStatus = String(message || '');
+      state.pickStatus = message && typeof message === 'object'
+        && message.messageKey
+        ? message : String(message || '');
       notifyChanged();
       return state.pickStatus;
     },

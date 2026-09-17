@@ -196,11 +196,14 @@ def test_structure_errors():
         "[A]\r\nif $x == 1\r\nendif\r\nelse if $x == 2\r\nendif\r\n")
     problems = [p["problem"] for p in orphan.structure_errors()]
     assert (problems) == (["elif without an open if", "endif without a matching if"]), ("orphan else-if reported")
+    assert [p["reason"] for p in orphan.structure_errors()] == [
+        "branch_without_if", "endif_without_if"]
     assert (orphan.is_safe_to_rewrite("A")) == (False), ("orphan section not safe")
 
     unclosed = IniDocument.from_string("[A]\r\nif $x == 1\r\ndrawindexed = 1,0,0\r\n")
     assert ([p["problem"] for p in unclosed.structure_errors()]) == (["1 unclosed if"]), ("unclosed if reported")
     assert (unclosed.structure_errors()[0]["line"]) == (1), ("unclosed if points to its opening line")
+    assert unclosed.structure_errors()[0]["count"] == 1
 
     extra = IniDocument.from_string("[A]\r\nif $x == 1\r\nendif\r\nendif\r\n")
     assert ([p["problem"] for p in extra.structure_errors()]) == (["endif without a matching if"]), ("extra endif reported")
@@ -239,4 +242,12 @@ def test_syntax_errors():
     assert (sum(p["code"] == "malformed_condition_syntax" for p in errors)) == (8), ("malformed conditional forms reported")
     assert (sum(p["code"] == "unbalanced_condition_parentheses" for p in errors)) == (2), ("unbalanced condition parentheses reported")
     assert (sum(p["code"] == "malformed_section_header" for p in errors)) == (3), ("malformed section headers reported")
+    assert {p["reason"] for p in errors} == {
+        "condition_missing_expression", "else_if_missing_expression",
+        "elseif_not_allowed", "condition_keyword_missing_space",
+        "else_if_missing_space", "else_trailing_content",
+        "endif_trailing_content", "unclosed_parenthesis",
+        "unmatched_close_parenthesis", "section_empty_name",
+        "section_missing_closing_bracket", "section_trailing_content",
+    }
     assert (doc.is_safe_to_rewrite("Good")) == (False), ("condition syntax makes section unsafe")
