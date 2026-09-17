@@ -55,6 +55,14 @@ class _Unsupported(Exception):
     never propagated to callers."""
 
 
+def _skip(report, var, line, reason, code=None, params=None):
+    item = {"var": var, "line": line, "reason": reason}
+    if code:
+        item["reason_code"] = code
+        item["reason_params"] = params or {}
+    report["skipped"].append(item)
+
+
 def _split_cond(line):
     m = _COND_RE.match(line.text)
     return (m.group(1), m.group(2).strip()) if m else None
@@ -282,19 +290,18 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
         line = doc.lines[line_no]
         owners = target_owners.get(line_no, set())
         if target_paths.get(line_no) and var not in owners:
-            report["skipped"].append({
-                "var": var, "line": line.no + 1,
-                "reason": "draw is reached through a run= command-list "
-                          "execution path without a physical owner for this "
-                          "variable; edit the caller branch manually"})
+            _skip(report, var, line.no + 1,
+                  "draw is reached through a run= command-list execution path "
+                  "without a physical owner for this variable; edit the caller "
+                  "branch manually", "command_path")
             continue
         if owners and var not in owners:
             continue
         if line.section is not None and line.section.name.lower() in unsafe_sections:
-            report["skipped"].append({
-                "var": var, "line": line.no + 1,
-                "reason": "this section's if/elif/endif nesting is ambiguous "
-                          "(see IniDocument.structure_errors); edit the ini directly"})
+            _skip(report, var, line.no + 1,
+                  "this section's if/elif/endif nesting is ambiguous (see "
+                  "IniDocument.structure_errors); edit the ini directly",
+                  "ambiguous_nesting")
             continue
         ancestors = _ancestors(doc, line)
         if not ancestors:
@@ -306,17 +313,17 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
             try:
                 leader = _chain_leader(doc, immediate)
             except _Unsupported as e:
-                report["skipped"].append({"var": var, "line": line.no + 1, "reason": str(e)})
+                _skip(report, var, line.no + 1, str(e), "unsupported",
+                      {"detail": str(e)})
                 continue
             chain_leaders[leader.no] = leader
             leader_lines.setdefault(leader.no, []).append(line_no)
             continue
 
         if any(_refs(doc, a, var) for a in ancestors[1:]):
-            report["skipped"].append({
-                "var": var, "line": line.no + 1,
-                "reason": "gated by this variable at an outer nesting level; "
-                          "edit the ini directly"})
+            _skip(report, var, line.no + 1,
+                  "gated by this variable at an outer nesting level; edit the ini "
+                  "directly", "outer_gate")
         else:
             bare_targets.append(line)
             nested_bare.add(line.no)
@@ -329,7 +336,8 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
             branches, endif_line = _chain_of(leader)
             edit = _regenerate_chain(doc, var, values, branches, endif_line, desired, all_positions)
         except _Unsupported as e:
-            report["skipped"].append({"var": var, "line": leader.no + 1, "reason": str(e)})
+            _skip(report, var, leader.no + 1, str(e), "unsupported",
+                  {"detail": str(e)})
             continue
         if edit is not None:
             chain_edits.append(edit)
@@ -352,8 +360,8 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
                     var, values, pos_set, all_positions)
             except _Unsupported as exc:
                 verified.pop(line.no, None)
-                report["skipped"].append({
-                    "var": var, "line": line.no + 1, "reason": str(exc)})
+                _skip(report, var, line.no + 1, str(exc), "unsupported",
+                      {"detail": str(exc)})
 
     return chain_edits, bare_edits, verified
 
@@ -486,9 +494,9 @@ def record_toggle(doc, section_name, position_lines, target_lines,
     refused = set()
     for line_no, claims in all_bare_claims.items():
         if len(claims) > 1:
-            report["skipped"].append({
-                "var": "/".join(v for v, _ in claims), "line": line_no + 1,
-                "reason": "targeted by more than one variable in this recording session"})
+            _skip(report, "/".join(v for v, _ in claims), line_no + 1,
+                  "targeted by more than one variable in this recording session",
+                  "multiple_variables")
             refused.update((v, line_no) for v, _ in claims)
             continue
         var, expr = claims[0]
@@ -498,10 +506,10 @@ def record_toggle(doc, section_name, position_lines, target_lines,
         # against the untouched document, so splicing both would corrupt it.
         # Leave the chain edit alone and refuse only this narrower wrap.
         if any(start <= line_no < end for start, end, _ in all_chain_edits):
-            report["skipped"].append({
-                "var": var, "line": line_no + 1,
-                "reason": "sits inside another variable's gate being rewritten in this "
-                          "same save; edit the ini directly to nest this condition"})
+            _skip(report, var, line_no + 1,
+                  "sits inside another variable's gate being rewritten in this "
+                  "same save; edit the ini directly to nest this condition",
+                  "nested_rewrite")
             refused.add((var, line_no))
             continue
         line = doc.lines[line_no]

@@ -78,7 +78,9 @@ def module_page(module_context, frontend_url, module_document):
 
 def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
-          panel_opacity_api=True, asset_folders=None, asset_subfolders=None,
+          panel_opacity_api=True, panel_opacity_error=None, language='en',
+          language_api=True,
+          asset_folders=None, asset_subfolders=None,
           startup_request=None, startup_api_ready=True, api_features=()):
     # Playwright's wait_for_function uses eval internally. Bypass the app's
     # production CSP only in this isolated test context so behavioral waits
@@ -95,7 +97,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
         "diagnostics": diagnostics or {
             "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
         "panelOpacity": panel_opacity,
+        "panelOpacityError": panel_opacity_error,
         "panelOpacityApi": panel_opacity_api,
+        "language": language,
+        "languageApi": language_api,
         "startupRequest": startup_request,
         "startupApiReady": startup_api_ready,
         "apiFeatures": list(api_features),
@@ -291,10 +296,18 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.pending[path] = false;
             },
             get_mod_folders: async () => copy({folders: state.modFolders}),
-            get_panel_opacity: async () => ({value: state.panelOpacity}),
+            get_panel_opacity: async () => state.panelOpacityError
+              ? {error: state.panelOpacityError}
+              : {value: state.panelOpacity},
             set_panel_opacity: async value => {
               state.panelOpacity = value;
               state.calls.panelOpacity.push(value);
+              return {value};
+            },
+            get_language: async () => ({value: state.language}),
+            set_language: async value => {
+              state.language = value;
+              state.calls.language.push(value);
               return {value};
             },
             add_mod_folder: async (name, path) => {
@@ -371,7 +384,8 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
             asset: ['load_asset'],
             asset_fill: ['load_missing_asset_parts',
               'remove_missing_asset_parts'],
-            panel: ['get_panel_opacity', 'set_panel_opacity'],
+            panel: ['get_panel_opacity', 'set_panel_opacity',
+              'get_language', 'set_language'],
             mod_folders: ['add_mod_folder', 'edit_mod_folder',
               'delete_mod_folder', 'list_subfolders'],
             asset_folders: ['get_asset_folders', 'add_asset_folder',
@@ -396,6 +410,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
           if (!state.panelOpacityApi) {
             delete window.pywebview.api.get_panel_opacity;
             delete window.pywebview.api.set_panel_opacity;
+          }
+          if (!state.languageApi) {
+            delete window.pywebview.api.get_language;
+            delete window.pywebview.api.set_language;
           }
           if (!state.startupApiReady) {
             delete window.pywebview.api.consume_startup_request;

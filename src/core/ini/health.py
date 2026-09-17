@@ -173,6 +173,7 @@ def _analyze_statements(doc, ini_rel, issues):
                         f"{malformed.group('prefix')!r}.",
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
                         resource=malformed.group("resource"),
+                        lhs=lhs, prefix=malformed.group("prefix"),
                     ))
 
             if lowered_lhs == "run":
@@ -215,6 +216,8 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
             problem["problem"], ini_rel, problem.get("section"),
             problem["line"] + 1,
             doc.lines[problem["line"]].raw.strip() if doc.lines else None,
+            reason=problem.get("reason"),
+            **({"count": problem["count"]} if "count" in problem else {}),
         ))
     for problem in doc.syntax_errors():
         category = ("conditions" if problem["code"] != "malformed_section_header"
@@ -223,6 +226,8 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
             problem["code"], "error", category, problem["problem"],
             ini_rel, problem.get("section"), problem["line"] + 1,
             doc.lines[problem["line"]].raw.strip() if doc.lines else None,
+            reason=problem.get("reason"),
+            **({"count": problem["count"]} if "count" in problem else {}),
         ))
     _analyze_statements(doc, ini_rel, issues)
 
@@ -284,7 +289,7 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
                     "invalid_resource_stride", "error", "resources",
                     f"{resource['name']} has an invalid stride: {raw_stride!r}.",
                     ini_rel, resource["name"], line.no + 1, line.raw.strip(),
-                    resource=resource["name"],
+                    resource=resource["name"], stride=raw_stride,
                 ))
 
         owned = []
@@ -420,6 +425,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
             issues.append(_issue(
                 "unreadable_ini", "error", "ini",
                 f"Could not read this INI as UTF-8: {exc}", ini=ini_rel,
+                detail=str(exc),
             ))
             continue
         declared_files.update(_filename_paths(

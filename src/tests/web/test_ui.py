@@ -180,6 +180,16 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         assert page.locator("#toggle-list .toggle-src-hdr").count() == 0
         assert page.locator("#menu-list .toggle-src-hdr").count() == 0
 
+        page.evaluate("""() => {
+          const addEventListener = window.addEventListener;
+          window.__sourceLanguageListenerCount = 0;
+          window.addEventListener = function(type, ...args) {
+            if (type === 'mod-viewer-language-changed') {
+              window.__sourceLanguageListenerCount += 1;
+            }
+            return addEventListener.call(this, type, ...args);
+          };
+        }""")
         page.evaluate("window.__oldDrawRow = document.querySelector('.draw-item')")
         _open(page, "Sources")
         page.wait_for_function(
@@ -205,6 +215,19 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         assert pool_identity["poolCount"] == 2
         assert pool_identity["nestedShared"]
         assert pool_identity["rootDistinct"]
+
+        assert page.evaluate("window.__sourceLanguageListenerCount") == 0
+
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        assert page.locator("#mesh-list .mesh-src-hdr").first.locator(
+            ".group-toggle").get_attribute("aria-label") == "折叠 Root.ini"
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
 
         first_header = page.locator("#mesh-list .mesh-src-hdr").first
         first_header.click()
@@ -367,6 +390,25 @@ def test_mod_folder_panel_browses_children_lazily(
         alice_node.locator(".mod-folder-expand").click()
         page.locator(".mod-folder-select", has_text="Summer").wait_for()
         assert page.evaluate("window.__fakeApi.calls.listSubfolders") == [root, alice]
+
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert root_node.locator(
+            ":scope > .mod-folder-row > .mod-folder-expand").get_attribute(
+                "aria-expanded") == "true"
+        assert alice_node.locator(
+            ":scope > .mod-folder-row > .mod-folder-expand").get_attribute(
+                "aria-expanded") == "true"
+        assert page.locator(".mod-folder-select", has_text="Summer").is_visible()
+
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
 
         root_arrow = root_node.locator(":scope > .mod-folder-row > .mod-folder-expand")
         root_children = root_node.locator(":scope > .mod-folder-children")
@@ -559,6 +601,20 @@ def test_mod_folder_add_edit_delete_modal_flow(
         assert page.locator(
             "[aria-label='More actions for Original']").get_attribute(
                 "aria-expanded") == "false"
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#mfm-title").inner_text() == "编辑 MOD 文件夹"
+        assert page.locator("#mfm-save").inner_text() == "保存"
+        assert page.locator("#mfm-name").input_value() == "Original"
+        assert page.locator("#mfm-path").input_value() == original
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
         page.locator("#mfm-name").fill("Renamed")
         page.locator("#mfm-save").click()
         page.locator(".mod-folder-select", has_text="Renamed").wait_for()
@@ -683,6 +739,181 @@ def test_panel_opacity_control_applies_and_saves_whole_percent(
         page.keyboard.press("Escape")
         assert page.locator("#appearance-popover").is_hidden()
         assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "false"
+    finally:
+        context.close()
+
+
+def test_panel_opacity_load_error_keeps_default_and_page_usable(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        panel_opacity_error="read failed")
+    try:
+        page.wait_for_function("document.querySelector('#panel-opacity').value === '58'")
+        assert page.locator("#open-btn").is_enabled()
+        assert page.locator("#appearance-btn").get_attribute("aria-label") == (
+            "Panel opacity: 58%")
+    finally:
+        context.close()
+
+
+def test_language_switch_updates_static_and_dynamic_labels_without_reload(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {"Language": _payload("Language")})
+    try:
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        _open(page, "Language")
+        page.locator(".draw-item").wait_for()
+        assert page.locator("#mod-path").text_content() == "Language"
+        load_count = page.evaluate("window.__fakeApi.calls.loadMod.length")
+
+        assert page.locator("#app-language").count() == 1
+        assert page.locator("#appearance-popover #app-language").count() == 0
+        page.locator("#language-btn").click()
+        assert not page.locator("#language-popover").is_hidden()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#open-btn").text_content() == "打开 MOD"
+        assert page.locator("#mod-path").text_content() == "Language"
+        assert page.evaluate("document.title") == "3DMigoto Mod Viewer"
+        assert page.locator("#toggle-add-btn").get_attribute("title") == "添加切换"
+        assert page.locator("#toggle-add-btn").get_attribute("aria-label") == "添加切换"
+        assert page.locator(".health-label").text_content() == "诊断"
+        assert page.locator("#appearance-popover label[for='panel-opacity']").text_content() == "面板透明度"
+        assert page.locator("#ao-btn").get_attribute("aria-label").startswith("环境光遮蔽")
+        assert page.locator("#shading-btn").get_attribute("title").startswith("平滑着色")
+        assert page.locator("#trackball-btn").get_attribute("aria-label").startswith("切换导航控件")
+        assert page.locator(".gizmo-axis.axis-x.positive").get_attribute("aria-label") == "从正 X 轴查看"
+        assert page.locator("#empty-add-folder-btn").text_content() == "添加 MOD 文件夹"
+        assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN"]
+        assert page.evaluate("window.__fakeApi.calls.loadMod.length") == load_count
+
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#open-btn").text_content() == "Open Mod"
+        assert page.locator("#mod-path").text_content() == "Language"
+        assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN", "en"]
+    finally:
+        context.close()
+
+
+def test_language_switch_updates_no_source_label_without_reload(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#mod-path").text_content() == "No mod loaded"
+        assert page.locator("#status-text").get_attribute("data-i18n") is None
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#mod-path").text_content() == "未加载 MOD"
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#mod-path").text_content() == "No mod loaded"
+    finally:
+        context.close()
+
+
+def test_language_switch_updates_empty_toggle_label(
+        edge_browser, frontend_url):
+    payload = _payload("EmptyToggles")
+    payload["controls"]["toggles"] = {}
+    context, page = _page(edge_browser, frontend_url, {"EmptyToggles": payload})
+    try:
+        _open(page, "EmptyToggles")
+        page.locator(".draw-item").wait_for()
+        assert page.locator("#toggle-list .toggle-empty").text_content() == (
+            "No toggles yet — click Add to create one.")
+
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#toggle-list .toggle-empty").text_content() == (
+            "暂无切换——点击“添加”创建一个。")
+
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#toggle-list .toggle-empty").text_content() == (
+            "No toggles yet — click Add to create one.")
+    finally:
+        context.close()
+
+
+def test_header_setting_popovers_are_mutually_exclusive(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Popover": _payload("Popover")},
+        panel_opacity=35)
+    try:
+        _open(page, "Popover")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#environment-btn").click()
+        page.locator("#environment-popover:not([hidden])").wait_for()
+        page.locator("#environment-popover .ui-popover-option", has_text="Studio").click()
+        assert page.evaluate("window.modViewer.getEnvironmentPreset().id") == "studio"
+
+        page.locator("#language-btn").click()
+        page.locator("#language-popover:not([hidden])").wait_for()
+        page.locator("#environment-btn").click()
+        assert page.locator("#language-popover").is_hidden()
+        assert page.locator("#language-btn").get_attribute("aria-expanded") == "false"
+        assert not page.locator("#environment-popover").is_hidden()
+        assert page.locator("#environment-btn").get_attribute("aria-expanded") == "true"
+
+        page.locator("#appearance-btn").click()
+        assert page.locator("#environment-popover").is_hidden()
+        assert page.locator("#environment-btn").get_attribute("aria-expanded") == "false"
+        assert not page.locator("#appearance-popover").is_hidden()
+        assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "true"
+        assert page.locator("#panel-opacity").input_value() == "35"
+
+        page.locator("#language-btn").click()
+        assert page.locator("#appearance-popover").is_hidden()
+        assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "false"
+        assert not page.locator("#language-popover").is_hidden()
+        assert page.locator("#language-btn").get_attribute("aria-expanded") == "true"
+        assert page.locator("#app-language").input_value() == "en"
+        assert page.evaluate("window.modViewer.getEnvironmentPreset().id") == "studio"
+        assert page.locator("#panel-opacity").input_value() == "35"
+    finally:
+        context.close()
+
+
+def test_saved_language_is_restored_and_late_bridge_cannot_overwrite_new_choice(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Language": _payload("Language")},
+        language="zh-CN")
+    try:
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#open-btn").text_content() == "打开 MOD"
+    finally:
+        context.close()
+
+    context, page = _page(
+        edge_browser, frontend_url, {"Language": _payload("Language")},
+        language="en", language_api=False)
+    try:
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          window.pywebview.api.get_language = async () => ({value: state.language});
+          window.pywebview.api.set_language = async value => {
+            state.language = value;
+            state.calls.language.push(value);
+            return {value};
+          };
+          window.dispatchEvent(new Event('pywebviewready'));
+        }""")
+        page.wait_for_function("window.__fakeApi.calls.language.length === 1")
+        assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN"]
+        assert page.evaluate("document.documentElement.lang") == "zh-CN"
     finally:
         context.close()
 
@@ -1376,6 +1607,31 @@ def test_texture_save_error_hides_consumed_save_action(
             "#texture-bake-body").inner_text()
 
         page.locator("#texture-bake-close").click()
+        page.locator(".inspector-texture-bake").click()
+        page.locator("#texture-bake-confirm").wait_for()
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('zh-CN');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        page.evaluate("""() => {
+          window.pywebview.api.save_texture_color = async () => ({
+            status: 'error',
+            code: 'mesh_has_no_uv',
+            error: 'The mesh has no UV coordinates.',
+          });
+        }""")
+        page.locator("#texture-bake-confirm").click()
+        page.wait_for_function("document.querySelector('#texture-bake-error').textContent")
+        assert page.locator("#texture-bake-error").inner_text() == (
+            "网格没有 UV 坐标。")
+
+        page.locator("#texture-bake-close").click()
+        page.evaluate("""async () => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale('en');
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
         page.locator(".inspector-texture-bake").click()
         page.locator("#texture-bake-confirm").wait_for()
         page.evaluate("""() => {

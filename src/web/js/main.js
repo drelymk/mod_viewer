@@ -37,9 +37,11 @@ import {
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
 import { initWeightRigPanel } from './panels/weight-rig-panel.js';
+import {weightRigStatus} from './mesh/weight-rig-status.js';
 import { createRigOverlayController } from './scene/rig-overlay-controller.js';
-import { initPanelOpacityControl } from './ui/appearance.js';
+import { initLanguageControl, initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
+import { LANGUAGE_CHANGED, t } from './i18n/index.js';
 import {
   getOutlineState as getMeshOutlineState,
   setOutlineSuppressedByDebug, setOutlinesEnabled,
@@ -188,13 +190,14 @@ async function openStartupMod() {
   try {
     request = await consume.call(window.pywebview.api);
   } catch (error) {
-    await alertDialog(
-      'Could not open startup mod:\n\n' + (error?.message || String(error)));
+    await alertDialog(t('errors.startupMod', {
+      detail: error?.message || String(error),
+    }));
     return true;
   }
   if (!request) return true;
   if (request.error) {
-    await alertDialog(`Could not open startup mod:\n\n${request.error}`);
+    await alertDialog(t('errors.startupMod', {detail: request.error}));
     return true;
   }
 
@@ -240,8 +243,8 @@ function syncBloomControl() {
   button.classList.toggle('active', enabled);
   button.setAttribute('aria-pressed', String(enabled));
   const label = available
-    ? `Emission bloom: ${enabled ? 'on' : 'off'}`
-    : 'Emission bloom unavailable: no GlowMap detected';
+    ? t('render.emissionBloom', {state: enabled ? t('common.on') : t('common.off')})
+    : t('render.bloomUnavailable');
   button.title = label;
   button.setAttribute('aria-label', label);
   return enabled;
@@ -249,6 +252,7 @@ function syncBloomControl() {
 
 initToolbarOverflow();
 initPanelOpacityControl();
+initLanguageControl();
 initOpenModMenu();
 
 rendererReady.then(ready => {
@@ -267,7 +271,11 @@ rendererReady.then(ready => {
     const button = $('outline-btn');
     button.classList.toggle('active', enabled);
     button.setAttribute('aria-pressed', String(enabled));
-    button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
+    const label = t('render.outlines', {
+      state: enabled ? t('common.on') : t('common.off'),
+    });
+    button.title = label;
+    button.setAttribute('aria-label', label);
   });
   $('bloom-btn').addEventListener('click', () => {
     setBloomEnabled(!getBloomEnabled());
@@ -279,6 +287,27 @@ rendererReady.then(ready => {
   $('glossy-btn').addEventListener('click', toggleGlossy);
   const syncAmbientOcclusionControl = initToolPopovers();
   syncBloomControl();
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    syncBloomControl();
+    const outlineButton = $('outline-btn');
+    if (outlineButton) {
+      const label = t('render.outlines', {
+        state: outlineButton.getAttribute('aria-pressed') === 'true'
+          ? t('common.on') : t('common.off'),
+      });
+      outlineButton.title = label;
+      outlineButton.setAttribute('aria-label', label);
+    }
+    const gridButton = $('grid-btn');
+    if (gridButton) {
+      const label = t('render.grid', {
+        state: gridButton.getAttribute('aria-pressed') === 'true'
+          ? t('common.on') : t('common.off'),
+      });
+      gridButton.title = label;
+      gridButton.setAttribute('aria-label', label);
+    }
+  });
   for (const eventName of [
     'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
     'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
@@ -315,7 +344,7 @@ rendererReady.then(ready => {
     finishHumanoidControlCarry,
     cancelHumanoidControlCarry,
     onTransformControlsUnavailable: () => setRigPoseControlStatus(
-      'Pose gizmo is unavailable in this build.'),
+      weightRigStatus('weightRig.status.poseGizmoUnavailable')),
     requestRender,
   });
   initWeightRigPanel();
@@ -336,10 +365,12 @@ rendererReady.then(ready => {
   const updateEmptyFolderAction = hasFolders => {
     hasModFolders = !!hasFolders;
     emptyFolderAction.textContent = hasModFolders
-      ? 'Open Mod Folder' : 'Add Mod Folder';
+      ? t('empty.openModFolder') : t('empty.addModFolder');
     emptyFolderAction.setAttribute('aria-label', emptyFolderAction.textContent);
   };
   updateEmptyFolderAction(false);
+  window.addEventListener(LANGUAGE_CHANGED, () =>
+    updateEmptyFolderAction(hasModFolders));
   const modFolderPanel = initModFolderPanel({
     switchMod,
     onRegistryChanged: updateEmptyFolderAction,

@@ -3,6 +3,7 @@
 import { confirmDialog } from '../ui/dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = id => document.getElementById(id);
 const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
@@ -27,11 +28,16 @@ function isAssetMatchingEnabled(entry) {
 function indexSummary(entry) {
   const index = entry?.index || {};
   if (index.status === 'ready') {
-    const skipped = index.skippedCount ? ` · ${index.skippedCount} skipped` : '';
-    return `${index.assetCount || 0} assets · ${index.geometryHashCount || 0} hashes${skipped}`;
+    const skipped = index.skippedCount
+      ? t('folder.skipped', {count: index.skippedCount}) : '';
+    return t('folder.assetsHashesSkipped', {
+      assets: index.assetCount || 0,
+      hashes: index.geometryHashCount || 0,
+      skipped,
+    });
   }
-  if (index.status === 'invalid') return 'Index invalid';
-  return 'Index required';
+  if (index.status === 'invalid') return t('folder.indexInvalid');
+  return t('folder.indexRequired');
 }
 
 export function initAssetFolderPanel({ switchAsset = null } = {}) {
@@ -88,13 +94,15 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       toggle.className = 'asset-folder-switch';
       toggle.setAttribute('role', 'switch');
       const enabled = isAssetMatchingEnabled(entry);
-      toggle.textContent = enabled ? 'ON' : 'OFF';
+      toggle.textContent = enabled ? t('common.on') : t('common.off');
       toggle.setAttribute('aria-checked', String(enabled));
       toggle.setAttribute(
-        'aria-label', `Use ${baseName(entry.path)} for asset matching`);
+        'aria-label', t('folder.useForAssetMatching', {
+          name: baseName(entry.path),
+        }));
       toggle.title = enabled
-        ? 'Include this folder in asset matching'
-        : 'Excluded from asset matching';
+        ? t('folder.includeAssetMatching')
+        : t('folder.excludeAssetMatching');
       toggle.addEventListener('click', async event => {
         event.stopPropagation();
         if (toggle.disabled) return;
@@ -122,8 +130,10 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       rebuild.type = 'button';
       rebuild.className = 'asset-folder-rebuild';
       rebuild.appendChild(createIcon('rebuild'));
-      rebuild.title = 'Rebuild asset index';
-      rebuild.setAttribute('aria-label', `Rebuild asset index for ${baseName(entry.path)}`);
+      rebuild.title = t('folder.rebuildAssetIndex');
+      rebuild.setAttribute('aria-label', t('folder.rebuildAssetIndexFor', {
+        name: baseName(entry.path),
+      }));
       rebuild.addEventListener('click', async event => {
         event.stopPropagation();
         if (rebuild.disabled) return;
@@ -132,7 +142,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
           const response = await window.pywebview.api.rebuild_asset_index(entry.path);
           if (response?.error) {
             const suffix = response.indexPreserved
-              ? ' Previous index is still available.' : '';
+              ? t('folder.previousIndexAvailable') : '';
             setTextError(error, `${response.error}${suffix}`);
             return;
           }
@@ -186,8 +196,8 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     editorMode = mode;
     originalPath = entry?.path || null;
     selectedPath = entry?.path || null;
-    title.textContent = mode === 'edit' ? 'Edit Asset Folder' : 'Add Asset Folder';
-    save.textContent = mode === 'edit' ? 'Save' : 'Add';
+    title.textContent = mode === 'edit' ? t('folder.editAsset') : t('folder.addAsset');
+    save.textContent = mode === 'edit' ? t('common.save') : t('common.add');
     typeInput.value = entry?.type || ASSET_TYPES[0];
     pathInput.value = entry?.path || '';
     setTextError(modalError, '');
@@ -199,10 +209,16 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     openEditor('add');
   }
 
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    if (!backdrop.classList.contains('show')) return;
+    title.textContent = editorMode === 'edit'
+      ? t('folder.editAsset') : t('folder.addAsset');
+    save.textContent = editorBusy ? t('folder.buildingIndex')
+      : (editorMode === 'edit' ? t('common.save') : t('common.add'));
+  });
+
   async function removeFolder(entry) {
-    const confirmed = await confirmDialog(
-      'Remove this Asset Folder?\n\n' +
-      'This only removes it from Mod Viewer.\nFiles on disk will not be deleted.');
+    const confirmed = await confirmDialog(t('folder.removeAsset'));
     if (!confirmed) return;
     const response = await window.pywebview.api.delete_asset_folder(entry.path);
     applyRegistryResponse(response);
@@ -223,17 +239,17 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     event.preventDefault();
     const path = selectedPath || pathInput.value.trim();
     if (!path) {
-      setTextError(modalError, 'Choose a folder with Browse.');
+      setTextError(modalError, t('folder.chooseBrowse'));
       return;
     }
-    const originalSaveText = editorMode === 'edit' ? 'Save' : 'Add';
+    const originalSaveText = editorMode === 'edit' ? t('common.save') : t('common.add');
     editorBusy = true;
     typeInput.disabled = true;
     pathInput.disabled = true;
     browse.disabled = true;
     cancel.disabled = true;
     save.disabled = true;
-    save.textContent = 'Building index…';
+    save.textContent = t('folder.buildingIndex');
     try {
       const response = editorMode === 'edit'
         ? await window.pywebview.api.edit_asset_folder(

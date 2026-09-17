@@ -1203,6 +1203,54 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         context.close()
 
 
+def test_weight_rig_panel_localizes_without_rebuilding_or_losing_selection(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"RigLocale": _payload("RigLocale")},
+        load_weight_runtime=True)
+    try:
+        _open(page, "RigLocale")
+        page.evaluate("""async () => {
+          const bytes = new Uint8Array(48);
+          new Uint32Array(bytes.buffer).set([0, 1, 1, 2, 0, 2]);
+          new Float32Array(bytes.buffer, 24).set([.8, .2, .7, .3, .6, .4]);
+          const url = URL.createObjectURL(new Blob([bytes]));
+          window.__testSkinningPreview = async () => ({
+            status: 'ok', vertex_count: 3, influence_count: 2,
+            bone_ids: [0, 1, 2], encoding: 'test', source: {
+              key: 'test/bodyblend.buf|offset=0',
+              file: 'Test/BodyBlend.buf', bone_id_offset: 0,
+            },
+            data: {url, length: 48,
+              indices: {offset: 0, length: 24, type: 'u32'},
+              weights: {offset: 24, length: 24, type: 'f32'}},
+            diagnostics: {},
+          });
+        }""")
+        page.locator("#weight-rig-tab").click()
+        page.wait_for_function(
+            "window.__testWeightRigRuntime.getModelRigState().loaded")
+        panel_handle = page.locator("#weight-rig-panel")
+        page.evaluate("window.__weightRigPanelIdentity = document.querySelector('#weight-rig-panel')")
+        page.locator(".rig-bone-select").select_option("1")
+        assert page.locator(".rig-bone-select").input_value() == "1"
+
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.evaluate(
+            "window.__weightRigPanelIdentity === document.querySelector('#weight-rig-panel')")
+        assert page.locator(".rig-bone-select").input_value() == "1"
+        assert page.locator(".weight-rig-section-title").all_inner_texts() == [
+            "权重", "骨架"]
+        assert page.locator(".rig-bone-select option").nth(1).inner_text() == "关节 0"
+        assert page.locator(".rig-panel-enable-ik").evaluate(
+            "element => element.parentElement.textContent") == "启用反向运动学"
+        assert panel_handle.is_visible()
+    finally:
+        context.close()
+
+
 def test_rig_panel_does_not_start_rig_for_model_without_weights(
         edge_browser, frontend_url):
     payload = _payload("NoWeights")

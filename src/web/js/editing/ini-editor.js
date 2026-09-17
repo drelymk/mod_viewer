@@ -3,12 +3,15 @@
 
 import { alertDialog, confirmDialog } from '../ui/dialogs.js';
 import { registerIniHighlightMode } from './ini-highlight.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 let modPath = null;
 let currentIni = null;
 let loadedText = '';
 let onApplied = null;
+let currentStatusKey = null;
+let currentStatusParams = {};
 const textEditor = $('ini-editor-text');
 window.ace.config.set('basePath', 'lib/ace');
 registerIniHighlightMode();
@@ -32,7 +35,14 @@ const iniEditor = window.ace.edit(textEditor, {
 });
 iniEditor.session.setUseWorker(false);
 iniEditor.renderer.setScrollMargin(8, 8);
-iniEditor.textInput.getElement().setAttribute('aria-label', 'INI file contents');
+iniEditor.textInput.getElement().setAttribute(
+  'aria-label', t('ini.fileContents'));
+
+function setEditorStatus(key, params = {}) {
+  currentStatusKey = key;
+  currentStatusParams = params;
+  $('ini-editor-status').textContent = t(key, params);
+}
 
 export function setIniEditorContext(path, changeCallback) {
   modPath = path;
@@ -64,15 +74,13 @@ export async function openIniEditor(iniName, line = 1) {
   if (!modPath || !iniName) return;
   const result = await window.pywebview.api.get_ini_text(modPath, iniName);
   if (result.error) {
-    await alertDialog('Could not open INI:\n\n' + result.error);
+    await alertDialog(t('ini.couldNotOpen', {detail: result.error}));
     return;
   }
   currentIni = result.ini;
   loadedText = result.text;
   $('ini-editor-title').textContent = result.ini;
-  $('ini-editor-status').textContent = result.dirty
-    ? 'Modified in memory — Export has not written it to disk.'
-    : 'Changes stay in memory until Export.';
+  setEditorStatus(result.dirty ? 'ini.appliedMemory' : 'ini.changesMemory');
   iniEditor.setValue(result.text, -1);
   iniEditor.clearSelection();
   showError();
@@ -87,7 +95,7 @@ async function chooseIni() {
   if (!modPath) return;
   const files = await window.pywebview.api.list_ini_files(modPath);
   if (!files.length) {
-    await alertDialog('This mod has no active INI files.');
+    await alertDialog(t('ini.noActiveFiles'));
     return;
   }
   if (files.length === 1) {
@@ -101,7 +109,7 @@ async function chooseIni() {
     button.type = 'button';
     button.role = 'menuitem';
     button.textContent = file.dirty ? `${file.label}  •` : file.label;
-    button.title = file.dirty ? 'Modified in memory' : file.label;
+    button.title = file.dirty ? t('ini.modifiedMemory') : file.label;
     button.addEventListener('click', () => openIniEditor(file.value));
     menu.appendChild(button);
   }
@@ -110,7 +118,7 @@ async function chooseIni() {
 
 async function closeEditor() {
   if (iniEditor.getValue() !== loadedText) {
-    const close = await confirmDialog('Discard the unapplied changes in this editor?');
+    const close = await confirmDialog(t('ini.discardChanges'));
     if (!close) return;
   }
   $('ini-editor-backdrop').classList.remove('show');
@@ -130,9 +138,7 @@ async function applyEditor() {
       return;
     }
     loadedText = text;
-    $('ini-editor-status').textContent = result.pending
-      ? 'Applied in memory — Export has not written it to disk.'
-      : 'Matches the exported file.';
+    setEditorStatus(result.pending ? 'ini.appliedMemory' : 'ini.matchesExported');
     if (onApplied) await onApplied();
     $('ini-editor-backdrop').classList.remove('show');
     currentIni = null;
@@ -186,4 +192,9 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     applyEditor();
   }
+});
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  iniEditor.textInput.getElement().setAttribute(
+    'aria-label', t('ini.fileContents'));
+  if (currentStatusKey) setEditorStatus(currentStatusKey, currentStatusParams);
 });

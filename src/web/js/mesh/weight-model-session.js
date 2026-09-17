@@ -6,6 +6,7 @@ import {createWeightPickController} from '../scene/weight-pick-controller.js';
 import {computeModelBounds} from '../scene/model-bounds.js';
 import {sampleSkinningAtIntersection} from './weight-selection.js';
 import {aggregateModelWeightBoneStats} from './weight-runtime.js';
+import {weightRigStatus} from './weight-rig-status.js';
 
 let activeSession = null;
 let activePickingSession = null;
@@ -49,14 +50,15 @@ function createPickingSession({modelWeightState, modelRigState, states,
 
   function handlePickedIntersection(intersection) {
     if (!intersection) {
-      modelWeightState.pickStatus = 'No model surface was picked.';
+      modelWeightState.pickStatus = weightRigStatus(
+        'weightRig.status.noSurfacePicked');
       notifyChanged();
       return null;
     }
     const sampled = sampleAtIntersection(intersection);
     if (!sampled) {
-      modelWeightState.pickStatus =
-        'No skin weights are available for this part.';
+      modelWeightState.pickStatus = weightRigStatus(
+        'weightRig.status.noWeightsAtPoint');
       notifyChanged();
       return null;
     }
@@ -103,7 +105,8 @@ function createPickingSession({modelWeightState, modelRigState, states,
     begin() {
       if (modelRigState.jointPickIntent) cancelRigPicking?.();
       if (!modelWeightState.loaded) {
-        modelWeightState.pickStatus = 'Load model weights before picking.';
+        modelWeightState.pickStatus = weightRigStatus(
+          'weightRig.status.loadWeightsBeforePicking');
         notifyChanged();
         return false;
       }

@@ -1,6 +1,7 @@
 // Shared lazy tree rendering for the Mod Library and Assets registries.
 
 import { createIcon } from '../ui/ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 function canonicalPath(path) {
   return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -75,7 +76,7 @@ export function createFolderRegistryPanel({
       childList.hidden = true;
       arrow.classList.toggle('leaf', childCache.get(canonicalPath(path))?.length === 0);
       arrow.setAttribute('aria-expanded', 'false');
-      arrow.setAttribute('aria-label', `Expand ${arrow.dataset.folderName}`);
+      arrow.setAttribute('aria-label', t('folder.expand', {name: arrow.dataset.folderName}));
       return;
     }
 
@@ -83,7 +84,7 @@ export function createFolderRegistryPanel({
     arrow.classList.add('expanded');
     childList.hidden = false;
     arrow.setAttribute('aria-expanded', 'true');
-    arrow.setAttribute('aria-label', `Collapse ${arrow.dataset.folderName}`);
+    arrow.setAttribute('aria-label', t('folder.collapse', {name: arrow.dataset.folderName}));
     const key = canonicalPath(path);
     if (childCache.has(key)) {
       renderChildren(node, childCache.get(key));
@@ -93,7 +94,7 @@ export function createFolderRegistryPanel({
     childList.innerHTML = '';
     const loading = document.createElement('div');
     loading.className = className('child-error');
-    loading.textContent = 'Loading...';
+    loading.textContent = t('folder.loading');
     childList.appendChild(loading);
     try {
       const response = await listChildren(path);
@@ -130,7 +131,9 @@ export function createFolderRegistryPanel({
     arrow.className = className('expand');
     arrow.textContent = '›';
     arrow.dataset.folderName = entry.name || entry.path;
-    arrow.setAttribute('aria-label', `Expand ${arrow.dataset.folderName}`);
+    arrow.setAttribute('aria-label', t('folder.assetTreeExpand', {
+      name: arrow.dataset.folderName,
+    }));
     arrow.setAttribute('aria-expanded', 'false');
     const expandable = entry.expandable !== false && entry.kind !== 'archive';
     arrow.classList.toggle('leaf', !expandable);
@@ -165,8 +168,10 @@ export function createFolderRegistryPanel({
       more.type = 'button';
       more.className = className('more');
       more.appendChild(createIcon('more'));
-      more.title = 'More folder actions';
-      more.setAttribute('aria-label', `More actions for ${entry.name || entry.path}`);
+      more.title = t('folder.moreActions');
+      more.setAttribute('aria-label', t('folder.moreActionsFor', {
+        name: entry.name || entry.path,
+      }));
       more.setAttribute('aria-haspopup', 'menu');
       more.setAttribute('aria-expanded', 'false');
       const menu = document.createElement('span');
@@ -178,7 +183,7 @@ export function createFolderRegistryPanel({
         edit.type = 'button';
         edit.className = className('edit');
         edit.setAttribute('role', 'menuitem');
-        edit.textContent = 'Edit';
+        edit.textContent = t('folder.edit');
         edit.addEventListener('click', event => {
           event.stopPropagation();
           menu.hidden = true;
@@ -192,7 +197,7 @@ export function createFolderRegistryPanel({
         remove.type = 'button';
         remove.className = className('remove');
         remove.setAttribute('role', 'menuitem');
-        remove.textContent = 'Remove';
+        remove.textContent = t('folder.remove');
         remove.addEventListener('click', event => {
           event.stopPropagation();
           menu.hidden = true;
@@ -223,7 +228,7 @@ export function createFolderRegistryPanel({
     if (entry.exists === false && isRoot) {
       const missing = document.createElement('div');
       missing.className = className('missing');
-      missing.append(createIcon('diagnostics'), document.createTextNode('Folder not found'));
+      missing.append(createIcon('diagnostics'), document.createTextNode(t('folder.notFound')));
       node.appendChild(missing);
     }
     return node;
@@ -245,11 +250,48 @@ export function createFolderRegistryPanel({
     return true;
   }
 
-  function render(entries) {
+  function expandedNodePaths() {
+    return [...listElement.querySelectorAll(selector('node'))]
+      .filter(node => node.classList.contains('expanded'))
+      .map(node => node.querySelector(`:scope > ${selector('row')}`)
+        ?.getAttribute(pathAttribute))
+      .filter(Boolean);
+  }
+
+  function findNode(path) {
+    const key = canonicalPath(path);
+    return [...listElement.querySelectorAll(selector('node'))].find(node => {
+      const row = node.querySelector(`:scope > ${selector('row')}`);
+      return row && canonicalPath(row.getAttribute(pathAttribute)) === key;
+    });
+  }
+
+  function restoreExpanded(paths) {
+    const ordered = [...new Set(paths.map(canonicalPath))]
+      .sort((left, right) => left.split('/').length - right.split('/').length);
+    ordered.forEach(path => {
+      const node = findNode(path);
+      const arrow = node?.querySelector(
+        `:scope > ${selector('row')} ${selector('expand')}`);
+      const children = node?.querySelector(`:scope > ${selector('children')}`);
+      if (!node || !arrow || arrow.disabled || !children) return;
+      node.classList.add('expanded');
+      arrow.classList.add('expanded');
+      arrow.setAttribute('aria-expanded', 'true');
+      arrow.setAttribute('aria-label', t('folder.collapse', {
+        name: arrow.dataset.folderName,
+      }));
+      children.hidden = false;
+      if (childCache.has(path)) renderChildren(node, childCache.get(path));
+    });
+  }
+
+  function render(entries, {expandedPaths = []} = {}) {
     roots = entries || [];
     listElement.innerHTML = '';
     listElement.hidden = roots.length === 0;
     roots.forEach(entry => listElement.appendChild(createNode(entry, true)));
+    restoreExpanded(expandedPaths);
     if (emptyElement) emptyElement.hidden = roots.length !== 0;
     setActivePath(activePath);
   }
@@ -283,7 +325,9 @@ export function createFolderRegistryPanel({
       replacementArrow.classList.add('expanded');
       replacementArrow.setAttribute('aria-expanded', 'true');
       replacementArrow.setAttribute(
-        'aria-label', `Collapse ${replacementArrow.dataset.folderName}`);
+        'aria-label', t('folder.collapse', {
+          name: replacementArrow.dataset.folderName,
+        }));
     }
     currentNode.replaceWith(replacement);
     roots[index] = entry;
@@ -303,6 +347,11 @@ export function createFolderRegistryPanel({
     render(response?.folders || []);
     return true;
   }
+
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    const expandedPaths = expandedNodePaths();
+    render(roots, {expandedPaths});
+  });
 
   return {
     render,

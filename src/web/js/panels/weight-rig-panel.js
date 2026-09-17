@@ -23,6 +23,7 @@ import {
 } from '../mesh/weight-rig-runtime.js';
 import {HUMANOID_CONTROL_KEYS} from '../mesh/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
+import {LANGUAGE_CHANGED, applyTranslations, getLocale, t} from '../i18n/index.js';
 
 let panel = null;
 let ui = null;
@@ -31,20 +32,36 @@ let latestWeightState = null;
 let latestRigState = null;
 
 const $ = id => document.getElementById(id);
-const HUMANOID_CONTROL_LABELS = Object.freeze({
-  chest: 'Chest', pelvis: 'Pelvis', neck: 'Neck', head: 'Head',
-  leftShoulder: 'Left Shoulder',
-  leftElbow: 'Left Elbow', leftHand: 'Left Hand',
-  rightShoulder: 'Right Shoulder', rightElbow: 'Right Elbow',
-  rightHand: 'Right Hand', leftHip: 'Left Hip', leftKnee: 'Left Knee',
-  leftFoot: 'Left Foot', rightHip: 'Right Hip', rightKnee: 'Right Knee',
-  rightFoot: 'Right Foot',
+const HUMANOID_CONTROL_LABEL_KEYS = Object.freeze({
+  chest: 'weightRig.control.chest', pelvis: 'weightRig.control.pelvis',
+  neck: 'weightRig.control.neck', head: 'weightRig.control.head',
+  leftShoulder: 'weightRig.control.leftShoulder',
+  leftElbow: 'weightRig.control.leftElbow',
+  leftHand: 'weightRig.control.leftHand',
+  rightShoulder: 'weightRig.control.rightShoulder',
+  rightElbow: 'weightRig.control.rightElbow',
+  rightHand: 'weightRig.control.rightHand',
+  leftHip: 'weightRig.control.leftHip', leftKnee: 'weightRig.control.leftKnee',
+  leftFoot: 'weightRig.control.leftFoot', rightHip: 'weightRig.control.rightHip',
+  rightKnee: 'weightRig.control.rightKnee', rightFoot: 'weightRig.control.rightFoot',
 });
 
-function addText(parent, className, value = '') {
+function humanoidControlLabel(key) {
+  const translationKey = HUMANOID_CONTROL_LABEL_KEYS[key];
+  return translationKey ? t(translationKey) : key || '';
+}
+
+function statusText(status) {
+  if (!status) return '';
+  if (typeof status === 'string') return status;
+  return status.messageKey ? t(status.messageKey, status.messageParams) : '';
+}
+
+function addText(parent, className, value = '', translationKey = null) {
   const node = document.createElement('span');
   node.className = className;
-  node.textContent = value;
+  if (translationKey) node.dataset.i18n = translationKey;
+  node.textContent = translationKey ? t(translationKey) : value;
   parent.appendChild(node);
   return node;
 }
@@ -52,16 +69,18 @@ function addText(parent, className, value = '') {
 function addSection(parent, title) {
   const section = document.createElement('section');
   section.className = 'weight-rig-section';
-  addText(section, 'weight-rig-section-title', title);
+  const key = title === 'WEIGHT' ? 'weightRig.weight' : 'weightRig.rig';
+  addText(section, 'weight-rig-section-title', '', key);
   parent.appendChild(section);
   return section;
 }
 
-function addAdvanced(parent, title = 'Advanced Settings') {
+function addAdvanced(parent) {
   const details = document.createElement('details');
   details.className = 'weight-rig-advanced';
   const summary = document.createElement('summary');
-  summary.textContent = title;
+  summary.dataset.i18n = 'weightRig.advancedSettings';
+  summary.textContent = t('weightRig.advancedSettings');
   details.appendChild(summary);
   const content = document.createElement('div');
   content.className = 'weight-rig-advanced-content';
@@ -72,11 +91,11 @@ function addAdvanced(parent, title = 'Advanced Settings') {
 
 function selectedLabel(state) {
   const entries = state?.selectedBones || [];
-  if (!entries.length) return 'Select bones';
+  if (!entries.length) return t('weightRig.selectBones');
   const count = Number(state.selectedBoneCount)
     || entries.reduce((total, entry) => total + entry.boneIds.length, 0);
   if (entries.length === 1 && count <= 4) return entries[0].boneIds.join(', ');
-  return `${count} bones selected`;
+  return t('weightRig.bonesSelected', {count});
 }
 
 function addRange(parent, className, label, min, max, step, value, onInput) {
@@ -84,7 +103,7 @@ function addRange(parent, className, label, min, max, step, value, onInput) {
   field.className = 'weight-field';
   const header = document.createElement('div');
   header.className = 'weight-range-header';
-  addText(header, 'weight-label', label);
+  addText(header, 'weight-label', '', label);
   const valueNode = addText(header, 'weight-value', Number(value).toFixed(2));
   field.appendChild(header);
   const input = document.createElement('input');
@@ -107,7 +126,8 @@ function buildWeightModelPicker(section) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'ui-button weight-rig-primary-action weight-pick-model';
-  button.textContent = 'Pick from model';
+  button.dataset.i18n = 'weightRig.pickFromModel';
+  button.textContent = t('weightRig.pickFromModel');
   button.setAttribute('aria-pressed', 'false');
   button.addEventListener('click', () => {
     closePopover();
@@ -119,7 +139,7 @@ function buildWeightModelPicker(section) {
 }
 
 function buildBonePicker(section) {
-  const label = addText(section, 'weight-rig-control-label', 'Authored Source');
+  const label = addText(section, 'weight-rig-control-label', '', 'weightRig.authoredSource');
   label.setAttribute('aria-hidden', 'true');
   const picker = document.createElement('div');
   picker.className = 'weight-picker';
@@ -134,27 +154,33 @@ function buildBonePicker(section) {
   popover.className = 'weight-bone-popover';
   popover.hidden = true;
   popover.setAttribute('role', 'listbox');
-  popover.setAttribute('aria-label', 'Bone IDs');
+  popover.dataset.i18nAriaLabel = 'weightRig.boneIds';
+  popover.setAttribute('aria-label', t('weightRig.boneIds'));
   const search = document.createElement('input');
   search.type = 'search';
   search.className = 'weight-bone-search';
-  search.placeholder = 'Find bone ID…';
-  search.setAttribute('aria-label', 'Find bone ID');
+  search.dataset.i18nPlaceholder = 'weightRig.findBoneId';
+  search.placeholder = t('weightRig.findBoneId');
+  search.dataset.i18nAriaLabel = 'weightRig.findBoneId';
+  search.setAttribute('aria-label', t('weightRig.findBoneId'));
   popover.appendChild(search);
   const pickerView = document.createElement('div');
   pickerView.className = 'weight-picker-view';
   pickerView.setAttribute('role', 'group');
-  pickerView.setAttribute('aria-label', 'Bone browser options');
+  pickerView.dataset.i18nAriaLabel = 'weightRig.boneBrowserOptions';
+  pickerView.setAttribute('aria-label', t('weightRig.boneBrowserOptions'));
   const allBones = document.createElement('button');
   allBones.type = 'button';
   allBones.className = 'weight-picker-view-option';
   allBones.dataset.mode = 'all';
-  allBones.textContent = 'All bones';
+  allBones.dataset.i18n = 'weightRig.allBones';
+  allBones.textContent = t('weightRig.allBones');
   const pickedPoint = document.createElement('button');
   pickedPoint.type = 'button';
   pickedPoint.className = 'weight-picker-view-option';
   pickedPoint.dataset.mode = 'picked';
-  pickedPoint.textContent = 'At picked point';
+  pickedPoint.dataset.i18n = 'weightRig.atPickedPoint';
+  pickedPoint.textContent = t('weightRig.atPickedPoint');
   pickerView.append(allBones, pickedPoint);
   popover.appendChild(pickerView);
   const filter = document.createElement('label');
@@ -163,7 +189,7 @@ function buildBonePicker(section) {
   selectedOnly.type = 'checkbox';
   selectedOnly.className = 'weight-selected-only';
   filter.appendChild(selectedOnly);
-  addText(filter, 'weight-label', 'Selected bones only');
+  addText(filter, 'weight-label', '', 'weightRig.selectedBonesOnly');
   popover.appendChild(filter);
   const list = document.createElement('div');
   list.className = 'weight-bone-list';
@@ -204,17 +230,20 @@ function buildWeightSection(parent) {
   const save = document.createElement('button');
   save.type = 'button';
   save.className = 'ui-button weight-save-selection';
-  save.textContent = 'Save';
+  save.dataset.i18n = 'common.save';
+  save.textContent = t('common.save');
   save.addEventListener('click', () => void saveModelWeightSelection());
   const load = document.createElement('button');
   load.type = 'button';
   load.className = 'ui-button weight-load-selection';
-  load.textContent = 'Load';
+  load.dataset.i18n = 'weightRig.load';
+  load.textContent = t('weightRig.load');
   load.addEventListener('click', () => loadSavedBoneSelection());
   const clear = document.createElement('button');
   clear.type = 'button';
   clear.className = 'ui-button weight-clear-selection';
-  clear.textContent = 'Clear';
+  clear.dataset.i18n = 'common.clear';
+  clear.textContent = t('common.clear');
   clear.addEventListener('click', () => clearSelectedBones());
   actions.append(save, load, clear);
   section.appendChild(actions);
@@ -229,7 +258,7 @@ function buildWeightSection(parent) {
   heatmap.className = 'weight-heatmap-enable';
   heatmap.addEventListener('change', () => setModelWeightHeatmap(heatmap.checked));
   heatmapLabel.appendChild(heatmap);
-  addText(heatmapLabel, 'weight-label', 'Show Weight Heatmap');
+  addText(heatmapLabel, 'weight-label', '', 'weightRig.showHeatmap');
   section.appendChild(heatmapLabel);
   ui.heatmap = heatmap;
 
@@ -240,30 +269,30 @@ function buildWeightSection(parent) {
   gravity.className = 'weight-physics-gravity-enable';
   gravity.addEventListener('change', () => setPhysicsGravityEnabled(gravity.checked));
   gravityLabel.appendChild(gravity);
-  addText(gravityLabel, 'weight-label', 'Gravity');
+  addText(gravityLabel, 'weight-label', '', 'weightRig.gravity');
   section.appendChild(gravityLabel);
   ui.physicsGravityEnable = gravity;
 
   const advanced = addAdvanced(parent);
-  const physicsTitle = addText(advanced.content, 'weight-rig-advanced-title', 'Physics tuning');
+  const physicsTitle = addText(advanced.content, 'weight-rig-advanced-title', '', 'weightRig.physicsTuning');
   physicsTitle.setAttribute('aria-hidden', 'true');
   const initial = getModelPhysicsState();
   const ranges = {};
   ranges.frequency = addRange(advanced.content, 'weight-physics-frequency',
-    'Frequency', 0.1, 10, 0.1, initial.frequencyHz, value => setPhysicsFrequency(value));
-  ranges.damping = addRange(advanced.content, 'weight-physics-damping', 'Damping',
+    'weightRig.frequency', 0.1, 10, 0.1, initial.frequencyHz, value => setPhysicsFrequency(value));
+  ranges.damping = addRange(advanced.content, 'weight-physics-damping', 'weightRig.damping',
     0, 2, 0.05, initial.dampingRatio, value => setPhysicsDamping(value));
   ranges.motion = addRange(advanced.content, 'weight-physics-motion',
-    'Angular response', 0, 1, 0.05, initial.angularResponse,
+    'weightRig.angularResponse', 0, 1, 0.05, initial.angularResponse,
     value => setPhysicsMotionStrength(value));
   ranges.linear = addRange(advanced.content, 'weight-physics-linear',
-    'Translation response', 0, 1, 0.05, initial.translationResponse,
+    'weightRig.translationResponse', 0, 1, 0.05, initial.translationResponse,
     value => setPhysicsLinearMotionStrength(value));
   ranges.continuous = addRange(advanced.content, 'weight-physics-continuous-response',
-    'Velocity response', 0, 1, 0.05, initial.velocityResponse,
+    'weightRig.velocityResponse', 0, 1, 0.05, initial.velocityResponse,
     value => setPhysicsContinuousLinearResponse(value));
   ranges.gravity = addRange(advanced.content, 'weight-physics-gravity-scale',
-    'Gravity scale', 0, 2, 0.1, initial.gravityScale,
+    'weightRig.gravityScale', 0, 2, 0.1, initial.gravityScale,
     value => setPhysicsGravityScale(value));
 
   const constraintsLabel = document.createElement('label');
@@ -273,16 +302,17 @@ function buildWeightSection(parent) {
   constraints.className = 'weight-physics-constraints-enable';
   constraints.addEventListener('change', () => setPhysicsConstraintsEnabled(constraints.checked));
   constraintsLabel.appendChild(constraints);
-  addText(constraintsLabel, 'weight-label', 'Joint limits');
+  addText(constraintsLabel, 'weight-label', '', 'weightRig.jointLimits');
   advanced.content.appendChild(constraintsLabel);
   ui.physicsConstraintsEnable = constraints;
   ranges.maxBend = addRange(advanced.content, 'weight-physics-max-bend',
-    'Max bend', 0, 90, 1, initial.maxBendDegrees,
+    'weightRig.maxBend', 0, 90, 1, initial.maxBendDegrees,
     value => setPhysicsMaxBendDegrees(value));
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'ui-button weight-physics-reset';
-  reset.textContent = 'Reset physics';
+  reset.dataset.i18n = 'weightRig.resetPhysics';
+  reset.textContent = t('weightRig.resetPhysics');
   reset.addEventListener('click', () => resetModelPhysics());
   advanced.content.appendChild(reset);
   ui.physicsReset = reset;
@@ -301,13 +331,14 @@ function selectedJoint(state = latestRigState) {
 function buildMainRigControls(parent) {
   const mainRig = document.createElement('div');
   mainRig.className = 'rig-main-edit';
-  const mainTitle = addText(mainRig, 'weight-rig-control-label', 'Main Rig');
+  const mainTitle = addText(mainRig, 'weight-rig-control-label', '', 'weightRig.mainRig');
   const normalActions = document.createElement('div');
   normalActions.className = 'rig-actions rig-main-actions';
   const editRig = document.createElement('button');
   editRig.type = 'button';
   editRig.className = 'ui-button weight-rig-primary-action rig-edit-main';
-  editRig.textContent = 'Edit Rig';
+  editRig.dataset.i18n = 'weightRig.editRig';
+  editRig.textContent = t('weightRig.editRig');
   editRig.addEventListener('click', () => {
     closePopover();
     if (latestRigState?.humanoidRigEdit?.editing) cancelHumanoidRigEdit();
@@ -316,9 +347,10 @@ function buildMainRigControls(parent) {
   const resetRig = document.createElement('button');
   resetRig.type = 'button';
   resetRig.className = 'ui-button rig-reset-main';
-  resetRig.textContent = 'Reset Rig';
+  resetRig.dataset.i18n = 'weightRig.resetRig';
+  resetRig.textContent = t('weightRig.resetRig');
   resetRig.addEventListener('click', async () => {
-    if (!await confirmDialog('Reset the saved Main Rig corrections?')) return;
+    if (!await confirmDialog(t('weightRig.confirm.resetRig'))) return;
     await resetHumanoidRig();
   });
   normalActions.append(editRig, resetRig);
@@ -329,19 +361,20 @@ function buildMainRigControls(parent) {
   const editCount = addText(editStatus, 'rig-edit-count');
   const editControl = addText(editStatus, 'rig-edit-control');
   const editConnection = addText(editStatus, 'rig-edit-connection');
-  const editHint = addText(editStatus, 'rig-edit-hint',
-    'Click a rig point to move it.');
+  const editHint = addText(editStatus, 'rig-edit-hint', '', 'weightRig.clickPointToMove');
   const editActions = document.createElement('div');
   editActions.className = 'rig-actions rig-edit-actions';
   const cancelEdit = document.createElement('button');
   cancelEdit.type = 'button';
   cancelEdit.className = 'ui-button rig-cancel-edit';
-  cancelEdit.textContent = 'Cancel';
+  cancelEdit.dataset.i18n = 'common.cancel';
+  cancelEdit.textContent = t('common.cancel');
   cancelEdit.addEventListener('click', () => cancelHumanoidRigEdit());
   const saveEdit = document.createElement('button');
   saveEdit.type = 'button';
   saveEdit.className = 'ui-button weight-rig-primary-action rig-save-edit';
-  saveEdit.textContent = 'Save';
+  saveEdit.dataset.i18n = 'common.save';
+  saveEdit.textContent = t('common.save');
   saveEdit.addEventListener('click', () => { void saveHumanoidRigEdit(); });
   editActions.append(cancelEdit, saveEdit);
   editStatus.appendChild(editActions);
@@ -362,10 +395,11 @@ function buildMainRigControls(parent) {
 function buildRigSection(parent) {
   const section = addSection(parent, 'RIG');
 
-  addText(section, 'weight-rig-control-label', 'Selected Joint');
+  addText(section, 'weight-rig-control-label', '', 'weightRig.selectedJoint');
   const joint = document.createElement('select');
   joint.className = 'rig-bone-select';
-  joint.setAttribute('aria-label', 'Selected model joint');
+  joint.dataset.i18nAriaLabel = 'weightRig.selectedModelJoint';
+  joint.setAttribute('aria-label', t('weightRig.selectedModelJoint'));
   joint.addEventListener('change', () => {
     if (joint.value !== '') selectRigJoint(Number(joint.value));
   });
@@ -375,7 +409,8 @@ function buildRigSection(parent) {
   const pickJoint = document.createElement('button');
   pickJoint.type = 'button';
   pickJoint.className = 'ui-button weight-rig-primary-action rig-pick-joint';
-  pickJoint.textContent = 'Pick from model';
+  pickJoint.dataset.i18n = 'weightRig.pickFromModel';
+  pickJoint.textContent = t('weightRig.pickFromModel');
   pickJoint.setAttribute('aria-pressed', 'false');
   pickJoint.addEventListener('click', () => {
     closePopover();
@@ -391,12 +426,14 @@ function buildRigSection(parent) {
   const clear = document.createElement('button');
   clear.type = 'button';
   clear.className = 'ui-button rig-clear-joint';
-  clear.textContent = 'Clear';
+  clear.dataset.i18n = 'common.clear';
+  clear.textContent = t('common.clear');
   clear.addEventListener('click', () => clearRigJointSelection());
   const resetJoint = document.createElement('button');
   resetJoint.type = 'button';
   resetJoint.className = 'ui-button rig-reset-joint';
-  resetJoint.textContent = 'Reset Joint';
+  resetJoint.dataset.i18n = 'weightRig.resetJoint';
+  resetJoint.textContent = t('weightRig.resetJoint');
   resetJoint.addEventListener('click', () => {
     const selected = selectedJoint();
     if (selected) resetRigJoint(selected.jointId);
@@ -404,7 +441,8 @@ function buildRigSection(parent) {
   const resetPose = document.createElement('button');
   resetPose.type = 'button';
   resetPose.className = 'ui-button rig-reset-pose';
-  resetPose.textContent = 'Reset Pose';
+  resetPose.dataset.i18n = 'weightRig.resetPose';
+  resetPose.textContent = t('weightRig.resetPose');
   resetPose.addEventListener('click', () => resetRigPose());
   jointActions.append(clear, resetJoint, resetPose);
   section.appendChild(jointActions);
@@ -412,10 +450,11 @@ function buildRigSection(parent) {
   ui.resetJoint = resetJoint;
   ui.resetPose = resetPose;
 
-  addText(section, 'weight-rig-control-label', 'Pose presets');
+  addText(section, 'weight-rig-control-label', '', 'weightRig.posePresets');
   const preset = document.createElement('select');
   preset.className = 'rig-preset-select';
-  preset.setAttribute('aria-label', 'Rig pose preset');
+  preset.dataset.i18nAriaLabel = 'weightRig.rigPosePreset';
+  preset.setAttribute('aria-label', t('weightRig.rigPosePreset'));
   preset.addEventListener('change', () => {
     const presetId = preset.value || null;
     if (!presetId) return;
@@ -428,17 +467,20 @@ function buildRigSection(parent) {
   const save = document.createElement('button');
   save.type = 'button';
   save.className = 'ui-button rig-save-preset';
-  save.textContent = 'Save';
+  save.dataset.i18n = 'common.save';
+  save.textContent = t('common.save');
   save.addEventListener('click', () => savePreset());
   const rename = document.createElement('button');
   rename.type = 'button';
   rename.className = 'ui-button rig-rename-preset';
-  rename.textContent = 'Rename';
+  rename.dataset.i18n = 'weightRig.rename';
+  rename.textContent = t('weightRig.rename');
   rename.addEventListener('click', () => renamePreset());
   const remove = document.createElement('button');
   remove.type = 'button';
   remove.className = 'ui-button rig-delete-preset';
-  remove.textContent = 'Delete';
+  remove.dataset.i18n = 'weightRig.delete';
+  remove.textContent = t('weightRig.delete');
   remove.addEventListener('click', () => deletePreset());
   management.append(save, rename, remove);
   section.appendChild(management);
@@ -456,7 +498,7 @@ function buildRigSection(parent) {
   ik.className = 'rig-panel-enable-ik';
   ik.addEventListener('change', () => setRigIkEnabled(ik.checked));
   ikLabel.appendChild(ik);
-  addText(ikLabel, 'weight-label', 'Enable Inverse Kinematics');
+  addText(ikLabel, 'weight-label', '', 'weightRig.enableIk');
   advanced.content.appendChild(ikLabel);
   ui.ik = ik;
   ui.ikSelection = addText(advanced.content, 'rig-hint');
@@ -465,13 +507,14 @@ function buildRigSection(parent) {
 
   const snapRow = document.createElement('label');
   snapRow.className = 'rig-row';
-  addText(snapRow, 'rig-label', 'Rotation snap');
+  addText(snapRow, 'rig-label', '', 'weightRig.rotationSnap');
   const snap = document.createElement('select');
   snap.className = 'rig-snap-select';
-  [[0, 'Off'], [5, '5°'], [15, '15°'], [30, '30°']].forEach(([value, text]) => {
+  [[0, 'weightRig.off'], [5, null], [15, null], [30, null]].forEach(([value, key]) => {
     const option = document.createElement('option');
     option.value = String(value);
-    option.textContent = text;
+    option.dataset.i18n = key || '';
+    option.textContent = key ? t(key) : `${value}°`;
     snap.appendChild(option);
   });
   snap.addEventListener('change', () => setRigRotationSnapDegrees(Number(snap.value)));
@@ -482,7 +525,8 @@ function buildRigSection(parent) {
   const setRoot = document.createElement('button');
   setRoot.type = 'button';
   setRoot.className = 'ui-button rig-set-root';
-  setRoot.textContent = 'Set selected as root';
+  setRoot.dataset.i18n = 'weightRig.setSelectedRoot';
+  setRoot.textContent = t('weightRig.setSelectedRoot');
   setRoot.addEventListener('click', () => {
     const selected = selectedJoint();
     if (selected) setRigJointRoot(selected.jointId);
@@ -497,7 +541,8 @@ function buildPanel() {
   const header = document.createElement('div');
   header.className = 'weight-rig-header';
   const heading = document.createElement('h3');
-  heading.textContent = 'Weight/Rig';
+  heading.dataset.i18n = 'weightRig.title';
+  heading.textContent = t('weightRig.title');
   header.appendChild(heading);
   ui.status = addText(header, 'weight-rig-status');
   panel.appendChild(header);
@@ -507,8 +552,14 @@ function buildPanel() {
 
 function formatAffectedVertices(value) {
   const count = Math.max(0, Math.round(Number(value) || 0));
-  if (count < 1000) return `${count.toLocaleString('en-US')} verts`;
-  return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}k verts`;
+  if (count < 1000) {
+    return t('weightRig.verts', {
+      count: count.toLocaleString(getLocale()),
+    });
+  }
+  return t('weightRig.vertsK', {
+    count: (count / 1000).toFixed(1).replace(/\.0$/, ''),
+  });
 }
 
 function formatBoneMeta(stats) {
@@ -519,7 +570,8 @@ function formatBoneMeta(stats) {
 function formatNearbyInfluence(value) {
   const percentage = Math.max(0, Number(value) || 0) * 100;
   return percentage > 0 && percentage < 1
-    ? '<1% nearby' : `${Math.round(percentage)}% nearby`;
+    ? t('weightRig.nearbyLess')
+    : t('weightRig.nearby', {count: Math.round(percentage)});
 }
 
 function syncBoneFilter(weightState = latestWeightState || getModelWeightState()) {
@@ -571,7 +623,7 @@ function syncBoneOptions(state) {
       let label = basename;
       if (basenameCounts.get(basenames.get(source.key)) > 1) label = source.file;
       if (fileCounts.get(String(source.file).toLowerCase()) > 1) {
-        label += ` · offset +${source.boneIdOffset}`;
+        label += ` · ${t('weightRig.offset', {offset: source.boneIdOffset})}`;
       }
       heading.textContent = label.toUpperCase();
       heading.title = source.file;
@@ -626,7 +678,7 @@ function syncBoneOptions(state) {
     });
   });
   if (!sources.some(source => source.availableBoneIds.length)) {
-    if (!ui.empty) ui.empty = addText(ui.boneList, 'weight-empty', 'No bone IDs available.');
+    if (!ui.empty) ui.empty = addText(ui.boneList, 'weight-empty', '', 'weightRig.noBoneIds');
     ui.empty.hidden = false;
   } else if (ui.empty) ui.empty.hidden = true;
 }
@@ -646,7 +698,8 @@ function syncWeightControls(state = latestWeightState || getModelWeightState()) 
   ui.boneButton.textContent = selectedLabel(state);
   const available = (state.sources || []).some(source => source.availableBoneIds?.length);
   ui.boneButton.disabled = !state.loaded || !available;
-  ui.weightPick.textContent = state.picking ? 'Cancel picking' : 'Pick from model';
+  ui.weightPick.textContent = state.picking
+    ? t('weightRig.cancelPicking') : t('weightRig.pickFromModel');
   ui.weightPick.classList.toggle('active', !!state.picking);
   ui.weightPick.setAttribute('aria-pressed', String(!!state.picking));
   ui.weightPick.disabled = !state.loaded || !available;
@@ -680,7 +733,8 @@ function syncPhysicsControls(state = getModelPhysicsState()) {
 function syncHumanoidEditControls(state) {
   const edit = state?.humanoidRigEdit || {};
   const editing = edit.editing === true;
-  ui.mainTitle.textContent = editing ? 'EDIT RIG' : 'Main Rig';
+  ui.mainTitle.textContent = editing
+    ? t('weightRig.editRigTitle') : t('weightRig.mainRig');
   ui.editStatus.hidden = !editing;
   ui.editRig.hidden = editing;
   ui.resetRig.hidden = editing;
@@ -691,17 +745,19 @@ function syncHumanoidEditControls(state) {
   const controlCount = Object.keys(edit.controls || {}).length;
   const controlTotal = HUMANOID_CONTROL_KEYS.length;
   ui.editCount.textContent = editing
-    ? `${controlCount} / ${controlTotal} control points visible` : '';
+    ? t('weightRig.controlPointsVisible', {
+      count: controlCount, total: controlTotal,
+    }) : '';
   const key = edit.selectedControlKey;
   ui.editControl.textContent = key
-    ? HUMANOID_CONTROL_LABELS[key] || key : 'Click a rig point to move it.';
+    ? humanoidControlLabel(key) : t('weightRig.clickPointToMove');
   const mapped = key ? edit.mappedJointIdByControl?.[key] : null;
   ui.editConnection.textContent = key
     ? mapped === undefined || mapped === null
-      ? 'Not connected' : `Connected: Joint ${mapped}` : '';
+      ? t('weightRig.notConnected')
+      : t('weightRig.connectedJoint', {id: mapped}) : '';
   ui.editHint.textContent = edit.error || (key
-    ? 'Move the point and click again to release it.'
-    : 'Click a rig point to move it.');
+    ? t('weightRig.movePointRelease') : t('weightRig.clickPointToMove'));
   ui.editHint.hidden = !edit.error && !!key;
   ui.editStatus.classList.toggle('is-saving', !!edit.saving);
 }
@@ -721,23 +777,31 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
     ui.joint.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = 'Select a joint';
+    placeholder.dataset.i18n = 'weightRig.selectJoint';
+    placeholder.textContent = t('weightRig.selectJoint');
     placeholder.disabled = true;
     placeholder.selected = true;
     ui.joint.appendChild(placeholder);
     joints.forEach(item => {
       const option = document.createElement('option');
       option.value = String(item.jointId);
-      option.textContent = `Joint ${item.jointId}`;
+      option.textContent = t('weightRig.joint', {id: item.jointId});
       ui.joint.appendChild(option);
     });
     ui.joint.dataset.optionKey = optionKey;
   }
+  if (ui.joint.options[0]) {
+    ui.joint.options[0].textContent = t('weightRig.selectJoint');
+  }
+  [...ui.joint.options].slice(1).forEach(option => {
+    option.textContent = t('weightRig.joint', {id: option.value});
+  });
   ui.joint.value = selected ? String(selected.jointId) : '';
   const editing = state?.humanoidRigEdit?.editing === true;
   ui.joint.disabled = editing || !state?.loaded || !joints.length;
   const jointPickActive = state?.jointPickIntent?.type === 'selected-joint';
-  ui.rigPickJoint.textContent = jointPickActive ? 'Cancel picking' : 'Pick from model';
+  ui.rigPickJoint.textContent = jointPickActive
+    ? t('weightRig.cancelPicking') : t('weightRig.pickFromModel');
   ui.rigPickJoint.classList.toggle('active', jointPickActive);
   ui.rigPickJoint.setAttribute('aria-pressed', String(jointPickActive));
   ui.rigPickJoint.disabled = editing || !state?.loaded || !joints.length;
@@ -747,8 +811,8 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   const hasSelected = !!selected;
   const selectedControl = ik.selectedHumanoidControlKey;
   ui.ikSelection.textContent = selectedControl
-    ? `Selected point: ${HUMANOID_CONTROL_LABELS[selectedControl] || selectedControl}`
-    : 'Click a rig point to select it.';
+    ? t('weightRig.selectedPoint', {name: humanoidControlLabel(selectedControl)})
+    : t('weightRig.selectPoint');
   ui.ik.checked = !!ik.enabled;
   ui.ik.disabled = editing || !state?.loaded || !ik.available;
   ui.clearJoint.disabled = editing || !hasSelected;
@@ -764,23 +828,26 @@ function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
 }
 
 const PRESET_SKIP_REASON_LABELS = Object.freeze({
-  joint_not_found: 'no matching joint',
-  root_not_found: 'no matching root',
-  ambiguous_joint_signature: 'ambiguous match',
-  duplicate_joint_entry: 'duplicate entry',
-  duplicate_root_entry: 'duplicate entry',
-  invalid_signature: 'invalid joint identity',
-  invalid_rotation: 'invalid rotation',
-  invalid_preset: 'invalid saved pose',
+  joint_not_found: 'weightRig.reason.noMatchingJoint',
+  root_not_found: 'weightRig.reason.noMatchingRoot',
+  ambiguous_joint_signature: 'weightRig.reason.ambiguousMatch',
+  duplicate_joint_entry: 'weightRig.reason.duplicateEntry',
+  duplicate_root_entry: 'weightRig.reason.duplicateEntry',
+  invalid_signature: 'weightRig.reason.invalidJointIdentity',
+  invalid_rotation: 'weightRig.reason.invalidRotation',
+  invalid_preset: 'weightRig.reason.invalidSavedPose',
 });
 
-function pluralizePresetCount(count, singular, plural = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : plural}`;
+function pluralizePresetCount(count, key) {
+  return t(`${key}.${count === 1 ? 'one' : 'many'}`, {count});
 }
 
 function presetSkipLabel(item) {
-  return PRESET_SKIP_REASON_LABELS[item?.reason]
-    || (item?.type === 'root' ? 'could not match root' : 'could not match joint');
+  const key = PRESET_SKIP_REASON_LABELS[item?.reason]
+    || (item?.type === 'root'
+      ? 'weightRig.reason.noMatchingRoot'
+      : 'weightRig.reason.noMatchingJoint');
+  return t(key);
 }
 
 function formatPresetApplication(result) {
@@ -794,31 +861,39 @@ function formatPresetApplication(result) {
   const applied = [];
   if (result.appliedJointCount) {
     applied.push(pluralizePresetCount(
-      result.appliedJointCount, 'joint rotation'));
+      result.appliedJointCount, 'weightRig.count.jointRotation'));
   }
   if (result.appliedRootCount) {
-    applied.push(pluralizePresetCount(result.appliedRootCount, 'root'));
+    applied.push(pluralizePresetCount(result.appliedRootCount, 'weightRig.count.root'));
   }
   const skippedParts = [];
   if (result.skippedJointCount) {
-    skippedParts.push(pluralizePresetCount(result.skippedJointCount, 'joint'));
+    skippedParts.push(pluralizePresetCount(
+      result.skippedJointCount, 'weightRig.count.joint'));
   }
   if (result.skippedRootCount) {
-    skippedParts.push(pluralizePresetCount(result.skippedRootCount, 'root'));
+    skippedParts.push(pluralizePresetCount(
+      result.skippedRootCount, 'weightRig.count.root'));
   }
   const reasonText = [...skippedReasons.entries()]
-    .map(([label, count]) => count > 1 ? `${label} (${count})` : label)
+    .map(([label, count]) => count > 1
+      ? t('weightRig.reasonCount', {label, count}) : label)
     .join('; ');
+  const reason = reasonText ? `: ${reasonText}` : '.';
   if (!result.success) {
-    return `Could not apply this pose${reasonText ? `: ${reasonText}` : '.'}`;
+    return t('weightRig.status.couldNotApplyPose', {reason});
   }
   if (!skippedParts.length) {
-    return applied.length ? `Applied ${applied.join(' and ')}.`
-      : 'Applied pose.';
+    return applied.length ? t('weightRig.status.applied', {
+      items: applied.join(` ${t('weightRig.and')} `),
+    }) : t('weightRig.status.appliedPose');
   }
-  return `Applied ${applied.length ? applied.join(' and ') : 'nothing'}. `
-    + `Skipped ${skippedParts.join(' and ')}`
-    + `${reasonText ? `: ${reasonText}` : '.'}`;
+  return t('weightRig.status.appliedSkipped', {
+    applied: applied.length
+      ? applied.join(` ${t('weightRig.and')} `) : t('weightRig.nothing'),
+    skipped: skippedParts.join(` ${t('weightRig.and')} `),
+    reason,
+  });
 }
 
 function presetFeedback(state) {
@@ -837,15 +912,18 @@ function syncPresetControls(state) {
     ui.preset.replaceChildren();
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = 'Select a pose';
+    placeholder.dataset.i18n = 'weightRig.selectPose';
+    placeholder.textContent = t('weightRig.selectPose');
     placeholder.disabled = true;
     ui.preset.appendChild(placeholder);
     const group = document.createElement('optgroup');
-    group.label = 'My Poses';
+    group.dataset.i18nLabel = 'weightRig.myPoses';
+    group.label = t('weightRig.myPoses');
     if (!presets.length) {
       const option = document.createElement('option');
       option.value = '';
-      option.textContent = 'No saved poses';
+      option.dataset.i18n = 'weightRig.noSavedPoses';
+      option.textContent = t('weightRig.noSavedPoses');
       option.disabled = true;
       group.appendChild(option);
     } else presets.forEach(item => {
@@ -856,6 +934,14 @@ function syncPresetControls(state) {
     });
     ui.preset.appendChild(group);
     ui.preset.dataset.optionKey = optionKey;
+  }
+  const placeholder = ui.preset.options[0];
+  if (placeholder) placeholder.textContent = t('weightRig.selectPose');
+  const group = ui.preset.querySelector('optgroup');
+  if (group) {
+    group.label = t('weightRig.myPoses');
+    const empty = group.querySelector('option[data-i18n="weightRig.noSavedPoses"]');
+    if (empty) empty.textContent = t('weightRig.noSavedPoses');
   }
   ui.preset.value = presetState.selectedPresetId || '';
   const current = selectedPreset(state, ui.preset.value);
@@ -873,29 +959,30 @@ function applySelectedPreset(presetId) {
 }
 
 async function savePreset() {
-  const name = await inputConfirmDialog('Save pose preset as:', '');
+  const name = await inputConfirmDialog(t('weightRig.prompt.savePose'), '');
   if (!name) return;
   const result = await saveRigPosePreset(name);
   ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
-    : result?.error || 'Could not save this pose.';
+    : result?.error || t('weightRig.status.couldNotSavePose');
 }
 
 async function renamePreset() {
   const current = latestRigState?.rigPresets?.presets?.find(item => item.id === ui.preset.value);
   if (!current) return;
-  const name = await inputConfirmDialog('Rename pose preset:', current.name);
+  const name = await inputConfirmDialog(t('weightRig.prompt.renamePose'), current.name);
   if (!name) return;
   const result = await renameRigPosePreset(current.id, name);
   ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
-    : result?.error || 'Could not rename this pose.';
+    : result?.error || t('weightRig.status.couldNotRenamePose');
 }
 
 async function deletePreset() {
   const current = latestRigState?.rigPresets?.presets?.find(item => item.id === ui.preset.value);
-  if (!current || !await confirmDialog(`Delete pose preset "${current.name}"?`)) return;
+  if (!current || !await confirmDialog(
+    t('weightRig.confirm.deletePose', {name: current.name}))) return;
   const result = await deleteRigPosePreset(current.id);
   ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
-    : result?.error || 'Could not delete this pose.';
+    : result?.error || t('weightRig.status.couldNotDeletePose');
 }
 
 function syncStatus() {
@@ -906,13 +993,17 @@ function syncStatus() {
   else if (rig.error) status = rig.error;
   else if (rig.humanoidRigEdit?.error) status = rig.humanoidRigEdit.error;
   else if (weight.selectionSaveError) {
-    status = `Could not save bone selection: ${weight.selectionSaveError}`;
-  } else if (weight.loading) status = 'Loading weights…';
-  else if (rig.loading) status = 'Loading Rig…';
+    status = t('weightRig.status.selectionSaveError', {
+      detail: weight.selectionSaveError,
+    });
+  } else if (weight.loading) status = t('weightRig.status.loadingWeights');
+  else if (rig.loading) status = t('weightRig.status.loadingRig');
   else if (weight.loaded && (!weight.sources?.length || weight.noWeights)) {
-    status = 'No skin weights available for this model.';
+    status = t('weightRig.status.noWeights');
   } else if (!weight.loaded && !rig.loaded) status = '';
-  if (weight.pickStatus || rig.pickStatus) status = weight.pickStatus || rig.pickStatus;
+  if (weight.pickStatus || rig.pickStatus) {
+    status = statusText(weight.pickStatus || rig.pickStatus);
+  }
   ui.status.textContent = status;
 }
 
@@ -967,6 +1058,13 @@ export function initWeightRigPanel() {
   });
   window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
     if (latestRigState) syncRigOptions(latestRigState);
+  });
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    applyTranslations(panel);
+    syncWeightControls(latestWeightState || getModelWeightState());
+    syncPhysicsControls();
+    syncRigOptions(latestRigState || getModelRigState());
+    syncStatus();
   });
   window.addEventListener('mod-viewer-weight-point-picked', () => {
     latestWeightState = getModelWeightState();

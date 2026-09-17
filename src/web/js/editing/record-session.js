@@ -15,6 +15,7 @@ import { dnfSatisfied } from './control-state.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { alertDialog } from '../ui/dialogs.js';
 import { cycleValueAt } from './cycle-values.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let active = null;    // non-null while a session is in progress
 let starting = false; // true from the first click until active is set (or the attempt is abandoned)
@@ -88,7 +89,9 @@ function positionLabel() {
   const values = previewVars
     .map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`)
     .join(', ');
-  return `Position ${current + 1} of ${positions} — ${values}`;
+  return t('record.position', {
+    current: current + 1, positions, values,
+  });
 }
 
 /**
@@ -105,13 +108,13 @@ export async function startRecordSession(info, ctx, ui) {
   try {
     const posInfo = await window.pywebview.api.get_record_positions(ctx.modPath, info.ini, info.section);
     if (posInfo.error) {
-      await alertDialog('Could not start recording:\n\n' + posInfo.error);
+      await alertDialog(t('record.startError', {detail: posInfo.error}));
       return;
     }
     const previewVars = info.cycle_vars || info.vars;
     const writable = writableVars(previewVars, posInfo.vars || []);
     if (!writable.length || !previewVars.length || !posInfo.positions) {
-      await alertDialog('This toggle has no variable this app can record automatically.');
+      await alertDialog(t('record.noAutomaticVariable'));
       return;
     }
 
@@ -177,7 +180,7 @@ function enterRecordingUI() {
 
   ui.originalCycleClick = ui.cycleBtn.onclick;
   ui.cycleBtn.onclick = () => advance();
-  ui.cycleBtn.title = 'Next position';
+  ui.cycleBtn.title = t('record.nextPosition');
 
   ui.recordRow.style.display = 'flex';
   ui.saveBtn.onclick = () => save();
@@ -195,7 +198,7 @@ function exitRecordingUI() {
   ui.deleteBtn.style.display = '';
   ui.recordRow.style.display = 'none';
   ui.cycleBtn.onclick = ui.originalCycleClick;
-  ui.cycleBtn.title = 'Cycle value';
+  ui.cycleBtn.title = t('record.cycleValue');
   // Cancel just changed toggleState back; Save's caller reloads the whole
   // panel anyway, but refreshing here too keeps this in sync either way.
   ui.valSpan.textContent = ui.describe();
@@ -227,9 +230,28 @@ function advance() {
 function summarizeSkips(report) {
   const skipped = report.skipped || [];
   if (!skipped.length) return '';
-  const shown = skipped.slice(0, 10).map((s) => `line ${s.line ?? '?'}: ${s.reason}`);
-  if (skipped.length > shown.length) shown.push(`… and ${skipped.length - shown.length} more`);
+  const shown = skipped.slice(0, 10).map((s) => t('record.line', {
+    line: s.line ?? '?', reason: skipReason(s),
+  }));
+  if (skipped.length > shown.length) shown.push(t('record.more', {
+    count: skipped.length - shown.length,
+  }));
   return shown.join('\n');
+}
+
+const SKIP_REASON_KEYS = Object.freeze({
+  command_path: 'record.reason.commandPath',
+  ambiguous_nesting: 'record.reason.ambiguousNesting',
+  unsupported: 'record.reason.unsupported',
+  outer_gate: 'record.reason.outerGate',
+  multiple_variables: 'record.reason.multipleVariables',
+  nested_rewrite: 'record.reason.nestedRewrite',
+  same_value: 'record.reason.sameValue',
+});
+
+function skipReason(item) {
+  const key = SKIP_REASON_KEYS[item?.reason_code];
+  return key ? t(key, item?.reason_params || {detail: item.reason}) : item?.reason;
 }
 
 function recordTargetRef(mesh, src) {
@@ -280,12 +302,12 @@ async function save() {
     const result = await window.pywebview.api.record_toggle(
       ctx.modPath, info.ini, info.section, positionLines, sortedTargetRefs);
     if (result.error) {
-      await alertDialog('Could not save recording:\n\n' + result.error);
+      await alertDialog(t('record.saveError', {detail: result.error}));
       return;
     }
     const summary = summarizeSkips(result.result || {});
     exitRecordingUI();
-    if (summary) await alertDialog('Recorded, but review these lines by hand:\n\n' + summary);
+    if (summary) await alertDialog(t('record.review', {detail: summary}));
     if (ctx.onChange) await ctx.onChange({ type: 'record' });
   } finally {
     ui.saveBtn.disabled = false;
@@ -298,3 +320,9 @@ function cancel() {
   exitRecordingUI();
   refreshAll();
 }
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (!active) return;
+  active.ui.cycleBtn.title = t('record.nextPosition');
+  active.ui.valSpan.textContent = positionLabel();
+});

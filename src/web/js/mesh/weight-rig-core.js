@@ -18,6 +18,7 @@ import {
   buildModelRigReconciliationCooperative,
   orientModelRigForest, sourceBoneKey,
 } from './weight-rig-reconcile.js';
+import {weightRigStatus} from './weight-rig-status.js';
 import {
   hydrateModelRig, loadOrBuildModelRig, serializeModelRig,
 } from './model-rig-persistence.js';
@@ -1526,7 +1527,8 @@ function applyRigPosePreset(resolvedPreset, options = {}) {
   if (!resolved?.success) {
     const result = resolved || unavailableRigPresetResult('invalid_preset');
     rigPresetState.lastApplyResult = result;
-    modelRigState.pickStatus = 'This saved pose is invalid and could not be applied.';
+    modelRigState.pickStatus = weightRigStatus(
+      'weightRig.status.invalidSavedPose');
     notifyModelRigChanged();
     return result;
   }
@@ -1542,9 +1544,10 @@ function applyRigPosePreset(resolvedPreset, options = {}) {
       failureReason: 'no_matches',
     };
     rigPresetState.lastApplyResult = result;
-    modelRigState.pickStatus = resolved.skipped?.length
-      ? 'No saved joints matched the current inferred Rig.'
-      : 'This saved pose is invalid and could not be applied.';
+    modelRigState.pickStatus = weightRigStatus(
+      resolved.skipped?.length
+        ? 'weightRig.status.noMatchingJoints'
+        : 'weightRig.status.invalidSavedPose');
     notifyModelRigChanged();
     return result;
   }

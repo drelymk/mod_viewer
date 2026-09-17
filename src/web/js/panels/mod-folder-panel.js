@@ -2,6 +2,7 @@
 
 import { confirmDialog } from '../ui/dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = id => document.getElementById(id);
 
@@ -69,8 +70,8 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     editorMode = mode;
     originalPath = entry?.path || null;
     selectedPath = entry?.path || null;
-    title.textContent = mode === 'edit' ? 'Edit Mod Folder' : 'Add Mod Folder';
-    save.textContent = mode === 'edit' ? 'Save' : 'Add';
+    title.textContent = mode === 'edit' ? t('folder.editMod') : t('folder.addMod');
+    save.textContent = mode === 'edit' ? t('common.save') : t('common.add');
     nameInput.value = entry?.name || '';
     pathInput.value = entry?.path || '';
     setTextError(modalError, '');
@@ -82,10 +83,15 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     openEditor('add');
   }
 
+  window.addEventListener(LANGUAGE_CHANGED, () => {
+    if (!backdrop.classList.contains('show')) return;
+    title.textContent = editorMode === 'edit'
+      ? t('folder.editMod') : t('folder.addMod');
+    save.textContent = editorMode === 'edit' ? t('common.save') : t('common.add');
+  });
+
   async function removeFolder(entry) {
-    const confirmed = await confirmDialog(
-      `Remove "${entry.name}" from Mod Folders?\n\n` +
-      'This only removes it from Mod Viewer.\nFiles on disk will not be deleted.');
+    const confirmed = await confirmDialog(t('folder.removeMod', {name: entry.name}));
     if (!confirmed) return;
     const response = await window.pywebview.api.delete_mod_folder(entry.path);
     applyRegistryResponse(response);
@@ -110,11 +116,11 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     const name = nameInput.value.trim();
     const path = selectedPath || pathInput.value.trim();
     if (!name) {
-      setTextError(modalError, 'Enter a Mod Folder name.');
+      setTextError(modalError, t('folder.enterModName'));
       return;
     }
     if (!path) {
-      setTextError(modalError, 'Choose a folder with Browse.');
+      setTextError(modalError, t('folder.chooseBrowse'));
       return;
     }
     save.disabled = true;

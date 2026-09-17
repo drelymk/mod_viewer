@@ -53,8 +53,14 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#health-close").click()
 
         summary = page.evaluate("""async () => {
-          const {summarizeAssetBindings} = await import('./js/panels/asset-diagnostics.js');
-          return summarizeAssetBindings([
+          const {assetMatchLabel, componentMatchLabel, summarizeAssetBindings} =
+            await import('./js/panels/asset-diagnostics.js');
+          const notFound = {asset_binding: {
+            status: 'not_found', component_status: 'not_found',
+            range_status: 'unknown',
+          }};
+          return {
+            summary: summarizeAssetBindings([
             {asset_binding: {
               status: 'exact', component_status: 'exact', range_status: 'exact',
               asset: 'Alice', component_name: 'Body', classification: 'A',
@@ -67,12 +73,17 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
               status: 'not_found', component_status: 'not_found',
               range_status: 'unknown',
             }},
-          ]);
+            ]),
+            assetLabel: assetMatchLabel(notFound),
+            componentLabel: componentMatchLabel(notFound),
+          };
         }""")
-        assert summary["status"] == "partial"
-        assert summary["assets"] == ["Alice"]
-        assert summary["matchedDraws"] == 2
-        assert summary["rangesVary"] is False
+        assert summary["summary"]["status"] == "partial"
+        assert summary["summary"]["assets"] == ["Alice"]
+        assert summary["summary"]["matchedDraws"] == 2
+        assert summary["summary"]["rangesVary"] is False
+        assert summary["assetLabel"] == "Not found"
+        assert summary["componentLabel"] == "Not found"
 
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
@@ -287,6 +298,21 @@ def test_indexed_asset_row_loads_read_only_preview(edge_browser, frontend_url):
         assert page.locator("#export-btn").is_hidden()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
         assert page.evaluate("window.modViewer.getCurrentSource().kind") == "asset"
+        assert page.locator("#mod-path").text_content() == (
+            "Asset Preview  —  Character")
+        load_count = page.evaluate("window.__fakeApi.calls.loadAsset.length")
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#mod-path").text_content() == (
+            "资源预览  —  Character")
+        assert page.evaluate("window.__fakeApi.calls.loadAsset.length") == load_count
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#mod-path").text_content() == (
+            "Asset Preview  —  Character")
+        assert page.evaluate("window.__fakeApi.calls.loadAsset.length") == load_count
     finally:
         context.close()
 

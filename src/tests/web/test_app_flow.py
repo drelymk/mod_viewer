@@ -172,6 +172,63 @@ def test_diagnostics_badge_populates_after_mod_load(
     finally:
         context.close()
 
+
+def test_diagnostics_localize_structured_messages_rerender_open_modal_and_fallback(
+        edge_browser, frontend_url):
+    diagnostics = {
+        "summary": {"issues": 3, "errors": 2, "warnings": 1},
+        "files": {"referenced": 1},
+        "issues": [
+            {"code": "malformed_condition_nesting", "severity": "error",
+             "category": "conditions", "ini": "mod.ini", "section": "Body",
+             "line": 4, "source": "endif", "reason": "endif_without_if",
+             "message": "endif without a matching if"},
+            {"code": "malformed_resource_reference", "severity": "error",
+             "category": "resources", "ini": "mod.ini", "section": "Body",
+             "line": 8, "source": "ib = bad ResourceBody", "lhs": "ib",
+             "prefix": "bad", "resource": "ResourceBody",
+             "message": "ib uses an invalid resource reference prefix: 'bad'."},
+            {"code": "future_issue", "severity": "warning", "category": "ini",
+             "message": "Future diagnostic"},
+        ],
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {"A": _payload("A")},
+        diagnostics=diagnostics)
+    try:
+        _open(page, "A")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("document.querySelector('#health-count').textContent === '3'")
+        page.locator("#health-btn").click()
+        page.locator("#health-modal-backdrop.show").wait_for()
+        assert "endif without a matching if" in page.locator(
+            ".health-message").nth(0).inner_text()
+        assert "Future diagnostic" in page.locator(".health-message").nth(2).inner_text()
+
+        page.evaluate("""() => {
+          const select = document.querySelector('#app-language');
+          select.value = 'zh-CN';
+          select.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        messages = page.locator(".health-message").all_inner_texts()
+        assert "endif 没有匹配的 if" in messages[0]
+        assert "无效的资源引用前缀" in messages[1]
+        assert messages[2] == "Future diagnostic"
+        assert "第 4 行" in page.locator(".health-location").nth(0).inner_text()
+
+        page.evaluate("""() => {
+          const select = document.querySelector('#app-language');
+          select.value = 'en';
+          select.dispatchEvent(new Event('change', {bubbles: true}));
+        }""")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert "endif without a matching if" in page.locator(
+            ".health-message").nth(0).inner_text()
+        assert page.evaluate("window.__fakeApi.calls.diagnostics") == ["A"]
+    finally:
+        context.close()
+
 def test_failed_mod_switch_clears_previous_ui_and_pending_state(
         edge_browser, frontend_url):
     failed_payload = {

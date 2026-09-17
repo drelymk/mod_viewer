@@ -5,6 +5,7 @@ import { alertDialog, confirmDialog, inputConfirmDialog } from '../ui/dialogs.js
 import { openPresentModal, presentSnapshots } from '../editing/present-modal.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_PRESENTS = 10;
@@ -12,18 +13,20 @@ let current = { modPath: null, present: null, onChange: null };
 let presentViewState = { modPath: null, selectedPosition: 0 };
 let syncCurrentValue = () => {};
 
+function presentName(item, index) {
+  return item?.names?.[index] || t('present.defaultName', {number: index + 1});
+}
+
 function clampPosition(item, position) {
   if (!item?.count) return 0;
   return Math.min(Math.max(Number(position) || 0, 0), item.count - 1);
 }
 
 async function removeKey() {
-  const confirmed = await confirmDialog(
-    'Delete the PRESENT key from every participating INI?\n\n' +
-    'This only stages the change; the INI is not written until Export.');
+  const confirmed = await confirmDialog(t('present.deleteKeyConfirm'));
   if (!confirmed) return;
   const result = await window.pywebview.api.delete_present(current.modPath);
-  if (result.error) return alertDialog('Could not delete PRESENT:\n\n' + result.error);
+  if (result.error) return alertDialog(t('present.deleteError', {detail: result.error}));
   if (current.onChange) await current.onChange({
     type: 'delete-key', selectedPosition: null, applySelection: false,
   });
@@ -79,13 +82,17 @@ async function capture(item, position, name, allowDuplicate = false) {
     current.modPath, presentSnapshots(current.present), name, position, allowDuplicate);
   if (result.warning) {
     const labels = (result.duplicate_positions || [])
-      .map((index) => item.names[index] || `Present ${index + 1}`).join(', ');
-    const confirmed = await confirmDialog(
-      `These variable values are the same as ${labels || 'another present'}.\n\nSave anyway?`);
+      .map((index) => presentName(item, index)).join(', ');
+    const confirmed = await confirmDialog(t('present.duplicateConfirm', {
+      labels: labels || t('present.another'),
+    }));
     return confirmed ? capture(item, position, name, true) : null;
   }
   if (result.error) {
-    await alertDialog(`Could not ${position === null ? 'create' : 'edit'} present:\n\n${result.error}`);
+    await alertDialog(t('present.editError', {
+      action: position === null ? t('present.createAction') : t('present.editAction'),
+      detail: result.error,
+    }));
     return null;
   }
   return result;
@@ -107,11 +114,14 @@ function buildItem(item, { applySelection = false } = {}) {
   header.className = 'toggle-hdr';
   const fields = document.createElement('div');
   fields.className = 'present-fields';
-  for (const [label, value] of [['Key', item.key], ['Back', item.back]]) {
+  for (const [label, value] of [
+    [t('present.keyLabel', {value: item.key}), item.key],
+    [t('present.backLabel', {value: item.back}), item.back],
+  ]) {
     if (!value) continue;
     const badge = document.createElement('span');
     badge.className = 'toggle-key';
-    badge.textContent = `${label}: ${value}`;
+    badge.textContent = label;
     fields.appendChild(badge);
   }
   header.append(fields);
@@ -121,15 +131,15 @@ function buildItem(item, { applySelection = false } = {}) {
   const cycle = document.createElement('button');
   cycle.className = 'toggle-cycle-btn';
   cycle.appendChild(createIcon('cycle'));
-  cycle.title = 'Cycle present';
-  cycle.setAttribute('aria-label', 'Cycle PRESENT');
+  cycle.title = t('present.cycle');
+  cycle.setAttribute('aria-label', t('present.cycleAria'));
   cycle.disabled = !synchronized;
   const name = document.createElement('span');
   name.className = 'toggle-value';
   const showName = () => {
     name.textContent = synchronized
-      ? (item.names[position] || `Present ${position + 1}`)
-      : 'Unavailable';
+      ? presentName(item, position)
+      : t('present.unavailable');
   };
   const sync = () => {
     if (synchronized) {
@@ -158,7 +168,7 @@ function buildItem(item, { applySelection = false } = {}) {
   if (!synchronized) {
     const error = document.createElement('div');
     error.className = 'present-sync-error';
-    error.textContent = item.sync_error || 'PRESENT has no usable positions.';
+    error.textContent = item.sync_error || t('present.noPositions');
     wrap.append(header, row, error);
     return { wrap, sync };
   }
@@ -166,17 +176,17 @@ function buildItem(item, { applySelection = false } = {}) {
   const actions = document.createElement('div');
   actions.className = 'present-buttons present-author-actions';
   const add = document.createElement('button');
-  add.textContent = 'New';
+  add.textContent = t('present.new');
   add.disabled = item.count >= MAX_PRESENTS || !(item.capture_vars || []).length;
   add.title = item.count >= MAX_PRESENTS
-    ? `A PRESENT key is limited to ${MAX_PRESENTS} presents.`
-    : (add.disabled ? 'This mod has no key or menu toggle values to capture.' : '');
+    ? t('present.limit', {count: MAX_PRESENTS})
+    : (add.disabled ? t('present.noCapture') : '');
   add.addEventListener('click', async () => {
-    const defaultName = `Present ${item.count + 1}`;
+    const defaultName = presentName({names: []}, item.count);
     const chosen = await inputConfirmDialog(
-      'Create a new present from the current key and menu toggle states?', defaultName);
+      t('present.namePrompt'), defaultName);
     if (chosen === null) return;
-    if (!chosen) return alertDialog('A present name is required.');
+    if (!chosen) return alertDialog(t('present.nameRequired'));
     if (!await capture(item, null, chosen)) return;
     if (current.onChange) await current.onChange({
       type: 'new-position', selectedPosition: item.count,
@@ -184,16 +194,15 @@ function buildItem(item, { applySelection = false } = {}) {
     });
   });
   const replace = document.createElement('button');
-  replace.textContent = 'Update';
+  replace.textContent = t('present.update');
   replace.disabled = !(item.capture_vars || []).length;
-  replace.title = replace.disabled ? 'This mod has no key or menu toggle states to capture.'
-    : 'Replace this present with the current key and menu toggle states.';
+  replace.title = replace.disabled ? t('present.noCapture') : t('present.replace');
   replace.addEventListener('click', async () => {
     const chosen = await inputConfirmDialog(
-      `Replace ${item.names[position] || `Present ${position + 1}`} with the current key and menu toggle states?`,
-      item.names[position] || `Present ${position + 1}`);
+      t('present.replacePrompt', {name: presentName(item, position)}),
+      presentName(item, position));
     if (chosen === null) return;
-    if (!chosen) return alertDialog('A present name is required.');
+    if (!chosen) return alertDialog(t('present.nameRequired'));
     if (!await capture(item, position, chosen)) return;
     if (current.onChange) await current.onChange({
       type: 'update-position', selectedPosition: position,
@@ -201,15 +210,15 @@ function buildItem(item, { applySelection = false } = {}) {
     });
   });
   const remove = document.createElement('button');
-  remove.textContent = 'Delete';
+  remove.textContent = t('present.delete');
   remove.disabled = item.count <= 1;
-  remove.title = remove.disabled ? 'The only present cannot be deleted.' : '';
+  remove.title = remove.disabled ? t('present.only') : '';
   remove.addEventListener('click', async () => {
-    const label = item.names[position] || `Present ${position + 1}`;
-    if (!await confirmDialog(`Delete ${label}?\n\nThis only stages the change until Export.`)) return;
+    const label = presentName(item, position);
+    if (!await confirmDialog(t('present.deletePosition', {name: label}))) return;
     const result = await window.pywebview.api.delete_present_position(
       current.modPath, position);
-    if (result.error) return alertDialog('Could not delete present:\n\n' + result.error);
+    if (result.error) return alertDialog(t('present.deleteError', {detail: result.error}));
     if (current.onChange) await current.onChange({
       type: 'delete-position',
       selectedPosition: Math.min(position, item.count - 2),
@@ -251,14 +260,14 @@ export function buildPresentPanel(present, context = {}) {
   const editKey = $('present-key-edit');
   const removeKeyButton = $('present-key-remove');
   action.replaceChildren(createIcon('more'));
-  action.title = 'More PRESENT actions';
+  action.title = t('present.moreActions');
   action.setAttribute('aria-label', action.title);
   action.disabled = false;
   addKey.hidden = !!item;
   addKey.disabled = !canAdd;
   editKey.hidden = !item;
   editKey.disabled = !item;
-  editKey.textContent = incomplete ? 'Complete PRESENT' : 'Edit key binding';
+  editKey.textContent = incomplete ? t('present.complete') : t('modal.editPresentKey');
   removeKeyButton.hidden = !item;
   removeKeyButton.disabled = !item;
 
@@ -266,8 +275,8 @@ export function buildPresentPanel(present, context = {}) {
     const empty = document.createElement('div');
     empty.className = 'toggle-empty';
     empty.textContent = canAdd
-      ? 'No presents yet - click Add to create one.'
-      : 'No key or menu toggle is available for PRESENT.';
+      ? t('present.noPresents')
+      : t('present.noToggle');
     list.appendChild(empty);
     return;
   }
@@ -280,3 +289,13 @@ export function buildPresentPanel(present, context = {}) {
   if (current.applySelection) refreshAll();
   else syncCurrentValue();
 }
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (!current.modPath || !current.present) return;
+  buildPresentPanel(current.present, {
+    modPath: current.modPath,
+    onChange: current.onChange,
+    selectedPosition: presentViewState.selectedPosition,
+    applySelection: false,
+  });
+});

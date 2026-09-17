@@ -10,6 +10,7 @@ import {
   setAmbientOcclusionSuppressedByWireframe,
   setBloomSuppressedByWireframe,
 } from './scene.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let wireframe = false;
 let smoothShading = true;
@@ -19,6 +20,53 @@ const DEFAULT_ROUGHNESS = 1.0;
 const GLOSSY_ROUGHNESS = 0.2;
 const textureModes = ['all', 'diffuse-normal', 'diffuse', 'none'];
 let textureModeIndex = 0;
+
+function stateWord(value) {
+  return value ? t('common.on') : t('common.off');
+}
+
+function updateRenderModeLabels() {
+  const wireButton = document.getElementById('wire-btn');
+  if (wireButton) {
+    const label = t('render.wireframe', {state: stateWord(wireframe)});
+    wireButton.title = label;
+    wireButton.setAttribute('aria-label', label);
+  }
+  const outlineButton = document.getElementById('outline-btn');
+  if (outlineButton) {
+    const label = t('render.outlines', {state: stateWord(
+      outlineButton.getAttribute('aria-pressed') === 'true')});
+    outlineButton.title = label;
+    outlineButton.setAttribute('aria-label', label);
+  }
+  const glossyButton = document.getElementById('glossy-btn');
+  if (glossyButton) {
+    const label = t('render.glossy', {state: stateWord(glossy)});
+    glossyButton.title = label;
+    glossyButton.setAttribute('aria-label', label);
+  }
+  const toonButton = document.getElementById('toon-btn');
+  if (toonButton) {
+    const label = t('render.toon', {state: stateWord(toonShading)});
+    toonButton.title = label;
+    toonButton.setAttribute('aria-label', label);
+  }
+  const shadingButton = document.getElementById('shading-btn');
+  if (shadingButton) {
+    const label = t('render.shading', {state: stateWord(smoothShading)});
+    shadingButton.title = label;
+    shadingButton.setAttribute('aria-label', label);
+  }
+  const textureButton = document.getElementById('texture-btn');
+  if (textureButton) {
+    const mode = textureModes[textureModeIndex];
+    const label = t(`render.textureMode.${mode}`);
+    textureButton.title = label;
+    textureButton.setAttribute('aria-label', label);
+  }
+}
+
+window.addEventListener(LANGUAGE_CHANGED, updateRenderModeLabels);
 
 function setMeshRoughness(mesh, roughness) {
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -46,7 +94,9 @@ export function toggleWireframeMode(meshes) {
   const button = document.getElementById('wire-btn');
   button.classList.toggle('active', wireframe);
   button.setAttribute('aria-pressed', String(wireframe));
-  button.setAttribute('aria-label', `Wireframe rendering: ${wireframe ? 'on' : 'off'}`);
+  const label = t('render.wireframe', {state: stateWord(wireframe)});
+  button.title = label;
+  button.setAttribute('aria-label', label);
   meshes.forEach(mesh => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(material => {
@@ -62,7 +112,9 @@ export function toggleSmoothShadingMode(meshes) {
   const button = document.getElementById('shading-btn');
   button.classList.toggle('off', !smoothShading);
   button.setAttribute('aria-pressed', String(smoothShading));
-  button.setAttribute('aria-label', `Smooth shading: ${smoothShading ? 'on' : 'off'}`);
+  const label = t('render.shading', {state: stateWord(smoothShading)});
+  button.title = label;
+  button.setAttribute('aria-label', label);
   meshes.forEach(mesh => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(material => {
@@ -81,7 +133,7 @@ export function toggleGlossyMode(meshes) {
   // leaves it looking enabled in both states because there is no glossy
   // `.active` rule.
   button.classList.toggle('off', !glossy);
-  const label = glossy ? 'Glossy materials: on' : 'Glossy materials: off';
+  const label = t('render.glossy', {state: stateWord(glossy)});
   button.title = label;
   button.setAttribute('aria-label', label);
   button.setAttribute('aria-pressed', String(glossy));
@@ -96,7 +148,7 @@ export function toggleToonShadingMode(meshes) {
   const button = document.getElementById('toon-btn');
   button.classList.toggle('active', toonShading);
   button.classList.toggle('off', !toonShading);
-  const label = `Toon shadows: ${toonShading ? 'on' : 'off'}`;
+  const label = t('render.toon', {state: stateWord(toonShading)});
   button.title = label;
   button.setAttribute('aria-label', label);
   button.setAttribute('aria-pressed', String(toonShading));
@@ -120,14 +172,9 @@ export function setTextureDisplayMode(mode, meshes) {
   button.classList.toggle('diffuse-normal', mode === 'diffuse-normal');
   button.classList.toggle('diffuse-only', mode === 'diffuse');
   button.classList.toggle('off', mode === 'none');
-  const labels = {
-    all: 'Textures: all maps',
-    'diffuse-normal': 'Textures: diffuse and normal map',
-    diffuse: 'Textures: diffuse only',
-    none: 'Textures: none',
-  };
-  button.title = labels[mode];
-  button.setAttribute('aria-label', labels[mode]);
+  const label = t(`render.textureMode.${mode}`);
+  button.title = label;
+  button.setAttribute('aria-label', label);
   setTextureMode(mode);
   meshes.forEach(refreshMeshTexture);
   requestRender();

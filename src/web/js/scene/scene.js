@@ -15,6 +15,7 @@ import { requestRender, setRenderCallback } from './render-scheduler.js';
 import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 import { createPhysicsDragController } from './physics-drag-controller.js';
+import { t } from '../i18n/index.js';
 
 const container = document.getElementById('canvas-container');
 const openButton = document.getElementById('open-btn');
@@ -56,8 +57,7 @@ function failRenderer(message) {
 
 function rendererFailureMessage(error) {
   const detail = error?.message ? ` (${error.message})` : '';
-  return `WebGPU is required by this version of Mod Viewer. Update your `
-    + `graphics driver or use a browser with WebGPU support${detail}`;
+  return t('renderer.failure', {detail});
 }
 
 async function initializeRenderer() {
@@ -100,10 +100,14 @@ export function isRendererAvailable() {
 }
 
 renderer.onDeviceLost = info => {
-  failRenderer(`The WebGPU device was lost: ${info?.message || 'unknown reason'}.`);
+  failRenderer(t('renderer.deviceLost', {
+    detail: info?.message || 'unknown reason',
+  }));
 };
 renderer.onError = info => {
-  failRenderer(`WebGPU reported an unrecoverable error: ${info?.message || 'unknown error'}.`);
+  failRenderer(t('renderer.unrecoverable', {
+    detail: info?.message || 'unknown error',
+  }));
 };
 
 export const scene = new THREE.Scene();

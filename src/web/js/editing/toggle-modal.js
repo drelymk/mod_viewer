@@ -8,6 +8,7 @@
 
 import { confirmDialog } from '../ui/dialogs.js';
 import { bindModalDismiss, setModalError } from '../ui/modal-shell.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -16,6 +17,17 @@ let currentModPath = null;
 let currentInfo = null;    // the payload entry being edited (add: null)
 let onSaved = null;        // callback invoked after a successful staged edit
 let editVarRows = [];      // [{var, original, input}] built for edit mode
+
+function syncLabels() {
+  if (!currentMode) return;
+  $('tm-title').textContent = currentMode === 'add'
+    ? t('toggle.addTitle') : t('toggle.editTitle', {name: currentInfo?.name});
+  editVarRows.forEach(row => {
+    row.label.textContent = t('toggle.valuesLabel', {name: row.var});
+  });
+  $('tm-save').textContent = t('common.save');
+  $('tm-cancel').textContent = t('common.cancel');
+}
 
 function setError(message) {
   setModalError($('tm-error'), message);
@@ -37,7 +49,7 @@ function buildEditVarRows(vars) {
     const row = document.createElement('label');
     row.className = 'modal-field';
     const span = document.createElement('span');
-    span.textContent = `$${name} values (comma-separated)`;
+    span.textContent = t('toggle.valuesLabel', {name});
     const input = document.createElement('input');
     input.type = 'text';
     input.autocomplete = 'off';
@@ -45,7 +57,7 @@ function buildEditVarRows(vars) {
     input.value = joined;
     row.append(span, input);
     wrap.appendChild(row);
-    editVarRows.push({ var: name, original: joined, input });
+    editVarRows.push({ var: name, original: joined, input, label: span });
   }
 }
 
@@ -84,7 +96,7 @@ export async function openToggleModal({ mode, modPath, info, onSaved: cb }) {
 
   $('tm-var-single').style.display = mode === 'add' ? '' : 'none';
   $('tm-vars-multi').style.display = mode === 'edit' ? '' : 'none';
-  $('tm-title').textContent = mode === 'add' ? 'Add Toggle' : `Edit ${info.name}`;
+  syncLabels();
   $('toggle-modal-backdrop').classList.add('show');
 
   if (mode === 'add') {
@@ -163,9 +175,9 @@ async function handleSubmit(evt) {
     // value — toggle_editor refuses by default; offer to force it, since
     // resolving that mesh's visibility is squarely the user's call.
     if (result.error && currentMode === 'edit' &&
-        result.error.startsWith('removing these values would orphan existing gates')) {
+        result.error_code === 'orphan_existing_gates') {
       const proceed = await confirmDialog(
-        `${result.error}\n\nApply anyway? Meshes only shown for a removed value will no longer be reachable through this toggle.`);
+        t('toggle.orphanConfirm', {error: result.error}));
       if (proceed) result = await submitEdit(true);
     }
 
@@ -194,3 +206,5 @@ bindModalDismiss({
   close: closeModal,
   buttons: [$('tm-cancel')],
 });
+
+window.addEventListener(LANGUAGE_CHANGED, syncLabels);

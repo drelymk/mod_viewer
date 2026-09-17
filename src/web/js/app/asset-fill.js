@@ -9,6 +9,7 @@ import { appendMeshPanel, removeAssetFillMeshPanel } from '../panels/mesh-panel.
 import { alertDialog } from '../ui/dialogs.js';
 import { setGeometryBlob } from '../textures/decode.js';
 import { createIcon } from '../ui/ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -20,19 +21,21 @@ export function updateAssetFillButton() {
     && viewerState.currentSource?.kind === 'mod' && !!viewerState.currentModPath;
   const state = assetFill.loading ? 'loading' : assetFill.loaded ? 'remove' : 'load';
   const label = state === 'remove'
-    ? 'Remove missing parts'
+    ? t('mesh.removeMissingParts')
     : state === 'loading'
-      ? assetFill.loaded ? 'Removing missing parts' : 'Loading missing parts'
-      : 'Load missing parts';
+      ? assetFill.loaded ? t('mesh.removingMissingParts') : t('mesh.loadingMissingParts')
+      : t('mesh.loadMissingParts');
   button.disabled = !available || assetFill.loading;
   button.dataset.state = state;
   button.setAttribute('aria-label', label);
   button.setAttribute('aria-pressed', String(assetFill.loaded));
   button.replaceChildren(createIcon(state === 'remove' ? 'close' : 'mesh-add'));
   button.title = assetFill.loaded
-    ? 'Remove original Asset components added for this session.'
-    : 'Add original Asset components not handled by this mod.';
+    ? t('mesh.removeOriginalParts')
+    : t('mesh.addOriginalParts');
 }
+
+window.addEventListener(LANGUAGE_CHANGED, updateAssetFillButton);
 
 export function resetAssetFillState() {
   const { assetFill } = viewerState;
@@ -127,12 +130,12 @@ export async function loadMissingAssetParts() {
     }
     if (result?.status !== 'loaded') {
       const messages = {
-        nothing_missing: 'No missing original Asset parts found.',
-        asset_ambiguous: 'Could not uniquely determine the original Asset.',
-        asset_not_found: 'No matching original Asset was found.',
+        nothing_missing: t('errors.assetFillNothing'),
+        asset_ambiguous: t('errors.assetFillAmbiguous'),
+        asset_not_found: t('errors.assetFillNotFound'),
       };
       if (result?.error) throw new Error(result.error);
-      await alertDialog(messages[result?.status] || 'No original Asset parts were loaded.');
+      await alertDialog(messages[result?.status] || t('errors.assetFillDefault'));
       return false;
     }
     backendLoaded = true;
@@ -194,7 +197,7 @@ export async function loadMissingAssetParts() {
   } catch (error) {
     await rollback();
     if (!assetFillOperationIsCurrent(operation, path)) return false;
-    await alertDialog('Could not load missing Asset parts:\n\n' + error.message);
+    await alertDialog(t('errors.loadMissingAsset', {detail: error.message}));
     return false;
   } finally {
     if (operation === state.assetFill.epoch) {
@@ -228,7 +231,7 @@ export async function removeMissingAssetParts() {
     return true;
   } catch (error) {
     if (!assetFillOperationIsCurrent(operation, path)) return false;
-    await alertDialog('Could not remove missing Asset parts:\n\n' + error.message);
+    await alertDialog(t('errors.removeMissingAsset', {detail: error.message}));
     return false;
   } finally {
     if (operation === state.assetFill.epoch) {

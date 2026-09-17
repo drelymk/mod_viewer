@@ -20,11 +20,12 @@ import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import {
-  assetSecondaryLabel, assetSummaryLabel, summarizeAssetBindings,
+  assetDetailLabel, assetSummaryLabel, summarizeAssetBindings,
 } from './asset-diagnostics.js';
 import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
 import { syncMeshColorAdjustment } from '../mesh/mesh-color-session.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
@@ -83,7 +84,13 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
   chevron.type = 'button';
   chevron.className = 'group-toggle';
   chevron.setAttribute('aria-expanded', 'true');
-  chevron.setAttribute('aria-label', `Collapse ${groupName}`);
+  const syncLabels = () => {
+    const collapsed = itemsWrap.classList.contains('collapsed');
+    chevron.setAttribute('aria-label', t(
+      collapsed ? 'mesh.expandComponent' : 'mesh.collapseComponent',
+      {name: groupName}));
+  };
+  syncLabels();
   chevron.setAttribute('aria-controls', itemsWrap.id);
   chevron.appendChild(createIcon('chevron-down'));
 
@@ -114,8 +121,8 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     const collapsed = !itemsWrap.classList.contains('collapsed');
     chevron.classList.toggle('collapsed', collapsed);
     chevron.setAttribute('aria-expanded', String(!collapsed));
-    chevron.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${groupName}`);
     itemsWrap.classList.toggle('collapsed', collapsed);
+    syncLabels();
   };
   chevron.addEventListener('click', event => {
     event.stopPropagation();
@@ -126,7 +133,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     onComponentSelected?.();
   });
 
-  return { hdr, masterCb };
+  return { hdr, masterCb, syncLabels };
 }
 
 function updateComponentAssetLabel(header, summary) {
@@ -150,7 +157,7 @@ function updateDrawAssetLabel(mesh) {
   const row = mesh?.userData?.assetRow;
   if (!row) return;
   let assetSpan = row.querySelector('.asset-draw-label');
-  const label = assetSecondaryLabel(
+  const label = assetDetailLabel(
     mesh.userData.assetEntry?.asset_binding);
   if (!label) {
     assetSpan?.remove();
@@ -161,7 +168,7 @@ function updateDrawAssetLabel(mesh) {
     assetSpan.className = 'asset-secondary-label asset-draw-label';
     row.appendChild(assetSpan);
   }
-  assetSpan.textContent = label.replace(/^Asset:\s*/, '');
+  assetSpan.textContent = label;
   assetSpan.title = label;
 }
 
@@ -204,11 +211,11 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   labelSpan.className = 'mesh-name';
   labelSpan.textContent = mesh.userData.displayName || label;
   row.append(cb, labelSpan);
-  const assetLabel = assetSecondaryLabel(entry.asset_binding);
+  const assetLabel = assetDetailLabel(entry.asset_binding);
   if (assetLabel) {
     const assetSpan = document.createElement('span');
     assetSpan.className = 'asset-secondary-label asset-draw-label';
-    assetSpan.textContent = assetLabel.replace(/^Asset:\s*/, '');
+    assetSpan.textContent = assetLabel;
     assetSpan.title = assetLabel;
     row.appendChild(assetSpan);
   }
@@ -219,9 +226,9 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     cb.classList.toggle('state-manual', !!m.userData.manuallyToggled);
     cb.setAttribute('aria-pressed', String(m.visible));
     if (m.userData.manuallyToggled) {
-      cb.title = m.visible ? 'Visible (manual override)' : 'Hidden (manual override)';
+      cb.title = t(m.visible ? 'mesh.visibleManual' : 'mesh.hiddenManual');
     } else {
-      cb.title = m.visible ? 'Visible automatically' : 'Hidden automatically';
+      cb.title = t(m.visible ? 'mesh.visibleAutomatic' : 'mesh.hiddenAutomatic');
     }
   };
   updateStateIndicator(mesh);
@@ -431,7 +438,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         setTextureOverride,
       });
 
-      const { hdr, masterCb } = buildGroupHeader(
+      const { hdr, masterCb, syncLabels } = buildGroupHeader(
         groupName, itemsWrap,
         () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
           detail: { component: componentDescriptor },
@@ -522,6 +529,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
         itemsWrap,
         sourceContainer: container === list ? null : container,
         sourceHeader,
+        syncLabels,
         assetFill: names.every(name => meshes[name]?.asset_fill === true),
         assetResolution: options.assetResolution || null,
       });
@@ -531,6 +539,15 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   document.getElementById('camera-panel').style.display = 'none';
   return activeMeshes;
 }
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  groupsUI.forEach(group => {
+    group.syncLabels?.();
+    group.itemObjs.forEach(mesh => getMeshView(mesh)?.syncStateIndicator?.());
+    updateComponentAssetLabel(group.header, group.componentDescriptor.assetSummary);
+    group.itemObjs.forEach(updateDrawAssetLabel);
+  });
+});
 
 export function removeAssetFillMeshPanel(targetMeshes = null) {
   const target = targetMeshes === null ? null : new Set(targetMeshes);

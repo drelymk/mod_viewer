@@ -47,9 +47,13 @@ def test_structure_resource_and_file_findings():
                    if item["code"] == "malformed_condition_nesting")
     assert (nesting["severity"] == "error"), ("malformed condition nesting has error severity")
     assert (nesting["line"] == 5 and nesting["source"] == "endif"), ("condition error has a 1-based line and source excerpt")
+    assert nesting["reason"] == "endif_without_if"
     assert ("missing_resource_section" in codes), ("direct local buffer binding without a declaration is reported")
     assert ("missing_resource_file" in codes), ("used resource with a missing file is an error")
     assert ("invalid_resource_stride" in codes), ("used resource with non-positive stride is an error")
+    stride = next(item for item in report["issues"]
+                  if item["code"] == "invalid_resource_stride")
+    assert stride["stride"] == "0"
     assert ("unused_resource_section" in codes), ("unreferenced resource declaration is reported")
     assert ("unreferenced_asset_file" in codes), ("asset not declared by an active INI is reported")
 

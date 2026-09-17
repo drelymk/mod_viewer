@@ -402,6 +402,8 @@ def verify_web():
     us — a typo'd path would only surface as a blank window at runtime."""
     required = [
         "index.html", "css/app.css", "js/main.js",
+        "js/i18n/index.js", "js/i18n/locales/en.js",
+        "js/i18n/locales/zh-CN.js",
         "js/scene/environment.js",
         "lib/ace/ace.js", "lib/ace/mode-ini.js",
         "lib/ace/theme-tomorrow_night.js", "lib/ace/ext-searchbox.js",

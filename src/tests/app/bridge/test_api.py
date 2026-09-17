@@ -36,6 +36,7 @@ EXPECTED_API_METHODS = {
     "get_mesh_semantics",
     "save_texture_color",
     "get_mod_folders",
+    "get_language",
     "get_panel_opacity",
     "get_present_state",
     "get_record_positions",
@@ -68,6 +69,7 @@ EXPECTED_API_METHODS = {
     "select_folder",
     "select_archive_mod",
     "set_asset_folder_enabled",
+    "set_language",
     "set_panel_opacity",
     "update_ini_text",
 }
@@ -111,6 +113,16 @@ def test_startup_request_preserves_disabled_ini_flag(tmp_path, monkeypatch):
     api = ModViewerAPI(startup_mod=str(root), startup_disabled_ini=True)
 
     assert api.consume_startup_request()["disabled_ini"] is True
+
+
+def test_language_bridge_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "config_path", lambda: str(tmp_path / "config.json"))
+    api = ModViewerAPI()
+
+    assert api.get_language() == {"value": "en"}
+    assert api.set_language("zh-CN") == {"value": "zh-CN"}
+    assert api.get_language() == {"value": "zh-CN"}
+    assert api.set_language("fr")["error"]
 
 
 def test_invalid_startup_request_is_reported_without_failing_api(

@@ -7,6 +7,7 @@ import { addTexture } from '../mesh/mesh-factory.js';
 import { bindModalDismiss } from './modal-shell.js';
 import { textureFile } from '../textures/texture-key.js';
 import { createIcon } from './ui-icons.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -17,9 +18,9 @@ let currentTexturePicker = null;
 let onChange = null;      // re-render callback for every open per-mesh list
 
 const mapColumns = [
-  ['light_map', 'LightMap'],
-  ['normal_map', 'NormalMap'],
-  ['material_map', 'MaterialMap'],
+  ['light_map', 'texture.lightMap'],
+  ['normal_map', 'texture.normalMap'],
+  ['material_map', 'texture.materialMap'],
 ];
 
 function showError(message) {
@@ -58,21 +59,24 @@ async function pickInto(opt, field) {
 }
 
 function render() {
-  $('texm-title').textContent = `Manage Textures — ${currentTitle}`;
+  $('texm-title').textContent = t('texture.manageTitle', {name: currentTitle});
   const list = $('texm-list');
   list.innerHTML = '';
   const header = document.createElement('div');
   header.className = 'texm-grid texm-header';
-  for (const text of ['Diffuse', 'LightMap', 'NormalMap', 'MaterialMap', '']) {
+  for (const key of [
+    'texture.diffuse', 'texture.lightMap', 'texture.normalMap',
+    'texture.materialMap', null,
+  ]) {
     const cell = document.createElement('span');
-    cell.textContent = text;
+    cell.textContent = key ? t(key) : '';
     header.appendChild(cell);
   }
   list.appendChild(header);
   if (!currentPool || !currentPool.length) {
     const empty = document.createElement('div');
     empty.className = 'texm-empty';
-    empty.textContent = 'No textures yet.';
+    empty.textContent = t('texture.noTextures');
     list.appendChild(empty);
   }
   for (const opt of (currentPool || [])) {
@@ -83,14 +87,17 @@ function render() {
     label.textContent = opt.label;
     label.title = opt.file || opt.tex_key;
     row.appendChild(label);
-    for (const [field, title] of mapColumns) {
+    for (const [field, titleKey] of mapColumns) {
+      const title = t(titleKey);
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'texm-map-cell';
       const displayKey = field === 'normal_map'
         ? (opt.normal_map || opt.normal_data) : opt[field];
       const file = textureFile(displayKey);
-      cell.title = displayKey ? `Replace ${title}: ${file}` : `Add ${title}`;
+      cell.title = displayKey
+        ? t('texture.replace', {title, file})
+        : t('texture.add', {title});
       const name = document.createElement('span');
       name.textContent = file
         ? file.split('/').pop().replace(/\.[^.]+$/, '')
@@ -101,7 +108,7 @@ function render() {
         const clear = document.createElement('span');
         clear.className = 'texm-map-clear';
         clear.appendChild(createIcon('close'));
-        clear.title = `Remove ${title}`;
+        clear.title = t('texture.remove', {title});
         clear.addEventListener('click', (evt) => {
           evt.stopPropagation();
           if (field === 'normal_map') {
@@ -128,8 +135,8 @@ function render() {
     const del = document.createElement('button');
     del.className = 'toggle-icon-btn';
     del.appendChild(createIcon('delete'));
-    del.title = 'Remove from this component\'s texture list';
-    del.setAttribute('aria-label', 'Remove texture from this component');
+    del.title = t('texture.removeFromComponent');
+    del.setAttribute('aria-label', t('texture.removeFromComponent'));
     del.addEventListener('click', () => {
       const idx = currentPool.indexOf(opt);
       if (idx !== -1) currentPool.splice(idx, 1);
@@ -188,4 +195,8 @@ bindModalDismiss({
   backdrop: $('texture-modal-backdrop'),
   close,
   buttons: [$('texm-close')],
+});
+
+window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (currentPool) render();
 });

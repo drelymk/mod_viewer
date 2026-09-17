@@ -29,6 +29,13 @@ def _unexpected_error():
     return {"error": "Unexpected backend error. See the application log for details."}
 
 
+def _toggle_error(error):
+    payload = {"error": str(error)}
+    if str(error).startswith("removing these values would orphan existing gates"):
+        payload["error_code"] = "orphan_existing_gates"
+    return payload
+
+
 def _ini_path(mod_dir, ini_rel):
     """Resolve a payload's relative ini name back to an absolute path,
     constrained to actually be one of this mod folder's own ini files (never
@@ -91,7 +98,7 @@ def get_toggle_details(mod_dir, ini_rel, section_name):
                 "key": _last_assign(sec, "key"), "back": _last_assign(sec, "back"),
                 "vars": te.cycle_vars(sec)}
     except te.ToggleEditError as e:
-        return {"error": str(e)}
+        return _toggle_error(e)
     except Exception:
         return _unexpected_error()
 
@@ -119,7 +126,7 @@ def _run(mod_dir, ini_rel, fn, on_commit=None):
             on_commit(path, result)
         return {"ok": True, "result": result, "pending": True}
     except te.ToggleEditError as e:
-        return {"error": str(e)}
+        return _toggle_error(e)
     except Exception:
         return _unexpected_error()
 
