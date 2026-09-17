@@ -1242,7 +1242,7 @@ def test_weight_rig_panel_localizes_without_rebuilding_or_losing_selection(
             "window.__weightRigPanelIdentity === document.querySelector('#weight-rig-panel')")
         assert page.locator(".rig-bone-select").input_value() == "1"
         assert page.locator(".weight-rig-section-title").all_inner_texts() == [
-            "权重", "骨骼"]
+            "权重", "骨架"]
         assert page.locator(".rig-bone-select option").nth(1).inner_text() == "关节 0"
         assert page.locator(".rig-panel-enable-ik").evaluate(
             "element => element.parentElement.textContent") == "启用反向运动学"
