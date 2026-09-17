@@ -471,7 +471,7 @@ export default {
   'texture.conflictingMeshes': '충돌하는 메시: {meshes}.',
   'texture.colorMetadataWarning': '텍스처는 저장했지만 색상 메타데이터를 지우지 못했습니다. MOD를 다시 열기 전에 메타데이터 쓰기 오류를 해결하세요.',
   'texture.saveProgress': '텍스처 저장 진행률',
-  'texture.noChangedMeshes': '변경되었거나 편집 가능한 메시가 이 DDS를 사용하지 않습니다.',
+  'texture.noChangedMeshes': '변경된 편집 가능 메시 중 이 DDS를 사용하는 메시가 없습니다.',
   'texture.blocks': '{completed} / {total} 블록',
   'texture.mipBlocks': 'Mip {mip} / {mips} · {completed} / {total} 블록',
   'texture.unknown': '알 수 없음',
