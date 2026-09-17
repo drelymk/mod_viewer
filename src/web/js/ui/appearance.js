@@ -3,6 +3,7 @@
 import {
   LANGUAGE_CHANGED, getLocale, setLocale, t,
 } from '../i18n/index.js';
+import { closeHeaderPopovers } from './header-popovers.js';
 
 const DEFAULT_PANEL_OPACITY = 58;
 const DEFAULT_LANGUAGE = 'en';
@@ -59,6 +60,8 @@ export function initPanelOpacityControl() {
   apply(DEFAULT_PANEL_OPACITY);
   button.addEventListener('click', event => {
     event.stopPropagation();
+    const opening = popover.hidden;
+    if (opening) closeHeaderPopovers('appearance-popover');
     popover.hidden = !popover.hidden;
     button.setAttribute('aria-expanded', String(!popover.hidden));
     if (!popover.hidden) slider.focus();
@@ -204,6 +207,8 @@ export function initLanguageControl() {
   button.setAttribute('aria-expanded', 'false');
   button.addEventListener('click', event => {
     event.stopPropagation();
+    const opening = popover.hidden;
+    if (opening) closeHeaderPopovers('language-popover');
     popover.hidden = !popover.hidden;
     button.setAttribute('aria-expanded', String(!popover.hidden));
     if (!popover.hidden) select.focus();

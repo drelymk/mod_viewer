@@ -298,6 +298,21 @@ def test_indexed_asset_row_loads_read_only_preview(edge_browser, frontend_url):
         assert page.locator("#export-btn").is_hidden()
         assert page.evaluate("window.__fakeApi.calls.loadMod") == []
         assert page.evaluate("window.modViewer.getCurrentSource().kind") == "asset"
+        assert page.locator("#mod-path").text_content() == (
+            "Asset Preview  —  Character")
+        load_count = page.evaluate("window.__fakeApi.calls.loadAsset.length")
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#mod-path").text_content() == (
+            "资源预览  —  Character")
+        assert page.evaluate("window.__fakeApi.calls.loadAsset.length") == load_count
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#mod-path").text_content() == (
+            "Asset Preview  —  Character")
+        assert page.evaluate("window.__fakeApi.calls.loadAsset.length") == load_count
     finally:
         context.close()
 

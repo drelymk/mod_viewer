@@ -764,6 +764,7 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         page.wait_for_function("document.documentElement.lang === 'en'")
         _open(page, "Language")
         page.locator(".draw-item").wait_for()
+        assert page.locator("#mod-path").text_content() == "Language"
         load_count = page.evaluate("window.__fakeApi.calls.loadMod.length")
 
         assert page.locator("#app-language").count() == 1
@@ -773,6 +774,7 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         page.locator("#app-language").select_option("zh-CN")
         page.wait_for_function("document.documentElement.lang === 'zh-CN'")
         assert page.locator("#open-btn").text_content() == "打开 MOD"
+        assert page.locator("#mod-path").text_content() == "Language"
         assert page.evaluate("document.title") == "3DMigoto Mod Viewer"
         assert page.locator("#toggle-add-btn").get_attribute("title") == "添加切换"
         assert page.locator("#toggle-add-btn").get_attribute("aria-label") == "添加切换"
@@ -790,7 +792,67 @@ def test_language_switch_updates_static_and_dynamic_labels_without_reload(
         page.locator("#app-language").select_option("en")
         page.wait_for_function("document.documentElement.lang === 'en'")
         assert page.locator("#open-btn").text_content() == "Open Mod"
+        assert page.locator("#mod-path").text_content() == "Language"
         assert page.evaluate("window.__fakeApi.calls.language") == ["zh-CN", "en"]
+    finally:
+        context.close()
+
+
+def test_language_switch_updates_no_source_label_without_reload(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#mod-path").text_content() == "No mod loaded"
+        assert page.locator("#status-text").get_attribute("data-i18n") is None
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("zh-CN")
+        page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+        assert page.locator("#mod-path").text_content() == "未加载 MOD"
+        page.locator("#language-btn").click()
+        page.locator("#app-language").select_option("en")
+        page.wait_for_function("document.documentElement.lang === 'en'")
+        assert page.locator("#mod-path").text_content() == "No mod loaded"
+    finally:
+        context.close()
+
+
+def test_header_setting_popovers_are_mutually_exclusive(
+        edge_browser, frontend_url):
+    context, page = _page(
+        edge_browser, frontend_url, {"Popover": _payload("Popover")},
+        panel_opacity=35)
+    try:
+        _open(page, "Popover")
+        page.locator(".draw-item").first.wait_for()
+        page.locator("#environment-btn").click()
+        page.locator("#environment-popover:not([hidden])").wait_for()
+        page.locator("#environment-popover .ui-popover-option", has_text="Studio").click()
+        assert page.evaluate("window.modViewer.getEnvironmentPreset().id") == "studio"
+
+        page.locator("#language-btn").click()
+        page.locator("#language-popover:not([hidden])").wait_for()
+        page.locator("#environment-btn").click()
+        assert page.locator("#language-popover").is_hidden()
+        assert page.locator("#language-btn").get_attribute("aria-expanded") == "false"
+        assert not page.locator("#environment-popover").is_hidden()
+        assert page.locator("#environment-btn").get_attribute("aria-expanded") == "true"
+
+        page.locator("#appearance-btn").click()
+        assert page.locator("#environment-popover").is_hidden()
+        assert page.locator("#environment-btn").get_attribute("aria-expanded") == "false"
+        assert not page.locator("#appearance-popover").is_hidden()
+        assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "true"
+        assert page.locator("#panel-opacity").input_value() == "35"
+
+        page.locator("#language-btn").click()
+        assert page.locator("#appearance-popover").is_hidden()
+        assert page.locator("#appearance-btn").get_attribute("aria-expanded") == "false"
+        assert not page.locator("#language-popover").is_hidden()
+        assert page.locator("#language-btn").get_attribute("aria-expanded") == "true"
+        assert page.locator("#app-language").input_value() == "en"
+        assert page.evaluate("window.modViewer.getEnvironmentPreset().id") == "studio"
+        assert page.locator("#panel-opacity").input_value() == "35"
     finally:
         context.close()
 

@@ -31,9 +31,33 @@ import {
   beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage,
   measureLoadStage,
 } from './load-benchmark.js';
-import { t } from '../i18n/index.js';
+import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
+
+function sourceName(path) {
+  return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+}
+
+function syncSourceLabelLanguage() {
+  const element = $('mod-path');
+  if (!element) return;
+  const source = viewerState.currentSource;
+  if (!source) {
+    element.textContent = t('toolbar.noModLoaded');
+    element.title = '';
+    return;
+  }
+  if (source.kind === 'asset') {
+    const path = source.path || '';
+    element.textContent = t('model.assetPreviewSeparator', {
+      name: sourceName(path),
+    });
+    element.title = path;
+  }
+}
+
+window.addEventListener(LANGUAGE_CHANGED, syncSourceLabelLanguage);
 
 export function syncViewportControlPlacement() {
   setRightDockEnabled(viewerState.rightDockEnabled);

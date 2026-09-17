@@ -9,6 +9,7 @@ import {
 import { KEY_LIGHT_MAX_INTENSITY } from '../scene/key-light-controller.js';
 import { setTextureDisplayMode } from '../scene/render-modes.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { closeHeaderPopovers } from './header-popovers.js';
 
 const $ = (id) => document.getElementById(id);
 const AO_MAX_STRENGTH = 1;
@@ -64,6 +65,7 @@ export function initEnvironmentControl() {
 
   function openPopover() {
     if (!popover) return;
+    closeHeaderPopovers('environment-popover');
     popover.replaceChildren();
     Object.values(ENVIRONMENT_PRESETS).forEach(preset => {
       const option = document.createElement('button');
