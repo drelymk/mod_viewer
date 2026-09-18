@@ -246,3 +246,80 @@ def test_health_survives_geometry_failure():
 
     assert ("error" in result and "health" in result), ("geometry failure still returns the health report")
     assert ("malformed_condition_nesting" in _codes(result["health"])), ("failure-path health report retains INI findings")
+
+
+def test_section_semantics_and_staged_findings(tmp_path):
+    ini = tmp_path / "mod.ini"
+    _write(ini, "[Present]\n")
+    staged = (
+        "namespace = Demo\ncondition = 1\nhash = 12345678\n"
+        "[TextureOverrideBody]\nhash = 12345678\nps-t0 = ResourceA\n"
+        "ps-t0 = ResourceB\n[textureoverridebody]\nhash = abcdef12\n"
+        "[TextureOverideTypo]\n[ResourceBody]\nfilename body.buf\n"
+        "stride = 4\nstride = 8\n[Include]\ninclude = a.ini\n"
+        "include = b.ini\n[KeyMany]\nkey = no_ctrl no_shift no_alt ;\n"
+        "key = ctrl F1\nback = F2\nback = F3\n"
+        "[KeyEmpty]\n[CommandListActions]\nif $x == 1\n"
+        "run = ResourceBody\nrun = CommandListMissing\nendif\n"
+        "[ShaderOverrideBad]\nhash = xyz\n"
+        "[TextureOverrideFuzzy]\nmatch_width = 128\n"
+    )
+    report = analyze_mod(str(tmp_path), overrides={str(ini): staged})
+    by_code = {}
+    for issue in report["issues"]:
+        by_code.setdefault(issue["code"], []).append(issue)
+
+    assert len(by_code["duplicate_section"]) == 1
+    assert by_code["duplicate_section"][0]["first_line"] == 4
+    assert len(by_code["unknown_section"]) == 1
+    assert len(by_code["statement_outside_section"]) == 1
+    assert len(by_code["malformed_regular_statement"]) == 1
+    assert len(by_code["duplicate_section_key"]) == 1
+    assert by_code["duplicate_section_key"][0]["key"] == "stride"
+    assert len(by_code["missing_key_binding"]) == 1
+    assert "invalid_key_binding" not in by_code
+    assert len(by_code["invalid_run_target"]) == 1
+    assert [issue["target"] for issue in by_code["missing_local_run_target"]] == ["CommandListMissing"]
+    assert len(by_code["invalid_hash"]) == 1
+    assert not [issue for issue in by_code.get("missing_override_hash", [])
+                if issue["section"] == "TextureOverrideFuzzy"]
+
+
+def test_override_and_key_missing_or_invalid(tmp_path):
+    _write(tmp_path / "mod.ini", (
+        "[ShaderOverrideMissing]\nhandling = skip\n"
+        "[TextureOverrideMissing]\nhandling = skip\n"
+        "[KeyInvalid]\nkey = no_ctrl no_shift\nback = \n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert {issue["override_type"] for issue in report["issues"]
+            if issue["code"] == "missing_override_hash"} == {"shader", "texture"}
+    assert {issue["binding_type"] for issue in report["issues"]
+            if issue["code"] == "invalid_key_binding"} == {"key", "back"}
+
+
+def test_variable_assignments_resolve_globals_across_inis_and_locals_per_section(tmp_path):
+    _write(tmp_path / "globals.ini", "[Constants]\nglobal persist $Shared = 0\n")
+    _write(tmp_path / "actions.ini", (
+        "[CommandListFirst]\nlocal $temp = 0\n$shared = 1\n"
+        "$temp = 2\n$missing = 3\n$\\Framework\\external = 4\n"
+        "[CommandListSecond]\n$temp = 5\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert [(issue["section"], issue["variable"]) for issue in report["issues"]
+            if issue["code"] == "undeclared_variable"] == [
+                ("CommandListFirst", "$missing"),
+                ("CommandListSecond", "$temp"),
+            ]
+
+
+def test_duplicate_override_metadata_but_not_repeated_commands(tmp_path):
+    _write(tmp_path / "mod.ini", (
+        "[TextureOverrideBody]\nhash = abcdef12\nmatch_width = 10\n"
+        "match_width = 20\nps-t0 = ResourceA\nps-t0 = ResourceB\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    duplicates = [issue for issue in report["issues"]
+                  if issue["code"] == "duplicate_section_key"]
+    assert [(issue["key"], issue["first_line"], issue["line"])
+            for issue in duplicates] == [("match_width", 3, 4)]

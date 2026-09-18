@@ -10,6 +10,7 @@ import os
 import re
 
 from .document import IniDocument, OTHER
+from . import migoto_semantics as semantics
 from ..mod_discovery import discover_ini_paths
 from ..mod_source import ModSourceError, mod_source_for_path
 from ..resource_paths import safe_resource_path
@@ -19,8 +20,6 @@ from ..textures import split_texture_key
 _RESOURCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])Resource[A-Za-z0-9_.\\-]*(?![A-Za-z0-9_.])", re.I)
 _LOCAL_RESOURCE_RE = re.compile(r"^Resource[A-Za-z0-9_.-]+$", re.I)
 _REFERENCE_LHS_RE = re.compile(r"^(?:ib|vb\d+|ps-t\d+|cs-t\d+)$", re.I)
-_LOCAL_RUN_TARGET_RE = re.compile(
-    r"^(?:CommandList|CustomShader)[A-Za-z0-9_.-]+$", re.I)
 _RESOURCE_REFERENCE_RE = re.compile(
     r"^(?P<prefix>\S+)\s+(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
 _VIEWER_DRAWINDEXED_RE = re.compile(
@@ -129,18 +128,67 @@ def _normalized_key_chord(value):
     return "+".join(sorted(set(modifiers)) + keys)
 
 
-def _analyze_statements(doc, ini_rel, issues):
+def _analyze_statements(doc, ini_rel, issues, global_variables):
     """Check conservative statement-level mistakes outside condition syntax."""
     declared_sections = {section.name.lower() for section in doc.sections}
     seen_keys = {}
 
+    for line in doc.lines:
+        if line.section is not None or line.kind in ("blank", "comment", "section"):
+            continue
+        lhs = line.text.split("=", 1)[0].strip().casefold()
+        if line.kind == "assign" and lhs in {"namespace", "condition"}:
+            continue
+        issues.append(_issue(
+            "statement_outside_section", "error", "ini",
+            "Statement outside a section.", ini_rel,
+            line=line.no + 1, source=line.raw.strip(),
+        ))
+
+    seen_sections = {}
+
     for section in doc.sections:
-        is_key = section.name.lower().startswith("key")
+        name = section.name.casefold()
+        is_key = name.startswith("key")
+        previous_section = seen_sections.get(name)
+        if previous_section is not None:
+            issues.append(_issue(
+                "duplicate_section", "warning", "ini",
+                f"Duplicate section [{section.name}]. 3DMigoto uses only the first section with this name.",
+                ini_rel, section.name, section.header_no + 1,
+                doc.lines[section.header_no].raw.strip(),
+                first_line=previous_section.header_no + 1,
+            ))
+        else:
+            seen_sections[name] = section
+        kind = semantics.section_kind(section.name)
+        if kind is None:
+            issues.append(_issue(
+                "unknown_section", "warning", "ini",
+                f"[{section.name}] is not a recognized 3DMigoto section.",
+                ini_rel, section.name, section.header_no + 1,
+                doc.lines[section.header_no].raw.strip(),
+            ))
+        seen_lhs = {}
+        bindings = []
+        hash_lines = []
+        texture_match = False
+        local_variables = {decl[1] for line in section.lines
+                           if (decl := semantics.declaration(line.text))
+                           and decl[0] == "local"}
         for line in section.lines:
             if is_key and line.kind == OTHER:
                 issues.append(_issue(
                     "unexpected_key_statement", "error", "ini",
                     f"Unexpected statement in [{section.name}]: {line.text}",
+                    ini_rel, section.name, line.no + 1, line.raw.strip(),
+                ))
+            elif (kind == "regular" and not semantics.allows_bare_statements(section.name)
+                  and line.kind not in ("blank", "comment", "assign", "section")
+                  and not (is_key and line.kind == OTHER)):
+                issues.append(_issue(
+                    "malformed_regular_statement", "error", "ini",
+                    f"Statement in [{section.name}] needs a key=value pair.",
                     ini_rel, section.name, line.no + 1, line.raw.strip(),
                 ))
 
@@ -163,6 +211,43 @@ def _analyze_statements(doc, ini_rel, issues):
             lhs, rhs = (part.strip() for part in line.text.split("=", 1))
             lowered_lhs = lhs.lower()
 
+            variable = semantics.plain_variable_assignment(lhs)
+            if (variable and variable not in global_variables
+                    and variable not in local_variables):
+                issues.append(_issue(
+                    "undeclared_variable", "error",
+                    "controls" if name.startswith(("key", "preset")) else "ini",
+                    f"{lhs} is assigned without a declaration.",
+                    ini_rel, section.name, line.no + 1, line.raw.strip(),
+                    variable=lhs,
+                ))
+
+            if ((kind == "regular" and not semantics.allows_duplicate_key(section.name, lhs))
+                    or semantics.unique_command_metadata(section.name, lhs)):
+                previous = seen_lhs.get(lowered_lhs)
+                if previous is not None:
+                    issues.append(_issue(
+                        "duplicate_section_key", "warning", "ini",
+                        f"[{section.name}] repeats {lhs}; 3DMigoto uses the first value.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        key=lhs, first_line=previous,
+                    ))
+                else:
+                    seen_lhs[lowered_lhs] = line.no + 1
+            if lowered_lhs == "hash":
+                hash_lines.append((rhs, line))
+            if semantics.may_be_texture_override_match_key(lhs):
+                texture_match = True
+            if is_key and lowered_lhs in {"key", "back"}:
+                bindings.append((lowered_lhs, rhs, line))
+                if semantics.key_binding_kind(rhs) == "invalid":
+                    issues.append(_issue(
+                        "invalid_key_binding", "error", "controls",
+                        f"[{section.name}] has no key token in its {lhs} binding.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        binding=rhs, binding_type=lowered_lhs,
+                    ))
+
             if _REFERENCE_LHS_RE.match(lhs):
                 malformed = _RESOURCE_REFERENCE_RE.match(rhs)
                 if malformed and malformed.group("prefix").lower() not in {
@@ -178,8 +263,15 @@ def _analyze_statements(doc, ini_rel, issues):
 
             if lowered_lhs == "run":
                 target = rhs.split(";", 1)[0].strip()
-                if (_LOCAL_RUN_TARGET_RE.match(target)
-                        and target.lower() not in declared_sections):
+                target_kind = semantics.classify_run_target(target)
+                if target_kind == "invalid":
+                    issues.append(_issue(
+                        "invalid_run_target", "error", "ini",
+                        f"{target or 'Empty run target'} is not a command-list target.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        target=target,
+                    ))
+                elif target_kind == "local" and target.lower() not in declared_sections:
                     issues.append(_issue(
                         "missing_local_run_target", "warning", "ini",
                         f"{target} is run but is not declared in this INI; "
@@ -207,9 +299,35 @@ def _analyze_statements(doc, ini_rel, issues):
                         "section": section.name, "line": line.no + 1,
                     }
 
+        if is_key and not bindings:
+            header = doc.lines[section.header_no]
+            issues.append(_issue(
+                "missing_key_binding", "warning", "controls",
+                f"[{section.name}] has no key= or back= binding.",
+                ini_rel, section.name, header.no + 1, header.raw.strip(),
+            ))
+        override_type = semantics.override_hash_kind(section.name)
+        if override_type:
+            for value, line in hash_lines:
+                if not semantics.valid_override_hash(value, override_type):
+                    issues.append(_issue(
+                        "invalid_hash", "error", "ini",
+                        f"[{section.name}] has an invalid {override_type} hash.",
+                        ini_rel, section.name, line.no + 1, line.raw.strip(),
+                        value=value, override_type=override_type,
+                    ))
+            if not hash_lines and not (override_type == "texture" and texture_match):
+                header = doc.lines[section.header_no]
+                issues.append(_issue(
+                    "missing_override_hash", "error", "ini",
+                    f"[{section.name}] has no hash or resource match option.",
+                    ini_rel, section.name, header.no + 1, header.raw.strip(),
+                    override_type=override_type,
+                ))
+
 
 def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
-                      source=None):
+                      source=None, global_variables=frozenset()):
     for problem in doc.structure_errors():
         issues.append(_issue(
             "malformed_condition_nesting", "error", "conditions",
@@ -229,7 +347,7 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
             reason=problem.get("reason"),
             **({"count": problem["count"]} if "count" in problem else {}),
         ))
-    _analyze_statements(doc, ini_rel, issues)
+    _analyze_statements(doc, ini_rel, issues, global_variables)
 
     resources = _resource_sections(doc)
     declared = set(resources)
@@ -413,6 +531,7 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
         ini_paths = discover_ini_paths(mod_dir, source=source)
 
     issues, declared_files = [], set()
+    loaded = []
     for path in ini_paths:
         ini_rel = _relative(path, mod_dir, source=source)
         try:
@@ -428,10 +547,19 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
                 detail=str(exc),
             ))
             continue
+        loaded.append((path, ini_rel, doc))
+
+    global_variables = {
+        decl[1] for _path, _ini_rel, doc in loaded
+        for line in doc.lines
+        if (decl := semantics.declaration(line.text)) and decl[0] == "global"
+    }
+    for path, ini_rel, doc in loaded:
         declared_files.update(_filename_paths(
             doc, mod_dir, path, source=source))
         _analyze_document(
-            doc, ini_rel, path, mod_dir, issues, declared_files, source=source)
+            doc, ini_rel, path, mod_dir, issues, declared_files, source=source,
+            global_variables=global_variables)
 
     inactive_files = set()
     for path in discover_ini_paths(mod_dir, disabled=True, source=source):
