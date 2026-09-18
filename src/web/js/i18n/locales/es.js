@@ -271,7 +271,7 @@ export default {
   'health.issueOpenOne': '{count} problema de diagnóstico del INI. Abrir diagnóstico',
   'health.issueOpenMany': '{count} problemas de diagnóstico del INI. Abrir diagnóstico',
   'diagnostics.issue.unexpected_key_statement': 'Declaración inesperada en [{section}]: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'El visor no puede crear esta declaración drawindexed: se esperaban count numérico, índice inicial y vértice base con signo. Argumentos: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments': 'El visor no puede reproducir esta forma de drawindexed como dibujo original; 3DMigoto podría aceptarla. Argumentos: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} usa un prefijo de referencia de recurso no válido: {prefix}.',
   'diagnostics.issue.missing_local_run_target': '{target} se ejecuta pero no está declarado en este INI; puede proporcionarlo el framework.',
   'diagnostics.issue.duplicate_key_binding': '[{section}] y [{otherSection}] comparten la asignación de tecla {key} y podrían activarse a la vez.',

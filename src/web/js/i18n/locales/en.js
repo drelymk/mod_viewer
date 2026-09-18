@@ -271,7 +271,7 @@ export default {
   'health.issueOpenOne': '{count} INI diagnostic issue. Open diagnostics',
   'health.issueOpenMany': '{count} INI diagnostic issues. Open diagnostics',
   'diagnostics.issue.unexpected_key_statement': 'Unexpected statement in [{section}]: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'The viewer cannot build this drawindexed statement: expected numeric count, start index and signed base vertex. Arguments: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments': 'The viewer cannot currently reconstruct this drawindexed form as an authored draw; 3DMigoto may accept it. Arguments: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} uses an invalid resource reference prefix: {prefix}.',
   'diagnostics.issue.missing_local_run_target': '{target} is run but is not declared in this INI; it may be supplied by the framework.',
   'diagnostics.issue.duplicate_key_binding': '[{section}] and [{otherSection}] share the key binding {key} and may activate together.',

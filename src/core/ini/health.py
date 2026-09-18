@@ -23,7 +23,9 @@ _LOCAL_RESOURCE_RE = re.compile(r"^Resource[A-Za-z0-9_.-]+$", re.I)
 _REFERENCE_LHS_RE = re.compile(r"^(?:ib|vb\d+|ps-t\d+|cs-t\d+)$", re.I)
 _RESOURCE_REFERENCE_RE = re.compile(
     r"^(?P<prefix>\S+)\s+(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
-_VIEWER_DRAWINDEXED_RE = re.compile(
+# Viewer reconstruction handles literal triples; this is not 3DMigoto's
+# operand grammar and must only drive viewer-compatibility findings.
+_VIEWER_LITERAL_DRAWINDEXED_RE = re.compile(
     r"^\d+\s*,\s*\d+\s*,\s*-?\d+$")
 _ASSET_EXTENSIONS = {
     ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".tga", ".bmp",
@@ -202,12 +204,12 @@ def _analyze_statements(doc, ini_rel, issues, global_variables,
                 draw_lhs, draw_rhs = (
                     part.strip() for part in line.text.split("=", 1))
                 if (draw_lhs.lower() == "drawindexed"
-                        and not _VIEWER_DRAWINDEXED_RE.fullmatch(
-                            draw_rhs.split(";", 1)[0].strip())):
+                        and draw_rhs.casefold() != "auto"
+                        and not _VIEWER_LITERAL_DRAWINDEXED_RE.fullmatch(draw_rhs)):
                     issues.append(_issue(
-                        "unsupported_drawindexed_arguments", "warning", "ini",
-                        "The viewer cannot build this drawindexed statement: "
-                        "expected numeric count, start index and signed base vertex.",
+                        "unsupported_drawindexed_arguments", "warning", "viewer",
+                        "The viewer cannot currently reconstruct this drawindexed "
+                        "form as an authored draw; 3DMigoto may accept it.",
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
                         arguments=draw_rhs,
                     ))

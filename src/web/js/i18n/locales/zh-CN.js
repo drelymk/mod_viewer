@@ -271,7 +271,7 @@ export default {
   'health.issueOpenOne': '{count} 个 INI 诊断问题。打开诊断',
   'health.issueOpenMany': '{count} 个 INI 诊断问题。打开诊断',
   'diagnostics.issue.unexpected_key_statement': '[{section}] 中存在意外语句：{source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': '查看器无法构建此 drawindexed 语句：需要数字 count、start index 和带符号的 base vertex。参数：{arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments': '查看器目前无法将此 drawindexed 形式还原为原始绘制；3DMigoto 可能接受它。参数：{arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} 使用了无效的资源引用前缀：{prefix}。',
   'diagnostics.issue.missing_local_run_target': '{target} 被执行，但未在此 INI 中声明；它可能由框架提供。',
   'diagnostics.issue.duplicate_key_binding': '[{section}] 与 [{otherSection}] 使用相同的按键绑定 {key}，可能会同时激活。',

@@ -271,7 +271,7 @@ export default {
   'health.issueOpenOne': 'INI 진단 문제 {count}개. 진단 열기',
   'health.issueOpenMany': 'INI 진단 문제 {count}개. 진단 열기',
   'diagnostics.issue.unexpected_key_statement': '[{section}]에 예기치 않은 문이 있습니다: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': '이 drawindexed 문을 만들 수 없습니다. 숫자 count, start index, signed base vertex가 필요합니다. 인수: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments': '뷰어는 현재 이 drawindexed 형식을 원래 드로우로 재현할 수 없습니다. 3DMigoto에서는 유효할 수 있습니다. 인수: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs}에서 잘못된 리소스 참조 접두사를 사용합니다: {prefix}.',
   'diagnostics.issue.missing_local_run_target': '{target}이(가) 실행되지만 이 INI에 선언되지 않았습니다. 프레임워크에서 제공될 수 있습니다.',
   'diagnostics.issue.duplicate_key_binding': '[{section}]과(와) [{otherSection}]이(가) 키 바인딩 {key}을(를) 공유하여 함께 활성화될 수 있습니다.',

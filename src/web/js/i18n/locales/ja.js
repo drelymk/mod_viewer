@@ -271,7 +271,7 @@ export default {
   'health.issueOpenOne': 'INI診断の問題{count}件。診断を開く',
   'health.issueOpenMany': 'INI診断の問題{count}件。診断を開く',
   'diagnostics.issue.unexpected_key_statement': '[{section}]内の予期しないステートメント：{source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'このdrawindexedステートメントは作成できません。数値のcount、start index、符号付きbase vertexが必要です。引数：{arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments': 'ビューワーはこのdrawindexed形式を元の描画として再現できません。3DMigotoでは有効な場合があります。引数：{arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs}が無効なリソース参照プレフィックスを使用しています：{prefix}。',
   'diagnostics.issue.missing_local_run_target': '{target}は実行されますが、このINIで宣言されていません。フレームワークから提供されている可能性があります。',
   'diagnostics.issue.duplicate_key_binding': '[{section}]と[{otherSection}]がキー割り当て{key}を共有しており、同時に有効になる可能性があります。',

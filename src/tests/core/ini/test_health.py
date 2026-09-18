@@ -221,20 +221,23 @@ def test_statement_run_target_and_key_binding_findings():
             by_code["missing_local_run_target"]] == ["CommandListMissing"]
 
 
-def test_unsupported_drawindexed_arguments_are_structured_diagnostics():
+def test_drawindexed_viewer_limitation_does_not_label_valid_auto_as_unsupported():
     with tempfile.TemporaryDirectory() as tmp:
         _write(os.path.join(tmp, "mod.ini"), (
             "[TextureOverrideBody]\n"
             "drawindexed = 3, 0, -4\n"
             "drawindexed = auto\n"
+            "drawindexed = AUTO\n"
             "drawindexed = $count, $start, 0\n"))
         report = analyze_mod(tmp)
 
     issues = [item for item in report["issues"]
               if item["code"] == "unsupported_drawindexed_arguments"]
-    assert [item["line"] for item in issues] == [3, 4]
-    assert [item["arguments"] for item in issues] == [
-        "auto", "$count, $start, 0"]
+    assert [item["line"] for item in issues] == [5]
+    assert [item["arguments"] for item in issues] == ["$count, $start, 0"]
+    assert issues[0]["category"] == "viewer"
+    assert issues[0]["severity"] == "warning"
+    assert "viewer" in issues[0]["message"].lower()
 
 
 

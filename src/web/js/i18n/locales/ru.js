@@ -271,7 +271,7 @@ export default {
   'health.issueOpenOne': 'Проблема диагностики INI: {count}. Открыть диагностику',
   'health.issueOpenMany': 'Проблем диагностики INI: {count}. Открыть диагностику',
   'diagnostics.issue.unexpected_key_statement': 'Неожиданная инструкция в [{section}]: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'Mod Viewer не может построить эту инструкцию drawindexed: нужны числовые count, start index и знаковый base vertex. Аргументы: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments': 'Просмотрщик пока не может воспроизвести эту форму drawindexed как исходный вызов; 3DMigoto может её принимать. Аргументы: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} использует недопустимый префикс ссылки на ресурс: {prefix}.',
   'diagnostics.issue.missing_local_run_target': '{target} запускается, но не объявлен в этом INI; возможно, он предоставляется framework.',
   'diagnostics.issue.duplicate_key_binding': '[{section}] и [{otherSection}] используют одну привязку клавиши {key} и могут сработать вместе.',
