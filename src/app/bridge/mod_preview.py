@@ -60,7 +60,8 @@ class ModPreview:
 
         return register
 
-    def authoritative_context(self, folder_path, disabled_ini=False):
+    def authoritative_context(self, folder_path, disabled_ini=False,
+                              serialize_overrides=False):
         """Load selected INI documents while preserving the current session."""
         folder_path = self._access.mod_folder(folder_path)
         source = edit_session.source_for(folder_path) or \
@@ -74,7 +75,11 @@ class ModPreview:
             edit_session.load_documents(folder_path, ini_paths, source=source)
         else:
             edit_session.load_documents(folder_path, ini_paths)
-        overrides = edit_session.overrides_for(folder_path)
+        # Analysis consumers read the authoritative IniDocuments directly.
+        # Keep the text snapshot available for callers that explicitly need a
+        # serialized override, but do not allocate one on normal read paths.
+        overrides = (edit_session.overrides_for(folder_path)
+                     if serialize_overrides else {})
         pending_new_sections = edit_session.new_sections_for(folder_path)
         saved_metadata = (metadata.load(folder_path, source=source)
                           if getattr(source, "virtual", False)
@@ -257,6 +262,20 @@ class ModPreview:
                 self.authoritative_context(folder_path)
             return mod_loader.load_mesh_semantics(
                 context, overrides, self._active_mesh_keys.get(folder_path))
+        except Exception:
+            return self._semantic_read_error()
+
+    def get_semantic_state(self, folder_path):
+        """Return mesh and control semantics from one analysis pass."""
+        try:
+            folder_path, overrides, pending, context = \
+                self.authoritative_context(folder_path)
+            result = mod_loader.load_semantic_state(
+                context, overrides, pending,
+                active_mesh_keys=self._active_mesh_keys.get(folder_path))
+            metadata.hydrate_present(
+                folder_path, result["controls"]["present"], context.metadata)
+            return result
         except Exception:
             return self._semantic_read_error()
 
@@ -552,7 +571,7 @@ class ModPreview:
         try:
             report = analyze_mod(
                 folder_path, ini_paths=ini_paths,
-                overrides=edit_session.overrides_for(folder_path),
+                overrides={},
                 documents=edit_session.documents_for(folder_path),
                 source=source)
             return edit_session.cache_diagnostics(folder_path, report)

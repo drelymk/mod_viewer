@@ -24,7 +24,7 @@ import {
   refreshSkinningAfterShapeChange,
   unregisterSkinningMesh,
   withSkinningBaseMaterial,
-} from './skinning-runtime.js';
+} from './weight-rig-feature.js';
 
 export const activeMeshes = [];
 const controlDependencies = new WeakMap();

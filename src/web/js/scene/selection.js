@@ -11,7 +11,7 @@ import { raycastModelAtClientPoint } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
 import {
   isRigTransformInteractionActive, isRigJointPickingActive,
-} from './rig-overlay-controller.js';
+} from './rig-overlay-state.js';
 
 let selected = null; // currently selected mesh, or null
 

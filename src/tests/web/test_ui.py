@@ -81,6 +81,68 @@ def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, front
         context.close()
 
 
+def test_weight_rig_modules_load_once_on_first_activation(
+        edge_browser, frontend_url):
+    payloads = {"LazyA": _payload("LazyA"), "LazyB": _payload("LazyB")}
+    payloads["LazyA"]["metadata"]["rig"] = {
+        "version": 1, "presets": [], "error": "stale-model-a",
+    }
+    payloads["LazyB"]["metadata"]["rig"] = {
+        "version": 1, "presets": [], "error": "current-model-b",
+    }
+    context, page = _page(
+        edge_browser, frontend_url, payloads, api_features={"skinning"})
+    try:
+        _open(page, "LazyA")
+        page.locator(".draw-item").wait_for()
+        before = page.evaluate("""() => performance.getEntriesByType('resource')
+          .map(entry => entry.name)
+          .filter(name => ['weight-rig-core.js', 'weight-rig-runtime.js',
+            'weight-rig-panel.js', 'weight-rig-reconcile.js',
+            'skinning-runtime.js'].some(file => name.endsWith('/' + file)))""")
+        assert before == []
+
+        _open(page, "LazyB")
+        page.locator(".draw-item").wait_for()
+        before_second_model = page.evaluate("""() => performance.getEntriesByType('resource')
+          .map(entry => entry.name)
+          .filter(name => ['weight-rig-core.js', 'weight-rig-runtime.js',
+            'weight-rig-panel.js', 'weight-rig-reconcile.js',
+            'skinning-runtime.js'].some(file => name.endsWith('/' + file)))""")
+        assert before_second_model == []
+
+        page.locator("#weight-rig-tab").click()
+        page.locator("#weight-rig-panel .weight-rig-section").first.wait_for()
+        page.wait_for_function("""() => performance.getEntriesByType('resource')
+          .some(entry => entry.name.includes('/js/mesh/weight-rig-core.js'))""")
+        rig_error = page.evaluate("""async () => {
+          const runtime = await import('./js/mesh/weight-rig-runtime.js');
+          return runtime.getModelRigState().rigPresets.error;
+        }""")
+        assert rig_error == "current-model-b"
+
+        loaded = page.evaluate("""() => performance.getEntriesByType('resource')
+          .map(entry => entry.name)
+          .filter(name => ['weight-rig-core.js', 'weight-rig-runtime.js',
+            'weight-rig-panel.js', 'weight-rig-reconcile.js',
+            'skinning-runtime.js'].some(file => name.endsWith('/' + file)))""")
+        assert sum("weight-rig-core.js" in name for name in loaded) == 1
+        assert sum("weight-rig-runtime.js" in name for name in loaded) == 1
+        assert sum("skinning-runtime.js" in name for name in loaded) == 1
+
+        page.locator("#controls-tab").click()
+        page.locator("#weight-rig-tab").click()
+        page.wait_for_timeout(100)
+        loaded_again = page.evaluate("""() => performance.getEntriesByType('resource')
+          .map(entry => entry.name)
+          .filter(name => ['weight-rig-core.js', 'weight-rig-runtime.js',
+            'weight-rig-panel.js', 'weight-rig-reconcile.js',
+            'skinning-runtime.js'].some(file => name.endsWith('/' + file)))""")
+        assert loaded_again == loaded
+    finally:
+        context.close()
+
+
 def test_right_dock_migrates_weight_and_rig_tab_preferences(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {

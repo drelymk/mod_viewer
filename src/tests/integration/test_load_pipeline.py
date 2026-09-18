@@ -593,6 +593,51 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
     assert set(result["controls"]["toggles"]) == {"KeyVisible"}
 
 
+def test_combined_semantic_state_analyzes_and_builds_meshes_once(tmp_path):
+    parsed = mod_analysis.ParsedModAnalysis(
+        groups=[{"draws": []}],
+        toggles={"KeyVisible": {
+            "name": "Visible", "key_display": "", "key": "",
+            "source": None, "ini_path": str(tmp_path / "mod.ini"),
+            "section": "KeyVisible", "vars": {"visible": ["0", "1"]},
+        }},
+        menu={}, defaults={"visible": "0"}, state_rules=[],
+        present={"target_inis": [], "item": None},
+        game=SimpleNamespace(game="unknown"),
+    )
+    mesh_semantics = {
+        "Body-1": {"conditions": [[{
+            "var": "visible", "value": "1", "negate": False,
+        }]]},
+    }
+    context = mod_loader.ModLoadContext(
+        str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
+    calls = {"analysis": 0, "mesh": 0}
+
+    def analyze(*_args, **_kwargs):
+        calls["analysis"] += 1
+        return parsed
+
+    def build(*_args, **_kwargs):
+        calls["mesh"] += 1
+        return mesh_semantics
+
+    with patch.object(mod_loader, "analyze_mod_inis", side_effect=analyze), \
+            patch.object(mod_loader, "build_mesh_semantics", side_effect=build), \
+            patch.object(mod_loader, "enrich_mod_analysis",
+                         return_value=(None, {"index_status": "ready"})), \
+            patch.object(mod_loader, "_assign_material_profiles",
+                         return_value={}):
+        result = mod_loader.load_semantic_state(
+            context, active_mesh_keys={"Body-1"})
+
+    assert calls == {"analysis": 1, "mesh": 1}
+    assert result["meshes"] == mesh_semantics
+    assert result["controls"]["toggles"]["KeyVisible"]["wired"] is True
+    assert result["controls"]["present"] == parsed.present
+    assert result["state"] == {"rules": [], "defaults": {"visible": "0"}}
+
+
 def test_diagnostics_cache_tracks_authoritative_revision():
     with tempfile.TemporaryDirectory() as root:
         path = os.path.join(root, "mod.ini")

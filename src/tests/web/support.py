@@ -216,6 +216,41 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
                   ?? payload.asset_resolution ?? null,
               });
             },
+            get_semantic_state: async path => {
+              state.calls.semanticState.push(path);
+              const payload = state.responses[path] || {};
+              const meshes = payload.meshSemantics || Object.fromEntries(
+                Object.entries(payload.meshes || {}).map(([name, entry]) => {
+                  const semantic = {};
+                  for (const key of [
+                    'conditions', 'sources', 'source', 'component',
+                    'identity',
+                    'tex_key', 'texture_variants', 'normal_map_key',
+                    'normal_map_variants', 'normal_data_key',
+                    'normal_data_variants', 'light_map_key',
+                    'light_map_variants', 'material_map_key',
+                    'material_map_variants', 'emission_map_key',
+                    'emission_map_variants', 'asset_binding',
+                    'texture_resolution', 'asset_slot_evidence',
+                    'material_kind', 'material_kind_reliable',
+                    'material_kind_reason', 'material_kind_override',
+                    'material_profile_id',
+                  ]) {
+                    if (Object.hasOwn(entry, key)) semantic[key] = entry[key];
+                  }
+                  return [name, semantic];
+                })
+              );
+              return copy({
+                meshes,
+                material_profiles: payload.materialProfiles
+                  || payload.metadata?.material_profiles || {},
+                asset_resolution: payload.meshSemanticsAssetResolution
+                  ?? payload.asset_resolution ?? null,
+                controls: payload.controls || {},
+                state: payload.state || {rules: [], defaults: {}},
+              });
+            },
             save_texture_color: stub(
               'saveTextureColor',
               (path, texKey, targets) =>

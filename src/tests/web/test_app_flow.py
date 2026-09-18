@@ -120,7 +120,8 @@ def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url
             "getEnvironmentPreset", "getLoadBenchmark", "getMaterialState",
             "getOutlineState", "getRenderCount", "openMod",
             "refreshControlSemantics", "refreshMeshSemantics",
-            "refreshPresentState", "reloadCurrentMod", "setEnvironmentPreset",
+            "refreshPresentState", "refreshSemanticState", "reloadCurrentMod",
+            "setEnvironmentPreset",
             "setBloomEnabled", "setMaterialDebugMode", "setOutlineEnabled", "switchAsset",
             "setAmbientOcclusionStrength", "switchMod",
         ])
@@ -735,7 +736,7 @@ def test_edit_toggle_refreshes_mesh_provenance_before_record(
         page.wait_for_function(
             "window.modViewer.activeMeshes[0].userData.sources[0].line === 17")
         assert page.evaluate("window.__fakeApi.editToggleCalls.length") == 1
-        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == [
+        assert page.evaluate("window.__fakeApi.calls.semanticState") == [
             "RecordEdit"]
     finally:
         context.close()
@@ -1142,7 +1143,7 @@ def test_record_refreshes_controls_and_meshes_without_reloading_model(
         page.locator("#toggle-list [title^='Record']").click()
         page.locator("#toggle-list .toggle-row.recording").wait_for()
         page.locator("#toggle-list .toggle-record-save").click()
-        page.wait_for_function("window.__fakeApi.calls.controlState.length === 1")
+        page.wait_for_function("window.__fakeApi.calls.semanticState.length === 1")
 
         assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Record"]
         assert page.evaluate(

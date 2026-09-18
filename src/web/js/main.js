@@ -20,25 +20,11 @@ import { initAssetFolderPanel } from './panels/asset-folder-panel.js';
 import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
 import { requestRender } from './scene/render-scheduler.js';
-import {
-  getModelRigState,
-  getRigJointPoseFrame,
-  finishRigJointPose,
-  cancelRigJointPicking,
-  handleRigJointPicked,
-  pickRigJointFromModelSurface,
-  setRigJointRotation, solveRigIkTarget,
-  selectHumanoidControl,
-  setRigPoseControlStatus,
-  getHumanoidRigEditSnapshot,
-  beginHumanoidControlCarry, updateHumanoidControlDraft,
-  finishHumanoidControlCarry, cancelHumanoidControlCarry,
-} from './mesh/weight-rig-runtime.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
-import { initWeightRigPanel } from './panels/weight-rig-panel.js';
-import {weightRigStatus} from './mesh/weight-rig-status.js';
-import { createRigOverlayController } from './scene/rig-overlay-controller.js';
+import {
+  getLoadedWeightRigFeature, loadWeightRigFeature,
+} from './mesh/weight-rig-feature.js';
 import { initLanguageControl, initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
 import { LANGUAGE_CHANGED, t } from './i18n/index.js';
@@ -59,6 +45,7 @@ import {
 } from './app/model-flow.js';
 import { toggleMissingAssetParts, updateAssetFillButton } from './app/asset-fill.js';
 import {
+  refreshSemanticState as refreshSemanticStateFlow,
   refreshControlSemantics as refreshControlSemanticsFlow,
   refreshMeshSemantics as refreshMeshSemanticsFlow,
   refreshPresentState as refreshPresentStateFlow,
@@ -69,11 +56,62 @@ import {
   initEnvironmentControl, initToolPopovers, initToolbarOverflow,
 } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
-// Initialize the Weight/Rig composition root. Product actions remain exposed
-// through the narrow runtime facade imported above.
-import './mesh/weight-rig-core.js';
 
 const $ = (id) => document.getElementById(id);
+
+let weightRigActivationPromise = null;
+let rigOverlayController = null;
+
+function initializeWeightRigOverlay(feature) {
+  if (rigOverlayController) return;
+  const runtime = feature;
+  rigOverlayController = feature.createRigOverlayController({
+    scene, camera, canvas: renderer.domElement,
+    arcballControls: controls,
+    getMeshes: () => activeMeshes,
+    getRigState: runtime.getModelRigState,
+    getHumanoidRigEditSnapshot: runtime.getHumanoidRigEditSnapshot,
+    getRigJointPoseFrame: runtime.getRigJointPoseFrame,
+    setRigJointRotation: runtime.setRigJointRotation,
+    solveRigIkTarget: runtime.solveRigIkTarget,
+    finishRigJointPose: runtime.finishRigJointPose,
+    onRigJointPicked: runtime.handleRigJointPicked,
+    onRigSurfacePickRequested: runtime.pickRigJointFromModelSurface,
+    onRigJointPickCancelled: runtime.cancelRigJointPicking,
+    onHumanoidControlSelected: runtime.selectHumanoidControl,
+    beginHumanoidControlCarry: runtime.beginHumanoidControlCarry,
+    updateHumanoidControlDraft: runtime.updateHumanoidControlDraft,
+    finishHumanoidControlCarry: runtime.finishHumanoidControlCarry,
+    cancelHumanoidControlCarry: runtime.cancelHumanoidControlCarry,
+    onTransformControlsUnavailable: () => runtime.setRigPoseControlStatus(
+      runtime.weightRigStatus('weightRig.status.poseGizmoUnavailable')),
+    requestRender,
+  });
+}
+
+function activateWeightRig() {
+  if (weightRigActivationPromise) return weightRigActivationPromise;
+  const loadedFeature = getLoadedWeightRigFeature();
+  if (loadedFeature) {
+    initializeWeightRigOverlay(loadedFeature);
+    weightRigActivationPromise = Promise.resolve(loadedFeature);
+    return weightRigActivationPromise;
+  }
+  weightRigActivationPromise = loadWeightRigFeature().then(feature => {
+    initializeWeightRigOverlay(feature);
+    window.dispatchEvent(new CustomEvent('mod-viewer-right-dock-tab-changed', {
+      detail: {tab: 'weight-rig', open: true},
+    }));
+    return feature;
+  });
+  return weightRigActivationPromise;
+}
+
+window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
+  if (event.detail?.tab === 'weight-rig' && event.detail?.open) {
+    void activateWeightRig();
+  }
+});
 
 function semanticHandlers() {
   return {
@@ -108,11 +146,6 @@ async function handlePresentChange(change = {}) {
 }
 
 async function handleToggleChange(change = {}) {
-  if (change.type === 'record') {
-    const meshesRefreshed = await refreshMeshSemanticsFlow(semanticHandlers());
-    return meshesRefreshed
-      ? refreshControlSemanticsFlow(semanticHandlers()) : false;
-  }
   if (change.type === 'delete') {
     // Deleting a toggle rewrites every safe branch that references its
     // variable, including resource bindings before drawindexed. The draw
@@ -121,10 +154,10 @@ async function handleToggleChange(change = {}) {
     return reloadCurrentMod();
   }
   if (change.type === 'add' || change.type === 'edit') {
-    const meshesRefreshed =
-      await refreshMeshSemanticsFlow(semanticHandlers());
-    return meshesRefreshed
-      ? refreshControlSemanticsFlow(semanticHandlers()) : false;
+    return refreshSemanticStateFlow(semanticHandlers());
+  }
+  if (change.type === 'record') {
+    return refreshSemanticStateFlow(semanticHandlers());
   }
   return refreshControlSemanticsFlow(semanticHandlers());
 }
@@ -325,29 +358,6 @@ rendererReady.then(ready => {
   $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
   const applyEnvironmentPreset = initEnvironmentControl();
   initLeftDock();
-  createRigOverlayController({
-    scene, camera, canvas: renderer.domElement,
-    arcballControls: controls,
-    getMeshes: () => activeMeshes,
-    getRigState: getModelRigState,
-    getHumanoidRigEditSnapshot,
-    getRigJointPoseFrame,
-    setRigJointRotation,
-    solveRigIkTarget,
-    finishRigJointPose,
-    onRigJointPicked: handleRigJointPicked,
-    onRigSurfacePickRequested: pickRigJointFromModelSurface,
-    onRigJointPickCancelled: cancelRigJointPicking,
-    onHumanoidControlSelected: selectHumanoidControl,
-    beginHumanoidControlCarry,
-    updateHumanoidControlDraft,
-    finishHumanoidControlCarry,
-    cancelHumanoidControlCarry,
-    onTransformControlsUnavailable: () => setRigPoseControlStatus(
-      weightRigStatus('weightRig.status.poseGizmoUnavailable')),
-    requestRender,
-  });
-  initWeightRigPanel();
   initRightDock();
   initInspectorPanel();
   initSelection();
@@ -440,6 +450,7 @@ rendererReady.then(ready => {
     getLoadBenchmark,
     exportChanges,
     refreshPresentState: handlePresentChange,
+    refreshSemanticState: () => refreshSemanticStateFlow(semanticHandlers()),
     refreshControlSemantics: () => refreshControlSemanticsFlow(semanticHandlers()),
     refreshMeshSemantics: () => refreshMeshSemanticsFlow(semanticHandlers()),
     activeMeshes,

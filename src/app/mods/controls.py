@@ -38,6 +38,16 @@ def _gating_vars(payload):
         entry for entry in payload.values() if isinstance(entry, dict))
 
 
+def _gating_vars_from_mesh_semantics(semantics, active_mesh_keys=None):
+    """Collect control gates from an already-built mesh semantic projection."""
+    if active_mesh_keys is None:
+        entries = semantics.values()
+    else:
+        entries = (semantics[key] for key in active_mesh_keys
+                   if key in semantics)
+    return _gating_vars_from_entries(entries)
+
+
 def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
                        pending_new_sections=None):
     """Build the Toggle panel projection from analyzed key sections."""
@@ -173,9 +183,7 @@ def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
     if active_mesh_keys is not None:
         semantics = build_mesh_semantics(
             groups, mod_dir, game_profile=game_profile, source=source)
-        draws = (entry for label, entry in semantics.items()
-                 if label in active_mesh_keys)
-        return _gating_vars_from_entries(draws)
+        return _gating_vars_from_mesh_semantics(semantics, active_mesh_keys)
 
     return _gating_vars_from_entries(
         draw for group in groups for draw in group.get("draws", []))

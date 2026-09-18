@@ -40,6 +40,33 @@ function handlersOrDefault(handlers = {}) {
   };
 }
 
+function applyControlSemanticResult(result, path, callbacks) {
+  const controls = result.controls || {};
+  const state = result.state || {};
+  viewerState.lastToggles = controls.toggles || {};
+  setStateRules(state.rules || [], state.defaults || {}, {
+    toggles: controls.toggles || {}, menu: controls.menu || {},
+  });
+  buildTogglePanel(controls.toggles, {
+    modPath: path, onChange: callbacks.onToggleChange,
+  });
+  buildMenuPanel(controls.menu);
+  buildPresentPanel(controls.present, {
+    modPath: path, onChange: callbacks.onPresentChange,
+  });
+}
+
+function applyMeshSemanticResult(result) {
+  const update = updateMeshSemantics(result.meshes, {
+    materialProfiles: result.material_profiles || {},
+  });
+  if (!update.success) return update;
+  const assetResolution = result.asset_resolution || null;
+  refreshMeshAssetDiagnostics(assetResolution);
+  setAssetResolution(assetResolution);
+  return update;
+}
+
 export async function refreshPresentState(change = {}, handlers = {}) {
   const callbacks = handlersOrDefault(handlers);
   const { path, epoch } = beginSemanticRefresh();
@@ -91,19 +118,7 @@ export async function refreshControlSemantics(handlers = {}) {
       await alertDialog(t('errors.refreshControls', {detail: result.error}));
       return false;
     }
-    const controls = result.controls || {};
-    const state = result.state || {};
-    viewerState.lastToggles = controls.toggles || {};
-    setStateRules(state.rules || [], state.defaults || {}, {
-      toggles: controls.toggles || {}, menu: controls.menu || {},
-    });
-    buildTogglePanel(controls.toggles, {
-      modPath: path, onChange: callbacks.onToggleChange,
-    });
-    buildMenuPanel(controls.menu);
-    buildPresentPanel(controls.present, {
-      modPath: path, onChange: callbacks.onPresentChange,
-    });
+    applyControlSemanticResult(result, path, callbacks);
     callbacks.syncViewportControlPlacement();
     refreshAll();
     return true;
@@ -131,18 +146,51 @@ export async function refreshMeshSemantics(handlers = {}) {
       await alertDialog(t('errors.refreshSemantics', {detail: result.error}));
       return false;
     }
-    const update = updateMeshSemantics(result.meshes, {
-      materialProfiles: result.material_profiles || {},
-    });
+    const update = applyMeshSemanticResult(result);
     if (!update.success) {
       await alertDialog(t('errors.refreshSemantics', {
         detail: t('semanticRefresh.drawMismatch'),
       }));
       return false;
     }
-    const assetResolution = result.asset_resolution || null;
-    refreshMeshAssetDiagnostics(assetResolution);
-    setAssetResolution(assetResolution);
+    refreshAll({
+      force: {visibility: true, textures: true},
+      additionalMeshes: update.materialChangedMeshes,
+    });
+    return true;
+  } finally {
+    await finishSemanticRefresh(path, epoch, callbacks);
+  }
+}
+
+export async function refreshSemanticState(handlers = {}) {
+  const callbacks = handlersOrDefault(handlers);
+  const { path, epoch } = beginSemanticRefresh();
+  try {
+    if (!path) return false;
+    let result;
+    try {
+      result = await window.pywebview.api.get_semantic_state(path);
+    } catch (error) {
+      if (semanticRefreshIsCurrent(path, epoch)) {
+        await alertDialog(t('errors.refreshSemantics', {detail: error}));
+      }
+      return false;
+    }
+    if (!semanticRefreshIsCurrent(path, epoch)) return false;
+    if (result?.error) {
+      await alertDialog(t('errors.refreshSemantics', {detail: result.error}));
+      return false;
+    }
+    const update = applyMeshSemanticResult(result);
+    if (!update.success) {
+      await alertDialog(t('errors.refreshSemantics', {
+        detail: t('semanticRefresh.drawMismatch'),
+      }));
+      return false;
+    }
+    applyControlSemanticResult(result, path, callbacks);
+    callbacks.syncViewportControlPlacement();
     refreshAll({
       force: {visibility: true, textures: true},
       additionalMeshes: update.materialChangedMeshes,

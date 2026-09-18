@@ -104,10 +104,10 @@ export function createWeightPickController({
     }
   }
 
-  canvas?.addEventListener('pointerdown', pointerDown);
-  canvas?.addEventListener('pointermove', pointerMove);
-  canvas?.addEventListener('pointerup', pointerUp);
-  canvas?.addEventListener('pointercancel', pointerCancel);
+  canvas?.addEventListener('pointerdown', pointerDown, true);
+  canvas?.addEventListener('pointermove', pointerMove, true);
+  canvas?.addEventListener('pointerup', pointerUp, true);
+  canvas?.addEventListener('pointercancel', pointerCancel, true);
   canvas?.addEventListener('lostpointercapture', pointerCancel);
   document.addEventListener('keydown', keyDown);
 
@@ -117,10 +117,10 @@ export function createWeightPickController({
     isEnabled: () => enabled,
     dispose() {
       if (enabled) finish(null, {cancelled: true});
-      canvas?.removeEventListener('pointerdown', pointerDown);
-      canvas?.removeEventListener('pointermove', pointerMove);
-      canvas?.removeEventListener('pointerup', pointerUp);
-      canvas?.removeEventListener('pointercancel', pointerCancel);
+      canvas?.removeEventListener('pointerdown', pointerDown, true);
+      canvas?.removeEventListener('pointermove', pointerMove, true);
+      canvas?.removeEventListener('pointerup', pointerUp, true);
+      canvas?.removeEventListener('pointercancel', pointerCancel, true);
       canvas?.removeEventListener('lostpointercapture', pointerCancel);
       document.removeEventListener('keydown', keyDown);
     },
