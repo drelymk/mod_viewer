@@ -202,6 +202,8 @@ def test_baked_animation_resume_restores_bounds_and_wakes_after_ownership(
         const {setCharacterShadowGeometryInvalidator} = await import(
           './js/scene/shadow-invalidation.js');
         const runtime = await import('./js/mesh/animation-runtime.js');
+        const {createSkinningRuntime} = await import(
+          './js/mesh/skinning-runtime.js');
         let geometryInvalidations = 0;
         let boxMin = null;
         let boxMax = null;
@@ -230,17 +232,55 @@ def test_baked_animation_resume_restores_bounds_and_wakes_after_ownership(
           fps: 1, frame_start: 0, frame_end: 1,
           conditions: [[{var: 'anim', value: '1', negate: false}]],
         }});
-        mesh.userData.animationSuspended = true;
         pending.get(Math.min(...pending.keys()))(0);
+        mesh.userData.animationSuspended = true;
+        const suspendedTick = Math.max(...pending.keys());
+        pending.get(suspendedTick)(100);
         pending.clear();
         mesh.geometry.attributes.position.array[0] = 9;
         const resumed = runtime.resumeAnimatedMesh(mesh);
         const pendingAfterResume = pending.size;
         const restored = Array.from(position.array);
+        const geometryInvalidationsAfterResume = geometryInvalidations;
+        mesh.userData.animationSuspended = false;
+        const resumeTick = Math.max(...pending.keys());
+        pending.get(resumeTick)(1000);
+        const resumedFrame = Array.from(position.array);
+        const skinningState = {
+          loaded: true,
+          baselinePositions: new Float32Array([0, 0, 0]),
+          baselineNormals: null,
+          poseActiveVertices: null,
+          physicsActiveVertices: null,
+          physicsEnabled: false,
+          deformationMode: null,
+          combinedActiveVertices: null,
+          combinedPoseVerticesRef: null,
+          combinedPhysicsVerticesRef: null,
+          finalBoundsDirty: true,
+          preDeformationFrustumCulled: true,
+        };
+        const skinningStates = new Map([[mesh, skinningState]]);
+        const skinningRuntime = createSkinningRuntime({
+          states: skinningStates,
+          knownMeshes: new Set([mesh]),
+          stateFor: candidate => skinningStates.get(candidate),
+          getModelRigState: () => ({explicitRootSignatures: new Set()}),
+          getRigPresetState: () => ({}),
+        });
+        mesh.frustumCulled = true;
+        mesh.userData.animationSuspended = true;
+        skinningState.preDeformationFrustumCulled = true;
+        mesh.frustumCulled = false;
+        skinningRuntime.applyDeformation(mesh, skinningState, {
+          request: false, invalidateShadow: false,
+        });
+        const frustumCulledAfterResume = mesh.frustumCulled;
         runtime.resetAnimationRuntime();
         setCharacterShadowGeometryInvalidator(() => {});
-        return {resumed, pendingAfterResume, restored,
-          geometryInvalidations, boxMin, boxMax};
+        return {resumed, pendingAfterResume, restored, resumedFrame,
+          geometryInvalidations, geometryInvalidationsAfterResume,
+          boxMin, boxMax, frustumCulledAfterResume};
       } finally {
         window.requestAnimationFrame = previousRequest;
         window.cancelAnimationFrame = previousCancel;
@@ -249,9 +289,11 @@ def test_baked_animation_resume_restores_bounds_and_wakes_after_ownership(
     assert result["resumed"] is True
     assert result["pendingAfterResume"] == 1
     assert result["restored"] == [0, 0, 0]
-    assert result["geometryInvalidations"] == 1
+    assert result["resumedFrame"] == [0, 0, 1]
+    assert result["geometryInvalidationsAfterResume"] == 1
     assert result["boxMin"] == [-2, -3, -4]
     assert result["boxMax"] == [5, 6, 7]
+    assert result["frustumCulledAfterResume"] is True
 
 
 def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(

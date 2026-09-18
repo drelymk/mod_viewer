@@ -261,10 +261,6 @@ export function resumeAnimatedMesh(mesh) {
     restoreCanonical(mesh);
     installAnimationBounds(mesh, meshState?.animationBounds);
     if (meshState) meshState.lastFrame = null;
-    state.lastFrame = null;
-    state.activeClockId = null;
-    state.active = false;
-    state.startedAt = 0;
     invalidateCharacterShadowGeometry({request: false});
     requestRender();
     schedule();

@@ -222,7 +222,14 @@ export function createSkinningRuntime({
       // this mesh. Resume from canonical animation geometry and keep the
       // conservative animation bounds after the handoff.
       resumedAnimation = resumeAnimatedMesh(mesh);
-      if (resumedAnimation) state.finalBoundsDirty = false;
+      if (resumedAnimation) {
+        state.finalBoundsDirty = false;
+        if (state.preDeformationFrustumCulled !== null
+            && state.preDeformationFrustumCulled !== undefined) {
+          mesh.frustumCulled = state.preDeformationFrustumCulled;
+          state.preDeformationFrustumCulled = null;
+        }
+      }
     }
     if (invalidateShadow && changed && !resumedAnimation) {
       invalidateShadow({request});
