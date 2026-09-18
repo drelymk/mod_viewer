@@ -147,6 +147,39 @@ $\\Group\\Master\\style = $value
     }]]
 
 
+def test_forwarded_target_can_also_be_read_by_another_ini(tmp_path):
+    menu = tmp_path / "Menu.ini"
+    target = tmp_path / "Target.ini"
+    consumer = tmp_path / "Consumer.ini"
+    menu.write_text("""[Constants]
+global persist $value = 1
+
+[CommandListButton]
+$value = 1 - $value
+
+[Present]
+$\\Target\\style = $value
+""", encoding="utf-8")
+    target.write_text("""namespace = Target
+
+[Constants]
+global $style = 1
+""" + _qualified_draw_ini("$style == 1"), encoding="utf-8")
+    consumer.write_text(_qualified_draw_ini(
+        r"$\Target\style == 1"), encoding="utf-8")
+
+    parsed = analyze_mod_inis(
+        [str(menu), str(target), str(consumer)], str(tmp_path))
+    assert any(info["var"] == "Target::style"
+               for info in parsed.menu.values())
+    for ini_path in (target, consumer):
+        group = next(group for group in parsed.groups
+                     if group["identity_source"].endswith(ini_path.name))
+        assert group["draws"][0].conditions == [[{
+            "var": "Target::style", "value": "1", "negate": False,
+        }]]
+
+
 def _qualified_draw_ini(condition):
     return f"""[TextureOverrideBody]
 ib = ResourceBodyIB

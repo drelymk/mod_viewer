@@ -183,7 +183,9 @@ def _qualified_vars_from_targets(namespace_targets):
         namespace = record.get("namespace")
         if not namespace:
             continue
-        for local_var in gating_var_names(record["sections"]):
+        local_vars = set(gating_var_names(record["sections"]))
+        local_vars.update(record.get("extra_gating_vars", ()))
+        for local_var in local_vars:
             canonical = record["canonical_vars"].get(
                 str(local_var).casefold(), str(local_var))
             result[f"\\{namespace}\\{canonical}".casefold()] = (
@@ -250,7 +252,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         for namespace, records in namespace_candidates.items()
         if len(records) == 1
     }
-    qualified_vars = _qualified_vars_from_targets(namespace_targets)
     records_by_path = {record["ini_path"]: record for record in ini_records}
     for record in ini_records:
         record["forwardings"] = _extract_namespace_forwarding(
@@ -281,6 +282,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             if target is not None:
                 target["extra_gating_vars"].add(
                     forwarding["destination_local"])
+
+    qualified_vars = _qualified_vars_from_targets(namespace_targets)
 
     # Shared across every INI: duplicate generic component names are
     # disambiguated instead of one silently overwriting another.
