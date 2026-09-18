@@ -2031,7 +2031,7 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {initializeRigSourceSession} = await import(
+      const {createRigSourceSession} = await import(
         './js/mesh/rig-model-session.js');
       const states = new Map();
       const knownMeshes = new Set();
@@ -2080,7 +2080,7 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
           validTriangleCount: evidenceMode === 'surface' ? 1 : 0,
         };
       };
-      const session = initializeRigSourceSession({
+      const session = createRigSourceSession({
         states, knownMeshes, modelWeightState: {
           sourceDescriptors: new Map([['source', {
             sourceFile: 'weights.buf', boneIdOffset: 0,
@@ -4815,7 +4815,7 @@ def test_humanoid_edit_session_snapping_uses_hysteresis_and_releases(module_page
       let notifications = 0;
       let persisted = null;
       let resets = 0;
-      const session = edit.initializeHumanoidRigEditSession({
+      const session = edit.createHumanoidRigEditSession({
         modelRigState,
         getModelRig: () => rig,
         getAutomaticRig: () => rig.humanoidControlRig,
@@ -4935,7 +4935,7 @@ def test_humanoid_edit_save_and_reset_refresh_without_model_rig_rebuild(
       const beforeModelRigSidecar = modelRigSidecar;
       const refreshes = [];
       let legacyRebuilds = 0;
-      const session = edit.initializeHumanoidRigEditSession({
+      const session = edit.createHumanoidRigEditSession({
         modelRigState,
         getModelRig: () => rig,
         getAutomaticRig: () => rig.humanoidAutomaticControlRig,
@@ -5003,7 +5003,7 @@ def test_humanoid_ik_selection_uses_control_keys_and_resets_default(module_page)
         selectedHumanoidControlKey: null, humanoidPose: {},
       };
       const notifications = [];
-      pose.initializeHumanoidPoseRuntime({
+      const session = pose.createHumanoidPoseRuntime({
         modelRigState: state,
         getModelRig: () => ({humanoidControlRig: {accepted: true, controls}}),
         getPrimaryLimb: role => ({role, available: role === 'left_arm', keys: []}),
@@ -5013,14 +5013,14 @@ def test_humanoid_ik_selection_uses_control_keys_and_resets_default(module_page)
         notifyChanged: () => notifications.push('changed'),
         requestRender: () => notifications.push('render'),
       });
-      const enabled = pose.setRigIkEnabled(true);
+      const enabled = session.setIkEnabled(true);
       const afterEnable = {...state};
-      const selectedArm = pose.selectHumanoidControl('rightElbow');
+      const selectedArm = session.selectControl('rightElbow');
       const afterArm = {...state};
-      const selectedCentral = pose.selectHumanoidControl('neck');
+      const selectedCentral = session.selectControl('neck');
       const afterCentral = {...state};
-      pose.setRigIkEnabled(false);
-      pose.setRigIkEnabled(true);
+      session.setIkEnabled(false);
+      session.setIkEnabled(true);
       return {enabled, afterEnable, selectedArm, afterArm,
         selectedCentral, afterCentral, final: {...state}, notifications};
     }""")
@@ -5035,6 +5035,42 @@ def test_humanoid_ik_selection_uses_control_keys_and_resets_default(module_page)
     assert result["afterCentral"]["selectedHumanoidControlKey"] == "neck"
     assert result["final"]["activeLimbRole"] == "left_arm"
     assert result["final"]["selectedHumanoidControlKey"] == "leftHand"
+
+
+def test_humanoid_pose_factories_isolate_state(module_page):
+    result = module_page.evaluate("""async () => {
+      const {createHumanoidPoseRuntime} = await import(
+        './js/mesh/humanoid-pose-runtime.js');
+      const makeState = () => ({
+        ikEnabled: false, activeLimbRole: 'right_leg',
+        selectedHumanoidControlKey: null, humanoidPose: {},
+      });
+      const makeSession = modelRigState => createHumanoidPoseRuntime({
+        modelRigState,
+        getModelRig: () => ({humanoidControlRig: {accepted: true, controls: {}}}),
+        getPrimaryLimb: role => ({role, available: role === 'left_arm', keys: []}),
+        solveControlIk: () => ({positions: {}}),
+        mergeLimbPose: value => value,
+        applyPose: () => false,
+        notifyChanged: () => {}, requestRender: () => {},
+      });
+      const firstState = makeState();
+      const secondState = makeState();
+      const first = makeSession(firstState);
+      const second = makeSession(secondState);
+      first.setIkEnabled(true);
+      first.selectControl('rightElbow');
+      return {first: {...firstState}, second: {...secondState}};
+    }""")
+    assert result["first"]["ikEnabled"] is True
+    assert result["first"]["activeLimbRole"] == "right_arm"
+    assert result["first"]["selectedHumanoidControlKey"] == "rightElbow"
+    assert result["second"] == {
+        "ikEnabled": False,
+        "activeLimbRole": "right_leg",
+        "selectedHumanoidControlKey": None,
+        "humanoidPose": {},
+    }
 
 
 def test_geometry_humanoid_control_rig_uses_common_depth_plane(module_page):

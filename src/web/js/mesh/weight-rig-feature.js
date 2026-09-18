@@ -38,26 +38,26 @@ export function withSkinningBaseMaterial(mesh, operation) {
 
 export function registerSkinningMesh(mesh) {
   pendingSkinningMeshes.add(mesh);
-  return skinning?.registerSkinningMesh(mesh);
+  return skinning?.registerMesh(mesh);
 }
 
 export function unregisterSkinningMesh(mesh) {
   pendingSkinningMeshes.delete(mesh);
-  return skinning?.unregisterSkinningMesh(mesh);
+  return skinning?.unregisterMesh(mesh);
 }
 
 export function refreshSkinningAfterShapeChange(mesh) {
-  return skinning?.refreshSkinningAfterShapeChange(mesh) || false;
+  return skinning?.refreshAfterShapeChange(mesh) || false;
 }
 
 export function disposeSkinningExperiment(mesh, options = {}) {
   pendingSkinningMeshes.delete(mesh);
-  return skinning?.disposeSkinningExperiment(mesh, options);
+  return skinning?.disposeMesh(mesh, options);
 }
 
 export function destroyModelPhysicsSession() {
   pendingSkinningMeshes.clear();
-  return skinning?.destroyModelPhysicsSession();
+  return skinning?.destroy();
 }
 
 export async function loadWeightRigFeature() {
@@ -65,23 +65,19 @@ export async function loadWeightRigFeature() {
   if (featurePromise) return featurePromise;
 
   featurePromise = (async () => {
-    // Importing the composition root is intentionally the first step: it
-    // installs the initialized runtime consumed by the public facades.
-    await import('./weight-rig-core.js');
-    const [runtime, panel, overlay, skinningModule, status] = await Promise.all([
-      import('./weight-rig-runtime.js'),
+    const core = await import('./weight-rig-core.js');
+    const [panel, overlay, status] = await Promise.all([
       import('../panels/weight-rig-panel.js'),
       import('../scene/rig-overlay-controller.js'),
-      import('./skinning-runtime.js'),
       import('./weight-rig-status.js'),
     ]);
-    skinning = skinningModule;
+    skinning = core.weightRigSkinningRuntime;
     for (const mesh of pendingSkinningMeshes) {
-      skinning.registerSkinningMesh(mesh);
+      skinning.registerMesh(mesh);
     }
 
     feature = {
-      ...runtime,
+      ...core.weightRigApi,
       createRigOverlayController: overlay.createRigOverlayController,
       weightRigStatus: status.weightRigStatus,
     };

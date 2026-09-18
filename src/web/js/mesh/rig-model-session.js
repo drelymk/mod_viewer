@@ -19,8 +19,6 @@ function clockNow() {
     ? globalThis.performance.now() : Date.now();
 }
 
-let activeSession = null;
-
 function memberStructuralEvidenceFields(member = {}) {
   const state = member.state || {};
   const identity = member.mesh?.userData?.identity || {};
@@ -63,7 +61,7 @@ function memberEvidenceShapeKey(member = {}) {
   ]);
 }
 
-function createSourceSession({states, knownMeshes, modelWeightState,
+export function createRigSourceSession({states, knownMeshes, modelWeightState,
     sourceSkinningRigs, ensureRigMeshPrepared,
     ensureRigMeshPreparedCooperative = ensureRigMeshPrepared,
     ensureInfluenceGraph, ensureInfluenceGraphCooperative = ensureInfluenceGraph,
@@ -530,11 +528,7 @@ function createSourceSession({states, knownMeshes, modelWeightState,
     reset() { inFlight.clear(); }};
 }
 
-export function initializeRigSourceSession(options) {
-  return createSourceSession(options);
-}
-
-function createSession({state, modelWeightState, getGeneration,
+export function createRigModelSession({state, modelWeightState, getGeneration,
     ensureModelWeightsLoaded, buildAllSourceSkinningRigs,
     buildAllSourceSkinningRigsCooperatively = buildAllSourceSkinningRigs,
     buildModelSkinningRig,
@@ -725,35 +719,4 @@ function createSession({state, modelWeightState, getGeneration,
     },
     setRotationSnapDegrees,
   };
-}
-
-export function initializeRigModelSession(options) {
-  activeSession = createSession(options);
-  return activeSession;
-}
-
-function session() {
-  if (!activeSession) throw new Error('Rig model session is not initialized.');
-  return activeSession;
-}
-
-export function getModelRigState() { return session().getState(); }
-export function ensureModelRigLoaded() { return session().ensureLoaded(); }
-export function beginRigJointPicking(intent = {}) {
-  return session().beginJointPicking(intent);
-}
-export function cancelRigJointPicking() { return session().cancelJointPicking(); }
-export function handleRigJointPicked(jointId, intent) {
-  return session().handleJointPicked(jointId, intent);
-}
-export function pickRigJointFromModelSurface(point, intent) {
-  return session().pickJointFromSurface(point, intent);
-}
-export function modelJointFromSkinningSample(sampled) {
-  return session().modelJointFromSkinningSample(sampled);
-}
-export function selectRigJoint(jointId) { return session().selectJoint(jointId); }
-export function clearRigJointSelection() { return session().clearJointSelection(); }
-export function setRigRotationSnapDegrees(value) {
-  return session().setRotationSnapDegrees(value);
 }

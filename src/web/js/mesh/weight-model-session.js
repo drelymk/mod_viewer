@@ -8,10 +8,7 @@ import {sampleSkinningAtIntersection} from './weight-selection.js';
 import {aggregateModelWeightBoneStats} from './weight-runtime.js';
 import {weightRigStatus} from './weight-rig-status.js';
 
-let activeSession = null;
-let activePickingSession = null;
-
-function createPickingSession({modelWeightState, modelRigState, states,
+export function createWeightPickingSession({modelWeightState, modelRigState, states,
     knownMeshes, canvas, camera, controls, notifyChanged, requestRender,
     cancelRigPicking} = {}) {
   function getMeshes() {
@@ -129,23 +126,7 @@ function createPickingSession({modelWeightState, modelRigState, states,
   };
 }
 
-export function initializeWeightPickingSession(options) {
-  activePickingSession = createPickingSession(options);
-  return activePickingSession;
-}
-
-export function resetWeightPickingSession() {
-  activePickingSession?.reset();
-}
-
-function pickingSession() {
-  if (!activePickingSession) {
-    throw new Error('Weight picking session is not initialized.');
-  }
-  return activePickingSession;
-}
-
-function createSession({modelWeightState, states, knownMeshes,
+export function createWeightModelSession({modelWeightState, states, knownMeshes,
     modelWeightSnapshot, selectionMapFromEntries, sourceSelectionEntries,
     refreshSelectedWeightMask,
     updateModelWeightHeatmap, syncPhysicsToSelection, sameBoneSelection,
@@ -351,46 +332,4 @@ function createSession({modelWeightState, states, knownMeshes,
     },
     reset() { selectionSavePromise = null; },
   };
-}
-
-export function initializeWeightModelSession(options) {
-  activeSession = createSession(options);
-}
-
-export function resetWeightModelSession() { activeSession?.reset(); }
-
-function session() {
-  if (!activeSession) throw new Error('Weight model session is not initialized.');
-  return activeSession;
-}
-
-export function getModelWeightState() { return session().getState(); }
-export function refreshModelWeightSummary(options) {
-  return session().refreshModelWeightSummary(options);
-}
-export function ensureModelWeightsLoaded() { return session().ensureLoaded(); }
-export function setSelectedBones(selection, options) {
-  return session().setSelectedBones(selection, options);
-}
-export function setBoneSelected(sourceKey, boneId, selected) {
-  return session().setBoneSelected(sourceKey, boneId, selected);
-}
-export function clearSelectedBones() { return session().clearSelectedBones(); }
-export function loadSavedBoneSelection() {
-  return session().loadSavedBoneSelection();
-}
-export function saveModelWeightSelection() { return session().saveSelection(); }
-export function setModelWeightHeatmap(enabled) {
-  return session().setHeatmap(enabled);
-}
-export function sampleModelSkinningAtIntersection(intersection) {
-  return pickingSession().sampleAtIntersection(intersection);
-}
-export function clearPickedPoint(options) {
-  return pickingSession().clearPickedPoint(options);
-}
-export function beginWeightModelPicking() { return pickingSession().begin(); }
-export function cancelWeightModelPicking() { return pickingSession().cancel(); }
-export function setWeightPickerViewMode(mode) {
-  return pickingSession().setViewMode(mode);
 }

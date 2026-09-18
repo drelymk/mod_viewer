@@ -30,8 +30,8 @@ def _page(edge_browser, frontend_url, responses, **kwargs):
         page.evaluate("""async () => {
           const feature = await import('./js/mesh/weight-rig-feature.js');
           await feature.loadWeightRigFeature();
-          window.__testWeightRigRuntime = await import(
-            './js/mesh/weight-rig-runtime.js');
+          window.__testWeightRigRuntime = (await import(
+            './js/mesh/weight-rig-core.js')).weightRigApi;
         }""")
     return context, page
 
@@ -1003,9 +1003,9 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
-          const {setSelectedBones} = await import('./js/mesh/weight-model-session.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
+          const {setSelectedBones} = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
               await experiment.ensureModelRigLoaded();
           setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
@@ -1045,7 +1045,7 @@ def test_physics_drag_preserves_arcball_camera_and_lmb_control(
         assert after_lmb != after_rmb
 
         page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           experiment.clearSelectedBones();
         }""")
         before_pan = view_state()
@@ -1090,8 +1090,8 @@ def test_weight_load_rejects_missing_source_identity(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           let error = null;
           await experiment.ensureModelRigLoaded();
           error = getSkinningState(mesh)?.error || null;
@@ -1145,7 +1145,7 @@ def test_rig_panel_loads_lazily_and_keeps_weight_selection_separate(
         page.locator("#weight-rig-tab").click()
         page.wait_for_function("window.__testWeightRigRuntime.getModelRigState().loaded")
         result = page.evaluate("""async () => {
-          const runtime = await import('./js/mesh/weight-rig-runtime.js');
+          const runtime = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           const rig = runtime.getModelRigState();
           const weight = runtime.getModelWeightState();
           const preset = document.querySelector('.rig-preset-select');
@@ -1324,7 +1324,7 @@ def test_weight_ready_state_has_no_eager_rig_preparation(
           });
           const weight = await weightPromise;
           const stateAfterWeight = runtime.getModelWeightState();
-          const skinRuntime = await import('./js/mesh/skinning-runtime.js');
+          const skinRuntime = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime;
           const skinAfterWeight = skinRuntime.getSkinningState(mesh);
           const weightBaselineWasNull = skinAfterWeight.baselinePositions === null;
           const weightNodesWereNull = skinAfterWeight.influenceNodes === null;
@@ -1416,7 +1416,7 @@ def test_model_rig_pose_deforms_equivalent_source_meshes_together(
         page.wait_for_function("window.__testWeightRigRuntime.getModelRigState().loaded")
         result = page.evaluate("""async () => {
           const THREE = await import('three/webgpu');
-          const runtime = await import('./js/mesh/weight-rig-runtime.js');
+          const runtime = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           const state = runtime.getModelRigState();
           const weight = runtime.getModelWeightState();
           const model = state.model;
@@ -1566,8 +1566,8 @@ def test_skinning_load_is_invalidated_by_shape_change(
             releasePreview = resolve;
           });
           window.__testSkinningPreview = async () => previewPending;
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
           const loadPromise = experiment.ensureModelRigLoaded();
@@ -1636,7 +1636,7 @@ def test_stale_rig_load_cannot_publish_after_model_switch(
           window.__testSkinningPreview = async path =>
             path === 'RigRaceA' ? pendingA : entry(
               'test/race-b-bodyblend.buf|offset=0', 'RaceB/BodyBlend.buf');
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           const loadA = experiment.ensureModelRigLoaded();
           await window.modViewer.switchMod('RigRaceB');
           await new Promise(resolve => setTimeout(resolve, 0));
@@ -1726,7 +1726,7 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
         page.wait_for_function("window.__testWeightRigRuntime.getModelWeightState().loaded")
         page.wait_for_function("window.__testWeightRigRuntime.getModelRigState().loaded")
         selected_joint_before = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           const id = experiment.getModelRigState().model.joints[0].jointId;
           experiment.selectRigJoint(id);
           return experiment.getModelRigState().selectedJointId;
@@ -1758,19 +1758,15 @@ def test_weight_picker_discovers_influences_without_mutating_selection(
           const {camera, renderer} = await import('./js/scene/scene.js');
           const {raycastModelAtClientPoint} = await import(
             './js/scene/model-picking.js');
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {sampleModelSkinningAtIntersection} = await import(
-            './js/mesh/weight-model-session.js');
-          const {modelJointFromSkinningSample} = await import(
-            './js/mesh/rig-model-session.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           const before = experiment.getModelWeightState().pickedPoint;
           const intersection = raycastModelAtClientPoint({
             clientX: point.x, clientY: point.y,
             canvas: renderer.domElement, camera,
             meshes: window.modViewer.activeMeshes,
           });
-          const sampled = sampleModelSkinningAtIntersection(intersection);
-          const resolved = modelJointFromSkinningSample(sampled);
+          const sampled = experiment.sampleModelSkinningAtIntersection(intersection);
+          const resolved = experiment.modelJointFromSkinningSample(sampled);
           const after = experiment.getModelWeightState().pickedPoint;
           return {sampled, resolved, unchanged: before === after};
         }""", point)
@@ -2232,7 +2228,7 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         page.wait_for_function("window.__testWeightRigRuntime.getModelPhysicsState().enabled")
         result = page.evaluate("""async () => {
           const experiment = window.__testWeightRigRuntime;
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           const [hair, coat] = window.modViewer.activeMeshes.map(getSkinningState);
           return {
             selected: window.__testWeightRigRuntime.getModelWeightState().selectedBones,
@@ -2254,14 +2250,14 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         page.locator(".weight-bone-select").click()
         page.locator(".weight-heatmap-enable").check()
         assert page.evaluate("""async () => {
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           return window.modViewer.activeMeshes.map(mesh =>
             getSkinningState(mesh).heatmapMode);
         }""") == ["bone", None]
         distinct = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
-          const {setSelectedBones} = await import('./js/mesh/weight-model-session.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
+          const {setSelectedBones} = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           setSelectedBones([
             {sourceKey: 'hair/hairblend.buf|offset=0',
              sourceFile: 'Hair/HairBlend.buf', boneIdOffset: 0, boneIds: [1]},
@@ -2280,8 +2276,8 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         assert distinct["physics"]["participatingMeshCount"] == 2
         assert distinct["independentSources"]
         cleared = page.evaluate("""async () => {
-          const runtime = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const runtime = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           runtime.clearSelectedBones();
           return window.modViewer.activeMeshes.map(mesh => {
             const state = getSkinningState(mesh);
@@ -2351,8 +2347,8 @@ def test_weight_selection_shared_source_participates_per_mesh(
         page.locator('.weight-bone-option[data-source-key="shared/sharedblend.buf|offset=0"] input[value="1"]').check()
         page.wait_for_function("window.__testWeightRigRuntime.getModelPhysicsState().enabled")
         result = page.evaluate("""async () => {
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           const meshes = window.modViewer.activeMeshes;
           const [body, hair] = meshes.map(getSkinningState);
           const scene = await import('./js/scene/scene.js');
@@ -4444,8 +4440,8 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
               weights: {offset: 24, length: 24, type: 'f32'},
             }, diagnostics: {},
           });
-          const experiment = await import('./js/mesh/weight-rig-runtime.js');
-          const {getSkinningState} = await import('./js/mesh/skinning-runtime.js');
+          const experiment = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
+          const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;
           const {setControlValue} =
             await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
@@ -4470,7 +4466,7 @@ def test_material_hot_swap_updates_loaded_skinning_baseline(
           refreshMeshes();
 
           const {setSelectedBones} =
-            await import('./js/mesh/weight-model-session.js');
+            (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           setSelectedBones([{
             sourceKey: 'test/bodyblend.buf|offset=0',
             sourceFile: 'Test/BodyBlend.buf', boneIdOffset: 0, boneIds: [1],

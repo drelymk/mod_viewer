@@ -22,13 +22,10 @@ import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
 import {resumeAnimatedMesh} from './animation-runtime.js';
 
-let activeRuntime = null;
-
 function clockNow() {
   return typeof globalThis.performance?.now === 'function'
     ? globalThis.performance.now() : Date.now();
 }
-
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
     throw new Error('Skin data has an unsupported binary layout.');
@@ -853,30 +850,3 @@ export function createSkinningRuntime({
     updateModelWeightHeatmap, disposeMesh, destroy,
   };
 }
-
-export function initializeSkinningRuntime(options) {
-  activeRuntime = createSkinningRuntime(options);
-  return activeRuntime;
-}
-
-function runtime() {
-  if (!activeRuntime) throw new Error('Skinning runtime is not initialized.');
-  return activeRuntime;
-}
-
-export function getSkinningState(mesh) { return runtime().getSkinningState(mesh); }
-export function getSkinningBaseMaterial(mesh) {
-  return runtime().getSkinningBaseMaterial(mesh);
-}
-export function withSkinningBaseMaterial(mesh, operation) {
-  return runtime().withSkinningBaseMaterial(mesh, operation);
-}
-export function registerSkinningMesh(mesh) { return runtime().registerMesh(mesh); }
-export function unregisterSkinningMesh(mesh) { return runtime().unregisterMesh(mesh); }
-export function refreshSkinningAfterShapeChange(mesh) {
-  return runtime().refreshAfterShapeChange(mesh);
-}
-export function disposeSkinningExperiment(mesh, options = {}) {
-  return runtime().disposeMesh(mesh, options);
-}
-export function destroyModelPhysicsSession() { return runtime().destroy(); }
