@@ -38,6 +38,16 @@ def _gating_vars(payload):
         entry for entry in payload.values() if isinstance(entry, dict))
 
 
+def _gating_vars_from_mesh_semantics(semantics, active_mesh_keys=None):
+    """Collect control gates from an already-built mesh semantic projection."""
+    if active_mesh_keys is None:
+        entries = semantics.values()
+    else:
+        entries = (semantics[key] for key in active_mesh_keys
+                   if key in semantics)
+    return _gating_vars_from_entries(entries)
+
+
 def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
                        pending_new_sections=None):
     """Build the Toggle panel projection from analyzed key sections."""
@@ -167,15 +177,37 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None):
     return panel
 
 
+def _control_semantic_projection(parsed, context, pending_new_sections=None,
+                                 *, gating_vars=None):
+    """Build controls and state from one already-authoritative analysis."""
+    if gating_vars is None:
+        gating_vars = _gating_vars_from_groups(
+            parsed.groups, context.mod_dir, parsed.game.game,
+            source=context.source)
+    return {
+        "controls": {
+            "toggles": build_toggle_panel(
+                parsed.toggles, parsed.defaults, gating_vars,
+                context.mod_dir, pending_new_sections),
+            "menu": build_menu_panel(
+                parsed.menu, parsed.defaults, context.mod_dir,
+                source=context.source),
+            "present": parsed.present,
+        },
+        "state": {
+            "rules": parsed.state_rules,
+            "defaults": parsed.defaults,
+        },
+    }
+
+
 def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
                              active_mesh_keys=None, source=None):
     """Collect gating variables without requiring geometry files."""
     if active_mesh_keys is not None:
         semantics = build_mesh_semantics(
             groups, mod_dir, game_profile=game_profile, source=source)
-        draws = (entry for label, entry in semantics.items()
-                 if label in active_mesh_keys)
-        return _gating_vars_from_entries(draws)
+        return _gating_vars_from_mesh_semantics(semantics, active_mesh_keys)
 
     return _gating_vars_from_entries(
         draw for group in groups for draw in group.get("draws", []))
@@ -197,21 +229,8 @@ def load_control_state(context, overrides=None, pending_new_sections=None,
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
                 source=context.source)
-    return {
-        "controls": {
-            "toggles": build_toggle_panel(
-                parsed.toggles, parsed.defaults, gating_vars,
-                context.mod_dir, pending_new_sections),
-            "menu": build_menu_panel(
-                parsed.menu, parsed.defaults, context.mod_dir,
-                source=context.source),
-            "present": parsed.present,
-        },
-        "state": {
-            "rules": parsed.state_rules,
-            "defaults": parsed.defaults,
-        },
-    }
+    return _control_semantic_projection(
+        parsed, context, pending_new_sections, gating_vars=gating_vars)
 
 
 def unwired_pending_sections(folder_path, overrides, pending_new_sections,

@@ -1,6 +1,5 @@
 // Shared ModelRig engine and Weight/Rig composition root. This module is
-// imported at application startup; backend Weight/Rig loading remains lazy
-// until the Weight tab asks for it.
+// imported by the optional Weight/Rig feature boundary on first use.
 
 import * as THREE from 'three';
 import {

@@ -42,6 +42,7 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
         disabled_ini, expected_name, monkeypatch):
     preview = ModPreview(_Access())
     discovered = []
+    serialized = []
     ini_path = f"mod/{expected_name}"
     monkeypatch.setattr(
         "app.bridge.mod_preview.discover_ini_paths",
@@ -58,7 +59,7 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.overrides_for",
-        lambda _folder: {},
+        lambda _folder: serialized.append(True) or {},
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.new_sections_for",
@@ -77,11 +78,50 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
         lambda: [],
     )
 
-    _folder, _overrides, _pending, context = preview.authoritative_context(
+    _folder, overrides, _pending, context = preview.authoritative_context(
         "mod", disabled_ini=disabled_ini)
 
     assert discovered == [disabled_ini]
     assert context.ini_paths == [ini_path]
+    assert overrides == {}
+    assert serialized == []
+
+
+def test_diagnostics_reads_staged_documents_without_serializing(monkeypatch):
+    preview = ModPreview(_Access())
+    document = object()
+    source = object()
+    captured = {}
+
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.cached_diagnostics",
+        lambda _folder: None)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.document_paths",
+        lambda _folder: ["mod.ini"])
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.source_for",
+        lambda _folder: source)
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.documents_for",
+        lambda _folder: {"mod.ini": document})
+    monkeypatch.setattr(
+        "app.bridge.mod_preview.edit_session.overrides_for",
+        lambda _folder: (_ for _ in ()).throw(
+            AssertionError("diagnostics must not serialize staged documents")),
+    )
+
+    def analyze(_folder, **kwargs):
+        captured.update(kwargs)
+        return {"summary": {"issues": 0}, "issues": []}
+
+    monkeypatch.setattr("app.bridge.mod_preview.analyze_mod", analyze)
+
+    result = preview.get_diagnostics("mod")
+
+    assert result["summary"]["issues"] == 0
+    assert captured["overrides"] == {}
+    assert captured["documents"] == {"mod.ini": document}
 
 
 def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):

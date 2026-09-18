@@ -10,6 +10,11 @@ import {
 import {
   HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES,
 } from '../mesh/humanoid-control-rig.js';
+import {
+  isRigJointPickingActive, isRigTransformInteractionActive,
+  setRigJointPickingActive,
+  setRigTransformInteractionActive,
+} from './rig-overlay-state.js';
 
 const PICK_ACQUIRE_RADIUS = 9;
 const PICK_RELEASE_RADIUS = 13;
@@ -217,16 +222,7 @@ function ikTargetPoint(snapshot, source) {
   return key ? humanoidControlPoint(source, key) : null;
 }
 
-let rigTransformInteractionActive = false;
-let rigJointPickingActive = false;
-
-export function isRigTransformInteractionActive() {
-  return rigTransformInteractionActive;
-}
-
-export function isRigJointPickingActive() {
-  return rigJointPickingActive;
-}
+export {isRigJointPickingActive, isRigTransformInteractionActive};
 
 function setGeometry(object, positions, colors = null) {
   const previous = object.geometry;
@@ -539,7 +535,7 @@ export function createRigOverlayController({
     dragRestRotation = null;
     dragJointId = null;
     dragMode = null;
-    rigTransformInteractionActive = false;
+    setRigTransformInteractionActive(false);
   }
 
   function updateModelFrame() {
@@ -1636,7 +1632,7 @@ export function createRigOverlayController({
       dragBoneId = null;
       dragJointId = null;
       dragMode = null;
-      rigTransformInteractionActive = false;
+      setRigTransformInteractionActive(false);
       proxy.visible = false;
       ikTargetProxy.visible = false;
       return;
@@ -1762,7 +1758,7 @@ export function createRigOverlayController({
         transformControls.setSpace?.(initialMode === 'ik' ? 'world' : 'local');
         transformControls.addEventListener?.('mouseUp', () => {
           queueMicrotask(() => {
-            rigTransformInteractionActive = false;
+            setRigTransformInteractionActive(false);
           });
         });
         transformControls.addEventListener?.('change', () => {
@@ -1826,7 +1822,7 @@ export function createRigOverlayController({
               dragRestRotation = null;
             }
             setArcballDragState(true);
-            rigTransformInteractionActive = true;
+            setRigTransformInteractionActive(true);
           } else if (event.value === false) {
             setArcballDragState(false);
             const boneId = dragBoneId;
@@ -1837,7 +1833,7 @@ export function createRigOverlayController({
             dragRestRotation = null;
             dragMode = null;
             queueMicrotask(() => {
-              rigTransformInteractionActive = false;
+              setRigTransformInteractionActive(false);
             });
             let primaryIkDrag = false;
             if (endedMode === 'ik') {
@@ -1876,12 +1872,12 @@ export function createRigOverlayController({
 
   function refresh(snapshot = getRigState?.()) {
     if (disposed) return;
-    const wasJointPicking = rigJointPickingActive;
+    const wasJointPicking = isRigJointPickingActive();
     const wasHumanoidEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
     currentSnapshot = snapshot || {};
     currentSource = sourceFor(currentSnapshot);
     invalidateHumanoidJointCandidates();
-    rigJointPickingActive = !!currentSnapshot.jointPickIntent;
+    setRigJointPickingActive(!!currentSnapshot.jointPickIntent);
     const humanoidEditing = currentSnapshot?.humanoidRigEdit?.editing === true;
     if (humanoidEditing
         && !currentSnapshot?.humanoidRigEdit?.carryingControlKey
@@ -1909,7 +1905,7 @@ export function createRigOverlayController({
       dragBoneId = null;
       dragJointId = null;
       dragMode = null;
-      rigTransformInteractionActive = false;
+      setRigTransformInteractionActive(false);
     }
     selectedJointId = selectedIdFor(currentSnapshot);
     const nextTopologyKey = overlayPresentationKey(currentSource);
@@ -2036,7 +2032,7 @@ export function createRigOverlayController({
     },
     dispose() {
       disposed = true;
-      rigJointPickingActive = false;
+      setRigJointPickingActive(false);
       window.removeEventListener('mod-viewer-model-rig-changed', onRigChanged);
       window.removeEventListener('mod-viewer-model-rig-pose-changed', onPoseChanged);
       window.removeEventListener('mod-viewer-model-transform-changed', onModelTransformChanged);

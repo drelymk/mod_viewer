@@ -28,6 +28,8 @@ def _page(edge_browser, frontend_url, responses, **kwargs):
         api_features=sorted(features), **kwargs)
     if load_weight_runtime:
         page.evaluate("""async () => {
+          const feature = await import('./js/mesh/weight-rig-feature.js');
+          await feature.loadWeightRigFeature();
           window.__testWeightRigRuntime = await import(
             './js/mesh/weight-rig-runtime.js');
         }""")

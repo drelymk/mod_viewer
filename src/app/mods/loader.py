@@ -19,7 +19,9 @@ from core.mod_source import (
 
 from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
 from app.mods.controls import (
+    _control_semantic_projection,
     _gating_vars,
+    _gating_vars_from_mesh_semantics,
     build_menu_panel,
     build_toggle_panel,
     load_control_state,
@@ -184,11 +186,8 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
     return payload
 
 
-def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
-    """Read draw and material semantics without building geometry."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+def _mesh_semantic_projection(parsed, context, active_mesh_keys=None):
+    """Build the mesh projection shared by narrow and combined reads."""
     _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
     mesh_payload = build_mesh_semantics(
         parsed.groups, context.mod_dir, game_profile=parsed.game.game,
@@ -199,10 +198,39 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     from .metadata import hydrate_component_material_kinds
     hydrate_component_material_kinds(mesh_payload, context.metadata)
     material_profiles = _assign_material_profiles(mesh_payload, parsed.game)
+    return mesh_payload, material_profiles, asset_resolution
+
+
+def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
+    """Read draw and material semantics without building geometry."""
+    parsed = analyze_mod_inis(
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source)
+    mesh_payload, material_profiles, asset_resolution = \
+        _mesh_semantic_projection(parsed, context, active_mesh_keys)
     return {
         "meshes": mesh_payload,
         "material_profiles": material_profiles,
         "asset_resolution": asset_resolution,
+    }
+
+
+def load_semantic_state(context, overrides=None, pending_new_sections=None,
+                        active_mesh_keys=None):
+    """Read mesh and control projections from one authoritative analysis."""
+    parsed = analyze_mod_inis(
+        context.ini_paths, context.mod_dir, overrides, context.docs,
+        source=context.source)
+    mesh_payload, material_profiles, asset_resolution = \
+        _mesh_semantic_projection(parsed, context, active_mesh_keys)
+    gating_vars = _gating_vars_from_mesh_semantics(
+        mesh_payload, active_mesh_keys)
+    return {
+        "meshes": mesh_payload,
+        "material_profiles": material_profiles,
+        "asset_resolution": asset_resolution,
+        **_control_semantic_projection(
+            parsed, context, pending_new_sections, gating_vars=gating_vars),
     }
 
 

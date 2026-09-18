@@ -178,6 +178,9 @@ class ModViewerAPI:
     def get_mesh_semantics(self, folder_path):
         return self._mod_preview.get_mesh_semantics(folder_path)
 
+    def get_semantic_state(self, folder_path):
+        return self._mod_preview.get_semantic_state(folder_path)
+
     def _emit_ui_event(self, name, detail):
         """Push one structured event to the current WebView, if available."""
         if self._window is None:

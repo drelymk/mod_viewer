@@ -39,6 +39,7 @@ EXPECTED_API_METHODS = {
     "get_language",
     "get_panel_opacity",
     "get_present_state",
+    "get_semantic_state",
     "get_record_positions",
     "get_model_skinning_preview",
     "get_toggle_details",

@@ -33,7 +33,8 @@ class IniAnalysis:
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
-                seen=None, extra_gating_vars=None, qualified_vars=None):
+                seen=None, extra_gating_vars=None, qualified_vars=None,
+                canonical_vars=None):
     """Analyze ``sections`` once and return all derived semantic models.
 
     Extractors accept the shared canonical spelling map so a normal load does
@@ -41,7 +42,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     receives the already-known gating set instead of rediscovering toggles,
     menu variables and state rules internally.
     """
-    canonical_vars = canonical_var_names(sections)
+    if canonical_vars is None:
+        canonical_vars = canonical_var_names(sections)
     resources = resources if resources is not None else extract_resources(sections)
     game_evidence, runtime_evidence, texture_api_evidence = \
         collect_game_evidence(sections, resources)

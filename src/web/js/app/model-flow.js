@@ -24,8 +24,9 @@ import {
   refreshHealthReport, setAssetResolution, setHealthLoader,
   setHealthReport,
 } from '../panels/health-report.js';
-import { setRigMetadata } from '../mesh/rig-preset-session.js';
-import { setHumanoidRigMetadata } from '../mesh/weight-rig-runtime.js';
+import {
+  setPendingHumanoidRigMetadata, setPendingRigMetadata,
+} from '../mesh/weight-rig-feature.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import {
@@ -236,8 +237,8 @@ export async function displayMeshPayload(payload, {
     setSourceUi('asset');
   }
   const modelPath = assetMode ? null : viewerState.currentModPath;
-  setRigMetadata(assetMode ? null : payload.metadata?.rig);
-  setHumanoidRigMetadata(assetMode ? null : payload.metadata?.rig);
+  setPendingRigMetadata(assetMode ? null : payload.metadata?.rig);
+  setPendingHumanoidRigMetadata(assetMode ? null : payload.metadata?.rig);
   viewerState.lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {}, {
     toggles: controls.toggles || {}, menu: controls.menu || {},

@@ -301,7 +301,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             secs, resources=resources, var_prefix=var_prefix, source=source_name,
             seen=seen_labels,
             extra_gating_vars=record["extra_gating_vars"],
-            qualified_vars=qualified_vars)
+            qualified_vars=qualified_vars,
+            canonical_vars=record["canonical_vars"])
         record["analysis"] = analysis
         ini_groups = analysis.draw_groups
         identity_source = _ini_rel(ini_path, folder_path, source=source)
