@@ -148,6 +148,12 @@ export function createSkinningRuntime({
     return true;
   }
 
+  function restAttributeArray(mesh, attributeName, current) {
+    const key = attributeName === 'position' ? 'basePositions' : 'baseNormals';
+    const base = mesh.userData?.[key];
+    return base && base.length === current.length ? base : current;
+  }
+
   function forEachRigMesh(rig, callback) {
     for (const mesh of rig?.meshes || []) {
       const state = states.get(mesh);
@@ -171,6 +177,22 @@ export function createSkinningRuntime({
     const previousVertices = state.combinedActiveVertices
       || EMPTY_ACTIVE_VERTICES;
     const activeVertices = combinedActiveVerticesForState(state);
+    const takingOwnership = Boolean(
+      activeVertices.length || state.deformationMode || state.physicsEnabled);
+    if (takingOwnership && mesh.userData.animationSuspended !== true) {
+      // Animation may have written a baked frame since the last deformation
+      // pass. Start the deformation owner from the canonical/rest geometry so
+      // the first pose does not mix two unrelated vertex spaces.
+      position.array.set(state.baselinePositions);
+      const normal = mesh.geometry.attributes.normal;
+      if (normal && state.baselineNormals
+          && normal.array.length === state.baselineNormals.length) {
+        normal.array.set(state.baselineNormals);
+        normal.needsUpdate = true;
+      }
+      position.needsUpdate = true;
+    }
+    mesh.userData.animationSuspended = takingOwnership;
     const removedVertices = vertexDifference(previousVertices, activeVertices);
     if (removedVertices.length) restorePoseVertices(mesh, state, removedVertices);
     let deformedVertices = 0;
@@ -258,11 +280,13 @@ export function createSkinningRuntime({
     const normal = mesh.geometry?.attributes?.normal;
     if (!state.baselinePositions
         || state.baselinePositions.length !== position.array.length) {
-      state.baselinePositions = new Float32Array(position.array);
+      state.baselinePositions = new Float32Array(
+        restAttributeArray(mesh, 'position', position.array));
     }
     if (normal && (!state.baselineNormals
         || state.baselineNormals.length !== normal.array.length)) {
-      state.baselineNormals = new Float32Array(normal.array);
+      state.baselineNormals = new Float32Array(
+        restAttributeArray(mesh, 'normal', normal.array));
     } else if (!normal) {
       state.baselineNormals = null;
     }
@@ -376,11 +400,13 @@ export function createSkinningRuntime({
     const normal = mesh.geometry?.attributes?.normal;
     if (!state.baselinePositions
         || state.baselinePositions.length !== position.array.length) {
-      state.baselinePositions = new Float32Array(position.array);
+      state.baselinePositions = new Float32Array(
+        restAttributeArray(mesh, 'position', position.array));
     }
     if (normal && (!state.baselineNormals
         || state.baselineNormals.length !== normal.array.length)) {
-      state.baselineNormals = new Float32Array(normal.array);
+      state.baselineNormals = new Float32Array(
+        restAttributeArray(mesh, 'normal', normal.array));
     } else if (!normal) {
       state.baselineNormals = null;
     }
@@ -803,6 +829,7 @@ export function createSkinningRuntime({
     else unregisterMesh(mesh);
     if (!state) return;
     state.disposed = true;
+    mesh.userData.animationSuspended = false;
     if (state.debugMaterial) state.debugMaterial.dispose();
     mesh.geometry?.deleteAttribute?.('color');
     mesh.material = state.originalMaterial || mesh.material;

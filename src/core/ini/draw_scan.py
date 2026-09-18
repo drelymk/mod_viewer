@@ -146,10 +146,33 @@ def gating_var_names(sections, var_prefix=None, *, toggle_keys=None,
     return toggle_vars | menu_vars | {rule["var"] for rule in state_rules}
 
 
-def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
+def _split_animation_conditions(conditions, animation_vars):
+    """Separate known frame clauses from ordinary visibility clauses."""
+    known = {str(value).casefold() for value in animation_vars or ()}
+    ordinary, animated = [], []
+    for group in conditions:
+        normal_group = [clause for clause in group
+                        if clause.get("var", "").casefold() not in known]
+        animation_group = [clause for clause in group
+                           if clause.get("var", "").casefold() in known]
+        if normal_group not in ordinary:
+            ordinary.append(normal_group)
+        if animation_group not in animated:
+            animated.append(animation_group)
+    # A condition that contained only an animation clause is unconditional from
+    # the viewer's visibility perspective. Preserve the frame branch separately.
+    if any(not group for group in ordinary):
+        ordinary = []
+    return ordinary, animated
+
+
+def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
+                             animation_vars=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
+    animation_vars = set(animation_vars or ())
+    tracked_vars = set(toggle_vars) | animation_vars
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     texture_override_index = _collect_texture_override_index(
@@ -350,6 +373,36 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 value = None if resource.lower() == "null" else resource
                 if cond_stack:
                     info["vertex_bindings_conditional"] = True
+                if slot == 0 and value:
+                    # Command lists often put the animated vb0 assignment in
+                    # an ``elif DRAW_TYPE`` branch.  Unknown runtime branch
+                    # expressions are represented as a false DNF by the
+                    # conservative parser, which would otherwise erase the
+                    # known ``$swapvar == N`` frame condition.  Keep only
+                    # tracked clauses for this metadata and treat an
+                    # untracked branch as unconstrained.
+                    combined = DNF_TRUE
+                    for frame in cond_stack:
+                        current = normalize_dnf(
+                            frame["cur"], tracked_vars)
+                        if current:
+                            combined = dnf_and(combined, current)
+                    conditions = normalize_dnf(
+                        combined, tracked_vars, var_prefix)
+                    public_animation_vars = {
+                        f"{var_prefix or ''}{item}"
+                        for item in animation_vars
+                    }
+                    conditions, animation_conditions = \
+                        _split_animation_conditions(
+                            conditions, public_animation_vars)
+                    info["animation_vertex_bindings"].append({
+                        "slot": slot,
+                        "resource": value,
+                        "conditions": conditions,
+                        "animation_conditions": animation_conditions,
+                        "source": line_source(raw),
+                    })
                 if slot <= 2 and value and not info[f"vb{slot}"]:
                     info[f"vb{slot}"] = value
                 info["_cur_vertex_resources"][slot] = value
@@ -370,7 +423,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 combined = DNF_TRUE
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
-                conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+                conditions = normalize_dnf(combined, tracked_vars, var_prefix)
+                public_animation_vars = {
+                    f"{var_prefix or ''}{value}" for value in animation_vars}
+                conditions, animation_conditions = _split_animation_conditions(
+                    conditions, public_animation_vars)
                 source = line_source(raw)
                 if source:
                     source = {
@@ -380,6 +437,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
                 info["draws"].append(AuthoredDrawCall(
                     count=int(match.group(1)), start=int(match.group(2)),
                     base=int(match.group(3)), conditions=conditions,
+                    animation_conditions=animation_conditions,
                     source=source,
                     occurrence=occurrence,
                     index_resource=info.get("_cur_ib"),
@@ -435,6 +493,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None):
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
+            "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
             "_cur_compute_resources": {},
             "_geometry_hash": None, "_match_first_index": None,

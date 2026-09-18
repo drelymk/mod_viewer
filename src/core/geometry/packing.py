@@ -32,6 +32,14 @@ class PackedDrawGeometry:
     used_vertices: tuple[int, ...] = ()
 
 
+@dataclass
+class PackedAnimationFrame:
+    """Only the per-frame attributes that differ from canonical geometry."""
+
+    positions: bytes
+    normals: bytes | None
+
+
 @dataclass(frozen=True)
 class PreparedDrawVertices:
     """The compact source-vertex selection shared by render and skin previews."""
@@ -254,6 +262,7 @@ def pack_draw_geometry(
     geometry_convention: GeometryConvention,
     sparse_shape_cache,
     source=None,
+    prepared=None,
 ):
     """Pack one resolved draw into compact raw geometry bytes.
 
@@ -261,10 +270,11 @@ def pack_draw_geometry(
     authored normals, and shape targets intentionally remain one operation so
     their ordering cannot drift apart.
     """
-    prepared = _prepare_draw_vertices(
-        draw, group, mod_dir=mod_dir, default_streams=default_streams,
-        default_index_size=default_index_size, buffers=buffers,
-        geometry_convention=geometry_convention, source=source)
+    if prepared is None:
+        prepared = _prepare_draw_vertices(
+            draw, group, mod_dir=mod_dir, default_streams=default_streams,
+            default_index_size=default_index_size, buffers=buffers,
+            geometry_convention=geometry_convention, source=source)
     if prepared is None:
         return None
     raw = prepared.raw_indices
@@ -342,7 +352,39 @@ def pack_draw_geometry(
     )
 
 
+def pack_animation_frame_attributes(
+        draw: DrawCall, prepared: PreparedDrawVertices, *, mod_dir,
+        buffers: BufferStore, source=None):
+    """Pack one frame's positions and authored normals for a prepared draw.
+
+    Indexes, UVs, textures, and shape targets remain owned by the canonical
+    draw.  The caller validates the prepared topology before using this data.
+    """
+    pos_bytes = bytearray(len(prepared.used_vertices) * 12)
+    for output_index, vertex_index in enumerate(prepared.used_vertices):
+        x, y, z, _u, _v = prepared.decoded_vertices[vertex_index]
+        struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
+
+    normal_bytes = None
+    normal_source = draw.normal_source
+    if normal_source is not None:
+        resolve = source.resolve_resource if source is not None \
+            else lambda value: safe_resource_path(mod_dir, value)
+        exists = source.is_file if source is not None else os.path.exists
+        same = source.same_reference if source is not None \
+            else lambda left, right: left == right
+        normal_path = resolve(normal_source.file)
+        if normal_path and exists(normal_path):
+            normal_data = (prepared.streams.position_data
+                           if same(normal_path, prepared.position_path)
+                           else buffers.raw(normal_path))
+            normal_bytes = decode_normals(
+                normal_source, normal_data, prepared.used_vertices)
+    return PackedAnimationFrame(bytes(pos_bytes), normal_bytes)
+
+
 __all__ = [
-    "PackedShapeTarget", "PackedDrawGeometry", "PreparedDrawVertices",
-    "_prepare_draw_vertices", "pack_draw_geometry",
+    "PackedShapeTarget", "PackedDrawGeometry", "PackedAnimationFrame",
+    "PreparedDrawVertices", "_prepare_draw_vertices", "pack_draw_geometry",
+    "pack_animation_frame_attributes",
 ]

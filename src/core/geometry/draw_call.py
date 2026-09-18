@@ -35,6 +35,7 @@ class AuthoredDrawCall:
     start: int
     base: int
     conditions: list = field(default_factory=list)
+    animation_conditions: list = field(default_factory=list)
     source: dict | None = None
     occurrence: DrawOccurrence | tuple | None = None
     index_resource: str | None = None
@@ -92,6 +93,7 @@ class DrawCall(MutableMapping):
     start: int = 0
     base: int = 0
     conditions: list = field(default_factory=list)
+    animation_conditions: list = field(default_factory=list)
     sources: list = field(default_factory=list)
     # Authored provenance used to distinguish separate displayed rows, not
     # rendered output and therefore not part of render_identity().
@@ -142,7 +144,8 @@ class DrawCall(MutableMapping):
         "emission_map": "emission_map",
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
-        "label", "conditions", "sources", "occurrence", "geometry_match",
+        "label", "conditions", "animation_conditions", "sources",
+        "occurrence", "geometry_match",
         "slot_textures", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
         "skinning_bone_offset",

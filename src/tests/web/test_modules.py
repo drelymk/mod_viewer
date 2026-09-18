@@ -20,6 +20,76 @@ def _call_module(page, module_path, export_name, *args):
     })
 
 
+def test_baked_animation_updates_existing_attributes_and_wraps_frames(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextFrameId = 1;
+      const previousRequest = window.requestAnimationFrame;
+      const previousCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextFrameId++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      try {
+        const {setControlValue} = await import('./js/editing/control-state.js');
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const first = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+        const second = new Float32Array([0, 0, 1, 1, 0, 1, 0, 1, 1]);
+        const frames = new Float32Array(first.length + second.length);
+        frames.set(first);
+        frames.set(second, first.length);
+        const position = {array: new Float32Array(first), needsUpdate: false};
+        const geometry = {
+          attributes: {position},
+          computeBoundingBox() {},
+          computeBoundingSphere() {},
+        };
+        const mesh = {
+          userData: {basePositions: new Float32Array(first)}, geometry,
+        };
+        const originalAttribute = position;
+        setControlValue('anim', '1');
+        runtime.registerAnimatedMesh(mesh, 'clock', {
+          positions: encode(frames), position_frame_bytes: first.byteLength,
+          frames: 2,
+        }, {clock: {
+          frame_var: 'frame', fps_var: null, fps: 1,
+          frame_start: 0, frame_end: 1,
+          conditions: [[{var: 'anim', value: '1', negate: false}]],
+        }});
+        const initialId = Math.min(...pending.keys());
+        pending.get(initialId)(0);
+        pending.delete(initialId);
+        const firstFrame = Array.from(position.array);
+        const nextId = Math.max(...pending.keys());
+        pending.get(nextId)(1000);
+        const secondFrame = Array.from(position.array);
+        const snapshot = runtime.animationRuntimeSnapshot();
+        runtime.resetAnimationRuntime();
+        return {
+          firstFrame, secondFrame,
+          sameAttribute: position === originalAttribute,
+          snapshot,
+        };
+      } finally {
+        window.requestAnimationFrame = previousRequest;
+        window.cancelAnimationFrame = previousCancel;
+      }
+    }""")
+    assert result["firstFrame"] == [0, 0, 0, 1, 0, 0, 0, 1, 0]
+    assert result["secondFrame"] == [0, 0, 1, 1, 0, 1, 0, 1, 1]
+    assert result["sameAttribute"]
+    assert result["snapshot"] == {"clocks": 1, "meshes": 1, "rafActive": True}
+
+
 def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
         module_page):
     result = module_page.evaluate("""async () => {

@@ -142,7 +142,7 @@ def _declared_vertex_vg_resources_for_blend(
 
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
-                      gating_vars=None):
+                      gating_vars=None, animation_vars=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     if seen is None:
         seen = {}
@@ -150,7 +150,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                                                 blend_filename):
         return _declared_vertex_vg_resources_for_blend(
             resources, blend_resource_name, blend_filename)
-    section_info = _scan_sections_for_draws(sections, var_prefix, gating_vars)
+    section_info = _scan_sections_for_draws(
+        sections, var_prefix, gating_vars, animation_vars)
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
         section_info, resources, resource_copy_sources, sections=sections)
@@ -162,6 +163,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     component_vertex_resources = resolved_buffers["component_vertex_resources"]
     component_blend_vertex_resources = resolved_buffers[
         "component_blend_vertex_resources"]
+    component_animation_vertex_bindings = resolved_buffers[
+        "component_animation_vertex_bindings"]
     hash_positions = resolved_buffers["hash_positions"]
     hash_texcoords = resolved_buffers["hash_texcoords"]
     global_ib = resolved_buffers["global_ib"]
@@ -215,6 +218,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     def lookup_component_blend_vertex_resources(component):
         return _lookup_component_value(
             component_blend_vertex_resources, component) or {}
+
+    def lookup_component_animation_vertex_bindings(component):
+        return _lookup_component_value(
+            component_animation_vertex_bindings, component) or []
 
     groups = []
     for section_name, info in draw_sections:
@@ -286,6 +293,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,
                 conditions=authored.conditions,
+                animation_conditions=authored.animation_conditions,
                 sources=[authored.source] if authored.source else [],
                 occurrence=authored.occurrence,
                 ib_file=ib_file, index_size=index_size,
@@ -481,6 +489,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "index_size": index_size,
             "geometry_match": info.get("geometry_match_at_end"),
             "draws": draws,
+            "animation_vertex_bindings": (
+                lookup_component_animation_vertex_bindings(component)),
             "_texture_override_index": texture_override_index,
         })
     return groups

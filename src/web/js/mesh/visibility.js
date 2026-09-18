@@ -13,6 +13,7 @@ import {
   toggleToonShadingMode, toggleWireframeMode,
 } from '../scene/render-modes.js';
 import { clearViewSyncs, syncView, syncViews } from '../scene/view-sync.js';
+import { wakeAnimationRuntime } from './animation-runtime.js';
 
 export {
   activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied,
@@ -48,6 +49,7 @@ export function syncCheckboxes() {
 
 export function refreshAll({ force = {}, additionalMeshes = [] } = {}) {
   replayControlStateRules();
+  wakeAnimationRuntime();
   const next = getControlState();
   const initialApplication = lastAppliedControlState === null;
   const changedVariables = initialApplication

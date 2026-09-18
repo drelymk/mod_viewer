@@ -2,7 +2,7 @@
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
@@ -34,6 +34,7 @@ class ParsedModAnalysis:
     state_rules: list
     present: dict
     game: GameDetection
+    animations: list = field(default_factory=list)
 
     def __iter__(self):
         """Keep old six-value helper callers source-compatible."""
@@ -188,6 +189,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     game_evidence = []
     runtime_evidence = []
     texture_api_evidence = []
+    animations = []
     multi = len(ini_paths) > 1
     if source is None and ini_paths:
         source = getattr(ini_paths[0], "source", None)
@@ -291,6 +293,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         game_evidence.extend(analysis.game_evidence)
         runtime_evidence.extend(analysis.runtime_evidence)
         texture_api_evidence.extend(analysis.texture_api_evidence)
+        animations.extend(analysis.animations)
         _attach_shape_sliders(ini_groups, shape_sliders)
         groups.extend(ini_groups)
         ini_toggles = analysis.toggles
@@ -450,6 +453,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         present=present,
         game=resolve_game_detection(
             game_evidence, runtime_evidence, texture_api_evidence),
+        animations=animations,
     )
 
 
