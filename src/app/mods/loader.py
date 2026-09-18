@@ -143,7 +143,7 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
                         present=None, state_rules=None, state_defaults=None,
                         health=None, error=None, game=None,
                         material_profiles=None, asset_resolution=None,
-                        source=None):
+                        source=None, animations=None):
     """Create the stable application-to-frontend payload shape."""
     profile_table = dict(material_profiles or {})
     if game is not None:
@@ -172,6 +172,8 @@ def _structured_payload(meshes=None, textures=None, toggles=None, menu=None,
     }
     if game is not None:
         payload["metadata"]["game"] = game.to_metadata()
+    if animations:
+        payload["animations"] = animations
     if source is not None:
         payload["metadata"].update({
             "source_kind": source.kind,
@@ -243,7 +245,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         built = build_mesh_result(
             parsed.groups, context.mod_dir, geometry=geometry,
             texture_source=texture_source,
-            game_profile=parsed.game.game, source=context.source)
+            game_profile=parsed.game.game, source=context.source,
+            animations=parsed.animations)
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}
@@ -272,7 +275,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             menu=menu, present=parsed.present,
             state_rules=parsed.state_rules, state_defaults=parsed.defaults,
             game=parsed.game, material_profiles=material_profiles,
-            asset_resolution=asset_resolution, source=context.source)
+            asset_resolution=asset_resolution, source=context.source,
+            animations=getattr(built, "animations", None))
     except ModSourceError as error:
         context.skinning_manifest = {}
         return _structured_payload(

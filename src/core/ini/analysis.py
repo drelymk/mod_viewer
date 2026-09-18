@@ -8,6 +8,7 @@ from .menu import extract_menu_toggles
 from .state import extract_state_rules
 from .shapes import extract_shape_sliders
 from .draw_groups import build_draw_groups
+from .animations import discover_animation_clocks
 from ..materials.game_profile import collect_game_evidence
 
 
@@ -24,6 +25,7 @@ class IniAnalysis:
     shapes: list
     defaults: dict
     gating_vars: set
+    animations: list = field(default_factory=list)
     draw_groups: list = field(default_factory=list)
     game_evidence: list = field(default_factory=list)
     runtime_evidence: list = field(default_factory=list)
@@ -56,6 +58,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         canonical_vars=canonical_vars)
     defaults = extract_variable_defaults(
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
+    animation_analysis = discover_animation_clocks(
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
 
     gating_vars = {
         var for info in toggles.values() for var in info.get("vars", {})
@@ -80,7 +84,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     }
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
-        seen=seen, gating_vars=scan_gating_vars)
+        seen=seen, gating_vars=scan_gating_vars,
+        animation_vars=animation_analysis.frame_vars)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,
@@ -91,6 +96,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         shapes=shapes,
         defaults=defaults,
         gating_vars=gating_vars,
+        animations=list(animation_analysis.clocks),
         draw_groups=draw_groups,
         game_evidence=game_evidence,
         runtime_evidence=runtime_evidence,

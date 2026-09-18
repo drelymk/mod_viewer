@@ -12,6 +12,7 @@ import {
   activeMeshes, refreshAll, reset, setStateRules,
 } from '../mesh/visibility.js';
 import { setTextures } from '../mesh/mesh-factory.js';
+import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
 import { buildMeshPanel } from '../panels/mesh-panel.js';
 import { setMeshesAvailable } from '../panels/left-dock.js';
 import { buildTogglePanel } from '../panels/toggle-panel.js';
@@ -95,6 +96,7 @@ export async function refreshPendingState(
 }
 
 export function clearScene({ preserveModelOrientation = false } = {}) {
+  resetAnimationRuntime();
   clearSelection();
   clearInspector();
   viewerState.rightDockEnabled = false;
@@ -249,6 +251,7 @@ export async function displayMeshPayload(payload, {
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,
+      animations: payload.animations || {},
       // Asset Preview has no editing session at all. An archive mod is read-only
       // only at the persistence boundary; viewer controls can still stage
       // session-local state while Export remains disabled.

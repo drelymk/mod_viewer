@@ -396,6 +396,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
     component_positions, component_texcoords = {}, {}
     component_vertex_resources = {}
     component_blend_vertex_resources = {}
+    component_animation_vertex_bindings = {}
     hash_positions, hash_texcoords = {}, {}
     component_roles = _component_roles_for_sections(section_info)
 
@@ -418,6 +419,23 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                         info.get("vertex_resources_at_end") or {}).items():
                     if resource is not None:
                         blend_resources.setdefault(slot, resource)
+            animation_bindings = info.get("animation_vertex_bindings") or []
+            if animation_bindings:
+                component_key = component_name.lower()
+                target = component_animation_vertex_bindings.setdefault(
+                    component_key, [])
+                # Blend overrides are the authored animation source in the
+                # supported baked-mesh pattern.  Keep the first matching
+                # source for a component so a later ordinary override cannot
+                # replace it with unrelated conditional bindings.
+                if not target or component_suffix == "Blend":
+                    target[:] = []
+                    for binding in animation_bindings:
+                        resolved = resolve_vertex_info(binding.get("resource"))
+                        item = dict(binding)
+                        item["file"] = resolved.get("filename")
+                        item["stride"] = resolved.get("stride")
+                        target.append(item)
         if parsed and component_suffix == "Texcoord":
             component = component_name
             if info["vb1"]:
@@ -490,6 +508,8 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         "component_texcoords": component_texcoords,
         "component_vertex_resources": component_vertex_resources,
         "component_blend_vertex_resources": component_blend_vertex_resources,
+        "component_animation_vertex_bindings": (
+            component_animation_vertex_bindings),
         "hash_positions": hash_positions,
         "hash_texcoords": hash_texcoords,
         "global_ib": global_ib,

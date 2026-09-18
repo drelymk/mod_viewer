@@ -26,6 +26,7 @@ import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
 import { syncMeshColorAdjustment } from '../mesh/mesh-color-session.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { registerAnimatedMesh } from '../mesh/animation-runtime.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
@@ -316,6 +317,7 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   const readOnlySource = options.readOnlySource === true;
   const canPersistMetadata = options.canPersistMetadata !== false;
   const texturePicker = options.texturePicker || null;
+  const animationClocks = options.animations || {};
 
   const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
   const bySource = groupKeysBySource(meshes, validNames);
@@ -474,6 +476,9 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
             material_map: meshes[name].material_map_variants,
             emission_map: meshes[name].emission_map_variants,
           });
+        registerAnimatedMesh(
+          mesh, entry.animation_id, entry.animation_geometry,
+          animationClocks);
         syncMeshColorAdjustment(mesh, { render: false });
         // addMesh establishes the automatic defaults; restore persisted
         // viewer choices only after that initialization has completed.
