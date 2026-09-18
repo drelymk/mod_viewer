@@ -14,8 +14,9 @@ that renders back to the original text.
 
 import re
 
-_CLAUSE_RE = re.compile(r'\$(\w+)\s*(==|!=)\s*(-?[\w.]+)')
-_ASSIGN_BOOL_RE = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
+_VAR_TOKEN = r'(?:\\[^\\\s()&|!=<>]+(?:\\[^\\\s()&|!=<>]+)+|\w+)'
+_CLAUSE_RE = re.compile(rf'\$({_VAR_TOKEN})\s*(==|!=)\s*(-?[\w.]+)')
+_ASSIGN_BOOL_RE = re.compile(rf'^\$({_VAR_TOKEN})\s*=\s*(.+)$')
 _STRUCT_RE = re.compile(r'(\(|\)|&&|\|\||!(?!=))')
 
 DNF_TRUE:  list = [[]]
@@ -99,7 +100,7 @@ def _atom_to_dnf(atom, alias_map):
         v, op, val = m.group(1), m.group(2), m.group(3)
         dnf = [[{"var": v, "value": val, "negate": op == "!="}]]
     else:
-        m = re.fullmatch(r'\$(\w+)', atom)
+        m = re.fullmatch(rf'\$({_VAR_TOKEN})', atom)
         if m:
             # Alias-map values are already DNF. A non-alias bare variable is
             # an ordinary 3DMigoto truthiness test (`if $hat` means non-zero),
@@ -164,7 +165,7 @@ def parse_condition_dnf(content, alias_map):
         return DNF_TRUE
 
 
-def normalize_dnf(dnf, toggle_vars, var_prefix=None):
+def normalize_dnf(dnf, toggle_vars, var_prefix=None, qualified_vars=None):
     """Drop clauses on untracked variables (they're assumed satisfied, matching
     long-standing behaviour), then apply var_prefix. An alternative left with no
     clauses is unconditionally true, which makes the whole condition true -> [].
@@ -174,16 +175,35 @@ def normalize_dnf(dnf, toggle_vars, var_prefix=None):
     `$Hair`, but a mod that spells it one way in [Constants] and the other in
     the draw would otherwise leave the mesh untracked, hence always visible.
     """
-    tracked = {v.lower(): v for v in toggle_vars}
+    tracked = {str(v).casefold(): v for v in toggle_vars}
+    qualified = {
+        str(key).casefold(): value
+        for key, value in (qualified_vars or {}).items()
+    }
+    # A scan may normalize the same DNF more than once. Keep resolved provider
+    # identities valid on subsequent passes without applying the consumer's
+    # prefix to them.
+    qualified.update({
+        str(value).casefold(): value
+        for value in (qualified_vars or {}).values()
+    })
     out: list = []
     for group in dnf:
-        kept = [{"var": tracked[c["var"].lower()], "value": c["value"],
-                 "negate": c["negate"]}
-                for c in group if c["var"].lower() in tracked]
+        kept = []
+        for clause in group:
+            key = str(clause["var"]).casefold()
+            if key in tracked:
+                variable = tracked[key]
+                if var_prefix:
+                    variable = f"{var_prefix}{variable}"
+            elif key in qualified:
+                variable = qualified[key]
+            else:
+                continue
+            kept.append({"var": variable, "value": clause["value"],
+                         "negate": clause["negate"]})
         if not kept:
             return []
-        if var_prefix:
-            kept = [{**c, "var": f"{var_prefix}{c['var']}"} for c in kept]
         if kept not in out:
             out.append(kept)
     return out

@@ -174,7 +174,7 @@ def _condition_stack_line(line, stack, aliases):
 
 
 def discover_animation_clocks(sections, *, var_prefix=None,
-                              canonical_vars=None):
+                              canonical_vars=None, qualified_vars=None):
     """Discover supported clocks and the source-spelling frame variables.
 
     The returned ``frame_vars`` intentionally uses the local INI spelling;
@@ -240,7 +240,8 @@ def discover_animation_clocks(sections, *, var_prefix=None,
             combined = DNF_TRUE
             for frame in stack:
                 combined = dnf_and(combined, frame["cur"])
-            conditions = normalize_dnf(combined, all_vars, var_prefix)
+            conditions = normalize_dnf(
+                combined, all_vars, var_prefix, qualified_vars)
             public_frame = f"{var_prefix or ''}{frame_local}"
             source_section = f"{var_prefix or ''}{section_name}"
             clock = AnimationClock(

@@ -105,6 +105,53 @@ filename = textures/b.dds
         "textures/a.dds", "textures/b.dds"]
 
 
+def test_animation_binding_keeps_already_resolved_qualified_reads():
+    sections = parse_sections("fixture.ini", text="""[TextureOverrideBody]
+if $swapvar == 1 && $\\JaneDoe_AIO\\Master\\swapvar == 1
+vb0 = ResourcePosition
+endif
+drawindexed = 3, 0, 0
+""")
+    scanned = _scan_sections_for_draws(
+        sections,
+        var_prefix="Consumer::",
+        animation_vars={"swapvar"},
+        qualified_vars={
+            r"\janedoe_aio\master\swapvar": "Master::swapvar",
+        })
+
+    binding = scanned["TextureOverrideBody"][
+        "animation_vertex_bindings"][0]
+    assert binding["conditions"] == [[{
+        "var": "Master::swapvar", "value": "1", "negate": False,
+    }]]
+    assert binding["animation_conditions"] == [[{
+        "var": "Consumer::swapvar", "value": "1", "negate": False,
+    }]]
+
+
+def test_texture_override_index_resolves_qualified_conditions():
+    sections = parse_sections("fixture.ini", text="""[TextureOverrideOriginal]
+hash = 11111111
+if $\\JaneDoe_AIO\\Master\\swapvar == 1
+this = ResourceA
+endif
+
+[ResourceA]
+filename = textures/a.dds
+""")
+    scanned = _scan_sections_for_draws(
+        sections,
+        qualified_vars={
+            r"\janedoe_aio\master\swapvar": "Master::swapvar",
+        })
+    replacement = scanned.texture_override_index.replacements_by_hash[
+        "11111111"][0]
+    assert replacement.dnf == [[{
+        "var": "Master::swapvar", "value": "1", "negate": False,
+    }]]
+
+
 def test_draw_groups_keep_clean_display_names_with_shared_seen_labels():
     sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
 ib = ResourceBodyIB
