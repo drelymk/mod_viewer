@@ -373,7 +373,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 value = None if resource.lower() == "null" else resource
                 if cond_stack:
                     info["vertex_bindings_conditional"] = True
-                if slot == 0 and value:
+                if slot == 0 and value and animation_vars:
                     # Command lists often put the animated vb0 assignment in
                     # an ``elif DRAW_TYPE`` branch.  Unknown runtime branch
                     # expressions are represented as a false DNF by the
@@ -396,13 +396,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     conditions, animation_conditions = \
                         _split_animation_conditions(
                             conditions, public_animation_vars)
-                    info["animation_vertex_bindings"].append({
-                        "slot": slot,
-                        "resource": value,
-                        "conditions": conditions,
-                        "animation_conditions": animation_conditions,
-                        "source": line_source(raw),
-                    })
+                    if animation_conditions:
+                        info["animation_vertex_bindings"].append({
+                            "slot": slot,
+                            "resource": value,
+                            "conditions": conditions,
+                            "animation_conditions": animation_conditions,
+                            "source": line_source(raw),
+                        })
                 if slot <= 2 and value and not info[f"vb{slot}"]:
                     info[f"vb{slot}"] = value
                 info["_cur_vertex_resources"][slot] = value

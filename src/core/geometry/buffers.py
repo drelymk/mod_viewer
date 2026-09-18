@@ -141,24 +141,32 @@ class BufferStore:
 
     def raw(self, path):
         if path not in self._raw:
-            source_backed = (self.source is not None
-                             and getattr(self.source, "virtual", False)
-                             and self.source.is_resource_reference(path))
-            size = (self.source.size(path)
-                    if source_backed else os.path.getsize(path))
-            if size > _MAX_BUFFER_FILE_BYTES:
-                raise ValueError(
-                    f"Buffer file is too large ({size / 1048576:.1f} MiB).")
-            if self._total_bytes + size > _MAX_TOTAL_BUFFER_BYTES:
-                raise ValueError("Mod buffer data exceeds the 2 GiB safety limit.")
-            if source_backed:
-                data = self.source.read_bytes(path)
-            else:
-                with open(path, "rb") as stream:
-                    data = stream.read()
+            data = self._read(path, cached=True)
             self._raw[path] = data
             self._total_bytes += len(data)
         return self._raw[path]
+
+    def transient(self, path):
+        """Read one frame buffer without retaining it in the build cache."""
+        return self._read(path, cached=False)
+
+    def _read(self, path, *, cached):
+        source_backed = (self.source is not None
+                         and getattr(self.source, "virtual", False)
+                         and self.source.is_resource_reference(path))
+        size = (self.source.size(path)
+                if source_backed else os.path.getsize(path))
+        if size > _MAX_BUFFER_FILE_BYTES:
+            raise ValueError(
+                f"Buffer file is too large ({size / 1048576:.1f} MiB).")
+        if cached and self._total_bytes + size > _MAX_TOTAL_BUFFER_BYTES:
+            raise ValueError("Mod buffer data exceeds the 2 GiB safety limit.")
+        if source_backed:
+            data = self.source.read_bytes(path)
+        else:
+            with open(path, "rb") as stream:
+                data = stream.read()
+        return data
 
     def vertex_streams(
         self,

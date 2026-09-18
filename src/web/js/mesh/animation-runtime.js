@@ -2,9 +2,10 @@
 
 import { decodeF32 } from '../textures/decode.js';
 import { getControlValue, dnfSatisfied } from '../editing/control-state.js';
+import { invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
-const clocks = new Map();
+const tracks = new Map();
 let rafId = null;
 
 function positiveInteger(value, fallback = 0) {
@@ -52,14 +53,45 @@ function restoreCanonical(mesh) {
     normal.array.set(baseNormals);
     normal.needsUpdate = true;
   } else if (normal) {
-    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeVertexNormals?.();
   }
-  mesh.geometry?.computeBoundingBox?.();
-  mesh.geometry?.computeBoundingSphere?.();
+}
+
+function installAnimationBounds(mesh, bounds) {
+  const geometry = mesh.geometry;
+  if (!geometry) return;
+  const min = bounds?.min;
+  const max = bounds?.max;
+  if (!Array.isArray(min) || min.length !== 3
+      || !Array.isArray(max) || max.length !== 3
+      || !min.every(Number.isFinite) || !max.every(Number.isFinite)) {
+    geometry.computeBoundingBox?.();
+    geometry.computeBoundingSphere?.();
+    return;
+  }
+  geometry.computeBoundingBox?.();
+  const box = geometry.boundingBox;
+  if (box?.min?.set && box?.max?.set) {
+    box.min.set(min[0], min[1], min[2]);
+    box.max.set(max[0], max[1], max[2]);
+  }
+  geometry.computeBoundingSphere?.();
+  const sphere = geometry.boundingSphere;
+  if (sphere?.center?.set) {
+    const center = [
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2,
+    ];
+    const radius = Math.hypot(
+      max[0] - center[0], max[1] - center[1], max[2] - center[2]);
+    sphere.center.set(center[0], center[1], center[2]);
+    sphere.radius = radius;
+  }
 }
 
 function applyFrame(mesh, state, frame) {
-  const index = frame - state.clock.frame_start;
+  const index = frame - state.frameStart;
   if (index < 0 || index >= state.frameCount) return false;
   if (state.lastFrame === frame) return false;
   const position = mesh.geometry?.attributes?.position;
@@ -80,10 +112,8 @@ function applyFrame(mesh, state, frame) {
       normal.needsUpdate = true;
     }
   } else if (normal) {
-    mesh.geometry.computeVertexNormals();
+    mesh.geometry.computeVertexNormals?.();
   }
-  mesh.geometry.computeBoundingBox();
-  mesh.geometry.computeBoundingSphere();
   state.lastFrame = frame;
   return true;
 }
@@ -93,13 +123,21 @@ function schedule() {
   rafId = requestAnimationFrame(tick);
 }
 
+function selectedClock(state) {
+  for (const id of state.clockIds) {
+    const clock = state.clocks[id];
+    if (clock && clockActive(clock)) return {id, clock};
+  }
+  return null;
+}
+
 function tick(now) {
   rafId = null;
   let playing = false;
   let changed = false;
-  for (const state of clocks.values()) {
-    const active = clockActive(state.clock);
-    if (!active) {
+  for (const state of tracks.values()) {
+    const selected = selectedClock(state);
+    if (!selected) {
       if (state.active) {
         state.meshes.forEach(mesh => {
           const meshState = state.meshesByMesh.get(mesh);
@@ -109,46 +147,68 @@ function tick(now) {
           }
           restoreCanonical(mesh);
           meshState.lastFrame = null;
+          if (mesh.visible !== false) changed = true;
         });
         state.lastFrame = null;
+        state.activeClockId = null;
         state.active = false;
-        changed = true;
       }
       continue;
     }
-    const fps = clockFps(state.clock);
+    const fps = clockFps(selected.clock);
     if (!fps) continue;
+    const visibleMeshes = [...state.meshes].filter(mesh =>
+      mesh.visible !== false && mesh.userData?.animationSuspended !== true);
+    if (!visibleMeshes.length) continue;
     playing = true;
-    if (!state.active) {
+    if (!state.active || state.activeClockId !== selected.id) {
       state.startedAt = now;
       state.lastFrame = null;
+      state.activeClockId = selected.id;
       state.active = true;
     }
-    const clock = {...state.clock, fps};
+    const clock = {...selected.clock, fps};
     const frame = frameForElapsed(clock, (now - state.startedAt) / 1000);
     if (frame === null) continue;
     state.meshes.forEach(mesh => {
-      if (mesh.userData?.animationSuspended === true) {
+      if (mesh.userData?.animationSuspended === true
+          || mesh.visible === false) {
         state.meshesByMesh.get(mesh).lastFrame = null;
         return;
       }
       changed = applyFrame(mesh, state.meshesByMesh.get(mesh), frame) || changed;
     });
   }
-  if (changed) requestRender();
+  if (changed) {
+    // Character shadows are demand-driven. One invalidation covers every
+    // mesh changed during this animation tick.
+    invalidateCharacterShadowMap({request: false});
+    requestRender();
+  }
   if (playing) schedule();
 }
 
 export function registerAnimatedMesh(mesh, animationId, geometry, animationClocks) {
-  const clock = animationClocks?.[animationId];
-  if (!mesh || !clock || !geometry?.positions) return false;
-  let state = clocks.get(animationId);
+  const clockIds = Array.isArray(geometry?.clock_ids)
+    && geometry.clock_ids.length ? geometry.clock_ids : [animationId];
+  const clocksForTrack = Object.fromEntries(clockIds
+    .map(id => [id, animationClocks?.[id]])
+    .filter(([, clock]) => !!clock));
+  if (!mesh || !Object.keys(clocksForTrack).length || !geometry?.positions) {
+    return false;
+  }
+  let state = tracks.get(animationId);
   if (!state) {
     state = {
-      clock: {...clock}, meshes: new Set(), meshesByMesh: new Map(),
-      startedAt: 0, lastFrame: null, active: false,
+      clocks: clocksForTrack, clockIds: Object.keys(clocksForTrack),
+      meshes: new Set(), meshesByMesh: new Map(), startedAt: 0,
+      lastFrame: null, activeClockId: null, active: false,
     };
-    clocks.set(animationId, state);
+    tracks.set(animationId, state);
+  } else {
+    Object.assign(state.clocks, clocksForTrack);
+    state.clockIds = [...new Set([...state.clockIds, ...clockIds])]
+      .filter(id => state.clocks[id]);
   }
   const frameCount = positiveInteger(geometry.frames);
   const positionFrameBytes = positiveInteger(geometry.position_frame_bytes);
@@ -158,8 +218,9 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
   const normalFrameBytes = positiveInteger(geometry.normal_frame_bytes);
   const normals = geometry.normals && normalFrameBytes
     ? decodeF32(geometry.normals) : null;
+  const firstClock = state.clocks[state.clockIds[0]];
   const meshState = {
-    clock: state.clock,
+    frameStart: Number(geometry.frame_start ?? firstClock?.frame_start ?? 0),
     positions,
     normals,
     frameCount,
@@ -170,6 +231,7 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
   state.meshes.add(mesh);
   state.meshesByMesh.set(mesh, meshState);
   mesh.userData.animationState = meshState;
+  installAnimationBounds(mesh, geometry.bounds);
   schedule();
   return true;
 }
@@ -179,18 +241,18 @@ export function resetAnimationRuntime() {
     cancelAnimationFrame(rafId);
   }
   rafId = null;
-  clocks.clear();
+  tracks.clear();
 }
 
-/** Wake a clock after control/state values change without rebuilding meshes. */
+/** Wake tracks after control or visibility state changes without rebuilding meshes. */
 export function wakeAnimationRuntime() {
   schedule();
 }
 
 export function animationRuntimeSnapshot() {
   return {
-    clocks: clocks.size,
-    meshes: [...clocks.values()].reduce(
+    clocks: tracks.size,
+    meshes: [...tracks.values()].reduce(
       (total, state) => total + state.meshes.size, 0),
     rafActive: rafId !== null,
   };

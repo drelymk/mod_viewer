@@ -7,6 +7,8 @@ behavior.
 """
 
 from dataclasses import dataclass
+import hashlib
+import json
 import re
 
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
@@ -79,12 +81,23 @@ class AnimationClock:
     @property
     def animation_id(self):
         # One Present section may drive several frame families through the
-        # same variable.  The baked frame range is part of the identity so a
-        # body animation and a battle animation cannot overwrite each other
-        # in the payload.
+        # same variable.  Include the complete clock definition: same-range
+        # clocks can still differ by FPS, speed, or activation conditions.
+        identity = json.dumps({
+            "source_section": self.source_section,
+            "frame_var": self.frame_var,
+            "fps_var": self.fps_var,
+            "fps": self.fps_value,
+            "frame_start": self.frame_start,
+            "frame_end": self.frame_end,
+            "conditions": self.conditions,
+            "speed_var": self.speed_var,
+            "speed": self.speed_value,
+        }, sort_keys=True, separators=(",", ":"), default=str)
+        digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
         return (f"{self.source_section}::{self.frame_var}::"
                 f"{self.frame_start}-{self.frame_end}::"
-                f"{self.speed_var or self.speed_value}")
+                f"{digest}")
 
     def to_dict(self):
         result = {

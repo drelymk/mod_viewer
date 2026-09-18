@@ -6,7 +6,9 @@ from core.ini.animations import discover_animation_clocks, frame_condition
 from core.ini.analysis import analyze_ini
 from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
-from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry.mesh_builder import (
+    GeometryBlob, _animation_families, build_mesh_result,
+)
 
 
 def _sections(text):
@@ -128,6 +130,52 @@ $aaa = (time * $fps * $xx % ($frameEnd - $frameStart + 1) + $frameStart) // 1
         "aaa", "fps", 50, "xx", 0.9, 1, 50)
 
 
+def test_static_vb0_bindings_are_not_animation_metadata():
+    sections = _sections(r"""
+[CommandListStatic]
+vb0 = ResourcePosition
+
+[ResourcePosition]
+filename = position.buf
+stride = 40
+""")
+
+    scanned = _scan_sections_for_draws(sections, animation_vars=set())
+    assert scanned["CommandListStatic"]["animation_vertex_bindings"] == []
+
+
+def test_same_frame_variable_ranges_share_one_geometry_track():
+    from core.geometry.draw_call import DrawCall
+
+    def branch(frame):
+        return DrawCall(
+            label="Body",
+            count=3,
+            animation_conditions=[[{
+                "var": "swapvar", "value": str(frame), "negate": False,
+            }]],
+        )
+
+    families = _animation_families(
+        [branch(frame) for frame in range(3)],
+        [
+            {"id": "clock-a", "frame_var": "swapvar", "frame_start": 0,
+             "frame_end": 1, "conditions": [[{
+                 "var": "anim", "value": "1", "negate": False,
+             }]]},
+            {"id": "clock-b", "frame_var": "swapvar", "frame_start": 0,
+             "frame_end": 2, "conditions": [[{
+                 "var": "anim", "value": "4", "negate": False,
+             }]]},
+        ])
+
+    assert len(families) == 1
+    family = families[0]
+    assert set(family["draws"]) == {0, 1, 2}
+    assert list(family["clock_ids"]) == ["clock-a", "clock-b"]
+    assert (family["frame_start"], family["frame_end"]) == (0, 2)
+
+
 def test_position_buffer_frames_share_one_packed_mesh(tmp_path):
     def write_positions(path, z):
         data = bytearray()
@@ -192,6 +240,11 @@ format = DXGI_FORMAT_R32_UINT
     entry = next(iter(built.meshes.values()))
     animation = entry["animation_geometry"]
     assert animation["frames"] == 2
+    assert animation["clock_ids"]
+    assert animation["bounds"] == {
+        "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0],
+    }
+    assert built.diagnostics["animation_prepare_calls"] == 1
     assert animation["position_frame_bytes"] == 36
     assert animation["positions"]["length"] == 72
     positions = geometry.to_bytes()[animation["positions"]["offset"]:]
@@ -337,6 +390,7 @@ format = DXGI_FORMAT_R32_UINT
     compatible_entries = list(compatible.meshes.values())
     assert len(compatible_entries) == 1
     assert compatible_entries[0]["animation_geometry"]["frames"] == 2
+    assert compatible.diagnostics["animation_prepare_calls"] == 2
 
     mismatched = build(tmp_path / "mismatched", 0.25)
     mismatched_entries = list(mismatched.meshes.values())

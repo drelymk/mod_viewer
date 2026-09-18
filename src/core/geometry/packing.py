@@ -5,7 +5,7 @@ import os
 import struct
 from dataclasses import dataclass
 
-from .buffers import POSITION_OFFSET, BufferStore, VertexStreams
+from .buffers import POSITION_OFFSET, POSITION_STRIDE, BufferStore, VertexStreams
 from .conventions import GeometryConvention
 from .draw_call import DrawCall
 from .vertex_attributes import decode_normals
@@ -383,8 +383,50 @@ def pack_animation_frame_attributes(
     return PackedAnimationFrame(bytes(pos_bytes), normal_bytes)
 
 
+def pack_animation_position_frame(
+        draw: DrawCall, used_vertices, *, mod_dir, buffers: BufferStore,
+        source=None):
+    """Pack a frame whose only changing input is its position buffer.
+
+    Conditional ``vb0`` animations keep the canonical index/UV mapping. Read
+    the frame source transiently and extract only the canonical vertex IDs so
+    frame preparation does not repeat index decoding, UV validation, or
+    topology checks.
+    """
+    resolve = source.resolve_resource if source is not None \
+        else lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    same = source.same_reference if source is not None \
+        else lambda left, right: left == right
+    position_path = resolve(draw.position_file)
+    if not position_path or not exists(position_path):
+        return None
+    position_stride = draw.position_stride or POSITION_STRIDE
+    position_data = buffers.transient(position_path)
+    pos_bytes = bytearray(len(used_vertices) * 12)
+    for output_index, vertex_index in enumerate(used_vertices):
+        offset = vertex_index * position_stride + POSITION_OFFSET
+        if offset < 0 or offset + 12 > len(position_data):
+            return None
+        x, y, z = struct.unpack_from("<fff", position_data, offset)
+        if not all(math.isfinite(value) for value in (x, y, z)):
+            return None
+        struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
+
+    normal_bytes = None
+    normal_source = draw.normal_source
+    if normal_source is not None:
+        normal_path = resolve(normal_source.file)
+        if normal_path and exists(normal_path):
+            normal_data = (position_data if same(normal_path, position_path)
+                           else buffers.transient(normal_path))
+            normal_bytes = decode_normals(
+                normal_source, normal_data, used_vertices)
+    return PackedAnimationFrame(bytes(pos_bytes), normal_bytes)
+
+
 __all__ = [
     "PackedShapeTarget", "PackedDrawGeometry", "PackedAnimationFrame",
     "PreparedDrawVertices", "_prepare_draw_vertices", "pack_draw_geometry",
-    "pack_animation_frame_attributes",
+    "pack_animation_frame_attributes", "pack_animation_position_frame",
 ]

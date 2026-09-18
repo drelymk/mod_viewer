@@ -5,7 +5,12 @@ import struct
 
 
 class GeometryBlob:
-    """Append-only binary geometry storage shared by one model load."""
+    """Binary geometry storage shared by one model load.
+
+    Normal geometry still uses :meth:`add`, while large baked-animation
+    payloads can reserve their final range and fill it frame by frame.  The
+    latter avoids holding a second ``join`` copy of the animation in memory.
+    """
 
     __slots__ = ("data",)
 
@@ -17,6 +22,22 @@ class GeometryBlob:
         offset = len(self.data)
         self.data.extend(raw)
         return {"offset": offset, "length": len(raw)}
+
+    def reserve(self, length):
+        length = int(length)
+        if length < 0:
+            raise ValueError("Geometry reservation length must be non-negative.")
+        offset = len(self.data)
+        self.data.extend(b"\0" * length)
+        return {"offset": offset, "length": length}
+
+    def write(self, offset, value):
+        raw = bytes(value)
+        offset = int(offset)
+        end = offset + len(raw)
+        if offset < 0 or end > len(self.data):
+            raise ValueError("Geometry write falls outside its reservation.")
+        self.data[offset:end] = raw
 
     def __len__(self):
         return len(self.data)
