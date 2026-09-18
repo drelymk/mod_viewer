@@ -342,32 +342,17 @@ function createSurfaceTopologyAccumulator(
 function createSurfaceGraphAccumulator(
     baselinePositions, triangleIndices, indices, weights, influenceCount,
     boneIds = null, boundingSphereRadius = null) {
-  const shape = surfaceTriangleCount(baselinePositions, triangleIndices);
+  const topologyAccumulator = createSurfaceTopologyAccumulator(
+    baselinePositions, triangleIndices);
+  const {shape} = topologyAccumulator;
   const requested = boneIds === null || boneIds === undefined
     ? null : new Set([...boneIds].map(Number));
   const nodeEntries = new Map();
   const relationshipEntries = new Map();
-  const topology = {
-    triangleCount: shape.triangleCount,
-    validTriangleCount: 0,
-    degenerateTriangleCount: 0,
-    invalidTriangleCount: 0,
-    totalSurfaceArea: 0,
-    measuredVertices: new Set(),
-  };
 
   function process(sample) {
-    if (sample.kind === 'invalid') {
-      topology.invalidTriangleCount += 1;
-      return;
-    }
-    if (sample.kind === 'degenerate') {
-      topology.degenerateTriangleCount += 1;
-      return;
-    }
-    topology.validTriangleCount += 1;
-    topology.totalSurfaceArea += sample.area;
-    sample.indices.forEach(index => topology.measuredVertices.add(index));
+    topologyAccumulator.process(sample);
+    if (sample.kind !== 'valid') return;
     const cornerWeights = sample.indices.map(vertex => surfaceInfluenceWeights(
       indices, weights, influenceCount, vertex, requested));
     const ids = [...new Set(cornerWeights.flatMap(values => [...values.keys()]))]
@@ -445,6 +430,7 @@ function createSurfaceGraphAccumulator(
   }
 
   function finish() {
+    const topology = topologyAccumulator.finish();
     const nodes = [...nodeEntries.values()].map(entry => {
       const center = entry.totalWeight > 0 ? [
         entry.weightedX / entry.totalWeight,
@@ -515,9 +501,8 @@ function createSurfaceGraphAccumulator(
       degenerateTriangleCount: topology.degenerateTriangleCount,
       invalidTriangleCount: topology.invalidTriangleCount,
       totalSurfaceArea: topology.totalSurfaceArea,
-      measuredVertexCount: topology.measuredVertices.size,
-      zeroMeasureVertexCount: shape.positionCount
-        - topology.measuredVertices.size,
+      measuredVertexCount: topology.measuredVertexCount,
+      zeroMeasureVertexCount: topology.zeroMeasureVertexCount,
       fallbackReason: null,
     };
   }

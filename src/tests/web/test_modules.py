@@ -2257,8 +2257,7 @@ def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_pa
 def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation,
-        buildModelRigReconciliationCooperative} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const rig = (sourceKey, entries, edges = []) => {
         const nodeIds = entries.map(item => item[0]);
@@ -2308,9 +2307,7 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
         [4, [0, 0, 0]], [43, [0, 1.01, 0]],
       ], [[4, 43, .8]]);
       const far = rig('far', [[0, [10, 0, 0]]]);
-      const result = buildModelRigReconciliation([body, legs, far]);
-      const cooperative = await buildModelRigReconciliationCooperative(
-        [body, legs, far]);
+      const result = await buildModelRigReconciliationCooperative([body, legs, far]);
       const bodyJoint = result.sourceBoneToModelJointId['body#bone=0'];
       const legsJoint = result.sourceBoneToModelJointId['legs#bone=4'];
       const bodyChild = result.sourceBoneToModelJointId['body#bone=1'];
@@ -2334,17 +2331,6 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
           edge.relationshipType === 'source')
           .map(edge => edge.sourceSupportCount),
         identityMode: result.reconciliation.identityMode,
-        cooperativeSame: JSON.stringify({
-          joints: cooperative.joints,
-          edges: cooperative.edges,
-          components: cooperative.components,
-          sourceBoneToModelJointId: cooperative.sourceBoneToModelJointId,
-        }) === JSON.stringify({
-          joints: result.joints,
-          edges: result.edges,
-          components: result.components,
-          sourceBoneToModelJointId: result.sourceBoneToModelJointId,
-        }),
       };
     }""")
     assert result["sameRoot"]
@@ -2353,20 +2339,18 @@ def test_cross_source_reconciliation_uses_geometry_and_guards_clusters(module_pa
     assert sorted(result["clusterSizes"], reverse=True)[:2] == [2, 2]
     assert "topology_conflict" in result["rejected"] or "not_mutual" in result["rejected"]
     assert 2 in result["sourceEdgeSupport"]
-    assert result["cooperativeSame"]
     assert all(signature == expected
                for signature, expected in result["jointSignatures"])
     assert result["identityMode"] == "geometric-reconciliation"
 
 
-def test_model_wide_bone_ids_build_dense_direct_model_rig_and_skip_matching(
+def test_model_wide_bone_ids_build_dense_model_rig_and_skip_matching(
         module_page):
     result = module_page.evaluate("""async () => {
-      const {buildModelRigReconciliation,
-        buildModelRigReconciliationCooperative} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const makeRig = (sourceKey, boneIds, links = [], modelWide = true,
-          guardDirect = false) => {
+          guardModelWide = false) => {
         const parentById = Object.fromEntries(boneIds.map(id => [id, null]));
         const childrenById = Object.fromEntries(boneIds.map(id => [id, []]));
         links.forEach(([parent, child]) => {
@@ -2415,8 +2399,8 @@ def test_model_wide_bone_ids_build_dense_direct_model_rig_and_skip_matching(
             componentByBoneId,
           },
         };
-        if (guardDirect) Object.defineProperty(rig, 'vertexEvidence', {
-          get() { throw new Error('direct mode must not build samples'); },
+        if (guardModelWide) Object.defineProperty(rig, 'vertexEvidence', {
+          get() { throw new Error('model-wide mode must not build samples'); },
         });
         return rig;
       };
@@ -2425,9 +2409,8 @@ def test_model_wide_bone_ids_build_dense_direct_model_rig_and_skip_matching(
         makeRig('b', [1, 5, 20], [[1, 5, .7], [5, 20, .6]], true, true),
         makeRig('c', [1, 30], [[1, 30, .5]], true, true),
       ];
-      const direct = buildModelRigReconciliation(rigs);
       const timings = {};
-      const cooperative = await buildModelRigReconciliationCooperative(rigs, {}, {
+      const model = await buildModelRigReconciliationCooperative(rigs, {}, {
         timings,
       });
       const snapshot = value => ({
@@ -2446,19 +2429,19 @@ def test_model_wide_bone_ids_build_dense_direct_model_rig_and_skip_matching(
       const samePositionB = makeRig('same-b', [11]);
       samePositionB.centerByBoneId.set(11, [0, 0, 0]);
       samePositionB.influenceGraph.nodes[0].weightedCenter = [0, 0, 0];
-      const distinct = buildModelRigReconciliation([
+      const distinct = await buildModelRigReconciliationCooperative([
         samePositionA, samePositionB]);
-      const sparse = buildModelRigReconciliation([
+      const sparse = await buildModelRigReconciliationCooperative([
         makeRig('sparse', [0, 4, 57, 376])]);
-      const mixed = buildModelRigReconciliation([
+      const mixed = await buildModelRigReconciliationCooperative([
         makeRig('mixed-wide', [1], [], true),
         makeRig('mixed-local', [1], [], false),
       ]);
       return {
-        direct: snapshot(direct), cooperative: snapshot(cooperative),
-        identityMode: direct.reconciliation.identityMode,
-        uniqueModelBoneIdCount: direct.reconciliation.uniqueModelBoneIdCount,
-        candidateCount: direct.reconciliation.candidateCount,
+        snapshot: snapshot(model),
+        identityMode: model.reconciliation.identityMode,
+        uniqueModelBoneIdCount: model.reconciliation.uniqueModelBoneIdCount,
+        candidateCount: model.reconciliation.candidateCount,
         skippedTimings: [timings.sampleBuildMs, timings.spatialIndexMs,
           timings.crossSourceMatchMs],
         samePositionCount: distinct.joints.length,
@@ -2472,14 +2455,13 @@ def test_model_wide_bone_ids_build_dense_direct_model_rig_and_skip_matching(
     assert result["uniqueModelBoneIdCount"] == 5
     assert result["candidateCount"] == 0
     assert result["skippedTimings"] == [0, 0, 0]
-    assert result["direct"] == result["cooperative"]
-    assert result["direct"]["jointIds"] == [0, 1, 2, 3, 4]
-    assert result["direct"]["members"] == [
+    assert result["snapshot"]["jointIds"] == [0, 1, 2, 3, 4]
+    assert result["snapshot"]["members"] == [
         ["a#bone=1", "b#bone=1", "c#bone=1"],
         ["a#bone=5", "b#bone=5"],
         ["a#bone=10"], ["b#bone=20"], ["c#bone=30"],
     ]
-    assert result["direct"]["sourceMap"] == {
+    assert result["snapshot"]["sourceMap"] == {
         "a#bone=1": 0, "b#bone=1": 0, "c#bone=1": 0,
         "a#bone=5": 1, "b#bone=5": 1,
         "a#bone=10": 2, "b#bone=20": 3, "c#bone=30": 4,
@@ -2495,8 +2477,7 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {crossSourceWeightEvidence,
-        crossSourceWeightEvidenceCooperative} = await import(
+      const {crossSourceWeightEvidenceCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, positions, ids) => ({
         sourceKey,
@@ -2508,15 +2489,12 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
           influenceCount: 1,
         }],
       });
-      const spatial = crossSourceWeightEvidence(
+      const spatial = await crossSourceWeightEvidenceCooperative(
         make('left', [.0099, 0, 0], [0]),
         make('right', [.0201, 0, 0], [1]), 1);
-      const mutual = crossSourceWeightEvidence(
+      const mutual = await crossSourceWeightEvidenceCooperative(
         make('mutual-left', [0, 0, 0, 0, .018, 0], [10, 11]),
         make('mutual-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
-      const cooperative = await crossSourceWeightEvidenceCooperative(
-        make('coop-left', [0, 0, 0, 0, .018, 0], [10, 11]),
-        make('coop-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
       let checks = 0;
       const cancelled = await crossSourceWeightEvidenceCooperative(
         make('cancel-left', [0, 0, 0, 0, .018, 0], [10, 11]),
@@ -2531,25 +2509,22 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
         mutualPairs: [...mutual.values()].map(item => [
           item.leftSourceBoneKey, item.rightSourceBoneKey,
         ]).sort(),
-        cooperativePairs: [...cooperative.values()].map(item => [
-          item.leftSourceBoneKey, item.rightSourceBoneKey,
+        mutualStrength: [...mutual.values()].map(item => [
           item.matchedVertexCount, item.weightedMatchStrength,
-        ]).sort(),
+        ]),
         cancelled: cancelled === null,
       };
     }""")
     assert result["spatialMatches"] == 1
     assert result["mutualPairs"] == [[
         "mutual-left#bone=11", "mutual-right#bone=21"]]
-    assert result["cooperativePairs"] == [[
-        "coop-left#bone=11", "coop-right#bone=21", 1,
-        pytest.approx(.575)]]
+    assert result["mutualStrength"] == [[1, pytest.approx(.575)]]
     assert result["cancelled"]
 
 
 def test_model_rig_reconciliation_ignores_main_rig_metadata(module_page):
     result = module_page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const makeRig = mainRigMetadata => {
         const nodes = [0, 1, 2].map(boneId => ({
@@ -2591,9 +2566,9 @@ def test_model_rig_reconciliation_ignores_main_rig_metadata(module_page):
         edges: rig.edges,
         components: rig.components,
       });
-      const withoutMetadata = summarize(buildModelRigReconciliation([
+      const withoutMetadata = summarize(await buildModelRigReconciliationCooperative([
         makeRig(null)]));
-      const withMetadata = summarize(buildModelRigReconciliation([
+      const withMetadata = summarize(await buildModelRigReconciliationCooperative([
         makeRig({version: 1, controls: {
           leftShoulder: {semantic: {sideN: -.4, height01: .8, depthN: .2},
             joint_signature: '[\"old#bone=99\"]'},
@@ -2612,7 +2587,7 @@ def test_cross_source_reconciliation_preserves_host_root_and_reroots_accessory(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, rootId, edgeList) => {
         const parentById = Object.fromEntries(entries.map(([id]) => [id, null]));
@@ -2650,7 +2625,7 @@ def test_cross_source_reconciliation_preserves_host_root_and_reroots_accessory(
         0, [[0, 1, .9]]);
       const wing = make('wing', [[7, [.02, 1, 0]], [8, [1.02, 1, 0]]],
         7, [[7, 8, .8]]);
-      const result = buildModelRigReconciliation([body, wing]);
+      const result = await buildModelRigReconciliationCooperative([body, wing]);
       const wingJoint = result.sourceBoneToModelJointId['wing#bone=7'];
       const bodyJoint = result.sourceBoneToModelJointId['body#bone=1'];
       const attachment = result.edges.find(edge =>
@@ -2678,7 +2653,7 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, edgeList, rootId,
           vertexPositions = null, vertexIds = null) => {
@@ -2739,8 +2714,8 @@ def test_cross_source_reconciliation_uses_neutral_weights_and_attachment_boundar
         [20, [0, 2.08, 0]], [21, [.3, 2.37, 0]],
         [22, [.6, 2.67, 0]], [23, [.9, 2.97, 0]],
       ], [[22, 21, .9], [21, 20, .9], [21, 23, .8]], 22);
-      const first = buildModelRigReconciliation([main, partial, accessory]);
-      const second = buildModelRigReconciliation([accessory, partial, main]);
+      const first = await buildModelRigReconciliationCooperative([main, partial, accessory]);
+      const second = await buildModelRigReconciliationCooperative([accessory, partial, main]);
       const id = (result, key) => result.sourceBoneToModelJointId[key];
       const attachment = first.edges.find(edge =>
         edge.relationshipType === 'attachment');
@@ -2810,7 +2785,7 @@ def test_cross_source_reconciliation_preserves_host_for_multiple_attachments(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, rootId, edgeList) => {
         const nodeIds = entries.map(([id]) => id);
@@ -2851,9 +2826,9 @@ def test_cross_source_reconciliation_preserves_host_for_multiple_attachments(
       const lower = make('lower', [
         [20, [.05, 0, 0]], [21, [-.3, -.3, 0]],
       ], 20, [[20, 21]]);
-      const first = buildModelRigReconciliation(
+      const first = await buildModelRigReconciliationCooperative(
         [host, upper, lower], {modelReferenceRadius: 1});
-      const second = buildModelRigReconciliation(
+      const second = await buildModelRigReconciliationCooperative(
         [lower, host, upper], {modelReferenceRadius: 1});
       const id = (value, source, bone) =>
         value.sourceBoneToModelJointId[`${source}#bone=${bone}`];
@@ -2890,7 +2865,7 @@ def test_cross_source_reconciliation_preserves_attachment_chain_order(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, rootId, edgeList, totalWeight) => {
         const nodeIds = entries.map(([id]) => id);
@@ -2931,9 +2906,9 @@ def test_cross_source_reconciliation_preserves_attachment_chain_order(
       const accessoryB = make('accessory-b', [
         [20, [0, 2.14, 0]], [21, [.3, 2.4, 0]],
       ], 20, [[20, 21]], 5);
-      const first = buildModelRigReconciliation(
+      const first = await buildModelRigReconciliationCooperative(
         [host, accessoryA, accessoryB], {modelReferenceRadius: 1});
-      const second = buildModelRigReconciliation(
+      const second = await buildModelRigReconciliationCooperative(
         [accessoryB, host, accessoryA], {modelReferenceRadius: 1});
       const id = (value, source, bone) =>
         value.sourceBoneToModelJointId[`${source}#bone=${bone}`];
@@ -2993,7 +2968,7 @@ def test_cross_source_reconciliation_equal_support_is_order_invariant(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, rootId) => ({
         sourceKey, boneIds: entries.map(([id]) => id),
@@ -3025,11 +3000,11 @@ def test_cross_source_reconciliation_equal_support_is_order_invariant(
           componentByBoneId: Object.fromEntries(entries.map(([id]) => [id, 0])),
         },
       });
-      const first = buildModelRigReconciliation([
+      const first = await buildModelRigReconciliationCooperative([
         make('alpha', [[0, [0, 0, 0]], [1, [0, .05, 0]]], 0),
         make('zeta', [[10, [0, .1, 0]], [11, [0, .15, 0]]], 10),
       ], {modelReferenceRadius: 1});
-      const second = buildModelRigReconciliation([
+      const second = await buildModelRigReconciliationCooperative([
         make('zeta', [[10, [0, .1, 0]], [11, [0, .15, 0]]], 10),
         make('alpha', [[0, [0, 0, 0]], [1, [0, .05, 0]]], 0),
       ], {modelReferenceRadius: 1});
@@ -3058,7 +3033,7 @@ def test_cross_source_reconciliation_equal_support_is_order_invariant(
 def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, vertexEntries = [], links = []) => {
         const nodeIds = entries.map(([id]) => id);
@@ -3132,7 +3107,7 @@ def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
         weights: Array.from({length: count}, () => weight),
         influenceCount: 1,
       });
-      const moderate = buildModelRigReconciliation([
+      const moderate = await buildModelRigReconciliationCooperative([
         make('moderate-a', [[0, [0, 0, 0]]], [{
           ...repeated(36, 0),
           ids: Array.from({length: 36}, () => [0, 99]).flat(),
@@ -3148,7 +3123,7 @@ def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
       ], {modelReferenceRadius: 1});
       const strongPositions = Array.from({length: 12}, (_, index) =>
         [index * .001, 0, 0]);
-      const strongDistance = buildModelRigReconciliation([
+      const strongDistance = await buildModelRigReconciliationCooperative([
         make('strong-a', [[0, [0, 0, 0]]], [
           oneInfluence('neutral', strongPositions, strongPositions.map(() => 0)),
         ]),
@@ -3159,7 +3134,7 @@ def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
       const winnerPositions = Array.from({length: 23}, (_, index) =>
         [index * .002, 0, 0]);
       const nearPositions = winnerPositions.map(([x, y, z]) => [x + .015, y, z]);
-      const strongestEvidenceWins = buildModelRigReconciliation([
+      const strongestEvidenceWins = await buildModelRigReconciliationCooperative([
         make('winner-a', [[0, [0, 0, 0]]], [
           oneInfluence('neutral', winnerPositions,
             winnerPositions.map(() => 0)),
@@ -3170,7 +3145,7 @@ def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
             winnerPositions.map(() => 2)),
         ]),
       ], {modelReferenceRadius: 1});
-      const oneVertex = buildModelRigReconciliation([
+      const oneVertex = await buildModelRigReconciliationCooperative([
         make('single-a', [[0, [0, 0, 0]]], [
           oneInfluence('neutral', [[0, 0, 0]], [0]),
         ]),
@@ -3178,7 +3153,7 @@ def test_cross_source_reconciliation_confidence_lanes_and_support(module_page):
           oneInfluence('neutral', [[0, 0, 0]], [1]),
         ]),
       ], {modelReferenceRadius: 1});
-      const threeSources = buildModelRigReconciliation([
+      const threeSources = await buildModelRigReconciliationCooperative([
         make('three-a', [[0, [0, 0, 0]]], [
           oneInfluence('neutral', winnerPositions,
             winnerPositions.map(() => 0)),
@@ -3238,7 +3213,7 @@ def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, links) => {
         const nodeIds = entries.map(([id]) => id);
@@ -3282,7 +3257,7 @@ def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
       const reversedChain = make('chain-b', [
         [10, [0, 2, 0]], [11, [.09, 1, 0]], [12, [0, 0, 0]],
       ], [[10, 11], [11, 12]]);
-      const twoAnchors = buildModelRigReconciliation(
+      const twoAnchors = await buildModelRigReconciliationCooperative(
         [chainA, reversedChain], {modelReferenceRadius: 1});
       const centerA = make('center-a', [
         [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
@@ -3290,7 +3265,7 @@ def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
       const centerB = make('center-b', [
         [10, [0, 0, 0]], [11, [.09, 1, 0]],
       ], [[10, 11]]);
-      const oneAnchor = buildModelRigReconciliation(
+      const oneAnchor = await buildModelRigReconciliationCooperative(
         [centerA, centerB], {modelReferenceRadius: 1});
       const pathA = make('path-a', [
         [0, [0, 0, 0]], [1, [0, 1, 0]], [2, [0, 2, 0]],
@@ -3300,7 +3275,7 @@ def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
         [10, [0, 0, 0]], [11, [.09, 1, 0]], [12, [.09, 2, 0]],
         [13, [0, 3, 0]], [14, [.09, 1, 0]], [15, [.09, 2, 0]],
       ], [[10, 11], [11, 12], [12, 13], [10, 14], [13, 15]]);
-      const pathAligned = buildModelRigReconciliation(
+      const pathAligned = await buildModelRigReconciliationCooperative(
         [pathA, pathB], {modelReferenceRadius: 1});
       const key = (sourceKey, boneId) => `${sourceKey}#bone=${boneId}`;
       const id = (value, sourceKey, boneId) =>
@@ -3348,7 +3323,7 @@ def test_cross_source_reconciliation_aligns_undirected_palette_graphs(
 def test_graph_alignment_does_not_compete_across_unrelated_branches(module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, links) => {
         const nodeIds = entries.map(([id]) => id);
@@ -3394,9 +3369,9 @@ def test_graph_alignment_does_not_compete_across_unrelated_branches(module_page)
       const rightOne = make('right-one', [
         [10, [0, 0, 0]], [11, [.09, 1, 0]],
       ], [[10, 11]]);
-      const both = buildModelRigReconciliation([left, rightBoth],
+      const both = await buildModelRigReconciliationCooperative([left, rightBoth],
         {modelReferenceRadius: 1});
-      const one = buildModelRigReconciliation([left, rightOne],
+      const one = await buildModelRigReconciliationCooperative([left, rightOne],
         {modelReferenceRadius: 1});
       const key = (source, bone) => `${source}#bone=${bone}`;
       const graphPairs = value => value.reconciliation.acceptedEquivalences
@@ -3424,7 +3399,7 @@ def test_graph_alignment_does_not_compete_across_unrelated_branches(module_page)
 def test_same_source_attachment_proximity_does_not_join_components(module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const entries = [
         [0, [0, 0, 0]], [1, [0, 1, 0]],
@@ -3455,7 +3430,7 @@ def test_same_source_attachment_proximity_does_not_join_components(module_page):
           componentByBoneId: {0: 0, 1: 0, 10: 1, 11: 1},
         },
       };
-      const result = buildModelRigReconciliation([rig],
+      const result = await buildModelRigReconciliationCooperative([rig],
         {modelReferenceRadius: 1});
       return {
         componentCount: result.components.length,
@@ -3470,7 +3445,7 @@ def test_cross_source_reconciliation_aggregates_component_attachments(
         module_page):
     page = module_page
     result = page.evaluate("""async () => {
-      const {buildModelRigReconciliation} = await import(
+      const {buildModelRigReconciliationCooperative} = await import(
         './js/mesh/weight-rig-reconcile.js');
       const make = (sourceKey, entries, links, vertexEntries = []) => {
         const nodeIds = entries.map(([id]) => id);
@@ -3528,7 +3503,7 @@ def test_cross_source_reconciliation_aggregates_component_attachments(
         meshKey: 'wings/neutral', positions,
         ids: [10, 10, 10, 11, 11, 11, 12, 12, 12],
       }]);
-      const value = buildModelRigReconciliation([target, wings], {
+      const value = await buildModelRigReconciliationCooperative([target, wings], {
         modelReferenceRadius: 1,
       });
       const targetJoint = value.sourceBoneToModelJointId['target#bone=0'];

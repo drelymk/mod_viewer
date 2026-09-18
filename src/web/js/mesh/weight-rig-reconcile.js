@@ -330,18 +330,7 @@ function sortVertexSamples(samples) {
     left.sampleKey.localeCompare(right.sampleKey));
 }
 
-function vertexSamplesForRig(rig) {
-  const samples = [];
-  for (const descriptor of vertexEvidenceDescriptors(rig)) {
-    for (let vertexIndex = 0; vertexIndex < descriptor.vertexCount;
-         vertexIndex += 1) {
-      appendVertexSample(samples, descriptor, vertexIndex);
-    }
-  }
-  return sortVertexSamples(samples);
-}
-
-export async function vertexSamplesForRigCooperative(rig, {
+async function vertexSamplesForRigCooperative(rig, {
     budget = createWorkBudget(), isCurrent = () => true,
     vertexBatch = 256,
 } = {}) {
@@ -390,24 +379,6 @@ function considerNearestSample(sample, candidate, matchDistance, best) {
   return best;
 }
 
-function nearestSample(sample, cells, cellSize, matchDistance) {
-  const [x, y, z] = cellKey(sample.point, cellSize).split(':').map(Number);
-  let best = null;
-  for (let dx = -1; dx <= 1; dx += 1) {
-    for (let dy = -1; dy <= 1; dy += 1) {
-      for (let dz = -1; dz <= 1; dz += 1) {
-        const entries = cells.get(`${x + dx}:${y + dy}:${z + dz}`);
-        if (!entries) continue;
-        for (const candidate of entries) {
-          best = considerNearestSample(
-            sample, candidate, matchDistance, best);
-        }
-      }
-    }
-  }
-  return best;
-}
-
 async function nearestSampleCooperative(sample, cells, cellSize, matchDistance,
     {budget, isCurrent}) {
   const [x, y, z] = cellKey(sample.point, cellSize).split(':').map(Number);
@@ -433,12 +404,6 @@ async function nearestSampleCooperative(sample, cells, cellSize, matchDistance,
   return best;
 }
 
-function buildSpatialCells(samples, cellSize) {
-  const cells = new Map();
-  samples.forEach(sample => addSpatialSample(cells, sample, cellSize));
-  return cells;
-}
-
 function addSpatialSample(cells, sample, cellSize) {
   const key = cellKey(sample.point, cellSize);
   const entries = cells.get(key) || [];
@@ -446,7 +411,7 @@ function addSpatialSample(cells, sample, cellSize) {
   cells.set(key, entries);
 }
 
-export async function buildSpatialCellsCooperative(samples, cellSize, {
+async function buildSpatialCellsCooperative(samples, cellSize, {
     budget = createWorkBudget(), isCurrent = () => true,
     sampleBatch = 256,
 } = {}) {
@@ -517,50 +482,6 @@ function finishCrossSourceEvidence(evidence, isCurrent = () => true) {
     delete record.matchedVertexKeys;
   }
   return evidence;
-}
-
-export function crossSourceWeightEvidence(
-    leftRig, rightRig, referenceRadius, leftSamples = null,
-    rightSamples = null, leftCells = null, rightCells = null) {
-  const leftSampleList = leftSamples || vertexSamplesForRig(leftRig);
-  const rightSampleList = rightSamples || vertexSamplesForRig(rightRig);
-  if (!leftSampleList.length || !rightSampleList.length) return new Map();
-  const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
-  // The search examines one neighboring cell in each axis, so each cell must
-  // cover the full match radius to avoid missing a valid pair at a boundary.
-  const cellSize = matchDistance;
-  const leftCellMap = leftCells
-    || buildSpatialCells(leftSampleList, cellSize);
-  const rightCellMap = rightCells
-    || buildSpatialCells(rightSampleList, cellSize);
-  const nearestLeftByRight = new Map();
-  const nearestRightByLeft = new Map();
-  rightSampleList.forEach(rightSample => {
-    const best = nearestSample(rightSample, leftCellMap, cellSize,
-      matchDistance);
-    if (!best) return;
-    nearestLeftByRight.set(rightSample, {
-      leftSample: best.sample, distance: best.distance,
-    });
-  });
-  leftSampleList.forEach(leftSample => {
-    const best = nearestSample(leftSample, rightCellMap, cellSize,
-      matchDistance);
-    if (!best) return;
-    nearestRightByLeft.set(leftSample, {
-      rightSample: best.sample, distance: best.distance,
-    });
-  });
-
-  const evidence = new Map();
-  nearestLeftByRight.forEach(({leftSample, distance}, rightSample) => {
-    const reverse = nearestRightByLeft.get(leftSample);
-    if (!reverse || reverse.rightSample !== rightSample) return;
-    addMutualCrossSourceEvidence(
-      evidence, leftRig, rightRig, leftSample, rightSample, distance,
-      matchDistance);
-  });
-  return finishCrossSourceEvidence(evidence);
 }
 
 export async function crossSourceWeightEvidenceCooperative(
@@ -957,44 +878,6 @@ function crossSourceMatchDistance(referenceRadius) {
   return Math.max(referenceRadius * 0.02, EPSILON);
 }
 
-function prepareCrossSourceEvidence(sourceRigs, referenceRadius) {
-  const rigs = orderedSourceRigs(sourceRigs);
-  const matchDistance = crossSourceMatchDistance(referenceRadius);
-  const samplesBySourceKey = new Map();
-  const cellsBySourceKey = new Map();
-  rigs.forEach(rig => {
-    const sourceKey = String(rig.sourceKey);
-    const samples = vertexSamplesForRig(rig);
-    samplesBySourceKey.set(sourceKey, samples);
-    cellsBySourceKey.set(sourceKey,
-      buildSpatialCells(samples, matchDistance));
-  });
-  return {
-    rigs,
-    samplesBySourceKey,
-    cellsBySourceKey,
-  };
-}
-
-function buildCrossSourceWeightEvidence(sourceRigs, referenceRadius) {
-  const evidence = new Map();
-  const preparation = prepareCrossSourceEvidence(sourceRigs, referenceRadius);
-  const {rigs, samplesBySourceKey, cellsBySourceKey} = preparation;
-  for (let leftIndex = 0; leftIndex < rigs.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < rigs.length; rightIndex += 1) {
-      const leftRig = rigs[leftIndex];
-      const rightRig = rigs[rightIndex];
-      crossSourceWeightEvidence(leftRig, rightRig, referenceRadius,
-        samplesBySourceKey.get(String(leftRig.sourceKey)),
-        samplesBySourceKey.get(String(rightRig.sourceKey)),
-        cellsBySourceKey.get(String(leftRig.sourceKey)),
-        cellsBySourceKey.get(String(rightRig.sourceKey)))
-        .forEach((record, key) => evidence.set(key, record));
-    }
-  }
-  return evidence;
-}
-
 async function buildCrossSourceWeightEvidenceCooperative(sourceRigs,
     referenceRadius, {budget = createWorkBudget(), isCurrent = () => true,
       timings = null} = {}) {
@@ -1050,10 +933,8 @@ async function buildCrossSourceWeightEvidenceCooperative(sourceRigs,
   return evidence;
 }
 
-function buildCandidates(evidenceByKey, referenceRadius, sourceRigs = [],
-    options = {}) {
-  const crossEvidenceByPair = options.crossEvidenceByPair
-    || buildCrossSourceWeightEvidence(sourceRigs, referenceRadius);
+function buildCandidates(evidenceByKey, referenceRadius, options = {}) {
+  const crossEvidenceByPair = options.crossEvidenceByPair || new Map();
   const bySource = new Map();
   for (const evidence of evidenceByKey.values()) {
     const entries = bySource.get(evidence.sourceKey) || [];
@@ -2412,7 +2293,7 @@ function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
     ? buildModelWideBoneIdentity(evidenceByKey) : null;
   const candidateBuild = identity ? {
     candidates: [], crossEvidenceByPair: new Map(),
-  } : buildCandidates(evidenceByKey, referenceRadius, sourceRigs, options);
+  } : buildCandidates(evidenceByKey, referenceRadius, options);
   const candidates = candidateBuild.candidates;
   const unionFind = identity?.unionFind
     || new GuardedUnionFind([...evidenceByKey.keys()]);
@@ -2509,23 +2390,6 @@ function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
     componentByJointId: finalForest.componentByJointId,
     reconciliation,
   };
-}
-
-export function buildModelRigReconciliation(sourceRigs = [], options = {}) {
-  const rigs = [...sourceRigs].filter(rig => rig?.sourceKey !== undefined)
-    .sort((left, right) => String(left.sourceKey)
-      .localeCompare(String(right.sourceKey)));
-  const useModelWideBoneIds = rigs.length > 0
-    && rigs.every(rig => rig.boneIdsModelWide === true);
-  const evidenceByKey = new Map();
-  rigs.forEach(rig =>
-    collectSourceBoneEvidence(rig).forEach((evidence, key) =>
-      evidenceByKey.set(key, evidence)));
-  prepareSourceBoneEvidence(evidenceByKey);
-  const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
-    modelReferenceRadius(evidenceByKey)));
-  return assembleModelRigReconciliation(rigs, evidenceByKey,
-    referenceRadius, {useModelWideBoneIds, options});
 }
 
 /**
