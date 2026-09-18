@@ -153,10 +153,8 @@ async function handleToggleChange(change = {}) {
     // patching is not safe here; rebuild from the authoritative session.
     return reloadCurrentMod();
   }
-  if (change.type === 'add' || change.type === 'edit') {
-    return refreshSemanticStateFlow(semanticHandlers());
-  }
-  if (change.type === 'record') {
+  if (change.type === 'add' || change.type === 'edit'
+      || change.type === 'record') {
     return refreshSemanticStateFlow(semanticHandlers());
   }
   return refreshControlSemanticsFlow(semanticHandlers());

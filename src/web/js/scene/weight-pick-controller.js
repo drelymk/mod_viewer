@@ -104,6 +104,9 @@ export function createWeightPickController({
     }
   }
 
+  // initSelection() is installed during startup, but this controller is
+  // created lazily. Capture lets the picker consume the gesture before the
+  // selection module's bubble listener can select the underlying mesh.
   canvas?.addEventListener('pointerdown', pointerDown, true);
   canvas?.addEventListener('pointermove', pointerMove, true);
   canvas?.addEventListener('pointerup', pointerUp, true);

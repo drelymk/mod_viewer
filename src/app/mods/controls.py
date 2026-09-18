@@ -177,6 +177,30 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None):
     return panel
 
 
+def _control_semantic_projection(parsed, context, pending_new_sections=None,
+                                 *, gating_vars=None):
+    """Build controls and state from one already-authoritative analysis."""
+    if gating_vars is None:
+        gating_vars = _gating_vars_from_groups(
+            parsed.groups, context.mod_dir, parsed.game.game,
+            source=context.source)
+    return {
+        "controls": {
+            "toggles": build_toggle_panel(
+                parsed.toggles, parsed.defaults, gating_vars,
+                context.mod_dir, pending_new_sections),
+            "menu": build_menu_panel(
+                parsed.menu, parsed.defaults, context.mod_dir,
+                source=context.source),
+            "present": parsed.present,
+        },
+        "state": {
+            "rules": parsed.state_rules,
+            "defaults": parsed.defaults,
+        },
+    }
+
+
 def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
                              active_mesh_keys=None, source=None):
     """Collect gating variables without requiring geometry files."""
@@ -205,21 +229,8 @@ def load_control_state(context, overrides=None, pending_new_sections=None,
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
                 source=context.source)
-    return {
-        "controls": {
-            "toggles": build_toggle_panel(
-                parsed.toggles, parsed.defaults, gating_vars,
-                context.mod_dir, pending_new_sections),
-            "menu": build_menu_panel(
-                parsed.menu, parsed.defaults, context.mod_dir,
-                source=context.source),
-            "present": parsed.present,
-        },
-        "state": {
-            "rules": parsed.state_rules,
-            "defaults": parsed.defaults,
-        },
-    }
+    return _control_semantic_projection(
+        parsed, context, pending_new_sections, gating_vars=gating_vars)
 
 
 def unwired_pending_sections(folder_path, overrides, pending_new_sections,

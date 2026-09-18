@@ -67,25 +67,33 @@ function applyMeshSemanticResult(result) {
   return update;
 }
 
+async function requestSemanticResult(path, epoch, request, errorKey) {
+  let result;
+  try {
+    result = await request(path);
+  } catch (error) {
+    if (semanticRefreshIsCurrent(path, epoch)) {
+      await alertDialog(t(errorKey, {detail: error}));
+    }
+    return null;
+  }
+  if (!semanticRefreshIsCurrent(path, epoch)) return null;
+  if (result?.error) {
+    await alertDialog(t(errorKey, {detail: result.error}));
+    return null;
+  }
+  return result;
+}
+
 export async function refreshPresentState(change = {}, handlers = {}) {
   const callbacks = handlersOrDefault(handlers);
   const { path, epoch } = beginSemanticRefresh();
   try {
     if (!path) return false;
-    let result;
-    try {
-      result = await window.pywebview.api.get_present_state(path);
-    } catch (error) {
-      if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog(t('errors.refreshPresent', {detail: error}));
-      }
-      return false;
-    }
-    if (!semanticRefreshIsCurrent(path, epoch)) return false;
-    if (result?.error) {
-      await alertDialog(t('errors.refreshPresent', {detail: result.error}));
-      return false;
-    }
+    const result = await requestSemanticResult(
+      path, epoch, currentPath => window.pywebview.api.get_present_state(currentPath),
+      'errors.refreshPresent');
+    if (result === null) return false;
     const context = { modPath: path, onChange: callbacks.onPresentChange };
     if (Object.hasOwn(change, 'selectedPosition')) {
       context.selectedPosition = change.selectedPosition;
@@ -104,20 +112,10 @@ export async function refreshControlSemantics(handlers = {}) {
   const { path, epoch } = beginSemanticRefresh();
   try {
     if (!path) return false;
-    let result;
-    try {
-      result = await window.pywebview.api.get_control_state(path);
-    } catch (error) {
-      if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog(t('errors.refreshControls', {detail: error}));
-      }
-      return false;
-    }
-    if (!semanticRefreshIsCurrent(path, epoch)) return false;
-    if (result?.error) {
-      await alertDialog(t('errors.refreshControls', {detail: result.error}));
-      return false;
-    }
+    const result = await requestSemanticResult(
+      path, epoch, currentPath => window.pywebview.api.get_control_state(currentPath),
+      'errors.refreshControls');
+    if (result === null) return false;
     applyControlSemanticResult(result, path, callbacks);
     callbacks.syncViewportControlPlacement();
     refreshAll();
@@ -132,20 +130,10 @@ export async function refreshMeshSemantics(handlers = {}) {
   const { path, epoch } = beginSemanticRefresh();
   try {
     if (!path) return false;
-    let result;
-    try {
-      result = await window.pywebview.api.get_mesh_semantics(path);
-    } catch (error) {
-      if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog(t('errors.refreshSemantics', {detail: error}));
-      }
-      return false;
-    }
-    if (!semanticRefreshIsCurrent(path, epoch)) return false;
-    if (result?.error) {
-      await alertDialog(t('errors.refreshSemantics', {detail: result.error}));
-      return false;
-    }
+    const result = await requestSemanticResult(
+      path, epoch, currentPath => window.pywebview.api.get_mesh_semantics(currentPath),
+      'errors.refreshSemantics');
+    if (result === null) return false;
     const update = applyMeshSemanticResult(result);
     if (!update.success) {
       await alertDialog(t('errors.refreshSemantics', {
@@ -168,20 +156,10 @@ export async function refreshSemanticState(handlers = {}) {
   const { path, epoch } = beginSemanticRefresh();
   try {
     if (!path) return false;
-    let result;
-    try {
-      result = await window.pywebview.api.get_semantic_state(path);
-    } catch (error) {
-      if (semanticRefreshIsCurrent(path, epoch)) {
-        await alertDialog(t('errors.refreshSemantics', {detail: error}));
-      }
-      return false;
-    }
-    if (!semanticRefreshIsCurrent(path, epoch)) return false;
-    if (result?.error) {
-      await alertDialog(t('errors.refreshSemantics', {detail: result.error}));
-      return false;
-    }
+    const result = await requestSemanticResult(
+      path, epoch, currentPath => window.pywebview.api.get_semantic_state(currentPath),
+      'errors.refreshSemantics');
+    if (result === null) return false;
     const update = applyMeshSemanticResult(result);
     if (!update.success) {
       await alertDialog(t('errors.refreshSemantics', {

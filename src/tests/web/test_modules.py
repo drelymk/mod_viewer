@@ -1164,8 +1164,11 @@ def test_rig_overlay_exposes_primary_humanoid_ik_target_without_joint_selection(
     assert result["target"] == pytest.approx([1.0, .7, 0])
 
 
-def test_model_picker_blocks_view_selection_before_bubble_listener(module_page):
+def test_model_picker_capture_blocks_view_selection_before_bubble_listener(
+        module_page):
     page = module_page
+    # Selection is initialized before the lazily-created picker. Keep this
+    # regression focused on the capture-phase ordering contract.
     result = page.evaluate("""async () => {
       const canvasContainer = document.createElement('div');
       canvasContainer.id = 'canvas-container';

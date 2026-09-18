@@ -19,6 +19,7 @@ from core.mod_source import (
 
 from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
 from app.mods.controls import (
+    _control_semantic_projection,
     _gating_vars,
     _gating_vars_from_mesh_semantics,
     build_menu_panel,
@@ -228,19 +229,8 @@ def load_semantic_state(context, overrides=None, pending_new_sections=None,
         "meshes": mesh_payload,
         "material_profiles": material_profiles,
         "asset_resolution": asset_resolution,
-        "controls": {
-            "toggles": build_toggle_panel(
-                parsed.toggles, parsed.defaults, gating_vars,
-                context.mod_dir, pending_new_sections),
-            "menu": build_menu_panel(
-                parsed.menu, parsed.defaults, context.mod_dir,
-                source=context.source),
-            "present": parsed.present,
-        },
-        "state": {
-            "rules": parsed.state_rules,
-            "defaults": parsed.defaults,
-        },
+        **_control_semantic_projection(
+            parsed, context, pending_new_sections, gating_vars=gating_vars),
     }
 
 
