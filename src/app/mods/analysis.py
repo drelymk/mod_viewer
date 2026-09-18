@@ -8,6 +8,7 @@ from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
 from core.ini.document import IniDocument
+from core.ini.draw_scan import gating_var_names
 from core.ini.menu import attach_menu_images, extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, merge_sections)
@@ -15,7 +16,7 @@ from core.materials.game_profile import GameDetection, resolve_game_detection
 
 
 _DIRECT_FORWARD_RE = re.compile(
-    r'^\$\\(?P<namespace>[^\\\s]+)\\(?P<target>\w+)\s*=\s*\$(?P<source>\w+)$',
+    r'^\$\\(?P<namespace>[^\\\s]+(?:\\[^\\\s]+)*)\\(?P<target>\w+)\s*=\s*\$(?P<source>\w+)$',
     re.I)
 _VARIANT_FIELDS = (
     "texture_variants", "normal_map_variants", "normal_data_variants",
@@ -175,6 +176,23 @@ def _gating_vars_from_groups(groups):
     return found
 
 
+def _qualified_vars_from_targets(namespace_targets):
+    """Map qualified reads to gated variables owned by unique namespaces."""
+    result = {}
+    for record in namespace_targets.values():
+        namespace = record.get("namespace")
+        if not namespace:
+            continue
+        local_vars = set(gating_var_names(record["sections"]))
+        local_vars.update(record.get("extra_gating_vars", ()))
+        for local_var in local_vars:
+            canonical = record["canonical_vars"].get(
+                str(local_var).casefold(), str(local_var))
+            result[f"\\{namespace}\\{canonical}".casefold()] = (
+                f"{record['var_prefix'] or ''}{canonical}")
+    return result
+
+
 def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
                      source=None):
     """Aggregate independent INI analyses into one mod semantic model.
@@ -265,6 +283,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
                 target["extra_gating_vars"].add(
                     forwarding["destination_local"])
 
+    qualified_vars = _qualified_vars_from_targets(namespace_targets)
+
     # Shared across every INI: duplicate generic component names are
     # disambiguated instead of one silently overwriting another.
     seen_labels = {}
@@ -280,7 +300,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         analysis = analyze_ini(
             secs, resources=resources, var_prefix=var_prefix, source=source_name,
             seen=seen_labels,
-            extra_gating_vars=record["extra_gating_vars"])
+            extra_gating_vars=record["extra_gating_vars"],
+            qualified_vars=qualified_vars)
         record["analysis"] = analysis
         ini_groups = analysis.draw_groups
         identity_source = _ini_rel(ini_path, folder_path, source=source)

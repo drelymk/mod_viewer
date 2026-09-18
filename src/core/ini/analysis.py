@@ -33,7 +33,7 @@ class IniAnalysis:
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
-                seen=None, extra_gating_vars=None):
+                seen=None, extra_gating_vars=None, qualified_vars=None):
     """Analyze ``sections`` once and return all derived semantic models.
 
     Extractors accept the shared canonical spelling map so a normal load does
@@ -59,7 +59,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     defaults = extract_variable_defaults(
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
     animation_analysis = discover_animation_clocks(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
+        qualified_vars=qualified_vars)
 
     gating_vars = {
         var for info in toggles.values() for var in info.get("vars", {})
@@ -85,7 +86,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
         seen=seen, gating_vars=scan_gating_vars,
-        animation_vars=animation_analysis.frame_vars)
+        animation_vars=animation_analysis.frame_vars,
+        qualified_vars=qualified_vars)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,

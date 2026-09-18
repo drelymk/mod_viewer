@@ -80,7 +80,7 @@ _LEGACY_TEXTURE_RESOURCE_RE = re.compile(
 
 
 def _collect_texture_override_index(sections, toggle_vars, alias_map,
-                                    var_prefix=None):
+                                    var_prefix=None, qualified_vars=None):
     """Index TextureOverride hashes and conditional ``this`` assignments."""
     hashes_by_resource = {}
     replacements_by_hash = {}
@@ -128,7 +128,8 @@ def _collect_texture_override_index(sections, toggle_vars, alias_map,
             combined = DNF_TRUE
             for frame in cond_stack:
                 combined = dnf_and(combined, frame["cur"])
-            conditions = normalize_dnf(combined, toggle_vars, var_prefix)
+            conditions = normalize_dnf(
+                combined, toggle_vars, var_prefix, qualified_vars)
             resource = match.group(1)
             resource_key = resource.casefold()
             hashes_by_resource.setdefault(resource_key, set()).update(hashes)

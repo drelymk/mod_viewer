@@ -167,7 +167,7 @@ def _split_animation_conditions(conditions, animation_vars):
 
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
-                             animation_vars=None):
+                             animation_vars=None, qualified_vars=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
@@ -176,7 +176,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     section_lookup = {str(name).lower(): name for name in sections}
     alias_map = build_bool_alias_map(sections)
     texture_override_index = _collect_texture_override_index(
-        sections, toggle_vars, alias_map, var_prefix)
+        sections, toggle_vars, alias_map, var_prefix, qualified_vars)
     resource_texture_hashes = texture_override_index.hashes_by_resource
     structural_slot_roles = _collect_structural_slot_role_hints(sections)
     seq_counter = [0]
@@ -215,7 +215,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
         combined = DNF_TRUE
         for frame in cond_stack:
             combined = dnf_and(combined, frame["cur"])
-        cond = normalize_dnf(combined, toggle_vars, var_prefix)
+        cond = normalize_dnf(
+            combined, toggle_vars, var_prefix, qualified_vars)
         if role == "diffuse":
             if not info["diffuse"]:
                 info["diffuse"] = res
@@ -384,11 +385,12 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     combined = DNF_TRUE
                     for frame in cond_stack:
                         current = normalize_dnf(
-                            frame["cur"], tracked_vars)
+                            frame["cur"], tracked_vars,
+                            qualified_vars=qualified_vars)
                         if current:
                             combined = dnf_and(combined, current)
                     conditions = normalize_dnf(
-                        combined, tracked_vars, var_prefix)
+                        combined, tracked_vars, var_prefix, qualified_vars)
                     public_animation_vars = {
                         f"{var_prefix or ''}{item}"
                         for item in animation_vars
@@ -424,7 +426,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 combined = DNF_TRUE
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
-                conditions = normalize_dnf(combined, tracked_vars, var_prefix)
+                conditions = normalize_dnf(
+                    combined, tracked_vars, var_prefix, qualified_vars)
                 public_animation_vars = {
                     f"{var_prefix or ''}{value}" for value in animation_vars}
                 conditions, animation_conditions = _split_animation_conditions(
