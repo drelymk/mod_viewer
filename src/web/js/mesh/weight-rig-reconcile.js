@@ -275,46 +275,70 @@ function crossPairKey(leftSourceBoneKey, rightSourceBoneKey) {
   return [leftSourceBoneKey, rightSourceBoneKey].sort().join('|');
 }
 
-function vertexSamplesForRig(rig) {
-  const samples = [];
-  (rig?.vertexEvidence || []).forEach((entry, entryIndex) => {
+function vertexEvidenceDescriptors(rig) {
+  return (rig?.vertexEvidence || []).map((entry, entryIndex) => {
     const positions = entry.positions || entry.baselinePositions;
     const indices = entry.indices;
     const weights = entry.weights;
     const influenceCount = Number(entry.influenceCount);
     if (!positions || !indices || !weights || !Number.isInteger(influenceCount)
-        || influenceCount <= 0) return;
-    const vertexCount = Math.floor(Math.min(
-      positions.length / 3, indices.length / influenceCount,
-      weights.length / influenceCount));
-    for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
-      const offset = vertexIndex * 3;
-      const point = vectorFrom([
-        positions[offset], positions[offset + 1], positions[offset + 2],
-      ]);
-      if (!point) continue;
-      const influenceMap = new Map();
-      const start = vertexIndex * influenceCount;
-      for (let influenceIndex = 0; influenceIndex < influenceCount;
-           influenceIndex += 1) {
-        const boneId = Number(indices[start + influenceIndex]);
-        const weight = Number(weights[start + influenceIndex]);
-        if (!Number.isInteger(boneId) || boneId < 0
-            || !Number.isFinite(weight) || weight <= 0) continue;
-        influenceMap.set(boneId, (influenceMap.get(boneId) || 0) + weight);
-      }
-      if (!influenceMap.size) continue;
-      samples.push({
-        sampleKey: `${String(entry.meshKey || entryIndex)}#vertex=${vertexIndex}`,
-        point,
-        influences: [...influenceMap.entries()].map(([boneId, weight]) => ({
-          boneId, weight,
-        })),
-      });
-    }
+        || influenceCount <= 0) return null;
+    return {
+      entry,
+      entryIndex,
+      positions,
+      indices,
+      weights,
+      influenceCount,
+      vertexCount: Math.floor(Math.min(
+        positions.length / 3, indices.length / influenceCount,
+        weights.length / influenceCount)),
+    };
+  }).filter(Boolean);
+}
+
+function appendVertexSample(samples, descriptor, vertexIndex) {
+  const {entry, entryIndex, positions, indices, weights, influenceCount} =
+    descriptor;
+  const offset = vertexIndex * 3;
+  const point = vectorFrom([
+    positions[offset], positions[offset + 1], positions[offset + 2],
+  ]);
+  if (!point) return;
+  const influenceMap = new Map();
+  const start = vertexIndex * influenceCount;
+  for (let influenceIndex = 0; influenceIndex < influenceCount;
+       influenceIndex += 1) {
+    const boneId = Number(indices[start + influenceIndex]);
+    const weight = Number(weights[start + influenceIndex]);
+    if (!Number.isInteger(boneId) || boneId < 0
+        || !Number.isFinite(weight) || weight <= 0) continue;
+    influenceMap.set(boneId, (influenceMap.get(boneId) || 0) + weight);
+  }
+  if (!influenceMap.size) return;
+  samples.push({
+    sampleKey: `${String(entry.meshKey || entryIndex)}#vertex=${vertexIndex}`,
+    point,
+    influences: [...influenceMap.entries()].map(([boneId, weight]) => ({
+      boneId, weight,
+    })),
   });
+}
+
+function sortVertexSamples(samples) {
   return samples.sort((left, right) =>
     left.sampleKey.localeCompare(right.sampleKey));
+}
+
+function vertexSamplesForRig(rig) {
+  const samples = [];
+  for (const descriptor of vertexEvidenceDescriptors(rig)) {
+    for (let vertexIndex = 0; vertexIndex < descriptor.vertexCount;
+         vertexIndex += 1) {
+      appendVertexSample(samples, descriptor, vertexIndex);
+    }
+  }
+  return sortVertexSamples(samples);
 }
 
 export async function vertexSamplesForRigCooperative(rig, {
@@ -322,49 +346,19 @@ export async function vertexSamplesForRigCooperative(rig, {
     vertexBatch = 256,
 } = {}) {
   const samples = [];
-  for (const [entryIndex, entry] of (rig?.vertexEvidence || []).entries()) {
-    const positions = entry.positions || entry.baselinePositions;
-    const indices = entry.indices;
-    const weights = entry.weights;
-    const influenceCount = Number(entry.influenceCount);
-    if (!positions || !indices || !weights || !Number.isInteger(influenceCount)
-        || influenceCount <= 0) continue;
-    const vertexCount = Math.floor(Math.min(
-      positions.length / 3, indices.length / influenceCount,
-      weights.length / influenceCount));
-    for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
+  for (const descriptor of vertexEvidenceDescriptors(rig)) {
+    for (let vertexIndex = 0; vertexIndex < descriptor.vertexCount;
+         vertexIndex += 1) {
       if (vertexIndex % vertexBatch === 0) {
         if (!isCurrent()) return null;
         await budget.checkpoint();
         if (!isCurrent()) return null;
       }
-      const offset = vertexIndex * 3;
-      const point = vectorFrom([
-        positions[offset], positions[offset + 1], positions[offset + 2],
-      ]);
-      if (!point) continue;
-      const influenceMap = new Map();
-      const start = vertexIndex * influenceCount;
-      for (let influenceIndex = 0; influenceIndex < influenceCount;
-           influenceIndex += 1) {
-        const boneId = Number(indices[start + influenceIndex]);
-        const weight = Number(weights[start + influenceIndex]);
-        if (!Number.isInteger(boneId) || boneId < 0
-            || !Number.isFinite(weight) || weight <= 0) continue;
-        influenceMap.set(boneId, (influenceMap.get(boneId) || 0) + weight);
-      }
-      if (!influenceMap.size) continue;
-      samples.push({
-        sampleKey: `${String(entry.meshKey || entryIndex)}#vertex=${vertexIndex}`,
-        point,
-        influences: [...influenceMap.entries()].map(([boneId, weight]) => ({
-          boneId, weight,
-        })),
-      });
+      appendVertexSample(samples, descriptor, vertexIndex);
     }
   }
   if (!isCurrent()) return null;
-  samples.sort((left, right) => left.sampleKey.localeCompare(right.sampleKey));
+  sortVertexSamples(samples);
   await budget.checkpoint();
   return samples;
 }
@@ -372,6 +366,28 @@ export async function vertexSamplesForRigCooperative(rig, {
 function cellKey(point, cellSize) {
   return [point.x, point.y, point.z].map(value =>
     Math.floor(value / cellSize)).join(':');
+}
+
+function considerNearestSample(sample, candidate, matchDistance, best) {
+  const deltaX = sample.point.x - candidate.point.x;
+  const deltaY = sample.point.y - candidate.point.y;
+  const deltaZ = sample.point.z - candidate.point.z;
+  const distanceSquared = deltaX * deltaX + deltaY * deltaY
+    + deltaZ * deltaZ;
+  let distance = null;
+  if (distanceSquared > matchDistance * matchDistance
+      && (distance = Math.sqrt(distanceSquared)) > matchDistance) {
+    return best;
+  }
+  if (best && distanceSquared > best.distanceSquared) return best;
+  distance ??= Math.sqrt(distanceSquared);
+  if (distance > matchDistance) return best;
+  if (!best || distance < best.distance
+      || distance === best.distance
+        && candidate.sampleKey.localeCompare(best.sample.sampleKey) < 0) {
+    return {sample: candidate, distance, distanceSquared};
+  }
+  return best;
 }
 
 function nearestSample(sample, cells, cellSize, matchDistance) {
@@ -383,23 +399,8 @@ function nearestSample(sample, cells, cellSize, matchDistance) {
         const entries = cells.get(`${x + dx}:${y + dy}:${z + dz}`);
         if (!entries) continue;
         for (const candidate of entries) {
-          const deltaX = sample.point.x - candidate.point.x;
-          const deltaY = sample.point.y - candidate.point.y;
-          const deltaZ = sample.point.z - candidate.point.z;
-          const distanceSquared = deltaX * deltaX + deltaY * deltaY
-            + deltaZ * deltaZ;
-          let distance = null;
-          if (distanceSquared > matchDistance * matchDistance
-              && (distance = Math.sqrt(distanceSquared)) > matchDistance) continue;
-          if (best && distanceSquared > best.distanceSquared) continue;
-          distance ??= Math.sqrt(distanceSquared);
-          if (distance > matchDistance) continue;
-          if (!best || distance < best.distance
-              || distance === best.distance
-                && candidate.sampleKey.localeCompare(
-                  best.sample.sampleKey) < 0) {
-            best = {sample: candidate, distance, distanceSquared};
-          }
+          best = considerNearestSample(
+            sample, candidate, matchDistance, best);
         }
       }
     }
@@ -423,23 +424,8 @@ async function nearestSampleCooperative(sample, cells, cellSize, matchDistance,
             await budget.checkpoint();
             if (!isCurrent()) return {cancelled: true};
           }
-          const deltaX = sample.point.x - candidate.point.x;
-          const deltaY = sample.point.y - candidate.point.y;
-          const deltaZ = sample.point.z - candidate.point.z;
-          const distanceSquared = deltaX * deltaX + deltaY * deltaY
-            + deltaZ * deltaZ;
-          let distance = null;
-          if (distanceSquared > matchDistance * matchDistance
-              && (distance = Math.sqrt(distanceSquared)) > matchDistance) continue;
-          if (best && distanceSquared > best.distanceSquared) continue;
-          distance ??= Math.sqrt(distanceSquared);
-          if (distance > matchDistance) continue;
-          if (!best || distance < best.distance
-              || distance === best.distance
-                && candidate.sampleKey.localeCompare(
-                  best.sample.sampleKey) < 0) {
-            best = {sample: candidate, distance, distanceSquared};
-          }
+          best = considerNearestSample(
+            sample, candidate, matchDistance, best);
         }
       }
     }
@@ -449,13 +435,15 @@ async function nearestSampleCooperative(sample, cells, cellSize, matchDistance,
 
 function buildSpatialCells(samples, cellSize) {
   const cells = new Map();
-  samples.forEach(sample => {
-    const key = cellKey(sample.point, cellSize);
-    const entries = cells.get(key) || [];
-    entries.push(sample);
-    cells.set(key, entries);
-  });
+  samples.forEach(sample => addSpatialSample(cells, sample, cellSize));
   return cells;
+}
+
+function addSpatialSample(cells, sample, cellSize) {
+  const key = cellKey(sample.point, cellSize);
+  const entries = cells.get(key) || [];
+  entries.push(sample);
+  cells.set(key, entries);
 }
 
 export async function buildSpatialCellsCooperative(samples, cellSize, {
@@ -470,14 +458,65 @@ export async function buildSpatialCellsCooperative(samples, cellSize, {
       if (!isCurrent()) return null;
     }
     const sample = samples[index];
-    const key = cellKey(sample.point, cellSize);
-    const entries = cells.get(key) || [];
-    entries.push(sample);
-    cells.set(key, entries);
+    addSpatialSample(cells, sample, cellSize);
   }
   if (!isCurrent()) return null;
   await budget.checkpoint();
   return cells;
+}
+
+function addMutualCrossSourceEvidence(evidence, leftRig, rightRig,
+    leftSample, rightSample, distance, matchDistance) {
+  const confidence = clamp(1 - distance / matchDistance);
+  for (const leftInfluence of leftSample.influences) {
+    for (const rightInfluence of rightSample.influences) {
+      const leftKey = sourceBoneKey(leftRig.sourceKey, leftInfluence.boneId);
+      const rightKey = sourceBoneKey(rightRig.sourceKey, rightInfluence.boneId);
+      const key = crossPairKey(leftKey, rightKey);
+      const record = evidence.get(key) || {
+        leftSourceBoneKey: leftKey,
+        rightSourceBoneKey: rightKey,
+        matchedVertexCount: 0,
+        weightedMatchStrength: 0,
+        leftMass: 0,
+        rightMass: 0,
+        matchedVertexKeys: new Set(),
+      };
+      const leftMass = leftInfluence.weight * confidence;
+      const rightMass = rightInfluence.weight * confidence;
+      const vertexPairKey = `${leftSample.sampleKey}|${rightSample.sampleKey}`;
+      if (!record.matchedVertexKeys.has(vertexPairKey)) {
+        record.matchedVertexKeys.add(vertexPairKey);
+        record.matchedVertexCount += 1;
+      }
+      record.weightedMatchStrength += leftInfluence.weight
+        * rightInfluence.weight * confidence;
+      record.leftMass += leftMass;
+      record.rightMass += rightMass;
+      evidence.set(key, record);
+    }
+  }
+}
+
+function finishCrossSourceEvidence(evidence, isCurrent = () => true) {
+  for (const record of evidence.values()) {
+    if (!isCurrent()) return null;
+    const minimumMass = Math.max(EPSILON,
+      Math.min(record.leftMass, record.rightMass));
+    const unionMass = Math.max(EPSILON,
+      record.leftMass + record.rightMass - record.weightedMatchStrength);
+    record.crossContainment = clamp(
+      record.weightedMatchStrength / minimumMass);
+    record.crossJaccard = clamp(record.weightedMatchStrength / unionMass);
+    record.overlapScore = clamp(record.crossContainment * .55
+      + record.crossJaccard * .45);
+    record.supportReliability = Math.min(
+      clamp(record.matchedVertexCount / CROSS_SOURCE_STRONG_VERTEX_COUNT),
+      clamp(record.weightedMatchStrength
+        / CROSS_SOURCE_STRONG_WEIGHT_STRENGTH));
+    delete record.matchedVertexKeys;
+  }
+  return evidence;
 }
 
 export function crossSourceWeightEvidence(
@@ -517,55 +556,11 @@ export function crossSourceWeightEvidence(
   nearestLeftByRight.forEach(({leftSample, distance}, rightSample) => {
     const reverse = nearestRightByLeft.get(leftSample);
     if (!reverse || reverse.rightSample !== rightSample) return;
-    const confidence = clamp(1 - distance / matchDistance);
-    for (const leftInfluence of leftSample.influences) {
-      for (const rightInfluence of rightSample.influences) {
-        const leftKey = sourceBoneKey(leftRig.sourceKey,
-          leftInfluence.boneId);
-        const rightKey = sourceBoneKey(rightRig.sourceKey,
-          rightInfluence.boneId);
-        const key = crossPairKey(leftKey, rightKey);
-        const record = evidence.get(key) || {
-          leftSourceBoneKey: leftKey,
-          rightSourceBoneKey: rightKey,
-          matchedVertexCount: 0,
-          weightedMatchStrength: 0,
-          leftMass: 0,
-          rightMass: 0,
-          matchedVertexKeys: new Set(),
-        };
-        const leftMass = leftInfluence.weight * confidence;
-        const rightMass = rightInfluence.weight * confidence;
-        const vertexPairKey = `${leftSample.sampleKey}|${rightSample.sampleKey}`;
-        if (!record.matchedVertexKeys.has(vertexPairKey)) {
-          record.matchedVertexKeys.add(vertexPairKey);
-          record.matchedVertexCount += 1;
-        }
-        record.weightedMatchStrength += leftInfluence.weight
-          * rightInfluence.weight * confidence;
-        record.leftMass += leftMass;
-        record.rightMass += rightMass;
-        evidence.set(key, record);
-      }
-    }
+    addMutualCrossSourceEvidence(
+      evidence, leftRig, rightRig, leftSample, rightSample, distance,
+      matchDistance);
   });
-  evidence.forEach(record => {
-    const minimumMass = Math.max(EPSILON,
-      Math.min(record.leftMass, record.rightMass));
-    const unionMass = Math.max(EPSILON,
-      record.leftMass + record.rightMass - record.weightedMatchStrength);
-    record.crossContainment = clamp(
-      record.weightedMatchStrength / minimumMass);
-    record.crossJaccard = clamp(record.weightedMatchStrength / unionMass);
-    record.overlapScore = clamp(record.crossContainment * .55
-      + record.crossJaccard * .45);
-    record.supportReliability = Math.min(
-      clamp(record.matchedVertexCount / CROSS_SOURCE_STRONG_VERTEX_COUNT),
-      clamp(record.weightedMatchStrength
-        / CROSS_SOURCE_STRONG_WEIGHT_STRENGTH));
-    delete record.matchedVertexKeys;
-  });
-  return evidence;
+  return finishCrossSourceEvidence(evidence);
 }
 
 export async function crossSourceWeightEvidenceCooperative(
@@ -626,56 +621,11 @@ export async function crossSourceWeightEvidenceCooperative(
     }
     const reverse = nearestRightByLeft.get(leftSample);
     if (!reverse || reverse.rightSample !== rightSample) continue;
-    const confidence = clamp(1 - distance / matchDistance);
-    for (const leftInfluence of leftSample.influences) {
-      for (const rightInfluence of rightSample.influences) {
-        const leftKey = sourceBoneKey(leftRig.sourceKey,
-          leftInfluence.boneId);
-        const rightKey = sourceBoneKey(rightRig.sourceKey,
-          rightInfluence.boneId);
-        const key = crossPairKey(leftKey, rightKey);
-        const record = evidence.get(key) || {
-          leftSourceBoneKey: leftKey,
-          rightSourceBoneKey: rightKey,
-          matchedVertexCount: 0,
-          weightedMatchStrength: 0,
-          leftMass: 0,
-          rightMass: 0,
-          matchedVertexKeys: new Set(),
-        };
-        const leftMass = leftInfluence.weight * confidence;
-        const rightMass = rightInfluence.weight * confidence;
-        const vertexPairKey = `${leftSample.sampleKey}|${rightSample.sampleKey}`;
-        if (!record.matchedVertexKeys.has(vertexPairKey)) {
-          record.matchedVertexKeys.add(vertexPairKey);
-          record.matchedVertexCount += 1;
-        }
-        record.weightedMatchStrength += leftInfluence.weight
-          * rightInfluence.weight * confidence;
-        record.leftMass += leftMass;
-        record.rightMass += rightMass;
-        evidence.set(key, record);
-      }
-    }
+    addMutualCrossSourceEvidence(
+      evidence, leftRig, rightRig, leftSample, rightSample, distance,
+      matchDistance);
   }
-  for (const record of evidence.values()) {
-    if (!isCurrent()) return null;
-    const minimumMass = Math.max(EPSILON,
-      Math.min(record.leftMass, record.rightMass));
-    const unionMass = Math.max(EPSILON,
-      record.leftMass + record.rightMass - record.weightedMatchStrength);
-    record.crossContainment = clamp(
-      record.weightedMatchStrength / minimumMass);
-    record.crossJaccard = clamp(record.weightedMatchStrength / unionMass);
-    record.overlapScore = clamp(record.crossContainment * .55
-      + record.crossJaccard * .45);
-    record.supportReliability = Math.min(
-      clamp(record.matchedVertexCount / CROSS_SOURCE_STRONG_VERTEX_COUNT),
-      clamp(record.weightedMatchStrength
-        / CROSS_SOURCE_STRONG_WEIGHT_STRENGTH));
-    delete record.matchedVertexKeys;
-  }
-  return evidence;
+  return finishCrossSourceEvidence(evidence, isCurrent);
 }
 
 function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
@@ -998,10 +948,18 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
   };
 }
 
-function prepareCrossSourceEvidence(sourceRigs, referenceRadius) {
-  const rigs = [...sourceRigs].sort((left, right) =>
+function orderedSourceRigs(sourceRigs) {
+  return [...sourceRigs].sort((left, right) =>
     String(left.sourceKey).localeCompare(String(right.sourceKey)));
-  const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
+}
+
+function crossSourceMatchDistance(referenceRadius) {
+  return Math.max(referenceRadius * 0.02, EPSILON);
+}
+
+function prepareCrossSourceEvidence(sourceRigs, referenceRadius) {
+  const rigs = orderedSourceRigs(sourceRigs);
+  const matchDistance = crossSourceMatchDistance(referenceRadius);
   const samplesBySourceKey = new Map();
   const cellsBySourceKey = new Map();
   rigs.forEach(rig => {
@@ -1040,9 +998,8 @@ function buildCrossSourceWeightEvidence(sourceRigs, referenceRadius) {
 async function buildCrossSourceWeightEvidenceCooperative(sourceRigs,
     referenceRadius, {budget = createWorkBudget(), isCurrent = () => true,
       timings = null} = {}) {
-  const rigs = [...sourceRigs].sort((left, right) =>
-    String(left.sourceKey).localeCompare(String(right.sourceKey)));
-  const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
+  const rigs = orderedSourceRigs(sourceRigs);
+  const matchDistance = crossSourceMatchDistance(referenceRadius);
   const samplesBySourceKey = new Map();
   const cellsBySourceKey = new Map();
   for (const rig of rigs) {

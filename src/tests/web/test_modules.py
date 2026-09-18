@@ -2517,6 +2517,14 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
       const cooperative = await crossSourceWeightEvidenceCooperative(
         make('coop-left', [0, 0, 0, 0, .018, 0], [10, 11]),
         make('coop-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1);
+      let checks = 0;
+      const cancelled = await crossSourceWeightEvidenceCooperative(
+        make('cancel-left', [0, 0, 0, 0, .018, 0], [10, 11]),
+        make('cancel-right', [-.018, 0, 0, 0, .0095, 0], [20, 21]), 1,
+        null, null, null, null, {
+          isCurrent: () => checks++ < 1,
+          budget: {checkpoint: async () => {}},
+        });
       return {
         spatialMatches: spatial.get('left#bone=0|right#bone=1')
           ?.matchedVertexCount || 0,
@@ -2527,6 +2535,7 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
           item.leftSourceBoneKey, item.rightSourceBoneKey,
           item.matchedVertexCount, item.weightedMatchStrength,
         ]).sort(),
+        cancelled: cancelled === null,
       };
     }""")
     assert result["spatialMatches"] == 1
@@ -2535,6 +2544,7 @@ def test_cross_source_neutral_sampling_uses_radius_and_true_mutual_nearest(
     assert result["cooperativePairs"] == [[
         "coop-left#bone=11", "coop-right#bone=21", 1,
         pytest.approx(.575)]]
+    assert result["cancelled"]
 
 
 def test_model_rig_reconciliation_ignores_main_rig_metadata(module_page):
