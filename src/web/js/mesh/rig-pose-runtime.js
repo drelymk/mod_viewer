@@ -23,7 +23,7 @@ function rotationEntries(rotationsByJointId) {
   return Object.entries(rotationsByJointId || {});
 }
 
-function createSession({state, getRig, getJoint, getParent,
+export function createRigPoseRuntime({state, getRig, getJoint, getParent,
     getComponentForJoint, getSourceRig, getSourceComponent,
     getModelJointId, getRepresentativeMember, applyPose,
     setComponentRoot, resetModelPose,
@@ -195,8 +195,4 @@ function createSession({state, getRig, getJoint, getParent,
       return state.pickStatus;
     },
   };
-}
-
-export function createRigPoseRuntime(options) {
-  return createSession(options);
 }

@@ -149,7 +149,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
   return {disable, syncParticipants, syncToSelection, reset};
 }
 
-function createController({modelPhysicsSession, reset} = {}) {
+export function createWeightPhysicsController({modelPhysicsSession, reset} = {}) {
   const setNumber = (key, value) => {
     const next = Number(value);
     if (!Number.isFinite(next)) return false;
@@ -175,8 +175,4 @@ function createController({modelPhysicsSession, reset} = {}) {
     },
     setMaxBendDegrees: value => setNumber('maxBendDegrees', value),
   };
-}
-
-export function createWeightPhysicsController(options) {
-  return createController(options);
 }

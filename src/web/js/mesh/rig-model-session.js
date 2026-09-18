@@ -61,7 +61,7 @@ function memberEvidenceShapeKey(member = {}) {
   ]);
 }
 
-function createSourceSession({states, knownMeshes, modelWeightState,
+export function createRigSourceSession({states, knownMeshes, modelWeightState,
     sourceSkinningRigs, ensureRigMeshPrepared,
     ensureRigMeshPreparedCooperative = ensureRigMeshPrepared,
     ensureInfluenceGraph, ensureInfluenceGraphCooperative = ensureInfluenceGraph,
@@ -528,11 +528,7 @@ function createSourceSession({states, knownMeshes, modelWeightState,
     reset() { inFlight.clear(); }};
 }
 
-export function createRigSourceSession(options) {
-  return createSourceSession(options);
-}
-
-function createSession({state, modelWeightState, getGeneration,
+export function createRigModelSession({state, modelWeightState, getGeneration,
     ensureModelWeightsLoaded, buildAllSourceSkinningRigs,
     buildAllSourceSkinningRigsCooperatively = buildAllSourceSkinningRigs,
     buildModelSkinningRig,
@@ -723,8 +719,4 @@ function createSession({state, modelWeightState, getGeneration,
     },
     setRotationSnapDegrees,
   };
-}
-
-export function createRigModelSession(options) {
-  return createSession(options);
 }

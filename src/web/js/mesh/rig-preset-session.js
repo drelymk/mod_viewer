@@ -19,7 +19,7 @@ function unavailableRigPresetResult(reason, preset = null) {
   };
 }
 
-function createSession({state, getModelRig, getModelRigState, getKnownMeshes,
+export function createRigPresetSession({state, getModelRig, getModelRigState, getKnownMeshes,
     resolveRigPreset, applyResolvedPreset, notifyChanged} = {}) {
   let generation = 0;
   let writeQueue = Promise.resolve();
@@ -198,8 +198,4 @@ function createSession({state, getModelRig, getModelRigState, getKnownMeshes,
       writeToken += 1;
       writeQueue = Promise.resolve();
     }};
-}
-
-export function createRigPresetSession(options) {
-  return createSession(options);
 }

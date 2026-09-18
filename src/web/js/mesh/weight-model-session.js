@@ -8,7 +8,7 @@ import {sampleSkinningAtIntersection} from './weight-selection.js';
 import {aggregateModelWeightBoneStats} from './weight-runtime.js';
 import {weightRigStatus} from './weight-rig-status.js';
 
-function createPickingSession({modelWeightState, modelRigState, states,
+export function createWeightPickingSession({modelWeightState, modelRigState, states,
     knownMeshes, canvas, camera, controls, notifyChanged, requestRender,
     cancelRigPicking} = {}) {
   function getMeshes() {
@@ -126,11 +126,7 @@ function createPickingSession({modelWeightState, modelRigState, states,
   };
 }
 
-export function createWeightPickingSession(options) {
-  return createPickingSession(options);
-}
-
-function createSession({modelWeightState, states, knownMeshes,
+export function createWeightModelSession({modelWeightState, states, knownMeshes,
     modelWeightSnapshot, selectionMapFromEntries, sourceSelectionEntries,
     refreshSelectedWeightMask,
     updateModelWeightHeatmap, syncPhysicsToSelection, sameBoneSelection,
@@ -336,8 +332,4 @@ function createSession({modelWeightState, states, knownMeshes,
     },
     reset() { selectionSavePromise = null; },
   };
-}
-
-export function createWeightModelSession(options) {
-  return createSession(options);
 }

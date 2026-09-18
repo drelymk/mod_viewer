@@ -6,7 +6,7 @@ import {
   HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES,
 } from './humanoid-control-rig.js';
 
-function createSession({modelRigState, getModelRig, getPrimaryLimb,
+export function createHumanoidPoseRuntime({modelRigState, getModelRig, getPrimaryLimb,
     solveControlIk, mergeLimbPose, applyPose, notifyChanged, requestRender} = {}) {
   function setActiveLimbRole(role) {
     const next = RIG_LIMB_ROLES.includes(role) ? role : null;
@@ -77,8 +77,4 @@ function createSession({modelRigState, getModelRig, getPrimaryLimb,
   }
 
   return {setActiveLimbRole, setIkEnabled, selectControl, solveTarget};
-}
-
-export function createHumanoidPoseRuntime(options) {
-  return createSession(options);
 }

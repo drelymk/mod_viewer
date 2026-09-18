@@ -82,7 +82,7 @@ function currentModPath(getKnownMeshes) {
     .find(mesh => mesh?.userData?.modPath)?.userData?.modPath || null;
 }
 
-function createSession({modelRigState, getModelRig, getAutomaticRig,
+export function createHumanoidRigEditSession({modelRigState, getModelRig, getAutomaticRig,
     resetCurrentPoseForHumanoidRigEdit, setPhysicsSuspended,
     resolveMappings, refreshHumanoidRig, getKnownMeshes, persist, clearPersist,
     cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {
@@ -428,8 +428,4 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
     begin, cancel, save, reset, beginCarry, updateDraft, finishCarry,
     cancelCarry, resetSession,
   };
-}
-
-export function createHumanoidRigEditSession(options) {
-  return createSession(options);
 }
