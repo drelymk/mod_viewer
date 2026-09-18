@@ -1500,6 +1500,94 @@ def test_cooperative_surface_evidence_matches_sync_and_supports_cancellation(
     assert result["cooperative"]["validTriangleCount"] == 2
 
 
+def test_cooperative_topology_and_vertex_graphs_match_sync(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const rig = await import('./js/mesh/weight-rig.js');
+      const topologyPositions = new Float32Array([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0, 0, 0, 1, 0, 0, 2, 0, 0,
+      ]);
+      const topologyIndices = new Uint32Array([
+        0, 1, 2, 3, 4, 5, 0, 1, 9,
+      ]);
+      let topologyCheckpoints = 0;
+      const topology = rig.inspectSurfaceTopology(
+        topologyPositions, topologyIndices);
+      const cooperativeTopology = await rig.inspectSurfaceTopologyCooperative(
+        topologyPositions, topologyIndices, {
+          triangleBatch: 1,
+          budget: {checkpoint: async () => { topologyCheckpoints += 1; }},
+        });
+
+      const positions = new Float32Array([
+        0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0,
+      ]);
+      const indices = new Uint32Array([
+        0, 1, 0, 1, 2, 3, 2, 1, 2, 0, 1, 2,
+      ]);
+      const weights = new Float32Array([
+        .5, .25, .25, .5, .5, 0, .2, .3, .5, 0, -1, .5,
+      ]);
+      const requested = [2, 0, 1, 99];
+      const nodes = rig.buildInfluenceNodes(
+        positions, indices, weights, 3, requested);
+      let nodeCheckpoints = 0;
+      const cooperativeNodes = await rig.buildInfluenceNodesCooperative(
+        positions, indices, weights, 3, requested, {
+          vertexBatch: 1,
+          budget: {checkpoint: async () => { nodeCheckpoints += 1; }},
+        });
+      const relationships = rig.buildInfluenceRelationships(
+        positions, indices, weights, 3, nodes, 3);
+      let relationshipCheckpoints = 0;
+      const cooperativeRelationships =
+        await rig.buildInfluenceRelationshipsCooperative(
+          positions, indices, weights, 3, nodes, 3, {
+            vertexBatch: 1,
+            budget: {checkpoint: async () => {
+              relationshipCheckpoints += 1;
+            }},
+          });
+      let nodeChecks = 0;
+      const cancelledNodes = await rig.buildInfluenceNodesCooperative(
+        positions, indices, weights, 3, requested, {
+          vertexBatch: 1,
+          isCurrent: () => nodeChecks++ < 2,
+          budget: {checkpoint: async () => {}},
+        });
+      let relationshipChecks = 0;
+      const cancelledRelationships =
+        await rig.buildInfluenceRelationshipsCooperative(
+          positions, indices, weights, 3, nodes, 3, {
+            vertexBatch: 1,
+            isCurrent: () => relationshipChecks++ < 2,
+            budget: {checkpoint: async () => {}},
+          });
+      return {
+        topologySame: JSON.stringify(cooperativeTopology)
+          === JSON.stringify(topology),
+        nodesSame: JSON.stringify(cooperativeNodes) === JSON.stringify(nodes),
+        relationshipsSame: JSON.stringify(cooperativeRelationships)
+          === JSON.stringify(relationships),
+        topologyCheckpoints, nodeCheckpoints, relationshipCheckpoints,
+        cancelledNodes: cancelledNodes === null,
+        cancelledRelationships: cancelledRelationships === null,
+      };
+    }""")
+    assert result == {
+        "topologySame": True,
+        "nodesSame": True,
+        "relationshipsSame": True,
+        "topologyCheckpoints": 4,
+        "nodeCheckpoints": 5,
+        "relationshipCheckpoints": 5,
+        "cancelledNodes": True,
+        "cancelledRelationships": True,
+    }
+
+
 def test_triangle_surface_evidence_is_invariant_for_varying_weight_tessellation(
         module_page):
     page = module_page
