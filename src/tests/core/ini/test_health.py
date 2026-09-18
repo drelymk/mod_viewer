@@ -221,20 +221,23 @@ def test_statement_run_target_and_key_binding_findings():
             by_code["missing_local_run_target"]] == ["CommandListMissing"]
 
 
-def test_unsupported_drawindexed_arguments_are_structured_diagnostics():
+def test_drawindexed_viewer_limitation_does_not_label_valid_auto_as_unsupported():
     with tempfile.TemporaryDirectory() as tmp:
         _write(os.path.join(tmp, "mod.ini"), (
             "[TextureOverrideBody]\n"
             "drawindexed = 3, 0, -4\n"
             "drawindexed = auto\n"
+            "drawindexed = AUTO\n"
             "drawindexed = $count, $start, 0\n"))
         report = analyze_mod(tmp)
 
     issues = [item for item in report["issues"]
               if item["code"] == "unsupported_drawindexed_arguments"]
-    assert [item["line"] for item in issues] == [3, 4]
-    assert [item["arguments"] for item in issues] == [
-        "auto", "$count, $start, 0"]
+    assert [item["line"] for item in issues] == [5]
+    assert [item["arguments"] for item in issues] == ["$count, $start, 0"]
+    assert issues[0]["category"] == "viewer"
+    assert issues[0]["severity"] == "warning"
+    assert "viewer" in issues[0]["message"].lower()
 
 
 
@@ -246,3 +249,179 @@ def test_health_survives_geometry_failure():
 
     assert ("error" in result and "health" in result), ("geometry failure still returns the health report")
     assert ("malformed_condition_nesting" in _codes(result["health"])), ("failure-path health report retains INI findings")
+
+
+def test_section_semantics_and_staged_findings(tmp_path):
+    ini = tmp_path / "mod.ini"
+    _write(ini, "[Present]\n")
+    staged = (
+        "namespace = Demo\ncondition = 1\nhash = 12345678\n"
+        "[TextureOverrideBody]\nhash = 12345678\nps-t0 = ResourceA\n"
+        "ps-t0 = ResourceB\n[textureoverridebody]\nhash = abcdef12\n"
+        "[TextureOverideTypo]\n[ResourceBody]\nfilename body.buf\n"
+        "stride = 4\nstride = 8\n[Include]\ninclude = a.ini\n"
+        "include = b.ini\n[KeyMany]\nkey = no_ctrl no_shift no_alt ;\n"
+        "key = ctrl F1\nback = F2\nback = F3\n"
+        "[KeyEmpty]\n[CommandListActions]\nif $x == 1\n"
+        "run = ResourceBody\nrun = CommandListMissing\nendif\n"
+        "[ShaderOverrideBad]\nhash = xyz\n"
+        "[TextureOverrideFuzzy]\nmatch_width = 128\n"
+    )
+    report = analyze_mod(str(tmp_path), overrides={str(ini): staged})
+    by_code = {}
+    for issue in report["issues"]:
+        by_code.setdefault(issue["code"], []).append(issue)
+
+    assert len(by_code["duplicate_section"]) == 1
+    assert by_code["duplicate_section"][0]["first_line"] == 4
+    assert len(by_code["unknown_section"]) == 1
+    assert len(by_code["statement_outside_section"]) == 1
+    assert len(by_code["malformed_regular_statement"]) == 1
+    assert len(by_code["duplicate_section_key"]) == 1
+    assert by_code["duplicate_section_key"][0]["key"] == "stride"
+    assert len(by_code["missing_key_binding"]) == 1
+    assert "invalid_key_binding" not in by_code
+    assert len(by_code["invalid_run_target"]) == 1
+    assert [issue["target"] for issue in by_code["missing_local_run_target"]] == ["CommandListMissing"]
+    assert len(by_code["invalid_hash"]) == 1
+    assert not [issue for issue in by_code.get("missing_override_hash", [])
+                if issue["section"] == "TextureOverrideFuzzy"]
+
+
+def test_override_and_key_missing_or_invalid(tmp_path):
+    _write(tmp_path / "mod.ini", (
+        "[ShaderOverrideMissing]\nhandling = skip\n"
+        "[TextureOverrideMissing]\nhandling = skip\n"
+        "[KeyInvalid]\nkey = no_ctrl no_shift\nback = \n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert {issue["override_type"] for issue in report["issues"]
+            if issue["code"] == "missing_override_hash"} == {"shader", "texture"}
+    assert {issue["binding_type"] for issue in report["issues"]
+            if issue["code"] == "invalid_key_binding"} == {"back"}
+
+
+def test_variable_assignments_resolve_namespace_and_local_scope(tmp_path):
+    _write(tmp_path / "globals.ini", (
+        "namespace = A\n[Constants]\nglobal persist $Shared\n"
+        "global $Uninitialized\n"
+    ))
+    _write(tmp_path / "actions.ini", (
+        "namespace = A\n[CommandListFirst]\n$early = 0\n"
+        "local $early\n$shared = 1\n$Uninitialized = 2\n"
+        "local $temp\n$temp = 2\n$missing = 3\n"
+        "$\\Framework\\external = 4\n"
+        "if $shared\nlocal $nested\n$nested = 1\nendif\n"
+        "$nested = 2\n[CommandListSecond]\n$temp = 5\n"
+    ))
+    _write(tmp_path / "other.ini", (
+        "namespace = B\n[CommandListOther]\n$shared = 1\n"
+        "global $fake\n$fake = 2\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert [(issue["section"], issue["variable"]) for issue in report["issues"]
+            if issue["code"] == "undeclared_variable"] == [
+                ("CommandListFirst", "$early"),
+                ("CommandListFirst", "$missing"),
+                ("CommandListFirst", "$nested"),
+                ("CommandListSecond", "$temp"),
+                ("CommandListOther", "$shared"),
+                ("CommandListOther", "$fake"),
+            ]
+
+
+def test_multi_ini_global_and_run_lookup_keeps_unnamespaced_siblings_isolated(tmp_path):
+    _write(tmp_path / "global.ini", (
+        "[Constants]\nglobal $fallback = 0\n"
+        "[CommandListGlobal]\n[CustomShaderGlobal]\n"
+    ))
+    _write(tmp_path / "a.ini", (
+        "namespace = Demo\n[Constants]\nglobal $shared = 0\n"
+        "[CommandListScoped]\n[CustomShaderScoped]\n"
+    ))
+    _write(tmp_path / "b.ini", (
+        "namespace = Demo\n[CommandListConsumer]\n"
+        "$shared = 1\n$fallback = 2\n"
+        "run = CommandListScoped\nrun = CommandListGlobal\n"
+        "run = CustomShaderScoped\nrun = CustomShaderGlobal\n"
+    ))
+    _write(tmp_path / "isolated.ini", (
+        "[CommandListIsolated]\n$fallback = 1\n"
+        "run = CommandListGlobal\n"
+    ))
+    _write(tmp_path / "other.ini", (
+        "namespace = Other\n[CommandListOther]\n"
+        "$shared = 1\nrun = CommandListScoped\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert [(issue["ini"], issue["variable"]) for issue in report["issues"]
+            if issue["code"] == "undeclared_variable"] == [
+                ("isolated.ini", "$fallback"),
+                ("other.ini", "$shared"),
+            ]
+    assert [(issue["ini"], issue["target"]) for issue in report["issues"]
+            if issue["code"] == "missing_local_run_target"] == [
+                ("isolated.ini", "CommandListGlobal"),
+                ("other.ini", "CommandListScoped"),
+            ]
+
+
+def test_duplicate_override_metadata_but_not_repeated_commands(tmp_path):
+    _write(tmp_path / "mod.ini", (
+        "[TextureOverrideBody]\nhash = abcdef12\nmatch_width = 10\n"
+        "match_width = 20\nps-t0 = ResourceA\nps-t0 = ResourceB\n"
+        "[ShaderOverrideBody]\nhash = 1\nfilter_index = 1\n"
+        "filter_index = 2\n"
+        "[CustomShaderBody]\nvs = body.hlsl\nvs = other.hlsl\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    duplicates = [issue for issue in report["issues"]
+                  if issue["code"] == "duplicate_section_key"]
+    assert [(issue["key"], issue["first_line"], issue["line"])
+            for issue in duplicates] == [
+                ("match_width", 3, 4),
+                ("filter_index", 9, 10),
+                ("vs", 12, 13),
+            ]
+
+
+def test_reviewed_hash_run_key_and_regular_statement_edges(tmp_path):
+    _write(tmp_path / "mod.ini", (
+        "[TextureOverrideShort]\nhash = a\n"
+        "[ShaderOverrideShort]\nhash = 1\n"
+        "[TextureOverrideTypo]\nmatch_widht = 100\n"
+        "[TextureOverridePriority]\nmatch_priority = 1\n"
+        "[TextureOverrideQuality]\nmatch_msaa_quality = 2\n"
+        "[TextureOverrideConflict]\nhash = 123\nmatch_width = 10\n"
+        "[ResourceRegular]\ndraw = something\n"
+        "[KeyModifiers]\nkey = ctrl\nkey = no_ctrl\n"
+        "key = no_ctrl no_shift\n"
+        "[CommandList Foo]\nrun = CommandList Foo\nrun =\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    by_code = {}
+    for issue in report["issues"]:
+        by_code.setdefault(issue["code"], []).append(issue)
+    assert "invalid_hash" not in by_code
+    assert "invalid_key_binding" not in by_code
+    assert "malformed_regular_statement" not in by_code
+    assert [(issue["section"], issue["code"]) for issue in
+            by_code["missing_override_hash"]] == [
+                ("TextureOverrideTypo", "missing_override_hash"),
+                ("TextureOverridePriority", "missing_override_hash"),
+            ]
+    assert len(by_code["hash_match_conflict"]) == 1
+    assert [(issue["target"], issue["target_display"]) for issue in
+            by_code["invalid_run_target"]] == [("", "Empty run target")]
+
+
+def test_namespaced_duplicate_global_section_is_not_assumed_ignored(tmp_path):
+    _write(tmp_path / "mod.ini", (
+        "namespace = Demo\n[Present]\nrun = CommandListA\n"
+        "[Present]\nrun = CommandListB\n"
+        "[TextureOverrideA]\nhash = 1\n"
+        "[textureoverridea]\nhash = 2\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert [issue["section"] for issue in report["issues"]
+            if issue["code"] == "duplicate_section"] == ["textureoverridea"]
