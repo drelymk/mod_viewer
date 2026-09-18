@@ -330,6 +330,42 @@ def test_variable_assignments_resolve_namespace_and_local_scope(tmp_path):
             ]
 
 
+def test_multi_ini_global_and_run_lookup_keeps_unnamespaced_siblings_isolated(tmp_path):
+    _write(tmp_path / "global.ini", (
+        "[Constants]\nglobal $fallback = 0\n"
+        "[CommandListGlobal]\n[CustomShaderGlobal]\n"
+    ))
+    _write(tmp_path / "a.ini", (
+        "namespace = Demo\n[Constants]\nglobal $shared = 0\n"
+        "[CommandListScoped]\n[CustomShaderScoped]\n"
+    ))
+    _write(tmp_path / "b.ini", (
+        "namespace = Demo\n[CommandListConsumer]\n"
+        "$shared = 1\n$fallback = 2\n"
+        "run = CommandListScoped\nrun = CommandListGlobal\n"
+        "run = CustomShaderScoped\nrun = CustomShaderGlobal\n"
+    ))
+    _write(tmp_path / "isolated.ini", (
+        "[CommandListIsolated]\n$fallback = 1\n"
+        "run = CommandListGlobal\n"
+    ))
+    _write(tmp_path / "other.ini", (
+        "namespace = Other\n[CommandListOther]\n"
+        "$shared = 1\nrun = CommandListScoped\n"
+    ))
+    report = analyze_mod(str(tmp_path))
+    assert [(issue["ini"], issue["variable"]) for issue in report["issues"]
+            if issue["code"] == "undeclared_variable"] == [
+                ("isolated.ini", "$fallback"),
+                ("other.ini", "$shared"),
+            ]
+    assert [(issue["ini"], issue["target"]) for issue in report["issues"]
+            if issue["code"] == "missing_local_run_target"] == [
+                ("isolated.ini", "CommandListGlobal"),
+                ("other.ini", "CommandListScoped"),
+            ]
+
+
 def test_duplicate_override_metadata_but_not_repeated_commands(tmp_path):
     _write(tmp_path / "mod.ini", (
         "[TextureOverrideBody]\nhash = abcdef12\nmatch_width = 10\n"

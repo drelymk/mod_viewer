@@ -132,9 +132,8 @@ def _normalized_key_chord(value):
 
 
 def _analyze_statements(doc, ini_rel, issues, global_variables,
-                        ini_namespace=None):
+                        run_targets, ini_namespace=None):
     """Check conservative statement-level mistakes outside condition syntax."""
-    declared_sections = {section.name.lower() for section in doc.sections}
     seen_keys = {}
 
     for line in doc.lines:
@@ -279,7 +278,7 @@ def _analyze_statements(doc, ini_rel, issues, global_variables,
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
                         target=target, target_display=target or "Empty run target",
                     ))
-                elif target_kind == "local" and target.lower() not in declared_sections:
+                elif target_kind == "local" and target.casefold() not in run_targets:
                     issues.append(_issue(
                         "missing_local_run_target", "warning", "ini",
                         f"{target} is run but is not declared in this INI; "
@@ -343,7 +342,7 @@ def _analyze_statements(doc, ini_rel, issues, global_variables,
 
 def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
                       source=None, global_variables=frozenset(),
-                      ini_namespace=None):
+                      run_targets=frozenset(), ini_namespace=None):
     for problem in doc.structure_errors():
         issues.append(_issue(
             "malformed_condition_nesting", "error", "conditions",
@@ -363,7 +362,8 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
             reason=problem.get("reason"),
             **({"count": problem["count"]} if "count" in problem else {}),
         ))
-    _analyze_statements(doc, ini_rel, issues, global_variables, ini_namespace)
+    _analyze_statements(
+        doc, ini_rel, issues, global_variables, run_targets, ini_namespace)
 
     resources = _resource_sections(doc)
     declared = set(resources)
@@ -565,24 +565,41 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
             continue
         loaded.append((path, ini_rel, doc))
 
-    global_variables = {}
-    for _path, _ini_rel, doc in loaded:
-        namespace = (extract_ini_namespace(document=doc) or "").casefold()
-        bucket = global_variables.setdefault(namespace, set())
-        for section in doc.sections:
-            if section.name.casefold() != "constants":
-                continue
-            for line in section.lines:
-                declaration = semantics.declaration(line.text)
-                if declaration and declaration[0] == "global":
-                    bucket.add(declaration[1])
+    scoped = []
+    namespace_globals, namespace_runs = {}, {}
+    unqualified_globals, unqualified_runs = set(), set()
     for path, ini_rel, doc in loaded:
         namespace = (extract_ini_namespace(document=doc) or "").casefold()
+        doc_globals, doc_runs = set(), set()
+        for section in doc.sections:
+            name = section.name.casefold()
+            if name.startswith(("commandlist", "customshader")):
+                doc_runs.add(name)
+            if name == "constants":
+                for line in section.lines:
+                    declaration = semantics.declaration(line.text)
+                    if declaration and declaration[0] == "global":
+                        doc_globals.add(declaration[1])
+        scoped.append((path, ini_rel, doc, namespace, doc_globals, doc_runs))
+        if namespace:
+            namespace_globals.setdefault(namespace, set()).update(doc_globals)
+            namespace_runs.setdefault(namespace, set()).update(doc_runs)
+        else:
+            unqualified_globals.update(doc_globals)
+            unqualified_runs.update(doc_runs)
+
+    for path, ini_rel, doc, namespace, doc_globals, doc_runs in scoped:
+        if namespace:
+            visible_globals = namespace_globals[namespace] | unqualified_globals
+            visible_runs = namespace_runs[namespace] | unqualified_runs
+        else:
+            # Mod analysis deliberately isolates unnamespaced sibling INIs.
+            visible_globals, visible_runs = doc_globals, doc_runs
         declared_files.update(_filename_paths(
             doc, mod_dir, path, source=source))
         _analyze_document(
             doc, ini_rel, path, mod_dir, issues, declared_files, source=source,
-            global_variables=global_variables.get(namespace, frozenset()),
+            global_variables=visible_globals, run_targets=visible_runs,
             ini_namespace=namespace)
 
     inactive_files = set()
