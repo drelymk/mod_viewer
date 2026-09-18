@@ -5,8 +5,6 @@
 import * as THREE from 'three';
 import {weightRigStatus} from './weight-rig-status.js';
 
-let activeSession = null;
-
 function strictQuaternion(value) {
   const values = value?.isQuaternion
     ? [value.x, value.y, value.z, value.w]
@@ -199,24 +197,6 @@ function createSession({state, getRig, getJoint, getParent,
   };
 }
 
-export function initializeRigPoseRuntime(options) {
-  activeSession = createSession(options);
-  return activeSession;
-}
-
-function session() {
-  if (!activeSession) throw new Error('Rig pose runtime is not initialized.');
-  return activeSession;
-}
-
-export function finishRigJointPose(jointId) { return session().finishPose(jointId); }
-export function getRigJointPoseFrame(jointId) { return session().getFrame(jointId); }
-export function resetRigJoint(jointId) { return session().resetJoint(jointId); }
-export function resetRigPose() { return session().resetPose(); }
-export function setRigJointRoot(jointId) { return session().setRoot(jointId); }
-export function setRigJointRotation(jointId, quaternion, options = {}) {
-  return session().setRotation(jointId, quaternion, options);
-}
-export function setRigPoseControlStatus(message = '') {
-  return session().setStatus(message);
+export function createRigPoseRuntime(options) {
+  return createSession(options);
 }

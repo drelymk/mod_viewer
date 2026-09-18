@@ -430,30 +430,6 @@ function createSession({modelRigState, getModelRig, getAutomaticRig,
   };
 }
 
-let activeSession = null;
-
-export function initializeHumanoidRigEditSession(options) {
-  activeSession = createSession(options);
-  return activeSession;
+export function createHumanoidRigEditSession(options) {
+  return createSession(options);
 }
-
-function session() {
-  if (!activeSession) throw new Error('Humanoid Rig edit session is not initialized.');
-  return activeSession;
-}
-
-export function getHumanoidRigEditSnapshot() { return session().snapshot(); }
-export function setHumanoidRigMetadata(metadata) { return session().setMetadata(metadata); }
-export function beginHumanoidRigEdit() { return session().begin(); }
-export function cancelHumanoidRigEdit() { return session().cancel(); }
-export function saveHumanoidRigEdit() { return session().save(); }
-export function resetHumanoidRig() { return session().reset(); }
-export function beginHumanoidControlCarry(controlKey) {
-  return session().beginCarry(controlKey);
-}
-export function updateHumanoidControlDraft(controlKey, position, options) {
-  return session().updateDraft(controlKey, position, options);
-}
-export function finishHumanoidControlCarry() { return session().finishCarry(); }
-export function cancelHumanoidControlCarry() { return session().cancelCarry(); }
-export function resetHumanoidRigEditSession() { return activeSession?.resetSession(); }

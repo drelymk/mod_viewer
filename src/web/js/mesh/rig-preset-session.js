@@ -7,8 +7,6 @@ import {
   validateRigPresetName,
 } from './weight-rig-presets.js';
 
-let activeSession = null;
-
 function unavailableRigPresetResult(reason, preset = null) {
   return {
     success: false,
@@ -202,23 +200,6 @@ function createSession({state, getModelRig, getModelRigState, getKnownMeshes,
     }};
 }
 
-export function initializeRigPresetSession(options) {
-  activeSession = createSession(options);
+export function createRigPresetSession(options) {
+  return createSession(options);
 }
-
-function session() {
-  if (!activeSession) throw new Error('Rig preset session is not initialized.');
-  return activeSession;
-}
-
-export function getRigPresetSnapshot() { return session().snapshot(); }
-export function resetRigPresetSession() { activeSession?.reset(); }
-export function setRigMetadata(metadata) { return session().setMetadata(metadata); }
-export function applyRigPosePresetById(presetId) {
-  return session().applyById(presetId);
-}
-export function saveRigPosePreset(name) { return session().save(name); }
-export function renameRigPosePreset(presetId, name) {
-  return session().rename(presetId, name);
-}
-export function deleteRigPosePreset(presetId) { return session().remove(presetId); }

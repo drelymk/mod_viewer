@@ -45,30 +45,20 @@ import {
   buildJointSignatureIndex, resolveRigPreset,
 } from './weight-rig-presets.js';
 import {
-  getRigPresetSnapshot, initializeRigPresetSession,
-  resetRigPresetSession,
+  createRigPresetSession,
 } from './rig-preset-session.js';
 import {
-  initializeWeightModelSession,
-  initializeWeightPickingSession,
-  resetWeightPickingSession,
-  resetWeightModelSession,
-  cancelWeightModelPicking,
-  clearPickedPoint,
-  refreshModelWeightSummary,
-  sampleModelSkinningAtIntersection,
-  setSelectedBones as setWeightModelSelectedBones,
+  createWeightModelSession, createWeightPickingSession,
 } from './weight-model-session.js';
 import {
-  createWeightPhysicsCoordinator, initializeWeightPhysicsController,
+  createWeightPhysicsController, createWeightPhysicsCoordinator,
 } from './weight-physics-controller.js';
-import {initializeHumanoidPoseRuntime} from './humanoid-pose-runtime.js';
-import {initializeSkinningRuntime} from './skinning-runtime.js';
+import {createHumanoidPoseRuntime} from './humanoid-pose-runtime.js';
+import {createSkinningRuntime} from './skinning-runtime.js';
 import {
-  cancelRigJointPicking, initializeRigModelSession, initializeRigSourceSession,
-  modelJointFromSkinningSample,
+  createRigModelSession, createRigSourceSession,
 } from './rig-model-session.js';
-import {initializeRigPoseRuntime} from './rig-pose-runtime.js';
+import {createRigPoseRuntime} from './rig-pose-runtime.js';
 import {
   activePoseJointIds,
   createRigRuntimeState, createWeightRuntimeState, matrixIsIdentity,
@@ -85,7 +75,7 @@ import {
 } from './humanoid-control-rig.js';
 import {mergeHumanoidLimbPose, solveHumanoidControlIk} from './humanoid-rig-ik.js';
 import {
-  initializeHumanoidRigEditSession, resetHumanoidRigEditSession,
+  createHumanoidRigEditSession,
 } from './humanoid-rig-edit-session.js';
 
 const weightRuntime = createWeightRuntimeState();
@@ -113,6 +103,11 @@ let rigModelSession = null;
 let rigPoseRuntime = null;
 let physicsCoordinator = null;
 let rigSourceSession = null;
+let weightModelSession = null;
+let weightPickingSession = null;
+let rigPresetSession = null;
+let humanoidPoseRuntime = null;
+let weightPhysicsController = null;
 let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
@@ -176,7 +171,7 @@ physicsCoordinator = createWeightPhysicsCoordinator({
   },
 });
 
-skinningRuntime = initializeSkinningRuntime({
+skinningRuntime = createSkinningRuntime({
   states,
   knownMeshes,
   stateFor,
@@ -187,9 +182,10 @@ skinningRuntime = initializeSkinningRuntime({
   modelWeightSnapshot,
   selectionMapFromEntries,
   sourceSelectionEntries,
-  setSelectedBones: (...args) => setWeightModelSelectedBones(...args),
+  setSelectedBones: (...args) => weightModelSession?.setSelectedBones(...args),
   syncPhysicsToSelection,
-  refreshModelWeightSummary,
+  refreshModelWeightSummary: (...args) =>
+    weightModelSession?.refreshModelWeightSummary(...args),
   refreshSelectedWeightMask,
   eligibleSkinningMesh,
   getGeneration: () => modelWeightGeneration,
@@ -199,7 +195,7 @@ skinningRuntime = initializeSkinningRuntime({
   setModelSkinningRig: value => { modelSkinningRig = value; },
   invalidateHumanoidDetection,
   invalidateModelRigLoad: () => rigModelSession?.invalidateLoad(),
-  clearPickedPoint,
+  clearPickedPoint: (...args) => weightPickingSession?.clearPickedPoint(...args),
   resetModelPose,
   syncPhysicsParticipants,
   buildAllSourceSkinningRigs,
@@ -212,7 +208,7 @@ skinningRuntime = initializeSkinningRuntime({
   invalidateShadow: invalidateCharacterShadowGeometry,
 });
 
-rigSourceSession = initializeRigSourceSession({
+rigSourceSession = createRigSourceSession({
   states,
   knownMeshes,
   modelWeightState,
@@ -229,12 +225,12 @@ rigSourceSession = initializeRigSourceSession({
   cloneForest: cloneSourceForest,
 });
 
-initializeWeightPhysicsController({
+weightPhysicsController = createWeightPhysicsController({
   modelPhysicsSession,
   reset: () => physicsCoordinator.reset(),
 });
 
-initializeWeightPickingSession({
+weightPickingSession = createWeightPickingSession({
   modelWeightState,
   modelRigState,
   states,
@@ -244,10 +240,10 @@ initializeWeightPickingSession({
   controls,
   notifyChanged: notifyModelWeightChanged,
   requestRender,
-  cancelRigPicking: cancelRigJointPicking,
+  cancelRigPicking: (...args) => rigModelSession?.cancelJointPicking(...args),
 });
 
-initializeRigPresetSession({
+rigPresetSession = createRigPresetSession({
   state: rigPresetState,
   getModelRig: () => modelSkinningRig,
   getModelRigState: () => modelRigState,
@@ -258,7 +254,7 @@ initializeRigPresetSession({
   notifyChanged: () => notifyModelRigChanged(),
 });
 
-initializeWeightModelSession({
+weightModelSession = createWeightModelSession({
   modelWeightState,
   states,
   knownMeshes,
@@ -278,7 +274,7 @@ initializeWeightModelSession({
   ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
 });
 
-initializeHumanoidPoseRuntime({
+humanoidPoseRuntime = createHumanoidPoseRuntime({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getPrimaryLimb: role => primaryHumanoidLimb(role),
@@ -289,7 +285,7 @@ initializeHumanoidPoseRuntime({
   requestRender,
 });
 
-humanoidRigEditSession = initializeHumanoidRigEditSession({
+humanoidRigEditSession = createHumanoidRigEditSession({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
@@ -301,8 +297,8 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
     ?.save_humanoid_control_rig?.(path, value),
   clearPersist: path => window.pywebview?.api
     ?.clear_humanoid_control_rig?.(path),
-  cancelWeightPicking: cancelWeightModelPicking,
-  cancelRigPicking: cancelRigJointPicking,
+  cancelWeightPicking: (...args) => weightPickingSession?.cancel(...args),
+  cancelRigPicking: (...args) => rigModelSession?.cancelJointPicking(...args),
   refreshHumanoidRig: async savedOverrides => {
     if (!modelSkinningRig) return;
     applySavedHumanoidRig(modelSkinningRig, savedOverrides);
@@ -313,7 +309,7 @@ humanoidRigEditSession = initializeHumanoidRigEditSession({
   requestRender,
 });
 
-rigModelSession = initializeRigModelSession({
+rigModelSession = createRigModelSession({
   state: modelRigState,
   modelWeightState,
   getGeneration: () => modelWeightGeneration,
@@ -325,7 +321,7 @@ rigModelSession = initializeRigModelSession({
   getSnapshot: () => rigSnapshot(),
   notifyChanged: notifyModelRigChanged,
   requestRender,
-  cancelWeightPicking: cancelWeightModelPicking,
+  cancelWeightPicking: (...args) => weightPickingSession?.cancel(...args),
   getModelJointId: (sourceKey, boneId) =>
     modelJointIdForSourceBone(sourceKey, boneId),
   pickFromSurface: ({clientX, clientY} = {}) => {
@@ -333,13 +329,13 @@ rigModelSession = initializeRigModelSession({
       clientX, clientY, canvas: renderer.domElement, camera,
       meshes: [...knownMeshes].filter(mesh => mesh?.userData?.assetFill !== true),
     });
-    const sampled = sampleModelSkinningAtIntersection(intersection);
-    return modelJointFromSkinningSample(sampled)?.jointId ?? null;
+    const sampled = weightPickingSession?.sampleAtIntersection(intersection);
+    return rigModelSession?.modelJointFromSkinningSample(sampled)?.jointId ?? null;
   },
   rotationSnapValues: RIG_ROTATION_SNAP_DEGREES,
 });
 
-rigPoseRuntime = initializeRigPoseRuntime({
+rigPoseRuntime = createRigPoseRuntime({
   state: modelRigState,
   getRig: () => modelSkinningRig,
   getJoint: modelJointForId,
@@ -363,6 +359,79 @@ rigPoseRuntime = initializeRigPoseRuntime({
   requestRender,
   rigPresetState,
 });
+
+export const weightRigApi = Object.freeze({
+  getModelWeightState: weightModelSession.getState,
+  ensureModelWeightsLoaded: weightModelSession.ensureLoaded,
+  setSelectedBones: weightModelSession.setSelectedBones,
+  setBoneSelected: weightModelSession.setBoneSelected,
+  clearSelectedBones: weightModelSession.clearSelectedBones,
+  loadSavedBoneSelection: weightModelSession.loadSavedBoneSelection,
+  saveModelWeightSelection: weightModelSession.saveSelection,
+  setModelWeightHeatmap: weightModelSession.setHeatmap,
+
+  beginWeightModelPicking: weightPickingSession.begin,
+  cancelWeightModelPicking: weightPickingSession.cancel,
+  setWeightPickerViewMode: weightPickingSession.setViewMode,
+  sampleModelSkinningAtIntersection: weightPickingSession.sampleAtIntersection,
+
+  getModelRigState: rigModelSession.getState,
+  ensureModelRigLoaded: rigModelSession.ensureLoaded,
+  beginRigJointPicking: rigModelSession.beginJointPicking,
+  cancelRigJointPicking: rigModelSession.cancelJointPicking,
+  clearRigJointSelection: rigModelSession.clearJointSelection,
+  selectRigJoint: rigModelSession.selectJoint,
+  handleRigJointPicked: rigModelSession.handleJointPicked,
+  modelJointFromSkinningSample: rigModelSession.modelJointFromSkinningSample,
+  pickRigJointFromModelSurface: rigModelSession.pickJointFromSurface,
+  setRigRotationSnapDegrees: rigModelSession.setRotationSnapDegrees,
+
+  finishRigJointPose: rigPoseRuntime.finishPose,
+  getRigJointPoseFrame: rigPoseRuntime.getFrame,
+  resetRigJoint: rigPoseRuntime.resetJoint,
+  resetRigPose: rigPoseRuntime.resetPose,
+  setRigJointRoot: rigPoseRuntime.setRoot,
+  setRigJointRotation: rigPoseRuntime.setRotation,
+  setRigPoseControlStatus: rigPoseRuntime.setStatus,
+
+  setRigActiveLimbRole: humanoidPoseRuntime.setActiveLimbRole,
+  setRigIkEnabled: humanoidPoseRuntime.setIkEnabled,
+  selectHumanoidControl: humanoidPoseRuntime.selectControl,
+  solveRigIkTarget: humanoidPoseRuntime.solveTarget,
+
+  getHumanoidRigEditSnapshot: humanoidRigEditSession.snapshot,
+  setHumanoidRigMetadata: humanoidRigEditSession.setMetadata,
+  beginHumanoidRigEdit: humanoidRigEditSession.begin,
+  cancelHumanoidRigEdit: humanoidRigEditSession.cancel,
+  saveHumanoidRigEdit: humanoidRigEditSession.save,
+  resetHumanoidRig: humanoidRigEditSession.reset,
+  beginHumanoidControlCarry: humanoidRigEditSession.beginCarry,
+  updateHumanoidControlDraft: humanoidRigEditSession.updateDraft,
+  finishHumanoidControlCarry: humanoidRigEditSession.finishCarry,
+  cancelHumanoidControlCarry: humanoidRigEditSession.cancelCarry,
+
+  getRigPresetSnapshot: rigPresetSession.snapshot,
+  setRigMetadata: rigPresetSession.setMetadata,
+  applyRigPosePresetById: rigPresetSession.applyById,
+  saveRigPosePreset: rigPresetSession.save,
+  renameRigPosePreset: rigPresetSession.rename,
+  deleteRigPosePreset: rigPresetSession.remove,
+
+  getModelPhysicsState: weightPhysicsController.getState,
+  resetModelPhysics: weightPhysicsController.reset,
+  setPhysicsFrequency: weightPhysicsController.setFrequency,
+  setPhysicsDamping: weightPhysicsController.setDamping,
+  setPhysicsMotionStrength: weightPhysicsController.setMotionStrength,
+  setPhysicsLinearMotionStrength: weightPhysicsController.setLinearMotionStrength,
+  setPhysicsContinuousLinearResponse:
+    weightPhysicsController.setContinuousLinearResponse,
+  setPhysicsGravityEnabled: weightPhysicsController.setGravityEnabled,
+  setPhysicsGravityScale: weightPhysicsController.setGravityScale,
+  setPhysicsConstraintsEnabled: weightPhysicsController.setConstraintsEnabled,
+  setPhysicsMaxBendDegrees: weightPhysicsController.setMaxBendDegrees,
+});
+
+export {skinningRuntime as weightRigSkinningRuntime};
 
 function modelWeightSnapshot() {
   const selectedBones = selectionRecordsFromMap(
@@ -564,7 +633,7 @@ function rigSnapshot() {
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
-    rigPresets: getRigPresetSnapshot(),
+    rigPresets: rigPresetSession?.snapshot() || null,
     humanoidRigEdit: humanoidRigEditSession?.snapshot(),
     humanoidControlRig: humanoidControlRigSnapshot(),
     model: modelRigSnapshotForState(),
@@ -683,15 +752,15 @@ function resetModelWeightState() {
   modelWeightGeneration += 1;
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
-  resetRigPresetSession();
-  resetHumanoidRigEditSession();
-  resetWeightPickingSession();
+  rigPresetSession?.reset();
+  humanoidRigEditSession?.resetSession();
+  weightPickingSession?.reset();
   sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   rigSourceSession?.reset?.();
   modelSkinningRig = null;
   weightRuntime.resetModelWeightState();
-  resetWeightModelSession();
+  weightModelSession?.reset();
   rigRuntime.resetModelRigState();
   rigRuntime.resetRigPresetState();
   notifyModelWeightChanged();
