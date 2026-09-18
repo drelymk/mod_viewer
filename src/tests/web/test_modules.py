@@ -178,6 +178,82 @@ def test_baked_animation_shared_track_selects_active_clock_range(module_page):
     assert result["longThird"][2] == 2
 
 
+def test_baked_animation_resume_restores_bounds_and_wakes_after_ownership(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextFrameId = 1;
+      const previousRequest = window.requestAnimationFrame;
+      const previousCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextFrameId++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      try {
+        const {setControlValue} = await import('./js/editing/control-state.js');
+        const {setCharacterShadowGeometryInvalidator} = await import(
+          './js/scene/shadow-invalidation.js');
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        let geometryInvalidations = 0;
+        let boxMin = null;
+        let boxMax = null;
+        const position = {array: new Float32Array([0, 0, 0])};
+        const geometry = {
+          attributes: {position},
+          boundingBox: {
+            min: {set(x, y, z) { boxMin = [x, y, z]; }},
+            max: {set(x, y, z) { boxMax = [x, y, z]; }},
+          },
+          boundingSphere: {center: {set() {}}, radius: 0},
+          computeBoundingBox() {}, computeBoundingSphere() {},
+        };
+        const mesh = {
+          visible: true, userData: {basePositions: new Float32Array([0, 0, 0])},
+          geometry,
+        };
+        setCharacterShadowGeometryInvalidator(
+          () => { geometryInvalidations += 1; });
+        setControlValue('anim', '1');
+        runtime.registerAnimatedMesh(mesh, 'clock', {
+          positions: encode(new Float32Array([0, 0, 0, 0, 0, 1])),
+          position_frame_bytes: 12, frames: 2,
+          bounds: {min: [-2, -3, -4], max: [5, 6, 7]},
+        }, {clock: {
+          fps: 1, frame_start: 0, frame_end: 1,
+          conditions: [[{var: 'anim', value: '1', negate: false}]],
+        }});
+        mesh.userData.animationSuspended = true;
+        pending.get(Math.min(...pending.keys()))(0);
+        pending.clear();
+        mesh.geometry.attributes.position.array[0] = 9;
+        const resumed = runtime.resumeAnimatedMesh(mesh);
+        const pendingAfterResume = pending.size;
+        const restored = Array.from(position.array);
+        runtime.resetAnimationRuntime();
+        setCharacterShadowGeometryInvalidator(() => {});
+        return {resumed, pendingAfterResume, restored,
+          geometryInvalidations, boxMin, boxMax};
+      } finally {
+        window.requestAnimationFrame = previousRequest;
+        window.cancelAnimationFrame = previousCancel;
+      }
+    }""")
+    assert result["resumed"] is True
+    assert result["pendingAfterResume"] == 1
+    assert result["restored"] == [0, 0, 0]
+    assert result["geometryInvalidations"] == 1
+    assert result["boxMin"] == [-2, -3, -4]
+    assert result["boxMax"] == [5, 6, 7]
+
+
 def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
         module_page):
     result = module_page.evaluate("""async () => {

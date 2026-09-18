@@ -39,6 +39,13 @@ class GeometryBlob:
             raise ValueError("Geometry write falls outside its reservation.")
         self.data[offset:end] = raw
 
+    def truncate(self, length):
+        """Rollback data appended after a build checkpoint."""
+        length = int(length)
+        if length < 0 or length > len(self.data):
+            raise ValueError("Geometry truncate point is outside the blob.")
+        del self.data[length:]
+
     def __len__(self):
         return len(self.data)
 

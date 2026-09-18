@@ -12,7 +12,10 @@ import {
 } from './outline-renderer.js';
 import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
-import { setCharacterShadowMapInvalidator } from './shadow-invalidation.js';
+import {
+  setCharacterShadowGeometryInvalidator,
+  setCharacterShadowMapInvalidator,
+} from './shadow-invalidation.js';
 import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 import { createPhysicsDragController } from './physics-drag-controller.js';
@@ -170,6 +173,11 @@ const viewportRenderPipeline = createViewportRenderPipeline({
 });
 setCharacterShadowMapInvalidator(({request = true} = {}) => {
   characterShadowController.invalidateMap();
+  if (request) requestRender();
+});
+setCharacterShadowGeometryInvalidator(({request = true} = {}) => {
+  characterShadowController.invalidateGeometry();
+  viewportRenderPipeline.invalidateGeometry();
   if (request) requestRender();
 });
 const viewGizmoController = createViewGizmoController({

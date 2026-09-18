@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import os
-import struct
 import time
 from copy import copy
 from dataclasses import dataclass, replace
@@ -310,6 +309,13 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
 
     frame_count = end - start + 1
     frame_bytes = len(canonical_packed.positions)
+    checkpoint = len(geometry) if geometry is not None else None
+
+    def reject():
+        if geometry is not None:
+            geometry.truncate(checkpoint)
+        return None
+
     position_ref = (geometry.reserve(frame_count * frame_bytes)
                     if geometry is not None else None)
     packed_frames = []
@@ -320,6 +326,8 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                           if normal_possible else 0)
     bounds_min = [float("inf")] * 3
     bounds_max = [float("-inf")] * 3
+    canonical_bounds = (canonical_packed.bounds_min,
+                        canonical_packed.bounds_max)
     pack_started = time.perf_counter()
     for frame_index, frame in enumerate(range(start, end + 1)):
         if frame == start:
@@ -342,19 +350,19 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                     time.perf_counter() - prepare_started)
             if prepared is None or not _compatible_prepared(
                     canonical_prepared, prepared, canonical_topology):
-                return None
+                return reject()
             packed_frame = pack_animation_frame_attributes(
                 frames[frame], prepared, mod_dir=mod_dir,
                 buffers=buffers, source=source)
         if packed_frame is None or len(packed_frame.positions) != frame_bytes:
-            return None
-        for x, y, z in struct.iter_unpack("<fff", packed_frame.positions):
-            bounds_min[0] = min(bounds_min[0], x)
-            bounds_min[1] = min(bounds_min[1], y)
-            bounds_min[2] = min(bounds_min[2], z)
-            bounds_max[0] = max(bounds_max[0], x)
-            bounds_max[1] = max(bounds_max[1], y)
-            bounds_max[2] = max(bounds_max[2], z)
+            return reject()
+        frame_bounds = (canonical_bounds if frame == start else
+                        (packed_frame.bounds_min, packed_frame.bounds_max))
+        if frame_bounds[0] is None or frame_bounds[1] is None:
+            return reject()
+        for index in range(3):
+            bounds_min[index] = min(bounds_min[index], frame_bounds[0][index])
+            bounds_max[index] = max(bounds_max[index], frame_bounds[1][index])
         if position_ref is not None:
             geometry.write(
                 position_ref["offset"] + frame_index * frame_bytes,
@@ -380,6 +388,8 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     has_normals = normal_possible and (
         len(normals) == frame_count if geometry is None else normal_ref is not None)
     if not has_normals:
+        if geometry is not None and normal_ref is not None:
+            geometry.truncate(normal_ref["offset"])
         normal_ref = None
     return {
         "track_id": family["track_id"],

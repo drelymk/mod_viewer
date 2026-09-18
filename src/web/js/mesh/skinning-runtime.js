@@ -20,6 +20,7 @@ import {
 } from './weight-rig.js';
 import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
+import {resumeAnimatedMesh} from './animation-runtime.js';
 
 let activeRuntime = null;
 
@@ -179,6 +180,7 @@ export function createSkinningRuntime({
     const activeVertices = combinedActiveVerticesForState(state);
     const takingOwnership = Boolean(
       activeVertices.length || state.deformationMode || state.physicsEnabled);
+    const wasSuspended = mesh.userData.animationSuspended === true;
     if (takingOwnership && mesh.userData.animationSuspended !== true) {
       // Animation may have written a baked frame since the last deformation
       // pass. Start the deformation owner from the canonical/rest geometry so
@@ -214,8 +216,18 @@ export function createSkinningRuntime({
     state.finalBoundsDirty = state.finalBoundsDirty || changed;
     if (changed) markFinalBoundsDirty(mesh, state);
     position.needsUpdate = changed || activeVertices.length > 0;
-    if (invalidateShadow && changed) invalidateShadow({request});
-    else if (request && changed) requestRender();
+    let resumedAnimation = false;
+    if (wasSuspended && !takingOwnership) {
+      // Rig/Physics may have stopped the animation scheduler while it owned
+      // this mesh. Resume from canonical animation geometry and keep the
+      // conservative animation bounds after the handoff.
+      resumedAnimation = resumeAnimatedMesh(mesh);
+      if (resumedAnimation) state.finalBoundsDirty = false;
+    }
+    if (invalidateShadow && changed && !resumedAnimation) {
+      invalidateShadow({request});
+    }
+    else if (request && changed && !resumedAnimation) requestRender();
     return changed;
   }
 

@@ -2,7 +2,10 @@
 
 import { decodeF32 } from '../textures/decode.js';
 import { getControlValue, dnfSatisfied } from '../editing/control-state.js';
-import { invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
+import {
+  invalidateCharacterShadowGeometry,
+  invalidateCharacterShadowMap,
+} from '../scene/shadow-invalidation.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
 const tracks = new Map();
@@ -221,6 +224,7 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
   const firstClock = state.clocks[state.clockIds[0]];
   const meshState = {
     frameStart: Number(geometry.frame_start ?? firstClock?.frame_start ?? 0),
+    animationBounds: geometry.bounds || null,
     positions,
     normals,
     frameCount,
@@ -247,6 +251,26 @@ export function resetAnimationRuntime() {
 /** Wake tracks after control or visibility state changes without rebuilding meshes. */
 export function wakeAnimationRuntime() {
   schedule();
+}
+
+/** Resume a track after Rig/Physics releases ownership of one mesh. */
+export function resumeAnimatedMesh(mesh) {
+  for (const state of tracks.values()) {
+    if (!state.meshes.has(mesh)) continue;
+    const meshState = state.meshesByMesh.get(mesh);
+    restoreCanonical(mesh);
+    installAnimationBounds(mesh, meshState?.animationBounds);
+    if (meshState) meshState.lastFrame = null;
+    state.lastFrame = null;
+    state.activeClockId = null;
+    state.active = false;
+    state.startedAt = 0;
+    invalidateCharacterShadowGeometry({request: false});
+    requestRender();
+    schedule();
+    return true;
+  }
+  return false;
 }
 
 export function animationRuntimeSnapshot() {

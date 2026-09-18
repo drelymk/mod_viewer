@@ -30,6 +30,8 @@ class PackedDrawGeometry:
     # Backend-only source mapping retained by the model builder for Weight.
     # This is deliberately not part of the application payload.
     used_vertices: tuple[int, ...] = ()
+    bounds_min: tuple[float, float, float] | None = None
+    bounds_max: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -38,6 +40,8 @@ class PackedAnimationFrame:
 
     positions: bytes
     normals: bytes | None
+    bounds_min: tuple[float, float, float] | None = None
+    bounds_max: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -302,9 +306,17 @@ def pack_draw_geometry(
         group.get("shape_sliders"), mod_dir, prepared.position_path, used,
         buffers, sparse_shape_cache, source=source)
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
+    bounds_min = [math.inf, math.inf, math.inf]
+    bounds_max = [-math.inf, -math.inf, -math.inf]
     for output_index, vertex_index in enumerate(used):
         x, y, z, u, v = prepared.decoded_vertices[vertex_index]
         struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
+        bounds_min[0] = min(bounds_min[0], x)
+        bounds_min[1] = min(bounds_min[1], y)
+        bounds_min[2] = min(bounds_min[2], z)
+        bounds_max[0] = max(bounds_max[0], x)
+        bounds_max[1] = max(bounds_max[1], y)
+        bounds_max[2] = max(bounds_max[2], z)
         for item in shape_buffers:
             shape = item.shape
             if item.sparse:
@@ -349,6 +361,8 @@ def pack_draw_geometry(
         normals=bytes(normal_bytes) if normal_bytes is not None else None,
         shape_targets=shape_targets,
         used_vertices=tuple(used),
+        bounds_min=tuple(bounds_min),
+        bounds_max=tuple(bounds_max),
     )
 
 
@@ -361,9 +375,17 @@ def pack_animation_frame_attributes(
     draw.  The caller validates the prepared topology before using this data.
     """
     pos_bytes = bytearray(len(prepared.used_vertices) * 12)
+    bounds_min = [math.inf, math.inf, math.inf]
+    bounds_max = [-math.inf, -math.inf, -math.inf]
     for output_index, vertex_index in enumerate(prepared.used_vertices):
         x, y, z, _u, _v = prepared.decoded_vertices[vertex_index]
         struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
+        bounds_min[0] = min(bounds_min[0], x)
+        bounds_min[1] = min(bounds_min[1], y)
+        bounds_min[2] = min(bounds_min[2], z)
+        bounds_max[0] = max(bounds_max[0], x)
+        bounds_max[1] = max(bounds_max[1], y)
+        bounds_max[2] = max(bounds_max[2], z)
 
     normal_bytes = None
     normal_source = draw.normal_source
@@ -380,7 +402,9 @@ def pack_animation_frame_attributes(
                            else buffers.raw(normal_path))
             normal_bytes = decode_normals(
                 normal_source, normal_data, prepared.used_vertices)
-    return PackedAnimationFrame(bytes(pos_bytes), normal_bytes)
+    return PackedAnimationFrame(
+        bytes(pos_bytes), normal_bytes,
+        tuple(bounds_min), tuple(bounds_max))
 
 
 def pack_animation_position_frame(
@@ -404,6 +428,8 @@ def pack_animation_position_frame(
     position_stride = draw.position_stride or POSITION_STRIDE
     position_data = buffers.transient(position_path)
     pos_bytes = bytearray(len(used_vertices) * 12)
+    bounds_min = [math.inf, math.inf, math.inf]
+    bounds_max = [-math.inf, -math.inf, -math.inf]
     for output_index, vertex_index in enumerate(used_vertices):
         offset = vertex_index * position_stride + POSITION_OFFSET
         if offset < 0 or offset + 12 > len(position_data):
@@ -412,6 +438,12 @@ def pack_animation_position_frame(
         if not all(math.isfinite(value) for value in (x, y, z)):
             return None
         struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
+        bounds_min[0] = min(bounds_min[0], x)
+        bounds_min[1] = min(bounds_min[1], y)
+        bounds_min[2] = min(bounds_min[2], z)
+        bounds_max[0] = max(bounds_max[0], x)
+        bounds_max[1] = max(bounds_max[1], y)
+        bounds_max[2] = max(bounds_max[2], z)
 
     normal_bytes = None
     normal_source = draw.normal_source
@@ -422,7 +454,9 @@ def pack_animation_position_frame(
                            else buffers.transient(normal_path))
             normal_bytes = decode_normals(
                 normal_source, normal_data, used_vertices)
-    return PackedAnimationFrame(bytes(pos_bytes), normal_bytes)
+    return PackedAnimationFrame(
+        bytes(pos_bytes), normal_bytes,
+        tuple(bounds_min), tuple(bounds_max))
 
 
 __all__ = [

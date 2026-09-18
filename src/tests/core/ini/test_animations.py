@@ -382,22 +382,41 @@ format = DXGI_FORMAT_R32_UINT
 """)
         analysis = analyze_ini(
             sections, resources=extract_resources(sections))
+        geometry = GeometryBlob()
         return build_mesh_result(
-            analysis.draw_groups, str(root), geometry=GeometryBlob(),
-            animations=analysis.animations)
+            analysis.draw_groups, str(root), geometry=geometry,
+            animations=analysis.animations), geometry
 
-    compatible = build(tmp_path / "compatible", 0.)
+    def static_blob_length(built):
+        entry = next(iter(built.meshes.values()))
+        refs = [entry["pos"], entry["idx"]]
+        if "uv" in entry:
+            refs.append(entry["uv"])
+        return max(ref["offset"] + ref["length"] for ref in refs)
+
+    def static_blob_bytes(built):
+        entry = next(iter(built.meshes.values()))
+        refs = [entry["pos"], entry["idx"]]
+        if "uv" in entry:
+            refs.append(entry["uv"])
+        return sum(ref["length"] for ref in refs)
+
+    compatible, compatible_geometry = build(tmp_path / "compatible", 0.)
     compatible_entries = list(compatible.meshes.values())
     assert len(compatible_entries) == 1
     assert compatible_entries[0]["animation_geometry"]["frames"] == 2
     assert compatible.diagnostics["animation_prepare_calls"] == 2
+    assert len(compatible_geometry) > static_blob_bytes(compatible)
 
-    mismatched = build(tmp_path / "mismatched", 0.25)
+    mismatched, mismatched_geometry = build(tmp_path / "mismatched", 0.25)
     mismatched_entries = list(mismatched.meshes.values())
     assert len(mismatched_entries) == 1
     assert "animation_geometry" not in mismatched_entries[0]
+    assert len(mismatched_geometry) == static_blob_length(mismatched)
 
-    missing = build(tmp_path / "missing", 0., include_second=False)
+    missing, missing_geometry = build(
+        tmp_path / "missing", 0., include_second=False)
     missing_entries = list(missing.meshes.values())
     assert len(missing_entries) == 1
     assert "animation_geometry" not in missing_entries[0]
+    assert len(missing_geometry) == static_blob_length(missing)
