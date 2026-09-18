@@ -11,6 +11,7 @@ import re
 
 from .document import IniDocument, OTHER
 from . import migoto_semantics as semantics
+from .sections import extract_ini_namespace
 from ..mod_discovery import discover_ini_paths
 from ..mod_source import ModSourceError, mod_source_for_path
 from ..resource_paths import safe_resource_path
@@ -128,7 +129,8 @@ def _normalized_key_chord(value):
     return "+".join(sorted(set(modifiers)) + keys)
 
 
-def _analyze_statements(doc, ini_rel, issues, global_variables):
+def _analyze_statements(doc, ini_rel, issues, global_variables,
+                        ini_namespace=None):
     """Check conservative statement-level mistakes outside condition syntax."""
     declared_sections = {section.name.lower() for section in doc.sections}
     seen_keys = {}
@@ -151,7 +153,8 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
         name = section.name.casefold()
         is_key = name.startswith("key")
         previous_section = seen_sections.get(name)
-        if previous_section is not None:
+        if previous_section is not None and not (
+                ini_namespace and semantics.is_global_exact_section(section.name)):
             issues.append(_issue(
                 "duplicate_section", "warning", "ini",
                 f"Duplicate section [{section.name}]. 3DMigoto uses only the first section with this name.",
@@ -173,10 +176,12 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
         bindings = []
         hash_lines = []
         texture_match = False
-        local_variables = {decl[1] for line in section.lines
-                           if (decl := semantics.declaration(line.text))
-                           and decl[0] == "local"}
+        local_variables = set()
         for line in section.lines:
+            declaration = semantics.declaration(line.text)
+            if (declaration and declaration[0] == "local" and line.depth == 0
+                    and kind == "command"):
+                local_variables.add(declaration[1])
             if is_key and line.kind == OTHER:
                 issues.append(_issue(
                     "unexpected_key_statement", "error", "ini",
@@ -184,7 +189,8 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
                     ini_rel, section.name, line.no + 1, line.raw.strip(),
                 ))
             elif (kind == "regular" and not semantics.allows_bare_statements(section.name)
-                  and line.kind not in ("blank", "comment", "assign", "section")
+                  and line.kind not in ("blank", "comment", "section")
+                  and "=" not in line.text
                   and not (is_key and line.kind == OTHER)):
                 issues.append(_issue(
                     "malformed_regular_statement", "error", "ini",
@@ -212,7 +218,7 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
             lowered_lhs = lhs.lower()
 
             variable = semantics.plain_variable_assignment(lhs)
-            if (variable and variable not in global_variables
+            if (variable and line.depth == 0 and variable not in global_variables
                     and variable not in local_variables):
                 issues.append(_issue(
                     "undeclared_variable", "error",
@@ -236,14 +242,14 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
                     seen_lhs[lowered_lhs] = line.no + 1
             if lowered_lhs == "hash":
                 hash_lines.append((rhs, line))
-            if semantics.may_be_texture_override_match_key(lhs):
-                texture_match = True
+            if semantics.is_texture_override_match_key(lhs):
+                texture_match = line
             if is_key and lowered_lhs in {"key", "back"}:
                 bindings.append((lowered_lhs, rhs, line))
                 if semantics.key_binding_kind(rhs) == "invalid":
                     issues.append(_issue(
                         "invalid_key_binding", "error", "controls",
-                        f"[{section.name}] has no key token in its {lhs} binding.",
+                        f"[{section.name}] has an empty {lhs} binding.",
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
                         binding=rhs, binding_type=lowered_lhs,
                     ))
@@ -269,7 +275,7 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
                         "invalid_run_target", "error", "ini",
                         f"{target or 'Empty run target'} is not a command-list target.",
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
-                        target=target,
+                        target=target, target_display=target or "Empty run target",
                     ))
                 elif target_kind == "local" and target.lower() not in declared_sections:
                     issues.append(_issue(
@@ -308,6 +314,13 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
             ))
         override_type = semantics.override_hash_kind(section.name)
         if override_type:
+            if override_type == "texture" and hash_lines and texture_match:
+                issues.append(_issue(
+                    "hash_match_conflict", "warning", "ini",
+                    f"[{section.name}] cannot combine hash= with resource match options.",
+                    ini_rel, section.name, texture_match.no + 1,
+                    texture_match.raw.strip(),
+                ))
             for value, line in hash_lines:
                 if not semantics.valid_override_hash(value, override_type):
                     issues.append(_issue(
@@ -327,7 +340,8 @@ def _analyze_statements(doc, ini_rel, issues, global_variables):
 
 
 def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
-                      source=None, global_variables=frozenset()):
+                      source=None, global_variables=frozenset(),
+                      ini_namespace=None):
     for problem in doc.structure_errors():
         issues.append(_issue(
             "malformed_condition_nesting", "error", "conditions",
@@ -347,7 +361,7 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
             reason=problem.get("reason"),
             **({"count": problem["count"]} if "count" in problem else {}),
         ))
-    _analyze_statements(doc, ini_rel, issues, global_variables)
+    _analyze_statements(doc, ini_rel, issues, global_variables, ini_namespace)
 
     resources = _resource_sections(doc)
     declared = set(resources)
@@ -549,17 +563,25 @@ def analyze_mod(mod_dir, ini_paths=None, overrides=None, documents=None,
             continue
         loaded.append((path, ini_rel, doc))
 
-    global_variables = {
-        decl[1] for _path, _ini_rel, doc in loaded
-        for line in doc.lines
-        if (decl := semantics.declaration(line.text)) and decl[0] == "global"
-    }
+    global_variables = {}
+    for _path, _ini_rel, doc in loaded:
+        namespace = (extract_ini_namespace(document=doc) or "").casefold()
+        bucket = global_variables.setdefault(namespace, set())
+        for section in doc.sections:
+            if section.name.casefold() != "constants":
+                continue
+            for line in section.lines:
+                declaration = semantics.declaration(line.text)
+                if declaration and declaration[0] == "global":
+                    bucket.add(declaration[1])
     for path, ini_rel, doc in loaded:
+        namespace = (extract_ini_namespace(document=doc) or "").casefold()
         declared_files.update(_filename_paths(
             doc, mod_dir, path, source=source))
         _analyze_document(
             doc, ini_rel, path, mod_dir, issues, declared_files, source=source,
-            global_variables=global_variables)
+            global_variables=global_variables.get(namespace, frozenset()),
+            ini_namespace=namespace)
 
     inactive_files = set()
     for path in discover_ini_paths(mod_dir, disabled=True, source=source):

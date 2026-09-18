@@ -20,13 +20,10 @@ _REGULAR_EXACT = {
     "logging", "system", "device", "stereo", "rendering", "hunting",
     "profile", "convergencemap", "loader",
 }
-_LOCAL_RUN = re.compile(r"^(?:commandlist|customshader)[\w.-]+$", re.I)
-_NAMESPACED_RUN = re.compile(
-    r"^(?:commandlist|customshader)\\[^\s\\]+(?:\\[^\s\\]+)+$", re.I)
-_BUILTIN_RUN = re.compile(r"^builtin(?:commandlist|customshader)[\w.-]+$", re.I)
 _PLAIN_VARIABLE = re.compile(r"^\$[A-Za-z_][A-Za-z_0-9]*$")
 _DECLARATION = re.compile(
-    r"^(?:(?:global\s+(?:persist\s+)?|local\s+))(?P<name>\$[A-Za-z_][A-Za-z_0-9]*)\s*=",
+    r"^(?P<kind>global(?:\s+persist)?|local)\s+"
+    r"(?P<name>\$[A-Za-z_][A-Za-z_0-9]*)(?:\s*=.*)?$",
     re.I,
 )
 
@@ -65,61 +62,84 @@ _TEXTURE_MATCH_KEYS = {
     "match_mips", "match_array", "match_format", "match_msaa",
     "match_usage", "match_bind_flags", "match_cpu_access_flags",
     "match_misc_flags", "match_byte_width", "match_stride",
+    "match_msaa_quality",
 }
+_SHADER_OVERRIDE_METADATA = {
+    "hash", "allow_duplicate_hash", "depth_filter", "partner", "model",
+    "disable_scissor", "filter_index",
+}
+_TEXTURE_OVERRIDE_METADATA = _TEXTURE_MATCH_KEYS | {
+    "hash", "stereomode", "format", "width", "height",
+    "width_multiply", "height_multiply", "iteration", "filter_index",
+    "expand_region_copy", "deny_cpu_read", "match_priority",
+    "match_first_vertex", "match_first_index", "match_first_instance",
+    "match_vertex_count", "match_index_count", "match_instance_count",
+}
+_CUSTOM_SHADER_METADATA = {
+    "vs", "hs", "ds", "gs", "ps", "cs", "max_executions_per_frame",
+    "flags", "blend", "alpha", "mask", "alpha_to_coverage",
+    "sample_mask", "blend_state_merge", "depth_enable",
+    "depth_write_mask", "depth_func", "stencil_enable",
+    "stencil_read_mask", "stencil_write_mask", "stencil_front",
+    "stencil_back", "stencil_ref", "depth_stencil_state_merge",
+    "fill", "cull", "front", "depth_bias", "depth_bias_clamp",
+    "slope_scaled_depth_bias", "depth_clip_enable", "scissor_enable",
+    "multisample_enable", "antialiased_line_enable",
+    "rasterizer_state_merge", "topology", "sampler",
+} | {f"{name}[{index}]" for name in ("blend", "alpha", "mask")
+     for index in range(8)} | {f"blend_factor[{index}]" for index in range(4)}
 
 
 def is_texture_override_match_key(lhs):
     return lhs.casefold() in _TEXTURE_MATCH_KEYS
 
 
-def may_be_texture_override_match_key(lhs):
-    # Newer forks may add match options. An unrecognized match_* keeps the
-    # missing-hash diagnosis uncertain, but is not itself declared valid.
-    return lhs.casefold().startswith("match_")
-
-
 def unique_command_metadata(section_name, lhs):
-    override_type = override_hash_kind(section_name)
-    return bool(override_type and (lhs.casefold() == "hash" or
-                (override_type == "texture" and
-                 is_texture_override_match_key(lhs))))
+    name, key = section_name.casefold(), lhs.casefold()
+    if name.startswith("shaderoverride"):
+        return key in _SHADER_OVERRIDE_METADATA
+    if name.startswith("textureoverride"):
+        return key in _TEXTURE_OVERRIDE_METADATA
+    if name.startswith(("customshader", "builtincustomshader")):
+        return key in _CUSTOM_SHADER_METADATA
+    return False
 
 
 def valid_override_hash(value, override_type):
-    # Shader hash method may use either the traditional 64-bit value or CRC32C.
-    widths = (8,) if override_type == "texture" else (8, 16)
-    return any(re.fullmatch(r"(?:0[xX])?[0-9a-fA-F]{" + str(width) + r"}", value)
-               for width in widths)
+    # %16llx accepts up to 16 characters, including an optional 0x prefix.
+    return (len(value) <= 16 and
+            bool(re.fullmatch(r"[+-]?(?:0[xX])?[0-9a-fA-F]+", value)))
 
 
 def classify_run_target(value):
-    if _LOCAL_RUN.fullmatch(value):
-        return "local"
-    if _NAMESPACED_RUN.fullmatch(value):
-        return "namespaced"
-    if _BUILTIN_RUN.fullmatch(value):
-        return "builtin"
-    if not value or re.fullmatch(r"(?:resource|key|preset|textureoverride|shaderoverride)[\w.-]+", value, re.I):
+    lowered = value.casefold()
+    if not value:
         return "invalid"
-    if re.search(r"\s", value) or value.startswith("\\"):
+    if lowered.startswith(("builtincommandlist", "builtincustomshader")):
+        return "builtin"
+    if lowered.startswith(("commandlist", "customshader")):
+        return "namespaced" if "\\" in value else "local"
+    if lowered.startswith(("resource", "key", "preset", "textureoverride", "shaderoverride")):
         return "invalid"
     return "unknown"
 
 
 def key_binding_kind(value):
-    """Only reject an empty binding or modifiers without a key token."""
-    tokens = [token.casefold().replace("-", "_") for token in value.split()]
-    modifiers = {"ctrl", "control", "shift", "alt", "no_modifiers",
-                 "no_ctrl", "no_control", "no_shift", "no_alt"}
-    return "invalid" if not tokens or all(t in modifiers for t in tokens) else "unknown"
+    """Only an empty binding is provably invalid without the full key table."""
+    return "invalid" if not value.strip() else "unknown"
 
 
 def declaration(text):
     match = _DECLARATION.match(text)
     if match:
-        return ("global" if text.casefold().startswith("global") else "local",
+        return ("global" if match.group("kind").casefold().startswith("global") else "local",
                 match.group("name").casefold())
     return None
+
+
+def is_global_exact_section(name):
+    name = name.casefold()
+    return name in _COMMAND_EXACT or name in _REGULAR_EXACT
 
 
 def plain_variable_assignment(lhs):

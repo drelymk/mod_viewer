@@ -35,6 +35,7 @@ export function diagnosticMessage(issue = {}) {
     lhs: issue.lhs || '',
     prefix: issue.prefix || '',
     target: issue.target || '',
+    targetDisplay: issue.target_display || issue.target || '',
     key: issue.key || '',
     otherSection: issue.other_section || '',
     firstLine: issue.first_line || '',
