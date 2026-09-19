@@ -12,6 +12,7 @@ import {
   activeMeshes, refreshAll, reset, setStateRules,
 } from '../mesh/visibility.js';
 import { setTextures } from '../mesh/mesh-factory.js';
+import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
 import { buildMeshPanel } from '../panels/mesh-panel.js';
 import { setMeshesAvailable } from '../panels/left-dock.js';
@@ -244,24 +245,29 @@ export async function displayMeshPayload(payload, {
     toggles: controls.toggles || {}, menu: controls.menu || {},
   });
   setTextures(payload.textures);
-  measureLoadStage('build_mesh_panel', () => buildMeshPanel(
-    meshes, modelPath, payload.metadata?.mesh_names || {},
-    payload.metadata?.material_profiles || {},
-    {
-      colorAdjustments: payload.metadata?.mesh_color_adjustments || {},
-      onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
-      texturePools: payload.texture_pools || {},
-      assetResolution: payload.asset_resolution || null,
-      animations: payload.animations || {},
-      // Asset Preview has no editing session at all. An archive mod is read-only
-      // only at the persistence boundary; viewer controls can still stage
-      // session-local state while Export remains disabled.
-      readOnlySource: assetMode,
-      canPersistMetadata: !assetMode && !sourceReadOnly,
-      texturePicker: assetMode
-        ? (role => window.pywebview.api.pick_asset_texture_file(
-          viewerState.currentSource.path, role)) : null,
-    }));
+  measureLoadStage('build_mesh_panel', () => {
+    const liveMeshes = buildPayloadMeshes(
+      meshes, modelPath, payload.metadata?.mesh_names || {},
+      payload.metadata?.material_profiles || {}, {
+        colorAdjustments: payload.metadata?.mesh_color_adjustments || {},
+        texturePools: payload.texture_pools || {},
+        animations: payload.animations || {},
+      });
+    buildMeshPanel(
+      meshes, liveMeshes, modelPath, {
+        onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
+        texturePools: payload.texture_pools || {},
+        assetResolution: payload.asset_resolution || null,
+        // Asset Preview has no editing session at all. An archive mod is read-only
+        // only at the persistence boundary; viewer controls can still stage
+        // session-local state while Export remains disabled.
+        readOnlySource: assetMode,
+        canPersistMetadata: !assetMode && !sourceReadOnly,
+        texturePicker: assetMode
+          ? (role => window.pywebview.api.pick_asset_texture_file(
+            viewerState.currentSource.path, role)) : null,
+      });
+  });
   measureLoadStage('control_panels', () => {
     buildTogglePanel(controls.toggles, {
       modPath: viewerState.currentModPath, onChange: onToggleChange,

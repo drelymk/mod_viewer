@@ -168,9 +168,6 @@ skinningRuntime = createSkinningRuntime({
   knownMeshes,
   stateFor,
   modelWeightState,
-  modelPhysicsSession,
-  sourcePhysicsRigs,
-  sourceSkinningRigs,
   modelWeightSnapshot,
   selectionMapFromEntries,
   sourceSelectionEntries,
@@ -181,21 +178,7 @@ skinningRuntime = createSkinningRuntime({
   refreshSelectedWeightMask,
   eligibleSkinningMesh,
   getGeneration: () => modelWeightGeneration,
-  getModelRigState: () => modelRigState,
-  getRigPresetState: () => rigPresetState,
-  getModelSkinningRig: () => modelSkinningRig,
-  setModelSkinningRig: value => { modelSkinningRig = value; },
-  invalidateHumanoidDetection,
-  invalidateModelRigLoad: () => rigModelSession?.invalidateLoad(),
-  clearPickedPoint: (...args) => weightPickingSession?.clearPickedPoint(...args),
-  resetModelPose,
-  syncPhysicsParticipants,
-  buildAllSourceSkinningRigs,
-  buildAllSourceSkinningRigsCooperatively,
-  buildModelSkinningRig: (...args) => buildModelSkinningRig(...args),
-  resetModelState: resetModelWeightState,
   notifyModelWeightChanged,
-  notifyModelRigChanged,
   requestRender,
   invalidateShadow: invalidateCharacterShadowGeometry,
 });
@@ -746,6 +729,130 @@ function resetModelWeightState() {
   rigRuntime.resetRigPresetState();
   notifyModelWeightChanged();
   notifyModelRigChanged();
+}
+
+export function registerWeightRigMesh(mesh) {
+  if (!mesh) return;
+  const wasKnown = knownMeshes.has(mesh);
+  knownMeshes.add(mesh);
+  if (!wasKnown) invalidateHumanoidDetection();
+  if (!modelPhysicsSession.getState().enabled) return;
+  const state = stateFor(mesh);
+  if (!eligibleSkinningMesh(mesh)) {
+    state.physicsParticipantStatus = 'unavailable';
+    modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
+    return;
+  }
+  if (state.loaded) syncPhysicsParticipants();
+}
+
+export function unregisterWeightRigMesh(mesh) {
+  if (modelWeightState.pickedPoint?.meshKey
+      && modelWeightState.pickedPoint.meshKey === mesh?.userData?.semanticKey) {
+    weightPickingSession?.clearPickedPoint();
+  }
+  const wasKnown = knownMeshes.delete(mesh);
+  if (wasKnown) invalidateHumanoidDetection();
+  const sourceKey = states.get(mesh)?.skinningSourceKey;
+  if (sourceKey) {
+    modelPhysicsSession.detach(sourceKey);
+    sourcePhysicsRigs.delete(sourceKey);
+    sourceSkinningRigs.delete(sourceKey);
+  }
+  weightModelSession?.refreshModelWeightSummary({refreshStats: true});
+  if (sourceKey && modelPhysicsSession.getState().enabled) {
+    syncPhysicsParticipants(new Set([sourceKey]));
+  }
+  if (modelRigState.loaded) {
+    const generation = modelWeightGeneration;
+    modelRigState.loading = true;
+    notifyModelRigChanged();
+    const buildSources = buildAllSourceSkinningRigsCooperatively
+      || (() => Promise.resolve(buildAllSourceSkinningRigs()));
+    void buildSources({
+      generation,
+      isCurrent: () => generation === modelWeightGeneration,
+    }).then(sourceRigs => {
+      if (!sourceRigs || generation !== modelWeightGeneration) return null;
+      return buildModelSkinningRig(sourceRigs, {
+        generation,
+        isCurrent: () => generation === modelWeightGeneration,
+      });
+    }).catch(() => null).then(built => {
+      if (generation !== modelWeightGeneration) return;
+      modelRigState.loading = false;
+      if (built) modelRigState.loaded = true;
+      notifyModelRigChanged();
+    });
+  }
+  notifyModelRigChanged();
+  notifyModelWeightChanged();
+}
+
+export function refreshWeightRigAfterShapeChange(mesh) {
+  const state = states.get(mesh);
+  const position = mesh?.geometry?.attributes?.position;
+  invalidateHumanoidDetection();
+  weightPickingSession?.clearPickedPoint();
+  if (!state?.loaded || !position) return false;
+  const preservedRootSignatures = new Set(
+    modelRigState.explicitRootSignatures);
+  const sourceKey = state.skinningSourceKey;
+  const shapedPositions = new Float32Array(position.array);
+  const normal = mesh.geometry.attributes.normal;
+  const shapedNormals = normal ? new Float32Array(normal.array) : null;
+  const participant = sourceKey
+    ? modelPhysicsSession.getParticipant(sourceKey) : null;
+  const wasPhysicsEnabled = !!participant || state.physicsEnabled;
+  if (participant) modelPhysicsSession.detach(sourceKey);
+  if (sourceKey) sourcePhysicsRigs.delete(sourceKey);
+  if (sourceKey) sourceSkinningRigs.delete(sourceKey);
+  if (modelSkinningRig) resetModelPose({request: false});
+  rigModelSession?.invalidateLoad();
+  modelRigState.promise = null;
+  modelRigState.loading = false;
+  modelRigState.loaded = false;
+  modelSkinningRig = null;
+  modelRigState.selectedJointId = null;
+  modelRigState.structureRevision = 0;
+  modelRigState.jointPickIntent = null;
+  modelRigState.ikEnabled = false;
+  modelRigState.activeLimbRole = 'left_arm';
+  modelRigState.selectedHumanoidControlKey = null;
+  modelRigState.explicitRootSignatures = preservedRootSignatures;
+  rigPresetState.lastApplyResult = null;
+  modelRigState.pickStatus = '';
+  notifyModelRigChanged();
+  const rebased = skinningRuntime.rebaseAfterShapeChange(mesh, {
+    positions: shapedPositions,
+    normals: shapedNormals,
+  });
+  if (wasPhysicsEnabled && modelPhysicsSession.getState().enabled
+      && sourceKey) {
+    syncPhysicsParticipants(new Set([sourceKey]));
+    modelPhysicsSession.wake();
+  }
+  if (state.heatmapMode) {
+    skinningRuntime.updateModelWeightHeatmap(new Set([sourceKey]));
+  }
+  return rebased;
+}
+
+export function disposeWeightRigMesh(mesh, {preserveRegistration = false} = {}) {
+  if (preserveRegistration) {
+    const sourceKey = states.get(mesh)?.skinningSourceKey;
+    if (sourceKey) modelPhysicsSession.detach(sourceKey);
+  } else {
+    unregisterWeightRigMesh(mesh);
+  }
+  skinningRuntime.disposeMesh(mesh);
+}
+
+export function destroyWeightRigModel() {
+  modelPhysicsSession.destroy();
+  for (const mesh of knownMeshes) skinningRuntime.disposeMesh(mesh);
+  knownMeshes.clear();
+  resetModelWeightState();
 }
 
 function ensureSourceSkinningRig(sourceKey, members) {

@@ -10,12 +10,6 @@ export {
   registerTextureRunGroup, unregisterTextureRunGroup,
 } from './mesh-texture-runs.js';
 
-export function legacyMeshMetadataKey(name, entry) {
-  const component = entry.component || name.replace(/-\d+$/, '');
-  const draw = entry.drawindexed ? entry.drawindexed.join(',') : 'whole';
-  return `${component}::${draw}`;
-}
-
 export function saveTextureState(modPath) {
   if (viewerState.currentSource?.kind === 'mod'
       && viewerState.currentSource?.readOnly === true) return;

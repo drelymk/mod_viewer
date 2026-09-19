@@ -4,6 +4,7 @@ import { viewerState, samePath } from './state.js';
 import { adoptModelMeshes, fitTo } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { addTexture, removeTextures } from '../mesh/mesh-factory.js';
+import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { activeMeshes, removeMesh } from '../mesh/visibility.js';
 import { appendMeshPanel, removeAssetFillMeshPanel } from '../panels/mesh-panel.js';
 import { alertDialog } from '../ui/dialogs.js';
@@ -171,9 +172,14 @@ export async function loadMissingAssetParts() {
     }
     const before = new Set(activeMeshes);
     try {
+      const entries = payload.meshes || {};
+      const liveMeshes = buildPayloadMeshes(
+        entries, null, {}, payload.metadata?.material_profiles || {}, {
+          texturePools: payload.texture_pools || {},
+          animations: payload.animations || {},
+        });
       appendMeshPanel(
-        payload.meshes || {}, null,
-        {}, payload.metadata?.material_profiles || {}, {
+        entries, liveMeshes, null, {
           replace: false,
           texturePools: payload.texture_pools || {},
           readOnlySource: true,
@@ -222,7 +228,10 @@ export async function removeMissingAssetParts() {
     if (!assetFillOperationIsCurrent(operation, path)) return false;
     if (result?.status === 'error') throw new Error(result.error);
     if (result?.stale) return false;
-    removeAssetFillMeshPanel();
+    const fillMeshes = activeMeshes.filter(
+      mesh => mesh.userData.assetFill === true).slice();
+    removeAssetFillMeshPanel(fillMeshes);
+    fillMeshes.forEach(removeMesh);
     removeTextures(state.assetFill.textureKeys);
     state.assetFill.textureKeys = new Set();
     state.assetFill.loaded = false;

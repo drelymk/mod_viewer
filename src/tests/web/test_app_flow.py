@@ -149,6 +149,36 @@ def test_frontend_public_surface_and_lifecycle_events(edge_browser, frontend_url
     finally:
         context.close()
 
+
+def test_mesh_panel_rebuild_reuses_existing_live_meshes(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {
+        "PanelOwnership": _payload("PanelOwnership"),
+    })
+    try:
+        _open(page, "PanelOwnership")
+        page.locator(".draw-item").wait_for()
+        result = page.evaluate("""async () => {
+          const payload = window.__fakeApi.responses.PanelOwnership;
+          const {buildMeshPanel} = await import('./js/panels/mesh-panel.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const name = Object.keys(payload.meshes)[0];
+          const before = window.modViewer.activeMeshes.slice();
+          buildMeshPanel(
+            payload.meshes, new Map([[name, mesh]]), 'PanelOwnership', {
+              texturePools: payload.texture_pools || {},
+            });
+          return {
+            count: window.modViewer.activeMeshes.length,
+            sameMesh: window.modViewer.activeMeshes[0] === mesh,
+            unchanged: window.modViewer.activeMeshes.length === before.length,
+          };
+        }""")
+        assert result == {"count": 1, "sameMesh": True, "unchanged": True}
+    finally:
+        context.close()
+
+
 def test_diagnostics_badge_populates_after_mod_load(
         edge_browser, frontend_url):
     diagnostics = {

@@ -1,6 +1,5 @@
-// Owns the model-wide skinning lifecycle. Rig construction and pose
-// composition consume this runtime through its callback surface; they do not
-// reach into its binary or geometry bookkeeping.
+// Owns model-wide skin data and geometry operations. Weight/Rig composition
+// coordinates cross-feature lifecycle through the core module.
 
 import * as THREE from 'three';
 import {
@@ -55,21 +54,11 @@ function buildBoneIds(indices, weights, influenceCount) {
 
 export function createSkinningRuntime({
     states, knownMeshes, stateFor, modelWeightState,
-    modelPhysicsSession, sourcePhysicsRigs, sourceSkinningRigs,
     modelWeightSnapshot, selectionMapFromEntries, sourceSelectionEntries,
     setSelectedBones, syncPhysicsToSelection, refreshModelWeightSummary,
     refreshSelectedWeightMask, eligibleSkinningMesh,
-    getGeneration, getModelRigState, getRigPresetState,
-    getModelSkinningRig, setModelSkinningRig,
-    invalidateHumanoidDetection, invalidateModelRigLoad, clearPickedPoint,
-    resetModelPose,
-    syncPhysicsParticipants, buildAllSourceSkinningRigs,
-    buildAllSourceSkinningRigsCooperatively = null,
-    buildModelSkinningRig, notifyModelWeightChanged, notifyModelRigChanged,
-    resetModelState, requestRender, invalidateShadow,
+    getGeneration, notifyModelWeightChanged, requestRender, invalidateShadow,
   } = {}) {
-  const modelRigState = getModelRigState();
-  const rigPresetState = getRigPresetState();
   const cooperativeGraphInFlight = new WeakMap();
 
   function markFinalBoundsDirty(mesh, state) {
@@ -698,104 +687,22 @@ export function createSkinningRuntime({
     }
   }
 
-  function registerMesh(mesh) {
-    if (!mesh) return;
-    const wasKnown = knownMeshes.has(mesh);
-    knownMeshes.add(mesh);
-    if (!wasKnown) invalidateHumanoidDetection();
-    if (!modelPhysicsSession.getState().enabled) return;
-    const state = stateFor(mesh);
-    if (!eligibleSkinningMesh(mesh)) {
-      state.physicsParticipantStatus = 'unavailable';
-      modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
-      return;
-    }
-    if (state.loaded) syncPhysicsParticipants();
-  }
-
-  function unregisterMesh(mesh) {
-    if (modelWeightState.pickedPoint?.meshKey
-        && modelWeightState.pickedPoint.meshKey === mesh?.userData?.semanticKey) {
-      clearPickedPoint();
-    }
-    const wasKnown = knownMeshes.delete(mesh);
-    if (wasKnown) invalidateHumanoidDetection();
-    const sourceKey = states.get(mesh)?.skinningSourceKey;
-    if (sourceKey) {
-      modelPhysicsSession.detach(sourceKey);
-      sourcePhysicsRigs.delete(sourceKey);
-      sourceSkinningRigs.delete(sourceKey);
-    }
-    refreshModelWeightSummary({refreshStats: true});
-    if (sourceKey && modelPhysicsSession.getState().enabled) {
-      syncPhysicsParticipants(new Set([sourceKey]));
-    }
-    if (modelRigState.loaded) {
-      const generation = getGeneration();
-      modelRigState.loading = true;
-      notifyModelRigChanged();
-      const buildSources = buildAllSourceSkinningRigsCooperatively
-        || (() => Promise.resolve(buildAllSourceSkinningRigs()));
-      void buildSources({
-        generation,
-        isCurrent: () => generation === getGeneration(),
-      }).then(sourceRigs => {
-        if (!sourceRigs || generation !== getGeneration()) return null;
-        return buildModelSkinningRig(sourceRigs, {
-          generation,
-          isCurrent: () => generation === getGeneration(),
-        });
-      }).catch(() => null).then(built => {
-        if (generation !== getGeneration()) return;
-        modelRigState.loading = false;
-        if (built) modelRigState.loaded = true;
-        notifyModelRigChanged();
-      });
-    }
-    notifyModelRigChanged();
-    notifyModelWeightChanged();
-  }
-
-  function refreshAfterShapeChange(mesh) {
+  function rebaseAfterShapeChange(mesh, {
+      positions = null, normals = null,
+  } = {}) {
     const state = states.get(mesh);
     const position = mesh?.geometry?.attributes?.position;
-    invalidateHumanoidDetection();
-    clearPickedPoint();
     if (!state?.loaded || !position) return false;
-    const preservedRootSignatures = new Set(
-      modelRigState.explicitRootSignatures);
-    const sourceKey = state.skinningSourceKey;
-    const shapedPositions = new Float32Array(position.array);
+    const shapedPositions = positions || new Float32Array(position.array);
     const normal = mesh.geometry.attributes.normal;
-    const shapedNormals = normal ? new Float32Array(normal.array) : null;
-    const participant = sourceKey
-      ? modelPhysicsSession.getParticipant(sourceKey) : null;
-    const wasPhysicsEnabled = !!participant || state.physicsEnabled;
-    if (participant) modelPhysicsSession.detach(sourceKey);
-    if (sourceKey) sourcePhysicsRigs.delete(sourceKey);
-    if (sourceKey) sourceSkinningRigs.delete(sourceKey);
-    if (getModelSkinningRig()) resetModelPose({request: false});
-    invalidateModelRigLoad();
-    modelRigState.promise = null;
-    modelRigState.loading = false;
+    const shapedNormals = normals
+      || (normal ? new Float32Array(normal.array) : null);
     state.poseTransforms = null;
     state.poseRotations = new Map();
     state.poseActiveVertices = null;
     state.combinedActiveVertices = null;
     state.combinedPoseVerticesRef = null;
     state.combinedPhysicsVerticesRef = null;
-    modelRigState.loaded = false;
-    setModelSkinningRig(null);
-    modelRigState.selectedJointId = null;
-    modelRigState.structureRevision = 0;
-    modelRigState.jointPickIntent = null;
-    modelRigState.ikEnabled = false;
-    modelRigState.activeLimbRole = 'left_arm';
-    modelRigState.selectedHumanoidControlKey = null;
-    modelRigState.explicitRootSignatures = preservedRootSignatures;
-    rigPresetState.lastApplyResult = null;
-    modelRigState.pickStatus = '';
-    notifyModelRigChanged();
     position.array.set(shapedPositions);
     position.needsUpdate = true;
     if (normal && shapedNormals && normal.array.length === shapedNormals.length) {
@@ -810,19 +717,11 @@ export function createSkinningRuntime({
     state.centerByBoneId = null;
     ensureRigMeshPrepared(mesh, state);
     state.influenceGraph = null;
-    if (wasPhysicsEnabled && modelPhysicsSession.getState().enabled
-        && sourceKey) {
-      syncPhysicsParticipants(new Set([sourceKey]));
-      modelPhysicsSession.wake();
-    }
-    if (state.heatmapMode) updateModelWeightHeatmap(new Set([sourceKey]));
     return true;
   }
 
-  function disposeMesh(mesh, {preserveRegistration = false} = {}) {
+  function disposeMesh(mesh) {
     const state = states.get(mesh);
-    if (preserveRegistration) modelPhysicsSession.detach(mesh);
-    else unregisterMesh(mesh);
     if (!state) return;
     state.disposed = true;
     mesh.userData.animationSuspended = false;
@@ -830,12 +729,6 @@ export function createSkinningRuntime({
     mesh.geometry?.deleteAttribute?.('color');
     mesh.material = state.originalMaterial || mesh.material;
     states.delete(mesh);
-  }
-
-  function destroy() {
-    modelPhysicsSession.destroy();
-    knownMeshes.clear();
-    resetModelState();
   }
 
   return {
@@ -846,7 +739,6 @@ export function createSkinningRuntime({
     getSkinningState: mesh => states.get(mesh) || null,
     getSkinningBaseMaterial, withSkinningBaseMaterial,
     installSkinningEntry, loadModelWeights, markFinalBoundsDirty,
-    registerMesh, unregisterMesh, refreshAfterShapeChange,
-    updateModelWeightHeatmap, disposeMesh, destroy,
+    rebaseAfterShapeChange, updateModelWeightHeatmap, disposeMesh,
   };
 }
