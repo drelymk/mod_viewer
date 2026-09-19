@@ -43,6 +43,8 @@ def _apply_texture_enrichment(parsed, context, bindings, complete_index):
     if str(getattr(parsed.game, "game", "")).casefold() == "wuwa":
         wuwa_texture_fallback.apply(
             parsed.groups, context.mod_dir,
+            resource_files=parsed.resource_files,
+            texture_indexes=parsed.texture_override_indexes,
             source=getattr(context, "source", None))
 
 

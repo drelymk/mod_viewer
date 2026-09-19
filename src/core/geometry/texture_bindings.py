@@ -98,11 +98,15 @@ def build_texture_options(group, registry):
 
     for candidate in group.get("discovered_textures") or []:
         filename = candidate.get("file")
-        path = registry.resolve(filename)
+        identity = candidate.get("identity")
+        path = candidate.get("path") or registry.resolve(filename)
         if path is None:
             continue
-        key = registry.key(path)
-        label = os.path.splitext(
+        # External candidates must publish their source before hydration,
+        # which resolves ordinary candidate keys relative to the mod.
+        key = (registry.ensure(path, identity=identity) if identity
+               else registry.key(path))
+        label = candidate.get("label") or os.path.splitext(
             str(filename).replace("\\", "/").rsplit("/", 1)[-1]
         )[0]
         append_texture_option(

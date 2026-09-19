@@ -143,7 +143,7 @@ def _declared_vertex_vg_resources_for_blend(
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None, animation_vars=None,
-                      qualified_vars=None):
+                      qualified_vars=None, *, section_info=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     if seen is None:
         seen = {}
@@ -151,8 +151,10 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                                                 blend_filename):
         return _declared_vertex_vg_resources_for_blend(
             resources, blend_resource_name, blend_filename)
-    section_info = _scan_sections_for_draws(
-        sections, var_prefix, gating_vars, animation_vars, qualified_vars)
+    if section_info is None:
+        section_info = _scan_sections_for_draws(
+            sections, var_prefix, gating_vars, animation_vars, qualified_vars,
+            resources=resources)
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
         section_info, resources, resource_copy_sources, sections=sections)
@@ -174,7 +176,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     draw_sections = _select_draw_sections(section_info, global_ib)
     texture_override_index = getattr(
         section_info, "texture_override_index", TextureOverrideIndex())
-    texture_override_index = texture_override_index.with_resource_files(resources)
     global_compute_resources = dict(
         getattr(section_info, "global_compute_resources", {}) or {})
     if not draw_sections:

@@ -104,6 +104,13 @@ of documentation, comments and tests; use portable fixtures instead.
   data. Normalize legacy path-only keys using the caller's known role.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
+- WWMI mod candidates use declared component-named Resource files across active
+  INIs, then replacements matching exact Asset TextureUsage hashes, then images
+  containing those hashes in the matched Asset metadata directory. Resolve each
+  INI's index against its own rebased resources; aggregate only filenames and
+  resolved indexes. Keep these candidates in the existing texture pool, with
+  Asset identities and labels distinct from mod files, and never scan loose mod
+  files or infer automatic roles from these associations.
 - Texture pools and backend loading must not eagerly decode/render sources.
   Production texture rendering stays at two concurrent jobs unless controlled
   benchmarks justify changing it. Native DDS uses validated eligibility only;

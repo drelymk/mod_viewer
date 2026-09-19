@@ -8,6 +8,8 @@ from .menu import extract_menu_toggles
 from .state import extract_state_rules
 from .shapes import extract_shape_sliders
 from .draw_groups import build_draw_groups
+from .draw_scan import _scan_sections_for_draws
+from .texture_roles import TextureOverrideIndex
 from .animations import discover_animation_clocks
 from ..materials.game_profile import collect_game_evidence
 
@@ -30,6 +32,8 @@ class IniAnalysis:
     game_evidence: list = field(default_factory=list)
     runtime_evidence: list = field(default_factory=list)
     texture_api_evidence: list = field(default_factory=list)
+    texture_override_index: TextureOverrideIndex = field(
+        default_factory=TextureOverrideIndex)
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
@@ -40,7 +44,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     Extractors accept the shared canonical spelling map so a normal load does
     not rescan every source line for each control family.  ``build_draw_groups``
     receives the already-known gating set instead of rediscovering toggles,
-    menu variables and state rules internally.
+    menu variables and state rules internally. The shared draw scan also keeps
+    a resolved texture index for INIs that do not produce any geometry groups.
     """
     if canonical_vars is None:
         canonical_vars = canonical_var_names(sections)
@@ -85,11 +90,14 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         else value
         for value in gating_vars
     }
+    section_info = _scan_sections_for_draws(
+        sections, var_prefix, scan_gating_vars, animation_analysis.frame_vars,
+        qualified_vars, resources=resources)
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
         seen=seen, gating_vars=scan_gating_vars,
         animation_vars=animation_analysis.frame_vars,
-        qualified_vars=qualified_vars)
+        qualified_vars=qualified_vars, section_info=section_info)
     return IniAnalysis(
         sections=sections,
         canonical_vars=canonical_vars,
@@ -105,4 +113,5 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         game_evidence=game_evidence,
         runtime_evidence=runtime_evidence,
         texture_api_evidence=texture_api_evidence,
+        texture_override_index=section_info.texture_override_index,
     )

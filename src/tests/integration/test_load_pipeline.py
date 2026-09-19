@@ -331,7 +331,8 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
     }
     parsed = mod_analysis.ParsedModAnalysis(
         groups=[group], toggles={}, menu={}, defaults={}, state_rules=[],
-        present={}, game=SimpleNamespace(game="wuwa"))
+        present={}, game=SimpleNamespace(game="wuwa"),
+        resource_files=[replacement.file])
     context = mod_loader.ModLoadContext(str(tmp_path), [], {}, {})
 
     mod_enrichment._apply_texture_enrichment(
