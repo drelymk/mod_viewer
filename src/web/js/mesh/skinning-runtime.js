@@ -693,12 +693,10 @@ export function createSkinningRuntime({
     const state = states.get(mesh);
     const position = mesh?.geometry?.attributes?.position;
     if (!state?.loaded || !position) return false;
-    const shapedPositions = positions
-      ? new Float32Array(positions) : new Float32Array(position.array);
+    const shapedPositions = positions || new Float32Array(position.array);
     const normal = mesh.geometry.attributes.normal;
     const shapedNormals = normals
-      ? new Float32Array(normals)
-      : normal ? new Float32Array(normal.array) : null;
+      || (normal ? new Float32Array(normal.array) : null);
     state.poseTransforms = null;
     state.poseRotations = new Map();
     state.poseActiveVertices = null;
