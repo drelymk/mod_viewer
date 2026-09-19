@@ -444,6 +444,9 @@ def test_rig_pose_runtime_reuses_affected_vertices_and_clears_to_rest(
           setSuspended() {}, reset() {}, wake() {},
         },
         getModelTransformState: () => ({}), invalidateShadow: () => {},
+        getModelJointId: (key, boneId) => key === sourceKey
+          ? Number(boneId) : undefined,
+        hasActivePhysics: () => false,
         quaternionIsIdentity: value => Math.abs(value.x) < 1e-8
           && Math.abs(value.y) < 1e-8 && Math.abs(value.z) < 1e-8
           && Math.abs(Math.abs(value.w) - 1) < 1e-8,
