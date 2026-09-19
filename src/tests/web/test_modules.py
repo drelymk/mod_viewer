@@ -364,6 +364,141 @@ def test_rig_pose_presets_use_exact_stable_signatures_and_partial_resolution(
     }
 
 
+def test_rig_pose_runtime_reuses_affected_vertices_and_clears_to_rest(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createRigPoseRuntime} = await import(
+        './js/mesh/rig-pose-runtime.js');
+      const sourceKey = 'body|offset=0';
+      const mesh = {};
+      const skinningState = {
+        indices: new Uint32Array([0, 1, 1, 2, 0, 0]),
+        weights: new Float32Array([.2, .8, .3, .7, 1, 0]),
+        influenceCount: 2,
+      };
+      const component = {
+        componentId: 0, rootId: 0, nodeIds: [0, 1, 2],
+        parentById: {0: null, 1: 0, 2: 1},
+        childrenById: {0: [1], 1: [2], 2: []},
+      };
+      const forest = {
+        components: [component],
+        componentByBoneId: {0: 0, 1: 0, 2: 0},
+      };
+      const sourceRig = {
+        sourceKey, boneIds: [0, 1, 2], meshes: new Set([mesh]),
+        inferredForest: forest,
+        poseRotationByBoneId: new Map(), poseTransforms: new Map(),
+        poseRotations: new Map(), physicsRig: null,
+        poseFrameCache: new Map(),
+      };
+      const rig = {
+        joints: [0, 1, 2].map(jointId => ({jointId, members: [
+          {sourceKey, boneId: jointId},
+        ]})),
+        components: [component], componentByJointId: new Map([
+          [0, 0], [1, 0], [2, 0],
+        ]),
+        inferredForest: forest,
+        sourceRigs: [sourceRig],
+        sourceBoneToModelJointId: new Map([0, 1, 2].map(jointId => [
+          `${sourceKey}#bone=${jointId}`, jointId,
+        ])),
+        centerByJointId: new Map([[0, [0, 0, 0]], [1, [1, 0, 0]],
+          [2, [2, 0, 0]]]),
+        jointPivotByJointId: new Map([[0, [0, 0, 0]], [1, [0, 0, 0]],
+          [2, [1, 0, 0]]]),
+        poseRotationByJointId: new Map(), poseTransforms: new Map(),
+        poseRotations: new Map(), manualPoseTransforms: new Map(),
+        humanoidDriverTransforms: new Map(), poseTransformCache: new Map(),
+        poseFrameCache: new Map(), sourceTransformAliases: new Map(),
+        sourceRotationAliases: new Map(), poseAffectedJointIds: new Set(),
+        poseActiveJointKey: '', poseActiveVerticesByMesh: new Map(),
+        poseSourceBoneIdsByMesh: new Map(), poseRevision: 0,
+        structureRevision: 7,
+      };
+      const state = {loaded: true, humanoidPose: {}, selectedJointId: null,
+        pickStatus: '', humanoidRigEditPhysicsSuspended: false};
+      let deformationCalls = 0;
+      let rootCall = null;
+      const runtime = createRigPoseRuntime({
+        state, getRig: () => rig,
+        sourceSkinningRigs: new Map([[sourceKey, sourceRig]]),
+        skinningRuntime: {
+          applyDeformation() { deformationCalls += 1; return true; },
+          finalizeDeformationGeometry() { return false; },
+        },
+        physicsRuntime: {
+          forEachRigMesh(source, callback) {
+            for (const candidate of source.meshes || []) {
+              callback(candidate, skinningState);
+            }
+          },
+          refreshParticipantDerivedState() {},
+          applySourceDeformation() { return true; },
+          syncRigParticipantState() {},
+        },
+        modelPhysicsSession: {
+          getSettings: () => ({}), getState: () => ({enabled: false}),
+          setSuspended() {}, reset() {}, wake() {},
+        },
+        getModelTransformState: () => ({}), invalidateShadow: () => {},
+        getModelJointId: (key, boneId) => key === sourceKey
+          ? Number(boneId) : undefined,
+        hasActivePhysics: () => false,
+        quaternionIsIdentity: value => Math.abs(value.x) < 1e-8
+          && Math.abs(value.y) < 1e-8 && Math.abs(value.z) < 1e-8
+          && Math.abs(Math.abs(value.w) - 1) < 1e-8,
+        setComponentRoot: (key, boneId) => {
+          rootCall = [key, boneId];
+          return true;
+        },
+        resetModelPose: () => false,
+        notifyChanged: () => {}, notifyPoseChanged: () => {},
+        requestRender: () => {},
+        rigPresetState: {selectedPresetId: null, lastApplyResult: null},
+      });
+      const rotation = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1), Math.PI / 2);
+      const posed = runtime.setRotation(1, rotation, {dragging: true});
+      const firstVertices = skinningState.poseActiveVertices;
+      const activeVertices = [...firstVertices];
+      const descendantTransform = [...sourceRig.poseTransforms.get(2).elements];
+      const repeated = runtime.setRotation(1, rotation, {dragging: true});
+      const reusedVertices = firstVertices === skinningState.poseActiveVertices;
+      const cleared = runtime.clearManualPose({request: false});
+      const restTransform = [...sourceRig.poseTransforms.get(2).elements];
+      state.humanoidPose = {head: [1, 2, 3]};
+      const structureBeforeEditReset = rig.structureRevision;
+      const resetForEdit = runtime.resetForHumanoidEdit({request: false});
+      const rooted = runtime.setRoot(1);
+      return {
+        posed, repeated, reusedVertices, activeVertices, descendantTransform,
+        deformationCalls, cleared, restTransform, resetForEdit,
+        humanoidPose: state.humanoidPose,
+        structureBeforeEditReset, structureAfterEditReset: rig.structureRevision,
+        rooted, rootCall,
+      };
+    }""")
+    assert result["posed"]
+    assert result["repeated"]
+    assert result["reusedVertices"]
+    assert result["activeVertices"] == [0, 1]
+    assert result["descendantTransform"] != pytest.approx(
+        [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+    assert result["deformationCalls"] >= 2
+    assert result["cleared"]
+    assert result["restTransform"] == pytest.approx(
+        [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+    assert result["resetForEdit"]
+    assert result["humanoidPose"] == {}
+    assert result["structureBeforeEditReset"] == \
+        result["structureAfterEditReset"] == 7
+    assert result["rooted"]
+    assert result["rootCall"] == ["body|offset=0", 1]
+
+
 def test_runtime_resets_keep_live_state_and_fresh_mutable_defaults(module_page):
     result = module_page.evaluate("""async () => {
       const runtime = await import('./js/mesh/weight-runtime.js');
