@@ -288,7 +288,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
       const graphStartedAt = clockNow();
       const graph = await ensureInfluenceGraphCooperative(
         member.mesh, member.state, evidenceMode,
-        evidenceMode === 'surface' ? surfaceEvidence : surfaceEvidence,
+        surfaceEvidence,
         {budget, isCurrent});
       if (!graph) return null;
       if (evidenceMode === 'surface') {
@@ -485,7 +485,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
     }
   }
 
-  function buildAll() {
+  function groupLoadedMeshes() {
     const groups = new Map();
     for (const mesh of knownMeshes) {
       const state = states.get(mesh);
@@ -494,23 +494,25 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
       members.push(mesh);
       groups.set(state.skinningSourceKey, members);
     }
-    for (const [sourceKey, members] of groups) ensure(sourceKey, members);
+    return groups;
+  }
+
+  function retainSourceRigs(groups) {
     for (const sourceKey of [...sourceSkinningRigs.keys()]) {
       if (!groups.has(sourceKey)) sourceSkinningRigs.delete(sourceKey);
     }
     return [...sourceSkinningRigs.values()];
   }
 
+  function buildAll() {
+    const groups = groupLoadedMeshes();
+    for (const [sourceKey, members] of groups) ensure(sourceKey, members);
+    return retainSourceRigs(groups);
+  }
+
   async function buildAllCooperative({generation = null,
       isCurrent = () => true} = {}) {
-    const groups = new Map();
-    for (const mesh of knownMeshes) {
-      const state = states.get(mesh);
-      if (!state?.loaded || !state.skinningSourceKey) continue;
-      const members = groups.get(state.skinningSourceKey) || [];
-      members.push(mesh);
-      groups.set(state.skinningSourceKey, members);
-    }
+    const groups = groupLoadedMeshes();
     const budget = createWorkBudget();
     for (const [sourceKey, members] of groups) {
       if (generation !== null && !isCurrent()) return null;
@@ -518,10 +520,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
       await budget.checkpoint();
     }
     if (generation !== null && !isCurrent()) return null;
-    for (const sourceKey of [...sourceSkinningRigs.keys()]) {
-      if (!groups.has(sourceKey)) sourceSkinningRigs.delete(sourceKey);
-    }
-    return [...sourceSkinningRigs.values()];
+    return retainSourceRigs(groups);
   }
 
   return {ensure, ensureCooperative, buildAll, buildAllCooperative, resetPose,
@@ -681,14 +680,14 @@ export function createRigModelSession({state, modelWeightState, getGeneration,
       ? {type: 'selected-joint'} : null;
     if (!next) return false;
     const jointId = pickFromSurface?.(point, next);
-    if (!Number.isInteger(Number(jointId))) {
+    if (!Number.isInteger(jointId)) {
       state.pickStatus = weightRigStatus(
         'weightRig.status.noRigJointAtPoint');
       notifyChanged();
       requestRender();
       return false;
     }
-    return handleJointPicked(Number(jointId), next);
+    return handleJointPicked(jointId, next);
   }
 
   function setRotationSnapDegrees(value) {

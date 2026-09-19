@@ -542,6 +542,42 @@ def test_runtime_resets_keep_live_state_and_fresh_mutable_defaults(module_page):
     }
 
 
+def test_rig_surface_pick_miss_preserves_selection_and_pick_intent(module_page):
+    result = module_page.evaluate("""async () => {
+      const {createRigModelSession} = await import(
+        './js/mesh/rig-model-session.js');
+      const {createRigRuntimeState} = await import('./js/mesh/weight-runtime.js');
+      const {modelRigState: state} = createRigRuntimeState();
+      state.loaded = true;
+      state.selectedJointId = 1;
+      let hit = null;
+      const session = createRigModelSession({
+        state,
+        getSnapshot: () => ({model: {joints: [{jointId: 0}, {jointId: 1}]}}),
+        pickFromSurface: () => hit,
+        notifyChanged: () => {}, requestRender: () => {},
+      });
+      session.beginJointPicking({type: 'selected-joint'});
+      const missed = session.pickJointFromSurface({clientX: 10, clientY: 20});
+      const afterMiss = {
+        selected: state.selectedJointId, intent: state.jointPickIntent,
+        status: state.pickStatus.messageKey,
+      };
+      hit = 0;
+      const picked = session.pickJointFromSurface({clientX: 30, clientY: 40});
+      return {missed, afterMiss, picked, selected: state.selectedJointId,
+        intent: state.jointPickIntent, status: state.pickStatus};
+    }""")
+    assert result == {
+        "missed": False,
+        "afterMiss": {
+            "selected": 1, "intent": {"type": "selected-joint"},
+            "status": "weightRig.status.noRigJointAtPoint",
+        },
+        "picked": True, "selected": 0, "intent": None, "status": "",
+    }
+
+
 def test_rig_joint_picker_projects_current_pivots_and_uses_nearest_hit(
         module_page):
     result = module_page.evaluate("""async () => {
@@ -2162,10 +2198,11 @@ def test_rig_member_structural_identity_ignores_ui_and_provenance(module_page):
     }
 
 
+@pytest.mark.parametrize("cooperative", [False, True])
 def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wide(
-        module_page):
+        module_page, cooperative):
     page = module_page
-    result = page.evaluate("""async () => {
+    result = page.evaluate("""async cooperative => {
       const {createRigSourceSession} = await import(
         './js/mesh/rig-model-session.js');
       const states = new Map();
@@ -2227,8 +2264,10 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
         rebuildRestFrames: () => {},
         cloneForest: forest => forest,
       });
-      const fallbackRig = session.ensure('source',
-        [first, duplicate, invalid]);
+      const build = () => cooperative
+        ? session.buildAllCooperative() : session.buildAll();
+      sourceSkinningRigs.set('removed-source', {});
+      const [fallbackRig] = await build();
       const fallback = {
         memberCount: fallbackRig.influenceGraph.memberCount,
         uniqueMemberCount: fallbackRig.influenceGraph.uniqueMemberCount,
@@ -2237,7 +2276,8 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
         graphCalls: [...graphCalls],
       };
       graphCalls.length = 0;
-      const surfaceRig = session.ensure('source', [first, duplicate]);
+      knownMeshes.delete(invalid);
+      const [surfaceRig] = await build();
       return {
         fallback,
         surface: {
@@ -2251,7 +2291,7 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
           relationships: surfaceRig.influenceGraph.relationships,
         },
       };
-    }""")
+    }""", cooperative)
     assert result["fallback"] == {
         "memberCount": 3,
         "uniqueMemberCount": 2,
