@@ -2135,72 +2135,6 @@ def test_surface_eligibility_probe_matches_topology_diagnostics(module_page):
     ]
 
 
-def test_rig_member_structural_identity_ignores_ui_and_provenance(module_page):
-    page = module_page
-    result = page.evaluate("""async () => {
-      const {memberStructuralEvidenceKey} = await import(
-        './js/mesh/rig-model-session.js');
-      const makeMember = (changes = {}) => ({
-        state: {
-          skinningSourceKey: 'source', influenceCount: 4,
-          encoding: 'compact', ...changes.state,
-        },
-        mesh: {
-          userData: {
-            semanticKey: 'semantic-a', component: 'Body', occurrence: 1,
-            material: 'material-a', texture: 'texture-a', visible: true,
-            identity: {
-              draw: {count: 6, start: 0, base: 0},
-              geometry_state: {
-                ib_file: 'indices.buf', index_size: 2,
-                position_file: 'positions.buf', position_stride: 12,
-                texcoord_file: 'uv.buf', texcoord_stride: 8,
-              },
-              ...changes.identity,
-            },
-          },
-          geometry: {
-            attributes: {position: {count: 3}},
-            index: {count: 3},
-            ...changes.geometry,
-          },
-        },
-      });
-      const base = makeMember();
-      const uiOnly = makeMember({
-        state: {semanticKey: 'ignored-state-field'},
-        identity: {component: 'Legs', material: 'material-b',
-          texture: 'texture-b'},
-      });
-      const different = field => memberStructuralEvidenceKey(
-        makeMember(field));
-      const baseKey = memberStructuralEvidenceKey(base);
-      return {
-        uiOnlyMatches: baseKey === memberStructuralEvidenceKey(uiOnly),
-        changedKeys: [
-          different({state: {skinningSourceKey: 'other'}}),
-          different({state: {influenceCount: 8}}),
-          different({state: {encoding: 'expanded'}}),
-          different({identity: {draw: {count: 7, start: 0, base: 0}}}),
-          different({identity: {draw: {count: 6, start: 1, base: 0}}}),
-          different({identity: {draw: {count: 6, start: 0, base: 1}}}),
-          different({identity: {geometry_state: {ib_file: 'other'}}}),
-          different({identity: {geometry_state: {index_size: 4}}}),
-          different({identity: {geometry_state: {position_file: 'other'}}}),
-          different({identity: {geometry_state: {position_stride: 16}}}),
-          different({identity: {geometry_state: {texcoord_file: 'other'}}}),
-          different({identity: {geometry_state: {texcoord_stride: 16}}}),
-          different({geometry: {attributes: {position: {count: 4}}}}),
-          different({geometry: {index: {count: 6}}}),
-        ].map(key => key !== baseKey),
-      };
-    }""")
-    assert result == {
-        "uiOnlyMatches": True,
-        "changedKeys": [True] * 14,
-    }
-
-
 @pytest.mark.parametrize("cooperative", [False, True])
 def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wide(
         module_page, cooperative):
@@ -2320,6 +2254,67 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
                     "maxVertexWeight": 1,
                     "weightedCenter": [0, 0, 0], "weightedRadius": 0}],
         "relationships": [],
+    }
+
+
+def test_cooperative_rig_source_session_cancels_during_member_deduplication(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {createRigSourceSession} = await import(
+        './js/mesh/rig-model-session.js');
+      const states = new Map();
+      const knownMeshes = new Set();
+      const sourceSkinningRigs = new Map();
+      let cancelled = false;
+      const largeValues = () => new Array(4096).fill(1);
+      const makeMesh = (name, boneIds = largeValues()) => {
+        const mesh = {
+          userData: {semanticKey: name},
+          geometry: {index: {array: largeValues()}},
+        };
+        states.set(mesh, {
+          loaded: true, skinningSourceKey: 'source', influenceCount: 1,
+          baselinePositions: new Array(4096 * 3).fill(0),
+          indices: largeValues(), weights: largeValues(), boneIds,
+        });
+        knownMeshes.add(mesh);
+        return mesh;
+      };
+      const duplicateBoneIds = new Proxy(largeValues(), {
+        get(target, property, receiver) {
+          if (property === '0') cancelled = true;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      makeMesh('first');
+      makeMesh('duplicate', duplicateBoneIds);
+      const session = createRigSourceSession({
+        states, knownMeshes, sourceSkinningRigs,
+        modelWeightState: {
+          sourceDescriptors: new Map([['source', {
+            sourceFile: 'weights.buf', boneIdOffset: 0,
+            boneIdsModelWide: true,
+          }]]),
+        },
+        ensureRigMeshPrepared: () => true,
+        ensureInfluenceGraph: () => ({nodes: [], relationships: []}),
+        rebuildRestFrames: () => {},
+        cloneForest: forest => forest,
+      });
+      const result = await session.buildAllCooperative({
+        generation: 1, isCurrent: () => !cancelled,
+      });
+      return {
+        cancelled,
+        returnedNull: result === null,
+        sourceRigInstalled: sourceSkinningRigs.has('source'),
+      };
+    }""")
+    assert result == {
+        "cancelled": True,
+        "returnedNull": True,
+        "sourceRigInstalled": False,
     }
 
 

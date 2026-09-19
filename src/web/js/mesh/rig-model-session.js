@@ -19,46 +19,39 @@ function clockNow() {
     ? globalThis.performance.now() : Date.now();
 }
 
-function memberStructuralEvidenceFields(member = {}) {
+function memberEvidenceArrays(member = {}) {
   const state = member.state || {};
-  const identity = member.mesh?.userData?.identity || {};
-  const draw = identity.draw || {};
-  const geometry = identity.geometry_state || {};
-  const positionCount = member.mesh?.geometry?.attributes?.position?.count;
-  const surfaceIndexCount = member.mesh?.geometry?.index?.count
-    ?? member.mesh?.geometry?.index?.array?.length;
   return [
-    state.skinningSourceKey ?? null,
-    state.influenceCount ?? null,
-    state.encoding ?? null,
-    draw.count ?? null,
-    draw.start ?? null,
-    draw.base ?? null,
-    geometry.ib_file ?? null,
-    geometry.index_size ?? null,
-    geometry.position_file ?? null,
-    geometry.position_stride ?? null,
-    geometry.texcoord_file ?? null,
-    geometry.texcoord_stride ?? null,
-    positionCount ?? null,
-    surfaceIndexCount ?? null,
+    state.boneIds,
+    member.surfaceIndices,
+    state.indices,
+    state.weights,
+    state.baselinePositions,
   ];
-}
-
-export function memberStructuralEvidenceKey(member = {}) {
-  return JSON.stringify(memberStructuralEvidenceFields(member));
 }
 
 function memberEvidenceShapeKey(member = {}) {
   const state = member.state || {};
   return JSON.stringify([
     state.influenceCount ?? null,
-    state.baselinePositions?.length ?? null,
-    state.indices?.length ?? null,
-    state.weights?.length ?? null,
-    state.boneIds?.length ?? null,
-    member.surfaceIndices?.length ?? null,
+    ...memberEvidenceArrays(member).map(values => values?.length ?? null),
   ]);
+}
+
+function preparedMember(mesh, state) {
+  return {
+    mesh,
+    state,
+    surfaceIndices: mesh.geometry?.index?.array || null,
+  };
+}
+
+function finalizeInfluenceGraph(graph, loadedMembers, uniqueMembers) {
+  return {
+    ...graph,
+    memberCount: loadedMembers.length,
+    uniqueMemberCount: uniqueMembers.length,
+  };
 }
 
 export function createRigSourceSession({states, knownMeshes, modelWeightState,
@@ -80,29 +73,15 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
     const leftState = left.state;
     const rightState = right.state;
     if (leftState.influenceCount !== rightState.influenceCount) return false;
-    const leftLengths = [
-      leftState.baselinePositions,
-      leftState.indices,
-      leftState.weights,
-      leftState.boneIds,
-      left.surfaceIndices,
-    ].map(values => values?.length ?? null);
-    const rightLengths = [
-      rightState.baselinePositions,
-      rightState.indices,
-      rightState.weights,
-      rightState.boneIds,
-      right.surfaceIndices,
-    ].map(values => values?.length ?? null);
+    const leftArrays = memberEvidenceArrays(left);
+    const rightArrays = memberEvidenceArrays(right);
+    const leftLengths = leftArrays.map(values => values?.length ?? null);
+    const rightLengths = rightArrays.map(values => values?.length ?? null);
     if (leftLengths.some((length, index) => length !== rightLengths[index])) {
       return false;
     }
-    return memberArraysEqual(leftState.boneIds, rightState.boneIds)
-      && memberArraysEqual(left.surfaceIndices, right.surfaceIndices)
-      && memberArraysEqual(leftState.indices, rightState.indices)
-      && memberArraysEqual(leftState.weights, rightState.weights)
-      && memberArraysEqual(leftState.baselinePositions,
-        rightState.baselinePositions);
+    return leftArrays.every((values, index) =>
+      memberArraysEqual(values, rightArrays[index]));
   }
 
   function normalizeMembers(members) {
@@ -128,11 +107,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
     const loadedMembers = members.map(mesh => {
       const state = states.get(mesh);
       if (state?.loaded) ensureRigMeshPrepared?.(mesh, state);
-      return state?.loaded ? {
-        mesh,
-        state,
-        surfaceIndices: mesh.geometry?.index?.array || null,
-      } : null;
+      return state?.loaded ? preparedMember(mesh, state) : null;
     }).filter(Boolean);
     const uniqueMembers = normalizeMembers(loadedMembers);
     const surfaceEligible = uniqueMembers.map(member =>
@@ -147,11 +122,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
       return ensureInfluenceGraph(
         member.mesh, member.state, evidenceMode, surfaceEvidence);
     }));
-    return {
-      ...graph,
-      memberCount: loadedMembers.length,
-      uniqueMemberCount: uniqueMembers.length,
-    };
+    return finalizeInfluenceGraph(graph, loadedMembers, uniqueMembers);
   }
 
   async function memberArraysEqualCooperative(left, right, budget, isCurrent) {
@@ -173,32 +144,16 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
     const leftState = left.state;
     const rightState = right.state;
     if (leftState.influenceCount !== rightState.influenceCount) return false;
-    const leftLengths = [
-      leftState.baselinePositions,
-      leftState.indices,
-      leftState.weights,
-      leftState.boneIds,
-      left.surfaceIndices,
-    ].map(values => values?.length ?? null);
-    const rightLengths = [
-      rightState.baselinePositions,
-      rightState.indices,
-      rightState.weights,
-      rightState.boneIds,
-      right.surfaceIndices,
-    ].map(values => values?.length ?? null);
+    const leftArrays = memberEvidenceArrays(left);
+    const rightArrays = memberEvidenceArrays(right);
+    const leftLengths = leftArrays.map(values => values?.length ?? null);
+    const rightLengths = rightArrays.map(values => values?.length ?? null);
     if (leftLengths.some((length, index) => length !== rightLengths[index])) {
       return false;
     }
-    for (const [leftValues, rightValues] of [
-      [leftState.boneIds, rightState.boneIds],
-      [left.surfaceIndices, right.surfaceIndices],
-      [leftState.indices, rightState.indices],
-      [leftState.weights, rightState.weights],
-      [leftState.baselinePositions, rightState.baselinePositions],
-    ]) {
+    for (let index = 0; index < leftArrays.length; index += 1) {
       const equal = await memberArraysEqualCooperative(
-        leftValues, rightValues, budget, isCurrent);
+        leftArrays[index], rightArrays[index], budget, isCurrent);
       if (equal === null) return null;
       if (!equal) return false;
     }
@@ -254,11 +209,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
       if (!(await ensureRigMeshPreparedCooperative(mesh, state,
         {budget, isCurrent}))) return null;
       timings.meshPreparationMs += clockNow() - preparationStartedAt;
-      loadedMembers.push({
-        mesh,
-        state,
-        surfaceIndices: mesh.geometry?.index?.array || null,
-      });
+      loadedMembers.push(preparedMember(mesh, state));
       await budget.checkpoint();
     }
     const uniqueMembers = await normalizeMembersCooperative(
@@ -301,9 +252,7 @@ export function createRigSourceSession({states, knownMeshes, modelWeightState,
     }
     const graph = aggregateInfluenceGraphs(graphs);
     return {
-      ...graph,
-      memberCount: loadedMembers.length,
-      uniqueMemberCount: uniqueMembers.length,
+      ...finalizeInfluenceGraph(graph, loadedMembers, uniqueMembers),
       __cooperativeTimings: timings,
     };
   }
