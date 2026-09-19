@@ -13,6 +13,8 @@ def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
     parsed = SimpleNamespace(
         groups=[{"name": "Body", "draws": []}],
         game=SimpleNamespace(game="wuwa"),
+        resource_files=["Components-2 t=aaaaaaaa.dds"],
+        texture_override_indexes=[],
     )
     context = SimpleNamespace(
         mod_dir=str(tmp_path),
@@ -26,6 +28,8 @@ def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
 
     def apply_fallback(*args, **kwargs):
         events.append("wuwa")
+        assert kwargs["resource_files"] is parsed.resource_files
+        assert kwargs["texture_indexes"] is parsed.texture_override_indexes
 
     summary = SimpleNamespace(to_dict=lambda: {
         "index_status": "unavailable",

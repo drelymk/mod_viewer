@@ -167,7 +167,8 @@ def _split_animation_conditions(conditions, animation_vars):
 
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
-                             animation_vars=None, qualified_vars=None):
+                             animation_vars=None, qualified_vars=None, *,
+                             resources=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
@@ -177,6 +178,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     alias_map = build_bool_alias_map(sections)
     texture_override_index = _collect_texture_override_index(
         sections, toggle_vars, alias_map, var_prefix, qualified_vars)
+    if resources is not None:
+        texture_override_index = texture_override_index.with_resource_files(
+            resources)
     resource_texture_hashes = texture_override_index.hashes_by_resource
     structural_slot_roles = _collect_structural_slot_role_hints(sections)
     seq_counter = [0]

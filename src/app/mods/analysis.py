@@ -36,6 +36,8 @@ class ParsedModAnalysis:
     present: dict
     game: GameDetection
     animations: list = field(default_factory=list)
+    resource_files: list = field(default_factory=list)
+    texture_override_indexes: list = field(default_factory=list)
 
     def __iter__(self):
         """Keep old six-value helper callers source-compatible."""
@@ -208,6 +210,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     runtime_evidence = []
     texture_api_evidence = []
     animations = []
+    resource_files = []
+    texture_override_indexes = []
     multi = len(ini_paths) > 1
     if source is None and ini_paths:
         source = getattr(ini_paths[0], "source", None)
@@ -304,6 +308,10 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             qualified_vars=qualified_vars,
             canonical_vars=record["canonical_vars"])
         record["analysis"] = analysis
+        resource_files.extend(
+            info["filename"] for info in analysis.resources.values()
+            if info.get("filename"))
+        texture_override_indexes.append(analysis.texture_override_index)
         ini_groups = analysis.draw_groups
         identity_source = _ini_rel(ini_path, folder_path, source=source)
         for group in ini_groups:
@@ -476,6 +484,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         game=resolve_game_detection(
             game_evidence, runtime_evidence, texture_api_evidence),
         animations=animations,
+        resource_files=list(dict.fromkeys(resource_files)),
+        texture_override_indexes=texture_override_indexes,
     )
 
 
