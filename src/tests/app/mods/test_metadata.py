@@ -144,6 +144,8 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     path = tmp_path / metadata.METADATA_NAME
     data = json.loads(path.read_text(encoding="utf-8"))
     data["future"] = {"keep": True}
+    data["rig"]["limb_mappings"] = {"legacy": "discard"}
+    data["rig"]["future_option"] = {"keep": True}
     path.write_text(json.dumps(data), encoding="utf-8")
 
     result = metadata.save_humanoid_control_rig(str(tmp_path), value)
@@ -152,6 +154,8 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     assert metadata.humanoid_control_rig(str(tmp_path)) == value
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["rig"]["presets"] == data["rig"]["presets"]
+    assert "limb_mappings" not in saved["rig"]
+    assert saved["rig"]["future_option"] == {"keep": True}
     assert saved["future"] == {"keep": True}
 
     cleared = metadata.clear_humanoid_control_rig(str(tmp_path))

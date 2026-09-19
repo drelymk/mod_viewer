@@ -697,6 +697,17 @@ def humanoid_control_rig(folder_path=None, data=None):
     return _normalized_humanoid_control_rig(raw)
 
 
+def _updated_rig_envelope(raw_rig, presets):
+    """Return the shared versioned Rig envelope for metadata updates."""
+    rig = deepcopy(raw_rig) if isinstance(raw_rig, dict) else {}
+    rig.update({"version": RIG_METADATA_VERSION,
+                "presets": deepcopy(presets)})
+    # Limb mappings belonged to the removed manual IK bridge. Do not preserve
+    # or migrate them when the current preset metadata is rewritten.
+    rig.pop("limb_mappings", None)
+    return rig
+
+
 def _rig_data_for_humanoid_update(data):
     raw_rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
     if raw_rig is not None and not isinstance(raw_rig, dict):
@@ -704,11 +715,7 @@ def _rig_data_for_humanoid_update(data):
     current = rig_pose_presets(data=data)
     if current["error"]:
         return None, "Pose preset metadata could not be updated."
-    rig = deepcopy(raw_rig) if isinstance(raw_rig, dict) else {}
-    rig.update({"version": RIG_METADATA_VERSION,
-                "presets": deepcopy(current["presets"])})
-    rig.pop("limb_mappings", None)
-    return rig, None
+    return _updated_rig_envelope(raw_rig, current["presets"]), None
 
 
 def save_humanoid_control_rig(folder_path, value):
@@ -786,14 +793,7 @@ def _rig_data_for_update(data):
     if current["error"]:
         return None, None, "Pose preset metadata could not be updated."
     raw_rig = data.get(RIG_METADATA_KEY)
-    rig = deepcopy(raw_rig) if isinstance(raw_rig, dict) else {}
-    rig.update({
-        "version": RIG_METADATA_VERSION,
-        "presets": deepcopy(current["presets"]),
-    })
-    # Limb mappings belonged to the removed manual IK bridge. Do not preserve
-    # or migrate them when the current preset metadata is rewritten.
-    rig.pop("limb_mappings", None)
+    rig = _updated_rig_envelope(raw_rig, current["presets"])
     return current, rig, None
 
 
