@@ -2257,6 +2257,67 @@ def test_rig_source_session_deduplicates_exact_evidence_and_falls_back_source_wi
     }
 
 
+def test_cooperative_rig_source_session_cancels_during_member_deduplication(
+        module_page):
+    page = module_page
+    result = page.evaluate("""async () => {
+      const {createRigSourceSession} = await import(
+        './js/mesh/rig-model-session.js');
+      const states = new Map();
+      const knownMeshes = new Set();
+      const sourceSkinningRigs = new Map();
+      let cancelled = false;
+      const largeValues = () => new Array(4096).fill(1);
+      const makeMesh = (name, boneIds = largeValues()) => {
+        const mesh = {
+          userData: {semanticKey: name},
+          geometry: {index: {array: largeValues()}},
+        };
+        states.set(mesh, {
+          loaded: true, skinningSourceKey: 'source', influenceCount: 1,
+          baselinePositions: new Array(4096 * 3).fill(0),
+          indices: largeValues(), weights: largeValues(), boneIds,
+        });
+        knownMeshes.add(mesh);
+        return mesh;
+      };
+      const duplicateBoneIds = new Proxy(largeValues(), {
+        get(target, property, receiver) {
+          if (property === '0') cancelled = true;
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      makeMesh('first');
+      makeMesh('duplicate', duplicateBoneIds);
+      const session = createRigSourceSession({
+        states, knownMeshes, sourceSkinningRigs,
+        modelWeightState: {
+          sourceDescriptors: new Map([['source', {
+            sourceFile: 'weights.buf', boneIdOffset: 0,
+            boneIdsModelWide: true,
+          }]]),
+        },
+        ensureRigMeshPrepared: () => true,
+        ensureInfluenceGraph: () => ({nodes: [], relationships: []}),
+        rebuildRestFrames: () => {},
+        cloneForest: forest => forest,
+      });
+      const result = await session.buildAllCooperative({
+        generation: 1, isCurrent: () => !cancelled,
+      });
+      return {
+        cancelled,
+        returnedNull: result === null,
+        sourceRigInstalled: sourceSkinningRigs.has('source'),
+      };
+    }""")
+    assert result == {
+        "cancelled": True,
+        "returnedNull": True,
+        "sourceRigInstalled": False,
+    }
+
+
 def test_inferred_rig_rest_frames_are_deterministic_and_transport_axes(module_page):
     page = module_page
     result = page.evaluate("""async () => {

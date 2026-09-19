@@ -783,18 +783,17 @@ def rig_pose_presets(folder_path=None, data=None):
 def _rig_data_for_update(data):
     raw_rig = data.get(RIG_METADATA_KEY) if isinstance(data, dict) else None
     if raw_rig is not None and not isinstance(raw_rig, dict):
-        return None, None, "Pose preset metadata uses an unsupported version."
+        return None, "Pose preset metadata uses an unsupported version."
     if isinstance(raw_rig, dict):
         if raw_rig.get("version") != RIG_METADATA_VERSION:
-            return None, None, "Pose preset metadata uses an unsupported version."
+            return None, "Pose preset metadata uses an unsupported version."
         if not isinstance(raw_rig.get("presets"), list):
-            return None, None, "Pose preset metadata could not be updated."
+            return None, "Pose preset metadata could not be updated."
     current = rig_pose_presets(data=data)
     if current["error"]:
-        return None, None, "Pose preset metadata could not be updated."
+        return None, "Pose preset metadata could not be updated."
     raw_rig = data.get(RIG_METADATA_KEY)
-    rig = _updated_rig_envelope(raw_rig, current["presets"])
-    return current, rig, None
+    return _updated_rig_envelope(raw_rig, current["presets"]), None
 
 
 def save_rig_pose_preset(folder_path, preset):
@@ -804,13 +803,13 @@ def save_rig_pose_preset(folder_path, preset):
         return {"saved": False, "error": "Invalid pose preset."}
     with _LOCK:
         data = load(folder_path)
-        current, rig, error = _rig_data_for_update(data)
+        rig, error = _rig_data_for_update(data)
         if error:
             return {"saved": False, "error": error}
-        if any(item["id"] == normalized["id"] for item in current["presets"]):
+        if any(item["id"] == normalized["id"] for item in rig["presets"]):
             return {"saved": False, "error": "A pose with this ID already exists."}
         if any(item["name"].casefold() == normalized["name"].casefold()
-               for item in current["presets"]):
+               for item in rig["presets"]):
             return {"saved": False, "error": "A pose with this name already exists."}
         rig["presets"].append(normalized)
         data[RIG_METADATA_KEY] = rig
@@ -828,7 +827,7 @@ def rename_rig_pose_preset(folder_path, preset_id, name):
     normalized_name = name.strip()
     with _LOCK:
         data = load(folder_path)
-        current, rig, error = _rig_data_for_update(data)
+        rig, error = _rig_data_for_update(data)
         if error:
             return {"saved": False, "error": error}
         target = next((item for item in rig["presets"]
@@ -851,7 +850,7 @@ def delete_rig_pose_preset(folder_path, preset_id):
         return {"saved": False, "error": "Invalid pose preset ID."}
     with _LOCK:
         data = load(folder_path)
-        current, rig, error = _rig_data_for_update(data)
+        rig, error = _rig_data_for_update(data)
         if error:
             return {"saved": False, "error": error}
         before = len(rig["presets"])
