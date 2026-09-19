@@ -20,8 +20,7 @@ app/bridge/toggle.py):
 
 Transactions make each action atomic: a rejected edit always leaves every
 document and any requested session metadata exactly as it was before that
-action started. `begin`/`commit`/`rollback` remain small compatibility
-wrappers for older internal callers.
+action started.
 
 Separately, `mark_added`/`rename_added`/`mark_removed`/`new_sections_for`
 track which [Key...] sections were freshly created by add_toggle this
@@ -79,6 +78,8 @@ class _EditTransaction:
         self._present_baseline = _NO_METADATA_BASELINE
         self._present_names = _NO_METADATA_BASELINE
         self._metadata_on_disk = _NO_METADATA_BASELINE
+        self._metadata_sidecar_exists = False
+        self._metadata_mutated = False
 
         requested = list(paths or [])
         missing = [path for path in requested
@@ -108,6 +109,8 @@ class _EditTransaction:
                 from app.mods import metadata
                 self._metadata_on_disk = metadata.all_present_names(
                     mod_dir, source=self.sess.source)
+                self._metadata_sidecar_exists = os.path.isfile(
+                    os.path.join(mod_dir, metadata.METADATA_NAME))
 
     def __enter__(self):
         return self
@@ -126,6 +129,11 @@ class _EditTransaction:
             return self.entries[key]["doc"]
         except KeyError as error:
             raise KeyError(f"{path!r} is not part of this transaction") from error
+
+    def mark_metadata_mutation(self):
+        """Mark that this transaction is about to change PRESENT metadata."""
+        if self.present_metadata:
+            self._metadata_mutated = True
 
     def _commit(self):
         try:
@@ -162,10 +170,16 @@ class _EditTransaction:
             self.sess.present_names = _copy_metadata_state(self._present_names)
             self.sess.revision = self._revision
             self.sess.diagnostics_cache = self._diagnostics_cache
-            if self._metadata_on_disk is not _NO_METADATA_BASELINE:
+            if (self._metadata_mutated
+                    and self._metadata_on_disk is not _NO_METADATA_BASELINE):
                 from app.mods import metadata
                 metadata.restore_present_names(
                     self.mod_dir, self._metadata_on_disk)
+                if not self._metadata_sidecar_exists:
+                    try:
+                        os.remove(os.path.join(self.mod_dir, metadata.METADATA_NAME))
+                    except FileNotFoundError:
+                        pass
 
 
 def transaction(mod_dir, paths, *, present_metadata=False):
@@ -232,44 +246,6 @@ def load_documents(mod_dir, ini_paths, *, source=None):
     if added:
         _touch(sess)
     return sess
-
-
-def begin(mod_dir, ini_path):
-    """Get `ini_path`'s authoritative doc for mutation, loading it into the
-    session on first touch (a session for a different mod folder is
-    replaced — the frontend confirms with the user before that happens).
-
-    Returns (session, key, doc, was_pending, snapshot); pass everything back
-    to `commit()` on success or `rollback()` on failure.
-    """
-    sess = _get_or_create(mod_dir)
-    key = _key(mod_dir, ini_path)
-    if key not in sess.docs:
-        load_documents(mod_dir, [ini_path])
-    was_pending = key in sess.dirty
-    doc = sess.docs[key]
-    snapshot = doc.to_string()
-    return sess, key, doc, was_pending, snapshot
-
-
-def commit(sess, key, doc):
-    """Record a successful mutation as this ini's new pending state."""
-    sess.docs[key] = doc
-    if doc.to_string() == sess.baselines[key]:
-        sess.dirty.discard(key)
-        sess.new_sections.pop(key, None)
-    else:
-        sess.dirty.add(key)
-    _touch(sess)
-
-
-def rollback(sess, key, was_pending, snapshot, ini_path):
-    """Undo a failed mutation and restore its previous dirty state."""
-    sess.docs[key] = IniDocument.from_string(snapshot, path=ini_path)
-    if was_pending:
-        sess.dirty.add(key)
-    else:
-        sess.dirty.discard(key)
 
 
 def peek(mod_dir, ini_path):

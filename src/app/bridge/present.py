@@ -52,6 +52,7 @@ def _batch_run(mod_dir, targets, mutate, metadata_change=None):
             for ini_rel, path, _doc in targets:
                 results.append(mutate(ini_rel, transaction.document(path)))
             if metadata_change:
+                transaction.mark_metadata_mutation()
                 edit_session.stage_present_metadata(mod_dir)
                 metadata_change(results, source)
         count = results[0].get("count") if results and isinstance(results[0], dict) else None

@@ -97,3 +97,26 @@ def test_ini_api_session(api_root):
 
 def test_ini_api_nested_duplicate_names(api_root):
     exercise_nested_duplicate_names(api_root)
+
+
+def test_failed_transaction_restores_dirty_and_new_section_state(api_root):
+    path = os.path.join(api_root, "a.ini")
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write(INI)
+    edit_session.load_documents(api_root, [path])
+    edit_session.update_text(api_root, "a.ini", INI.replace("key = 1", "key = 2"))
+    edit_session.mark_added(api_root, path, "KeyPending")
+    before_text = edit_session.peek(api_root, path).to_string()
+    before_dirty = edit_session.dirty_documents(api_root)
+    before_new = edit_session.new_sections_for(api_root)
+
+    try:
+        with edit_session.transaction(api_root, [path]) as transaction:
+            transaction.document(path).replace_lines(0, 1, ["[Changed]"])
+            raise RuntimeError("forced transaction failure")
+    except RuntimeError:
+        pass
+
+    assert edit_session.peek(api_root, path).to_string() == before_text
+    assert edit_session.dirty_documents(api_root) == before_dirty
+    assert edit_session.new_sections_for(api_root) == before_new

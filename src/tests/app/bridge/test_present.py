@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import zipfile
 
 import pytest
 
@@ -12,6 +13,8 @@ from app.bridge import present as present_api
 from app.mods.analysis import analyze_mod_inis
 from core.editing import present as present_editor
 from core.editing.present import MAX_PRESENTS, SECTION_NAME
+from core.mod_discovery import discover_ini_paths
+from core.mod_source import ZipModSource
 
 
 INI = """[Constants]
@@ -191,17 +194,71 @@ def test_add_is_atomic_when_one_snapshot_is_missing(present_pair):
         f"[{SECTION_NAME}]" not in edit_session.peek(folder, path).to_string()
         for path in paths)), ("a failed multi-INI Add rolls every staged document back")
     assert (not edit_session.has_pending(folder)), ("a failed PRESENT action leaves no phantom pending state")
+    assert not os.path.exists(os.path.join(folder, metadata.METADATA_NAME))
+
+
+def test_writable_present_metadata_rollback_restores_sidecar(
+        present_pair, monkeypatch):
+    folder, paths = present_pair
+    edit_session.load_documents(folder, paths)
+    assert present_api.add_present(folder, "p", "", snapshots()).get("ok")
+    metadata.save_present_name(folder, metadata.PRESENT_NAMES_KEY, 0, "Original")
+    before = [edit_session.peek(folder, path).to_string() for path in paths]
+
+    def fail_touch(_session):
+        raise RuntimeError("forced transaction failure")
+
+    monkeypatch.setattr(edit_session, "_touch", fail_touch)
+    result = present_api.capture_present(
+        folder, snapshots("1", "2", "0", "2"), "Changed")
+
+    assert "error" in result
+    assert [edit_session.peek(folder, path).to_string() for path in paths] == before
+    assert metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) == {
+        "0": "Original"}
+    assert os.path.exists(os.path.join(folder, metadata.METADATA_NAME))
+
+
+def test_archive_present_metadata_rollback_restores_staged_state(
+        tmp_path, monkeypatch):
+    archive_path = tmp_path / "present.zip"
+    original = "[KeyHat]\nkey = h\ntype = cycle\n$Hat = 0,1\n"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("Wrapper/mod.ini", original)
+    source = ZipModSource(archive_path)
+    paths = discover_ini_paths(str(archive_path), source=source)
+    mod_dir = str(archive_path)
+
+    try:
+        edit_session.load_documents(mod_dir, paths, source=source)
+        assert present_api.add_present(
+            mod_dir, "p", "", {"mod.ini": {"Hat": "0"}}).get("ok")
+        before_names = edit_session.staged_present_names(mod_dir)
+        before_text = edit_session.peek(mod_dir, paths[0]).to_string()
+
+        def fail_touch(_session):
+            raise RuntimeError("forced transaction failure")
+
+        monkeypatch.setattr(edit_session, "_touch", fail_touch)
+        result = present_api.capture_present(
+            mod_dir, {"mod.ini": {"Hat": "1"}}, "Changed")
+
+        assert "error" in result
+        assert edit_session.staged_present_names(mod_dir) == before_names
+        assert edit_session.peek(mod_dir, paths[0]).to_string() == before_text
+    finally:
+        edit_session.discard(mod_dir)
 
 
 def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
     folder, paths = present_pair
     edit_session.load_documents(folder, paths)
 
-    sess, key, doc, _was_pending, _snapshot = edit_session.begin(folder, paths[0])
-    present_editor.add(doc, "p", "", {"Hat": "0", "Coat": "0"})
-    present_editor.capture(
-        doc, {"Hat": "1", "Coat": "2"}, allow_duplicate=True)
-    edit_session.commit(sess, key, doc)
+    with edit_session.transaction(folder, [paths[0]]) as transaction:
+        doc = transaction.document(paths[0])
+        present_editor.add(doc, "p", "", {"Hat": "0", "Coat": "0"})
+        present_editor.capture(
+            doc, {"Hat": "1", "Coat": "2"}, allow_duplicate=True)
     metadata.save_present_name(
         folder, metadata.PRESENT_NAMES_KEY, 1, "Alternate")
 
@@ -218,10 +275,10 @@ def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
     assert (metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) ==
           {"1": "Alternate"}), ("completing a partial PRESENT preserves its logical names")
 
-    sess, key, doc, _was_pending, _snapshot = edit_session.begin(folder, paths[0])
-    present_editor.capture(
-        doc, {"Hat": "0", "Coat": "1"}, allow_duplicate=True)
-    edit_session.commit(sess, key, doc)
+    with edit_session.transaction(folder, [paths[0]]) as transaction:
+        doc = transaction.document(paths[0])
+        present_editor.capture(
+            doc, {"Hat": "0", "Coat": "1"}, allow_duplicate=True)
     _groups, _toggles, _menu, _defaults, _rules, mismatched = analyze_mod_inis(
         paths, folder, edit_session.overrides_for(folder))
     assert (mismatched["item"]["count"] == 0 and
