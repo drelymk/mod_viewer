@@ -382,35 +382,8 @@ export function createRigOverlayController({
     vertexColors: true, depthTest: false, depthWrite: false,
   });
   const humanoidMarkerTexture = circularMarkerTexture();
-  const humanoidPointMaterial = new THREE.PointsMaterial({
-    size: 12, sizeAttenuation: false, vertexColors: true,
-    depthTest: false, depthWrite: false, map: humanoidMarkerTexture,
-    alphaTest: .1, transparent: true,
-  });
-  const humanoidHaloMaterial = new THREE.PointsMaterial({
-    size: 21, sizeAttenuation: false, vertexColors: true,
-    depthTest: false, depthWrite: false, map: humanoidMarkerTexture,
-    alphaTest: .1, transparent: true, opacity: .48,
-  });
   const humanoidLines = new THREE.LineSegments(
     new THREE.BufferGeometry(), humanoidLineMaterial);
-  const humanoidPoints = new THREE.Points(
-    new THREE.BufferGeometry(), humanoidPointMaterial);
-  const humanoidHalos = new THREE.Points(
-    new THREE.BufferGeometry(), humanoidHaloMaterial);
-  const humanoidCandidateMaterial = new THREE.PointsMaterial({
-      color: 0xfacc15, size: 24, sizeAttenuation: false,
-      depthTest: false, depthWrite: false, map: humanoidMarkerTexture,
-      alphaTest: .1, transparent: true, opacity: .8,
-    });
-  const humanoidCandidate = new THREE.Points(
-    new THREE.BufferGeometry(), humanoidCandidateMaterial);
-  // WebGPU renders THREE.Points as one-pixel point primitives. Keep these
-  // buffers for the overlay's lightweight position/update bookkeeping, but
-  // use sprites for the visible controls so their circular size is honored.
-  humanoidPoints.visible = false;
-  humanoidHalos.visible = false;
-  humanoidCandidate.visible = false;
   const humanoidPointSprites = [];
   const humanoidHaloSprites = [];
   const humanoidCandidateSprite = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -422,19 +395,9 @@ export function createRigOverlayController({
   humanoidCandidateSprite.frustumCulled = false;
   humanoidCandidateSprite.visible = false;
   humanoidLines.renderOrder = 13;
-  humanoidPoints.renderOrder = 14;
-  humanoidHalos.renderOrder = 13;
-  humanoidCandidate.renderOrder = 15;
   humanoidLines.frustumCulled = false;
-  humanoidPoints.frustumCulled = false;
-  humanoidHalos.frustumCulled = false;
-  humanoidCandidate.frustumCulled = false;
   humanoidLines.raycast = () => {};
-  humanoidPoints.raycast = () => {};
-  humanoidHalos.raycast = () => {};
-  humanoidCandidate.raycast = () => {};
-  humanoidGroup.add(humanoidLines, humanoidHalos, humanoidPoints,
-    humanoidCandidate, humanoidCandidateSprite);
+  humanoidGroup.add(humanoidLines, humanoidCandidateSprite);
   group.add(humanoidGroup);
 
   const proxy = new THREE.Object3D();
@@ -836,7 +799,6 @@ export function createRigOverlayController({
   }
 
   function updateHumanoidCandidateMarker() {
-    humanoidCandidate.visible = false;
     humanoidCandidateSprite.visible = false;
 
     const edit = currentSnapshot?.humanoidRigEdit;
@@ -859,14 +821,6 @@ export function createRigOverlayController({
     humanoidCandidateSprite.visible = true;
     setHumanoidSpritePosition(humanoidCandidateSprite, point);
     setHumanoidSpriteColor(humanoidCandidateSprite, [1, .78, .08]);
-    const attribute = humanoidCandidate.geometry.getAttribute('position');
-    if (!attribute || attribute.count !== 1) {
-      setGeometry(humanoidCandidate, vector(point).toArray());
-      return;
-    }
-    const value = vector(point);
-    attribute.setXYZ(0, value.x, value.y, value.z);
-    attribute.needsUpdate = true;
     updateHumanoidSpriteSizes();
   }
 
@@ -875,10 +829,6 @@ export function createRigOverlayController({
     humanoidLandmarks = [];
     const linePositions = [];
     const lineColors = [];
-    const pointPositions = [];
-    const pointColors = [];
-    const haloPositions = [];
-    const haloColors = [];
     clearHumanoidSprites(humanoidPointSprites);
     clearHumanoidSprites(humanoidHaloSprites);
     const rig = humanoidControlRigFor(source);
@@ -928,11 +878,6 @@ export function createRigOverlayController({
     CONTROL_KEYS_FOR_OVERLAY.forEach(({key, role}) => {
       const point = controlPoint(key);
       if (!point) return;
-      pointPositions.push(...vector(point).toArray());
-      const meta = controlMeta(key);
-      pointColors.push(...editControlColor(role, key));
-      haloPositions.push(...vector(point).toArray());
-      haloColors.push(...editControlColor(role, key));
       humanoidLandmarks.push({key, role});
       humanoidHaloSprites.push(createHumanoidSprite({
         name: `viewer-humanoid-halo-${key}`,
@@ -946,8 +891,6 @@ export function createRigOverlayController({
       setHumanoidSpritePosition(humanoidPointSprites.at(-1), point);
     });
     setGeometry(humanoidLines, linePositions, lineColors);
-    setGeometry(humanoidHalos, haloPositions, haloColors);
-    setGeometry(humanoidPoints, pointPositions, pointColors);
     updateHumanoidCandidateMarker();
     updateHumanoidSpriteSizes();
   }
@@ -962,22 +905,10 @@ export function createRigOverlayController({
     const points = new Map(CONTROL_KEYS_FOR_OVERLAY.map(({key}) => [
       key, controlPoint(key),
     ]));
-    const pointAttribute = humanoidPoints.geometry.getAttribute('position');
-    const pointColors = humanoidPoints.geometry.getAttribute('color');
-    const haloAttribute = humanoidHalos.geometry.getAttribute('position');
-    const haloColors = humanoidHalos.geometry.getAttribute('color');
     humanoidLandmarks.forEach(({key}, index) => {
       const value = points.get(key);
-      if (!value || !pointAttribute) return;
+      if (!value) return;
       const point = vector(value);
-      pointAttribute.setXYZ(index, point.x, point.y, point.z);
-      haloAttribute?.setXYZ(index, point.x, point.y, point.z);
-      if (haloColors) haloColors.setXYZ(index, ...editControlColor(
-        CONTROL_KEYS_FOR_OVERLAY.find(item => item.key === key)?.role || 'torso',
-        key));
-      if (pointColors) pointColors.setXYZ(index, ...editControlColor(
-        CONTROL_KEYS_FOR_OVERLAY.find(item => item.key === key)?.role || 'torso',
-        key));
       const role = CONTROL_KEYS_FOR_OVERLAY.find(item => item.key === key)?.role
         || 'torso';
       const color = editControlColor(role, key);
@@ -988,10 +919,6 @@ export function createRigOverlayController({
       setHumanoidSpriteColor(haloSprite, color);
       setHumanoidSpriteColor(pointSprite, color);
     });
-    if (pointAttribute) pointAttribute.needsUpdate = true;
-    if (haloAttribute) haloAttribute.needsUpdate = true;
-    if (haloColors) haloColors.needsUpdate = true;
-    if (pointColors) pointColors.needsUpdate = true;
     const lineAttribute = humanoidLines.geometry.getAttribute('position');
     humanoidLinePairs.forEach(([firstKey, secondKey], index) => {
       const first = points.get(firstKey);
@@ -2003,7 +1930,7 @@ export function createRigOverlayController({
         humanoidOverlayVisible: humanoidGroup.visible,
         humanoidSegmentCount: humanoidLinePairs.length,
         humanoidLandmarkCount: humanoidLandmarks.length,
-        humanoidHaloCount: humanoidHalos.geometry.getAttribute('position')?.count || 0,
+        humanoidHaloCount: humanoidHaloSprites.length,
         humanoidPointSpriteCount: humanoidPointSprites.length,
         humanoidHaloSpriteCount: humanoidHaloSprites.length,
         humanoidMarkerTextureReady: !!humanoidMarkerTexture,
@@ -2059,9 +1986,6 @@ export function createRigOverlayController({
       jointPoints.geometry.dispose();
       modelJointMarkerMesh.geometry.dispose();
       humanoidLines.geometry.dispose();
-      humanoidHalos.geometry.dispose();
-      humanoidPoints.geometry.dispose();
-      humanoidCandidate.geometry.dispose();
       hoverPoint.geometry.dispose();
       proxyRing.geometry.dispose();
       centerMaterial.dispose();
@@ -2071,9 +1995,6 @@ export function createRigOverlayController({
       selectedMaterial.dispose();
       lineMaterial.dispose();
       humanoidLineMaterial.dispose();
-      humanoidHaloMaterial.dispose();
-      humanoidPointMaterial.dispose();
-      humanoidCandidateMaterial.dispose();
       humanoidCandidateSprite.material.dispose();
       selectedJointIndicatorMaterial.dispose();
       clearHumanoidSprites(humanoidPointSprites);

@@ -24,6 +24,12 @@ from app.mods import loader as mod_loader
 from app.session import edit as edit_session
 
 
+class _RecordVerificationFailure(Exception):
+    def __init__(self, mismatches):
+        self.mismatches = mismatches
+        super().__init__("record verification failed")
+
+
 def _unexpected_error():
     traceback.print_exc()
     return {"error": "Unexpected backend error. See the application log for details."}
@@ -115,13 +121,9 @@ def _run(mod_dir, ini_rel, fn, on_commit=None):
     """
     try:
         path = _ini_path(mod_dir, ini_rel)
-        sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
-        try:
+        with edit_session.transaction(mod_dir, [path]) as transaction:
+            doc = transaction.document(path)
             result = fn(doc)
-        except BaseException:
-            edit_session.rollback(sess, key, was_pending, snapshot, path)
-            raise
-        edit_session.commit(sess, key, doc)
         if on_commit is not None:
             on_commit(path, result)
         return {"ok": True, "result": result, "pending": True}
@@ -245,8 +247,8 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
     """
     try:
         path = _ini_path(mod_dir, ini_rel)
-        sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
-        try:
+        with edit_session.transaction(mod_dir, [path]) as transaction:
+            doc = transaction.document(path)
             result = record_editor.record_toggle(
                 doc, section_name, position_lines, target_lines,
                 target_ini=ini_rel)
@@ -254,21 +256,19 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
             # to an IniDocument projection instead of invoking parse_sections.
             mismatches = record_editor.verify_recording(path, result,
                                                          text=doc.to_string())
-        except BaseException:
-            edit_session.rollback(sess, key, was_pending, snapshot, path)
-            raise
-        # "verify" only exists to drive the check just above -- an internal
-        # contract between record_editor's two halves, not part of the
-        # UI-facing report.
-        result.pop("verify", None)
-        if mismatches:
-            edit_session.rollback(sess, key, was_pending, snapshot, path)
-            return {"error": "the rewritten gating didn't match what was recorded, so "
-                              "the pending change was discarded; nothing was changed "
-                              f"(first mismatch: {mismatches[0]})",
-                    "mismatches": mismatches}
-        edit_session.commit(sess, key, doc)
+            # "verify" only exists to drive the check just above -- an
+            # internal contract between record_editor's two halves, not part
+            # of the UI-facing report.
+            result.pop("verify", None)
+            if mismatches:
+                raise _RecordVerificationFailure(mismatches)
         return {"ok": True, "result": result, "pending": True}
+    except _RecordVerificationFailure as exc:
+        mismatches = exc.mismatches
+        return {"error": "the rewritten gating didn't match what was recorded, so "
+                          "the pending change was discarded; nothing was changed "
+                          f"(first mismatch: {mismatches[0]})",
+                "mismatches": mismatches}
     except te.ToggleEditError as e:
         return {"error": str(e)}
     except Exception:

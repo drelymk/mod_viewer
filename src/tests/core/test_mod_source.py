@@ -1,5 +1,6 @@
 """ZIP-backed mod source and discovery safety contracts."""
 
+import os
 import zipfile
 
 import pytest
@@ -41,6 +42,10 @@ def test_zip_source_strips_one_wrapper_and_keeps_logical_paths(tmp_path):
     casefolded = source.resolve("NESTED/MESH.BUF")
     assert source.logical_path(casefolded) == "nested/mesh.buf"
     assert source.same_reference(mesh, casefolded)
+    legacy = f"{os.path.abspath(archive_path)}::nested/mesh.buf"
+    assert source.logical_path(legacy) == "nested/mesh.buf"
+    assert source.same_reference(
+        source.resolve_resource(source.logical_path(legacy)), mesh)
 
 
 def test_zip_discovery_uses_wrapper_relative_depth_and_disabled_selection(tmp_path):
