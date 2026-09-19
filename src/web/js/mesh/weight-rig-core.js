@@ -8,14 +8,11 @@ import {
 } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import {
-  buildForestTransformsFromLocalRotations,
-} from './weight-deformation.js';
-import {
   buildInferredRigRestFrames, rebuildModelRestFrames,
 } from './weight-rig-frames.js';
 import {
   buildModelRigReconciliationCooperative,
-  orientModelRigForest, sourceBoneKey,
+  orientModelRigForest,
 } from './weight-rig-reconcile.js';
 import {weightRigStatus} from './weight-rig-status.js';
 import {
@@ -60,14 +57,13 @@ import {
 } from './rig-model-session.js';
 import {createRigPoseRuntime} from './rig-pose-runtime.js';
 import {
-  activePoseJointIds,
   createRigRuntimeState, createWeightRuntimeState, matrixIsIdentity,
   EMPTY_ACTIVE_VERTICES, RIG_LIMB_ROLES, RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
 import {characterAxesFromOrientation} from './humanoid-orientation.js';
 import {
-  buildHumanoidDriverBaseTransforms, buildHumanoidRigBinding,
+  buildHumanoidRigBinding,
 } from './humanoid-rig-binding.js';
 import {
   applyHumanoidControlRigOverrides, buildHumanoidControlRig,
@@ -111,7 +107,6 @@ let weightPhysicsController = null;
 let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
-const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 let humanoidRigEditSession = null;
 
 function clockNow() {
@@ -140,10 +135,6 @@ const {
   modelPhysicsSession,
   buildSelectedPhysicsForest,
   createSourcePhysicsParticipant,
-  forEachRigMesh,
-  refreshParticipantDerivedState,
-  applySourceDeformation,
-  syncRigParticipantState,
 } = physicsRuntime;
 
 physicsCoordinator = createWeightPhysicsCoordinator({
@@ -274,13 +265,31 @@ weightModelSession = createWeightModelSession({
   ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
 });
 
+rigPoseRuntime = createRigPoseRuntime({
+  state: modelRigState,
+  getRig: () => modelSkinningRig,
+  sourceSkinningRigs,
+  skinningRuntime,
+  physicsRuntime,
+  modelPhysicsSession,
+  getModelTransformState,
+  invalidateShadow: invalidateCharacterShadowGeometry,
+  quaternionIsIdentity,
+  setComponentRoot: setRigComponentRootForSource,
+  resetModelPose,
+  notifyChanged: notifyModelRigChanged,
+  notifyPoseChanged: notifyModelRigPoseChanged,
+  requestRender,
+  rigPresetState,
+});
+
 humanoidPoseRuntime = createHumanoidPoseRuntime({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getPrimaryLimb: role => primaryHumanoidLimb(role),
   solveControlIk: solveHumanoidControlIk,
   mergeLimbPose: mergeHumanoidLimbPose,
-  applyPose: options => applyModelPose(options),
+  applyPose: options => rigPoseRuntime?.applyPose(options) || false,
   notifyChanged: () => notifyModelRigChanged(),
   requestRender,
 });
@@ -289,8 +298,10 @@ humanoidRigEditSession = createHumanoidRigEditSession({
   modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
-  resetCurrentPoseForHumanoidRigEdit,
-  setPhysicsSuspended: setHumanoidEditPhysicsSuspended,
+  resetCurrentPoseForHumanoidRigEdit: (...args) =>
+    rigPoseRuntime?.resetForHumanoidEdit(...args) || false,
+  setPhysicsSuspended: (...args) =>
+    rigPoseRuntime?.setHumanoidEditPhysicsSuspended(...args) || false,
   getKnownMeshes: () => knownMeshes,
   resolveMappings: resolveHumanoidControlMappings,
   persist: (path, value) => window.pywebview?.api
@@ -303,7 +314,7 @@ humanoidRigEditSession = createHumanoidRigEditSession({
     if (!modelSkinningRig) return;
     applySavedHumanoidRig(modelSkinningRig, savedOverrides);
     modelRigState.humanoidPose = {};
-    applyModelPose({request: false});
+    rigPoseRuntime?.applyPose({request: false});
   },
   notifyChanged: notifyModelRigChanged,
   requestRender,
@@ -323,7 +334,7 @@ rigModelSession = createRigModelSession({
   requestRender,
   cancelWeightPicking: (...args) => weightPickingSession?.cancel(...args),
   getModelJointId: (sourceKey, boneId) =>
-    modelJointIdForSourceBone(sourceKey, boneId),
+    rigPoseRuntime?.getModelJointId(sourceKey, boneId),
   pickFromSurface: ({clientX, clientY} = {}) => {
     const intersection = raycastModelAtClientPoint({
       clientX, clientY, canvas: renderer.domElement, camera,
@@ -333,31 +344,6 @@ rigModelSession = createRigModelSession({
     return rigModelSession?.modelJointFromSkinningSample(sampled)?.jointId ?? null;
   },
   rotationSnapValues: RIG_ROTATION_SNAP_DEGREES,
-});
-
-rigPoseRuntime = createRigPoseRuntime({
-  state: modelRigState,
-  getRig: () => modelSkinningRig,
-  getJoint: modelJointForId,
-  getParent: modelParentForJoint,
-  getComponentForJoint: modelComponentForJoint,
-  getSourceRig: sourceKey => sourceSkinningRigs.get(String(sourceKey)) || null,
-  getSourceComponent: rigComponentForBone,
-  getModelJointId: modelJointIdForSourceBone,
-  getRepresentativeMember: joint =>
-    joint?.representativeMember || joint?.members?.[0] || null,
-  applyPose: options => applyModelPose(options),
-  setComponentRoot: setRigComponentRootForSource,
-  resetModelPose,
-  hasActivePhysics: modelRigHasActivePhysics,
-  finalizeSourcePoseBounds,
-  finalizeAllPoseBounds: () =>
-    (modelSkinningRig?.sourceRigs || []).forEach(finalizeSourcePoseBounds),
-  wakePhysics: () => modelPhysicsSession.wake(),
-  notifyChanged: notifyModelRigChanged,
-  notifyPoseChanged: notifyModelRigPoseChanged,
-  requestRender,
-  rigPresetState,
 });
 
 export const weightRigApi = Object.freeze({
@@ -524,13 +510,6 @@ function modelRigSnapshotForState() {
   return snapshot;
 }
 
-function modelComponentForJoint(jointId) {
-  const id = Number(jointId);
-  const componentId = modelSkinningRig?.componentByJointId?.get(id);
-  return Number.isInteger(Number(componentId))
-    ? modelSkinningRig?.components?.[Number(componentId)] || null : null;
-}
-
 function humanoidControlRigSnapshot() {
   const rig = modelSkinningRig?.humanoidControlRig
     || modelRigState.humanoidControlRig;
@@ -629,7 +608,7 @@ function rigSnapshot() {
     structureRevision: modelRigState.structureRevision,
     selectedJointId: modelRigState.selectedJointId,
     selectedHumanoidControlKey: modelRigState.selectedHumanoidControlKey || null,
-    physicsActive: modelRigHasActivePhysics(),
+    physicsActive: rigPoseRuntime?.hasActivePhysics() || false,
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
@@ -651,7 +630,7 @@ function notifyModelRigChanged() {
 function notifyModelRigPoseChanged(rig, boneId, changedJointIds = null) {
   if (typeof window !== 'undefined') {
     const quaternion = rig?.poseRotationByBoneId?.get(boneId);
-    const jointId = modelJointIdForSourceBone(rig?.sourceKey, boneId);
+    const jointId = rigPoseRuntime?.getModelJointId(rig?.sourceKey, boneId);
     const modelQuaternion = Number.isInteger(jointId)
       ? modelSkinningRig?.poseRotationByJointId?.get(jointId) : null;
     const jointIds = Array.isArray(changedJointIds)
@@ -809,21 +788,6 @@ function buildAllSourceSkinningRigsCooperatively(options) {
 
 function resetSourceSkinningPose(rig) {
   return rigSourceSession?.resetPose(rig);
-}
-
-function modelJointIdForSourceBone(sourceKey, boneId) {
-  return modelSkinningRig?.sourceBoneToModelJointId?.get(
-    sourceBoneKey(sourceKey, boneId));
-}
-
-function modelJointForId(jointId) {
-  const id = Number(jointId);
-  return Number.isInteger(id) ? modelSkinningRig?.joints?.[id] || null : null;
-}
-
-function modelRigHasActivePhysics() {
-  return !!modelSkinningRig?.sourceRigs?.some(sourceRig =>
-    sourceRig.physicsRig?.physicsState);
 }
 
 function cloneModelComponent(component) {
@@ -1123,7 +1087,7 @@ async function buildModelSkinningRig(sourceRigs = [...sourceSkinningRigs.values(
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId = Number.isInteger(previousSelectedJointId)
     && joints[previousSelectedJointId] ? previousSelectedJointId : null;
-  updateModelPoseFrameCache(rig, rig.poseTransforms);
+  rigPoseRuntime?.updatePoseFrameCache(rig, rig.poseTransforms);
   performance.totalRigBuildMs = clockNow() - startedAt;
   const modelStats = budget.getStats();
   performance.modelRigLargestChunkMs = modelStats.largestChunkMs;
@@ -1169,70 +1133,6 @@ function applySavedHumanoidRig(rig, savedOverrides = null) {
     orientationState?.modelOrientationRevision) || 0;
   modelRigState.humanoidControlRig = controlRig;
   modelRigState.humanoidStructureRevision = rig.structureRevision;
-}
-
-function modelParentForJoint(jointId, rig = modelSkinningRig) {
-  const componentId = rig?.componentByJointId?.get?.(Number(jointId));
-  const component = Number.isInteger(Number(componentId))
-    ? rig.components?.[Number(componentId)] : null;
-  const parent = component?.parentById?.[Number(jointId)];
-  return parent === null || parent === undefined ? null : Number(parent);
-}
-
-function updateModelPoseFrameCache(rig, transforms) {
-  const seen = new Set();
-  for (const joint of rig?.joints || []) {
-    const jointId = Number(joint.jointId);
-    if (!Number.isInteger(jointId)) continue;
-    const parentId = modelParentForJoint(jointId, rig);
-    const parentTransform = parentId === null
-      ? RIG_IDENTITY_MATRIX : transforms.get(parentId) || RIG_IDENTITY_MATRIX;
-    const pivotValues = rig.jointPivotByJointId.get(jointId)
-      || (parentId !== null ? rig.centerByJointId.get(parentId) : null)
-      || rig.centerByJointId.get(jointId) || [0, 0, 0];
-    const centerValues = rig.centerByJointId.get(jointId) || [0, 0, 0];
-    const frame = rig.poseFrameCache.get(jointId) || {
-      center: new THREE.Vector3(),
-      pivot: new THREE.Vector3(),
-    };
-    frame.center.fromArray(centerValues).applyMatrix4(
-      transforms.get(jointId) || RIG_IDENTITY_MATRIX);
-    frame.pivot.fromArray(pivotValues).applyMatrix4(parentTransform);
-    rig.poseFrameCache.set(jointId, frame);
-    seen.add(jointId);
-  }
-  for (const jointId of rig.poseFrameCache.keys()) {
-    if (!seen.has(jointId)) rig.poseFrameCache.delete(jointId);
-  }
-}
-
-function updateModelSourceAliases(rig) {
-  for (const sourceRig of rig.sourceRigs || []) {
-    const transforms = rig.sourceTransformAliases.get(sourceRig.sourceKey)
-      || new Map();
-    const rotations = rig.sourceRotationAliases.get(sourceRig.sourceKey)
-      || new Map();
-    const manualTransforms = rig.manualPoseTransforms || new Map();
-    transforms.clear();
-    rotations.clear();
-    for (const boneId of sourceRig.boneIds || []) {
-      const jointId = rig.sourceBoneToModelJointId.get(
-        sourceBoneKey(sourceRig.sourceKey, boneId));
-      const manual = Number.isInteger(jointId)
-        ? manualTransforms.get(jointId) : null;
-      const modelTransform = Number.isInteger(jointId)
-        ? rig.poseTransforms.get(jointId) : null;
-      const transform = modelTransform || manual;
-      if (!transform) continue;
-      transforms.set(Number(boneId), transform);
-      rotations.set(Number(boneId),
-        new THREE.Quaternion().setFromRotationMatrix(transform).normalize());
-    }
-    rig.sourceTransformAliases.set(sourceRig.sourceKey, transforms);
-    rig.sourceRotationAliases.set(sourceRig.sourceKey, rotations);
-    sourceRig.modelTransformAliasByBoneId = transforms;
-    sourceRig.modelRotationAliasByBoneId = rotations;
-  }
 }
 
 function sourceMembersMatch(rig, members) {
@@ -1313,213 +1213,6 @@ function disablePhysicsSession() {
   return physicsCoordinator?.disable() || false;
 }
 
-function poseVerticesForState(state, affectedBoneIds) {
-  const mask = buildSelectedWeightMask(
-    state.indices, state.weights, state.influenceCount, affectedBoneIds);
-  const vertices = [];
-  mask.forEach((weight, vertex) => {
-    if (weight > 0) vertices.push(vertex);
-  });
-  return Uint32Array.from(vertices);
-}
-
-function finalizeSourcePoseBounds(rig) {
-  let finalized = false;
-  forEachRigMesh(rig, (mesh, state) => {
-    finalized = skinningRuntime.finalizeDeformationGeometry(mesh, state)
-      || finalized;
-  });
-  if (finalized) invalidateCharacterShadowGeometry({request: false});
-  return finalized;
-}
-
-function buildModelPoseTransforms() {
-  if (!modelSkinningRig) return new Map();
-  const manualTransforms = buildForestTransformsFromLocalRotations(
-    modelSkinningRig.inferredForest, modelSkinningRig.centerByJointId, {
-      getQuaternion: jointId => modelSkinningRig.poseRotationByJointId.get(
-        jointId) || new THREE.Quaternion(),
-      jointPivotByBoneId: modelSkinningRig.jointPivotByJointId,
-      transformCache: modelSkinningRig.poseTransformCache,
-    });
-  const driverLayer = buildHumanoidDriverBaseTransforms({
-    binding: modelSkinningRig.humanoidBinding,
-    controlRig: modelSkinningRig.humanoidControlRig,
-    modelRig: modelSkinningRig,
-    posedControls: modelRigState.humanoidPose,
-  });
-  modelSkinningRig.manualPoseTransforms = manualTransforms;
-  modelSkinningRig.humanoidDriverTransforms = driverLayer.result;
-  modelSkinningRig.humanoidDriverWorldByJointId =
-    driverLayer.driverWorldByJointId;
-  const composed = new Map();
-  manualTransforms.forEach((matrix, jointId) => composed.set(jointId, matrix));
-  driverLayer.result.forEach((driverDelta, jointId) => {
-    const manual = manualTransforms.get(jointId) || RIG_IDENTITY_MATRIX;
-    composed.set(jointId, driverDelta.clone().multiply(manual));
-  });
-  modelSkinningRig.poseTransforms = composed;
-  modelSkinningRig.poseRotations.clear();
-  composed.forEach((matrix, jointId) => {
-    modelSkinningRig.poseRotations.set(jointId,
-      new THREE.Quaternion().setFromRotationMatrix(matrix).normalize());
-  });
-  updateModelPoseFrameCache(modelSkinningRig,
-    modelSkinningRig.poseTransforms);
-  updateModelSourceAliases(modelSkinningRig);
-  return modelSkinningRig.poseTransforms;
-}
-
-function modelPoseDescendantIds(rig, posedJointIds) {
-  const affected = new Set();
-  const pending = [...posedJointIds].map(Number).filter(Number.isFinite);
-  while (pending.length) {
-    const jointId = pending.pop();
-    if (affected.has(jointId)) continue;
-    affected.add(jointId);
-    const componentId = rig.componentByJointId.get(jointId);
-    const component = Number.isInteger(Number(componentId))
-      ? rig.components[Number(componentId)] : null;
-    for (const child of component?.childrenById?.[jointId] || []) {
-      pending.push(Number(child));
-    }
-  }
-  return affected;
-}
-
-function sourceBoneIdsForModelJoints(sourceRig, jointIds) {
-  const affected = new Set();
-  for (const boneId of sourceRig.boneIds || []) {
-    const jointId = modelJointIdForSourceBone(sourceRig.sourceKey, boneId);
-    if (Number.isInteger(jointId) && jointIds.has(jointId)) {
-      affected.add(Number(boneId));
-    }
-  }
-  return affected;
-}
-
-function sourceBoneKeyForSet(ids) {
-  return [...ids].sort((left, right) => left - right).join(',');
-}
-
-function syncDerivedSourcePose(sourceRig, modelRig) {
-  sourceRig.poseRotationByBoneId.clear();
-  for (const boneId of sourceRig.boneIds || []) {
-    const jointId = modelJointIdForSourceBone(sourceRig.sourceKey, boneId);
-    const quaternion = Number.isInteger(jointId)
-      ? modelRig.poseRotationByJointId.get(jointId) : null;
-    if (quaternion && !quaternionIsIdentity(quaternion)) {
-      sourceRig.poseRotationByBoneId.set(Number(boneId), quaternion.clone());
-    }
-  }
-  sourceRig.poseTransforms = modelRig.sourceTransformAliases.get(
-    sourceRig.sourceKey) || new Map();
-  sourceRig.poseRotations = modelRig.sourceRotationAliases.get(
-    sourceRig.sourceKey) || new Map();
-}
-
-function applyModelPose({request = true, dragging = false} = {}) {
-  const rig = modelSkinningRig;
-  if (!rig) return false;
-  const transforms = buildModelPoseTransforms();
-  rig.poseRevision = (rig.poseRevision || 0) + 1;
-  const posedJointIds = activePoseJointIds({
-    manualRotations: rig.poseRotationByJointId,
-    driverTransforms: rig.humanoidDriverTransforms,
-    quaternionIsIdentity,
-  });
-  const poseJointKey = posedJointIds.sort((left, right) => left - right).join(',');
-  const affectedJointIds = rig.poseActiveJointKey === poseJointKey
-    ? rig.poseAffectedJointIds : modelPoseDescendantIds(rig, posedJointIds);
-  const affectedSetChanged = rig.poseActiveJointKey !== poseJointKey;
-  let changed = false;
-  for (const sourceRig of rig.sourceRigs || []) {
-    syncDerivedSourcePose(sourceRig, rig);
-    const transformsByBoneId = rig.sourceTransformAliases.get(
-      sourceRig.sourceKey) || new Map();
-    const rotationsByBoneId = rig.sourceRotationAliases.get(
-      sourceRig.sourceKey) || new Map();
-    const affectedBoneIds = sourceBoneIdsForModelJoints(
-      sourceRig, affectedJointIds);
-    forEachRigMesh(sourceRig, (mesh, state) => {
-      const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
-      const boneKey = sourceBoneKeyForSet(affectedBoneIds);
-      const activeVertices = !affectedSetChanged && previousBoneKey === boneKey
-        && rig.poseActiveVerticesByMesh.has(mesh)
-        ? rig.poseActiveVerticesByMesh.get(mesh)
-        : affectedBoneIds.size
-          ? poseVerticesForState(state, affectedBoneIds) : new Uint32Array();
-      // Update the manual layer first. The common writer below then unions it
-      // with the Physics-selected vertices and skins the authored baseline
-      // exactly once.
-      state.poseActiveVertices = activeVertices;
-      state.poseTransforms = transformsByBoneId;
-      state.poseRotations = rotationsByBoneId;
-      rig.poseActiveVerticesByMesh.set(mesh, activeVertices);
-      rig.poseSourceBoneIdsByMesh.set(mesh, boneKey);
-    });
-    const physicsRig = sourceRig.physicsRig;
-    if (physicsRig?.physicsState) {
-      refreshParticipantDerivedState(
-        [...physicsRig.meshes][0], physicsRig,
-        modelPhysicsSession.getSettings());
-      changed = applySourceDeformation(physicsRig, {visibleOnly: false})
-        || changed;
-    } else {
-      forEachRigMesh(sourceRig, (mesh, state) => {
-        changed = skinningRuntime.applyDeformation(mesh, state, {
-          request: false, invalidateShadow: false, skipHidden: false,
-        }) || changed;
-      });
-    }
-  }
-  rig.poseAffectedJointIds = affectedJointIds;
-  rig.poseActiveJointKey = poseJointKey;
-  if (changed) invalidateCharacterShadowGeometry({request: false});
-  if (!dragging && !modelRigHasActivePhysics()) {
-    for (const sourceRig of rig.sourceRigs || []) finalizeSourcePoseBounds(sourceRig);
-  }
-  if (modelRigHasActivePhysics()
-      && !modelRigState.humanoidRigEditPhysicsSuspended) {
-    modelPhysicsSession.wake();
-  }
-  if (request) requestRender();
-  return changed;
-}
-
-function setHumanoidEditPhysicsSuspended(value) {
-  const suspended = !!value;
-  modelRigState.humanoidRigEditPhysicsSuspended = suspended;
-  modelPhysicsSession.setSuspended?.(suspended);
-  if (suspended && modelPhysicsSession.getState().enabled) {
-    // Clear pre-edit spring offsets while the session is already suspended;
-    // otherwise resuming could briefly reapply stale posed deformation.
-    modelPhysicsSession.reset(getModelTransformState());
-  }
-  if (!modelSkinningRig) return suspended;
-  for (const sourceRig of modelSkinningRig.sourceRigs || []) {
-    const physicsRig = sourceRig.physicsRig;
-    if (!physicsRig?.physicsState) continue;
-    if (suspended) {
-      forEachRigMesh(sourceRig, (mesh, state) => {
-        state.physicsEnabled = false;
-        state.deformationMode = null;
-        state.combinedActiveVerticesRef = null;
-        state.combinedPoseVerticesRef = null;
-        state.combinedPhysicsVerticesRef = null;
-        skinningRuntime.applyDeformation(mesh, state, {
-          request: false, invalidateShadow: false, skipHidden: false,
-        });
-      });
-    } else {
-      syncRigParticipantState(physicsRig);
-      applySourceDeformation(physicsRig, {visibleOnly: false});
-    }
-  }
-  if (!suspended && modelRigHasActivePhysics()) modelPhysicsSession.wake();
-  return suspended;
-}
-
 function resetModelPose({request = true} = {}) {
   if (!modelSkinningRig) return false;
   const hadRootOverrides = modelRigState.explicitRootSignatures.size > 0;
@@ -1532,42 +1225,10 @@ function resetModelPose({request = true} = {}) {
     modelSkinningRig.structureRevision = ++rigRuntime.structureRevision;
     modelRigState.structureRevision = modelSkinningRig.structureRevision;
   }
-  const changed = applyModelPose({request});
+  const changed = rigPoseRuntime?.applyPose({request}) || false;
   modelSkinningRig.poseActiveVerticesByMesh.clear();
   modelSkinningRig.poseSourceBoneIdsByMesh.clear();
   return changed;
-}
-
-// Edit Rig starts from the current ModelJoint rest configuration. Clear only
-// active manual/humanoid pose state; Set Root and its structure revision are
-// intentionally preserved until the user explicitly changes or resets them.
-function resetCurrentPoseForHumanoidRigEdit({request = false} = {}) {
-  if (!modelSkinningRig) return false;
-  const hadPose = modelSkinningRig.poseRotationByJointId.size > 0
-    || Object.keys(modelRigState.humanoidPose || {}).length > 0
-    || modelSkinningRig.poseActiveJointKey !== '';
-  modelSkinningRig.poseRotationByJointId.clear();
-  modelRigState.humanoidPose = {};
-  const changed = applyModelPose({request});
-  modelSkinningRig.poseActiveVerticesByMesh.clear();
-  modelSkinningRig.poseSourceBoneIdsByMesh.clear();
-  modelSkinningRig.poseTransformCache.clear();
-  modelSkinningRig.poseFrameCache.clear();
-  modelSkinningRig.poseActiveJointKey = '';
-  modelSkinningRig.poseAffectedJointIds = new Set();
-  return changed || hadPose;
-}
-
-function clearModelManualPose({request = false} = {}) {
-  if (!modelSkinningRig) return false;
-  const hadPose = modelSkinningRig.poseRotationByJointId.size > 0
-    || modelSkinningRig.poseActiveJointKey !== '';
-  modelSkinningRig.poseRotationByJointId.clear();
-  if (!hadPose) return false;
-  const changed = applyModelPose({request});
-  modelSkinningRig.poseActiveVerticesByMesh.clear();
-  modelSkinningRig.poseSourceBoneIdsByMesh.clear();
-  return changed || hadPose;
 }
 
 function unavailableRigPresetResult(reason, preset = null) {
@@ -1653,7 +1314,8 @@ function applyRigPosePreset(resolvedPreset, options = {}) {
     rig.poseRotationByJointId.set(Number(entry.jointId),
       cloneRigQuaternion(rotation));
   }
-  const changed = applyModelPose({request: false, dragging: false});
+  const changed = rigPoseRuntime?.applyPose({request: false, dragging: false})
+    || false;
   const skipped = [...(resolved.skipped || []), ...rootRestore.skipped];
   const result = {
     success: true,
@@ -1679,9 +1341,9 @@ function setRigComponentRootForSource(sourceKey, boneId) {
   const id = Number(boneId);
   const component = rigComponentForBone(rig, id);
   if (!rig || !component || !component.nodeIds.includes(id)) return false;
-  const jointId = modelJointIdForSourceBone(sourceKey, id);
+  const jointId = rigPoseRuntime?.getModelJointId(sourceKey, id);
   if (!Number.isInteger(jointId) || !modelSkinningRig) return false;
-  clearModelManualPose({request: false});
+  rigPoseRuntime?.clearManualPose({request: false});
   resetSourceSkinningPose(rig);
   const overrides = new Map(rig.inferredForest.components.map(item => [
     item.componentId, item.rootId]));
@@ -1730,7 +1392,7 @@ function setRigComponentRootForSource(sourceKey, boneId) {
   modelSkinningRig.structureRevision = ++rigRuntime.structureRevision;
   modelRigState.structureRevision = modelSkinningRig.structureRevision;
   selectRigBoneInternal(sourceKey, id);
-  applyModelPose({request: false});
+  rigPoseRuntime?.applyPose({request: false});
   notifyModelRigChanged();
   requestRender();
   return true;
@@ -1765,7 +1427,7 @@ function handleModelOrientationChanged() {
   modelRigState.humanoidPose = pose;
   if (modelSkinningRig && modelRigState.loaded) {
     buildPrimaryHumanoidRig(modelSkinningRig);
-    applyModelPose({request: false});
+    rigPoseRuntime?.applyPose({request: false});
   }
   notifyModelRigChanged();
 }
