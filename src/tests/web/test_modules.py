@@ -1002,6 +1002,8 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
       modelJointMarker?.getMatrixAt(0, markerMatrix);
       const markerPosition = new THREE.Vector3()
         .setFromMatrixPosition(markerMatrix).toArray();
+      const humanoidChildren = controller.group.getObjectByName(
+        'viewer-humanoid-control-rig-overlay')?.children.map(child => child.type);
       controller.dispose();
       return {initial, carrying, cancelled, released, events, arcball: arcball.enabled,
         arcballActions: arcball.actions, arcballCalls: arcball.calls,
@@ -1009,7 +1011,7 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
         pointType: pointSprite?.type, haloType: haloSprite?.type,
         initialCandidateVisible, zeroCandidateVisible,
         pointScale: pointSprite?.scale?.x || 0,
-        haloScale: haloSprite?.scale?.x || 0, markerPosition};
+        haloScale: haloSprite?.scale?.x || 0, markerPosition, humanoidChildren};
     }""")
     assert result["initial"]["staticVisible"] is True
     assert result["initial"]["humanoidOverlayVisible"] is True
@@ -1019,6 +1021,7 @@ def test_rig_overlay_humanoid_edit_has_priority_and_uses_sticky_clicks(module_pa
     assert result["initial"]["humanoidMarkerTextureReady"] is True
     assert result["pointType"] == "Sprite"
     assert result["haloType"] == "Sprite"
+    assert "Points" not in result["humanoidChildren"]
     assert result["initialCandidateVisible"] is False
     assert result["zeroCandidateVisible"] is True
     assert result["pointScale"] > 0

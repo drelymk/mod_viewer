@@ -80,10 +80,7 @@ def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
     if getattr(source, "virtual", False):
         normalized_paths = []
         for path in ini_paths:
-            logical = getattr(path, "logical_path", None)
-            if not logical:
-                logical = str(path).split("::", 1)[-1]
-            normalized_paths.append(source.document_path(logical))
+            normalized_paths.append(source.document_path(source.logical_path(path)))
         ini_paths = normalized_paths
     return ModLoadContext(
         folder_path, list(ini_paths), documents or {}, {}, source=source)
@@ -99,20 +96,15 @@ def _normalize_virtual_context(context):
         if source.is_resource_reference(path):
             normalized_paths.append(path)
             continue
-        logical = getattr(path, "logical_path", None)
-        if not logical:
-            logical = str(path).split("::", 1)[-1]
-        normalized_paths.append(source.document_path(logical))
+        normalized_paths.append(source.document_path(source.logical_path(path)))
     context.ini_paths = normalized_paths
 
     documents = dict(getattr(context, "docs", None) or {})
     for path, document in list(documents.items()):
         if source.is_resource_reference(path):
             continue
-        logical = getattr(path, "logical_path", None)
-        if not logical:
-            logical = str(path).split("::", 1)[-1]
         try:
+            logical = source.logical_path(path)
             documents[source.document_path(logical)] = document
         except ModSourceError:
             continue

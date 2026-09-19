@@ -29,6 +29,23 @@ import {
 export const activeMeshes = [];
 const controlDependencies = new WeakMap();
 
+// These fields all follow the same variants -> default -> resolved -> current
+// lifecycle. Keep role-specific rendering policy below this mechanical table.
+const TEXTURE_ROLE_FIELDS = Object.freeze([
+  {role: 'diffuse', variants: 'textureVariants', payloadVariants: 'texture_variants',
+    default: 'defaultTexKey', payloadDefault: 'tex_key', resolved: 'resolvedTexKey', current: 'texKey'},
+  {role: 'normal_map', variants: 'normalMapVariants', payloadVariants: 'normal_map_variants',
+    default: 'defaultNormalMapKey', payloadDefault: 'normal_map_key', resolved: 'resolvedNormalMapKey', current: 'normalMapKey'},
+  {role: 'normal_data', variants: 'normalDataVariants', payloadVariants: 'normal_data_variants',
+    default: 'defaultNormalDataKey', payloadDefault: 'normal_data_key', resolved: 'resolvedNormalDataKey', current: 'normalDataKey'},
+  {role: 'light_map', variants: 'lightMapVariants', payloadVariants: 'light_map_variants',
+    default: 'defaultLightMapKey', payloadDefault: 'light_map_key', resolved: 'resolvedLightMapKey', current: 'lightMapKey'},
+  {role: 'material_map', variants: 'materialMapVariants', payloadVariants: 'material_map_variants',
+    default: 'defaultMaterialMapKey', payloadDefault: 'material_map_key', resolved: 'resolvedMaterialMapKey', current: 'materialMapKey'},
+  {role: 'emission_map', variants: 'emissionMapVariants', payloadVariants: 'emission_map_variants',
+    default: 'defaultEmissionMapKey', payloadDefault: 'emission_map_key', resolved: 'resolvedEmissionMapKey', current: 'emissionMapKey'},
+]);
+
 /** Add every variable referenced by an existing DNF condition structure. */
 export function variablesFromConditions(conditions, variables = new Set()) {
   for (const group of conditions || []) {
@@ -52,11 +69,8 @@ export function dependenciesFor(mesh) {
 
   const visibility = variablesFromConditions(mesh.userData?.conditions);
   const textures = new Set();
-  for (const field of [
-    'textureVariants', 'normalMapVariants', 'normalDataVariants',
-    'lightMapVariants', 'materialMapVariants', 'emissionMapVariants',
-  ]) {
-    variablesFromVariants(mesh.userData?.[field], textures);
+  for (const {variants} of TEXTURE_ROLE_FIELDS) {
+    variablesFromVariants(mesh.userData?.[variants], textures);
   }
   const shapes = new Set(
     (mesh.userData?.shapeTargets || [])
@@ -158,14 +172,12 @@ export function resetMeshVisibility() {
 const SEMANTIC_SNAPSHOT_FIELDS = [
   'conditions', 'sources', 'source', 'component',
   'identity',
-  'textureVariants', 'normalMapVariants', 'normalDataVariants',
-  'lightMapVariants', 'materialMapVariants', 'emissionMapVariants',
-  'defaultTexKey', 'defaultNormalMapKey', 'defaultNormalDataKey',
-  'defaultLightMapKey', 'defaultMaterialMapKey', 'defaultEmissionMapKey',
+  ...TEXTURE_ROLE_FIELDS.flatMap(({variants, default: defaultField, current}) => [
+    variants, defaultField, current,
+  ]),
   'assetEntry', 'materialKind', 'materialKindReliable',
   'materialKindReason', 'materialKindOverride', 'materialProfileId',
-  'materialProfile', 'texKey', 'normalMapKey', 'normalDataKey',
-  'lightMapKey', 'materialMapKey', 'emissionMapKey',
+  'materialProfile',
 ];
 
 function snapshotMeshSemantics(mesh) {
@@ -236,28 +248,12 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       if (Object.hasOwn(semantic, 'identity')) {
         mesh.userData.identity = semantic.identity || null;
       }
-      const variants = [
-        ['textureVariants', 'texture_variants'],
-        ['normalMapVariants', 'normal_map_variants'],
-        ['normalDataVariants', 'normal_data_variants'],
-        ['lightMapVariants', 'light_map_variants'],
-        ['materialMapVariants', 'material_map_variants'],
-        ['emissionMapVariants', 'emission_map_variants'],
-      ];
-      for (const [target, source] of variants) {
-        mesh.userData[target] = semantic[source] || [];
+      for (const {variants, payloadVariants} of TEXTURE_ROLE_FIELDS) {
+        mesh.userData[variants] = semantic[payloadVariants] || [];
       }
-      const defaults = [
-        ['defaultTexKey', 'tex_key'],
-        ['defaultNormalMapKey', 'normal_map_key'],
-        ['defaultNormalDataKey', 'normal_data_key'],
-        ['defaultLightMapKey', 'light_map_key'],
-        ['defaultMaterialMapKey', 'material_map_key'],
-        ['defaultEmissionMapKey', 'emission_map_key'],
-      ];
-      for (const [target, source] of defaults) {
-        if (Object.hasOwn(semantic, source)) {
-          mesh.userData[target] = semantic[source] || null;
+      for (const {default: defaultField, payloadDefault} of TEXTURE_ROLE_FIELDS) {
+        if (Object.hasOwn(semantic, payloadDefault)) {
+          mesh.userData[defaultField] = semantic[payloadDefault] || null;
         }
       }
       const assetEntry = {...(mesh.userData.assetEntry || {})};
@@ -322,20 +318,9 @@ export function conditionsSatisfied(mesh) {
 }
 
 export function applyTextureVariant(mesh, { render = true } = {}) {
-  const previous = [
-    mesh.userData.resolvedTexKey,
-    mesh.userData.resolvedNormalMapKey,
-    mesh.userData.resolvedNormalDataKey,
-    mesh.userData.resolvedLightMapKey,
-    mesh.userData.resolvedMaterialMapKey,
-    mesh.userData.resolvedEmissionMapKey,
-    mesh.userData.texKey,
-    mesh.userData.normalMapKey,
-    mesh.userData.normalDataKey,
-    mesh.userData.lightMapKey,
-    mesh.userData.materialMapKey,
-    mesh.userData.emissionMapKey,
-  ];
+  const previous = TEXTURE_ROLE_FIELDS.flatMap(({resolved, current}) => [
+    mesh.userData[resolved], mesh.userData[current],
+  ]);
   const resolve = (variants, fallback) => {
     variants = variants || [];
     const variant = variants.findLast
@@ -343,42 +328,21 @@ export function applyTextureVariant(mesh, { render = true } = {}) {
       : [...variants].reverse().find(item => dnfSatisfied(item.conditions));
     return variant ? variant.tex_key : fallback;
   };
-  mesh.userData.resolvedTexKey = resolve(
-    mesh.userData.textureVariants, mesh.userData.defaultTexKey);
-  mesh.userData.resolvedNormalMapKey = resolve(
-    mesh.userData.normalMapVariants, mesh.userData.defaultNormalMapKey);
-  mesh.userData.resolvedNormalDataKey = resolve(
-    mesh.userData.normalDataVariants, mesh.userData.defaultNormalDataKey);
-  mesh.userData.resolvedLightMapKey = resolve(
-    mesh.userData.lightMapVariants, mesh.userData.defaultLightMapKey);
-  mesh.userData.resolvedMaterialMapKey = resolve(
-    mesh.userData.materialMapVariants, mesh.userData.defaultMaterialMapKey);
-  mesh.userData.resolvedEmissionMapKey = resolve(
-    mesh.userData.emissionMapVariants, mesh.userData.defaultEmissionMapKey);
-  const materialChanged = setMeshTextureState(mesh, {
-    diffuse: mesh.userData.manualTexOverride !== undefined
+  for (const {variants, default: defaultField, resolved} of TEXTURE_ROLE_FIELDS) {
+    mesh.userData[resolved] = resolve(
+      mesh.userData[variants], mesh.userData[defaultField]);
+  }
+  const textureState = {};
+  for (const {role, resolved} of TEXTURE_ROLE_FIELDS) {
+    textureState[role] = role === 'diffuse'
+      && mesh.userData.manualTexOverride !== undefined
       ? mesh.userData.manualTexOverride
-      : mesh.userData.resolvedTexKey,
-    normal_map: mesh.userData.resolvedNormalMapKey,
-    normal_data: mesh.userData.resolvedNormalDataKey,
-    light_map: mesh.userData.resolvedLightMapKey,
-    material_map: mesh.userData.resolvedMaterialMapKey,
-    emission_map: mesh.userData.resolvedEmissionMapKey,
-  }, { render });
-  const next = [
-    mesh.userData.resolvedTexKey,
-    mesh.userData.resolvedNormalMapKey,
-    mesh.userData.resolvedNormalDataKey,
-    mesh.userData.resolvedLightMapKey,
-    mesh.userData.resolvedMaterialMapKey,
-    mesh.userData.resolvedEmissionMapKey,
-    mesh.userData.texKey,
-    mesh.userData.normalMapKey,
-    mesh.userData.normalDataKey,
-    mesh.userData.lightMapKey,
-    mesh.userData.materialMapKey,
-    mesh.userData.emissionMapKey,
-  ];
+      : mesh.userData[resolved];
+  }
+  const materialChanged = setMeshTextureState(mesh, textureState, { render });
+  const next = TEXTURE_ROLE_FIELDS.flatMap(({resolved, current}) => [
+    mesh.userData[resolved], mesh.userData[current],
+  ]);
   return materialChanged || next.some((value, index) => !Object.is(value, previous[index]));
 }
 

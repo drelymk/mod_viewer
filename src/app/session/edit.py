@@ -15,16 +15,13 @@ mismatched session, via `discard()`.
 Typical flow, one edit action (add/edit/delete/record_toggle in
 app/bridge/toggle.py):
 
-    sess, key, doc, was_pending, snapshot = begin(mod_dir, ini_path)
-    try:
-        result = <mutate doc in place>
-    except Exception:
-        rollback(sess, key, was_pending, snapshot, ini_path)
-        raise
-    commit(sess, key, doc)
+    with transaction(mod_dir, [ini_path]) as edit:
+        result = <mutate edit.document(ini_path) in place>
 
-`begin`/`commit`/`rollback` make each action atomic: a rejected edit always
-leaves the session's ini exactly as it was before that action started.
+Transactions make each action atomic: a rejected edit always leaves every
+document and any requested session metadata exactly as it was before that
+action started. `begin`/`commit`/`rollback` remain small compatibility
+wrappers for older internal callers.
 
 Separately, `mark_added`/`rename_added`/`mark_removed`/`new_sections_for`
 track which [Key...] sections were freshly created by add_toggle this
@@ -65,6 +62,118 @@ _session = None
 _NO_METADATA_BASELINE = object()
 
 
+def _copy_metadata_state(value):
+    return value if value is _NO_METADATA_BASELINE else deepcopy(value)
+
+
+class _EditTransaction:
+    """Atomic mutation of one or more authoritative staged documents."""
+
+    def __init__(self, mod_dir, paths, *, present_metadata=False):
+        self.mod_dir = mod_dir
+        self.sess = _get_or_create(mod_dir)
+        self.present_metadata = bool(present_metadata)
+        self.entries = {}
+        self._revision = None
+        self._diagnostics_cache = None
+        self._present_baseline = _NO_METADATA_BASELINE
+        self._present_names = _NO_METADATA_BASELINE
+        self._metadata_on_disk = _NO_METADATA_BASELINE
+
+        requested = list(paths or [])
+        missing = [path for path in requested
+                   if _key(mod_dir, path, source=self.sess.source)
+                   not in self.sess.docs]
+        if missing:
+            load_documents(mod_dir, missing, source=self.sess.source)
+        self._revision = self.sess.revision
+        self._diagnostics_cache = self.sess.diagnostics_cache
+        for path in requested:
+            key = _key(mod_dir, path, source=self.sess.source)
+            if key not in self.sess.docs:
+                raise KeyError(f"{path!r} is not an active INI in this mod")
+            doc = self.sess.docs[key]
+            self.entries.setdefault(key, {
+                "path": doc.path,
+                "doc": doc,
+                "text": doc.to_string(),
+                "dirty": key in self.sess.dirty,
+                "new_sections": set(self.sess.new_sections.get(key, set())),
+            })
+        if self.present_metadata:
+            self._present_baseline = _copy_metadata_state(
+                self.sess.present_names_baseline)
+            self._present_names = _copy_metadata_state(self.sess.present_names)
+            if not self.sess.source.read_only:
+                from app.mods import metadata
+                self._metadata_on_disk = metadata.all_present_names(
+                    mod_dir, source=self.sess.source)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            self._commit()
+        else:
+            self._rollback()
+        return False
+
+    def document(self, path):
+        """Return the authoritative staged document for ``path``."""
+        key = _key(self.mod_dir, path, source=self.sess.source)
+        try:
+            return self.entries[key]["doc"]
+        except KeyError as error:
+            raise KeyError(f"{path!r} is not part of this transaction") from error
+
+    def _commit(self):
+        try:
+            for key, entry in self.entries.items():
+                doc = entry["doc"]
+                self.sess.docs[key] = doc
+                if doc.to_string() == self.sess.baselines[key]:
+                    self.sess.dirty.discard(key)
+                    self.sess.new_sections.pop(key, None)
+                else:
+                    self.sess.dirty.add(key)
+            # A transaction is one logical user action, so derived state is
+            # invalidated once even when it spans several INIs.
+            _touch(self.sess)
+        except BaseException:
+            self._rollback()
+            raise
+
+    def _rollback(self):
+        for key, entry in self.entries.items():
+            self.sess.docs[key] = IniDocument.from_string(
+                entry["text"], path=entry["path"])
+            if entry["dirty"]:
+                self.sess.dirty.add(key)
+            else:
+                self.sess.dirty.discard(key)
+            if entry["new_sections"]:
+                self.sess.new_sections[key] = set(entry["new_sections"])
+            else:
+                self.sess.new_sections.pop(key, None)
+        if self.present_metadata:
+            self.sess.present_names_baseline = _copy_metadata_state(
+                self._present_baseline)
+            self.sess.present_names = _copy_metadata_state(self._present_names)
+            self.sess.revision = self._revision
+            self.sess.diagnostics_cache = self._diagnostics_cache
+            if self._metadata_on_disk is not _NO_METADATA_BASELINE:
+                from app.mods import metadata
+                metadata.restore_present_names(
+                    self.mod_dir, self._metadata_on_disk)
+
+
+def transaction(mod_dir, paths, *, present_metadata=False):
+    """Return an atomic staged-edit context for one or more active INIs."""
+    return _EditTransaction(mod_dir, paths,
+                            present_metadata=present_metadata)
+
+
 def _same_mod(mod_dir):
     return _session is not None and os.path.normpath(_session.mod_dir) == os.path.normpath(mod_dir)
 
@@ -86,11 +195,9 @@ def _key(mod_dir, path, source=None):
     """Stable, browser-safe identity for an INI, including nested folders."""
     source = source or (getattr(_session, "source", None)
                         if _same_mod(mod_dir) else None)
-    if source is not None and source.is_resource_reference(path):
+    if source is not None and (source.virtual
+                               or source.is_resource_reference(path)):
         return source.logical_path(path)
-    if "::" in str(path) and str(path).startswith(
-            os.path.abspath(os.fspath(mod_dir)) + "::"):
-        return str(path).split("::", 1)[1].replace("\\", "/")
     return os.path.relpath(os.path.abspath(path), os.path.abspath(mod_dir)).replace(os.sep, "/")
 
 
@@ -269,18 +376,13 @@ def update_text(mod_dir, ini_name, text):
     normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
     if normalized == editable_text(doc):
         return False
-    snapshot = doc.to_string()
-    was_pending = key in _session.dirty
-    try:
-        doc.replace_lines(0, len(doc.lines), normalized.splitlines())
-        commit(_session, key, doc)
-        tracked = _session.new_sections.get(key)
-        if tracked:
-            present = {sec.name for sec in doc.sections}
-            tracked.intersection_update(present)
-    except BaseException:
-        rollback(_session, key, was_pending, snapshot, doc.path)
-        raise
+    with transaction(mod_dir, [doc.path]) as edit:
+        staged = edit.document(doc.path)
+        staged.replace_lines(0, len(staged.lines), normalized.splitlines())
+    tracked = _session.new_sections.get(key)
+    if tracked:
+        present = {sec.name for sec in doc.sections}
+        tracked.intersection_update(present)
     return True
 
 

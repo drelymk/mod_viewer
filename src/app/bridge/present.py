@@ -44,24 +44,16 @@ def _metadata_change(mod_dir, source, mutate, persist):
 
 def _batch_run(mod_dir, targets, mutate, metadata_change=None):
     source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
-    records = []
     try:
-        for ini_rel, path, _doc in targets:
-            sess, key, doc, was_pending, snapshot = edit_session.begin(mod_dir, path)
-            records.append((sess, key, doc, was_pending, snapshot, path, ini_rel))
-        results = []
-        try:
-            for _sess, _key, doc, _was, _snapshot, _path, ini_rel in records:
-                results.append(mutate(ini_rel, doc))
+        paths = [path for _ini_rel, path, _doc in targets]
+        with edit_session.transaction(
+                mod_dir, paths, present_metadata=metadata_change is not None) as transaction:
+            results = []
+            for ini_rel, path, _doc in targets:
+                results.append(mutate(ini_rel, transaction.document(path)))
             if metadata_change:
                 edit_session.stage_present_metadata(mod_dir)
                 metadata_change(results, source)
-        except BaseException:
-            for sess, key, _doc, was_pending, snapshot, path, _ini_rel in reversed(records):
-                edit_session.rollback(sess, key, was_pending, snapshot, path)
-            raise
-        for sess, key, doc, _was, _snapshot, _path, _ini_rel in records:
-            edit_session.commit(sess, key, doc)
         count = results[0].get("count") if results and isinstance(results[0], dict) else None
         return {"ok": True, "result": {"count": count, "files": len(results)},
                 "pending": True}
