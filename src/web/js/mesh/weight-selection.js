@@ -342,8 +342,3 @@ export function selectedBoneCount(selection) {
   return normalizeBoneSelection(selection).reduce(
     (total, entry) => total + entry.boneIds.length, 0);
 }
-
-export function sameBoneSelection(left, right) {
-  return JSON.stringify(serializeBoneSelection(left))
-    === JSON.stringify(serializeBoneSelection(right));
-}

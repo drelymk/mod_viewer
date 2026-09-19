@@ -2275,6 +2275,29 @@ def test_weight_selection_is_scoped_to_the_decoded_blend_source(
         assert distinct["physics"]["participantCount"] == 2
         assert distinct["physics"]["participatingMeshCount"] == 2
         assert distinct["independentSources"]
+        unchanged = page.evaluate("""async () => {
+          const {weightRigApi: runtime, weightRigSkinningRuntime: skinning} =
+            await import('./js/mesh/weight-rig-core.js');
+          const states = window.modViewer.activeMeshes.map(skinning.getSkinningState);
+          const masks = states.map(state => state.selectedWeightMask);
+          const selection = runtime.getModelWeightState().selectedBones;
+          let notifications = 0;
+          const onChange = () => { notifications += 1; };
+          window.addEventListener('mod-viewer-model-weight-changed', onChange);
+          // Reordering, duplicates and unavailable IDs do not change selection.
+          runtime.setSelectedBones([...selection].reverse().map(entry => ({
+            ...entry, boneIds: [999, ...entry.boneIds, ...entry.boneIds],
+          })));
+          window.removeEventListener('mod-viewer-model-weight-changed', onChange);
+          return {notifications,
+            masksReused: states.every((state, index) =>
+              state.selectedWeightMask === masks[index]),
+            selected: runtime.getModelWeightState().selectedBones,
+            expected: selection};
+        }""")
+        assert unchanged["notifications"] == 0
+        assert unchanged["masksReused"]
+        assert unchanged["selected"] == unchanged["expected"]
         cleared = page.evaluate("""async () => {
           const runtime = (await import('./js/mesh/weight-rig-core.js')).weightRigApi;
           const getSkinningState = (await import('./js/mesh/weight-rig-core.js')).weightRigSkinningRuntime.getSkinningState;

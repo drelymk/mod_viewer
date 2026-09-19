@@ -22,7 +22,7 @@ import {GRAVITY_WORLD_DIRECTION} from './weight-physics.js';
 import {
   buildSelectedWeightMask, normalizeBoneSelection,
   normalizeSelectedBoneIds, selectedBoneCount,
-  serializeBoneSelection, sameBoneSelection,
+  serializeBoneSelection,
 } from './weight-selection.js';
 import {
   buildInfluenceNodes as buildRigInfluenceNodes,
@@ -257,7 +257,6 @@ weightModelSession = createWeightModelSession({
   updateModelWeightHeatmap: (...args) =>
     skinningRuntime.updateModelWeightHeatmap(...args),
   syncPhysicsToSelection,
-  sameBoneSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
   notifyChanged: () => notifyModelWeightChanged(),

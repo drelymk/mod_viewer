@@ -129,10 +129,23 @@ export function createWeightPickingSession({modelWeightState, modelRigState, sta
 export function createWeightModelSession({modelWeightState, states, knownMeshes,
     modelWeightSnapshot, selectionMapFromEntries, sourceSelectionEntries,
     refreshSelectedWeightMask,
-    updateModelWeightHeatmap, syncPhysicsToSelection, sameBoneSelection,
+    updateModelWeightHeatmap, syncPhysicsToSelection,
     serializeBoneSelection, eligibleSkinningMesh, notifyChanged,
     requestRender, getGeneration, ensureModelWeightsLoaded} = {}) {
   let selectionSavePromise = null;
+
+  function retainAvailableBones(selection) {
+    if (!modelWeightState.loaded) return;
+    const availableBySource = new Map(modelWeightState.sources.map(source => [
+      source.key, new Set(source.availableBoneIds),
+    ]));
+    for (const [sourceKey, ids] of selection) {
+      const available = availableBySource.get(sourceKey);
+      const filtered = new Set([...ids].filter(id => available?.has(id)));
+      if (filtered.size) selection.set(sourceKey, filtered);
+      else selection.delete(sourceKey);
+    }
+  }
 
   function refreshModelBoneStats() {
     const statsBySource = new Map();
@@ -185,23 +198,7 @@ export function createWeightModelSession({modelWeightState, states, knownMeshes,
       .sort((left, right) => left.key.localeCompare(right.key));
     modelWeightState.loadedMeshCount = loadedMeshCount;
     modelWeightState.failedMeshCount = failedMeshCount;
-    if (modelWeightState.loaded) {
-      const availableBySource = new Map(modelWeightState.sources.map(source => [
-        source.key, new Set(source.availableBoneIds),
-      ]));
-      for (const map of [modelWeightState.selectedBonesBySource]) {
-        for (const [sourceKey, ids] of map) {
-          const available = availableBySource.get(sourceKey);
-          if (!available) {
-            map.delete(sourceKey);
-            continue;
-          }
-          const filtered = new Set([...ids].filter(id => available.has(id)));
-          if (filtered.size) map.set(sourceKey, filtered);
-          else map.delete(sourceKey);
-        }
-      }
-    }
+    retainAvailableBones(modelWeightState.selectedBonesBySource);
     if (refreshStats) refreshModelBoneStats();
   }
 
@@ -209,39 +206,21 @@ export function createWeightModelSession({modelWeightState, states, knownMeshes,
       refreshMasks = true} = {}) {
     refreshModelWeightSummary();
     const next = selectionMapFromEntries(selection);
-    if (modelWeightState.loaded) {
-      const available = new Map(modelWeightState.sources.map(source => [
-        source.key, new Set(source.availableBoneIds),
-      ]));
-      for (const [sourceKey, ids] of next) {
-        const valid = available.get(sourceKey);
-        if (!valid) {
-          next.delete(sourceKey);
-          continue;
-        }
-        const filtered = new Set([...ids].filter(id => valid.has(id)));
-        if (filtered.size) next.set(sourceKey, filtered);
-        else next.delete(sourceKey);
+    retainAvailableBones(next);
+    const previous = modelWeightState.selectedBonesBySource;
+    const changedSourceKeys = new Set([...previous.keys(), ...next.keys()]);
+    for (const sourceKey of changedSourceKeys) {
+      const before = previous.get(sourceKey);
+      const after = next.get(sourceKey);
+      if (before?.size === after?.size
+          && [...before].every(id => after.has(id))) {
+        changedSourceKeys.delete(sourceKey);
       }
     }
-    const previousEntries = sourceSelectionEntries(
-      modelWeightState.selectedBonesBySource);
-    const nextEntries = sourceSelectionEntries(next);
-    if (sameBoneSelection(previousEntries, nextEntries)) {
+    if (!changedSourceKeys.size) {
       if (syncPhysics) syncPhysicsToSelection();
       return modelWeightSnapshot();
     }
-    const changedSourceKeys = new Set([
-      ...modelWeightState.selectedBonesBySource.keys(), ...next.keys(),
-    ].filter(sourceKey => !sameBoneSelection(
-      sourceSelectionEntries(new Map([
-        [sourceKey, modelWeightState.selectedBonesBySource.get(sourceKey)
-          || new Set()],
-      ])),
-      sourceSelectionEntries(new Map([
-        [sourceKey, next.get(sourceKey) || new Set()],
-      ])),
-    )));
     modelWeightState.selectedBonesBySource = next;
     if (refreshMasks) knownMeshes.forEach(mesh => {
       const state = states.get(mesh);
