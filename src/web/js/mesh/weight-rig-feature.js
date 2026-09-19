@@ -38,26 +38,26 @@ export function withSkinningBaseMaterial(mesh, operation) {
 
 export function registerSkinningMesh(mesh) {
   pendingSkinningMeshes.add(mesh);
-  return skinning?.registerMesh(mesh);
+  return feature?.registerWeightRigMesh(mesh);
 }
 
 export function unregisterSkinningMesh(mesh) {
   pendingSkinningMeshes.delete(mesh);
-  return skinning?.unregisterMesh(mesh);
+  return feature?.unregisterWeightRigMesh(mesh);
 }
 
 export function refreshSkinningAfterShapeChange(mesh) {
-  return skinning?.refreshAfterShapeChange(mesh) || false;
+  return feature?.refreshWeightRigAfterShapeChange(mesh) || false;
 }
 
 export function disposeSkinningExperiment(mesh, options = {}) {
   pendingSkinningMeshes.delete(mesh);
-  return skinning?.disposeMesh(mesh, options);
+  return feature?.disposeWeightRigMesh(mesh, options);
 }
 
 export function destroyModelPhysicsSession() {
   pendingSkinningMeshes.clear();
-  return skinning?.destroy();
+  return feature?.destroyWeightRigModel();
 }
 
 export async function loadWeightRigFeature() {
@@ -72,15 +72,15 @@ export async function loadWeightRigFeature() {
       import('./weight-rig-status.js'),
     ]);
     skinning = core.weightRigSkinningRuntime;
-    for (const mesh of pendingSkinningMeshes) {
-      skinning.registerMesh(mesh);
-    }
 
     feature = {
       ...core.weightRigApi,
       createRigOverlayController: overlay.createRigOverlayController,
       weightRigStatus: status.weightRigStatus,
     };
+    for (const mesh of pendingSkinningMeshes) {
+      feature.registerWeightRigMesh(mesh);
+    }
     feature.setRigMetadata(pendingRigMetadata);
     feature.setHumanoidRigMetadata(pendingHumanoidRigMetadata);
 

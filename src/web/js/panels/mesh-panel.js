@@ -2,13 +2,13 @@
 // source ini (mirroring the Toggle panel); within each, one collapsible group
 // per component, one checkbox per draw call within it.
 
-import { buildMesh, hasTexture } from '../mesh/mesh-factory.js';
+import { hasTexture } from '../mesh/mesh-factory.js';
 import {
-  activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied, removeMesh,
+  activeMeshes, applyMeshVisibility, conditionsSatisfied,
   setManualTexOverride,
 } from '../mesh/mesh-state.js';
 import {
-  clearTextureRunGroups, legacyMeshMetadataKey, recomputeTextureRuns,
+  clearTextureRunGroups, recomputeTextureRuns,
   registerTextureRunGroup, unregisterTextureRunGroup, saveTextureState,
 } from '../mesh/mesh-texture-state.js';
 import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
@@ -22,11 +22,8 @@ import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import {
   assetDetailLabel, assetSummaryLabel, summarizeAssetBindings,
 } from './asset-diagnostics.js';
-import { normalizeColorAdjustment } from '../mesh/color-adjustment.js';
-import { syncMeshColorAdjustment } from '../mesh/mesh-color-session.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
-import { registerAnimatedMesh } from '../mesh/animation-runtime.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
@@ -293,17 +290,17 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
   return { wrap };
 }
 
-/** Build the panel and add every mesh in the mesh map to the scene. `modPath`
- * is threaded through to the per-component texture popup, which needs it to
- * open the native file picker rooted at the mod folder. */
-export function buildMeshPanel(meshes, modPath, meshNames = {},
-                               materialProfiles = {}, options = {}) {
-  return appendMeshPanel(meshes, modPath, meshNames, materialProfiles,
+/** Build the panel for already-constructed live meshes. `modPath` is threaded
+ * through to the per-component texture popup, which needs it to open the
+ * native file picker rooted at the mod folder. */
+export function buildMeshPanel(meshes, liveMeshes, modPath, meshNames = {},
+                               options = {}) {
+  return appendMeshPanel(meshes, liveMeshes, modPath, meshNames,
     {...options, replace: true});
 }
 
-export function appendMeshPanel(meshes, modPath, meshNames = {},
-                                materialProfiles = {}, options = {}) {
+export function appendMeshPanel(meshes, liveMeshes, modPath, meshNames = {},
+                                options = {}) {
   const list = document.getElementById('mesh-list');
   const replace = options.replace !== false;
   if (replace) {
@@ -313,11 +310,9 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
   }
   registerViewSync('mesh-panel', syncMeshPanel);
   const texturePools = options.texturePools || {};
-  const colorAdjustments = options.colorAdjustments || {};
   const readOnlySource = options.readOnlySource === true;
   const canPersistMetadata = options.canPersistMetadata !== false;
   const texturePicker = options.texturePicker || null;
-  const animationClocks = options.animations || {};
 
   const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
   const bySource = groupKeysBySource(meshes, validNames);
@@ -450,41 +445,9 @@ export function appendMeshPanel(meshes, modPath, meshNames = {},
 
       for (const name of names) {
         const entry = meshes[name];
-        const materialProfile = materialProfiles?.[entry.material_profile_id] || null;
-        const mesh = buildMesh(name, entry, materialProfile);
-        mesh.userData.semanticKey = name;
-        mesh.userData.identity = entry.identity || null;
-        mesh.userData.metadataKey = entry.identity?.key
-          || legacyMeshMetadataKey(name, entry);
-        mesh.userData.colorAdjustment = normalizeColorAdjustment(
-          colorAdjustments[mesh.userData.metadataKey]);
-        mesh.userData.texturePool = texturePool;
-        mesh.userData.displayName = meshNames[mesh.userData.metadataKey]
-          || entry.display_name || null;
-        mesh.userData.meshNames = meshNames;
-        mesh.userData.modPath = modPath;
-        mesh.userData.assetFill = entry.asset_fill === true;
-        // Diagnostic-only projection. Operational identity remains the
-        // existing semantic key and component grouping.
-        mesh.userData.assetEntry = meshes[name];
+        const mesh = liveMeshes?.get?.(name) || liveMeshes?.[name];
+        if (!mesh) throw new Error(`Missing live mesh for ${name}`);
         mesh.userData.componentDescriptor = componentDescriptor;
-        addMesh(mesh, meshes[name].conditions, meshes[name].sources,
-          meshes[name].texture_variants, {
-            normal_map: meshes[name].normal_map_variants,
-            normal_data: meshes[name].normal_data_variants,
-            light_map: meshes[name].light_map_variants,
-            material_map: meshes[name].material_map_variants,
-            emission_map: meshes[name].emission_map_variants,
-          });
-        registerAnimatedMesh(
-          mesh, entry.animation_id, entry.animation_geometry,
-          animationClocks);
-        syncMeshColorAdjustment(mesh, { render: false });
-        // addMesh establishes the automatic defaults; restore persisted
-        // viewer choices only after that initialization has completed.
-        if (Object.hasOwn(meshes[name], 'saved_texture_override')) {
-          mesh.userData.manualTexOverride = meshes[name].saved_texture_override;
-        }
         itemObjs.push(mesh);
         // The first mesh for each resolved texture becomes an automatic
         // boundary. The ordered pass below propagates each boundary only
@@ -567,7 +530,7 @@ export function removeAssetFillMeshPanel(targetMeshes = null) {
       : [...group.itemObjs];
     members.forEach(mesh => {
       mesh.userData.assetRow?.closest('.draw-item-wrap')?.remove();
-      if (removeMesh(mesh)) removed.push(mesh);
+      removed.push(mesh);
       const index = group.itemObjs.indexOf(mesh);
       if (index >= 0) {
         group.itemObjs.splice(index, 1);
