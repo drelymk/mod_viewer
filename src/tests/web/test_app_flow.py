@@ -165,8 +165,7 @@ def test_mesh_panel_rebuild_reuses_existing_live_meshes(
           const name = Object.keys(payload.meshes)[0];
           const before = window.modViewer.activeMeshes.slice();
           buildMeshPanel(
-            payload.meshes, new Map([[name, mesh]]), 'PanelOwnership',
-            payload.metadata?.mesh_names || {}, {
+            payload.meshes, new Map([[name, mesh]]), 'PanelOwnership', {
               texturePools: payload.texture_pools || {},
             });
           return {

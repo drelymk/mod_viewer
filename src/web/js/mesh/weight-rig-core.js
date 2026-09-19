@@ -332,12 +332,6 @@ rigModelSession = createRigModelSession({
 });
 
 export const weightRigApi = Object.freeze({
-  registerWeightRigMesh,
-  unregisterWeightRigMesh,
-  refreshWeightRigAfterShapeChange,
-  disposeWeightRigMesh,
-  destroyWeightRigModel,
-
   getModelWeightState: weightModelSession.getState,
   ensureModelWeightsLoaded: weightModelSession.ensureLoaded,
   setSelectedBones: weightModelSession.setSelectedBones,
@@ -737,7 +731,7 @@ function resetModelWeightState() {
   notifyModelRigChanged();
 }
 
-function registerWeightRigMesh(mesh) {
+export function registerWeightRigMesh(mesh) {
   if (!mesh) return;
   const wasKnown = knownMeshes.has(mesh);
   knownMeshes.add(mesh);
@@ -752,7 +746,7 @@ function registerWeightRigMesh(mesh) {
   if (state.loaded) syncPhysicsParticipants();
 }
 
-function unregisterWeightRigMesh(mesh) {
+export function unregisterWeightRigMesh(mesh) {
   if (modelWeightState.pickedPoint?.meshKey
       && modelWeightState.pickedPoint.meshKey === mesh?.userData?.semanticKey) {
     weightPickingSession?.clearPickedPoint();
@@ -795,7 +789,7 @@ function unregisterWeightRigMesh(mesh) {
   notifyModelWeightChanged();
 }
 
-function refreshWeightRigAfterShapeChange(mesh) {
+export function refreshWeightRigAfterShapeChange(mesh) {
   const state = states.get(mesh);
   const position = mesh?.geometry?.attributes?.position;
   invalidateHumanoidDetection();
@@ -844,7 +838,7 @@ function refreshWeightRigAfterShapeChange(mesh) {
   return rebased;
 }
 
-function disposeWeightRigMesh(mesh, {preserveRegistration = false} = {}) {
+export function disposeWeightRigMesh(mesh, {preserveRegistration = false} = {}) {
   if (preserveRegistration) {
     const sourceKey = states.get(mesh)?.skinningSourceKey;
     if (sourceKey) modelPhysicsSession.detach(sourceKey);
@@ -854,7 +848,7 @@ function disposeWeightRigMesh(mesh, {preserveRegistration = false} = {}) {
   skinningRuntime.disposeMesh(mesh);
 }
 
-function destroyWeightRigModel() {
+export function destroyWeightRigModel() {
   modelPhysicsSession.destroy();
   for (const mesh of knownMeshes) skinningRuntime.disposeMesh(mesh);
   knownMeshes.clear();

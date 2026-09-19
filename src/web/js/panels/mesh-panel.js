@@ -4,7 +4,7 @@
 
 import { hasTexture } from '../mesh/mesh-factory.js';
 import {
-  activeMeshes, applyMeshVisibility, conditionsSatisfied,
+  applyMeshVisibility, conditionsSatisfied,
   setManualTexOverride,
 } from '../mesh/mesh-state.js';
 import {
@@ -293,14 +293,12 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
 /** Build the panel for already-constructed live meshes. `modPath` is threaded
  * through to the per-component texture popup, which needs it to open the
  * native file picker rooted at the mod folder. */
-export function buildMeshPanel(meshes, liveMeshes, modPath, meshNames = {},
-                               options = {}) {
-  return appendMeshPanel(meshes, liveMeshes, modPath, meshNames,
+export function buildMeshPanel(meshes, liveMeshes, modPath, options = {}) {
+  return appendMeshPanel(meshes, liveMeshes, modPath,
     {...options, replace: true});
 }
 
-export function appendMeshPanel(meshes, liveMeshes, modPath, meshNames = {},
-                                options = {}) {
+export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const list = document.getElementById('mesh-list');
   const replace = options.replace !== false;
   if (replace) {
@@ -505,7 +503,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, meshNames = {},
   }
 
   document.getElementById('camera-panel').style.display = 'none';
-  return activeMeshes;
 }
 
 window.addEventListener(LANGUAGE_CHANGED, () => {

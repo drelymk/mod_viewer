@@ -179,7 +179,7 @@ export async function loadMissingAssetParts() {
           animations: payload.animations || {},
         });
       appendMeshPanel(
-        entries, liveMeshes, null, {}, {
+        entries, liveMeshes, null, {
           replace: false,
           texturePools: payload.texture_pools || {},
           readOnlySource: true,

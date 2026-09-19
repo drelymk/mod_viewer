@@ -120,6 +120,14 @@ def test_weight_rig_modules_load_once_on_first_activation(
           return core.weightRigApi.getModelRigState().rigPresets.error;
         }""")
         assert rig_error == "current-model-b"
+        lifecycle_in_public_api = page.evaluate("""async () => {
+          const core = await import('./js/mesh/weight-rig-core.js');
+          return ['registerWeightRigMesh', 'unregisterWeightRigMesh',
+            'refreshWeightRigAfterShapeChange', 'disposeWeightRigMesh',
+            'destroyWeightRigModel'].some(name =>
+              Object.hasOwn(core.weightRigApi, name));
+        }""")
+        assert lifecycle_in_public_api is False
 
         loaded = page.evaluate("""() => performance.getEntriesByType('resource')
           .map(entry => entry.name)

@@ -254,7 +254,7 @@ export async function displayMeshPayload(payload, {
         animations: payload.animations || {},
       });
     buildMeshPanel(
-      meshes, liveMeshes, modelPath, payload.metadata?.mesh_names || {}, {
+      meshes, liveMeshes, modelPath, {
         onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
         texturePools: payload.texture_pools || {},
         assetResolution: payload.asset_resolution || null,
