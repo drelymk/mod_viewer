@@ -2,7 +2,7 @@
 
 import { decodeF32, decodeI32 } from '../textures/decode.js';
 import {
-  getControlValue, dnfSatisfied,
+  getControlValue, setControlValue, dnfSatisfied,
 } from '../editing/control-state.js';
 import {
   invalidateCharacterShadowGeometry,
@@ -69,6 +69,32 @@ function gimiOperand(operand, fallback = 0) {
 function gimiClockRate(clock) {
   const rate = gimiOperand(clock?.rate, 0);
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
+}
+
+function gimiClockRange(clock) {
+  const target = gimiOperand(clock?.wrap_target, Number.NaN);
+  const limit = gimiOperand(clock?.wrap_limit, Number.NaN);
+  if (!Number.isFinite(target) || !Number.isFinite(limit)) return null;
+  return {
+    target, limit, low: Math.min(target, limit), high: Math.max(target, limit),
+  };
+}
+
+function sameGimiRange(left, right) {
+  return left?.target === right?.target && left?.limit === right?.limit;
+}
+
+function syncGimiClockRange(track, clock, phaseKey) {
+  const range = gimiClockRange(clock);
+  const previous = track.resolvedRanges[phaseKey];
+  track.resolvedRanges[phaseKey] = range;
+  if (previous === undefined || sameGimiRange(previous, range) || !range) {
+    return;
+  }
+  if (track[phaseKey] < range.low || track[phaseKey] > range.high) {
+    track[phaseKey] = range.target;
+    track.dirty = true;
+  }
 }
 
 function gimiBasisVector(matrix, x, y, z) {
@@ -295,6 +321,10 @@ function resetGimiTrack(track) {
       const satisfied = dnfSatisfied(rule.conditions || []);
       if (satisfied && track.resetConditions[resetKey] !== true) {
         track[phaseKey] = gimiOperand(rule.value, track[phaseKey]);
+        const clear = rule.clear;
+        if (clear?.variable && clear.value?.kind === 'literal') {
+          setControlValue(clear.variable, String(clear.value.value));
+        }
         track.dirty = true;
       }
       track.resetConditions[resetKey] = satisfied;
@@ -511,9 +541,12 @@ function registerGimiMesh(mesh, animationId, geometry) {
         shapeClock: geometry.shape_clock || null,
         poseClock: geometry.pose_clock || null,
         shapePhase: 0, poseTime: 0,
+        resolvedRanges: Object.create(null),
         resetConditions: Object.create(null),
         lastNow: null, lastGeometryTime: null, dirty: true,
       };
+      syncGimiClockRange(state, state.shapeClock, 'shapePhase');
+      syncGimiClockRange(state, state.poseClock, 'poseTime');
       resetGimiTrack(state);
       tracks.set(animationId, state);
     }
@@ -617,6 +650,8 @@ export function resetAnimationRuntime() {
 export function wakeAnimationRuntime() {
   for (const state of tracks.values()) {
     if (state.kind === 'gimi_compute') {
+      syncGimiClockRange(state, state.shapeClock, 'shapePhase');
+      syncGimiClockRange(state, state.poseClock, 'poseTime');
       resetGimiTrack(state);
       state.dirty = true;
       state.lastGeometryTime = null;
@@ -634,6 +669,8 @@ export function resumeAnimatedMesh(mesh) {
     installAnimationBounds(mesh, meshState?.animationBounds);
     if (meshState) meshState.lastFrame = null;
     if (state.kind === 'gimi_compute') {
+      syncGimiClockRange(state, state.shapeClock, 'shapePhase');
+      syncGimiClockRange(state, state.poseClock, 'poseTime');
       resetGimiTrack(state);
       state.dirty = true;
       state.lastGeometryTime = null;

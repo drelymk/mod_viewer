@@ -221,7 +221,8 @@ def test_gimi_compute_animation_treats_reset_controls_as_edges(module_page):
         callback(now);
       };
       try {
-        const {setControlValue} = await import('./js/editing/control-state.js');
+        const {getControlValue, setControlValue} = await import(
+          './js/editing/control-state.js');
         const runtime = await import('./js/mesh/animation-runtime.js');
         const pose = new Float32Array(2 * 14);
         pose[0] = pose[1] = pose[2] = 1;
@@ -257,6 +258,8 @@ def test_gimi_compute_animation_treats_reset_controls_as_edges(module_page):
             reset_rules: [{
               conditions: [[{var: 'anime_state', value: '1', negate: false}]],
               value: {kind: 'literal', value: 0},
+              clear: {variable: 'anime_state',
+                value: {kind: 'literal', value: 0}},
             }],
           },
         });
@@ -275,7 +278,8 @@ def test_gimi_compute_animation_treats_reset_controls_as_edges(module_page):
         runNext(4000);
         const restarted = Array.from(position.array);
         runtime.resetAnimationRuntime();
-        return {advanced, paused, restarted};
+        return {advanced, paused, restarted,
+          trigger: getControlValue('anime_state')};
       } finally {
         window.requestAnimationFrame = oldRequest;
         window.cancelAnimationFrame = oldCancel;
@@ -284,6 +288,105 @@ def test_gimi_compute_animation_treats_reset_controls_as_edges(module_page):
     assert result["advanced"] == [1, 0, 0]
     assert result["paused"] == result["advanced"]
     assert result["restarted"] == [0, 0, 0]
+    assert result["trigger"] == "0"
+
+
+def test_gimi_compute_animation_rebases_changed_control_range(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      const runNext = now => {
+        const id = Math.min(...pending.keys());
+        const callback = pending.get(id);
+        pending.delete(id);
+        callback(now);
+      };
+      try {
+        const control = await import('./js/editing/control-state.js');
+        const {replayControlStateRules, setControlStateRules} = control;
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        setControlStateRules([
+          {conditions: [[{var: 'anime', value: '0', negate: false}]],
+            var: 'start', value: '40'},
+          {conditions: [[{var: 'anime', value: '0', negate: false}]],
+            var: 'end', value: '60'},
+          {conditions: [[{var: 'anime', value: '2', negate: false}]],
+            var: 'start', value: '160'},
+          {conditions: [[{var: 'anime', value: '2', negate: false}]],
+            var: 'end', value: '1170'},
+        ], {anime: '0', start: '40', end: '60'});
+        const pose = new Float32Array(200 * 14);
+        for (let frame = 0; frame < 200; frame += 1) {
+          const offset = frame * 14;
+          pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
+          pose[offset + 9] = 1;
+          pose[offset + 10] = frame / 2;
+        }
+        const position = {array: new Float32Array([0, 0, 0]), needsUpdate: false};
+        const normal = {array: new Float32Array([0, 1, 0]), needsUpdate: false};
+        const mesh = {
+          visible: true,
+          userData: {basePositions: new Float32Array([0, 0, 0])},
+          geometry: {attributes: {position, normal}},
+        };
+        control.setControlValue('anime', '0');
+        replayControlStateRules();
+        runtime.wakeAnimationRuntime();
+        runtime.registerAnimatedMesh(mesh, 'range-rebase-test', {
+          kind: 'gimi_compute', vertex_count: 1,
+          base_normals: encode(new Float32Array([0, 1, 0])),
+          shape_passes: [],
+          pose: {
+            frames: encode(pose), bone_count: 1, frame_count: 200,
+            dispatch_vertices: 1,
+            blend: {
+              weights: encode(new Float32Array([1, 0, 0, 0])),
+              indices: encode(new Int32Array([0, 0, 0, 0])),
+              active: encode(new Float32Array([1])),
+            },
+          },
+          pose_clock: {
+            rate: {kind: 'literal', value: 50},
+            advance_conditions: [], reset_rules: [],
+            wrap_target: {kind: 'variable', variable: 'start', offset: 0},
+            wrap_limit: {kind: 'variable', variable: 'end', offset: 0},
+          },
+        });
+        runNext(0);
+        runNext(1000);
+        const before = Array.from(position.array);
+        control.setControlValue('anime', '2');
+        replayControlStateRules();
+        runtime.wakeAnimationRuntime();
+        runNext(1000);
+        const after = Array.from(position.array);
+        runtime.resetAnimationRuntime();
+        return {before, after,
+          range: [control.getControlValue('start'),
+            control.getControlValue('end')]};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["before"] == [50, 0, 0]
+    assert result["after"] == [160, 0, 0]
+    assert result["range"] == ["160", "1170"]
 
 
 def test_gimi_compute_animation_uses_slot_zero_dq_reference(module_page):

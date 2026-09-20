@@ -141,6 +141,10 @@ cs-u5 = null
 if $pause == 0
     $Freq_pose = $Freq_pose + 30 * $dt
 endif
+if $anime_state == 1
+    $Freq_pose = 0
+    $anime_state = 0
+endif
 if $Freq_pose > $end_frame
     $Freq_pose = $strat_frame
 endif
@@ -213,6 +217,15 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
         "kind": "variable", "variable": "ShapeLimit", "offset": 0}
     assert animation["pose_clock"]["wrap_target"] == {
         "kind": "variable", "variable": "strat_frame", "offset": 0}
+    assert animation["pose_clock"]["reset_rules"] == [{
+        "conditions": [[{
+            "var": "anime_state", "value": "1", "negate": False}]],
+        "value": {"kind": "literal", "value": 0.0},
+        "clear": {
+            "variable": "anime_state",
+            "value": {"kind": "literal", "value": 0.0},
+        },
+    }]
     assert "anime_auto_play" not in repr(animation)
 
     bad_shader = tmp_path / "bad-shader"
@@ -233,7 +246,16 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     (bad_indices / "blend.buf").write_bytes(b"".join(
         struct.pack("<4f4i", 1., 0., 0., 0., 2, 0, 0, 0)
         for _ in range(3)))
-    assert not _discover(bad_indices, bad_index_sections)
+    bad_index_animation = _discover(bad_indices, bad_index_sections)
+    assert len(bad_index_animation) == 1
+    bad_index_analysis = analyze_ini(
+        bad_index_sections, resources=extract_resources(bad_index_sections))
+    bad_index_built = build_mesh_result(
+        bad_index_analysis.draw_groups, str(bad_indices),
+        compute_animations=bad_index_animation)
+    assert not any(
+        "animation_geometry" in mesh
+        for mesh in bad_index_built.meshes.values())
 
     bad_bone_count = tmp_path / "bad-bone-count"
     bad_count_sections = _sections(bad_bone_count)

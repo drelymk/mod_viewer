@@ -9,10 +9,8 @@ behavior.
 from dataclasses import dataclass
 import hashlib
 import json
-import math
 import os
 import re
-import struct
 
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, parse_condition_dnf)
@@ -345,6 +343,16 @@ def _read_resource_bytes(path, source):
         return None
 
 
+def _resource_size(path, source):
+    if not path:
+        return None
+    try:
+        return (source.size(path) if source is not None
+                else os.path.getsize(path))
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def _resource_path(mod_dir, filename, source):
     if not filename:
         return None
@@ -557,6 +565,7 @@ def _phase_bindings(sections, canonical, *, var_prefix=None):
     for lines in sections.values():
         stack = []
         pending_wrap = None
+        pending_reset = None
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             if not line:
@@ -564,6 +573,7 @@ def _phase_bindings(sections, canonical, *, var_prefix=None):
             if _condition_stack_line(line, stack, aliases):
                 wrap = _PHASE_WRAP_RE.fullmatch(line)
                 pending_wrap = None
+                pending_reset = None
                 if wrap:
                     pending_wrap = {
                         "var": _canonical(wrap.group("var"), canonical),
@@ -591,26 +601,42 @@ def _phase_bindings(sections, canonical, *, var_prefix=None):
                     item["advance_conditions"] = _combined_conditions(
                         stack, canonical, var_prefix)
                 pending_wrap = None
+                pending_reset = None
                 continue
             assignment = _COMPUTE_ASSIGN_RE.fullmatch(line)
             if not assignment or not assignment.group("lhs").startswith("$"):
                 pending_wrap = None
+                pending_reset = None
                 continue
             local = _canonical(assignment.group("lhs"), canonical)
             item = updates.get(local.casefold())
             if item is None:
+                value = _operand(assignment.group("rhs"), literals, canonical,
+                                 var_prefix)
+                if (pending_reset is not None
+                        and value is not None
+                        and value.get("kind") == "literal"
+                        and pending_reset["conditions"] ==
+                        _combined_conditions(stack, canonical, var_prefix)):
+                    pending_reset["clear"] = {
+                        "variable": f"{var_prefix or ''}{local}",
+                        "value": value,
+                    }
                 pending_wrap = None
+                pending_reset = None
                 continue
             value = _operand(assignment.group("rhs"), literals, canonical,
                              var_prefix)
             if value is None:
                 pending_wrap = None
+                pending_reset = None
                 continue
             if (pending_wrap is not None
                     and pending_wrap["var"].casefold() == local.casefold()):
                 item["wrap_limit"] = pending_wrap["limit"]
                 item["wrap_target"] = value
                 pending_wrap = None
+                pending_reset = None
                 continue
             # A phase reset must be guarded by a real control condition. The
             # phase comparison in a wrap is not a control dependency.
@@ -623,10 +649,14 @@ def _phase_bindings(sections, canonical, *, var_prefix=None):
             ]
             conditions = [group for group in conditions if group]
             if conditions:
-                item["reset_rules"].append({
+                reset_rule = {
                     "conditions": conditions,
                     "value": value,
-                })
+                }
+                item["reset_rules"].append(reset_rule)
+                pending_reset = reset_rule
+            else:
+                pending_reset = None
             pending_wrap = None
     return updates
 
@@ -663,33 +693,28 @@ def _validate_compute_buffers(resources, copy_sources, shape_passes, pose,
     base_path = _resource_path(mod_dir, base_info.get("filename"), source)
     blend_path = _resource_path(mod_dir, blend_info.get("filename"), source)
     pose_path = _resource_path(mod_dir, pose_info.get("filename"), source)
-    base_data = _read_resource_bytes(base_path, source)
-    blend_data = _read_resource_bytes(blend_path, source)
-    pose_data = _read_resource_bytes(pose_path, source)
-    if not base_data or not blend_data or not pose_data:
+    base_size = _resource_size(base_path, source)
+    blend_size = _resource_size(blend_path, source)
+    pose_size = _resource_size(pose_path, source)
+    if base_size is None or blend_size is None or pose_size is None:
         return None
-    base_count = len(base_data) // 40
-    if (len(base_data) != base_count * 40
-            or len(blend_data) != base_count * 32
-            or len(pose_data) % (bone_count * 56)):
+    if base_size % 40:
         return None
-    frame_count = len(pose_data) // (bone_count * 56)
+    base_count = base_size // 40
+    if (blend_size != base_count * 32
+            or pose_size % (bone_count * 56)):
+        return None
+    frame_count = pose_size // (bone_count * 56)
     if base_count <= 0 or frame_count < 2:
         return None
-    for offset in range(0, len(blend_data), 32):
-        weights = struct.unpack_from("<4f", blend_data, offset)
-        indices = struct.unpack_from("<4i", blend_data, offset + 16)
-        if (not all(math.isfinite(value) for value in weights)
-                or any(index < 0 or index >= bone_count for index in indices)):
-            return None
     for item in shape_passes:
         info = _resolved_resource(resources, copy_sources,
                                   item["target_resource"])
         if info.get("stride") != 40:
             return None
         path = _resource_path(mod_dir, info.get("filename"), source)
-        data = _read_resource_bytes(path, source)
-        if data is None or len(data) != base_count * 40:
+        size = _resource_size(path, source)
+        if size != base_count * 40:
             return None
     return {
         "base_file": base_info["filename"],
