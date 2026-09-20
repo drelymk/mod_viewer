@@ -3,7 +3,10 @@
 import pytest
 
 from core.ini.draw_groups import build_draw_groups
-from core.ini.draw_resources import _ib_index_size, _resolve_component_buffers
+from core.ini.draw_resources import (
+    _collect_resource_copy_sources, _ib_index_size,
+    _resolve_component_buffers,
+)
 from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import ResourceTable, extract_resources, parse_sections
 
@@ -19,6 +22,67 @@ def test_runtime_vertex_resource_uses_one_b_rest_pose_fallback():
         "filename": "position-rest.buf", "stride": 12}
     assert _ib_index_size("DXGI_FORMAT_R16_UINT") == 2
     assert _ib_index_size("DXGI_FORMAT_R32_UINT") == 4
+
+
+def test_uav_resource_copy_chain_resolves_file_backed_source():
+    sections = parse_sections("sample.ini", text="""
+[CustomShaderA]
+cs-u5 = copy ResourcePosition.2
+ResourcePosition.1 = ref cs-u5
+
+[CustomShaderB]
+cs-u5 = copy ResourcePosition.1
+ResourcePosition = ref cs-u5
+
+[ResourcePosition]
+[ResourcePosition.1]
+[ResourcePosition.2]
+stride = 40
+filename = Position.buf
+""")
+    resources = extract_resources(sections)
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers(
+        _scan_sections_for_draws(sections), resources, copy_sources)
+
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
+        "stride": 40, "filename": "Position.buf",
+    }
+
+
+def test_uav_null_clears_the_tracked_resource_source():
+    sections = parse_sections("sample.ini", text="""
+[CustomShader]
+cs-u5 = copy ResourceA
+cs-u5 = null
+ResourceB = ref cs-u5
+
+[ResourceA]
+filename = a.buf
+""")
+
+    copy_sources = _collect_resource_copy_sources(
+        sections, extract_resources(sections))
+
+    assert "resourceb" not in copy_sources
+
+
+def test_uav_resource_tracking_is_isolated_between_sections():
+    sections = parse_sections("sample.ini", text="""
+[CustomShaderA]
+cs-u5 = copy ResourceA
+
+[CustomShaderB]
+ResourceB = ref cs-u5
+
+[ResourceA]
+filename = a.buf
+""")
+
+    copy_sources = _collect_resource_copy_sources(
+        sections, extract_resources(sections))
+
+    assert "resourceb" not in copy_sources
 
 
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():

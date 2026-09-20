@@ -179,8 +179,14 @@ def _collect_resource_copy_sources(sections, resources):
         r"^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
     cs_write_re = re.compile(
         r"^\s*cs-u0\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+    cs_u_copy_re = re.compile(
+        r"^\s*cs-u(\d+)\s*=\s*copy\s+(Resource\S+)\s*$", re.I)
+    cs_u_null_re = re.compile(r"^\s*cs-u(\d+)\s*=\s*null\s*$", re.I)
+    resource_u_ref_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*ref\s+cs-u(\d+)\s*$", re.I)
     for lines in sections.values():
         cs_inputs = {}
+        cs_u_sources = {}
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
             match = cs_read_re.match(line)
@@ -190,6 +196,26 @@ def _collect_resource_copy_sources(sections, resources):
                     cs_inputs.pop(slot, None)
                 else:
                     cs_inputs[slot] = resource_name
+                continue
+            match = cs_u_copy_re.match(line)
+            if match:
+                slot, resource_name = match.groups()
+                cs_u_sources[slot] = resource_name
+                continue
+            match = cs_u_null_re.match(line)
+            if match:
+                cs_u_sources.pop(match.group(1), None)
+                continue
+            match = resource_u_ref_re.match(line)
+            if match:
+                destination, slot = match.groups()
+                copy_source = cs_u_sources.get(slot)
+                if copy_source:
+                    sources = resource_copy_sources.setdefault(
+                        destination.lower(), [])
+                    if all(existing.lower() != copy_source.lower()
+                           for existing in sources):
+                        sources.append(copy_source)
                 continue
             match = cs_write_re.match(line)
             if not match or match.group(1).lower() == "null":
