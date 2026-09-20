@@ -195,6 +195,64 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
     assert result["paused"] == result["first"]
 
 
+def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      try {
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const position = {array: new Float32Array([0, 0, 0]),
+          needsUpdate: false};
+        const normal = {array: new Float32Array([0, 1, 0]),
+          needsUpdate: false};
+        const mesh = {
+          visible: true,
+          userData: {basePositions: new Float32Array([0, 0, 0])},
+          geometry: {attributes: {position, normal}},
+        };
+        runtime.registerAnimatedMesh(mesh, 'shape-only-test', {
+          kind: 'gimi_compute', vertex_count: 1,
+          base_normals: encode(new Float32Array([0, 1, 0])),
+          shape_passes: [{deltas: encode(new Float32Array([
+            1, 0, 0, 0, 0, 0])), phase_offset: 0,
+            amplitude: 1, angular_scale: 1, bias: 0}],
+          pose: null,
+          shape_clock: {rate: {kind: 'literal', value: 1},
+            advance_conditions: [], reset_rules: []},
+          pose_clock: null,
+        });
+        pending.get(Math.min(...pending.keys()))(0);
+        const first = Array.from(position.array);
+        pending.get(Math.max(...pending.keys()))(1000);
+        const second = Array.from(position.array);
+        const secondNormal = Array.from(normal.array);
+        runtime.resetAnimationRuntime();
+        return {first, second, secondNormal};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["first"] == [0, 0, 0]
+    assert result["second"] == pytest.approx([math.sin(1), 0, 0], abs=1e-5)
+    assert result["secondNormal"] == [0, 1, 0]
+
+
 def test_gimi_compute_animation_treats_reset_controls_as_edges(module_page):
     result = module_page.evaluate("""async () => {
       const pending = new Map();

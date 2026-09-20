@@ -115,11 +115,14 @@ function applyGimiPose(mesh, meshState, track) {
       (track.shapePhase + pass.phaseOffset) * Number(pass.angularScale))
     + Number(pass.bias));
 
-  const frameValue = Math.max(0, track.poseTime);
-  const frame = Math.min(
-    track.poseFrameCount - 1, Math.floor(frameValue));
-  const nextFrame = Math.min(track.poseFrameCount - 1, frame + 1);
-  const inter = Math.min(1, Math.max(0, frameValue - frame));
+  const hasPose = !!(track.poseFrames && track.poseBoneCount
+    && meshState.poseActive);
+  const frameValue = hasPose ? Math.max(0, track.poseTime) : 0;
+  const frame = hasPose ? Math.min(
+    track.poseFrameCount - 1, Math.floor(frameValue)) : 0;
+  const nextFrame = hasPose
+    ? Math.min(track.poseFrameCount - 1, frame + 1) : 0;
+  const inter = hasPose ? Math.min(1, Math.max(0, frameValue - frame)) : 0;
   const weights = meshState.weights;
   const indices = meshState.indices;
   const pose = track.poseFrames;
@@ -152,7 +155,7 @@ function applyGimiPose(mesh, meshState, track) {
       nz += pass.deltas[source + 5] * weight;
     }
 
-    if (meshState.poseActive[vertex] < 0.5) {
+    if (!hasPose || meshState.poseActive[vertex] < 0.5) {
       positions[positionOffset] = px;
       positions[positionOffset + 1] = py;
       positions[positionOffset + 2] = pz;
@@ -476,8 +479,10 @@ function tick(now) {
       }
       playing = true;
       advanceGimiTrack(state, now);
-      const poseRate = gimiClockRate(state.poseClock);
-      const geometryInterval = poseRate > 0 ? 1000 / poseRate : 1000 / 60;
+      const geometryRate = gimiClockRate(state.poseClock)
+        || gimiClockRate(state.shapeClock);
+      const geometryInterval = geometryRate > 0
+        ? 1000 / geometryRate : 1000 / 60;
       const due = state.lastGeometryTime === null
         || now - state.lastGeometryTime >= geometryInterval;
       if (state.dirty || due) {
@@ -542,25 +547,29 @@ function tick(now) {
 function registerGimiMesh(mesh, animationId, geometry) {
   if (!mesh || geometry?.kind !== 'gimi_compute') return false;
   const vertexCount = positiveInteger(geometry.vertex_count);
-  const poseInfo = geometry.pose || {};
-  const poseBoneCount = positiveInteger(poseInfo.bone_count);
-  const poseFrameCount = positiveInteger(poseInfo.frame_count);
-  const poseBlend = poseInfo.blend;
-  const poseFrames = poseInfo.frames;
-  if (!vertexCount || !poseBoneCount || !poseFrameCount
-      || !poseBlend || !poseFrames) return false;
+  const poseInfo = geometry.pose || null;
+  const poseBoneCount = positiveInteger(poseInfo?.bone_count);
+  const poseFrameCount = positiveInteger(poseInfo?.frame_count);
+  const poseBlend = poseInfo?.blend;
+  const poseFrames = poseInfo?.frames;
+  const hasPose = !!poseInfo;
+  if (!vertexCount || (hasPose && (!poseBoneCount || !poseFrameCount
+      || !poseBlend || !poseFrames))) return false;
   let state = tracks.get(animationId);
   try {
     if (!state) {
-      const decodedPoseFrames = decodeF32(poseFrames);
-      if (decodedPoseFrames.length < poseFrameCount * poseBoneCount * 14) {
-        return false;
+      let decodedPoseFrames = null;
+      if (hasPose) {
+        decodedPoseFrames = decodeF32(poseFrames);
+        if (decodedPoseFrames.length < poseFrameCount * poseBoneCount * 14) {
+          return false;
+        }
       }
       state = {
         kind: 'gimi_compute',
         meshes: new Set(), meshesByMesh: new Map(),
         poseFrames: decodedPoseFrames, poseBoneCount, poseFrameCount,
-        poseBasis: poseInfo.basis || null,
+        poseBasis: poseInfo?.basis || null,
         shapeClock: geometry.shape_clock || null,
         poseClock: geometry.pose_clock || null,
         shapePhase: 0, poseTime: 0,
@@ -574,13 +583,18 @@ function registerGimiMesh(mesh, animationId, geometry) {
       tracks.set(animationId, state);
     }
     const baseNormals = decodeF32(geometry.base_normals);
-    const weights = decodeF32(poseBlend.weights);
-    const indices = decodeI32(poseBlend.indices);
-    const poseActive = decodeF32(poseBlend.active);
+    let weights = null;
+    let indices = null;
+    let poseActive = null;
+    if (hasPose) {
+      weights = decodeF32(poseBlend.weights);
+      indices = decodeI32(poseBlend.indices);
+      poseActive = decodeF32(poseBlend.active);
+    }
     if (baseNormals.length < vertexCount * 3
-        || weights.length < vertexCount * 4
+        || (hasPose && (weights.length < vertexCount * 4
         || indices.length < vertexCount * 4
-        || poseActive.length < vertexCount) return false;
+        || poseActive.length < vertexCount))) return false;
     const shapePasses = (geometry.shape_passes || []).map(pass => ({
       deltas: decodeF32(pass.deltas),
       phaseOffset: Number(pass.phase_offset) || 0,
@@ -592,7 +606,8 @@ function registerGimiMesh(mesh, animationId, geometry) {
       pass.deltas.length < vertexCount * 6
       || !Number.isFinite(pass.amplitude)
       || !Number.isFinite(pass.angularScale)
-      || !Number.isFinite(pass.bias))) return false;
+      || !Number.isFinite(pass.bias))
+      || (!hasPose && !shapePasses.length)) return false;
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
       poseActive,

@@ -732,6 +732,36 @@ def _validate_compute_buffers(resources, copy_sources, shape_passes, pose,
     }
 
 
+def _validate_shape_buffers(resources, copy_sources, shape_passes, *,
+                            mod_dir, source):
+    """Validate a shape-only chain before exposing its descriptor."""
+    if not shape_passes:
+        return None
+    base_info = _resolved_resource(
+        resources, copy_sources, shape_passes[0]["base_resource"])
+    if base_info.get("stride") != 40:
+        return None
+    base_path = _resource_path(mod_dir, base_info.get("filename"), source)
+    base_size = _resource_size(base_path, source)
+    if base_size is None or base_size % 40:
+        return None
+    vertex_count = base_size // 40
+    if vertex_count <= 0:
+        return None
+    for item in shape_passes:
+        info = _resolved_resource(
+            resources, copy_sources, item["target_resource"])
+        if info.get("stride") != 40:
+            return None
+        path = _resource_path(mod_dir, info.get("filename"), source)
+        if _resource_size(path, source) != base_size:
+            return None
+    return {
+        "base_file": base_info["filename"],
+        "vertex_count": vertex_count,
+    }
+
+
 def discover_compute_animations(sections, resources, *, mod_dir=None,
                                ini_path=None, source=None, var_prefix=None,
                                canonical_vars=None):
@@ -804,6 +834,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 if current_chain is None:
                     continue
                 snapshot = {"supported": False}
+                if active is not None:
+                    snapshot["kind"] = active["kind"]
+                    if t_sources.get(50):
+                        snapshot["base_resource"] = t_sources[50]
                 if (active is not None and match.group(2) == "1"
                         and match.group(3) == "1"):
                     dispatch = int(match.group(1)) * active["threads"]
@@ -858,6 +892,12 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
     literals = _literal_assignments(sections, canonical)
     updates = _phase_bindings(
         sections, canonical, var_prefix=var_prefix)
+    pose_inputs = {
+        str(item.get("base_resource", "")).casefold()
+        for chain in chains
+        for item in chain["passes"]
+        if item.get("kind") == "pose"
+    }
 
     def phase_operand(expression):
         operand = _operand(expression, literals, canonical, var_prefix)
@@ -865,14 +905,78 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             return None
         return operand
 
+    def parse_shape_passes(items):
+        parsed = []
+        shape_clock = None
+        shape_local = None
+        for item in items:
+            operand = phase_operand(item.get("phase_expr", ""))
+            if operand is None:
+                return [], None
+            local = _unprefix(operand["variable"], var_prefix)
+            if shape_local is None:
+                shape_local = local
+                shape_clock = updates.get(local.casefold())
+            if (shape_clock is None
+                    or local.casefold() != shape_local.casefold()):
+                return [], None
+            parsed.append((item, operand))
+        return parsed, shape_clock
+
     animations = []
     for chain_index, chain in enumerate(chains):
         output_resource = chain.get("output_resource")
         if not output_resource:
             continue
+        if any(not item.get("supported") for item in chain["passes"]):
+            continue
         pose_passes = [item for item in chain["passes"]
                        if item.get("supported") and item.get("kind") == "pose"]
         if not pose_passes:
+            shape_passes = [item for item in chain["passes"]
+                            if item.get("kind") == "shape"]
+            if (not shape_passes
+                    or len(shape_passes) != len(chain["passes"])
+                    or str(output_resource).casefold() in pose_inputs):
+                continue
+            validated = _validate_shape_buffers(
+                resources, copy_sources, shape_passes,
+                mod_dir=mod_dir, source=source)
+            if validated is None:
+                continue
+            parsed_shape_passes, shape_clock = parse_shape_passes(
+                shape_passes)
+            if not parsed_shape_passes:
+                continue
+            identity = json.dumps({
+                "ini": (source.logical_path(ini_path) if source is not None
+                        and source.is_resource_reference(ini_path)
+                        else os.path.basename(str(ini_path or ""))),
+                "output": output_resource,
+                "base": shape_passes[0]["base_resource"],
+                "chain": chain_index,
+            }, sort_keys=True, separators=(",", ":"))
+            track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
+            animations.append({
+                "kind": "gimi_compute",
+                "track_id": track_id,
+                "position_resource": output_resource,
+                "base_resource": shape_passes[0]["base_resource"],
+                "base_file": validated["base_file"],
+                "vertex_count": validated["vertex_count"],
+                "shape_passes": [{
+                    "target_resource": item["target_resource"],
+                    "target_file": _resolved_resource(
+                        resources, copy_sources, item["target_resource"])[
+                            "filename"],
+                    "dispatch_vertices": item["dispatch_vertices"],
+                    "phase_offset": float(operand.get("offset", 0)),
+                    **item["shape"],
+                } for item, operand in parsed_shape_passes],
+                "pose": None,
+                "shape_clock": shape_clock,
+                "pose_clock": None,
+            })
             continue
         pose_pass = pose_passes[-1]
         matching_shapes = output_chains.get(
@@ -914,24 +1018,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         if pose_clock is None:
             continue
 
-        parsed_shape_passes = []
-        shape_clock = None
-        shape_local = None
-        for item in shape_passes:
-            operand = phase_operand(item.get("phase_expr", ""))
-            if operand is None:
-                parsed_shape_passes = []
-                shape_clock = None
-                break
-            local = _unprefix(operand["variable"], var_prefix)
-            if shape_local is None:
-                shape_local = local
-                shape_clock = updates.get(local.casefold())
-            if shape_clock is None or local.casefold() != shape_local.casefold():
-                parsed_shape_passes = []
-                shape_clock = None
-                break
-            parsed_shape_passes.append((item, operand))
+        parsed_shape_passes, shape_clock = parse_shape_passes(shape_passes)
         if shape_passes and not parsed_shape_passes:
             continue
 

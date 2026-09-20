@@ -365,6 +365,27 @@ def test_compute_animation_accepts_pose_only_and_nonstandard_thread_width(tmp_pa
     assert discovered[0]["pose"]["bone_count"] == 2
 
 
+def test_compute_animation_accepts_shape_only_chain(tmp_path):
+    root = tmp_path / "shape-only"
+    sections = _sections(root)
+    sections.pop("CustomShaderPose")
+    sections["TextureOverrideBody"] = [
+        line.replace("vb0 = ResourcePosition", "vb0 = ResourcePosition.1")
+        for line in sections["TextureOverrideBody"]]
+
+    discovered = _discover(root, sections)
+
+    assert len(discovered) == 1
+    assert discovered[0]["pose"] is None
+    assert len(discovered[0]["shape_passes"]) == 2
+    analysis = analyze_ini(sections, resources=extract_resources(sections))
+    _attach_animation(analysis.draw_groups, discovered[0])
+    built = build_mesh_result(analysis.draw_groups, str(root))
+    payload = next(iter(built.meshes.values()))["animation_geometry"]
+    assert payload["pose"] is None
+    assert len(payload["shape_passes"]) == 2
+
+
 def test_compute_animation_keeps_sequential_pose_dispatch_snapshots(tmp_path):
     root = tmp_path / "sequential-pose"
     sections = _sections(root)
