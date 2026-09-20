@@ -29,3 +29,8 @@ export function decodeU32(b64) {
   const bytes = decodeBytes(b64);
   return new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
 }
+
+export function decodeI32(b64) {
+  const bytes = decodeBytes(b64);
+  return new Int32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+}

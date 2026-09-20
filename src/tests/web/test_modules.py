@@ -111,6 +111,89 @@ def test_baked_animation_updates_existing_attributes_and_wraps_frames(module_pag
     assert result["snapshot"] == {"clocks": 1, "meshes": 1, "rafActive": False}
 
 
+def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      try {
+        const {setControlValue} = await import('./js/editing/control-state.js');
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const base = new Float32Array([0, 0, 0, 1, 0, 0]);
+        const normals = new Float32Array([0, 2, 0, 0, 2, 0]);
+        const deltas = new Float32Array([
+          1, 0, 0, 0, 1, 0,
+          2, 0, 0, 0, 1, 0,
+        ]);
+        const weights = new Float32Array([
+          1, 0, 0, 0, 1, 0, 0, 0,
+        ]);
+          const indices = new Int32Array([
+            0, 0, 0, 0, 0, 0, 0, 0,
+          ]);
+        const poseActive = new Float32Array([1, 1]);
+        const pose = new Float32Array(2 * 2 * 14);
+        for (let frame = 0; frame < 2; frame += 1) {
+          for (let bone = 0; bone < 2; bone += 1) {
+            const offset = (frame * 2 + bone) * 14;
+            pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
+            pose[offset + 9] = 1;
+          }
+        }
+        const position = {array: new Float32Array(base), needsUpdate: false};
+        const normal = {array: new Float32Array(normals), needsUpdate: false};
+        const mesh = {
+          visible: true,
+          userData: {basePositions: new Float32Array(base)},
+          geometry: {attributes: {position, normal}},
+        };
+        setControlValue('pause', '0');
+        setControlValue('anime_state', '0');
+        runtime.registerAnimatedMesh(mesh, 'gimi-test', {
+          kind: 'gimi_compute', vertex_count: 2,
+          base_normals: encode(normals),
+          shape_passes: [{deltas: encode(deltas), phase_offset: 0}],
+          pose_blend: {weights: encode(weights), indices: encode(indices),
+            active: encode(poseActive)},
+          pose_frames: encode(pose), pose_bone_count: 2,
+          pose_frame_count: 2, state_ranges: [{state: 0, start: 0, end: 1}],
+          shape_frequency_var: 'freq_key', pose_frequency_var: 'freq_pose',
+          pause_var: 'pause', state_var: 'anime_state',
+          shape_speed: 0, pose_speed: 0, shape_wrap: 5.236,
+        });
+        const firstId = Math.min(...pending.keys());
+        pending.get(firstId)(0);
+        const first = Array.from(position.array);
+        const firstNormals = Array.from(normal.array);
+        setControlValue('pause', '1');
+        const nextId = Math.max(...pending.keys());
+        pending.get(nextId)(1000);
+        const paused = Array.from(position.array);
+        runtime.resetAnimationRuntime();
+        return {first, firstNormals, paused};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["first"] == [0.5, 0, 0, 2, 0, 0]
+    assert result["firstNormals"] == [0, 1, 0, 0, 1, 0]
+    assert result["paused"] == result["first"]
+
+
 def test_baked_animation_shared_track_selects_active_clock_range(module_page):
     result = module_page.evaluate("""async () => {
       const pending = new Map();

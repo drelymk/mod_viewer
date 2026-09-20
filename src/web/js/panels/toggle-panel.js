@@ -53,6 +53,8 @@ export function refreshToggleValues() {
   syncView('toggle-panel');
 }
 
+window.addEventListener('mod-viewer-animation-state-changed', refreshToggleValues);
+
 document.getElementById('toggle-add-btn').addEventListener('click', () => {
   if (!currentCtx.modPath) return;
   openToggleModal({ mode: 'add', modPath: currentCtx.modPath, onSaved: currentCtx.onChange });

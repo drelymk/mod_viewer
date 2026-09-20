@@ -2,7 +2,9 @@
 
 import base64
 import hashlib
+import math
 import os
+import struct
 import time
 from copy import copy
 from dataclasses import dataclass, replace
@@ -47,6 +49,7 @@ class MeshBuildResult:
     geometry: GeometryBlob | None = None
     skinning_manifest: dict[str, SkinningManifestEntry] | None = None
     animations: dict | None = None
+    animation_control_vars: set | None = None
     diagnostics: dict | None = None
 
 
@@ -416,9 +419,127 @@ def _geometry_ref(raw, geometry):
     return base64.b64encode(raw).decode()
 
 
+def _gimi_path(mod_dir, value, source):
+    return (source.resolve_resource(value) if source is not None
+            else safe_resource_path(mod_dir, value))
+
+
+def _prepare_gimi_shared(animation, *, mod_dir, buffers, source, geometry):
+    """Load the one pose stream shared by all compact draws in a track."""
+    pose_path = _gimi_path(mod_dir, animation["pose_file"], source)
+    if not pose_path:
+        return None
+    pose_data = buffers.raw(pose_path)
+    expected = (int(animation["pose_frame_count"])
+                * int(animation["pose_bone_count"]) * 56)
+    if len(pose_data) != expected:
+        return None
+    return {
+        "pose_frames": _geometry_ref(pose_data, geometry),
+        "pose_frame_bytes": 56,
+    }
+
+
+def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
+                           source, geometry, shared):
+    """Pack fixed-layout compute inputs in the draw's compact vertex order."""
+    base_path = _gimi_path(mod_dir, animation["base_file"], source)
+    blend_path = _gimi_path(mod_dir, animation["pose_blend_file"], source)
+    if not base_path or not blend_path:
+        return None
+    base_data = buffers.raw(base_path)
+    blend_data = buffers.raw(blend_path)
+    vertex_count = int(animation["vertex_count"])
+    if (len(base_data) != vertex_count * 40
+            or len(blend_data) != vertex_count * 32
+            or any(index < 0 or index >= vertex_count
+                   for index in used_vertices)):
+        return None
+
+    shape_entries = []
+    base_normals = bytearray(len(used_vertices) * 12)
+    for output, raw_index in enumerate(used_vertices):
+        values = struct.unpack_from("<3f", base_data, raw_index * 40 + 12)
+        if not all(math.isfinite(value) for value in values):
+            return None
+        struct.pack_into("<3f", base_normals, output * 12, *values)
+    for item in animation.get("shape_passes", ()):
+        target_path = _gimi_path(mod_dir, item["target_file"], source)
+        if not target_path:
+            return None
+        target_data = buffers.raw(target_path)
+        if len(target_data) != vertex_count * 40:
+            return None
+        deltas = bytearray(len(used_vertices) * 24)
+        limit = min(int(item["dispatch_vertices"]), vertex_count)
+        for output, raw_index in enumerate(used_vertices):
+            if raw_index >= limit:
+                continue
+            base_offset = raw_index * 40
+            target_offset = raw_index * 40
+            base_values = struct.unpack_from("<6f", base_data, base_offset)
+            target_values = struct.unpack_from("<6f", target_data, target_offset)
+            struct.pack_into(
+                "<6f", deltas, output * 24,
+                *(target_values[index] - base_values[index]
+                  for index in range(6)))
+        shape_entries.append({
+            "deltas": _geometry_ref(deltas, geometry),
+            "vertex_count": len(used_vertices),
+            "delta_floats": 6,
+            "phase_offset": float(item.get("phase_offset", 0.0)),
+        })
+
+    weights = bytearray(len(used_vertices) * 16)
+    indices = bytearray(len(used_vertices) * 16)
+    pose_active = bytearray(len(used_vertices) * 4)
+    bone_count = int(animation["pose_bone_count"])
+    pose_limit = min(int(animation["pose_dispatch_vertices"]), vertex_count)
+    for output, raw_index in enumerate(used_vertices):
+        offset = raw_index * 32
+        values = struct.unpack_from("<4f4i", blend_data, offset)
+        if (not all(math.isfinite(value) for value in values[:4])
+                or any(index < 0 or index >= bone_count
+                       for index in values[4:])):
+            return None
+        struct.pack_into("<4f", weights, output * 16, *values[:4])
+        struct.pack_into("<4i", indices, output * 16, *values[4:])
+        struct.pack_into("<f", pose_active, output * 4,
+                         1.0 if raw_index < pose_limit else 0.0)
+
+    return {
+        "kind": "gimi_compute",
+        "track_id": animation["track_id"],
+        "base_normals": _geometry_ref(base_normals, geometry),
+        "shape_passes": shape_entries,
+        "pose_blend": {
+            "weights": _geometry_ref(weights, geometry),
+            "indices": _geometry_ref(indices, geometry),
+            "active": _geometry_ref(pose_active, geometry),
+            "vertex_count": len(used_vertices),
+        },
+        "pose_frames": shared["pose_frames"],
+        "pose_frame_bytes": shared["pose_frame_bytes"],
+        "pose_frame_floats": 14,
+        "pose_bone_count": bone_count,
+        "pose_frame_count": int(animation["pose_frame_count"]),
+        "pose_dispatch_vertices": int(animation["pose_dispatch_vertices"]),
+        "vertex_count": len(used_vertices),
+        "shape_frequency_var": animation["shape_frequency_var"],
+        "pose_frequency_var": animation["pose_frequency_var"],
+        "pause_var": animation["pause_var"],
+        "state_var": animation["state_var"],
+        "autoplay": animation.get("autoplay"),
+        "state_ranges": animation["state_ranges"],
+        "shape_speed": animation["shape_speed"],
+        "pose_speed": animation["pose_speed"],
+        "shape_wrap": animation["shape_wrap"],
+    }
+
+
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                       texture_source=None, game_profile=None, source=None,
-                      animations=None):
+                      animations=None, compute_animations=None):
     """Build mesh draw entries and a shared texture registry.
 
     Geometry packing and texture publication are delegated to focused stages;
@@ -440,6 +561,13 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         animation_id, value = _animation_clock_dict(clock)
         animation_clocks[animation_id] = value
     used_clock_ids = set()
+    animation_control_vars = set()
+    gimi_by_position = {
+        str(animation.get("position_resource", "")).casefold(): animation
+        for animation in compute_animations or ()
+        if animation.get("position_resource")
+    }
+    gimi_shared = {}
     animation_diagnostics = {
         "animation_family_count": 0,
         "animation_frame_count": 0,
@@ -543,6 +671,29 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     # frame, never a partially mapped mesh.
                     animation_payload = None
 
+            gimi_payload = None
+            gimi = gimi_by_position.get(
+                str(group.get("position_resource", "")).casefold())
+            same_position = (source.same_reference(
+                draw.position_file, group.get("position_file"))
+                if source is not None else
+                os.path.normcase(os.path.normpath(draw.position_file or ""))
+                == os.path.normcase(os.path.normpath(
+                    group.get("position_file") or "")))
+            if gimi is not None and same_position and animation_payload is None:
+                shared = gimi_shared.get(gimi["track_id"])
+                if shared is None:
+                    shared = _prepare_gimi_shared(
+                        gimi, mod_dir=mod_dir, buffers=buffers,
+                        source=source, geometry=geometry)
+                    if shared is not None:
+                        gimi_shared[gimi["track_id"]] = shared
+                if shared is not None:
+                    gimi_payload = _prepare_gimi_geometry(
+                        gimi, packed.used_vertices, mod_dir=mod_dir,
+                        buffers=buffers, source=source, geometry=geometry,
+                        shared=shared)
+
             if draw.skinning_source is not None:
                 skinning_manifest[draw.label] = \
                     SkinningManifestEntry.from_vertices(
@@ -612,6 +763,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                        * animation_payload["frame_count"]
                        if animation_payload["normals"] is not None
                        or animation_payload["normals_ref"] is not None else 0))
+            if gimi_payload is not None:
+                entry["animation_id"] = gimi_payload["track_id"]
+                entry["animation_geometry"] = gimi_payload
+                animation_control_vars.update(gimi.get("control_vars", ()))
+                animation_diagnostics["animation_family_count"] += 1
             if draw.conditions:
                 entry["conditions"] = draw.conditions
             if draw.sources:
@@ -644,18 +800,20 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         skinning_manifest=skinning_manifest,
         animations={key: animation_clocks[key]
                     for key in sorted(used_clock_ids)},
+        animation_control_vars=animation_control_vars,
         diagnostics=animation_diagnostics,
     )
 
 
 def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
                        texture_source=None, game_profile=None, source=None,
-                       animations=None):
+                       animations=None, compute_animations=None):
     """Legacy flat payload wrapper retaining the ``__textures__`` field."""
     built = build_mesh_result(
         groups, mod_dir, max_draws=max_draws, geometry=geometry,
         texture_source=texture_source, game_profile=game_profile,
-        source=source, animations=animations)
+        source=source, animations=animations,
+        compute_animations=compute_animations)
     payload = dict(built.meshes)
     payload["__textures__"] = built.textures
     return payload

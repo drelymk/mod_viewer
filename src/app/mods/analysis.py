@@ -12,6 +12,7 @@ from core.ini.draw_scan import gating_var_names
 from core.ini.menu import attach_menu_images, extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, merge_sections)
+from core.ini.animations import discover_compute_animations
 from core.materials.game_profile import GameDetection, resolve_game_detection
 
 
@@ -36,6 +37,8 @@ class ParsedModAnalysis:
     present: dict
     game: GameDetection
     animations: list = field(default_factory=list)
+    compute_animations: list = field(default_factory=list)
+    animation_control_vars: set = field(default_factory=set)
     resource_files: list = field(default_factory=list)
     texture_override_indexes: list = field(default_factory=list)
 
@@ -210,6 +213,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     runtime_evidence = []
     texture_api_evidence = []
     animations = []
+    compute_animations = []
+    animation_control_vars = set()
     resource_files = []
     texture_override_indexes = []
     multi = len(ini_paths) > 1
@@ -307,6 +312,13 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             extra_gating_vars=record["extra_gating_vars"],
             qualified_vars=qualified_vars,
             canonical_vars=record["canonical_vars"])
+        compute = discover_compute_animations(
+            secs, resources, mod_dir=folder_path, ini_path=ini_path,
+            source=source, var_prefix=var_prefix,
+            canonical_vars=record["canonical_vars"])
+        compute_animations.extend(compute)
+        for animation in compute:
+            animation_control_vars.update(animation.get("control_vars", ()))
         record["analysis"] = analysis
         resource_files.extend(
             info["filename"] for info in analysis.resources.values()
@@ -484,6 +496,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         game=resolve_game_detection(
             game_evidence, runtime_evidence, texture_api_evidence),
         animations=animations,
+        compute_animations=compute_animations,
+        animation_control_vars=animation_control_vars,
         resource_files=list(dict.fromkeys(resource_files)),
         texture_override_indexes=texture_override_indexes,
     )

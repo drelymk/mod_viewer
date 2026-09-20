@@ -184,6 +184,8 @@ def _control_semantic_projection(parsed, context, pending_new_sections=None,
         gating_vars = _gating_vars_from_groups(
             parsed.groups, context.mod_dir, parsed.game.game,
             source=context.source)
+    gating_vars = set(gating_vars or ())
+    gating_vars.update(getattr(parsed, "animation_control_vars", ()))
     return {
         "controls": {
             "toggles": build_toggle_panel(

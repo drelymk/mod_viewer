@@ -266,7 +266,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             parsed.groups, context.mod_dir, geometry=geometry,
             texture_source=texture_source,
             game_profile=parsed.game.game, source=context.source,
-            animations=parsed.animations)
+            animations=parsed.animations,
+            compute_animations=parsed.compute_animations)
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}
@@ -285,7 +286,9 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         hydrate_component_material_kinds(mesh_payload, context.metadata)
         material_profiles = _assign_material_profiles(mesh_payload, parsed.game)
         toggles = build_toggle_panel(
-            parsed.toggles, parsed.defaults, _gating_vars(mesh_payload),
+            parsed.toggles, parsed.defaults,
+            _gating_vars(mesh_payload)
+            | set(getattr(built, "animation_control_vars", ()) or ()),
             context.mod_dir, pending_new_sections)
         menu = build_menu_panel(
             parsed.menu, parsed.defaults, context.mod_dir,
