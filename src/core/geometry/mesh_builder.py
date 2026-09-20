@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import os
+import struct
 import time
 from copy import copy
 from dataclasses import dataclass, replace
@@ -416,6 +417,103 @@ def _geometry_ref(raw, geometry):
     return base64.b64encode(raw).decode()
 
 
+def _gimi_path(mod_dir, value, source):
+    return (source.resolve_resource(value) if source is not None
+            else safe_resource_path(mod_dir, value))
+
+
+def _prepare_gimi_shared(animation, *, mod_dir, buffers, source, geometry):
+    """Load the one pose stream shared by all compact draws in a track."""
+    pose = animation.get("pose")
+    if not pose:
+        return {}
+    pose_path = _gimi_path(mod_dir, pose["file"], source)
+    if not pose_path:
+        return None
+    pose_data = buffers.raw(pose_path)
+    expected = (int(pose["frame_count"])
+                * int(pose["bone_count"]) * 56)
+    if len(pose_data) < expected:
+        return None
+    return {
+        "pose_frames": _geometry_ref(pose_data, geometry),
+    }
+
+
+def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
+                           source, geometry, shared):
+    """Pack fixed-layout compute inputs in the draw's compact vertex order."""
+    base_path = _gimi_path(mod_dir, animation["base_file"], source)
+    pose = animation.get("pose")
+    blend_path = (_gimi_path(mod_dir, pose["blend_file"], source)
+                  if pose else None)
+    if not base_path or (pose and not blend_path):
+        return None
+    base_data = buffers.raw(base_path)
+    blend_data = buffers.raw(blend_path) if pose else None
+    vertex_count = int(animation["vertex_count"])
+    shape_entries = []
+    base_normals = bytearray(len(used_vertices) * 12)
+    for output, raw_index in enumerate(used_vertices):
+        values = struct.unpack_from("<3f", base_data, raw_index * 40 + 12)
+        struct.pack_into("<3f", base_normals, output * 12, *values)
+    for item in animation.get("shape_passes", ()):
+        target_path = _gimi_path(mod_dir, item["target_file"], source)
+        if not target_path:
+            return None
+        target_data = buffers.raw(target_path)
+        deltas = bytearray(len(used_vertices) * 24)
+        limit = min(int(item["dispatch_vertices"]), vertex_count)
+        for output, raw_index in enumerate(used_vertices):
+            if raw_index >= limit:
+                continue
+            base_offset = raw_index * 40
+            target_offset = raw_index * 40
+            base_values = struct.unpack_from("<6f", base_data, base_offset)
+            target_values = struct.unpack_from("<6f", target_data, target_offset)
+            struct.pack_into(
+                "<6f", deltas, output * 24,
+                *(target_values[index] - base_values[index]
+                  for index in range(6)))
+        shape_entries.append({
+            "deltas": _geometry_ref(deltas, geometry),
+        })
+
+    result = {
+        "kind": "gimi_compute",
+        "track_id": animation["track_id"],
+        "coordinate_variant": animation.get("coordinate_variant", "standard"),
+        "program_id": animation.get("program_id"),
+        "program": animation.get("program"),
+        "base_normals": _geometry_ref(base_normals, geometry),
+        "shape_passes": shape_entries,
+        "vertex_count": len(used_vertices),
+    }
+    if pose:
+        weights = bytearray(len(used_vertices) * 16)
+        indices = bytearray(len(used_vertices) * 16)
+        bone_count = int(pose["bone_count"])
+        for output, raw_index in enumerate(used_vertices):
+            offset = raw_index * 32
+            values = struct.unpack_from("<4f4i", blend_data, offset)
+            if any(index < 0 or index >= bone_count for index in values[4:]):
+                return None
+            struct.pack_into("<4f", weights, output * 16, *values[:4])
+            struct.pack_into("<4i", indices, output * 16, *values[4:])
+        result["pose"] = {
+            "frames": shared["pose_frames"],
+            "bone_count": bone_count,
+            "frame_count": int(pose["frame_count"]),
+            "blend": {
+                "weights": _geometry_ref(weights, geometry),
+                "indices": _geometry_ref(indices, geometry),
+            },
+        }
+    else:
+        result["pose"] = None
+    return result
+
+
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                       texture_source=None, game_profile=None, source=None,
                       animations=None):
@@ -440,6 +538,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         animation_id, value = _animation_clock_dict(clock)
         animation_clocks[animation_id] = value
     used_clock_ids = set()
+    gimi_shared = {}
     animation_diagnostics = {
         "animation_family_count": 0,
         "animation_frame_count": 0,
@@ -543,6 +642,22 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     # frame, never a partially mapped mesh.
                     animation_payload = None
 
+            gimi_payload = None
+            gimi = group.get("_compute_animation")
+            if gimi is not None and animation_payload is None:
+                shared = gimi_shared.get(gimi["track_id"])
+                if shared is None:
+                    shared = _prepare_gimi_shared(
+                        gimi, mod_dir=mod_dir, buffers=buffers,
+                        source=source, geometry=geometry)
+                    if shared is not None:
+                        gimi_shared[gimi["track_id"]] = shared
+                if shared is not None:
+                    gimi_payload = _prepare_gimi_geometry(
+                        gimi, packed.used_vertices, mod_dir=mod_dir,
+                        buffers=buffers, source=source, geometry=geometry,
+                        shared=shared)
+
             if draw.skinning_source is not None:
                 skinning_manifest[draw.label] = \
                     SkinningManifestEntry.from_vertices(
@@ -612,6 +727,10 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                        * animation_payload["frame_count"]
                        if animation_payload["normals"] is not None
                        or animation_payload["normals_ref"] is not None else 0))
+            if gimi_payload is not None:
+                entry["animation_id"] = gimi_payload["track_id"]
+                entry["animation_geometry"] = gimi_payload
+                animation_diagnostics["animation_family_count"] += 1
             if draw.conditions:
                 entry["conditions"] = draw.conditions
             if draw.sources:

@@ -4,6 +4,18 @@ The durable project invariants live in `context.md`. Read that file before subst
 
 Keep deterministic formatting, lint, and other mechanical checks in CI. Code review should focus on consequential regressions and repository-specific behavior.
 
+## Implementation workflow
+
+- When the user provides an implementation plan, follow that plan as the
+  authoritative scope and acceptance criteria; re-read it before implementing
+  and do not silently replace it with a different approach.
+- After implementation, perform at least two explicit verification passes
+  against the user-provided plan. In each pass, compare the result with every
+  plan item, run the relevant focused checks, and fix any remaining issue
+  before starting the next pass. Do not report the work complete until both
+  passes are clean; if a blocker remains, report it instead of claiming
+  completion.
+
 ## Test environment
 
 - Run the repository test suite with `.venv-test\Scripts\python.exe -m pytest -q`. This project venv includes `mcp.server.fastmcp`; the system Python may not.

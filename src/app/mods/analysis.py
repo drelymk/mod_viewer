@@ -12,6 +12,9 @@ from core.ini.draw_scan import gating_var_names
 from core.ini.menu import attach_menu_images, extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, merge_sections)
+from core.ini.animations import (
+    compute_animation_control_vars, discover_compute_animations,
+)
 from core.materials.game_profile import GameDetection, resolve_game_detection
 
 
@@ -36,6 +39,7 @@ class ParsedModAnalysis:
     present: dict
     game: GameDetection
     animations: list = field(default_factory=list)
+    animation_control_vars: set = field(default_factory=set)
     resource_files: list = field(default_factory=list)
     texture_override_indexes: list = field(default_factory=list)
 
@@ -210,6 +214,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     runtime_evidence = []
     texture_api_evidence = []
     animations = []
+    animation_control_vars = set()
     resource_files = []
     texture_override_indexes = []
     multi = len(ini_paths) > 1
@@ -307,6 +312,12 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             extra_gating_vars=record["extra_gating_vars"],
             qualified_vars=qualified_vars,
             canonical_vars=record["canonical_vars"])
+        compute = discover_compute_animations(
+            secs, resources, mod_dir=folder_path, ini_path=ini_path,
+            source=source, var_prefix=var_prefix,
+            canonical_vars=record["canonical_vars"])
+        animation_control_vars.update(
+            compute_animation_control_vars(compute, analysis.state_rules))
         record["analysis"] = analysis
         resource_files.extend(
             info["filename"] for info in analysis.resources.values()
@@ -318,6 +329,18 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             # ``source`` is intentionally a compact UI grouping label. Keep
             # the complete relative INI path separately for mesh identity.
             group["identity_source"] = identity_source
+        compute_by_position = {}
+        for item in compute:
+            key = str(item.get("position_resource", "")).casefold()
+            if key:
+                compute_by_position.setdefault(key, []).append(item)
+        for group in ini_groups:
+            matches = compute_by_position.get(
+                str(group.get("position_resource", "")).casefold(), ())
+            if len(matches) == 1:
+                # Keep the descriptor on the group that came from this INI.
+                # Mesh construction must not match resources across siblings.
+                group["_compute_animation"] = matches[0]
         shape_sliders = analysis.shapes
         state_rules.extend(analysis.state_rules)
         game_evidence.extend(analysis.game_evidence)
@@ -484,6 +507,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         game=resolve_game_detection(
             game_evidence, runtime_evidence, texture_api_evidence),
         animations=animations,
+        animation_control_vars=animation_control_vars,
         resource_files=list(dict.fromkeys(resource_files)),
         texture_override_indexes=texture_override_indexes,
     )

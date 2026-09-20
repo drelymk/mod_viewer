@@ -479,6 +479,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "name": label,
             "display_name": display_name,
             "source": source,
+            "position_resource": buffers["position"],
             "position_file": position_file,
             "texcoord_file": texcoord_file,
             "position_stride": position_stride,

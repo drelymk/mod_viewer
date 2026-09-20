@@ -8,6 +8,12 @@ from .sections import canonical_var_names
 
 _ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*$")
 _ELIF_RE = re.compile(r"(?:else\s+if|elif)\s+(.*)$", re.I)
+_UNSUPPORTED_CONDITION_RE = re.compile(r"[<>+*/%]|\btime\b", re.I)
+
+
+def _condition_is_supported(expression):
+    """Reject branches whose truth value cannot be represented by DNF."""
+    return _UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
 
 
 def _possible_groups(groups):
@@ -69,14 +75,30 @@ def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
                 branch = parse_condition_dnf(match.group(1), aliases)
                 frame["cur"] = dnf_and(dnf_not(frame["seen"]), branch)
                 frame["seen"] = dnf_or(frame["seen"], branch)
+                frame["supported"] = (
+                    frame["parent_supported"]
+                    and frame["condition_supported"]
+                    and _condition_is_supported(match.group(1)))
             continue
         if low.startswith("if "):
             branch = parse_condition_dnf(line[3:], aliases)
-            stack.append({"cur": branch, "seen": branch})
+            parent_supported = all(
+                frame["supported"] for frame in stack)
+            condition_supported = _condition_is_supported(line[3:])
+            stack.append({
+                "cur": branch, "seen": branch,
+                "parent_supported": parent_supported,
+                "condition_supported": condition_supported,
+                "supported": parent_supported and condition_supported,
+            })
             continue
         if low == "else":
             if stack:
-                stack[-1]["cur"] = dnf_not(stack[-1]["seen"])
+                frame = stack[-1]
+                frame["cur"] = dnf_not(frame["seen"])
+                frame["supported"] = (
+                    frame["parent_supported"]
+                    and frame["condition_supported"])
             continue
         if low == "endif":
             if stack:
@@ -88,6 +110,8 @@ def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
         combined = DNF_TRUE
         for frame in stack:
             combined = dnf_and(combined, frame["cur"])
+        if any(not frame["supported"] for frame in stack):
+            continue
         conditions = _possible_groups(normalize_dnf(combined, tracked, var_prefix))
         if combined != DNF_TRUE and not conditions:
             continue

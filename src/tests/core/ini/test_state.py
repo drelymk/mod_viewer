@@ -35,3 +35,28 @@ endif
                           a["negate"] != b["negate"]
                           for i, a in enumerate(group) for b in group[i + 1:])
               for rule in rules for group in rule["conditions"])), ("impossible elif alternatives are removed from state rules")
+
+
+def test_unsupported_state_conditions_are_not_replayed():
+    text = r"""
+[Constants]
+global persist $anime_state = 0
+global $anime_loop = 0
+global $start_frame = 40
+
+[Present]
+if $anime_state == 0
+    $start_frame = 40
+endif
+if $anime_auto_play == 1
+    if $anime_state == 0 && $anime_loop > 50
+        $anime_state = 1
+    endif
+endif
+"""
+    rules = extract_state_rules(sections(text))
+    assert rules == [{
+        "var": "start_frame", "value": "40",
+        "conditions": [[{
+            "var": "anime_state", "value": "0", "negate": False}]],
+    }]
