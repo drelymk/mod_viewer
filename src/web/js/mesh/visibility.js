@@ -30,10 +30,6 @@ export const setStateRules = setControlStateRules;
 
 let lastAppliedControlState = null;
 
-window.addEventListener('mod-viewer-animation-state-changed', () => {
-  refreshAll();
-});
-
 export function reset(options) {
   resetMeshes(options);
   resetControlState();

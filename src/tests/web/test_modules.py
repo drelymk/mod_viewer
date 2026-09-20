@@ -165,14 +165,15 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
         runtime.registerAnimatedMesh(mesh, 'gimi-test', {
           kind: 'gimi_compute', vertex_count: 2,
           base_normals: encode(normals),
-          shape_passes: [{deltas: encode(deltas), phase_offset: 0}],
-          pose_blend: {weights: encode(weights), indices: encode(indices),
-            active: encode(poseActive)},
-          pose_frames: encode(pose), pose_bone_count: 2,
-          pose_frame_count: 2, state_ranges: [{state: 0, start: 0, end: 1}],
-          shape_frequency_var: 'freq_key', pose_frequency_var: 'freq_pose',
-          pause_var: 'pause', state_var: 'anime_state',
-          shape_speed: 0, pose_speed: 0, shape_wrap: 5.236,
+          shape_passes: [{deltas: encode(deltas), phase_offset: 0,
+            amplitude: 0.5, angular_scale: 30, bias: 0.5}],
+          pose: {blend: {weights: encode(weights), indices: encode(indices),
+            active: encode(poseActive)}, frames: encode(pose), bone_count: 2,
+            frame_count: 2, dispatch_vertices: 2},
+          shape_clock: null,
+          pose_clock: {rate: {kind: 'literal', value: 0},
+            advance_conditions: [[{var: 'pause', value: '0', negate: false}]],
+            reset_rules: []},
         });
         const firstId = Math.min(...pending.keys());
         pending.get(firstId)(0);
@@ -192,6 +193,159 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
     assert result["first"] == [0.5, 0, 0, 2, 0, 0]
     assert result["firstNormals"] == [0, 1, 0, 0, 1, 0]
     assert result["paused"] == result["first"]
+
+
+def test_gimi_compute_animation_uses_slot_zero_dq_reference(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      try {
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const half = Math.SQRT1_2;
+        const pose = new Float32Array(2 * 3 * 14);
+        for (let frame = 0; frame < 2; frame += 1) {
+          let offset = (frame * 3) * 14;
+          pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
+          pose[offset + 9] = half;
+          pose[offset + 8] = half;
+          pose[offset + 10] = 0.1767766953;
+          pose[offset + 11] = -0.1767766953;
+          offset += 14;
+          pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
+          pose[offset + 8] = -half;
+          pose[offset + 9] = -half;
+          pose[offset + 10] = -0.1767766953;
+          pose[offset + 11] = 0.1767766953;
+          offset += 14;
+          pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
+          pose[offset + 8] = half;
+          pose[offset + 9] = half;
+          pose[offset + 10] = 0.1767766953;
+          pose[offset + 11] = -0.1767766953;
+        }
+        const position = {array: new Float32Array([1, 0, 0])};
+        const normal = {array: new Float32Array([1, 0, 0])};
+        const mesh = {
+          visible: true,
+          userData: {basePositions: new Float32Array([1, 0, 0])},
+          geometry: {attributes: {position, normal}},
+        };
+        runtime.registerAnimatedMesh(mesh, 'dq-sign-test', {
+          kind: 'gimi_compute', vertex_count: 1,
+          base_normals: encode(new Float32Array([1, 0, 0])),
+          shape_passes: [], pose_clock: {
+            rate: {kind: 'literal', value: 0},
+            advance_conditions: [], reset_rules: [],
+          },
+          pose: {
+            frames: encode(pose), bone_count: 3, frame_count: 2,
+            dispatch_vertices: 1,
+            blend: {
+              weights: encode(new Float32Array([0, 0.5, 0.5, 0])),
+              indices: encode(new Int32Array([0, 1, 2, 0])),
+              active: encode(new Float32Array([1])),
+            },
+          },
+        });
+        pending.get(Math.min(...pending.keys()))(0);
+        const output = Array.from(position.array);
+        const outputNormal = Array.from(normal.array);
+        runtime.resetAnimationRuntime();
+        return {output, outputNormal};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["output"] == pytest.approx([0.5, 1, 0], abs=1e-5)
+    assert result["outputNormal"] == pytest.approx([0, 1, 0], abs=1e-5)
+
+
+def test_gimi_compute_animation_throttles_geometry_to_pose_clock(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      const tick = time => {
+        const id = Math.max(...pending.keys());
+        pending.get(id)(time);
+      };
+      try {
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        let updates = 0;
+        const position = {
+          array: new Float32Array([0, 0, 0]),
+          set needsUpdate(value) { if (value) updates += 1; },
+        };
+        const normal = {
+          array: new Float32Array([0, 1, 0]),
+          set needsUpdate(value) { if (value) updates += 1; },
+        };
+        const mesh = {
+          visible: true,
+          userData: {basePositions: new Float32Array([0, 0, 0])},
+          geometry: {attributes: {position, normal}},
+        };
+        const pose = new Float32Array(2 * 14);
+        for (let frame = 0; frame < 2; frame += 1) {
+          const offset = frame * 14;
+          pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
+          pose[offset + 9] = 1;
+        }
+        runtime.registerAnimatedMesh(mesh, 'schedule-test', {
+          kind: 'gimi_compute', vertex_count: 1,
+          base_normals: encode(new Float32Array([0, 1, 0])), shape_passes: [],
+          pose_clock: {rate: {kind: 'literal', value: 30},
+            advance_conditions: [], reset_rules: []},
+          pose: {frames: encode(pose), bone_count: 1, frame_count: 2,
+            dispatch_vertices: 1,
+            blend: {weights: encode(new Float32Array([1, 0, 0, 0])),
+              indices: encode(new Int32Array([0, 0, 0, 0])),
+              active: encode(new Float32Array([1]))}},
+        });
+        tick(0);
+        const first = updates;
+        tick(8);
+        const highRate = updates;
+        tick(34);
+        const poseRate = updates;
+        runtime.resetAnimationRuntime();
+        return {first, highRate, poseRate};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result == {"first": 2, "highRate": 2, "poseRate": 4}
 
 
 def test_baked_animation_shared_track_selects_active_clock_range(module_page):

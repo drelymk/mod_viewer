@@ -49,7 +49,6 @@ class MeshBuildResult:
     geometry: GeometryBlob | None = None
     skinning_manifest: dict[str, SkinningManifestEntry] | None = None
     animations: dict | None = None
-    animation_control_vars: set | None = None
     diagnostics: dict | None = None
 
 
@@ -426,12 +425,13 @@ def _gimi_path(mod_dir, value, source):
 
 def _prepare_gimi_shared(animation, *, mod_dir, buffers, source, geometry):
     """Load the one pose stream shared by all compact draws in a track."""
-    pose_path = _gimi_path(mod_dir, animation["pose_file"], source)
+    pose = animation["pose"]
+    pose_path = _gimi_path(mod_dir, pose["file"], source)
     if not pose_path:
         return None
     pose_data = buffers.raw(pose_path)
-    expected = (int(animation["pose_frame_count"])
-                * int(animation["pose_bone_count"]) * 56)
+    expected = (int(pose["frame_count"])
+                * int(pose["bone_count"]) * 56)
     if len(pose_data) != expected:
         return None
     return {
@@ -444,7 +444,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
                            source, geometry, shared):
     """Pack fixed-layout compute inputs in the draw's compact vertex order."""
     base_path = _gimi_path(mod_dir, animation["base_file"], source)
-    blend_path = _gimi_path(mod_dir, animation["pose_blend_file"], source)
+    blend_path = _gimi_path(mod_dir, animation["pose"]["blend_file"], source)
     if not base_path or not blend_path:
         return None
     base_data = buffers.raw(base_path)
@@ -488,13 +488,17 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
             "vertex_count": len(used_vertices),
             "delta_floats": 6,
             "phase_offset": float(item.get("phase_offset", 0.0)),
+            "amplitude": float(item["amplitude"]),
+            "angular_scale": float(item["angular_scale"]),
+            "bias": float(item["bias"]),
         })
 
     weights = bytearray(len(used_vertices) * 16)
     indices = bytearray(len(used_vertices) * 16)
     pose_active = bytearray(len(used_vertices) * 4)
-    bone_count = int(animation["pose_bone_count"])
-    pose_limit = min(int(animation["pose_dispatch_vertices"]), vertex_count)
+    pose = animation["pose"]
+    bone_count = int(pose["bone_count"])
+    pose_limit = min(int(pose["dispatch_vertices"]), vertex_count)
     for output, raw_index in enumerate(used_vertices):
         offset = raw_index * 32
         values = struct.unpack_from("<4f4i", blend_data, offset)
@@ -512,28 +516,23 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
         "track_id": animation["track_id"],
         "base_normals": _geometry_ref(base_normals, geometry),
         "shape_passes": shape_entries,
-        "pose_blend": {
-            "weights": _geometry_ref(weights, geometry),
-            "indices": _geometry_ref(indices, geometry),
-            "active": _geometry_ref(pose_active, geometry),
-            "vertex_count": len(used_vertices),
+        "pose": {
+            "frames": shared["pose_frames"],
+            "frame_bytes": shared["pose_frame_bytes"],
+            "frame_floats": 14,
+            "bone_count": bone_count,
+            "frame_count": int(pose["frame_count"]),
+            "dispatch_vertices": int(pose["dispatch_vertices"]),
+            "blend": {
+                "weights": _geometry_ref(weights, geometry),
+                "indices": _geometry_ref(indices, geometry),
+                "active": _geometry_ref(pose_active, geometry),
+                "vertex_count": len(used_vertices),
+            },
         },
-        "pose_frames": shared["pose_frames"],
-        "pose_frame_bytes": shared["pose_frame_bytes"],
-        "pose_frame_floats": 14,
-        "pose_bone_count": bone_count,
-        "pose_frame_count": int(animation["pose_frame_count"]),
-        "pose_dispatch_vertices": int(animation["pose_dispatch_vertices"]),
+        "shape_clock": animation.get("shape_clock"),
+        "pose_clock": animation["pose_clock"],
         "vertex_count": len(used_vertices),
-        "shape_frequency_var": animation["shape_frequency_var"],
-        "pose_frequency_var": animation["pose_frequency_var"],
-        "pause_var": animation["pause_var"],
-        "state_var": animation["state_var"],
-        "autoplay": animation.get("autoplay"),
-        "state_ranges": animation["state_ranges"],
-        "shape_speed": animation["shape_speed"],
-        "pose_speed": animation["pose_speed"],
-        "shape_wrap": animation["shape_wrap"],
     }
 
 
@@ -561,7 +560,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         animation_id, value = _animation_clock_dict(clock)
         animation_clocks[animation_id] = value
     used_clock_ids = set()
-    animation_control_vars = set()
     gimi_by_position = {
         str(animation.get("position_resource", "")).casefold(): animation
         for animation in compute_animations or ()
@@ -766,7 +764,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if gimi_payload is not None:
                 entry["animation_id"] = gimi_payload["track_id"]
                 entry["animation_geometry"] = gimi_payload
-                animation_control_vars.update(gimi.get("control_vars", ()))
                 animation_diagnostics["animation_family_count"] += 1
             if draw.conditions:
                 entry["conditions"] = draw.conditions
@@ -800,7 +797,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         skinning_manifest=skinning_manifest,
         animations={key: animation_clocks[key]
                     for key in sorted(used_clock_ids)},
-        animation_control_vars=animation_control_vars,
         diagnostics=animation_diagnostics,
     )
 

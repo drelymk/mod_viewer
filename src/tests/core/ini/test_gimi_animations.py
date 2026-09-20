@@ -5,6 +5,7 @@ import struct
 from core.ini.animations import discover_compute_animations
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.ini.draw_resources import _collect_resource_copy_sources
 from core.ini.sections import extract_resources, parse_sections
 
 
@@ -46,6 +47,7 @@ void main(uint3 threadID : SV_DispatchThreadID) {
   PoseAttributes p = pose[b.indicies.x];
   float4 qr = normalize(p.QR);
   float4 qd = p.QD;
+  float sign = dot(qr, qr);
   rw_buffer[i].position = v.position * p.S + p.T;
   rw_buffer[i].normal = normalize(v.normal);
 }
@@ -85,6 +87,7 @@ global $pause = 0
 global $Freq_key = 0
 global $Freq_pose = 0
 global $Speed = 0.1
+global $ShapeLimit = 5.236
 global $dt
 global $VG_count = 2
 global $strat_frame = 0
@@ -118,6 +121,9 @@ endif
 if $pause == 0
     $Freq_key = $Freq_key + $Speed * $dt
 endif
+if $Freq_key > $ShapeLimit
+    $Freq_key = 0
+endif
 x88 = $Freq_key
 cs-t50 = copy ResourcePosition.2
 cs-t51 = copy ResourceKey1
@@ -135,7 +141,11 @@ cs-u5 = null
 if $pause == 0
     $Freq_pose = $Freq_pose + 30 * $dt
 endif
+if $Freq_pose > $end_frame
+    $Freq_pose = $strat_frame
+endif
 x88 = $Freq_pose
+x89 = $VG_count
 cs-t50 = copy ResourcePosition.1
 cs-t51 = copy ResourceBlend
 cs-t52 = copy ResourcePose
@@ -192,12 +202,22 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     animation = discovered[0]
     assert [item["dispatch_vertices"] for item in animation["shape_passes"]] == [64, 64]
     assert [item["phase_offset"] for item in animation["shape_passes"]] == [0., -0.05236]
-    assert animation["pose_bone_count"] == 2
-    assert animation["pose_frame_count"] == 2
-    assert animation["control_vars"] == ["pause", "anime_state", "anime_auto_play"]
+    assert animation["shape_passes"][0]["amplitude"] == 0.5
+    assert animation["shape_passes"][0]["angular_scale"] == 30
+    assert animation["shape_passes"][0]["bias"] == 0.5
+    assert animation["pose"]["bone_count"] == 2
+    assert animation["pose"]["frame_count"] == 2
+    assert animation["pose_clock"]["rate"] == {
+        "kind": "literal", "value": 30.0}
+    assert animation["shape_clock"]["wrap_limit"] == {
+        "kind": "variable", "variable": "ShapeLimit", "offset": 0}
+    assert animation["pose_clock"]["wrap_target"] == {
+        "kind": "variable", "variable": "strat_frame", "offset": 0}
+    assert "anime_auto_play" not in repr(animation)
 
     bad_shader = tmp_path / "bad-shader"
     bad_sections = _sections(bad_shader, shader=False)
+    (bad_shader / "pose.hlsl").write_text("void main() {}")
     assert not _discover(bad_shader, bad_sections)
 
     bad_stride = tmp_path / "bad-stride"
@@ -243,4 +263,85 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
         payload["base_normals"]["offset"]:
         payload["base_normals"]["offset"] + payload["base_normals"]["length"]]
     assert struct.unpack_from("<fff", raw_normals, 0) == (0., 2., 0.)
-    assert payload["pose_frames"]["length"] == 2 * 2 * 56
+    assert payload["pose"]["frames"]["length"] == 2 * 2 * 56
+
+
+def test_compute_resource_copy_edges_track_uav_slots_and_sections(tmp_path):
+    sections = {
+        "CustomShaderA": [
+            "cs-u5 = copy ResourcePosition.2",
+            "ResourcePosition.1 = ref cs-u5",
+        ],
+        "CustomShaderB": [
+            "cs-u5 = copy ResourcePosition.1",
+            "ResourcePosition = ref cs-u5",
+        ],
+        "CustomShaderNull": [
+            "cs-u5 = copy ResourceA",
+            "cs-u5 = null",
+            "ResourceB = ref cs-u5",
+        ],
+        "OtherSection": ["ResourceC = ref cs-u5"],
+    }
+    copies = _collect_resource_copy_sources(sections, {})
+    assert copies["resourceposition.1"] == ["ResourcePosition.2"]
+    assert copies["resourceposition"] == ["ResourcePosition.1"]
+    assert "resourceb" not in copies
+    assert "resourcec" not in copies
+
+
+def test_compute_animation_accepts_pose_only_and_nonstandard_thread_width(tmp_path):
+    root = tmp_path / "pose-only"
+    sections = _sections(root)
+    sections.pop("CustomShaderShape")
+    (root / "pose.hlsl").write_text(
+        POSE_SHADER.replace("numthreads(64", "numthreads(32")
+        .replace("rw_buffer", "result_buffer")
+        .replace("base", "source_buffer")
+        .replace("blend", "weights_buffer")
+        .replace("pose", "skeleton_buffer")
+    )
+    sections["CustomShaderPose"] = [
+        line.replace("ResourcePosition.1", "ResourceA")
+             .replace("ResourceBlend", "ResourceWeights")
+             .replace("ResourcePose", "ResourceSkeleton")
+             .replace("ResourcePosition", "ResourceOutput")
+        for line in sections["CustomShaderPose"]
+    ]
+    sections["CustomShaderPose"] = [
+        line.replace("Dispatch = 1, 1, 1", "Dispatch = 10, 1, 1")
+        for line in sections["CustomShaderPose"]
+    ]
+    sections["ResourceA"] = sections.pop("ResourcePosition.2")
+    sections["ResourceWeights"] = sections.pop("ResourceBlend")
+    sections["ResourceSkeleton"] = sections.pop("ResourcePose")
+    sections["ResourceOutput"] = []
+    discovered = _discover(root, sections)
+    assert len(discovered) == 1
+    assert discovered[0]["shape_passes"] == []
+    assert discovered[0]["pose"]["dispatch_vertices"] == 320
+
+
+def test_compute_animation_uses_shape_kernel_constants(tmp_path):
+    root = tmp_path / "shape-constants"
+    sections = _sections(root)
+    shader = (root / "shape.hlsl").read_text()
+    shader = shader.replace("0.5 * (sin(FREQ * 30) + 1)",
+                            "0.25 * (sin(FREQ * 12) + 1)")
+    (root / "shape.hlsl").write_text(shader)
+    animation = _discover(root, sections)[0]
+    assert animation["shape_passes"][0]["amplitude"] == 0.25
+    assert animation["shape_passes"][0]["angular_scale"] == 12
+    assert animation["shape_passes"][0]["bias"] == 0.25
+
+
+def test_compute_animation_keeps_pose_when_shape_phase_is_unparseable(tmp_path):
+    root = tmp_path / "unparseable-shape"
+    sections = _sections(root)
+    sections["CustomShaderShape"] = [
+        "x88 = unsupported_expression" if line.startswith("x88 =") else line
+        for line in sections["CustomShaderShape"]
+    ]
+    animation = _discover(root, sections)[0]
+    assert animation["shape_passes"] == []
+    assert animation["pose"]["frame_count"] == 2

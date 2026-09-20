@@ -12,7 +12,9 @@ from core.ini.draw_scan import gating_var_names
 from core.ini.menu import attach_menu_images, extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, merge_sections)
-from core.ini.animations import discover_compute_animations
+from core.ini.animations import (
+    compute_animation_control_vars, discover_compute_animations,
+)
 from core.materials.game_profile import GameDetection, resolve_game_detection
 
 
@@ -317,8 +319,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             source=source, var_prefix=var_prefix,
             canonical_vars=record["canonical_vars"])
         compute_animations.extend(compute)
-        for animation in compute:
-            animation_control_vars.update(animation.get("control_vars", ()))
         record["analysis"] = analysis
         resource_files.extend(
             info["filename"] for info in analysis.resources.values()
@@ -486,6 +486,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             "sync_error": sync_error,
         }
     present = {"target_inis": present_sources, "item": present_item}
+    animation_control_vars = compute_animation_control_vars(
+        compute_animations, state_rules)
     return ParsedModAnalysis(
         groups=groups,
         toggles=toggle_keys,

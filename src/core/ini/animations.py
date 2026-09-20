@@ -62,20 +62,17 @@ _NUMTHREADS_RE = re.compile(
     re.I)
 _REGISTER_RE = re.compile(
     r"\b(?P<kind>rwstructuredbuffer|structuredbuffer)\s*<[^>]+>\s+"
-    r"\w+\s*:\s*register\s*\(\s*(?P<reg>[ut]\d+)\s*\)", re.I)
-_X88_RE = re.compile(r"^\s*x88\s*=\s*(?P<expr>.+?)\s*$", re.I)
-_STATE_BRANCH_RE = re.compile(
-    r"^\s*(?:if|elif|else\s+if)\s+\$(?P<var>\w+)\s*==\s*"
-    r"(?P<state>\d+)\s*$", re.I)
-_AUTO_BRANCH_RE = re.compile(
-    r"^\s*(?:if|elif|else\s+if)\s+\$(?P<state>\w+)\s*==\s*"
-    r"(?P<from>\d+)\s*&&\s*\$(?P<loop>\w+)\s*>\s*(?P<threshold>\d+)\s*$",
+    r"(?P<name>\w+)\s*:\s*register\s*\(\s*(?P<reg>[ut]\d+)\s*\)",
     re.I)
-_VAR_REF_RE = re.compile(r"\$(\w+)")
+_X88_RE = re.compile(r"^\s*x88\s*=\s*(?P<expr>.+?)\s*$", re.I)
+_X89_RE = re.compile(r"^\s*x89\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _RUNTIME_UPDATE_RE = re.compile(
     r"^\s*\$(?P<var>\w+)\s*=\s*\$(?P=var)\s*\+\s*"
     r"(?P<speed>\$\w+|[-+]?\d+(?:\.\d+)?)\s*\*\s*"
     r"(?P<dt>\$\w+|[-+]?\d+(?:\.\d+)?)\s*$", re.I)
+_PHASE_WRAP_RE = re.compile(
+    r"^\s*if\s+\$(?P<var>\w+)\s*>\s*(?P<limit>.+?)\s*$", re.I)
+_SHADER_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 
 
 def _unprefix(value, var_prefix):
@@ -374,43 +371,106 @@ def _shader_path(mod_dir, ini_path, value, source):
     return safe_resource_path(mod_dir, value)
 
 
+def _strip_hlsl_comments(text):
+    text = re.sub(r"//[^\r\n]*", "", text)
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+
+
+def _shape_constants(text):
+    """Read the small sinusoid form used by the supported shape kernel."""
+    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
+    number = _SHADER_NUMBER
+    match = re.search(
+        rf"(?P<amplitude>{number})\*\(sin\([^()]+\*(?P<angular>{number})\)\+1\)",
+        compact)
+    if match:
+        amplitude = float(match.group("amplitude"))
+        return {
+            "amplitude": amplitude,
+            "angular_scale": float(match.group("angular")),
+            "bias": amplitude,
+        }
+    match = re.search(
+        rf"(?P<amplitude>{number})\*sin\([^()]+\*(?P<angular>{number})\)"
+        rf"\+(?P<bias>{number})", compact)
+    if match:
+        return {
+            "amplitude": float(match.group("amplitude")),
+            "angular_scale": float(match.group("angular")),
+            "bias": float(match.group("bias")),
+        }
+    return None
+
+
 def _shader_signature(text):
-    """Classify only the two known, fixed-layout compute shader families."""
+    """Classify the fixed-layout kernels by their declarations and operations."""
     if not text:
         return None
-    registers = {
-        match.group("reg").lower()
-        for match in _REGISTER_RE.finditer(text)
+    cleaned = _strip_hlsl_comments(text)
+    compact = re.sub(r"\s+", "", cleaned).lower()
+    declarations = {
+        match.group("reg").lower(): {
+            "kind": match.group("kind").lower(),
+            "name": match.group("name").lower(),
+        }
+        for match in _REGISTER_RE.finditer(cleaned)
     }
-    threads = _NUMTHREADS_RE.search(text)
-    if threads is None:
+    threads = _NUMTHREADS_RE.search(cleaned)
+    if threads is None or "sv_dispatchthreadid" not in compact:
         return None
     thread_dims = tuple(int(threads.group(index)) for index in range(1, 4))
-    if thread_dims != (64, 1, 1) or "sv_dispatchthreadid" not in text.lower():
+    if thread_dims[0] <= 0 or thread_dims[1:] != (1, 1):
         return None
-    low = text.lower()
-    if not {"u5", "t50", "t51"}.issubset(registers):
+    required = {"u5", "t50", "t51"}
+    if not required.issubset(declarations):
         return None
-    if ("shapekey[i].position - base[i].position" not in low
-            or "shapekey[i].normal - base[i].normal" not in low
-            or "sin(" not in low
-            or "rw_buffer[i].position +=" not in low
-            or "rw_buffer[i].normal +=" not in low):
-        shape = False
-    else:
-        shape = True
-    pose = ({"u5", "t50", "t51", "t52"}.issubset(registers)
-            and "iniparams[88]" in low and "iniparams[89]" in low
-            and "frac(time)" in low
-            and ".qr" in low and ".qd" in low
-            and ".s" in low and ".t" in low
-            and "normalize" in low
-            and "rw_buffer[i].position" in low
-            and "rw_buffer[i].normal" in low)
-    if shape and not pose:
-        return {"kind": "shape", "threads": thread_dims[0]}
+
+    def alias(reg):
+        item = declarations.get(reg)
+        return re.escape(item["name"]) if item else None
+
+    output = alias("u5")
+    base = alias("t50")
+    target = alias("t51")
+    shape = False
+    shape_data = None
+    if output and base and target:
+        has_position_delta = re.search(
+            rf"{target}\[i\]\.position-{base}\[i\]\.position", compact)
+        has_normal_delta = re.search(
+            rf"{target}\[i\]\.normal-{base}\[i\]\.normal", compact)
+        has_position_write = re.search(
+            rf"{output}\[i\]\.position\+=", compact)
+        has_normal_write = re.search(
+            rf"{output}\[i\]\.normal\+=", compact)
+        shape = bool(has_position_delta and has_normal_delta
+                     and has_position_write and has_normal_write
+                     and "sin(" in compact)
+        if shape:
+            shape_data = _shape_constants(cleaned)
+
+    pose = False
+    if {"u5", "t50", "t51", "t52"}.issubset(declarations):
+        pose_aliases = [alias(reg) for reg in ("u5", "t50", "t51", "t52")]
+        pose = bool(
+            all(pose_aliases)
+            and re.search(r"\[[^]]*88[^]]*\]", compact)
+            and re.search(r"\[[^]]*89[^]]*\]", compact)
+            and "frac(time)" in compact
+            and ".qr" in compact and ".qd" in compact
+            and ".s" in compact and ".t" in compact
+            and "normalize" in compact and "dot(" in compact
+            and re.search(rf"{pose_aliases[1]}\[i\]", compact)
+            and re.search(rf"{pose_aliases[2]}\[i\]", compact)
+            and re.search(rf"{pose_aliases[3]}\[", compact)
+            and re.search(rf"{pose_aliases[0]}\[i\]\.position", compact)
+            and re.search(rf"{pose_aliases[0]}\[i\]\.normal", compact)
+        )
     if pose and not shape:
         return {"kind": "pose", "threads": thread_dims[0]}
+    if shape and not pose:
+        return {"kind": "shape", "threads": thread_dims[0],
+                "shape": shape_data}
     return None
 
 
@@ -421,142 +481,115 @@ def _literal_number(value, literals, canonical):
     return _numeric(value)
 
 
-def _phase_bindings(sections, canonical):
-    """Return runtime phase updates and the variable used for pause."""
+def _combined_conditions(stack, canonical, var_prefix=None):
+    combined = DNF_TRUE
+    for frame in stack:
+        combined = dnf_and(combined, frame["cur"])
+    return normalize_dnf(combined, set(canonical.values()), var_prefix)
+
+
+def _operand(value, literals, canonical, var_prefix=None):
+    """Normalize the intentionally tiny runtime operand grammar."""
+    text = str(value).strip().strip("()")
+    match = re.fullmatch(r"(\$\w+)\s*([+-])\s*(%s)" % _NUMBER_RE,
+                         text, re.I)
+    if match:
+        local = _canonical(match.group(1), canonical)
+        offset = float(match.group(3))
+        if match.group(2) == "-":
+            offset = -offset
+        return {"kind": "variable", "variable": f"{var_prefix or ''}{local}",
+                "offset": offset}
+    if text.startswith("$"):
+        local = _canonical(text, canonical)
+        return {"kind": "variable", "variable": f"{var_prefix or ''}{local}",
+                "offset": 0}
+    number = _numeric(text)
+    if number is None:
+        return None
+    return {"kind": "literal", "value": number}
+
+
+def _phase_bindings(sections, canonical, *, var_prefix=None):
+    """Find phase updates, their exact guards, wraps, and simple resets."""
     literals = _literal_assignments(sections, canonical)
+    aliases = build_bool_alias_map(sections)
     updates = {}
-    pause_var = None
     for lines in sections.values():
-        zero_candidate = None
+        stack = []
+        pending_wrap = None
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
-            zero_match = re.match(
-                r"^\s*if\s+\$(\w+)\s*==\s*0\s*$", line, re.I)
-            if zero_match:
-                zero_candidate = _canonical(zero_match.group(1), canonical)
+            if not line:
+                continue
+            if _condition_stack_line(line, stack, aliases):
+                wrap = _PHASE_WRAP_RE.fullmatch(line)
+                pending_wrap = None
+                if wrap:
+                    pending_wrap = {
+                        "var": _canonical(wrap.group("var"), canonical),
+                        "limit": _operand(wrap.group("limit"), literals,
+                                          canonical, var_prefix),
+                    }
+                continue
             update = _RUNTIME_UPDATE_RE.fullmatch(line)
             if update:
                 local = _canonical(update.group("var"), canonical)
-                speed = _literal_number(update.group("speed"), literals, canonical)
+                rate = _operand(update.group("speed"), literals, canonical,
+                                var_prefix)
                 dt = update.group("dt")
-                if speed is not None and (dt.startswith("$") or _numeric(dt) is not None):
-                    updates[local.casefold()] = {
-                        "var": local,
-                        "speed": float(speed),
-                        "dt_var": (_canonical(dt, canonical)
-                                   if dt.startswith("$") else None),
-                    }
-                if pause_var is None and zero_candidate is not None:
-                    pause_var = zero_candidate
-    return updates, pause_var
-
-
-def _state_ranges(sections, canonical):
-    ranges = {}
-    current_var = None
-    for section, lines in sections.items():
-        if str(section).casefold() != "present":
-            continue
-        current = None
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            branch = _STATE_BRANCH_RE.fullmatch(line)
-            if branch:
-                current_var = _canonical(branch.group("var"), canonical)
-                current = int(branch.group("state"))
-                continue
-            if line.casefold() in {"endif", "else"}:
-                if line.casefold() == "endif":
-                    current = None
-                continue
-            if current is None:
+                if rate is not None and (dt.startswith("$")
+                                         or _numeric(dt) is not None):
+                    item = updates.setdefault(local.casefold(), {
+                        "variable": f"{var_prefix or ''}{local}",
+                        "rate": rate,
+                        "advance_conditions": _combined_conditions(
+                            stack, canonical, var_prefix),
+                        "reset_rules": [],
+                        "wrap_limit": None,
+                        "wrap_target": None,
+                    })
+                    item["advance_conditions"] = _combined_conditions(
+                        stack, canonical, var_prefix)
+                pending_wrap = None
                 continue
             assignment = _COMPUTE_ASSIGN_RE.fullmatch(line)
             if not assignment or not assignment.group("lhs").startswith("$"):
+                pending_wrap = None
                 continue
-            local = _canonical(assignment.group("lhs").lstrip("$"), canonical)
-            value = _integer(assignment.group("rhs"))
+            local = _canonical(assignment.group("lhs"), canonical)
+            item = updates.get(local.casefold())
+            if item is None:
+                pending_wrap = None
+                continue
+            value = _operand(assignment.group("rhs"), literals, canonical,
+                             var_prefix)
             if value is None:
+                pending_wrap = None
                 continue
-            item = ranges.setdefault(current_var, {}).setdefault(current, {})
-            if local.casefold().startswith("strat"):
-                item["start"] = value
-                item["start_var"] = local
-            elif local.casefold().startswith("end"):
-                item["end"] = value
-                item["end_var"] = local
-    candidates = []
-    for candidate_var, candidate_ranges in ranges.items():
-        result = []
-        for state, item in sorted(candidate_ranges.items()):
-            if ("start" not in item or "end" not in item
-                    or item["end"] < item["start"]):
+            if (pending_wrap is not None
+                    and pending_wrap["var"].casefold() == local.casefold()):
+                item["wrap_limit"] = pending_wrap["limit"]
+                item["wrap_target"] = value
+                pending_wrap = None
                 continue
-            result.append({"state": state, "start": item["start"],
-                           "end": item["end"]})
-        if result:
-            candidates.append((candidate_var, result))
-    if not candidates:
-        return None, None
-    return max(candidates, key=lambda item: len(item[1]))
-
-
-def _autoplay_machine(sections, canonical):
-    for section, lines in sections.items():
-        if str(section).casefold() != "present":
-            continue
-        for index, raw in enumerate(lines):
-            gate = re.fullmatch(
-                r"\s*if\s+\$(\w+)\s*==\s*1\s*", str(raw), re.I)
-            if not gate:
-                continue
-            transitions = []
-            for branch_index, later in enumerate(lines[index + 1:], index + 1):
-                text = str(later).split(";", 1)[0].strip()
-                branch = _AUTO_BRANCH_RE.fullmatch(text)
-                if not branch:
-                    if text.casefold() == "endif":
-                        break
-                    continue
-                state_var = _canonical(branch.group("state"), canonical)
-                loop_var = _canonical(branch.group("loop"), canonical)
-                from_state = int(branch.group("from"))
-                threshold = int(branch.group("threshold"))
-                destination = None
-                loop_reset = False
-                for candidate in lines[branch_index + 1:]:
-                    candidate_text = str(candidate).split(";", 1)[0].strip()
-                    if (candidate_text.casefold() == "endif"
-                            or re.match(r"^(?:if|elif|else\s+if)\b",
-                                        candidate_text, re.I)):
-                        break
-                    assignment = _COMPUTE_ASSIGN_RE.fullmatch(candidate_text)
-                    if not assignment:
-                        continue
-                    lhs = assignment.group("lhs").lstrip("$")
-                    rhs = assignment.group("rhs").strip()
-                    if _canonical(lhs, canonical).casefold() == state_var.casefold():
-                        destination = _integer(rhs)
-                    elif (_canonical(lhs, canonical).casefold()
-                          == loop_var.casefold() and _integer(rhs) == 0):
-                        loop_reset = True
-                    if destination is not None and loop_reset:
-                        break
-                if destination is None or not loop_reset:
-                    continue
-                transitions.append({"from": from_state, "to": destination,
-                                    "threshold": threshold})
-            normalized = {(item["from"], item["to"], item["threshold"])
-                          for item in transitions}
-            expected = {(0, 1, 50), (1, 2, 50), (2, 0, 1)}
-            if normalized == expected and len(transitions) == 3:
-                return {
-                    "var": _canonical(gate.group(1), canonical),
-                    "state_var": state_var,
-                    "loop_var": loop_var,
-                    "transitions": transitions,
-                }
-    return None
+            # A phase reset must be guarded by a real control condition. The
+            # phase comparison in a wrap is not a control dependency.
+            conditions = _combined_conditions(stack, canonical, var_prefix)
+            phase_clause = f"{var_prefix or ''}{local}".casefold()
+            conditions = [
+                [clause for clause in group
+                 if str(clause.get("var", "")).casefold() != phase_clause]
+                for group in conditions
+            ]
+            conditions = [group for group in conditions if group]
+            if conditions:
+                item["reset_rules"].append({
+                    "conditions": conditions,
+                    "value": value,
+                })
+            pending_wrap = None
+    return updates
 
 
 def _resolved_resource(resources, copy_sources, name, visiting=None):
@@ -578,8 +611,9 @@ def _resolved_resource(resources, copy_sources, name, visiting=None):
 def _validate_compute_buffers(resources, copy_sources, shape_passes, pose,
                               *, mod_dir, source, bone_count):
     """Validate fixed layouts and dimensions before exposing a descriptor."""
-    base_info = _resolved_resource(resources, copy_sources,
-                                   shape_passes[0]["base_resource"])
+    base_resource = (shape_passes[0]["base_resource"] if shape_passes
+                     else pose["base_resource"])
+    base_info = _resolved_resource(resources, copy_sources, base_resource)
     blend_info = _resolved_resource(resources, copy_sources,
                                     pose["blend_resource"])
     pose_info = _resolved_resource(resources, copy_sources,
@@ -630,12 +664,7 @@ def _validate_compute_buffers(resources, copy_sources, shape_passes, pose,
 def discover_compute_animations(sections, resources, *, mod_dir=None,
                                ini_path=None, source=None, var_prefix=None,
                                canonical_vars=None):
-    """Recognize the conservative fixed-layout GIMI compute-animation family.
-
-    This deliberately describes one known data contract instead of attempting
-    to interpret arbitrary HLSL.  The result is backend metadata consumed by
-    the existing mesh/GeometryBlob animation path.
-    """
+    """Discover the conservative fixed-layout compute-animation contract."""
     canonical = canonical_vars or canonical_var_names(sections)
     from .draw_resources import _collect_resource_copy_sources
     copy_sources = _collect_resource_copy_sources(sections, resources)
@@ -650,6 +679,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         pending = None
         pending_output = None
         phase_expr = None
+        bone_count_expr = None
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             if not line:
@@ -669,6 +699,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             match = _X88_RE.fullmatch(line)
             if match:
                 phase_expr = match.group("expr").strip()
+                continue
+            match = _X89_RE.fullmatch(line)
+            if match:
+                bone_count_expr = match.group("expr").strip()
                 continue
             match = _COMPUTE_SHADER_RE.fullmatch(line)
             if match:
@@ -690,13 +724,14 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     base = t_sources.get(50)
                     target = t_sources.get(51)
                     uav = u_sources.get(5)
-                    if base and target and uav:
+                    if base and target and uav and active.get("shape"):
                         pending = {
                             "base_resource": base,
                             "target_resource": target,
                             "uav_resource": uav,
                             "dispatch_vertices": dispatch,
                             "phase_expr": phase_expr,
+                            "shape": active["shape"],
                             **(pending_output or {}),
                         }
                         shape_passes.append(pending)
@@ -713,6 +748,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             "uav_resource": uav,
                             "dispatch_vertices": dispatch,
                             "phase_expr": phase_expr,
+                            "bone_count_expr": bone_count_expr,
                             **(pending_output or {}),
                         }
                         pose_pass = pending
@@ -726,24 +762,16 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 else:
                     pending_output = output
 
-    if not shape_passes or pose_pass is None:
+    if pose_pass is None:
         return []
     if "output_resource" not in pose_pass:
         return []
-    shape_outputs = {
-        str(item.get("output_resource", "")).casefold()
-        for item in shape_passes if item.get("output_resource")
-    }
-    if str(pose_pass["base_resource"]).casefold() not in shape_outputs:
-        return []
     if not all(item["dispatch_vertices"] > 0 for item in shape_passes):
         return []
-    bone_count = None
     literals = _literal_assignments(sections, canonical)
-    for name, value in literals.items():
-        if name == "vg_count":
-            bone_count = _integer(value)
-            break
+    bone_count = _literal_number(
+        pose_pass.get("bone_count_expr"), literals, canonical)
+    bone_count = _integer(bone_count)
     if bone_count is None:
         return []
     validated = _validate_compute_buffers(
@@ -752,57 +780,61 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
     if validated is None:
         return []
 
-    updates, pause_var = _phase_bindings(sections, canonical)
-    shape_freq = None
-    pose_freq = None
+    updates = _phase_bindings(
+        sections, canonical, var_prefix=var_prefix)
+
+    def phase_operand(expression):
+        operand = _operand(expression, literals, canonical, var_prefix)
+        if operand is None or operand.get("kind") != "variable":
+            return None
+        return operand
+
+    parsed_shape_passes = []
     shape_offsets = []
     for item in shape_passes:
-        expr = item.get("phase_expr", "")
-        vars_found = _VAR_REF_RE.findall(expr)
-        if vars_found:
-            freq = _canonical(vars_found[0], canonical)
-            shape_freq = shape_freq or freq
-        offset_match = re.search(
-            r"(?P<sign>[+-])?\s*(?P<value>\d+(?:\.\d+)?)\s*$", expr)
-        if offset_match and offset_match.group("sign"):
-            value = float(offset_match.group("value"))
-            if offset_match.group("sign") == "-":
-                value = -value
-            shape_offsets.append(value)
+        operand = phase_operand(item.get("phase_expr", ""))
+        if operand is None:
+            continue
+        shape_offsets.append(float(operand.get("offset", 0)))
+        item["phase_operand"] = operand
+        parsed_shape_passes.append(item)
+    shape_passes = parsed_shape_passes
+    pose_operand = phase_operand(pose_pass.get("phase_expr", ""))
+    if pose_operand is None:
+        return []
+    pose_local = _unprefix(pose_operand["variable"], var_prefix)
+    pose_clock = updates.get(pose_local.casefold())
+    if pose_clock is None:
+        return []
+    shape_clock = None
+    if shape_passes:
+        shape_local = _unprefix(
+            shape_passes[0]["phase_operand"]["variable"], var_prefix)
+        shape_clock = updates.get(shape_local.casefold())
+        if shape_clock is None:
+            shape_passes = []
         else:
-            shape_offsets.append(0.0)
-    vars_found = _VAR_REF_RE.findall(pose_pass.get("phase_expr", ""))
-    if vars_found:
-        pose_freq = _canonical(vars_found[0], canonical)
-    if (shape_freq is None or pose_freq is None
-            or shape_freq.casefold() not in updates
-            or pose_freq.casefold() not in updates
-            or pause_var is None):
-        return []
-    state_var, state_ranges = _state_ranges(sections, canonical)
-    if state_var is None or not state_ranges:
-        return []
-    autoplay = _autoplay_machine(sections, canonical)
-    control_vars = [
-        f"{var_prefix or ''}{pause_var}",
-        f"{var_prefix or ''}{state_var}",
-    ]
-    if autoplay is not None:
-        control_vars.append(f"{var_prefix or ''}{autoplay['var']}")
+            shape_outputs = {
+                str(item.get("output_resource", "")).casefold()
+                for item in shape_passes if item.get("output_resource")
+            }
+            if (str(pose_pass["base_resource"]).casefold()
+                    not in shape_outputs):
+                shape_passes = []
 
     identity = json.dumps({
         "ini": (source.logical_path(ini_path) if source is not None
                 and source.is_resource_reference(ini_path)
                 else os.path.basename(str(ini_path or ""))),
         "output": pose_pass["output_resource"],
-        "base": shape_passes[0]["base_resource"],
+        "base": pose_pass["base_resource"],
     }, sort_keys=True, separators=(",", ":"))
     track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
     return [{
         "kind": "gimi_compute",
         "track_id": track_id,
         "position_resource": pose_pass["output_resource"],
-        "base_resource": shape_passes[0]["base_resource"],
+        "base_resource": pose_pass["base_resource"],
         "base_file": validated["base_file"],
         "vertex_count": validated["vertex_count"],
         "shape_passes": [{
@@ -811,32 +843,60 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 resources, copy_sources, item["target_resource"])["filename"],
             "dispatch_vertices": item["dispatch_vertices"],
             "phase_offset": offset,
+            **item["shape"],
         } for item, offset in zip(shape_passes, shape_offsets)],
-        "pose_blend_resource": pose_pass["blend_resource"],
-        "pose_blend_file": validated["blend_file"],
-        "pose_resource": pose_pass["pose_resource"],
-        "pose_file": validated["pose_file"],
-        "pose_bone_count": bone_count,
-        "pose_frame_count": validated["frame_count"],
-        "pose_dispatch_vertices": pose_pass["dispatch_vertices"],
-        "shape_frequency_var": f"{var_prefix or ''}{shape_freq}",
-        "pose_frequency_var": f"{var_prefix or ''}{pose_freq}",
-        "pause_var": f"{var_prefix or ''}{pause_var}",
-        "state_var": f"{var_prefix or ''}{state_var}",
-        "autoplay": ({
-            **autoplay,
-            "var": f"{var_prefix or ''}{autoplay['var']}",
-            "state_var": f"{var_prefix or ''}{autoplay['state_var']}",
-        } if autoplay is not None else None),
-        "state_ranges": state_ranges,
-        "shape_speed": updates[shape_freq.casefold()]["speed"],
-        "pose_speed": updates[pose_freq.casefold()]["speed"],
-        "shape_wrap": 5.236,
-        "control_vars": control_vars,
+        "pose": {
+            "base_resource": pose_pass["base_resource"],
+            "blend_resource": pose_pass["blend_resource"],
+            "blend_file": validated["blend_file"],
+            "resource": pose_pass["pose_resource"],
+            "file": validated["pose_file"],
+            "bone_count": bone_count,
+            "frame_count": validated["frame_count"],
+            "dispatch_vertices": pose_pass["dispatch_vertices"],
+        },
+        "shape_clock": shape_clock,
+        "pose_clock": pose_clock,
     }]
+
+
+def compute_animation_control_vars(animations, state_rules=()):
+    """Return only controls that can change an animation clock's behavior."""
+    dependencies = set()
+
+    def add_conditions(conditions):
+        for group in conditions or ():
+            for clause in group:
+                dependencies.add(str(clause.get("var", "")))
+
+    def add_operand(operand):
+        if operand and operand.get("kind") == "variable":
+            dependencies.add(str(operand.get("variable", "")))
+
+    for animation in animations or ():
+        for clock_key in ("shape_clock", "pose_clock"):
+            clock = animation.get(clock_key)
+            if not clock:
+                continue
+            add_conditions(clock.get("advance_conditions"))
+            add_operand(clock.get("wrap_limit"))
+            add_operand(clock.get("wrap_target"))
+            for rule in clock.get("reset_rules", ()):
+                add_conditions(rule.get("conditions"))
+                add_operand(rule.get("value"))
+
+    # State rules can derive one of those direct inputs from a user-facing
+    # controller. Follow that small existing rule chain without introducing a
+    # second dependency graph for compute animations.
+    direct = {value.casefold() for value in dependencies}
+    for rule in state_rules or ():
+        if str(rule.get("var", "")).casefold() in direct:
+            add_conditions(rule.get("conditions"))
+    return dependencies
 
 
 __all__ = [
     "AnimationAnalysis", "AnimationClock", "discover_animation_clocks",
     "frame_condition", "discover_compute_animations",
+    "compute_animation_control_vars",
 ]
