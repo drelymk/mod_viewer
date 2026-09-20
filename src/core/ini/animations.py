@@ -869,7 +869,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             }, sort_keys=True, separators=(",", ":"))
             track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
             animations.append({
-                "kind": "gimi_compute",
                 "track_id": track_id,
                 "position_resource": output_resource,
                 "base_file": validated["base_file"],
@@ -924,7 +923,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         }, sort_keys=True, separators=(",", ":"))
         track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
         animations.append({
-            "kind": "gimi_compute",
             "track_id": track_id,
             "position_resource": output_resource,
             "base_file": validated["base_file"],
@@ -966,7 +964,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         if pose is not None:
             pose.pop("phase_expr", None)
             pose.pop("dispatch_key", None)
-        animation.pop("kind", None)
         animation["program_id"] = program_id
         animation["program"] = program
     return animations

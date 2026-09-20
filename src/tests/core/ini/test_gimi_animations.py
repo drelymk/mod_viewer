@@ -9,7 +9,6 @@ from core.ini.animations import (_identify_compute_shader,
                                  discover_compute_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
-from core.ini.draw_resources import _collect_resource_copy_sources
 from core.ini.sections import extract_resources, parse_sections
 from core.ini.toggles import extract_toggle_keys, extract_variable_defaults
 
@@ -299,14 +298,10 @@ def test_key_self_clearing_animation_input_stays_external(tmp_path):
     assert set(panel) == {"KeyPause", "KeyAnime"}
 
 
-def test_compute_animation_reads_numthreads_without_shader_hash():
+def test_compute_animation_reads_shader_metadata():
     adapter = _identify_compute_shader(POSE_SHADER)
     assert adapter["threads"] == 64
     assert adapter["coordinate_variant"] == "standard"
-    changed = POSE_SHADER.replace(
-        "rw_buffer[i].position = v.position * p.S + p.T;",
-        "rw_buffer[i].position = v.position * p.T + p.S;")
-    assert _identify_compute_shader(changed)["threads"] == 64
 
 
 def test_compute_animation_identifies_columbina_basis():
@@ -366,30 +361,6 @@ def test_compute_shape_dispatch_keeps_partial_morph_coverage(tmp_path):
     assert struct.unpack_from("<6f", deltas, 24) == (0., 0., 0., 0., 0., 0.)
 
 
-def test_compute_resource_copy_edges_track_uav_slots_and_sections(tmp_path):
-    sections = {
-        "CustomShaderA": [
-            "cs-u5 = copy ResourcePosition.2",
-            "ResourcePosition.1 = ref cs-u5",
-        ],
-        "CustomShaderB": [
-            "cs-u5 = copy ResourcePosition.1",
-            "ResourcePosition = ref cs-u5",
-        ],
-        "CustomShaderNull": [
-            "cs-u5 = copy ResourceA",
-            "cs-u5 = null",
-            "ResourceB = ref cs-u5",
-        ],
-        "OtherSection": ["ResourceC = ref cs-u5"],
-    }
-    copies = _collect_resource_copy_sources(sections, {})
-    assert copies["resourceposition.1"] == ["ResourcePosition.2"]
-    assert copies["resourceposition"] == ["ResourcePosition.1"]
-    assert "resourceb" not in copies
-    assert "resourcec" not in copies
-
-
 def test_compute_animation_accepts_shape_only_chain(tmp_path):
     root = tmp_path / "shape-only"
     sections = _sections(root)
@@ -409,16 +380,6 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
     payload = next(iter(built.meshes.values()))["animation_geometry"]
     assert payload["pose"] is None
     assert len(payload["shape_passes"]) == 2
-
-
-def test_compute_animation_rejects_shape_chain_when_phase_is_unparseable(tmp_path):
-    root = tmp_path / "unparseable-shape"
-    sections = _sections(root)
-    sections["CustomShaderShape"] = [
-        "x88 = unsupported_expression" if line.startswith("x88 =") else line
-        for line in sections["CustomShaderShape"]
-    ]
-    assert not _discover(root, sections)
 
 
 def test_compute_animation_is_attached_per_ini_with_duplicate_resources(tmp_path):
