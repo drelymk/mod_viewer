@@ -3,12 +3,15 @@
 import struct
 
 from app.mods.analysis import analyze_mod_inis
+from app.mods.controls import build_toggle_panel
 from core.ini.animations import (_compile_condition, _identify_compute_shader,
+                                 compute_animation_control_vars,
                                  discover_compute_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.ini.draw_resources import _collect_resource_copy_sources
 from core.ini.sections import extract_resources, parse_sections
+from core.ini.toggles import extract_toggle_keys, extract_variable_defaults
 
 
 SHAPE_SHADER = """
@@ -249,6 +252,34 @@ def test_compute_animation_discovers_bindings_and_dimensions(tmp_path):
         line.replace("$VG_count = 2", "$VG_count = 3")
         for line in bad_count_sections["Constants"]]
     assert not _discover(bad_bone_count, bad_count_sections)
+
+
+def test_key_self_clearing_animation_input_stays_external(tmp_path):
+    root = tmp_path / "key-trigger"
+    sections = _sections(root)
+    sections["Constants"] = [
+        line.replace("Freq_pose", "Freq")
+        for line in sections["Constants"]]
+    sections["CustomShaderPose"] = [
+        line.replace("Freq_pose", "Freq")
+        for line in sections["CustomShaderPose"]]
+    sections["KeyPause"] = [
+        "key = p", "type = cycle", "$pause = 0,1",
+    ]
+    sections["KeyAnime"] = [
+        "key = a", "type = cycle", "$anime_state = 0,1",
+    ]
+
+    animation = _discover(root, sections)[0]
+    external = set(animation["program"]["external_variables"])
+    assert {"pause", "anime_state"} <= external
+    assert "Freq" not in external
+
+    controls = compute_animation_control_vars([animation])
+    panel = build_toggle_panel(
+        extract_toggle_keys(sections), extract_variable_defaults(sections),
+        controls, mod_dir=None)
+    assert set(panel) == {"KeyPause", "KeyAnime"}
 
 
 def test_compute_program_keeps_nested_simple_conditions(tmp_path):

@@ -209,6 +209,18 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None)
             }
 
     initials = _literal_constant_assignments(sections, canonical)
+    key_variables = set()
+    for section, lines in sections.items():
+        if not str(section).casefold().startswith("key"):
+            continue
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = _COMPUTE_ASSIGN_RE.fullmatch(line)
+            if match is not None and match.group("lhs").startswith("$"):
+                key_variables.add(
+                    f"{var_prefix or ''}"
+                    f"{_canonical(match.group('lhs'), canonical)}")
+
     commands = []
     variables = set()
     assigned = set()
@@ -270,7 +282,8 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None)
         if f"{var_prefix or ''}{_canonical(key, canonical)}" in variables
     }
     return {
-        "external_variables": sorted(variables - assigned),
+        "external_variables": sorted(
+            (variables - assigned) | (variables & key_variables)),
         "initials": normalized_initials,
         "commands": commands,
     }
