@@ -799,6 +799,9 @@ _KNOWN_COMPUTE_SHADERS = {
     "50d6b4f03e37964ddcbe2795ef9d8484e7384d1372529102791cc69a75bb04cd": {
         "kind": "pose", "coordinate_variant": "standard", "threads": 64,
     },
+    "6789152b17648894962c805b5af6196849ce93ade7f35f57d9be07e14645fe9a": {
+        "kind": "pose", "coordinate_variant": "standard", "threads": 1,
+    },
     "c65f23f916d94e0d1fa0878345fc29e60ac8f08b7e260a1e27d6d17f2ad31361": {
         "kind": "pose", "coordinate_variant": "columbina_basis", "threads": 1,
     },

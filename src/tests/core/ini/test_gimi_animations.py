@@ -3,7 +3,8 @@
 import struct
 
 from app.mods.analysis import analyze_mod_inis
-from core.ini.animations import (_compile_condition, _identify_compute_shader,
+from core.ini.animations import (_KNOWN_COMPUTE_SHADERS, _compile_condition,
+                                 _identify_compute_shader,
                                  discover_compute_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
@@ -317,6 +318,14 @@ def test_compute_animation_accepts_verified_shader_hash():
         "rw_buffer[i].position = v.position * p.S + p.T;",
         "rw_buffer[i].position = v.position * p.T + p.S;")
     assert _identify_compute_shader(changed) is None
+
+
+def test_verified_single_thread_pose_adapter_is_standard():
+    adapter = _KNOWN_COMPUTE_SHADERS[
+        "6789152b17648894962c805b5af6196849ce93ade7f35f57d9be07e14645fe9a"]
+    assert adapter == {
+        "kind": "pose", "coordinate_variant": "standard", "threads": 1,
+    }
 
 
 def test_compute_program_preserves_dispatch_guards(tmp_path):
