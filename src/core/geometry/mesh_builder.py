@@ -2,7 +2,6 @@
 
 import base64
 import hashlib
-import math
 import os
 import struct
 import time
@@ -438,7 +437,6 @@ def _prepare_gimi_shared(animation, *, mod_dir, buffers, source, geometry):
         return None
     return {
         "pose_frames": _geometry_ref(pose_data, geometry),
-        "pose_frame_bytes": 56,
     }
 
 
@@ -454,26 +452,16 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
     base_data = buffers.raw(base_path)
     blend_data = buffers.raw(blend_path) if pose else None
     vertex_count = int(animation["vertex_count"])
-    if (len(base_data) < vertex_count * 40
-            or (pose and len(blend_data) < vertex_count * 32)
-            or any(index < 0 or index >= vertex_count
-                   for index in used_vertices)):
-        return None
-
     shape_entries = []
     base_normals = bytearray(len(used_vertices) * 12)
     for output, raw_index in enumerate(used_vertices):
         values = struct.unpack_from("<3f", base_data, raw_index * 40 + 12)
-        if not all(math.isfinite(value) for value in values):
-            return None
         struct.pack_into("<3f", base_normals, output * 12, *values)
     for item in animation.get("shape_passes", ()):
         target_path = _gimi_path(mod_dir, item["target_file"], source)
         if not target_path:
             return None
         target_data = buffers.raw(target_path)
-        if len(target_data) < vertex_count * 40:
-            return None
         deltas = bytearray(len(used_vertices) * 24)
         limit = min(int(item["dispatch_vertices"]), vertex_count)
         for output, raw_index in enumerate(used_vertices):
@@ -483,18 +471,12 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
             target_offset = raw_index * 40
             base_values = struct.unpack_from("<6f", base_data, base_offset)
             target_values = struct.unpack_from("<6f", target_data, target_offset)
-            if not all(math.isfinite(value)
-                       for value in (*base_values, *target_values)):
-                return None
             struct.pack_into(
                 "<6f", deltas, output * 24,
                 *(target_values[index] - base_values[index]
                   for index in range(6)))
         shape_entries.append({
             "deltas": _geometry_ref(deltas, geometry),
-            "amplitude": float(item["amplitude"]),
-            "angular_scale": float(item["angular_scale"]),
-            "bias": float(item["bias"]),
         })
 
     result = {
@@ -510,20 +492,14 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
     if pose:
         weights = bytearray(len(used_vertices) * 16)
         indices = bytearray(len(used_vertices) * 16)
-        pose_active = bytearray(len(used_vertices) * 4)
         bone_count = int(pose["bone_count"])
-        pose_limit = min(int(pose["dispatch_vertices"]), vertex_count)
         for output, raw_index in enumerate(used_vertices):
             offset = raw_index * 32
             values = struct.unpack_from("<4f4i", blend_data, offset)
-            if (not all(math.isfinite(value) for value in values[:4])
-                    or any(index < 0 or index >= bone_count
-                           for index in values[4:])):
+            if any(index < 0 or index >= bone_count for index in values[4:]):
                 return None
             struct.pack_into("<4f", weights, output * 16, *values[:4])
             struct.pack_into("<4i", indices, output * 16, *values[4:])
-            struct.pack_into("<f", pose_active, output * 4,
-                             1.0 if raw_index < pose_limit else 0.0)
         result["pose"] = {
             "frames": shared["pose_frames"],
             "bone_count": bone_count,
@@ -531,7 +507,6 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
             "blend": {
                 "weights": _geometry_ref(weights, geometry),
                 "indices": _geometry_ref(indices, geometry),
-                "active": _geometry_ref(pose_active, geometry),
             },
         }
     else:
@@ -669,13 +644,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
             gimi_payload = None
             gimi = group.get("_compute_animation")
-            same_position = (source.same_reference(
-                draw.position_file, group.get("position_file"))
-                if source is not None else
-                os.path.normcase(os.path.normpath(draw.position_file or ""))
-                == os.path.normcase(os.path.normpath(
-                    group.get("position_file") or "")))
-            if gimi is not None and same_position and animation_payload is None:
+            if gimi is not None and animation_payload is None:
                 shared = gimi_shared.get(gimi["track_id"])
                 if shared is None:
                     shared = _prepare_gimi_shared(

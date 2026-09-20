@@ -144,7 +144,6 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
           const indices = new Int32Array([
             0, 0, 0, 0, 0, 0, 0, 0,
           ]);
-        const poseActive = new Float32Array([1, 1]);
         const pose = new Float32Array(2 * 2 * 14);
         for (let frame = 0; frame < 2; frame += 1) {
           for (let bone = 0; bone < 2; bone += 1) {
@@ -176,9 +175,9 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
                 right: {kind: 'binary', op: '*',
                   left: {kind: 'literal', value: 30},
                   right: {kind: 'dt'}}},
-              condition: {kind: 'compare', op: '==',
+              conditions: [{kind: 'compare', op: '==',
                 left: {kind: 'variable', variable: 'pause'},
-                right: {kind: 'literal', value: 0}}},
+                right: {kind: 'literal', value: 0}}]},
             {op: 'dispatch', track_id: 'gimi-test', kind: 'shape',
               pass: 0, phase: {kind: 'variable', variable: 'phase'}},
             {op: 'dispatch', track_id: 'gimi-test', kind: 'pose',
@@ -189,10 +188,9 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
           kind: 'gimi_compute', vertex_count: 2,
           base_normals: encode(normals),
           program_id: 'gimi-program-test', track_id: 'gimi-test', program,
-          shape_passes: [{deltas: encode(deltas),
-            amplitude: 0.5, angular_scale: 30, bias: 0.5}],
+          shape_passes: [{deltas: encode(deltas)}],
           pose: {blend: {weights: encode(weights), indices: encode(indices),
-            active: encode(poseActive)}, frames: encode(pose), bone_count: 2,
+            }, frames: encode(pose), bone_count: 2,
             frame_count: 2},
         });
         const firstId = Math.min(...pending.keys());
@@ -268,8 +266,7 @@ def test_gimi_compute_animation_shares_program_state_across_outputs(module_page)
           program_id: 'shared-program', track_id: trackId, program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [{deltas: encode(new Float32Array([
-            1, 0, 0, 0, 0, 0])), amplitude: 1,
-            angular_scale: 1, bias: 0}], pose: null,
+            1, 0, 0, 0, 0, 0]))}], pose: null,
         });
         const first = mesh();
         const second = mesh();
@@ -293,7 +290,8 @@ def test_gimi_compute_animation_shares_program_state_across_outputs(module_page)
         window.cancelAnimationFrame = oldCancel;
       }
     }""")
-    assert result["output"] == pytest.approx([math.sin(1), math.sin(1)])
+    expected = 0.5 * (math.sin(30) + 1)
+    assert result["output"] == pytest.approx([expected, expected])
     assert result["snapshot"] == {"clocks": 1, "meshes": 2, "rafActive": True}
 
 
@@ -321,8 +319,7 @@ def test_animation_scheduler_keeps_active_programs_playing(module_page):
         track_id: trackId, program,
         base_normals: encode(new Float32Array([0, 1, 0])),
         shape_passes: [{deltas: encode(new Float32Array([
-          1, 0, 0, 0, 0, 0])), amplitude: 1,
-          angular_scale: 1, bias: 0}], pose: null,
+          1, 0, 0, 0, 0, 0]))}], pose: null,
       });
       const mesh = () => ({visible: true,
         userData: {basePositions: new Float32Array([0, 0, 0])},
@@ -418,8 +415,7 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
           program_id: 'shape-program', track_id: 'shape-only-test', program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [{deltas: encode(new Float32Array([
-            1, 0, 0, 0, 0, 0])),
-            amplitude: 1, angular_scale: 1, bias: 0}],
+            1, 0, 0, 0, 0, 0]))}],
           pose: null,
         });
         pending.get(Math.min(...pending.keys()))(0);
@@ -434,8 +430,9 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
         window.cancelAnimationFrame = oldCancel;
       }
     }""")
-    assert result["first"] == [0, 0, 0]
-    assert result["second"] == pytest.approx([math.sin(0.0034), 0, 0], abs=1e-5)
+    assert result["first"] == [0.5, 0, 0]
+    expected = 0.5 * (math.sin(0.0034 * 30) + 1)
+    assert result["second"] == pytest.approx([expected, 0, 0], abs=1e-5)
     assert result["secondNormal"] == [0, 1, 0]
 
 
@@ -492,19 +489,19 @@ def test_gimi_compute_animation_executes_reset_assignments_in_order(module_page)
                 left: {kind: 'variable', variable: 'phase'},
                 right: {kind: 'binary', op: '*',
                   left: {kind: 'literal', value: 1}, right: {kind: 'dt'}}},
-              condition: {kind: 'compare', op: '==',
+              conditions: [{kind: 'compare', op: '==',
                 left: {kind: 'variable', variable: 'pause'},
-                right: {kind: 'literal', value: 0}}},
+                right: {kind: 'literal', value: 0}}]},
             {op: 'set', variable: 'phase',
               expression: {kind: 'literal', value: 0},
-              condition: {kind: 'compare', op: '==',
+              conditions: [{kind: 'compare', op: '==',
                 left: {kind: 'variable', variable: 'anime_state'},
-                right: {kind: 'literal', value: 1}}},
+                right: {kind: 'literal', value: 1}}]},
             {op: 'set', variable: 'anime_state',
               expression: {kind: 'literal', value: 0},
-              condition: {kind: 'compare', op: '==',
+              conditions: [{kind: 'compare', op: '==',
                 left: {kind: 'variable', variable: 'anime_state'},
-                right: {kind: 'literal', value: 1}}},
+                right: {kind: 'literal', value: 1}}]},
             {op: 'dispatch', track_id: 'reset-edge-test', kind: 'pose',
               phase: {kind: 'variable', variable: 'phase'}},
           ],
@@ -519,7 +516,6 @@ def test_gimi_compute_animation_executes_reset_assignments_in_order(module_page)
             blend: {
               weights: encode(new Float32Array([1, 0, 0, 0])),
               indices: encode(new Int32Array([0, 0, 0, 0])),
-              active: encode(new Float32Array([1])),
             },
           },
         });
@@ -549,110 +545,6 @@ def test_gimi_compute_animation_executes_reset_assignments_in_order(module_page)
     assert result["paused"] == result["advanced"]
     assert result["restarted"] == [0, 0, 0]
     assert result["trigger"] == "0"
-
-
-def test_gimi_compute_animation_does_not_rebase_on_control_range_changes(module_page):
-    result = module_page.evaluate("""async () => {
-      const pending = new Map();
-      let nextRequest = 1;
-      const oldRequest = window.requestAnimationFrame;
-      const oldCancel = window.cancelAnimationFrame;
-      window.requestAnimationFrame = callback => {
-        const id = nextRequest++;
-        pending.set(id, callback);
-        return id;
-      };
-      window.cancelAnimationFrame = id => pending.delete(id);
-      const encode = values => {
-        const bytes = new Uint8Array(values.buffer, values.byteOffset,
-          values.byteLength);
-        let text = '';
-        for (const value of bytes) text += String.fromCharCode(value);
-        return btoa(text);
-      };
-      const runNext = now => {
-        const id = Math.min(...pending.keys());
-        const callback = pending.get(id);
-        pending.delete(id);
-        callback(now);
-      };
-      try {
-        const control = await import('./js/editing/control-state.js');
-        const {replayControlStateRules, setControlStateRules} = control;
-        const runtime = await import('./js/mesh/animation-runtime.js');
-        setControlStateRules([
-          {conditions: [[{var: 'anime', value: '0', negate: false}]],
-            var: 'start', value: '40'},
-          {conditions: [[{var: 'anime', value: '0', negate: false}]],
-            var: 'end', value: '60'},
-          {conditions: [[{var: 'anime', value: '2', negate: false}]],
-            var: 'start', value: '160'},
-          {conditions: [[{var: 'anime', value: '2', negate: false}]],
-            var: 'end', value: '1170'},
-        ], {anime: '0', start: '40', end: '60'});
-        const pose = new Float32Array(200 * 14);
-        for (let frame = 0; frame < 200; frame += 1) {
-          const offset = frame * 14;
-          pose[offset] = pose[offset + 1] = pose[offset + 2] = 1;
-          pose[offset + 9] = 1;
-          pose[offset + 10] = frame / 2;
-        }
-        const position = {array: new Float32Array([0, 0, 0]), needsUpdate: false};
-        const normal = {array: new Float32Array([0, 1, 0]), needsUpdate: false};
-        const mesh = {
-          visible: true,
-          userData: {basePositions: new Float32Array([0, 0, 0])},
-          geometry: {attributes: {position, normal}},
-        };
-        control.setControlValue('anime', '0');
-        replayControlStateRules();
-        runtime.wakeAnimationRuntime();
-        const program = {
-          external_variables: [], initials: {phase: 0},
-          commands: [
-            {op: 'set', variable: 'phase',
-              expression: {kind: 'binary', op: '+',
-                left: {kind: 'variable', variable: 'phase'},
-                right: {kind: 'binary', op: '*',
-                  left: {kind: 'literal', value: 50}, right: {kind: 'dt'}}}},
-            {op: 'dispatch', track_id: 'range-rebase-test', kind: 'pose',
-              phase: {kind: 'variable', variable: 'phase'}},
-          ],
-        };
-        runtime.registerAnimatedMesh(mesh, 'range-rebase-test', {
-          kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'range-program', track_id: 'range-rebase-test', program,
-          base_normals: encode(new Float32Array([0, 1, 0])),
-          shape_passes: [],
-          pose: {
-            frames: encode(pose), bone_count: 1, frame_count: 200,
-            blend: {
-              weights: encode(new Float32Array([1, 0, 0, 0])),
-              indices: encode(new Int32Array([0, 0, 0, 0])),
-              active: encode(new Float32Array([1])),
-            },
-          },
-        });
-        runNext(0);
-        runNext(1000);
-        const before = Array.from(position.array);
-        control.setControlValue('anime', '2');
-        replayControlStateRules();
-        runtime.wakeAnimationRuntime();
-        runNext(1000);
-        const after = Array.from(position.array);
-        runtime.resetAnimationRuntime();
-        return {before, after,
-          range: [control.getControlValue('start'),
-            control.getControlValue('end')]};
-      } finally {
-        window.requestAnimationFrame = oldRequest;
-        window.cancelAnimationFrame = oldCancel;
-      }
-    }""")
-    assert result["before"] == [50, 0, 0]
-    assert result["after"] == [50, 0, 0]
-    assert result["range"] == ["160", "1170"]
 
 
 def test_gimi_compute_animation_uses_slot_zero_dq_reference(module_page):
@@ -720,7 +612,6 @@ def test_gimi_compute_animation_uses_slot_zero_dq_reference(module_page):
             blend: {
               weights: encode(new Float32Array([0, 0.5, 0.5, 0])),
               indices: encode(new Int32Array([0, 1, 2, 0])),
-              active: encode(new Float32Array([1])),
             },
           },
         });
@@ -789,7 +680,6 @@ def test_gimi_compute_animation_applies_columbina_basis(module_page):
             blend: {
               weights: encode(new Float32Array([1, 0, 0, 0])),
               indices: encode(new Int32Array([0, 0, 0, 0])),
-              active: encode(new Float32Array([1])),
             },
           },
         });
@@ -868,8 +758,7 @@ def test_gimi_compute_animation_throttles_geometry_updates(module_page):
               base_normals: encode(new Float32Array([0, 1, 0])), shape_passes: [],
               pose: {frames: encode(pose), bone_count: 1, frame_count: 2,
             blend: {weights: encode(new Float32Array([1, 0, 0, 0])),
-              indices: encode(new Int32Array([0, 0, 0, 0])),
-              active: encode(new Float32Array([1]))}},
+              indices: encode(new Int32Array([0, 0, 0, 0]))}},
         });
         tick(0);
         const first = updates;

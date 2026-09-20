@@ -39,9 +39,7 @@ _CLOCK_LITERAL_RANGE_RE = re.compile(
     rf"\s*\)*\s*//\s*1\s*$",
     re.I,
 )
-_ELIF_RE = re.compile(r"(?:else\s+if|elif)\s+(.*)$", re.I)
-_RUN_RE = re.compile(
-    r"^\s*(?:(?:post)\s+)?run\s*=\s*(?P<section>\S+)\s*$", re.I)
+_CLOCK_ELIF_RE = re.compile(r"(?:else\s+if|elif)\s+(.*)$", re.I)
 _COMPUTE_ASSIGN_RE = re.compile(
     r"^\s*(?P<lhs>\$?\w+)\s*=\s*(?P<rhs>.+?)\s*$", re.I)
 _COMPUTE_RESOURCE_RE = re.compile(
@@ -65,19 +63,13 @@ class _ExpressionParser:
 
     _TOKEN_RE = re.compile(
         rf"\s*(?:(?P<number>(?:\d+(?:\.\d*)?|\.\d+))|"
-        r"(?P<name>\$?\\?(?:[A-Za-z_]\w*\\)*[A-Za-z_]\w*)|"
-        r"(?P<operator>[()+*\-]))")
+        r"(?P<name>\$?[A-Za-z_]\w*)|"
+        r"(?P<operator>[+*\-]))")
 
-    def __init__(self, text, canonical, var_prefix=None, qualified_vars=None):
+    def __init__(self, text, canonical, var_prefix=None):
         self.text = str(text).strip()
         self.canonical = canonical
         self.var_prefix = var_prefix or ""
-        self.qualified_vars = {
-            str(key).casefold(): str(value)
-            for key, value in (qualified_vars or {}).items()}
-        self.qualified_vars.update({
-            str(value).casefold(): str(value)
-            for value in (qualified_vars or {}).values()})
         self.tokens = []
         position = 0
         while position < len(self.text):
@@ -123,19 +115,7 @@ class _ExpressionParser:
         return result
 
     def _unary(self):
-        if self._peek() in ("+", "-"):
-            operator = self._take()
-            if operator == "+":
-                return self._unary()
-            return {"kind": "binary", "op": "*",
-                    "left": {"kind": "literal", "value": -1},
-                    "right": self._unary()}
         token = self._take()
-        if token == "(":
-            result = self._additive()
-            if self._take() != ")":
-                raise ValueError("unclosed expression")
-            return result
         if token is None:
             raise ValueError("missing expression operand")
         number = _numeric(token)
@@ -146,14 +126,6 @@ class _ExpressionParser:
         if not token.startswith("$"):
             raise ValueError("bare names are not numeric operands")
         local = str(token).lstrip("$")
-        if "\\" in local:
-            mapped = self.qualified_vars.get(local.casefold())
-            if mapped is not None:
-                return {"kind": "variable", "variable": mapped}
-            # A standalone mod folder may omit the INI that owns this
-            # read-only gate. Keep the gate opaque; the selected folder is
-            # already the scope, matching draw-condition normalization.
-            return {"kind": "qualified_unknown", "variable": local}
         local = _canonical(local, self.canonical)
         if local.casefold() == "dt":
             return {"kind": "dt"}
@@ -161,105 +133,29 @@ class _ExpressionParser:
                 "variable": f"{self.var_prefix}{local}"}
 
 
-def _compile_expression(value, canonical, var_prefix=None, qualified_vars=None):
+def _compile_expression(value, canonical, var_prefix=None):
     try:
-        return _ExpressionParser(
-            value, canonical, var_prefix, qualified_vars).parse()
+        return _ExpressionParser(value, canonical, var_prefix).parse()
     except (TypeError, ValueError):
         return None
 
 
-_COMPARISON_RE = re.compile(r"(==|!=|>=|<=|>|<)")
+_COMPARISON_RE = re.compile(r"(==|>)")
 
 
-def _split_boolean(value, operator):
-    """Split one boolean level without treating operators in parentheses."""
-    parts = []
-    start = 0
-    depth = 0
-    index = 0
-    while index < len(value):
-        char = value[index]
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        elif depth == 0 and value.startswith(operator, index):
-            parts.append(value[start:index])
-            start = index + len(operator)
-            index += len(operator) - 1
-        index += 1
-    parts.append(value[start:])
-    return parts
-
-
-def _strip_outer_condition_parens(value):
-    text = value
-    while text.startswith("(") and text.endswith(")"):
-        depth = 0
-        wraps = True
-        for index, char in enumerate(text):
-            if char == "(":
-                depth += 1
-            elif char == ")":
-                depth -= 1
-                if depth == 0 and index != len(text) - 1:
-                    wraps = False
-                    break
-                if depth < 0:
-                    wraps = False
-                    break
-        if not wraps or depth != 0:
-            break
-        text = text[1:-1].strip()
-    return text
-
-
-def _compile_condition(value, canonical, var_prefix=None, qualified_vars=None):
-    text = _strip_outer_condition_parens(str(value).strip())
-    groups = _split_boolean(text, "||")
-    if len(groups) > 1:
-        children = [_compile_condition(
-            item, canonical, var_prefix, qualified_vars)
-                    for item in groups]
-        return {"kind": "or", "items": children} \
-            if all(children) else None
-    groups = _split_boolean(text, "&&")
-    if len(groups) > 1:
-        children = [_compile_condition(
-            item, canonical, var_prefix, qualified_vars)
-                    for item in groups]
-        return {"kind": "and", "items": children} \
-            if all(children) else None
-    if text.startswith("!"):
-        child = _compile_condition(
-            text[1:], canonical, var_prefix, qualified_vars)
-        return {"kind": "not", "item": child} if child else None
+def _compile_condition(value, canonical, var_prefix=None):
+    text = str(value).strip()
     match = _COMPARISON_RE.search(text)
     if match is None:
-        expression = _compile_expression(text, canonical, var_prefix)
-        return {"kind": "truthy", "expression": expression} \
-            if expression is not None else None
+        return None
     left = _compile_expression(
-        text[:match.start()], canonical, var_prefix, qualified_vars)
+        text[:match.start()], canonical, var_prefix)
     right = _compile_expression(
-        text[match.end():], canonical, var_prefix, qualified_vars)
+        text[match.end():], canonical, var_prefix)
     if left is None or right is None:
         return None
     return {"kind": "compare", "op": match.group(1),
             "left": left, "right": right}
-
-
-def _condition_and(left, right):
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return {"kind": "and", "items": [left, right]}
-
-
-def _condition_not(value):
-    return {"kind": "not", "item": value} if value is not None else None
 
 
 def _expression_variables(value, result=None):
@@ -278,36 +174,36 @@ def _expression_variables(value, result=None):
     return result
 
 
-def _condition_variables(value, result=None):
-    return _expression_variables(value, result)
-
-
-def _program_assignment(line, canonical, var_prefix, qualified_vars=None):
+def _program_assignment(line, canonical, var_prefix):
     match = _COMPUTE_ASSIGN_RE.fullmatch(line)
     if not match or not match.group("lhs").startswith("$"):
         return None
     expression = _compile_expression(
-        match.group("rhs"), canonical, var_prefix, qualified_vars)
+        match.group("rhs"), canonical, var_prefix)
     if expression is None:
         return None
     variable = f"{var_prefix or ''}{_canonical(match.group('lhs'), canonical)}"
     return {"op": "set", "variable": variable, "expression": expression}
 
 
-def _compile_animation_program(sections, animations, canonical, var_prefix=None,
-                               qualified_vars=None):
-    """Compile authored statements and dispatches into one per-INI program."""
+def _compile_animation_program(sections, animations, canonical, var_prefix=None):
+    """Compile only the authored CustomShader statements with dispatches."""
     dispatches = {}
+    compile_sections = set()
     for animation in animations:
         track_id = animation["track_id"]
         for index, item in enumerate(animation.get("shape_passes", ())):
-            dispatches[tuple(item["dispatch_key"])] = {
+            section, line_index = tuple(item["dispatch_key"])
+            compile_sections.add(section)
+            dispatches[(section, line_index)] = {
                 "track_id": track_id, "pass": index,
                 "phase": item["phase_expr"], "kind": "shape",
             }
         pose = animation.get("pose")
         if pose is not None:
-            dispatches[tuple(pose["dispatch_key"])] = {
+            section, line_index = tuple(pose["dispatch_key"])
+            compile_sections.add(section)
+            dispatches[(section, line_index)] = {
                 "track_id": track_id, "phase": pose["phase_expr"],
                 "kind": "pose",
             }
@@ -315,48 +211,13 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
     initials = _literal_constant_assignments(sections, canonical)
     commands = []
     variables = set()
-    condition_variables = set()
     assigned = set()
-    unsupported = False
-    section_lookup = {
-        str(section).casefold(): section for section in sections}
-    run_targets = set()
-    for lines in sections.values():
-        for raw in lines:
-            run = _RUN_RE.fullmatch(str(raw).split(";", 1)[0].strip())
-            if run:
-                run_targets.add(run.group("section").casefold())
-
-    def expanded_lines(section, chain=()):
-        """Inline only command lists reached by a supported root section."""
-        nonlocal unsupported
+    for section, lines in sections.items():
         section_key = str(section).casefold()
-        if section_key in chain:
-            unsupported = True
-            return
-        for line_index, raw in enumerate(sections.get(section, ())):
-            line = str(raw).split(";", 1)[0].strip()
-            run = _RUN_RE.fullmatch(line)
-            if run:
-                target = section_lookup.get(run.group("section").casefold())
-                target_name = str(target).casefold() if target is not None else ""
-                if (target is None
-                        or not (target_name.startswith("commandlist")
-                                or target_name.startswith("customshader"))):
-                    unsupported = True
-                    continue
-                yield from expanded_lines(target, chain + (section_key,))
-            else:
-                yield section, line_index, raw
-
-    for root_section in sections:
-        section_name = str(root_section).casefold()
-        if not (section_name == "present"
-                or (section_name.startswith("customshader")
-                    and section_name not in run_targets)):
+        if section_key not in compile_sections:
             continue
-        stack = []
-        for section, line_index, raw in expanded_lines(root_section):
+        conditions = []
+        for line_index, raw in enumerate(lines):
             line = str(raw).split(";", 1)[0].strip()
             if not line:
                 continue
@@ -365,95 +226,51 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
                     or low.startswith("global persist "):
                 continue
             if low.startswith("if "):
-                condition = _compile_condition(
-                    line[3:], canonical, var_prefix, qualified_vars)
+                condition = _compile_condition(line[3:], canonical, var_prefix)
                 if condition is None:
-                    unsupported = True
-                    stack.append({"cur": None, "seen": None,
-                                  "unsupported": True})
-                else:
-                    stack.append({"cur": condition, "seen": condition,
-                                  "unsupported": False})
-                continue
-            if _ELIF_RE.fullmatch(line):
-                match = _ELIF_RE.fullmatch(line)
-                if not stack:
-                    unsupported = True
-                    continue
-                condition = _compile_condition(
-                    match.group(1), canonical, var_prefix, qualified_vars)
-                frame = stack[-1]
-                frame["cur"] = _condition_and(
-                    _condition_not(frame["seen"]), condition)
-                frame["seen"] = (condition if frame["seen"] is None
-                                 else {"kind": "or", "items": [
-                                     frame["seen"], condition]}) \
-                    if condition else None
-                frame["unsupported"] = frame["unsupported"] or condition is None
-                continue
-            if low == "else":
-                if not stack:
-                    unsupported = True
-                else:
-                    frame = stack[-1]
-                    frame["cur"] = _condition_not(frame["seen"])
+                    return None
+                conditions.append(condition)
+                variables.update(_expression_variables(condition))
                 continue
             if low == "endif":
-                if stack:
-                    stack.pop()
-                else:
-                    unsupported = True
+                if not conditions:
+                    return None
+                conditions.pop()
                 continue
-            condition = None
-            for frame in stack:
-                condition = _condition_and(condition, frame["cur"])
-                if frame["unsupported"]:
-                    condition = None
+            if low in {"else", "elif"} or low.startswith("else "):
+                return None
             raw_assignment = _COMPUTE_ASSIGN_RE.fullmatch(line)
             if (raw_assignment is not None
                     and raw_assignment.group("lhs").startswith("$")
                     and _canonical(raw_assignment.group("lhs"), canonical)
                     .casefold() in {"dt", "ts"}):
-                # 3DMigoto's timestamp bookkeeping is represented by the
-                # browser's frame delta, not by persistent program state.
                 continue
-            assignment = _program_assignment(
-                line, canonical, var_prefix, qualified_vars)
+            assignment = _program_assignment(line, canonical, var_prefix)
             if assignment is not None:
-                assignment["condition"] = condition
+                assignment["conditions"] = list(conditions)
                 commands.append(assignment)
                 variables.add(assignment["variable"])
                 variables.update(_expression_variables(assignment["expression"]))
-                condition_variables.update(_condition_variables(condition))
-                variables.update(condition_variables)
                 assigned.add(assignment["variable"])
                 continue
-            if (raw_assignment is not None
-                    and raw_assignment.group("lhs").startswith("$")):
-                unsupported = True
-                continue
+            if raw_assignment is not None and raw_assignment.group("lhs").startswith("$"):
+                return None
             if _COMPUTE_DISPATCH_RE.fullmatch(line):
-                item = dispatches.get((str(section).casefold(), line_index))
+                if conditions:
+                    return None
+                item = dispatches.get((section_key, line_index))
                 if item is not None:
-                    command = {"op": "dispatch", **item,
-                               "condition": condition}
-                    commands.append(command)
+                    commands.append({"op": "dispatch", **item})
                     variables.update(_expression_variables(item["phase"]))
-                    condition_variables.update(_condition_variables(condition))
-                    variables.update(condition_variables)
-                    continue
-        if stack:
-            unsupported = True
-    if unsupported:
-        return None
+        if conditions:
+            return None
     normalized_initials = {
         f"{var_prefix or ''}{_canonical(key, canonical)}": value
         for key, value in initials.items()
         if f"{var_prefix or ''}{_canonical(key, canonical)}" in variables
     }
     return {
-        "external_variables": sorted(
-            (variables - assigned) | condition_variables),
+        "external_variables": sorted(variables - assigned),
         "initials": normalized_initials,
         "commands": commands,
     }
@@ -575,7 +392,7 @@ def _literal_constant_assignments(sections, canonical_vars):
 def _condition_stack_line(line, stack, aliases):
     """Advance a small if/elif/else stack and report control lines."""
     low = line.lower()
-    match = _ELIF_RE.fullmatch(line)
+    match = _CLOCK_ELIF_RE.fullmatch(line)
     if match:
         if stack:
             frame = stack[-1]
@@ -778,52 +595,33 @@ def _strip_hlsl_comments(text):
     return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
 
-_KNOWN_COMPUTE_SHADERS = {
-    # The fixture adapter keeps the unit-test kernel representative while
-    # the remaining entries are normalized hashes of observed mod shaders.
-    "6e0c527c8bd742a04b3bbb961b0123df5a6afc2d16683e422a4fe09ff28250ad": {
-        "kind": "shape", "threads": 64,
-        "shape": {"amplitude": 0.5, "angular_scale": 30.0, "bias": 0.5},
-    },
-    "ca017d1bb057699c9197aeeaf56b00fcccf53857e16d04bedde2180130591c98": {
-        "kind": "shape", "threads": 64,
-        "shape": {"amplitude": 0.5, "angular_scale": 30.0, "bias": 0.5},
-    },
-    "9a9721837bb819c7c9d34d7cbdd647fc75c97896523809bc9dae8808ec0de510": {
-        "kind": "shape", "threads": 1,
-        "shape": {"amplitude": 0.5, "angular_scale": 30.0, "bias": 0.5},
-    },
-    "c5c2ac0ad58b7232619529e97fc3bbb0c8b61c8a30b64a1d8f8c4604d5ddc1ba": {
-        "kind": "pose", "coordinate_variant": "standard", "threads": 64,
-    },
-    "50d6b4f03e37964ddcbe2795ef9d8484e7384d1372529102791cc69a75bb04cd": {
-        "kind": "pose", "coordinate_variant": "standard", "threads": 64,
-    },
-    "6789152b17648894962c805b5af6196849ce93ade7f35f57d9be07e14645fe9a": {
-        "kind": "pose", "coordinate_variant": "standard", "threads": 1,
-    },
-    "c65f23f916d94e0d1fa0878345fc29e60ac8f08b7e260a1e27d6d17f2ad31361": {
-        "kind": "pose", "coordinate_variant": "columbina_basis", "threads": 1,
-    },
-}
-
-
-def _normalized_shader_hash(text):
-    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
-    return hashlib.sha256(compact.encode("utf-8")).hexdigest()
+_NUMTHREADS_RE = re.compile(
+    r"\[\s*numthreads\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]",
+    re.I)
 
 
 def _identify_compute_shader(text):
-    """Return a verified adapter for one supported compute kernel template."""
+    """Read the small adapter surface needed by GIMI compute shaders."""
     if not text:
         return None
-    adapter = _KNOWN_COMPUTE_SHADERS.get(_normalized_shader_hash(text))
-    if adapter is None:
+    source = _strip_hlsl_comments(text)
+    match = _NUMTHREADS_RE.search(source)
+    if match is None:
         return None
-    result = dict(adapter)
-    if "shape" in adapter:
-        result["shape"] = dict(adapter["shape"])
-    return result
+    threads = int(match.group(1))
+    if threads <= 0:
+        return None
+    compact = re.sub(r"\s+", "", source).lower()
+    columbina_markers = (
+        "float4pos=float4(v.position.x,-v.position.z,v.position.y,1.0f)",
+        "float4normal=float4(v.normal.x,-v.normal.z,v.normal.y,0.0f)",
+        "rw_buffer[i].position=float3(pos_result.x,pos_result.z,-pos_result.y)",
+        "rw_buffer[i].normal=normalize(float3(normal_result.x,normal_result.z,-normal_result.y)",
+    )
+    coordinate_variant = (
+        "columbina_basis" if all(marker in compact for marker in columbina_markers)
+        else "standard")
+    return {"threads": threads, "coordinate_variant": coordinate_variant}
 
 
 def _resolved_resource(resources, copy_sources, name, visiting=None):
@@ -898,7 +696,7 @@ def _validate_compute_layout(resources, copy_sources, shape_passes, pose=None,
 
 def discover_compute_animations(sections, resources, *, mod_dir=None,
                                ini_path=None, source=None, var_prefix=None,
-                               canonical_vars=None, qualified_vars=None):
+                               canonical_vars=None):
     """Discover the conservative fixed-layout compute-animation contract."""
     canonical = canonical_vars or canonical_var_names(sections)
     from .draw_resources import _collect_resource_copy_sources
@@ -933,7 +731,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 if slot == 5:
                     close_chain()
                     current_chain = {
-                        "uav_resource": match.group(2),
                         "output_resource": None,
                         "passes": [],
                     }
@@ -967,52 +764,31 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             if match:
                 if current_chain is None:
                     continue
-                snapshot = {"supported": False}
-                if active is not None:
-                    snapshot["kind"] = active["kind"]
-                    if t_sources.get(50):
-                        snapshot["base_resource"] = t_sources[50]
-                if (active is not None and match.group(2) == "1"
-                        and match.group(3) == "1"):
-                    dispatch = int(match.group(1)) * active["threads"]
-                    if active["kind"] == "shape":
-                        base = t_sources.get(50)
-                        target = t_sources.get(51)
-                        if base and target and active.get("shape"):
-                            snapshot = {
-                                "supported": True,
-                                "kind": "shape",
-                                "dispatch_key": (str(section).casefold(),
-                                                  line_index),
-                                "base_resource": base,
-                                "target_resource": target,
-                                "uav_resource": current_chain[
-                                    "uav_resource"],
-                                "dispatch_vertices": dispatch,
-                                "phase_expr": phase_expr,
-                                "shape": active["shape"],
-                            }
-                    elif active["kind"] == "pose":
-                        base = t_sources.get(50)
-                        blend = t_sources.get(51)
-                        pose = t_sources.get(52)
-                        if base and blend and pose:
-                            snapshot = {
-                                "supported": True,
-                                "kind": "pose",
-                                "coordinate_variant": active[
-                                    "coordinate_variant"],
-                                "dispatch_key": (str(section).casefold(),
-                                                  line_index),
-                                "base_resource": base,
-                                "blend_resource": blend,
-                                "pose_resource": pose,
-                                "uav_resource": current_chain[
-                                    "uav_resource"],
-                                "dispatch_vertices": dispatch,
-                                "phase_expr": phase_expr,
-                                "bone_count_expr": bone_count_expr,
-                            }
+                if active is None:
+                    continue
+                base = t_sources.get(50)
+                blend = t_sources.get(51)
+                pose = t_sources.get(52)
+                if not base or not blend:
+                    continue
+                kind = "pose" if pose else "shape"
+                dispatch = int(match.group(1)) * active["threads"]
+                snapshot = {
+                    "kind": kind,
+                    "dispatch_key": (str(section).casefold(), line_index),
+                    "base_resource": base,
+                    "dispatch_vertices": dispatch,
+                    "phase_expr": phase_expr,
+                }
+                if kind == "shape":
+                    snapshot["target_resource"] = blend
+                else:
+                    snapshot.update({
+                        "coordinate_variant": active["coordinate_variant"],
+                        "blend_resource": blend,
+                        "pose_resource": pose,
+                        "bone_count_expr": bone_count_expr,
+                    })
                 current_chain["passes"].append(snapshot)
                 continue
             match = _COMPUTE_RESOURCE_RE.fullmatch(line)
@@ -1034,11 +810,11 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         for item in chain["passes"]
         if item.get("kind") == "pose"
     }
+
     literals = _literal_assignments(sections, canonical)
 
     def phase_expression(expression):
-        return _compile_expression(
-            expression, canonical, var_prefix, qualified_vars)
+        return _compile_expression(expression, canonical, var_prefix)
 
     def parse_shape_passes(items):
         parsed = []
@@ -1056,21 +832,13 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         output_resource = chain.get("output_resource")
         if not output_resource:
             continue
-        if any(not item.get("supported") for item in chain["passes"]):
-            continue
         pose_passes = [item for item in chain["passes"]
-                       if item.get("supported") and item.get("kind") == "pose"]
+                       if item.get("kind") == "pose"]
         if not pose_passes:
             shape_passes = [item for item in chain["passes"]
                             if item.get("kind") == "shape"]
             if (not shape_passes
-                    or len(shape_passes) != len(chain["passes"])
                     or str(output_resource).casefold() in pose_inputs):
-                continue
-            shape_base = str(shape_passes[0]["base_resource"]).casefold()
-            if (str(chain["uav_resource"]).casefold() != shape_base
-                    or any(str(item["base_resource"]).casefold()
-                           != shape_base for item in shape_passes)):
                 continue
             validated = _validate_compute_layout(
                 resources, copy_sources, shape_passes,
@@ -1105,39 +873,20 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     "dispatch_vertices": item["dispatch_vertices"],
                     "phase_expr": expression,
                     "dispatch_key": item["dispatch_key"],
-                    **item["shape"],
                 } for (item, expression) in parsed_shape_passes],
                 "pose": None,
             })
-            continue
-        if len(pose_passes) != 1:
             continue
         pose_pass = pose_passes[0]
         matching_shapes = output_chains.get(
             str(pose_pass["base_resource"]).casefold(), ())
         shape_passes = []
         if matching_shapes:
-            if len(matching_shapes) != 1:
-                continue
             shape_chain = matching_shapes[0]
-            if any(not item.get("supported") for item in shape_chain["passes"]):
-                continue
             shape_passes = [item for item in shape_chain["passes"]
                             if item.get("kind") == "shape"]
-            if not shape_passes or len(shape_passes) != len(
-                    shape_chain["passes"]):
+            if not shape_passes:
                 continue
-            shape_base = str(shape_passes[0]["base_resource"]).casefold()
-            if (str(shape_chain["uav_resource"]).casefold() != shape_base
-                    or any(str(item["base_resource"]).casefold()
-                           != shape_base for item in shape_passes)):
-                continue
-        elif not _resolved_resource(
-                resources, copy_sources, pose_pass["base_resource"]).get(
-                    "filename"):
-            # A pose input that came from an unsupported compute chain cannot
-            # silently become a pose-only animation.
-            continue
 
         bone_count = _integer(_operand_value(
             pose_pass.get("bone_count_expr"), literals, canonical))
@@ -1182,7 +931,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "dispatch_vertices": item["dispatch_vertices"],
                 "phase_expr": expression,
                 "dispatch_key": item["dispatch_key"],
-                **item["shape"],
             } for (item, expression) in parsed_shape_passes],
             "pose": {
                 "base_resource": pose_pass["base_resource"],
@@ -1200,7 +948,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
     if not animations:
         return []
     program = _compile_animation_program(
-        sections, animations, canonical, var_prefix, qualified_vars)
+        sections, animations, canonical, var_prefix)
     if program is None:
         return []
     identity = (source.logical_path(ini_path) if source is not None

@@ -60,7 +60,6 @@ function evaluateExpression(expression, program) {
     case 'literal': return numeric(expression.value);
     case 'dt': return program.dt;
     case 'variable': return numeric(program.variables[expression.variable]);
-    case 'qualified_unknown': return 0;
     case 'binary': {
       const left = evaluateExpression(expression.left, program);
       const right = evaluateExpression(expression.right, program);
@@ -75,42 +74,14 @@ function evaluateExpression(expression, program) {
 
 function evaluateCondition(condition, program) {
   if (!condition) return true;
-  if (condition.kind === 'truthy') {
-    if (expressionUsesUnknown(condition.expression)) return true;
-    return Math.abs(evaluateExpression(condition.expression, program))
-      > 1e-12;
-  }
-  if (condition.kind === 'not') {
-    return !evaluateCondition(condition.item, program);
-  }
-  if (condition.kind === 'and') {
-    return condition.items.every(item => evaluateCondition(item, program));
-  }
-  if (condition.kind === 'or') {
-    return condition.items.some(item => evaluateCondition(item, program));
-  }
   if (condition.kind !== 'compare') return false;
-  if (expressionUsesUnknown(condition.left)
-      || expressionUsesUnknown(condition.right)) return true;
   const left = evaluateExpression(condition.left, program);
   const right = evaluateExpression(condition.right, program);
   switch (condition.op) {
     case '==': return left === right;
-    case '!=': return left !== right;
     case '>': return left > right;
-    case '<': return left < right;
-    case '>=': return left >= right;
-    case '<=': return left <= right;
     default: return false;
   }
-}
-
-function expressionUsesUnknown(expression) {
-  if (!expression || typeof expression !== 'object') return false;
-  if (expression.kind === 'qualified_unknown') return true;
-  return Object.values(expression).some(value => Array.isArray(value)
-    ? value.some(item => expressionUsesUnknown(item))
-    : expressionUsesUnknown(value));
 }
 
 function expressionUsesDt(expression) {
@@ -164,16 +135,16 @@ function executeGimiProgram(track, now) {
   program.dt = dt;
   syncGimiProgramControls(program);
   for (const output of track.outputs.values()) {
-    output.active = false;
-    output.poseActive = false;
     output.shapePhases = [];
     output.poseTime = 0;
   }
   let changed = false;
   let activeDtCommand = false;
   for (const command of track.program.commands || []) {
-    const conditionActive = evaluateCondition(command.condition, program);
-    const commandUsesDt = expressionUsesDt(command.condition)
+    const conditions = command.conditions || [];
+    const conditionActive = conditions.every(condition =>
+      evaluateCondition(condition, program));
+    const commandUsesDt = conditions.some(expressionUsesDt)
       || expressionUsesDt(command.expression)
       || expressionUsesDt(command.phase);
     activeDtCommand = activeDtCommand || (conditionActive && commandUsesDt);
@@ -189,12 +160,10 @@ function executeGimiProgram(track, now) {
     if (command.op !== 'dispatch') continue;
     const output = track.outputs.get(command.track_id);
     if (!output) continue;
-    output.active = true;
     const phase = evaluateExpression(command.phase, program);
     if (command.kind === 'shape') {
       output.shapePhases[command.pass] = phase;
     } else {
-      output.poseActive = true;
       output.poseTime = phase;
     }
   }
@@ -208,22 +177,17 @@ function applyGimiPose(mesh, meshState, output) {
   const basePositions = mesh.userData?.basePositions;
   const baseNormals = meshState.baseNormals;
   const vertexCount = meshState.vertexCount;
-  if (!position || !normal || !basePositions || !baseNormals
-      || position.array.length < vertexCount * 3
-      || normal.array.length < vertexCount * 3
-      || baseNormals.length < vertexCount * 3) return false;
+  if (!position || !normal || !basePositions || !baseNormals) return false;
 
   const positions = position.array;
   const normals = normal.array;
   const shapeWeights = meshState.shapePasses.map((pass, index) => {
     const phase = output.shapePhases[index];
     if (!Number.isFinite(phase)) return 0;
-    return Number(pass.amplitude) * Math.sin(
-      phase * Number(pass.angularScale)) + Number(pass.bias);
+    return 0.5 * (Math.sin(phase * 30) + 1);
   });
 
-  const hasPose = !!(output.poseActive && meshState.poseFrames
-    && meshState.poseBoneCount && meshState.poseActive);
+  const hasPose = meshState.poseFrames != null;
   const columbinaBasis = output.coordinateVariant === 'columbina_basis';
   const frameValue = hasPose ? Math.max(0, output.poseTime) : 0;
   const frame = hasPose ? Math.min(
@@ -267,7 +231,7 @@ function applyGimiPose(mesh, meshState, output) {
       nz = oldNy;
     }
 
-    if (!hasPose || meshState.poseActive[vertex] < 0.5) {
+    if (!hasPose) {
       positions[positionOffset] = px;
       positions[positionOffset + 1] = py;
       positions[positionOffset + 2] = pz;
@@ -297,7 +261,6 @@ function applyGimiPose(mesh, meshState, output) {
       const weight = weights[blendOffset + influence];
       if (Math.abs(weight) <= 1e-8) continue;
       const bone = indices[blendOffset + influence];
-      if (bone < 0 || bone >= boneCount) continue;
       const prev = (frame * boneCount + bone) * 14;
       const next = (nextFrame * boneCount + bone) * 14;
       const prevScaleX = pose[prev];
@@ -411,10 +374,7 @@ function applyGimiTrack(track) {
       continue;
     }
     const output = track.outputs.get(meshState.trackId);
-    if (!output?.active) {
-      restoreCanonical(mesh);
-      continue;
-    }
+    if (!output) continue;
     changed = applyGimiPose(mesh, meshState, output) || changed;
   }
   return changed;
@@ -599,18 +559,13 @@ function registerGimiMesh(mesh, animationId, geometry) {
   const trackId = geometry.track_id || animationId;
   const coordinateVariant = geometry.coordinate_variant || 'standard';
   if (!program || !programId || !trackId) return false;
-  if (!['standard', 'columbina_basis'].includes(coordinateVariant)) {
-    return false;
-  }
-  const vertexCount = positiveInteger(geometry.vertex_count);
+  const vertexCount = Number(geometry.vertex_count);
   const poseInfo = geometry.pose || null;
-  const poseBoneCount = positiveInteger(poseInfo?.bone_count);
-  const poseFrameCount = positiveInteger(poseInfo?.frame_count);
+  const poseBoneCount = Number(poseInfo?.bone_count);
+  const poseFrameCount = Number(poseInfo?.frame_count);
   const poseBlend = poseInfo?.blend;
   const poseFrames = poseInfo?.frames;
   const hasPose = !!poseInfo;
-  if (!vertexCount || (hasPose && (!poseBoneCount || !poseFrameCount
-      || !poseBlend || !poseFrames))) return false;
   let state = tracks.get(programId);
   try {
     if (!state) {
@@ -628,44 +583,26 @@ function registerGimiMesh(mesh, animationId, geometry) {
     const baseNormals = decodeF32(geometry.base_normals);
     let weights = null;
     let indices = null;
-    let poseActive = null;
     if (hasPose) {
       weights = decodeF32(poseBlend.weights);
       indices = decodeI32(poseBlend.indices);
-      poseActive = decodeF32(poseBlend.active);
     }
-    if (baseNormals.length < vertexCount * 3
-        || (hasPose && (weights.length < vertexCount * 4
-        || indices.length < vertexCount * 4
-        || poseActive.length < vertexCount))) return false;
     let decodedPoseFrames = null;
     if (hasPose) {
       decodedPoseFrames = decodeF32(poseFrames);
-      if (decodedPoseFrames.length < poseFrameCount * poseBoneCount * 14) {
-        return false;
-      }
     }
     const shapePasses = (geometry.shape_passes || []).map(pass => ({
       deltas: decodeF32(pass.deltas),
-      amplitude: Number(pass.amplitude),
-      angularScale: Number(pass.angular_scale),
-      bias: Number(pass.bias),
     }));
-    if (shapePasses.some(pass =>
-      pass.deltas.length < vertexCount * 6
-      || !Number.isFinite(pass.amplitude)
-      || !Number.isFinite(pass.angularScale)
-      || !Number.isFinite(pass.bias))
-      || (!hasPose && !shapePasses.length)) return false;
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
-      poseActive, poseFrames: decodedPoseFrames,
+      poseFrames: decodedPoseFrames,
       poseBoneCount, poseFrameCount, trackId,
       animationBounds: geometry.bounds || null,
     };
     if (!state.outputs.has(trackId)) {
       state.outputs.set(trackId, {
-        active: false, poseActive: false, shapePhases: [], poseTime: 0,
+        shapePhases: [], poseTime: 0,
         coordinateVariant,
       });
     }

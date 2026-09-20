@@ -3,8 +3,7 @@
 import struct
 
 from app.mods.analysis import analyze_mod_inis
-from core.ini.animations import (_KNOWN_COMPUTE_SHADERS, _compile_condition,
-                                 _identify_compute_shader,
+from core.ini.animations import (_compile_condition, _identify_compute_shader,
                                  discover_compute_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
@@ -95,29 +94,10 @@ global $VG_count = 2
 global $strat_frame = 0
 global $end_frame = 1
 global persist $anime_state = 0
-global persist $anime_auto_play = 1
 global $anime_loop = 0
 
 [Present]
-if $anime_state == 0
-    $strat_frame = 0
-    $end_frame = 1
-elif $anime_state == 1
-    $strat_frame = 0
-    $end_frame = 1
-endif
-if $anime_auto_play == 1
-    if $anime_state == 0 && $anime_loop > 50
-        $anime_state = 1
-        $anime_loop = 0
-    elif $anime_state == 1 && $anime_loop > 50
-        $anime_state = 2
-        $anime_loop = 0
-    elif $anime_state == 2 && $anime_loop > 1
-        $anime_state = 0
-        $anime_loop = 0
-    endif
-endif
+$present_only = 1
 
 [CustomShaderShape]
 if $pause == 0
@@ -194,10 +174,10 @@ filename = index.buf
     return parse_sections("fixture.ini", text=text)
 
 
-def _discover(root, sections, *, qualified_vars=None):
+def _discover(root, sections):
     return discover_compute_animations(
         sections, extract_resources(sections), mod_dir=str(root),
-        ini_path=str(root / "fixture.ini"), qualified_vars=qualified_vars)
+        ini_path=str(root / "fixture.ini"))
 
 
 def _attach_animation(groups, animation):
@@ -207,7 +187,7 @@ def _attach_animation(groups, animation):
             group["_compute_animation"] = animation
 
 
-def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
+def test_compute_animation_discovers_bindings_and_dimensions(tmp_path):
     root = tmp_path / "valid"
     sections = _sections(root)
     discovered = _discover(root, sections)
@@ -216,9 +196,9 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     assert [item["dispatch_vertices"] for item in animation["shape_passes"]] == [64, 64]
     assert [item["phase_expr"]["kind"] for item in animation["shape_passes"]] == [
         "variable", "binary"]
-    assert animation["shape_passes"][0]["amplitude"] == 0.5
-    assert animation["shape_passes"][0]["angular_scale"] == 30
-    assert animation["shape_passes"][0]["bias"] == 0.5
+    assert "amplitude" not in animation["shape_passes"][0]
+    assert "angular_scale" not in animation["shape_passes"][0]
+    assert "bias" not in animation["shape_passes"][0]
     assert animation["pose"]["bone_count"] == 2
     assert animation["pose"]["frame_count"] == 2
     assert animation["pose"]["phase_expr"] == {
@@ -227,7 +207,10 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     assert "id" not in program
     assert "version" not in program
     assert any(command["op"] == "dispatch" for command in program["commands"])
-    assert "anime_auto_play" in program["external_variables"]
+    assert "present_only" not in program["external_variables"]
+    assert all("condition" not in command for command in program["commands"])
+    assert all("conditions" in command for command in program["commands"]
+               if command["op"] == "set")
     assert all(command.get("variable") not in {"dt", "ts"}
                for command in program["commands"])
 
@@ -268,12 +251,11 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     assert not _discover(bad_bone_count, bad_count_sections)
 
 
-def test_compute_program_keeps_truthy_gates_and_scopes_unknown_qualified_gates(
-        tmp_path):
-    root = tmp_path / "qualified-gates"
+def test_compute_program_keeps_nested_simple_conditions(tmp_path):
+    root = tmp_path / "nested-conditions"
     sections = _sections(root)
     sections["CustomShaderPose"].extend([
-        "if $pause",
+        "if $pause == 0",
         "    $anime_loop = $anime_loop + 1",
         "endif",
     ])
@@ -281,27 +263,18 @@ def test_compute_program_keeps_truthy_gates_and_scopes_unknown_qualified_gates(
     animation = _discover(root, sections)[0]
     assignment = next(
         command for command in animation["program"]["commands"]
-        if command.get("variable") == "anime_loop"
-        and command.get("condition", {}).get("kind") == "truthy")
-    assert assignment["condition"]["kind"] == "truthy"
-    assert _compile_condition("$active", {})["kind"] == "truthy"
-    assert _compile_condition("$active || $pause", {})["kind"] == "or"
-    assert _compile_condition("!$active", {})["kind"] == "not"
-
-    qualified = _sections(tmp_path / "qualified-rejected")
-    qualified["CustomShaderPose"].insert(0, r"if $\Odette\Master\swapvar == 4")
-    qualified["CustomShaderPose"].append("endif")
-    discovered = _discover(tmp_path / "qualified-rejected", qualified)
-    assert len(discovered) == 1
-    dispatch = next(command for command in discovered[0]["program"]["commands"]
-                    if command.get("op") == "dispatch"
-                    and command.get("kind") == "pose")
-    condition = dispatch["condition"]
-    assert condition["kind"] == "compare"
-    assert condition["left"]["kind"] == "qualified_unknown"
+        if command.get("variable") == "anime_loop")
+    assert assignment["conditions"] == [{
+        "kind": "compare", "op": "==",
+        "left": {"kind": "variable", "variable": "pause"},
+        "right": {"kind": "literal", "value": 0.0},
+    }]
+    assert _compile_condition("$active", {}) is None
+    assert _compile_condition("$active || $pause", {}) is None
+    assert _compile_condition("$active != 0", {}) is None
 
 
-def test_compute_program_rejects_unverified_expression_operators(tmp_path):
+def test_compute_program_rejects_unsupported_expression_operators(tmp_path):
     root = tmp_path / "unsupported-expression"
     sections = _sections(root)
     sections["CustomShaderPose"] = [
@@ -310,90 +283,14 @@ def test_compute_program_rejects_unverified_expression_operators(tmp_path):
     assert not _discover(root, sections)
 
 
-def test_compute_animation_accepts_verified_shader_hash():
+def test_compute_animation_reads_numthreads_without_shader_hash():
     adapter = _identify_compute_shader(POSE_SHADER)
-    assert adapter["kind"] == "pose"
+    assert adapter["threads"] == 64
     assert adapter["coordinate_variant"] == "standard"
     changed = POSE_SHADER.replace(
         "rw_buffer[i].position = v.position * p.S + p.T;",
         "rw_buffer[i].position = v.position * p.T + p.S;")
-    assert _identify_compute_shader(changed) is None
-
-
-def test_verified_single_thread_pose_adapter_is_standard():
-    adapter = _KNOWN_COMPUTE_SHADERS[
-        "6789152b17648894962c805b5af6196849ce93ade7f35f57d9be07e14645fe9a"]
-    assert adapter == {
-        "kind": "pose", "coordinate_variant": "standard", "threads": 1,
-    }
-
-
-def test_compute_program_preserves_dispatch_guards(tmp_path):
-    root = tmp_path / "guarded-dispatch"
-    sections = _sections(root)
-    lines = sections["CustomShaderPose"]
-    dispatch_index = lines.index("Dispatch = 1, 1, 1")
-    sections["CustomShaderPose"] = (
-        lines[:dispatch_index]
-        + ["if $pause == 1", lines[dispatch_index], "endif"]
-        + lines[dispatch_index + 1:])
-
-    animation = _discover(root, sections)[0]
-    pose_dispatch = next(
-        command for command in animation["program"]["commands"]
-        if command.get("kind") == "pose")
-    assert pose_dispatch["condition"] == {
-        "kind": "compare", "op": "==",
-        "left": {"kind": "variable", "variable": "pause"},
-        "right": {"kind": "literal", "value": 1.0},
-    }
-
-
-def test_compute_program_inlines_reached_command_lists(tmp_path):
-    root = tmp_path / "command-list"
-    sections = _sections(root)
-    assignment = "$Freq_pose = $Freq_pose + 30 * $dt"
-    pose_lines = sections["CustomShaderPose"]
-    sections["CustomShaderPose"] = [
-        "run = CommandListPose" if line == assignment else line
-        for line in pose_lines
-    ]
-    sections["CommandListPose"] = [assignment]
-
-    animation = _discover(root, sections)[0]
-    assert any(
-        command.get("op") == "set"
-        and command.get("variable") == "Freq_pose"
-        for command in animation["program"]["commands"])
-
-
-def test_compute_program_preserves_present_runs_and_known_qualified_gates(
-        tmp_path):
-    root = tmp_path / "present-program"
-    sections = _sections(root)
-    sections["Present"] = [
-        r"if $\Owner\Master\swapvar == 1",
-        "    run = CustomShaderShape",
-        "    run = CustomShaderPose",
-        "endif",
-    ]
-
-    animation = _discover(
-        root, sections,
-        qualified_vars={r"\Owner\Master\swapvar": "present_enabled"})[0]
-    commands = animation["program"]["commands"]
-    assert any(
-        command.get("op") == "dispatch"
-        and command.get("kind") == "pose"
-        for command in commands)
-    dispatch = next(command for command in commands
-                    if command.get("op") == "dispatch"
-                    and command.get("kind") == "pose")
-    assert dispatch["condition"] == {
-        "kind": "compare", "op": "==",
-        "left": {"kind": "variable", "variable": "present_enabled"},
-        "right": {"kind": "literal", "value": 1.0},
-    }
+    assert _identify_compute_shader(changed)["threads"] == 64
 
 
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
@@ -425,6 +322,27 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     assert "dispatch_vertices" not in payload["pose"]
     assert "shape_clock" not in payload
     assert "pose_clock" not in payload
+
+
+def test_compute_shape_dispatch_keeps_partial_morph_coverage(tmp_path):
+    root = tmp_path / "partial-morph"
+    sections = _sections(root)
+    (root / "shape.hlsl").write_text(
+        SHAPE_SHADER.replace("[numthreads(64, 1, 1)]", "[numthreads(1, 1, 1)]"))
+    animation = _discover(root, sections)[0]
+    analysis = analyze_ini(sections, resources=extract_resources(sections))
+    _attach_animation(analysis.draw_groups, animation)
+    geometry = GeometryBlob()
+    built = build_mesh_result(
+        analysis.draw_groups, str(root), geometry=geometry)
+    payload = next(iter(built.meshes.values()))["animation_geometry"]
+    raw = geometry.to_bytes()
+    deltas = raw[
+        payload["shape_passes"][0]["deltas"]["offset"]:
+        payload["shape_passes"][0]["deltas"]["offset"]
+        + payload["shape_passes"][0]["deltas"]["length"]]
+    assert struct.unpack_from("<6f", deltas, 0) == (1., 0., 0., 0., 1., 0.)
+    assert struct.unpack_from("<6f", deltas, 24) == (0., 0., 0., 0., 0., 0.)
 
 
 def test_compute_resource_copy_edges_track_uav_slots_and_sections(tmp_path):
@@ -472,96 +390,6 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
     assert len(payload["shape_passes"]) == 2
 
 
-def test_compute_animation_keeps_sequential_pose_dispatch_snapshots(tmp_path):
-    root = tmp_path / "sequential-pose"
-    sections = _sections(root)
-    sections["Constants"] = [
-        line.replace("$VG_count = 2", "$VG_count = 139")
-        for line in sections["Constants"]
-    ] + ["global $Acc1_count = 8"]
-    sections["ResourcePose"] = [
-        line.replace("pose.buf", "main_pose.buf")
-        for line in sections["ResourcePose"]
-    ]
-    sections["ResourceAcc1"] = []
-    sections["ResourceAcc1.1"] = [
-        "stride = 40",
-        "filename = acc1_position.buf",
-    ]
-    sections["ResourceAcc1Blend"] = [
-        "stride = 32",
-        "filename = acc1_blend.buf",
-    ]
-    sections["ResourceAcc1Pose"] = [
-        "stride = 56",
-        "filename = acc1_pose.buf",
-    ]
-    sections["CustomShaderPose"].extend([
-        "cs-u5 = null",
-        "x89 = $Acc1_count",
-        "cs-t50 = copy ResourceAcc1.1",
-        "cs-t51 = copy ResourceAcc1Blend",
-        "cs-t52 = copy ResourceAcc1Pose",
-        "cs-u5 = copy ResourceAcc1.1",
-        "ResourceAcc1 = ref cs-u5",
-        "Dispatch = 1, 1, 1",
-        "cs-u5 = null",
-    ])
-    pose_record = struct.pack(
-        "<3f3f4f4f", 1., 1., 1., 0., 0., 0.,
-        0., 0., 0., 1., 0., 0., 0., 0.)
-    (root / "main_pose.buf").write_bytes(pose_record * (139 * 2))
-    (root / "acc1_position.buf").write_bytes(
-        (root / "position.buf").read_bytes())
-    (root / "acc1_blend.buf").write_bytes(
-        (root / "blend.buf").read_bytes())
-    (root / "acc1_pose.buf").write_bytes(pose_record * (8 * 2))
-
-    discovered = _discover(root, sections)
-
-    by_output = {item["position_resource"]: item for item in discovered}
-    assert set(by_output) == {"ResourcePosition", "ResourceAcc1"}
-    assert by_output["ResourcePosition"]["base_file"] == "position.buf"
-    assert by_output["ResourcePosition"]["pose"]["bone_count"] == 139
-    assert by_output["ResourcePosition"]["pose"]["blend_file"] == "blend.buf"
-    assert by_output["ResourcePosition"]["pose"]["file"] == "main_pose.buf"
-    assert by_output["ResourceAcc1"]["base_file"] == "acc1_position.buf"
-    assert by_output["ResourceAcc1"]["pose"]["bone_count"] == 8
-    assert by_output["ResourceAcc1"]["pose"]["blend_file"] == "acc1_blend.buf"
-    assert by_output["ResourceAcc1"]["pose"]["file"] == "acc1_pose.buf"
-    assert by_output["ResourcePosition"]["program_id"] == \
-        by_output["ResourceAcc1"]["program_id"]
-    dispatches = by_output["ResourcePosition"]["program"]["commands"]
-    operations = [item["track_id"] for item in dispatches
-                  if item["op"] == "dispatch"]
-    assert by_output["ResourcePosition"]["track_id"] in operations
-    assert by_output["ResourceAcc1"]["track_id"] in operations
-
-
-def test_compute_animation_rejects_multiple_pose_passes_in_one_chain(tmp_path):
-    root = tmp_path / "multiple-pose-passes"
-    sections = _sections(root)
-    sections["CustomShaderPose"].insert(
-        sections["CustomShaderPose"].index("cs-u5 = null"),
-        "Dispatch = 1, 1, 1")
-
-    assert not _discover(root, sections)
-
-
-def test_compute_animation_rejects_unsupported_shape_chain(tmp_path):
-    root = tmp_path / "unsupported-shape-chain"
-    sections = _sections(root)
-    (root / "shape.hlsl").write_text("void main() {}")
-
-    assert not _discover(root, sections)
-
-    changed_math = tmp_path / "changed-shape-math"
-    changed_sections = _sections(changed_math)
-    (changed_math / "shape.hlsl").write_text(
-        SHAPE_SHADER.replace("0.5 * (sin", "0.75 * (sin"))
-    assert not _discover(changed_math, changed_sections)
-
-
 def test_compute_animation_rejects_shape_chain_when_phase_is_unparseable(tmp_path):
     root = tmp_path / "unparseable-shape"
     sections = _sections(root)
@@ -589,15 +417,6 @@ def test_compute_animation_preserves_zero_multiplication(tmp_path):
         "left": {"kind": "variable", "variable": "Speed"},
         "right": {"kind": "literal", "value": 0.0},
     }
-
-
-def test_compute_animation_rejects_non_linear_dispatch(tmp_path):
-    root = tmp_path / "non-linear-dispatch"
-    sections = _sections(root)
-    sections["CustomShaderPose"] = [
-        line.replace("Dispatch = 1, 1, 1", "Dispatch = 1, 2, 1")
-        for line in sections["CustomShaderPose"]]
-    assert not _discover(root, sections)
 
 
 def test_compute_animation_preserves_ordered_assignments(tmp_path):
