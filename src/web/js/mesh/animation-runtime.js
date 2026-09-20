@@ -479,10 +479,8 @@ function tick(now) {
       }
       playing = true;
       advanceGimiTrack(state, now);
-      const geometryRate = gimiClockRate(state.poseClock)
-        || gimiClockRate(state.shapeClock);
-      const geometryInterval = geometryRate > 0
-        ? 1000 / geometryRate : 1000 / 60;
+      const poseRate = gimiClockRate(state.poseClock);
+      const geometryInterval = poseRate > 0 ? 1000 / poseRate : 1000 / 60;
       const due = state.lastGeometryTime === null
         || now - state.lastGeometryTime >= geometryInterval;
       if (state.dirty || due) {

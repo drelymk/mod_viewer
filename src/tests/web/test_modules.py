@@ -232,13 +232,13 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
             1, 0, 0, 0, 0, 0])), phase_offset: 0,
             amplitude: 1, angular_scale: 1, bias: 0}],
           pose: null,
-          shape_clock: {rate: {kind: 'literal', value: 1},
+          shape_clock: {rate: {kind: 'literal', value: 0.1},
             advance_conditions: [], reset_rules: []},
           pose_clock: null,
         });
         pending.get(Math.min(...pending.keys()))(0);
         const first = Array.from(position.array);
-        pending.get(Math.max(...pending.keys()))(1000);
+        pending.get(Math.max(...pending.keys()))(20);
         const second = Array.from(position.array);
         const secondNormal = Array.from(normal.array);
         runtime.resetAnimationRuntime();
@@ -249,7 +249,7 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
       }
     }""")
     assert result["first"] == [0, 0, 0]
-    assert result["second"] == pytest.approx([math.sin(1), 0, 0], abs=1e-5)
+    assert result["second"] == pytest.approx([math.sin(0.002), 0, 0], abs=1e-5)
     assert result["secondNormal"] == [0, 1, 0]
 
 
