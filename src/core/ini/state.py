@@ -8,7 +8,7 @@ from .sections import canonical_var_names
 
 _ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*$")
 _ELIF_RE = re.compile(r"(?:else\s+if|elif)\s+(.*)$", re.I)
-_UNSUPPORTED_CONDITION_RE = re.compile(r"[<>+*/%]|time", re.I)
+_UNSUPPORTED_CONDITION_RE = re.compile(r"[<>+*/%]|\btime\b", re.I)
 
 
 def _condition_is_supported(expression):

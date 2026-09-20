@@ -434,7 +434,7 @@ def _prepare_gimi_shared(animation, *, mod_dir, buffers, source, geometry):
     pose_data = buffers.raw(pose_path)
     expected = (int(pose["frame_count"])
                 * int(pose["bone_count"]) * 56)
-    if len(pose_data) != expected:
+    if len(pose_data) < expected:
         return None
     return {
         "pose_frames": _geometry_ref(pose_data, geometry),
@@ -454,8 +454,8 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
     base_data = buffers.raw(base_path)
     blend_data = buffers.raw(blend_path) if pose else None
     vertex_count = int(animation["vertex_count"])
-    if (len(base_data) != vertex_count * 40
-            or (pose and len(blend_data) != vertex_count * 32)
+    if (len(base_data) < vertex_count * 40
+            or (pose and len(blend_data) < vertex_count * 32)
             or any(index < 0 or index >= vertex_count
                    for index in used_vertices)):
         return None
@@ -472,7 +472,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
         if not target_path:
             return None
         target_data = buffers.raw(target_path)
-        if len(target_data) != vertex_count * 40:
+        if len(target_data) < vertex_count * 40:
             return None
         deltas = bytearray(len(used_vertices) * 24)
         limit = min(int(item["dispatch_vertices"]), vertex_count)
@@ -483,15 +483,15 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
             target_offset = raw_index * 40
             base_values = struct.unpack_from("<6f", base_data, base_offset)
             target_values = struct.unpack_from("<6f", target_data, target_offset)
+            if not all(math.isfinite(value)
+                       for value in (*base_values, *target_values)):
+                return None
             struct.pack_into(
                 "<6f", deltas, output * 24,
                 *(target_values[index] - base_values[index]
                   for index in range(6)))
         shape_entries.append({
             "deltas": _geometry_ref(deltas, geometry),
-            "vertex_count": len(used_vertices),
-            "delta_floats": 6,
-            "phase_expr": item.get("phase_expr"),
             "amplitude": float(item["amplitude"]),
             "angular_scale": float(item["angular_scale"]),
             "bias": float(item["bias"]),
@@ -500,8 +500,6 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
     result = {
         "kind": "gimi_compute",
         "track_id": animation["track_id"],
-        "operation_id": animation["track_id"],
-        "operation": animation.get("operation"),
         "coordinate_variant": animation.get("coordinate_variant", "standard"),
         "program_id": animation.get("program_id"),
         "program": animation.get("program"),
@@ -528,16 +526,12 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
                              1.0 if raw_index < pose_limit else 0.0)
         result["pose"] = {
             "frames": shared["pose_frames"],
-            "frame_bytes": shared["pose_frame_bytes"],
-            "frame_floats": 14,
             "bone_count": bone_count,
             "frame_count": int(pose["frame_count"]),
-            "dispatch_vertices": int(pose["dispatch_vertices"]),
             "blend": {
                 "weights": _geometry_ref(weights, geometry),
                 "indices": _geometry_ref(indices, geometry),
                 "active": _geometry_ref(pose_active, geometry),
-                "vertex_count": len(used_vertices),
             },
         }
     else:

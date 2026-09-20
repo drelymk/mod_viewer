@@ -167,7 +167,7 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
         setControlValue('pause', '0');
         setControlValue('anime_state', '0');
         const program = {
-          version: 1, variables: ['pause', 'phase'],
+          external_variables: ['pause'],
           initials: {phase: 0},
           commands: [
             {op: 'set', variable: 'phase',
@@ -179,21 +179,21 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
               condition: {kind: 'compare', op: '==',
                 left: {kind: 'variable', variable: 'pause'},
                 right: {kind: 'literal', value: 0}}},
-            {op: 'dispatch', operation: 'gimi-test', kind: 'shape',
+            {op: 'dispatch', track_id: 'gimi-test', kind: 'shape',
               pass: 0, phase: {kind: 'variable', variable: 'phase'}},
-            {op: 'dispatch', operation: 'gimi-test', kind: 'pose',
+            {op: 'dispatch', track_id: 'gimi-test', kind: 'pose',
               phase: {kind: 'variable', variable: 'phase'}},
           ],
         };
         runtime.registerAnimatedMesh(mesh, 'gimi-test', {
           kind: 'gimi_compute', vertex_count: 2,
           base_normals: encode(normals),
-          program_id: 'gimi-program-test', operation_id: 'gimi-test', program,
+          program_id: 'gimi-program-test', track_id: 'gimi-test', program,
           shape_passes: [{deltas: encode(deltas),
             amplitude: 0.5, angular_scale: 30, bias: 0.5}],
           pose: {blend: {weights: encode(weights), indices: encode(indices),
             active: encode(poseActive)}, frames: encode(pose), bone_count: 2,
-            frame_count: 2, dispatch_vertices: 2},
+            frame_count: 2},
         });
         const firstId = Math.min(...pending.keys());
         pending.get(firstId)(0);
@@ -251,21 +251,21 @@ def test_gimi_compute_animation_shares_program_state_across_outputs(module_page)
       try {
         const runtime = await import('./js/mesh/animation-runtime.js');
         const program = {
-          version: 1, variables: ['phase'], initials: {phase: 0},
+          external_variables: [], initials: {phase: 0},
           commands: [
             {op: 'set', variable: 'phase',
               expression: {kind: 'binary', op: '+',
                 left: {kind: 'variable', variable: 'phase'},
                 right: {kind: 'dt'}}},
-            {op: 'dispatch', operation: 'main', kind: 'shape', pass: 0,
+            {op: 'dispatch', track_id: 'main', kind: 'shape', pass: 0,
               phase: {kind: 'variable', variable: 'phase'}},
-            {op: 'dispatch', operation: 'acc1', kind: 'shape', pass: 0,
+            {op: 'dispatch', track_id: 'acc1', kind: 'shape', pass: 0,
               phase: {kind: 'variable', variable: 'phase'}},
           ],
         };
-        const geometry = operation => ({
+        const geometry = trackId => ({
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'shared-program', operation_id: operation, program,
+          program_id: 'shared-program', track_id: trackId, program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [{deltas: encode(new Float32Array([
             1, 0, 0, 0, 0, 0])), amplitude: 1,
@@ -316,9 +316,9 @@ def test_animation_scheduler_keeps_active_programs_playing(module_page):
         for (const value of bytes) text += String.fromCharCode(value);
         return btoa(text);
       };
-      const geometry = (programId, operationId, program) => ({
+      const geometry = (programId, trackId, program) => ({
         kind: 'gimi_compute', vertex_count: 1, program_id: programId,
-        operation_id: operationId, program,
+        track_id: trackId, program,
         base_normals: encode(new Float32Array([0, 1, 0])),
         shape_passes: [{deltas: encode(new Float32Array([
           1, 0, 0, 0, 0, 0])), amplitude: 1,
@@ -333,18 +333,18 @@ def test_animation_scheduler_keeps_active_programs_playing(module_page):
       try {
         const runtime = await import('./js/mesh/animation-runtime.js');
         const active = {
-          version: 1, variables: ['phase'], initials: {phase: 0},
+          external_variables: [], initials: {phase: 0},
           commands: [
             {op: 'set', variable: 'phase',
               expression: {kind: 'binary', op: '+',
                 left: {kind: 'variable', variable: 'phase'}, right: {kind: 'dt'}}},
-            {op: 'dispatch', operation: 'active', kind: 'shape', pass: 0,
+            {op: 'dispatch', track_id: 'active', kind: 'shape', pass: 0,
               phase: {kind: 'variable', variable: 'phase'}},
           ],
         };
         const paused = {
-          version: 1, variables: [], initials: {},
-          commands: [{op: 'dispatch', operation: 'paused', kind: 'shape',
+          external_variables: [], initials: {},
+          commands: [{op: 'dispatch', track_id: 'paused', kind: 'shape',
             pass: 0, phase: {kind: 'literal', value: 0}}],
         };
         runtime.registerAnimatedMesh(mesh(), 'active',
@@ -401,7 +401,7 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
             geometry: {attributes: {position, normal}},
           };
         const program = {
-          version: 1, variables: ['phase'], initials: {phase: 0},
+          external_variables: [], initials: {phase: 0},
           commands: [
             {op: 'set', variable: 'phase',
               expression: {kind: 'binary', op: '+',
@@ -409,13 +409,13 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
                 right: {kind: 'binary', op: '*',
                   left: {kind: 'literal', value: 0.1},
                   right: {kind: 'dt'}}}},
-            {op: 'dispatch', operation: 'shape-only-test', kind: 'shape',
+            {op: 'dispatch', track_id: 'shape-only-test', kind: 'shape',
               pass: 0, phase: {kind: 'variable', variable: 'phase'}},
           ],
         };
         runtime.registerAnimatedMesh(mesh, 'shape-only-test', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'shape-program', operation_id: 'shape-only-test', program,
+          program_id: 'shape-program', track_id: 'shape-only-test', program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [{deltas: encode(new Float32Array([
             1, 0, 0, 0, 0, 0])),
@@ -424,7 +424,7 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
         });
         pending.get(Math.min(...pending.keys()))(0);
         const first = Array.from(position.array);
-        pending.get(Math.max(...pending.keys()))(20);
+        pending.get(Math.max(...pending.keys()))(34);
         const second = Array.from(position.array);
         const secondNormal = Array.from(normal.array);
         runtime.resetAnimationRuntime();
@@ -435,7 +435,7 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
       }
     }""")
     assert result["first"] == [0, 0, 0]
-    assert result["second"] == pytest.approx([math.sin(0.002), 0, 0], abs=1e-5)
+    assert result["second"] == pytest.approx([math.sin(0.0034), 0, 0], abs=1e-5)
     assert result["secondNormal"] == [0, 1, 0]
 
 
@@ -484,7 +484,7 @@ def test_gimi_compute_animation_executes_reset_assignments_in_order(module_page)
         setControlValue('pause', '0');
         setControlValue('anime_state', '1');
         const program = {
-          version: 1, variables: ['pause', 'anime_state', 'phase'],
+          external_variables: ['pause', 'anime_state'],
           initials: {phase: 0},
           commands: [
             {op: 'set', variable: 'phase',
@@ -505,18 +505,17 @@ def test_gimi_compute_animation_executes_reset_assignments_in_order(module_page)
               condition: {kind: 'compare', op: '==',
                 left: {kind: 'variable', variable: 'anime_state'},
                 right: {kind: 'literal', value: 1}}},
-            {op: 'dispatch', operation: 'reset-edge-test', kind: 'pose',
+            {op: 'dispatch', track_id: 'reset-edge-test', kind: 'pose',
               phase: {kind: 'variable', variable: 'phase'}},
           ],
         };
         runtime.registerAnimatedMesh(mesh, 'reset-edge-test', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'reset-program', operation_id: 'reset-edge-test', program,
+          program_id: 'reset-program', track_id: 'reset-edge-test', program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [],
           pose: {
             frames: encode(pose), bone_count: 1, frame_count: 2,
-            dispatch_vertices: 1,
             blend: {
               weights: encode(new Float32Array([1, 0, 0, 0])),
               indices: encode(new Int32Array([0, 0, 0, 0])),
@@ -609,25 +608,24 @@ def test_gimi_compute_animation_does_not_rebase_on_control_range_changes(module_
         replayControlStateRules();
         runtime.wakeAnimationRuntime();
         const program = {
-          version: 1, variables: ['phase'], initials: {phase: 0},
+          external_variables: [], initials: {phase: 0},
           commands: [
             {op: 'set', variable: 'phase',
               expression: {kind: 'binary', op: '+',
                 left: {kind: 'variable', variable: 'phase'},
                 right: {kind: 'binary', op: '*',
                   left: {kind: 'literal', value: 50}, right: {kind: 'dt'}}}},
-            {op: 'dispatch', operation: 'range-rebase-test', kind: 'pose',
+            {op: 'dispatch', track_id: 'range-rebase-test', kind: 'pose',
               phase: {kind: 'variable', variable: 'phase'}},
           ],
         };
         runtime.registerAnimatedMesh(mesh, 'range-rebase-test', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'range-program', operation_id: 'range-rebase-test', program,
+          program_id: 'range-program', track_id: 'range-rebase-test', program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [],
           pose: {
             frames: encode(pose), bone_count: 1, frame_count: 200,
-            dispatch_vertices: 1,
             blend: {
               weights: encode(new Float32Array([1, 0, 0, 0])),
               indices: encode(new Int32Array([0, 0, 0, 0])),
@@ -708,18 +706,17 @@ def test_gimi_compute_animation_uses_slot_zero_dq_reference(module_page):
           geometry: {attributes: {position, normal}},
         };
         const program = {
-          version: 1, variables: [], initials: {},
-          commands: [{op: 'dispatch', operation: 'dq-sign-test', kind: 'pose',
+          external_variables: [], initials: {},
+          commands: [{op: 'dispatch', track_id: 'dq-sign-test', kind: 'pose',
             phase: {kind: 'literal', value: 0}}],
         };
         runtime.registerAnimatedMesh(mesh, 'dq-sign-test', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'dq-program', operation_id: 'dq-sign-test', program,
+          program_id: 'dq-program', track_id: 'dq-sign-test', program,
           base_normals: encode(new Float32Array([1, 0, 0])),
           shape_passes: [],
           pose: {
             frames: encode(pose), bone_count: 3, frame_count: 2,
-            dispatch_vertices: 1,
             blend: {
               weights: encode(new Float32Array([0, 0.5, 0.5, 0])),
               indices: encode(new Int32Array([0, 1, 2, 0])),
@@ -777,19 +774,18 @@ def test_gimi_compute_animation_applies_columbina_basis(module_page):
           geometry: {attributes: {position, normal}},
         };
         const program = {
-          version: 1, variables: [], initials: {},
-          commands: [{op: 'dispatch', operation: 'columbina', kind: 'pose',
+          external_variables: [], initials: {},
+          commands: [{op: 'dispatch', track_id: 'columbina', kind: 'pose',
             phase: {kind: 'literal', value: 0}}],
         };
         runtime.registerAnimatedMesh(mesh, 'columbina', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'columbina-program', operation_id: 'columbina', program,
+          program_id: 'columbina-program', track_id: 'columbina', program,
           coordinate_variant: 'columbina_basis',
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [],
           pose: {
             frames: encode(pose), bone_count: 1, frame_count: 2,
-            dispatch_vertices: 1,
             blend: {
               weights: encode(new Float32Array([1, 0, 0, 0])),
               indices: encode(new Int32Array([0, 0, 0, 0])),
@@ -855,23 +851,22 @@ def test_gimi_compute_animation_throttles_geometry_updates(module_page):
           pose[offset + 9] = 1;
         }
             const program = {
-              version: 1, variables: ['phase'], initials: {phase: 0},
+              external_variables: [], initials: {phase: 0},
               commands: [
                 {op: 'set', variable: 'phase',
                   expression: {kind: 'binary', op: '+',
                     left: {kind: 'variable', variable: 'phase'},
                     right: {kind: 'binary', op: '*',
                       left: {kind: 'literal', value: 30}, right: {kind: 'dt'}}}},
-                {op: 'dispatch', operation: 'schedule-test', kind: 'pose',
+                {op: 'dispatch', track_id: 'schedule-test', kind: 'pose',
                   phase: {kind: 'variable', variable: 'phase'}},
               ],
             };
             runtime.registerAnimatedMesh(mesh, 'schedule-test', {
               kind: 'gimi_compute', vertex_count: 1,
-              program_id: 'schedule-program', operation_id: 'schedule-test', program,
+              program_id: 'schedule-program', track_id: 'schedule-test', program,
               base_normals: encode(new Float32Array([0, 1, 0])), shape_passes: [],
               pose: {frames: encode(pose), bone_count: 1, frame_count: 2,
-            dispatch_vertices: 1,
             blend: {weights: encode(new Float32Array([1, 0, 0, 0])),
               indices: encode(new Int32Array([0, 0, 0, 0])),
               active: encode(new Float32Array([1]))}},

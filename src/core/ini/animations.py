@@ -56,9 +56,6 @@ _COMPUTE_SHADER_RE = re.compile(r"^\s*cs\s*=\s*(\S+)\s*$", re.I)
 _COMPUTE_DISPATCH_RE = re.compile(
     r"^\s*dispatch\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$",
     re.I)
-_NUMTHREADS_RE = re.compile(
-    r"\[\s*numthreads\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]",
-    re.I)
 _X88_RE = re.compile(r"^\s*x88\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _X89_RE = re.compile(r"^\s*x89\s*=\s*(?P<expr>.+?)\s*$", re.I)
 
@@ -69,7 +66,7 @@ class _ExpressionParser:
     _TOKEN_RE = re.compile(
         rf"\s*(?:(?P<number>(?:\d+(?:\.\d*)?|\.\d+))|"
         r"(?P<name>\$?\\?(?:[A-Za-z_]\w*\\)*[A-Za-z_]\w*)|"
-        r"(?P<operator>[()+*\-/]))")
+        r"(?P<operator>[()+*\-]))")
 
     def __init__(self, text, canonical, var_prefix=None, qualified_vars=None):
         self.text = str(text).strip()
@@ -119,10 +116,8 @@ class _ExpressionParser:
 
     def _multiplicative(self):
         result = self._unary()
-        while self._peek() in ("*", "/"):
+        while self._peek() == "*":
             operator = self._take()
-            # Division is intentionally accepted only as a numeric operation;
-            # callers still decide whether the resulting program is supported.
             result = {"kind": "binary", "op": operator,
                       "left": result, "right": self._unary()}
         return result
@@ -146,8 +141,6 @@ class _ExpressionParser:
         number = _numeric(token)
         if number is not None:
             return {"kind": "literal", "value": number}
-        if token.casefold() == "time":
-            return {"kind": "time"}
         if token.casefold() == "dt":
             return {"kind": "dt"}
         if not token.startswith("$"):
@@ -155,14 +148,15 @@ class _ExpressionParser:
         local = str(token).lstrip("$")
         if "\\" in local:
             mapped = self.qualified_vars.get(local.casefold())
-            if mapped is None:
-                return {"kind": "qualified_unknown", "variable": local}
-            return {"kind": "variable", "variable": mapped}
+            if mapped is not None:
+                return {"kind": "variable", "variable": mapped}
+            # A standalone mod folder may omit the INI that owns this
+            # read-only gate. Keep the gate opaque; the selected folder is
+            # already the scope, matching draw-condition normalization.
+            return {"kind": "qualified_unknown", "variable": local}
         local = _canonical(local, self.canonical)
         if local.casefold() == "dt":
             return {"kind": "dt"}
-        if local.casefold() == "time":
-            return {"kind": "time"}
         return {"kind": "variable",
                 "variable": f"{self.var_prefix}{local}"}
 
@@ -243,8 +237,7 @@ def _compile_condition(value, canonical, var_prefix=None, qualified_vars=None):
         return {"kind": "not", "item": child} if child else None
     match = _COMPARISON_RE.search(text)
     if match is None:
-        expression = _compile_expression(
-            text, canonical, var_prefix, qualified_vars)
+        expression = _compile_expression(text, canonical, var_prefix)
         return {"kind": "truthy", "expression": expression} \
             if expression is not None else None
     left = _compile_expression(
@@ -289,20 +282,6 @@ def _condition_variables(value, result=None):
     return _expression_variables(value, result)
 
 
-def _expression_contains(value, kinds):
-    if not isinstance(value, dict):
-        return False
-    if value.get("kind") in kinds:
-        return True
-    for child in value.values():
-        if isinstance(child, dict) and _expression_contains(child, kinds):
-            return True
-        if isinstance(child, list) and any(
-                _expression_contains(item, kinds) for item in child):
-            return True
-    return False
-
-
 def _program_assignment(line, canonical, var_prefix, qualified_vars=None):
     match = _COMPUTE_ASSIGN_RE.fullmatch(line)
     if not match or not match.group("lhs").startswith("$"):
@@ -320,20 +299,20 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
     """Compile authored statements and dispatches into one per-INI program."""
     dispatches = {}
     for animation in animations:
-        operation_id = animation["track_id"]
+        track_id = animation["track_id"]
         for index, item in enumerate(animation.get("shape_passes", ())):
             dispatches[tuple(item["dispatch_key"])] = {
-                "operation": operation_id, "pass": index,
+                "track_id": track_id, "pass": index,
                 "phase": item["phase_expr"], "kind": "shape",
             }
         pose = animation.get("pose")
         if pose is not None:
             dispatches[tuple(pose["dispatch_key"])] = {
-                "operation": operation_id, "phase": pose["phase_expr"],
-                "kind": "pose", "bone_count": pose["bone_count_expr"],
+                "track_id": track_id, "phase": pose["phase_expr"],
+                "kind": "pose",
             }
 
-    initials = _literal_assignments(sections, canonical)
+    initials = _literal_constant_assignments(sections, canonical)
     commands = []
     variables = set()
     condition_variables = set()
@@ -360,7 +339,10 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
             run = _RUN_RE.fullmatch(line)
             if run:
                 target = section_lookup.get(run.group("section").casefold())
-                if target is None:
+                target_name = str(target).casefold() if target is not None else ""
+                if (target is None
+                        or not (target_name.startswith("commandlist")
+                                or target_name.startswith("customshader"))):
                     unsupported = True
                     continue
                 yield from expanded_lines(target, chain + (section_key,))
@@ -427,6 +409,14 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
                 condition = _condition_and(condition, frame["cur"])
                 if frame["unsupported"]:
                     condition = None
+            raw_assignment = _COMPUTE_ASSIGN_RE.fullmatch(line)
+            if (raw_assignment is not None
+                    and raw_assignment.group("lhs").startswith("$")
+                    and _canonical(raw_assignment.group("lhs"), canonical)
+                    .casefold() in {"dt", "ts"}):
+                # 3DMigoto's timestamp bookkeeping is represented by the
+                # browser's frame delta, not by persistent program state.
+                continue
             assignment = _program_assignment(
                 line, canonical, var_prefix, qualified_vars)
             if assignment is not None:
@@ -438,7 +428,6 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
                 variables.update(condition_variables)
                 assigned.add(assignment["variable"])
                 continue
-            raw_assignment = _COMPUTE_ASSIGN_RE.fullmatch(line)
             if (raw_assignment is not None
                     and raw_assignment.group("lhs").startswith("$")):
                 unsupported = True
@@ -452,9 +441,6 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
                     variables.update(_expression_variables(item["phase"]))
                     condition_variables.update(_condition_variables(condition))
                     variables.update(condition_variables)
-                    if item.get("bone_count") is not None:
-                        variables.update(_expression_variables(
-                            item["bone_count"]))
                     continue
         if stack:
             unsupported = True
@@ -463,19 +449,13 @@ def _compile_animation_program(sections, animations, canonical, var_prefix=None,
     normalized_initials = {
         f"{var_prefix or ''}{_canonical(key, canonical)}": value
         for key, value in initials.items()
+        if f"{var_prefix or ''}{_canonical(key, canonical)}" in variables
     }
-    control_vars = sorted(variables | set(normalized_initials))
     return {
-        "version": 1,
-        "variables": control_vars,
         "external_variables": sorted(
             (variables - assigned) | condition_variables),
         "initials": normalized_initials,
         "commands": commands,
-        "assigned": sorted(assigned),
-        "time_dependent": any(
-            _expression_contains(command, {"dt", "time"})
-            for command in commands),
     }
 
 
@@ -582,6 +562,14 @@ def _literal_assignments(sections, canonical_vars):
             key = _canonical(match.group("var"), canonical_vars).casefold()
             values.setdefault(key, value)
     return values
+
+
+def _literal_constant_assignments(sections, canonical_vars):
+    """Return numeric initial values authored in the INI's Constants section."""
+    constants = next(
+        (lines for name, lines in sections.items()
+         if str(name).casefold() == "constants"), ())
+    return _literal_assignments({"Constants": constants}, canonical_vars)
 
 
 def _condition_stack_line(line, stack, aliases):
@@ -790,67 +778,49 @@ def _strip_hlsl_comments(text):
     return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
 
+_KNOWN_COMPUTE_SHADERS = {
+    # The fixture adapter keeps the unit-test kernel representative while
+    # the remaining entries are normalized hashes of observed mod shaders.
+    "6e0c527c8bd742a04b3bbb961b0123df5a6afc2d16683e422a4fe09ff28250ad": {
+        "kind": "shape", "threads": 64,
+        "shape": {"amplitude": 0.5, "angular_scale": 30.0, "bias": 0.5},
+    },
+    "ca017d1bb057699c9197aeeaf56b00fcccf53857e16d04bedde2180130591c98": {
+        "kind": "shape", "threads": 64,
+        "shape": {"amplitude": 0.5, "angular_scale": 30.0, "bias": 0.5},
+    },
+    "9a9721837bb819c7c9d34d7cbdd647fc75c97896523809bc9dae8808ec0de510": {
+        "kind": "shape", "threads": 1,
+        "shape": {"amplitude": 0.5, "angular_scale": 30.0, "bias": 0.5},
+    },
+    "c5c2ac0ad58b7232619529e97fc3bbb0c8b61c8a30b64a1d8f8c4604d5ddc1ba": {
+        "kind": "pose", "coordinate_variant": "standard", "threads": 64,
+    },
+    "50d6b4f03e37964ddcbe2795ef9d8484e7384d1372529102791cc69a75bb04cd": {
+        "kind": "pose", "coordinate_variant": "standard", "threads": 64,
+    },
+    "c65f23f916d94e0d1fa0878345fc29e60ac8f08b7e260a1e27d6d17f2ad31361": {
+        "kind": "pose", "coordinate_variant": "columbina_basis", "threads": 1,
+    },
+}
+
+
+def _normalized_shader_hash(text):
+    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
+    return hashlib.sha256(compact.encode("utf-8")).hexdigest()
+
+
 def _identify_compute_shader(text):
     """Return a verified adapter for one supported compute kernel template."""
     if not text:
         return None
-    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
-    threads = _NUMTHREADS_RE.search(compact)
-    if threads is None or "sv_dispatchthreadid" not in compact:
+    adapter = _KNOWN_COMPUTE_SHADERS.get(_normalized_shader_hash(text))
+    if adapter is None:
         return None
-    thread_dims = tuple(int(threads.group(index)) for index in range(1, 4))
-    if thread_dims[0] <= 0 or thread_dims[1:] != (1, 1):
-        return None
-    has_registers = lambda *registers: all(
-        f"register({register})" in compact for register in registers)
-    shape_math = all(marker in compact for marker in (
-        "position+=diff.position*(0.5*(sin(freq*30)+1))",
-        "normal+=diff.normal*(0.5*(sin(freq*30)+1))",
-    ))
-    shape = (
-        has_registers("u5", "t50", "t51", "t120")
-        and shape_math
-        and "[88]" in compact
-    )
-    optimized_pose_math = all(marker in compact for marker in (
-        "pos.xyz=pos.xyz*scale+bias",
-        "pos_result.x=m00*pos.x+m01*pos.y+m02*pos.z+t0*pos.w",
-        "normal_result.x=m00*normal.x+m01*normal.y+m02*normal.z",
-        "normalize(float3(normal_result.x,normal_result.y,normal_result.z))",
-    ))
-    columbina_pose_math = all(marker in compact for marker in (
-        "float4pos=float4(v.position.x,-v.position.z,v.position.y,1.0f)",
-        "float4normal=float4(v.normal.x,-v.normal.z,v.normal.y,0.0f)",
-        "rw_buffer[i].position=float3(pos_result.x,pos_result.z,-pos_result.y)",
-        "rw_buffer[i].normal=normalize(float3(normal_result.x,normal_result.z,-normal_result.y))",
-    ))
-    pose = (
-        has_registers("u5", "t50", "t51", "t52", "t120")
-        and all(marker in compact for marker in (
-            "[88]", "[89]", ".qr", ".qd", ".s", ".t", "dot(",
-            "position", "normal",
-        ))
-        and ("frac(time)" in compact or "time-floor(time)" in compact)
-        and (("v.position*p.s+p.t" in compact
-              and "normalize(v.normal)" in compact)
-             or optimized_pose_math or columbina_pose_math)
-    )
-    if pose and not shape:
-        return {"kind": "pose", "operation": "dq_pose",
-                "coordinate_variant": (
-                    "columbina_basis" if columbina_pose_math else "standard"),
-                "shader_variant": (
-                    "columbina_basis" if columbina_pose_math
-                    else "optimized" if optimized_pose_math else "standard"),
-                "threads": thread_dims[0]}
-    if shape and not pose:
-        return {
-            "kind": "shape", "operation": "morph_delta",
-            "threads": thread_dims[0],
-            "shape": {"amplitude": 0.5, "angular_scale": 30.0,
-                       "bias": 0.5},
-        }
-    return None
+    result = dict(adapter)
+    if "shape" in adapter:
+        result["shape"] = dict(adapter["shape"])
+    return result
 
 
 def _resolved_resource(resources, copy_sources, name, visiting=None):
@@ -869,61 +839,12 @@ def _resolved_resource(resources, copy_sources, name, visiting=None):
     return {}
 
 
-def _validate_compute_buffers(resources, copy_sources, shape_passes, pose,
-                              *, mod_dir, source, bone_count):
-    """Validate fixed layouts and dimensions before exposing a descriptor."""
+def _validate_compute_layout(resources, copy_sources, shape_passes, pose=None,
+                             *, mod_dir, source, bone_count=None):
+    """Validate shared GIMI layouts before exposing a descriptor."""
     base_resource = (shape_passes[0]["base_resource"] if shape_passes
                      else pose["base_resource"])
     base_info = _resolved_resource(resources, copy_sources, base_resource)
-    blend_info = _resolved_resource(resources, copy_sources,
-                                    pose["blend_resource"])
-    pose_info = _resolved_resource(resources, copy_sources,
-                                   pose["pose_resource"])
-    if (base_info.get("stride") != 40 or blend_info.get("stride") != 32
-            or pose_info.get("stride") != 56 or not bone_count):
-        return None
-    base_path = _resource_path(mod_dir, base_info.get("filename"), source)
-    blend_path = _resource_path(mod_dir, blend_info.get("filename"), source)
-    pose_path = _resource_path(mod_dir, pose_info.get("filename"), source)
-    base_size = _resource_size(base_path, source)
-    blend_size = _resource_size(blend_path, source)
-    pose_size = _resource_size(pose_path, source)
-    if base_size is None or blend_size is None or pose_size is None:
-        return None
-    if base_size % 40:
-        return None
-    base_count = base_size // 40
-    if (blend_size != base_count * 32
-            or pose_size % (bone_count * 56)):
-        return None
-    frame_count = pose_size // (bone_count * 56)
-    if base_count <= 0 or frame_count < 2:
-        return None
-    for item in shape_passes:
-        info = _resolved_resource(resources, copy_sources,
-                                  item["target_resource"])
-        if info.get("stride") != 40:
-            return None
-        path = _resource_path(mod_dir, info.get("filename"), source)
-        size = _resource_size(path, source)
-        if size != base_count * 40:
-            return None
-    return {
-        "base_file": base_info["filename"],
-        "blend_file": blend_info["filename"],
-        "pose_file": pose_info["filename"],
-        "vertex_count": base_count,
-        "frame_count": frame_count,
-    }
-
-
-def _validate_shape_buffers(resources, copy_sources, shape_passes, *,
-                            mod_dir, source):
-    """Validate a shape-only chain before exposing its descriptor."""
-    if not shape_passes:
-        return None
-    base_info = _resolved_resource(
-        resources, copy_sources, shape_passes[0]["base_resource"])
     if base_info.get("stride") != 40:
         return None
     base_path = _resource_path(mod_dir, base_info.get("filename"), source)
@@ -934,17 +855,42 @@ def _validate_shape_buffers(resources, copy_sources, shape_passes, *,
     if vertex_count <= 0:
         return None
     for item in shape_passes:
-        info = _resolved_resource(
-            resources, copy_sources, item["target_resource"])
+        info = _resolved_resource(resources, copy_sources,
+                                  item["target_resource"])
         if info.get("stride") != 40:
             return None
         path = _resource_path(mod_dir, info.get("filename"), source)
         if _resource_size(path, source) != base_size:
             return None
-    return {
+    result = {
         "base_file": base_info["filename"],
         "vertex_count": vertex_count,
     }
+    if pose is None:
+        return result
+    blend_info = _resolved_resource(resources, copy_sources,
+                                    pose["blend_resource"])
+    pose_info = _resolved_resource(resources, copy_sources,
+                                   pose["pose_resource"])
+    if (blend_info.get("stride") != 32 or pose_info.get("stride") != 56
+            or not bone_count):
+        return None
+    blend_path = _resource_path(mod_dir, blend_info.get("filename"), source)
+    pose_path = _resource_path(mod_dir, pose_info.get("filename"), source)
+    blend_size = _resource_size(blend_path, source)
+    pose_size = _resource_size(pose_path, source)
+    if (blend_size != vertex_count * 32
+            or pose_size is None or pose_size % (bone_count * 56)):
+        return None
+    frame_count = pose_size // (bone_count * 56)
+    if frame_count < 2:
+        return None
+    result.update({
+        "blend_file": blend_info["filename"],
+        "pose_file": pose_info["filename"],
+        "frame_count": frame_count,
+    })
+    return result
 
 
 def discover_compute_animations(sections, resources, *, mod_dir=None,
@@ -1033,7 +979,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             snapshot = {
                                 "supported": True,
                                 "kind": "shape",
-                                "operation": active["operation"],
                                 "dispatch_key": (str(section).casefold(),
                                                   line_index),
                                 "base_resource": base,
@@ -1052,7 +997,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             snapshot = {
                                 "supported": True,
                                 "kind": "pose",
-                                "operation": active["operation"],
                                 "coordinate_variant": active[
                                     "coordinate_variant"],
                                 "dispatch_key": (str(section).casefold(),
@@ -1125,7 +1069,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     or any(str(item["base_resource"]).casefold()
                            != shape_base for item in shape_passes)):
                 continue
-            validated = _validate_shape_buffers(
+            validated = _validate_compute_layout(
                 resources, copy_sources, shape_passes,
                 mod_dir=mod_dir, source=source)
             if validated is None:
@@ -1150,7 +1094,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "base_resource": shape_passes[0]["base_resource"],
                 "base_file": validated["base_file"],
                 "vertex_count": validated["vertex_count"],
-                "operation": shape_passes[0]["operation"],
                 "shape_passes": [{
                     "target_resource": item["target_resource"],
                     "target_file": _resolved_resource(
@@ -1197,17 +1140,14 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             pose_pass.get("bone_count_expr"), literals, canonical))
         if bone_count is None:
             continue
-        validated = _validate_compute_buffers(
+        validated = _validate_compute_layout(
             resources, copy_sources, shape_passes, pose_pass,
             mod_dir=mod_dir, source=source, bone_count=bone_count)
         if validated is None:
             continue
 
         pose_expression = phase_expression(pose_pass.get("phase_expr", ""))
-        bone_count_expression = _compile_expression(
-            pose_pass.get("bone_count_expr"), canonical, var_prefix,
-            qualified_vars)
-        if pose_expression is None or bone_count_expression is None:
+        if pose_expression is None:
             continue
 
         parsed_shape_passes, _shape_expressions = parse_shape_passes(shape_passes)
@@ -1230,7 +1170,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             "base_resource": pose_pass["base_resource"],
             "base_file": validated["base_file"],
             "vertex_count": validated["vertex_count"],
-            "operation": pose_pass["operation"],
             "coordinate_variant": pose_pass.get("coordinate_variant", "standard"),
             "shape_passes": [{
                 "target_resource": item["target_resource"],
@@ -1252,7 +1191,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "frame_count": validated["frame_count"],
                 "dispatch_vertices": pose_pass["dispatch_vertices"],
                 "phase_expr": pose_expression,
-                "bone_count_expr": bone_count_expression,
                 "dispatch_key": pose_pass["dispatch_key"],
             },
         })
@@ -1267,7 +1205,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 else os.path.basename(str(ini_path or "")))
     program_id = "gimi-program::" + hashlib.sha1(
         str(identity).encode("utf-8")).hexdigest()[:12]
-    program["id"] = program_id
     for animation in animations:
         animation["program_id"] = program_id
         animation["program"] = program

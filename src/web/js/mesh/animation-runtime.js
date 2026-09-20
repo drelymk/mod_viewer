@@ -54,46 +54,46 @@ function numeric(value, fallback = 0) {
   return Number.isFinite(result) ? result : fallback;
 }
 
-function evaluateExpression(expression, program, now) {
+function evaluateExpression(expression, program) {
   if (!expression) return 0;
   switch (expression.kind) {
     case 'literal': return numeric(expression.value);
-    case 'time': return now / 1000;
     case 'dt': return program.dt;
     case 'variable': return numeric(program.variables[expression.variable]);
     case 'qualified_unknown': return 0;
     case 'binary': {
-      const left = evaluateExpression(expression.left, program, now);
-      const right = evaluateExpression(expression.right, program, now);
+      const left = evaluateExpression(expression.left, program);
+      const right = evaluateExpression(expression.right, program);
       if (expression.op === '+') return left + right;
       if (expression.op === '-') return left - right;
       if (expression.op === '*') return left * right;
-      return Math.abs(right) > 1e-12 ? left / right : 0;
+      return 0;
     }
     default: return 0;
   }
 }
 
-function evaluateCondition(condition, program, now) {
+function evaluateCondition(condition, program) {
   if (!condition) return true;
   if (condition.kind === 'truthy') {
-    return Math.abs(evaluateExpression(condition.expression, program, now))
+    if (expressionUsesUnknown(condition.expression)) return true;
+    return Math.abs(evaluateExpression(condition.expression, program))
       > 1e-12;
   }
   if (condition.kind === 'not') {
-    return !evaluateCondition(condition.item, program, now);
+    return !evaluateCondition(condition.item, program);
   }
   if (condition.kind === 'and') {
-    return condition.items.every(item => evaluateCondition(item, program, now));
+    return condition.items.every(item => evaluateCondition(item, program));
   }
   if (condition.kind === 'or') {
-    return condition.items.some(item => evaluateCondition(item, program, now));
+    return condition.items.some(item => evaluateCondition(item, program));
   }
   if (condition.kind !== 'compare') return false;
   if (expressionUsesUnknown(condition.left)
       || expressionUsesUnknown(condition.right)) return true;
-  const left = evaluateExpression(condition.left, program, now);
-  const right = evaluateExpression(condition.right, program, now);
+  const left = evaluateExpression(condition.left, program);
+  const right = evaluateExpression(condition.right, program);
   switch (condition.op) {
     case '==': return left === right;
     case '!=': return left !== right;
@@ -113,18 +113,18 @@ function expressionUsesUnknown(expression) {
     : expressionUsesUnknown(value));
 }
 
-function expressionUsesTime(expression) {
+function expressionUsesDt(expression) {
   if (!expression || typeof expression !== 'object') return false;
-  if (expression.kind === 'dt' || expression.kind === 'time') return true;
+  if (expression.kind === 'dt') return true;
   return Object.values(expression).some(value => Array.isArray(value)
-    ? value.some(item => expressionUsesTime(item))
-    : expressionUsesTime(value));
+    ? value.some(item => expressionUsesDt(item))
+    : expressionUsesDt(value));
 }
 
 function initializeGimiProgram(program) {
   const variables = {...(program?.initials || {})};
   const published = {};
-  for (const variable of program?.variables || []) {
+  for (const variable of program?.external_variables || []) {
     const external = getControlValue(variable);
     if (external !== undefined) variables[variable] = numeric(external);
     if (variables[variable] === undefined) variables[variable] = 0;
@@ -135,7 +135,7 @@ function initializeGimiProgram(program) {
 }
 
 function syncGimiProgramControls(program) {
-  for (const variable of program.program.variables || []) {
+  for (const variable of program.program.external_variables || []) {
     const external = getControlValue(variable);
     if (external !== undefined
         && String(external) !== program.published[variable]) {
@@ -146,7 +146,7 @@ function syncGimiProgramControls(program) {
 }
 
 function publishGimiProgramControls(program) {
-  for (const variable of program.program.variables || []) {
+  for (const variable of program.program.external_variables || []) {
     const value = String(program.variables[variable]);
     if (program.published[variable] === value) continue;
     setControlValue(variable, value);
@@ -168,20 +168,18 @@ function executeGimiProgram(track, now) {
     output.poseActive = false;
     output.shapePhases = [];
     output.poseTime = 0;
-    output.boneCount = null;
   }
   let changed = false;
-  let activeTimeCommand = false;
+  let activeDtCommand = false;
   for (const command of track.program.commands || []) {
-    const conditionActive = evaluateCondition(command.condition, program, now);
-    const commandUsesTime = expressionUsesTime(command.condition)
-      || expressionUsesTime(command.expression)
-      || expressionUsesTime(command.phase)
-      || expressionUsesTime(command.bone_count);
-    activeTimeCommand = activeTimeCommand || commandUsesTime;
+    const conditionActive = evaluateCondition(command.condition, program);
+    const commandUsesDt = expressionUsesDt(command.condition)
+      || expressionUsesDt(command.expression)
+      || expressionUsesDt(command.phase);
+    activeDtCommand = activeDtCommand || (conditionActive && commandUsesDt);
     if (!conditionActive) continue;
     if (command.op === 'set') {
-      const value = evaluateExpression(command.expression, program, now);
+      const value = evaluateExpression(command.expression, program);
       if (!Object.is(program.variables[command.variable], value)) {
         changed = true;
         program.variables[command.variable] = value;
@@ -189,21 +187,19 @@ function executeGimiProgram(track, now) {
       continue;
     }
     if (command.op !== 'dispatch') continue;
-    const output = track.outputs.get(command.operation);
+    const output = track.outputs.get(command.track_id);
     if (!output) continue;
     output.active = true;
-    const phase = evaluateExpression(command.phase, program, now);
+    const phase = evaluateExpression(command.phase, program);
     if (command.kind === 'shape') {
       output.shapePhases[command.pass] = phase;
     } else {
       output.poseActive = true;
       output.poseTime = phase;
-      output.boneCount = command.bone_count
-        ? evaluateExpression(command.bone_count, program, now) : null;
     }
   }
   publishGimiProgramControls(program);
-  return changed || (previousNow === null && activeTimeCommand);
+  return changed || (previousNow === null && activeDtCommand);
 }
 
 function applyGimiPose(mesh, meshState, output) {
@@ -227,9 +223,7 @@ function applyGimiPose(mesh, meshState, output) {
   });
 
   const hasPose = !!(output.poseActive && meshState.poseFrames
-    && meshState.poseBoneCount && meshState.poseActive
-    && (output.boneCount === null
-      || output.boneCount === meshState.poseBoneCount));
+    && meshState.poseBoneCount && meshState.poseActive);
   const columbinaBasis = output.coordinateVariant === 'columbina_basis';
   const frameValue = hasPose ? Math.max(0, output.poseTime) : 0;
   const frame = hasPose ? Math.min(
@@ -265,8 +259,12 @@ function applyGimiPose(mesh, meshState, output) {
     }
 
     if (hasPose && columbinaBasis) {
-      [px, py, pz] = [px, -pz, py];
-      [nx, ny, nz] = [nx, -nz, ny];
+      const oldPy = py;
+      const oldNy = ny;
+      py = -pz;
+      pz = oldPy;
+      ny = -nz;
+      nz = oldNy;
     }
 
     if (!hasPose || meshState.poseActive[vertex] < 0.5) {
@@ -410,10 +408,9 @@ function applyGimiTrack(track) {
   for (const mesh of track.meshes) {
     const meshState = track.meshesByMesh.get(mesh);
     if (mesh.visible === false || mesh.userData?.animationSuspended === true) {
-      meshState.lastApplied = false;
       continue;
     }
-    const output = track.outputs.get(meshState.operationId);
+    const output = track.outputs.get(meshState.trackId);
     if (!output?.active) {
       restoreCanonical(mesh);
       continue;
@@ -532,7 +529,7 @@ function tick(now) {
         continue;
       }
       const advanced = executeGimiProgram(state, now);
-      const geometryInterval = 1000 / 60;
+      const geometryInterval = 1000 / 30;
       const due = state.lastGeometryTime === null
         || now - state.lastGeometryTime >= geometryInterval;
       if (state.dirty || (advanced && due)) {
@@ -599,9 +596,9 @@ function registerGimiMesh(mesh, animationId, geometry) {
   if (!mesh || geometry?.kind !== 'gimi_compute') return false;
   const program = geometry.program;
   const programId = geometry.program_id;
-  const operationId = geometry.operation_id || geometry.track_id || animationId;
+  const trackId = geometry.track_id || animationId;
   const coordinateVariant = geometry.coordinate_variant || 'standard';
-  if (!program || !programId || !operationId) return false;
+  if (!program || !programId || !trackId) return false;
   if (!['standard', 'columbina_basis'].includes(coordinateVariant)) {
     return false;
   }
@@ -627,8 +624,6 @@ function registerGimiMesh(mesh, animationId, geometry) {
         lastNow: null, lastGeometryTime: null, dirty: true,
       };
       tracks.set(programId, state);
-    } else if (state.program.version !== program.version) {
-      return false;
     }
     const baseNormals = decodeF32(geometry.base_normals);
     let weights = null;
@@ -665,13 +660,13 @@ function registerGimiMesh(mesh, animationId, geometry) {
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
       poseActive, poseFrames: decodedPoseFrames,
-      poseBoneCount, poseFrameCount, operationId,
+      poseBoneCount, poseFrameCount, trackId,
       animationBounds: geometry.bounds || null,
     };
-    if (!state.outputs.has(operationId)) {
-      state.outputs.set(operationId, {
+    if (!state.outputs.has(trackId)) {
+      state.outputs.set(trackId, {
         active: false, poseActive: false, shapePhases: [], poseTime: 0,
-        boneCount: null, coordinateVariant,
+        coordinateVariant,
       });
     }
     state.meshes.add(mesh);
