@@ -97,15 +97,6 @@ function syncGimiClockRange(track, clock, phaseKey) {
   }
 }
 
-function gimiBasisVector(matrix, x, y, z) {
-  if (!Array.isArray(matrix) || matrix.length !== 9) return [x, y, z];
-  return [
-    matrix[0] * x + matrix[1] * y + matrix[2] * z,
-    matrix[3] * x + matrix[4] * y + matrix[5] * z,
-    matrix[6] * x + matrix[7] * y + matrix[8] * z,
-  ];
-}
-
 function applyGimiPose(mesh, meshState, track) {
   const position = mesh.geometry?.attributes?.position;
   const normal = mesh.geometry?.attributes?.normal;
@@ -119,27 +110,10 @@ function applyGimiPose(mesh, meshState, track) {
 
   const positions = position.array;
   const normals = normal.array;
-  for (let offset = 0; offset < vertexCount * 3; offset += 1) {
-    positions[offset] = basePositions[offset];
-    normals[offset] = baseNormals[offset];
-  }
-
-  for (const pass of meshState.shapePasses) {
-    const weight = Number(pass.amplitude) * Math.sin(
+  const shapeWeights = meshState.shapePasses.map(pass =>
+    Number(pass.amplitude) * Math.sin(
       (track.shapePhase + pass.phaseOffset) * Number(pass.angularScale))
-      + Number(pass.bias);
-    const deltas = pass.deltas;
-    for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-      const source = vertex * 6;
-      const target = vertex * 3;
-      positions[target] += deltas[source] * weight;
-      positions[target + 1] += deltas[source + 1] * weight;
-      positions[target + 2] += deltas[source + 2] * weight;
-      normals[target] += deltas[source + 3] * weight;
-      normals[target + 1] += deltas[source + 4] * weight;
-      normals[target + 2] += deltas[source + 5] * weight;
-    }
-  }
+    + Number(pass.bias));
 
   const frameValue = Math.max(0, track.poseTime);
   const frame = Math.min(
@@ -150,11 +124,44 @@ function applyGimiPose(mesh, meshState, track) {
   const indices = meshState.indices;
   const pose = track.poseFrames;
   const boneCount = track.poseBoneCount;
+  const basis = track.poseBasis || {};
+  const pre = Array.isArray(basis.pre) && basis.pre.length === 9
+    ? basis.pre : null;
+  const post = Array.isArray(basis.post) && basis.post.length === 9
+    ? basis.post : null;
 
   for (let vertex = 0; vertex < vertexCount; vertex += 1) {
-    if (meshState.poseActive[vertex] < 0.5) continue;
     const blendOffset = vertex * 4;
     const positionOffset = vertex * 3;
+    let px = basePositions[positionOffset];
+    let py = basePositions[positionOffset + 1];
+    let pz = basePositions[positionOffset + 2];
+    let nx = baseNormals[positionOffset];
+    let ny = baseNormals[positionOffset + 1];
+    let nz = baseNormals[positionOffset + 2];
+    for (let passIndex = 0;
+      passIndex < meshState.shapePasses.length; passIndex += 1) {
+      const pass = meshState.shapePasses[passIndex];
+      const source = vertex * 6;
+      const weight = shapeWeights[passIndex];
+      px += pass.deltas[source] * weight;
+      py += pass.deltas[source + 1] * weight;
+      pz += pass.deltas[source + 2] * weight;
+      nx += pass.deltas[source + 3] * weight;
+      ny += pass.deltas[source + 4] * weight;
+      nz += pass.deltas[source + 5] * weight;
+    }
+
+    if (meshState.poseActive[vertex] < 0.5) {
+      positions[positionOffset] = px;
+      positions[positionOffset + 1] = py;
+      positions[positionOffset + 2] = pz;
+      normals[positionOffset] = nx;
+      normals[positionOffset + 1] = ny;
+      normals[positionOffset + 2] = nz;
+      continue;
+    }
+
     let scaleX = 0;
     let scaleY = 0;
     let scaleZ = 0;
@@ -236,19 +243,21 @@ function applyGimiPose(mesh, meshState, track) {
     qdZ /= qrLength;
     qdW /= qrLength;
 
-    const basis = track.poseBasis || {};
-    const basePosition = gimiBasisVector(
-      basis.pre, positions[positionOffset], positions[positionOffset + 1],
-      positions[positionOffset + 2]);
-    const baseNormal = gimiBasisVector(
-      basis.pre, normals[positionOffset], normals[positionOffset + 1],
-      normals[positionOffset + 2]);
-    const px = basePosition[0] * scaleX + biasX;
-    const py = basePosition[1] * scaleY + biasY;
-    const pz = basePosition[2] * scaleZ + biasZ;
-    const nx = baseNormal[0];
-    const ny = baseNormal[1];
-    const nz = baseNormal[2];
+    const baseX = pre
+      ? pre[0] * px + pre[1] * py + pre[2] * pz : px;
+    const baseY = pre
+      ? pre[3] * px + pre[4] * py + pre[5] * pz : py;
+    const baseZ = pre
+      ? pre[6] * px + pre[7] * py + pre[8] * pz : pz;
+    const normalX = pre
+      ? pre[0] * nx + pre[1] * ny + pre[2] * nz : nx;
+    const normalY = pre
+      ? pre[3] * nx + pre[4] * ny + pre[5] * nz : ny;
+    const normalZ = pre
+      ? pre[6] * nx + pre[7] * ny + pre[8] * nz : nz;
+    const posedX = baseX * scaleX + biasX;
+    const posedY = baseY * scaleY + biasY;
+    const posedZ = baseZ * scaleZ + biasZ;
     const m00 = 1 - 2 * qrY * qrY - 2 * qrZ * qrZ;
     const m10 = 2 * (qrX * qrY + qrW * qrZ);
     const m20 = 2 * (qrX * qrZ - qrW * qrY);
@@ -261,26 +270,35 @@ function applyGimiPose(mesh, meshState, track) {
     const m12 = 2 * (qrY * qrZ - qrW * qrX);
     const m22 = 1 - 2 * qrX * qrX - 2 * qrY * qrY;
     const t2 = 2 * (-qdW * qrZ - qdX * qrY + qdY * qrX + qdZ * qrW);
-    const posedPosition = gimiBasisVector(
-      basis.post,
-      m00 * px + m01 * py + m02 * pz + t0,
-      m10 * px + m11 * py + m12 * pz + t1,
-      m20 * px + m21 * py + m22 * pz + t2);
-    positions[positionOffset] = posedPosition[0];
-    positions[positionOffset + 1] = posedPosition[1];
-    positions[positionOffset + 2] = posedPosition[2];
-    const outX = m00 * nx + m01 * ny + m02 * nz;
-    const outY = m10 * nx + m11 * ny + m12 * nz;
-    const outZ = m20 * nx + m21 * ny + m22 * nz;
-    const posedNormal = gimiBasisVector(basis.post, outX, outY, outZ);
+    const transformedX = m00 * posedX + m01 * posedY + m02 * posedZ + t0;
+    const transformedY = m10 * posedX + m11 * posedY + m12 * posedZ + t1;
+    const transformedZ = m20 * posedX + m21 * posedY + m22 * posedZ + t2;
+    positions[positionOffset] = post
+      ? post[0] * transformedX + post[1] * transformedY
+        + post[2] * transformedZ : transformedX;
+    positions[positionOffset + 1] = post
+      ? post[3] * transformedX + post[4] * transformedY
+        + post[5] * transformedZ : transformedY;
+    positions[positionOffset + 2] = post
+      ? post[6] * transformedX + post[7] * transformedY
+        + post[8] * transformedZ : transformedZ;
+    const outX = m00 * normalX + m01 * normalY + m02 * normalZ;
+    const outY = m10 * normalX + m11 * normalY + m12 * normalZ;
+    const outZ = m20 * normalX + m21 * normalY + m22 * normalZ;
+    const transformedNormalX = post
+      ? post[0] * outX + post[1] * outY + post[2] * outZ : outX;
+    const transformedNormalY = post
+      ? post[3] * outX + post[4] * outY + post[5] * outZ : outY;
+    const transformedNormalZ = post
+      ? post[6] * outX + post[7] * outY + post[8] * outZ : outZ;
     const normalLength = Math.hypot(
-      posedNormal[0], posedNormal[1], posedNormal[2]);
+      transformedNormalX, transformedNormalY, transformedNormalZ);
     normals[positionOffset] = normalLength > 1e-12
-      ? posedNormal[0] / normalLength : 0;
+      ? transformedNormalX / normalLength : 0;
     normals[positionOffset + 1] = normalLength > 1e-12
-      ? posedNormal[1] / normalLength : 0;
+      ? transformedNormalY / normalLength : 0;
     normals[positionOffset + 2] = normalLength > 1e-12
-      ? posedNormal[2] / normalLength : 0;
+      ? transformedNormalZ / normalLength : 0;
   }
   position.needsUpdate = true;
   normal.needsUpdate = true;
@@ -322,7 +340,12 @@ function resetGimiTrack(track) {
       if (satisfied && track.resetConditions[resetKey] !== true) {
         track[phaseKey] = gimiOperand(rule.value, track[phaseKey]);
         const clear = rule.clear;
-        if (clear?.variable && clear.value?.kind === 'literal') {
+        const conditionVariables = new Set((rule.conditions || [])
+          .flatMap(group => group.map(clause =>
+            String(clause?.var || '').toLowerCase())));
+        if (clear?.variable && clear.value?.kind === 'literal'
+            && conditionVariables.size === 1
+            && conditionVariables.has(String(clear.variable).toLowerCase())) {
           setControlValue(clear.variable, String(clear.value.value));
         }
         track.dirty = true;

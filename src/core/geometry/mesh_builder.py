@@ -539,7 +539,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
 
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                       texture_source=None, game_profile=None, source=None,
-                      animations=None, compute_animations=None):
+                      animations=None):
     """Build mesh draw entries and a shared texture registry.
 
     Geometry packing and texture publication are delegated to focused stages;
@@ -561,11 +561,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         animation_id, value = _animation_clock_dict(clock)
         animation_clocks[animation_id] = value
     used_clock_ids = set()
-    gimi_by_position = {
-        str(animation.get("position_resource", "")).casefold(): animation
-        for animation in compute_animations or ()
-        if animation.get("position_resource")
-    }
     gimi_shared = {}
     animation_diagnostics = {
         "animation_family_count": 0,
@@ -671,8 +666,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     animation_payload = None
 
             gimi_payload = None
-            gimi = gimi_by_position.get(
-                str(group.get("position_resource", "")).casefold())
+            gimi = group.get("_compute_animation")
             same_position = (source.same_reference(
                 draw.position_file, group.get("position_file"))
                 if source is not None else
@@ -804,13 +798,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
 
 def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
                        texture_source=None, game_profile=None, source=None,
-                       animations=None, compute_animations=None):
+                       animations=None):
     """Legacy flat payload wrapper retaining the ``__textures__`` field."""
     built = build_mesh_result(
         groups, mod_dir, max_draws=max_draws, geometry=geometry,
         texture_source=texture_source, game_profile=game_profile,
-        source=source, animations=animations,
-        compute_animations=compute_animations)
+        source=source, animations=animations)
     payload = dict(built.meshes)
     payload["__textures__"] = built.textures
     return payload

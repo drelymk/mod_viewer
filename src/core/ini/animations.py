@@ -618,10 +618,17 @@ def _phase_bindings(sections, canonical, *, var_prefix=None):
                         and value.get("kind") == "literal"
                         and pending_reset["conditions"] ==
                         _combined_conditions(stack, canonical, var_prefix)):
-                    pending_reset["clear"] = {
-                        "variable": f"{var_prefix or ''}{local}",
-                        "value": value,
+                    condition_vars = {
+                        str(clause.get("var", "")).casefold()
+                        for group in pending_reset["conditions"]
+                        for clause in group
                     }
+                    trigger = f"{var_prefix or ''}{local}".casefold()
+                    if condition_vars == {trigger}:
+                        pending_reset["clear"] = {
+                            "variable": f"{var_prefix or ''}{local}",
+                            "value": value,
+                        }
                 pending_wrap = None
                 pending_reset = None
                 continue
@@ -732,18 +739,22 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
     canonical = canonical_vars or canonical_var_names(sections)
     from .draw_resources import _collect_resource_copy_sources
     copy_sources = _collect_resource_copy_sources(sections, resources)
-    shape_passes = []
-    pose_pass = None
+    chains = []
     for section, lines in sections.items():
         if not str(section).casefold().startswith("customshader"):
             continue
-        u_sources = {}
         t_sources = {}
         active = None
-        pending = None
-        pending_output = None
         phase_expr = None
         bone_count_expr = None
+        current_chain = None
+
+        def close_chain():
+            nonlocal current_chain
+            if current_chain is not None:
+                chains.append(current_chain)
+                current_chain = None
+
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             if not line:
@@ -754,11 +765,20 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 continue
             match = _COMPUTE_U_COPY_RE.fullmatch(line)
             if match:
-                u_sources[int(match.group("slot"))] = match.group(2)
+                slot = int(match.group("slot"))
+                if slot == 5:
+                    close_chain()
+                    current_chain = {
+                        "uav_resource": match.group(2),
+                        "output_resource": None,
+                        "passes": [],
+                    }
                 continue
             match = _COMPUTE_U_NULL_RE.fullmatch(line)
             if match:
-                u_sources.pop(int(match.group("slot")), None)
+                slot = int(match.group("slot"))
+                if slot == 5:
+                    close_chain()
                 continue
             match = _X88_RE.fullmatch(line)
             if match:
@@ -778,73 +798,64 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 except AttributeError:
                     text = None
                 active = _shader_signature(text)
-                pending = None
-                pending_output = None
                 continue
             match = _COMPUTE_DISPATCH_RE.fullmatch(line)
-            if match and active is not None:
-                dispatch = int(match.group(1)) * active["threads"]
-                if active["kind"] == "shape":
-                    base = t_sources.get(50)
-                    target = t_sources.get(51)
-                    uav = u_sources.get(5)
-                    if base and target and uav and active.get("shape"):
-                        pending = {
-                            "base_resource": base,
-                            "target_resource": target,
-                            "uav_resource": uav,
-                            "dispatch_vertices": dispatch,
-                            "phase_expr": phase_expr,
-                            "shape": active["shape"],
-                            **(pending_output or {}),
-                        }
-                        shape_passes.append(pending)
-                elif active["kind"] == "pose":
-                    base = t_sources.get(50)
-                    blend = t_sources.get(51)
-                    pose = t_sources.get(52)
-                    uav = u_sources.get(5)
-                    if base and blend and pose and uav:
-                        pending = {
-                            "base_resource": base,
-                            "blend_resource": blend,
-                            "pose_resource": pose,
-                            "uav_resource": uav,
-                            "dispatch_vertices": dispatch,
-                            "phase_expr": phase_expr,
-                            "bone_count_expr": bone_count_expr,
-                            "basis": active.get("basis"),
-                            **(pending_output or {}),
-                        }
-                        pose_pass = pending
+            if match:
+                if current_chain is None:
+                    continue
+                snapshot = {"supported": False}
+                if (active is not None and match.group(2) == "1"
+                        and match.group(3) == "1"):
+                    dispatch = int(match.group(1)) * active["threads"]
+                    if active["kind"] == "shape":
+                        base = t_sources.get(50)
+                        target = t_sources.get(51)
+                        if base and target and active.get("shape"):
+                            snapshot = {
+                                "supported": True,
+                                "kind": "shape",
+                                "base_resource": base,
+                                "target_resource": target,
+                                "uav_resource": current_chain[
+                                    "uav_resource"],
+                                "dispatch_vertices": dispatch,
+                                "phase_expr": phase_expr,
+                                "shape": active["shape"],
+                            }
+                    elif active["kind"] == "pose":
+                        base = t_sources.get(50)
+                        blend = t_sources.get(51)
+                        pose = t_sources.get(52)
+                        if base and blend and pose:
+                            snapshot = {
+                                "supported": True,
+                                "kind": "pose",
+                                "base_resource": base,
+                                "blend_resource": blend,
+                                "pose_resource": pose,
+                                "uav_resource": current_chain[
+                                    "uav_resource"],
+                                "dispatch_vertices": dispatch,
+                                "phase_expr": phase_expr,
+                                "bone_count_expr": bone_count_expr,
+                                "basis": active.get("basis"),
+                            }
+                current_chain["passes"].append(snapshot)
                 continue
             match = _COMPUTE_RESOURCE_RE.fullmatch(line)
             if match:
-                output = {"output_resource": match.group(1),
-                          "uav_slot": int(match.group("slot"))}
-                if pending is not None:
-                    pending.update(output)
-                else:
-                    pending_output = output
+                if (current_chain is not None
+                        and int(match.group("slot")) == 5):
+                    current_chain["output_resource"] = match.group(1)
+        close_chain()
 
-    if pose_pass is None:
-        return []
-    if "output_resource" not in pose_pass:
-        return []
-    if not all(item["dispatch_vertices"] > 0 for item in shape_passes):
-        return []
+    output_chains = {}
+    for chain in chains:
+        output = chain.get("output_resource")
+        if output:
+            output_chains.setdefault(str(output).casefold(), []).append(chain)
+
     literals = _literal_assignments(sections, canonical)
-    bone_count = _literal_number(
-        pose_pass.get("bone_count_expr"), literals, canonical)
-    bone_count = _integer(bone_count)
-    if bone_count is None:
-        return []
-    validated = _validate_compute_buffers(
-        resources, copy_sources, shape_passes, pose_pass,
-        mod_dir=mod_dir, source=source, bone_count=bone_count)
-    if validated is None:
-        return []
-
     updates = _phase_bindings(
         sections, canonical, var_prefix=var_prefix)
 
@@ -854,76 +865,116 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             return None
         return operand
 
-    parsed_shape_passes = []
-    shape_offsets = []
-    for item in shape_passes:
-        operand = phase_operand(item.get("phase_expr", ""))
-        if operand is None:
+    animations = []
+    for chain_index, chain in enumerate(chains):
+        output_resource = chain.get("output_resource")
+        if not output_resource:
             continue
-        shape_offsets.append(float(operand.get("offset", 0)))
-        item["phase_operand"] = operand
-        parsed_shape_passes.append(item)
-    shape_passes = parsed_shape_passes
-    pose_operand = phase_operand(pose_pass.get("phase_expr", ""))
-    if pose_operand is None:
-        return []
-    pose_local = _unprefix(pose_operand["variable"], var_prefix)
-    pose_clock = updates.get(pose_local.casefold())
-    if pose_clock is None:
-        return []
-    shape_clock = None
-    if shape_passes:
-        shape_local = _unprefix(
-            shape_passes[0]["phase_operand"]["variable"], var_prefix)
-        shape_clock = updates.get(shape_local.casefold())
-        if shape_clock is None:
-            shape_passes = []
-        else:
-            shape_outputs = {
-                str(item.get("output_resource", "")).casefold()
-                for item in shape_passes if item.get("output_resource")
-            }
-            if (str(pose_pass["base_resource"]).casefold()
-                    not in shape_outputs):
-                shape_passes = []
+        pose_passes = [item for item in chain["passes"]
+                       if item.get("supported") and item.get("kind") == "pose"]
+        if not pose_passes:
+            continue
+        pose_pass = pose_passes[-1]
+        matching_shapes = output_chains.get(
+            str(pose_pass["base_resource"]).casefold(), ())
+        shape_passes = []
+        if matching_shapes:
+            if len(matching_shapes) != 1:
+                continue
+            shape_chain = matching_shapes[0]
+            if any(not item.get("supported") for item in shape_chain["passes"]):
+                continue
+            shape_passes = [item for item in shape_chain["passes"]
+                            if item.get("kind") == "shape"]
+            if not shape_passes or len(shape_passes) != len(
+                    shape_chain["passes"]):
+                continue
+        elif not _resolved_resource(
+                resources, copy_sources, pose_pass["base_resource"]).get(
+                    "filename"):
+            # A pose input that came from an unsupported compute chain cannot
+            # silently become a pose-only animation.
+            continue
 
-    identity = json.dumps({
-        "ini": (source.logical_path(ini_path) if source is not None
-                and source.is_resource_reference(ini_path)
-                else os.path.basename(str(ini_path or ""))),
-        "output": pose_pass["output_resource"],
-        "base": pose_pass["base_resource"],
-    }, sort_keys=True, separators=(",", ":"))
-    track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
-    return [{
-        "kind": "gimi_compute",
-        "track_id": track_id,
-        "position_resource": pose_pass["output_resource"],
-        "base_resource": pose_pass["base_resource"],
-        "base_file": validated["base_file"],
-        "vertex_count": validated["vertex_count"],
-        "shape_passes": [{
-            "target_resource": item["target_resource"],
-            "target_file": _resolved_resource(
-                resources, copy_sources, item["target_resource"])["filename"],
-            "dispatch_vertices": item["dispatch_vertices"],
-            "phase_offset": offset,
-            **item["shape"],
-        } for item, offset in zip(shape_passes, shape_offsets)],
-        "pose": {
+        bone_count = _integer(_literal_number(
+            pose_pass.get("bone_count_expr"), literals, canonical))
+        if bone_count is None:
+            continue
+        validated = _validate_compute_buffers(
+            resources, copy_sources, shape_passes, pose_pass,
+            mod_dir=mod_dir, source=source, bone_count=bone_count)
+        if validated is None:
+            continue
+
+        pose_operand = phase_operand(pose_pass.get("phase_expr", ""))
+        if pose_operand is None:
+            continue
+        pose_local = _unprefix(pose_operand["variable"], var_prefix)
+        pose_clock = updates.get(pose_local.casefold())
+        if pose_clock is None:
+            continue
+
+        parsed_shape_passes = []
+        shape_clock = None
+        shape_local = None
+        for item in shape_passes:
+            operand = phase_operand(item.get("phase_expr", ""))
+            if operand is None:
+                parsed_shape_passes = []
+                shape_clock = None
+                break
+            local = _unprefix(operand["variable"], var_prefix)
+            if shape_local is None:
+                shape_local = local
+                shape_clock = updates.get(local.casefold())
+            if shape_clock is None or local.casefold() != shape_local.casefold():
+                parsed_shape_passes = []
+                shape_clock = None
+                break
+            parsed_shape_passes.append((item, operand))
+        if shape_passes and not parsed_shape_passes:
+            continue
+
+        identity = json.dumps({
+            "ini": (source.logical_path(ini_path) if source is not None
+                    and source.is_resource_reference(ini_path)
+                    else os.path.basename(str(ini_path or ""))),
+            "output": output_resource,
+            "base": pose_pass["base_resource"],
+            "chain": chain_index,
+        }, sort_keys=True, separators=(",", ":"))
+        track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
+        animations.append({
+            "kind": "gimi_compute",
+            "track_id": track_id,
+            "position_resource": output_resource,
             "base_resource": pose_pass["base_resource"],
-            "blend_resource": pose_pass["blend_resource"],
-            "blend_file": validated["blend_file"],
-            "resource": pose_pass["pose_resource"],
-            "file": validated["pose_file"],
-            "bone_count": bone_count,
-            "frame_count": validated["frame_count"],
-            "dispatch_vertices": pose_pass["dispatch_vertices"],
-            "basis": pose_pass.get("basis"),
-        },
-        "shape_clock": shape_clock,
-        "pose_clock": pose_clock,
-    }]
+            "base_file": validated["base_file"],
+            "vertex_count": validated["vertex_count"],
+            "shape_passes": [{
+                "target_resource": item["target_resource"],
+                "target_file": _resolved_resource(
+                    resources, copy_sources, item["target_resource"])[
+                        "filename"],
+                "dispatch_vertices": item["dispatch_vertices"],
+                "phase_offset": float(operand.get("offset", 0)),
+                **item["shape"],
+            } for item, operand in parsed_shape_passes],
+            "pose": {
+                "base_resource": pose_pass["base_resource"],
+                "blend_resource": pose_pass["blend_resource"],
+                "blend_file": validated["blend_file"],
+                "resource": pose_pass["pose_resource"],
+                "file": validated["pose_file"],
+                "bone_count": bone_count,
+                "frame_count": validated["frame_count"],
+                "dispatch_vertices": pose_pass["dispatch_vertices"],
+                "basis": pose_pass.get("basis"),
+            },
+            "shape_clock": shape_clock,
+            "pose_clock": pose_clock,
+        })
+    return animations
 
 
 def compute_animation_control_vars(animations, state_rules=()):

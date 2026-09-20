@@ -2,6 +2,7 @@
 
 import struct
 
+from app.mods.analysis import analyze_mod_inis
 from core.ini.animations import discover_compute_animations
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
@@ -198,6 +199,13 @@ def _discover(root, sections):
         ini_path=str(root / "fixture.ini"))
 
 
+def _attach_animation(groups, animation):
+    for group in groups:
+        if (str(group.get("position_resource", "")).casefold()
+                == str(animation.get("position_resource", "")).casefold()):
+            group["_compute_animation"] = animation
+
+
 def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     root = tmp_path / "valid"
     sections = _sections(root)
@@ -250,9 +258,9 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     assert len(bad_index_animation) == 1
     bad_index_analysis = analyze_ini(
         bad_index_sections, resources=extract_resources(bad_index_sections))
+    _attach_animation(bad_index_analysis.draw_groups, bad_index_animation[0])
     bad_index_built = build_mesh_result(
-        bad_index_analysis.draw_groups, str(bad_indices),
-        compute_animations=bad_index_animation)
+        bad_index_analysis.draw_groups, str(bad_indices))
     assert not any(
         "animation_geometry" in mesh
         for mesh in bad_index_built.meshes.values())
@@ -271,10 +279,10 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     resources = extract_resources(sections)
     animation = _discover(root, sections)
     analysis = analyze_ini(sections, resources=resources)
+    _attach_animation(analysis.draw_groups, animation[0])
     geometry = GeometryBlob()
     built = build_mesh_result(
-        analysis.draw_groups, str(root), geometry=geometry,
-        compute_animations=animation)
+        analysis.draw_groups, str(root), geometry=geometry)
 
     entry = next(iter(built.meshes.values()))
     payload = entry["animation_geometry"]
@@ -357,6 +365,39 @@ def test_compute_animation_accepts_pose_only_and_nonstandard_thread_width(tmp_pa
     assert discovered[0]["pose"]["bone_count"] == 2
 
 
+def test_compute_animation_keeps_sequential_pose_dispatch_snapshots(tmp_path):
+    root = tmp_path / "sequential-pose"
+    sections = _sections(root)
+    sections["ResourceAcc1"] = []
+    sections["ResourceAcc1.1"] = [
+        "stride = 40",
+        "filename = position.buf",
+    ]
+    sections["CustomShaderPose"].extend([
+        "cs-u5 = null",
+        "cs-t50 = copy ResourceAcc1.1",
+        "cs-u5 = copy ResourceAcc1.1",
+        "ResourceAcc1 = ref cs-u5",
+        "Dispatch = 1, 1, 1",
+        "cs-u5 = null",
+    ])
+
+    discovered = _discover(root, sections)
+
+    assert {item["position_resource"] for item in discovered} == {
+        "ResourcePosition", "ResourceAcc1"}
+    assert all(item["pose"]["dispatch_vertices"] == 64
+               for item in discovered)
+
+
+def test_compute_animation_rejects_unsupported_shape_chain(tmp_path):
+    root = tmp_path / "unsupported-shape-chain"
+    sections = _sections(root)
+    (root / "shape.hlsl").write_text("void main() {}")
+
+    assert not _discover(root, sections)
+
+
 def test_compute_animation_uses_shape_kernel_constants(tmp_path):
     root = tmp_path / "shape-constants"
     sections = _sections(root)
@@ -370,13 +411,96 @@ def test_compute_animation_uses_shape_kernel_constants(tmp_path):
     assert animation["shape_passes"][0]["bias"] == 0.25
 
 
-def test_compute_animation_keeps_pose_when_shape_phase_is_unparseable(tmp_path):
+def test_compute_animation_rejects_shape_chain_when_phase_is_unparseable(tmp_path):
     root = tmp_path / "unparseable-shape"
     sections = _sections(root)
     sections["CustomShaderShape"] = [
         "x88 = unsupported_expression" if line.startswith("x88 =") else line
         for line in sections["CustomShaderShape"]
     ]
+    assert not _discover(root, sections)
+
+
+def test_compute_animation_rejects_non_linear_dispatch(tmp_path):
+    root = tmp_path / "non-linear-dispatch"
+    sections = _sections(root)
+    sections["CustomShaderPose"] = [
+        line.replace("Dispatch = 1, 1, 1", "Dispatch = 1, 2, 1")
+        for line in sections["CustomShaderPose"]]
+    assert not _discover(root, sections)
+
+
+def test_compute_animation_only_accepts_same_variable_reset_clear(tmp_path):
+    root = tmp_path / "reset-clear"
+    sections = _sections(root)
+    sections["CustomShaderPose"] = [
+        line.replace("$anime_state = 0", "$unrelated = 0")
+        for line in sections["CustomShaderPose"]]
+
     animation = _discover(root, sections)[0]
-    assert animation["shape_passes"] == []
-    assert animation["pose"]["frame_count"] == 2
+
+    assert "clear" not in animation["pose_clock"]["reset_rules"][0]
+
+
+def test_compute_animation_is_attached_per_ini_with_duplicate_resources(tmp_path):
+    ini_paths = []
+    (tmp_path / "pose.hlsl").write_text(POSE_SHADER)
+    for name in ("main", "acc1"):
+        root = tmp_path / name
+        _sections(root)
+        ini_path = root / f"{name}.ini"
+        ini_path.write_text(
+            """
+[Constants]
+global $pause = 0
+global $Freq_pose = 0
+global $Speed = 0.1
+global $dt
+global $VG_count = 2
+
+[CustomShaderPose]
+if $pause == 0
+    $Freq_pose = $Freq_pose + 30 * $dt
+endif
+x88 = $Freq_pose
+x89 = $VG_count
+cs-t50 = copy ResourcePosition
+cs-t51 = copy ResourceBlend
+cs-t52 = copy ResourcePose
+cs = pose.hlsl
+cs-u5 = copy ResourcePosition
+ResourceOutput = ref cs-u5
+Dispatch = 1, 1, 1
+cs-u5 = null
+
+[TextureOverrideBody]
+vb0 = ResourceOutput
+vb1 = ResourceTexcoord
+ib = ResourceIB
+drawindexed = 3, 0, 0
+
+[ResourcePosition]
+stride = 40
+filename = position.buf
+[ResourceBlend]
+stride = 32
+filename = blend.buf
+[ResourcePose]
+stride = 56
+filename = pose.buf
+[ResourceOutput]
+[ResourceTexcoord]
+stride = 20
+filename = texcoord.buf
+[ResourceIB]
+format = DXGI_FORMAT_R32_UINT
+filename = index.buf
+""".strip() + "\n")
+        ini_paths.append(ini_path)
+
+    parsed = analyze_mod_inis(ini_paths, tmp_path)
+
+    attached = [group.get("_compute_animation") for group in parsed.groups]
+    assert len(attached) == 2
+    assert all(attached)
+    assert len({item["track_id"] for item in attached}) == 2

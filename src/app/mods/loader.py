@@ -266,8 +266,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             parsed.groups, context.mod_dir, geometry=geometry,
             texture_source=texture_source,
             game_profile=parsed.game.game, source=context.source,
-            animations=parsed.animations,
-            compute_animations=parsed.compute_animations)
+            animations=parsed.animations)
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}

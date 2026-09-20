@@ -39,7 +39,6 @@ class ParsedModAnalysis:
     present: dict
     game: GameDetection
     animations: list = field(default_factory=list)
-    compute_animations: list = field(default_factory=list)
     animation_control_vars: set = field(default_factory=set)
     resource_files: list = field(default_factory=list)
     texture_override_indexes: list = field(default_factory=list)
@@ -330,6 +329,18 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             # ``source`` is intentionally a compact UI grouping label. Keep
             # the complete relative INI path separately for mesh identity.
             group["identity_source"] = identity_source
+        compute_by_position = {}
+        for item in compute:
+            key = str(item.get("position_resource", "")).casefold()
+            if key:
+                compute_by_position.setdefault(key, []).append(item)
+        for group in ini_groups:
+            matches = compute_by_position.get(
+                str(group.get("position_resource", "")).casefold(), ())
+            if len(matches) == 1:
+                # Keep the descriptor on the group that came from this INI.
+                # Mesh construction must not match resources across siblings.
+                group["_compute_animation"] = matches[0]
         shape_sliders = analysis.shapes
         state_rules.extend(analysis.state_rules)
         game_evidence.extend(analysis.game_evidence)
@@ -498,7 +509,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         game=resolve_game_detection(
             game_evidence, runtime_evidence, texture_api_evidence),
         animations=animations,
-        compute_animations=compute_animations,
         animation_control_vars=animation_control_vars,
         resource_files=list(dict.fromkeys(resource_files)),
         texture_override_indexes=texture_override_indexes,
