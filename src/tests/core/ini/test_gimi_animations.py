@@ -296,16 +296,28 @@ def test_compute_animation_accepts_pose_only_and_nonstandard_thread_width(tmp_pa
     sections.pop("CustomShaderShape")
     (root / "pose.hlsl").write_text(
         POSE_SHADER.replace("numthreads(64", "numthreads(32")
+        .replace("frac(TIME)", "TIME - floor(TIME)")
+        .replace("normalize(p.QR)", "p.QR / length(p.QR)")
         .replace("rw_buffer", "result_buffer")
         .replace("base", "source_buffer")
         .replace("blend", "weights_buffer")
         .replace("pose", "skeleton_buffer")
+        .replace("pos_result", "deformed_position")
+        .replace("normal_result", "deformed_normal")
     )
     sections["CustomShaderPose"] = [
         line.replace("ResourcePosition.1", "ResourceA")
              .replace("ResourceBlend", "ResourceWeights")
              .replace("ResourcePose", "ResourceSkeleton")
              .replace("ResourcePosition", "ResourceOutput")
+        for line in sections["CustomShaderPose"]
+    ]
+    sections["Constants"] = [
+        line.replace("$VG_count", "$bone_total")
+        for line in sections["Constants"]
+    ]
+    sections["CustomShaderPose"] = [
+        line.replace("$VG_count", "$bone_total")
         for line in sections["CustomShaderPose"]
     ]
     sections["CustomShaderPose"] = [
@@ -320,6 +332,7 @@ def test_compute_animation_accepts_pose_only_and_nonstandard_thread_width(tmp_pa
     assert len(discovered) == 1
     assert discovered[0]["shape_passes"] == []
     assert discovered[0]["pose"]["dispatch_vertices"] == 320
+    assert discovered[0]["pose"]["bone_count"] == 2
 
 
 def test_compute_animation_uses_shape_kernel_constants(tmp_path):

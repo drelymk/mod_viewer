@@ -402,6 +402,40 @@ def _shape_constants(text):
     return None
 
 
+def _pose_basis(text, base_name, output_name):
+    """Recognize the conservative axis-basis conversion used by some kernels."""
+    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
+    base = re.escape(base_name)
+    output = re.escape(output_name)
+    pre = (
+        rf"(?P<position>[a-z_]\w*)\.x={base}\[i\]\.position\.x\*-1\.0f?"
+        rf".*(?P=position)\.z={base}\[i\]\.position\.y\*-1\.0f?"
+        rf".*(?P=position)\.y={base}\[i\]\.position\.z"
+    )
+    pre_normal = (
+        rf"(?P<normal>[a-z_]\w*)\.x={base}\[i\]\.normal\.x\*-1\.0f?"
+        rf".*(?P=normal)\.z={base}\[i\]\.normal\.y\*-1\.0f?"
+        rf".*(?P=normal)\.y={base}\[i\]\.normal\.z"
+    )
+    post = (
+        rf"{output}\[i\]\.position\.x=(?P<position_result>[a-z_]\w*)\.x\*-1\.0f?"
+        rf".*{output}\[i\]\.position\.y=(?P=position_result)\.z\*-1\.0f?"
+        rf".*{output}\[i\]\.position\.z=(?P=position_result)\.y"
+    )
+    post_normal = (
+        rf"{output}\[i\]\.normal\.x=(?P<normal_result>[a-z_]\w*)\.x\*-1\.0f?"
+        rf".*{output}\[i\]\.normal\.y=(?P=normal_result)\.z\*-1\.0f?"
+        rf".*{output}\[i\]\.normal\.z=(?P=normal_result)\.y"
+    )
+    if not all(re.search(pattern, compact) for pattern in
+               (pre, pre_normal, post, post_normal)):
+        return None
+    return {
+        "pre": [-1, 0, 0, 0, 0, 1, 0, -1, 0],
+        "post": [-1, 0, 0, 0, 0, -1, 0, 1, 0],
+    }
+
+
 def _shader_signature(text):
     """Classify the fixed-layout kernels by their declarations and operations."""
     if not text:
@@ -456,10 +490,11 @@ def _shader_signature(text):
             all(pose_aliases)
             and re.search(r"\[[^]]*88[^]]*\]", compact)
             and re.search(r"\[[^]]*89[^]]*\]", compact)
-            and "frac(time)" in compact
+            and ("frac(time)" in compact or "time-floor(time)" in compact)
             and ".qr" in compact and ".qd" in compact
             and ".s" in compact and ".t" in compact
-            and "normalize" in compact and "dot(" in compact
+            and ("normalize" in compact or "length(" in compact)
+            and "dot(" in compact
             and re.search(rf"{pose_aliases[1]}\[i\]", compact)
             and re.search(rf"{pose_aliases[2]}\[i\]", compact)
             and re.search(rf"{pose_aliases[3]}\[", compact)
@@ -467,7 +502,11 @@ def _shader_signature(text):
             and re.search(rf"{pose_aliases[0]}\[i\]\.normal", compact)
         )
     if pose and not shape:
-        return {"kind": "pose", "threads": thread_dims[0]}
+        return {
+            "kind": "pose", "threads": thread_dims[0],
+            "basis": _pose_basis(cleaned, declarations["t50"]["name"],
+                                  declarations["u5"]["name"]),
+        }
     if shape and not pose:
         return {"kind": "shape", "threads": thread_dims[0],
                 "shape": shape_data}
@@ -749,6 +788,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             "dispatch_vertices": dispatch,
                             "phase_expr": phase_expr,
                             "bone_count_expr": bone_count_expr,
+                            "basis": active.get("basis"),
                             **(pending_output or {}),
                         }
                         pose_pass = pending
@@ -854,6 +894,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             "bone_count": bone_count,
             "frame_count": validated["frame_count"],
             "dispatch_vertices": pose_pass["dispatch_vertices"],
+            "basis": pose_pass.get("basis"),
         },
         "shape_clock": shape_clock,
         "pose_clock": pose_clock,

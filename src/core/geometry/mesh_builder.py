@@ -523,6 +523,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
             "bone_count": bone_count,
             "frame_count": int(pose["frame_count"]),
             "dispatch_vertices": int(pose["dispatch_vertices"]),
+            "basis": pose.get("basis"),
             "blend": {
                 "weights": _geometry_ref(weights, geometry),
                 "indices": _geometry_ref(indices, geometry),

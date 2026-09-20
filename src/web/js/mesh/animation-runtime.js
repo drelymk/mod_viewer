@@ -71,6 +71,15 @@ function gimiClockRate(clock) {
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
 }
 
+function gimiBasisVector(matrix, x, y, z) {
+  if (!Array.isArray(matrix) || matrix.length !== 9) return [x, y, z];
+  return [
+    matrix[0] * x + matrix[1] * y + matrix[2] * z,
+    matrix[3] * x + matrix[4] * y + matrix[5] * z,
+    matrix[6] * x + matrix[7] * y + matrix[8] * z,
+  ];
+}
+
 function applyGimiPose(mesh, meshState, track) {
   const position = mesh.geometry?.attributes?.position;
   const normal = mesh.geometry?.attributes?.normal;
@@ -201,12 +210,19 @@ function applyGimiPose(mesh, meshState, track) {
     qdZ /= qrLength;
     qdW /= qrLength;
 
-    const px = positions[positionOffset] * scaleX + biasX;
-    const py = positions[positionOffset + 1] * scaleY + biasY;
-    const pz = positions[positionOffset + 2] * scaleZ + biasZ;
-    const nx = normals[positionOffset];
-    const ny = normals[positionOffset + 1];
-    const nz = normals[positionOffset + 2];
+    const basis = track.poseBasis || {};
+    const basePosition = gimiBasisVector(
+      basis.pre, positions[positionOffset], positions[positionOffset + 1],
+      positions[positionOffset + 2]);
+    const baseNormal = gimiBasisVector(
+      basis.pre, normals[positionOffset], normals[positionOffset + 1],
+      normals[positionOffset + 2]);
+    const px = basePosition[0] * scaleX + biasX;
+    const py = basePosition[1] * scaleY + biasY;
+    const pz = basePosition[2] * scaleZ + biasZ;
+    const nx = baseNormal[0];
+    const ny = baseNormal[1];
+    const nz = baseNormal[2];
     const m00 = 1 - 2 * qrY * qrY - 2 * qrZ * qrZ;
     const m10 = 2 * (qrX * qrY + qrW * qrZ);
     const m20 = 2 * (qrX * qrZ - qrW * qrY);
@@ -219,16 +235,26 @@ function applyGimiPose(mesh, meshState, track) {
     const m12 = 2 * (qrY * qrZ - qrW * qrX);
     const m22 = 1 - 2 * qrX * qrX - 2 * qrY * qrY;
     const t2 = 2 * (-qdW * qrZ - qdX * qrY + qdY * qrX + qdZ * qrW);
-    positions[positionOffset] = m00 * px + m01 * py + m02 * pz + t0;
-    positions[positionOffset + 1] = m10 * px + m11 * py + m12 * pz + t1;
-    positions[positionOffset + 2] = m20 * px + m21 * py + m22 * pz + t2;
+    const posedPosition = gimiBasisVector(
+      basis.post,
+      m00 * px + m01 * py + m02 * pz + t0,
+      m10 * px + m11 * py + m12 * pz + t1,
+      m20 * px + m21 * py + m22 * pz + t2);
+    positions[positionOffset] = posedPosition[0];
+    positions[positionOffset + 1] = posedPosition[1];
+    positions[positionOffset + 2] = posedPosition[2];
     const outX = m00 * nx + m01 * ny + m02 * nz;
     const outY = m10 * nx + m11 * ny + m12 * nz;
     const outZ = m20 * nx + m21 * ny + m22 * nz;
-    const normalLength = Math.hypot(outX, outY, outZ);
-    normals[positionOffset] = normalLength > 1e-12 ? outX / normalLength : 0;
-    normals[positionOffset + 1] = normalLength > 1e-12 ? outY / normalLength : 0;
-    normals[positionOffset + 2] = normalLength > 1e-12 ? outZ / normalLength : 0;
+    const posedNormal = gimiBasisVector(basis.post, outX, outY, outZ);
+    const normalLength = Math.hypot(
+      posedNormal[0], posedNormal[1], posedNormal[2]);
+    normals[positionOffset] = normalLength > 1e-12
+      ? posedNormal[0] / normalLength : 0;
+    normals[positionOffset + 1] = normalLength > 1e-12
+      ? posedNormal[1] / normalLength : 0;
+    normals[positionOffset + 2] = normalLength > 1e-12
+      ? posedNormal[2] / normalLength : 0;
   }
   position.needsUpdate = true;
   normal.needsUpdate = true;
@@ -249,12 +275,6 @@ function applyGimiTrack(track) {
 
 function advanceGimiClock(track, clock, phaseKey, dt) {
   if (!clock) return;
-  for (const rule of clock.reset_rules || []) {
-    if (dnfSatisfied(rule.conditions || [])) {
-      track[phaseKey] = gimiOperand(rule.value, track[phaseKey]);
-      track.dirty = true;
-    }
-  }
   if (!dnfSatisfied(clock.advance_conditions || [])) return;
   const rate = gimiClockRate(clock);
   if (rate <= 0 || dt <= 0) return;
@@ -263,6 +283,22 @@ function advanceGimiClock(track, clock, phaseKey, dt) {
   if (Number.isFinite(limit) && track[phaseKey] > limit) {
     track[phaseKey] = gimiOperand(clock.wrap_target, track[phaseKey]);
     track.dirty = true;
+  }
+}
+
+function resetGimiTrack(track) {
+  for (const [clock, phaseKey] of [
+    [track.shapeClock, 'shapePhase'], [track.poseClock, 'poseTime'],
+  ]) {
+    for (const [index, rule] of (clock?.reset_rules || []).entries()) {
+      const resetKey = `${phaseKey}:${index}`;
+      const satisfied = dnfSatisfied(rule.conditions || []);
+      if (satisfied && track.resetConditions[resetKey] !== true) {
+        track[phaseKey] = gimiOperand(rule.value, track[phaseKey]);
+        track.dirty = true;
+      }
+      track.resetConditions[resetKey] = satisfied;
+    }
   }
 }
 
@@ -471,11 +507,14 @@ function registerGimiMesh(mesh, animationId, geometry) {
         kind: 'gimi_compute',
         meshes: new Set(), meshesByMesh: new Map(),
         poseFrames: decodedPoseFrames, poseBoneCount, poseFrameCount,
+        poseBasis: poseInfo.basis || null,
         shapeClock: geometry.shape_clock || null,
         poseClock: geometry.pose_clock || null,
         shapePhase: 0, poseTime: 0,
+        resetConditions: Object.create(null),
         lastNow: null, lastGeometryTime: null, dirty: true,
       };
+      resetGimiTrack(state);
       tracks.set(animationId, state);
     }
     const baseNormals = decodeF32(geometry.base_normals);
@@ -578,6 +617,7 @@ export function resetAnimationRuntime() {
 export function wakeAnimationRuntime() {
   for (const state of tracks.values()) {
     if (state.kind === 'gimi_compute') {
+      resetGimiTrack(state);
       state.dirty = true;
       state.lastGeometryTime = null;
     }
@@ -594,6 +634,7 @@ export function resumeAnimatedMesh(mesh) {
     installAnimationBounds(mesh, meshState?.animationBounds);
     if (meshState) meshState.lastFrame = null;
     if (state.kind === 'gimi_compute') {
+      resetGimiTrack(state);
       state.dirty = true;
       state.lastGeometryTime = null;
     }
