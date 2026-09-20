@@ -315,7 +315,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         compute = discover_compute_animations(
             secs, resources, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,
-            canonical_vars=record["canonical_vars"])
+            canonical_vars=record["canonical_vars"],
+            qualified_vars=qualified_vars)
         animation_control_vars.update(
             compute_animation_control_vars(compute, analysis.state_rules))
         record["analysis"] = analysis

@@ -49,60 +49,164 @@ function signedUnit(value) {
   return value < 0 ? -1 : value > 0 ? 1 : 0;
 }
 
-function gimiOperand(operand, fallback = 0) {
-  if (operand === null || operand === undefined) return fallback;
-  if (typeof operand === 'number') {
-    return Number.isFinite(operand) ? operand : fallback;
-  }
-  if (operand.kind === 'literal') {
-    const value = Number(operand.value);
-    return Number.isFinite(value) ? value : fallback;
-  }
-  if (operand.kind === 'variable') {
-    const value = Number(getControlValue(operand.variable));
-    const offset = Number(operand.offset || 0);
-    return Number.isFinite(value) ? value + offset : fallback;
-  }
-  return fallback;
+function numeric(value, fallback = 0) {
+  const result = Number(value);
+  return Number.isFinite(result) ? result : fallback;
 }
 
-function gimiClockRate(clock) {
-  const rate = gimiOperand(clock?.rate, 0);
-  return Number.isFinite(rate) && rate > 0 ? rate : 0;
-}
-
-function gimiClockAdvancing(clock) {
-  return !!clock && dnfSatisfied(clock.advance_conditions || [])
-    && gimiClockRate(clock) > 0;
-}
-
-function gimiClockRange(clock) {
-  const target = gimiOperand(clock?.wrap_target, Number.NaN);
-  const limit = gimiOperand(clock?.wrap_limit, Number.NaN);
-  if (!Number.isFinite(target) || !Number.isFinite(limit)) return null;
-  return {
-    target, limit, low: Math.min(target, limit), high: Math.max(target, limit),
-  };
-}
-
-function sameGimiRange(left, right) {
-  return left?.target === right?.target && left?.limit === right?.limit;
-}
-
-function syncGimiClockRange(track, clock, phaseKey) {
-  const range = gimiClockRange(clock);
-  const previous = track.resolvedRanges[phaseKey];
-  track.resolvedRanges[phaseKey] = range;
-  if (previous === undefined || sameGimiRange(previous, range) || !range) {
-    return;
-  }
-  if (track[phaseKey] < range.low || track[phaseKey] > range.high) {
-    track[phaseKey] = range.target;
-    track.dirty = true;
+function evaluateExpression(expression, program, now) {
+  if (!expression) return 0;
+  switch (expression.kind) {
+    case 'literal': return numeric(expression.value);
+    case 'time': return now / 1000;
+    case 'dt': return program.dt;
+    case 'variable': return numeric(program.variables[expression.variable]);
+    case 'qualified_unknown': return 0;
+    case 'binary': {
+      const left = evaluateExpression(expression.left, program, now);
+      const right = evaluateExpression(expression.right, program, now);
+      if (expression.op === '+') return left + right;
+      if (expression.op === '-') return left - right;
+      if (expression.op === '*') return left * right;
+      return Math.abs(right) > 1e-12 ? left / right : 0;
+    }
+    default: return 0;
   }
 }
 
-function applyGimiPose(mesh, meshState, track) {
+function evaluateCondition(condition, program, now) {
+  if (!condition) return true;
+  if (condition.kind === 'truthy') {
+    return Math.abs(evaluateExpression(condition.expression, program, now))
+      > 1e-12;
+  }
+  if (condition.kind === 'not') {
+    return !evaluateCondition(condition.item, program, now);
+  }
+  if (condition.kind === 'and') {
+    return condition.items.every(item => evaluateCondition(item, program, now));
+  }
+  if (condition.kind === 'or') {
+    return condition.items.some(item => evaluateCondition(item, program, now));
+  }
+  if (condition.kind !== 'compare') return false;
+  if (expressionUsesUnknown(condition.left)
+      || expressionUsesUnknown(condition.right)) return true;
+  const left = evaluateExpression(condition.left, program, now);
+  const right = evaluateExpression(condition.right, program, now);
+  switch (condition.op) {
+    case '==': return left === right;
+    case '!=': return left !== right;
+    case '>': return left > right;
+    case '<': return left < right;
+    case '>=': return left >= right;
+    case '<=': return left <= right;
+    default: return false;
+  }
+}
+
+function expressionUsesUnknown(expression) {
+  if (!expression || typeof expression !== 'object') return false;
+  if (expression.kind === 'qualified_unknown') return true;
+  return Object.values(expression).some(value => Array.isArray(value)
+    ? value.some(item => expressionUsesUnknown(item))
+    : expressionUsesUnknown(value));
+}
+
+function expressionUsesTime(expression) {
+  if (!expression || typeof expression !== 'object') return false;
+  if (expression.kind === 'dt' || expression.kind === 'time') return true;
+  return Object.values(expression).some(value => Array.isArray(value)
+    ? value.some(item => expressionUsesTime(item))
+    : expressionUsesTime(value));
+}
+
+function initializeGimiProgram(program) {
+  const variables = {...(program?.initials || {})};
+  const published = {};
+  for (const variable of program?.variables || []) {
+    const external = getControlValue(variable);
+    if (external !== undefined) variables[variable] = numeric(external);
+    if (variables[variable] === undefined) variables[variable] = 0;
+    published[variable] = external === undefined
+      ? String(variables[variable]) : String(external);
+  }
+  return {variables, published, dt: 0};
+}
+
+function syncGimiProgramControls(program) {
+  for (const variable of program.program.variables || []) {
+    const external = getControlValue(variable);
+    if (external !== undefined
+        && String(external) !== program.published[variable]) {
+      program.variables[variable] = numeric(external);
+      program.published[variable] = String(external);
+    }
+  }
+}
+
+function publishGimiProgramControls(program) {
+  for (const variable of program.program.variables || []) {
+    const value = String(program.variables[variable]);
+    if (program.published[variable] === value) continue;
+    setControlValue(variable, value);
+    program.published[variable] = value;
+  }
+}
+
+function executeGimiProgram(track, now) {
+  const program = track.programState;
+  if (!program) return false;
+  const previousNow = track.lastNow;
+  const dt = previousNow === null
+    ? 0 : Math.max(0, (now - previousNow) / 1000);
+  track.lastNow = now;
+  program.dt = dt;
+  syncGimiProgramControls(program);
+  for (const output of track.outputs.values()) {
+    output.active = false;
+    output.poseActive = false;
+    output.shapePhases = [];
+    output.poseTime = 0;
+    output.boneCount = null;
+  }
+  let changed = false;
+  let activeTimeCommand = false;
+  for (const command of track.program.commands || []) {
+    const conditionActive = evaluateCondition(command.condition, program, now);
+    const commandUsesTime = expressionUsesTime(command.condition)
+      || expressionUsesTime(command.expression)
+      || expressionUsesTime(command.phase)
+      || expressionUsesTime(command.bone_count);
+    activeTimeCommand = activeTimeCommand || commandUsesTime;
+    if (!conditionActive) continue;
+    if (command.op === 'set') {
+      const value = evaluateExpression(command.expression, program, now);
+      if (!Object.is(program.variables[command.variable], value)) {
+        changed = true;
+        program.variables[command.variable] = value;
+      }
+      continue;
+    }
+    if (command.op !== 'dispatch') continue;
+    const output = track.outputs.get(command.operation);
+    if (!output) continue;
+    output.active = true;
+    const phase = evaluateExpression(command.phase, program, now);
+    if (command.kind === 'shape') {
+      output.shapePhases[command.pass] = phase;
+    } else {
+      output.poseActive = true;
+      output.poseTime = phase;
+      output.boneCount = command.bone_count
+        ? evaluateExpression(command.bone_count, program, now) : null;
+    }
+  }
+  publishGimiProgramControls(program);
+  return changed || (previousNow === null && activeTimeCommand);
+}
+
+function applyGimiPose(mesh, meshState, output) {
   const position = mesh.geometry?.attributes?.position;
   const normal = mesh.geometry?.attributes?.normal;
   const basePositions = mesh.userData?.basePositions;
@@ -115,23 +219,28 @@ function applyGimiPose(mesh, meshState, track) {
 
   const positions = position.array;
   const normals = normal.array;
-  const shapeWeights = meshState.shapePasses.map(pass =>
-    Number(pass.amplitude) * Math.sin(
-      (track.shapePhase + pass.phaseOffset) * Number(pass.angularScale))
-    + Number(pass.bias));
+  const shapeWeights = meshState.shapePasses.map((pass, index) => {
+    const phase = output.shapePhases[index];
+    if (!Number.isFinite(phase)) return 0;
+    return Number(pass.amplitude) * Math.sin(
+      phase * Number(pass.angularScale)) + Number(pass.bias);
+  });
 
-  const hasPose = !!(track.poseFrames && track.poseBoneCount
-    && meshState.poseActive);
-  const frameValue = hasPose ? Math.max(0, track.poseTime) : 0;
+  const hasPose = !!(output.poseActive && meshState.poseFrames
+    && meshState.poseBoneCount && meshState.poseActive
+    && (output.boneCount === null
+      || output.boneCount === meshState.poseBoneCount));
+  const columbinaBasis = output.coordinateVariant === 'columbina_basis';
+  const frameValue = hasPose ? Math.max(0, output.poseTime) : 0;
   const frame = hasPose ? Math.min(
-    track.poseFrameCount - 1, Math.floor(frameValue)) : 0;
+    meshState.poseFrameCount - 1, Math.floor(frameValue)) : 0;
   const nextFrame = hasPose
-    ? Math.min(track.poseFrameCount - 1, frame + 1) : 0;
+    ? Math.min(meshState.poseFrameCount - 1, frame + 1) : 0;
   const inter = hasPose ? Math.min(1, Math.max(0, frameValue - frame)) : 0;
   const weights = meshState.weights;
   const indices = meshState.indices;
-  const pose = track.poseFrames;
-  const boneCount = track.poseBoneCount;
+  const pose = meshState.poseFrames;
+  const boneCount = meshState.poseBoneCount;
 
   for (let vertex = 0; vertex < vertexCount; vertex += 1) {
     const blendOffset = vertex * 4;
@@ -153,6 +262,11 @@ function applyGimiPose(mesh, meshState, track) {
       nx += pass.deltas[source + 3] * weight;
       ny += pass.deltas[source + 4] * weight;
       nz += pass.deltas[source + 5] * weight;
+    }
+
+    if (hasPose && columbinaBasis) {
+      [px, py, pz] = [px, -pz, py];
+      [nx, ny, nz] = [nx, -nz, ny];
     }
 
     if (!hasPose || meshState.poseActive[vertex] < 0.5) {
@@ -265,19 +379,26 @@ function applyGimiPose(mesh, meshState, track) {
     const transformedY = m10 * posedX + m11 * posedY + m12 * posedZ + t1;
     const transformedZ = m20 * posedX + m21 * posedY + m22 * posedZ + t2;
     positions[positionOffset] = transformedX;
-    positions[positionOffset + 1] = transformedY;
-    positions[positionOffset + 2] = transformedZ;
+    positions[positionOffset + 1] = columbinaBasis
+      ? transformedZ : transformedY;
+    positions[positionOffset + 2] = columbinaBasis
+      ? -transformedY : transformedZ;
     const transformedNormalX = m00 * nx + m01 * ny + m02 * nz;
     const transformedNormalY = m10 * nx + m11 * ny + m12 * nz;
     const transformedNormalZ = m20 * nx + m21 * ny + m22 * nz;
+    const outputNormalX = transformedNormalX;
+    const outputNormalY = columbinaBasis
+      ? transformedNormalZ : transformedNormalY;
+    const outputNormalZ = columbinaBasis
+      ? -transformedNormalY : transformedNormalZ;
     const normalLength = Math.hypot(
-      transformedNormalX, transformedNormalY, transformedNormalZ);
+      outputNormalX, outputNormalY, outputNormalZ);
     normals[positionOffset] = normalLength > 1e-12
-      ? transformedNormalX / normalLength : 0;
+      ? outputNormalX / normalLength : 0;
     normals[positionOffset + 1] = normalLength > 1e-12
-      ? transformedNormalY / normalLength : 0;
+      ? outputNormalY / normalLength : 0;
     normals[positionOffset + 2] = normalLength > 1e-12
-      ? transformedNormalZ / normalLength : 0;
+      ? outputNormalZ / normalLength : 0;
   }
   position.needsUpdate = true;
   normal.needsUpdate = true;
@@ -287,64 +408,19 @@ function applyGimiPose(mesh, meshState, track) {
 function applyGimiTrack(track) {
   let changed = false;
   for (const mesh of track.meshes) {
+    const meshState = track.meshesByMesh.get(mesh);
     if (mesh.visible === false || mesh.userData?.animationSuspended === true) {
-      track.meshesByMesh.get(mesh).lastApplied = false;
+      meshState.lastApplied = false;
       continue;
     }
-    changed = applyGimiPose(mesh, track.meshesByMesh.get(mesh), track) || changed;
+    const output = track.outputs.get(meshState.operationId);
+    if (!output?.active) {
+      restoreCanonical(mesh);
+      continue;
+    }
+    changed = applyGimiPose(mesh, meshState, output) || changed;
   }
   return changed;
-}
-
-function advanceGimiClock(track, clock, phaseKey, dt) {
-  if (!gimiClockAdvancing(clock) || dt <= 0) return false;
-  const rate = gimiClockRate(clock);
-  track[phaseKey] += rate * dt;
-  const limit = gimiOperand(clock.wrap_limit, Number.NaN);
-  if (Number.isFinite(limit) && track[phaseKey] > limit) {
-    track[phaseKey] = gimiOperand(clock.wrap_target, track[phaseKey]);
-    track.dirty = true;
-  }
-  return true;
-}
-
-function resetGimiTrack(track) {
-  for (const [clock, phaseKey] of [
-    [track.shapeClock, 'shapePhase'], [track.poseClock, 'poseTime'],
-  ]) {
-    for (const [index, rule] of (clock?.reset_rules || []).entries()) {
-      const resetKey = `${phaseKey}:${index}`;
-      const satisfied = dnfSatisfied(rule.conditions || []);
-      if (satisfied && track.resetConditions[resetKey] !== true) {
-        track[phaseKey] = gimiOperand(rule.value, track[phaseKey]);
-        const clear = rule.clear;
-        const conditionVariables = new Set((rule.conditions || [])
-          .flatMap(group => group.map(clause =>
-            String(clause?.var || '').toLowerCase())));
-        if (clear?.variable && clear.value?.kind === 'literal'
-            && conditionVariables.size === 1
-            && conditionVariables.has(String(clear.variable).toLowerCase())) {
-          setControlValue(clear.variable, String(clear.value.value));
-        }
-        track.dirty = true;
-      }
-      track.resetConditions[resetKey] = satisfied;
-    }
-  }
-}
-
-function advanceGimiTrack(track, now) {
-  if (track.lastNow === null) {
-    track.lastNow = now;
-    return false;
-  }
-  const dt = Math.max(0, (now - track.lastNow) / 1000);
-  track.lastNow = now;
-  const shapeAdvanced = advanceGimiClock(
-    track, track.shapeClock, 'shapePhase', dt);
-  const poseAdvanced = advanceGimiClock(
-    track, track.poseClock, 'poseTime', dt);
-  return shapeAdvanced || poseAdvanced;
 }
 
 function restoreCanonical(mesh) {
@@ -455,9 +531,8 @@ function tick(now) {
         state.lastNow = now;
         continue;
       }
-      const advanced = advanceGimiTrack(state, now);
-      const poseRate = gimiClockRate(state.poseClock);
-      const geometryInterval = poseRate > 0 ? 1000 / poseRate : 1000 / 60;
+      const advanced = executeGimiProgram(state, now);
+      const geometryInterval = 1000 / 60;
       const due = state.lastGeometryTime === null
         || now - state.lastGeometryTime >= geometryInterval;
       if (state.dirty || (advanced && due)) {
@@ -465,10 +540,7 @@ function tick(now) {
         state.dirty = false;
         state.lastGeometryTime = now;
       }
-      playing = advanced
-        || gimiClockAdvancing(state.shapeClock)
-        || gimiClockAdvancing(state.poseClock)
-        || state.dirty;
+      playing = playing || advanced || state.dirty;
       continue;
     }
     const selected = selectedClock(state);
@@ -525,6 +597,14 @@ function tick(now) {
 
 function registerGimiMesh(mesh, animationId, geometry) {
   if (!mesh || geometry?.kind !== 'gimi_compute') return false;
+  const program = geometry.program;
+  const programId = geometry.program_id;
+  const operationId = geometry.operation_id || geometry.track_id || animationId;
+  const coordinateVariant = geometry.coordinate_variant || 'standard';
+  if (!program || !programId || !operationId) return false;
+  if (!['standard', 'columbina_basis'].includes(coordinateVariant)) {
+    return false;
+  }
   const vertexCount = positiveInteger(geometry.vertex_count);
   const poseInfo = geometry.pose || null;
   const poseBoneCount = positiveInteger(poseInfo?.bone_count);
@@ -534,31 +614,21 @@ function registerGimiMesh(mesh, animationId, geometry) {
   const hasPose = !!poseInfo;
   if (!vertexCount || (hasPose && (!poseBoneCount || !poseFrameCount
       || !poseBlend || !poseFrames))) return false;
-  let state = tracks.get(animationId);
+  let state = tracks.get(programId);
   try {
     if (!state) {
-      let decodedPoseFrames = null;
-      if (hasPose) {
-        decodedPoseFrames = decodeF32(poseFrames);
-        if (decodedPoseFrames.length < poseFrameCount * poseBoneCount * 14) {
-          return false;
-        }
-      }
       state = {
         kind: 'gimi_compute',
         meshes: new Set(), meshesByMesh: new Map(),
-        poseFrames: decodedPoseFrames, poseBoneCount, poseFrameCount,
-        shapeClock: geometry.shape_clock || null,
-        poseClock: geometry.pose_clock || null,
-        shapePhase: 0, poseTime: 0,
-        resolvedRanges: Object.create(null),
-        resetConditions: Object.create(null),
+        program, programState: {
+          program, ...initializeGimiProgram(program),
+        },
+        outputs: new Map(),
         lastNow: null, lastGeometryTime: null, dirty: true,
       };
-      syncGimiClockRange(state, state.shapeClock, 'shapePhase');
-      syncGimiClockRange(state, state.poseClock, 'poseTime');
-      resetGimiTrack(state);
-      tracks.set(animationId, state);
+      tracks.set(programId, state);
+    } else if (state.program.version !== program.version) {
+      return false;
     }
     const baseNormals = decodeF32(geometry.base_normals);
     let weights = null;
@@ -573,9 +643,15 @@ function registerGimiMesh(mesh, animationId, geometry) {
         || (hasPose && (weights.length < vertexCount * 4
         || indices.length < vertexCount * 4
         || poseActive.length < vertexCount))) return false;
+    let decodedPoseFrames = null;
+    if (hasPose) {
+      decodedPoseFrames = decodeF32(poseFrames);
+      if (decodedPoseFrames.length < poseFrameCount * poseBoneCount * 14) {
+        return false;
+      }
+    }
     const shapePasses = (geometry.shape_passes || []).map(pass => ({
       deltas: decodeF32(pass.deltas),
-      phaseOffset: Number(pass.phase_offset) || 0,
       amplitude: Number(pass.amplitude),
       angularScale: Number(pass.angular_scale),
       bias: Number(pass.bias),
@@ -588,9 +664,16 @@ function registerGimiMesh(mesh, animationId, geometry) {
       || (!hasPose && !shapePasses.length)) return false;
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
-      poseActive,
+      poseActive, poseFrames: decodedPoseFrames,
+      poseBoneCount, poseFrameCount, operationId,
       animationBounds: geometry.bounds || null,
     };
+    if (!state.outputs.has(operationId)) {
+      state.outputs.set(operationId, {
+        active: false, poseActive: false, shapePhases: [], poseTime: 0,
+        boneCount: null, coordinateVariant,
+      });
+    }
     state.meshes.add(mesh);
     state.meshesByMesh.set(mesh, meshState);
     mesh.userData.animationState = meshState;
@@ -666,9 +749,6 @@ export function resetAnimationRuntime() {
 export function wakeAnimationRuntime() {
   for (const state of tracks.values()) {
     if (state.kind === 'gimi_compute') {
-      syncGimiClockRange(state, state.shapeClock, 'shapePhase');
-      syncGimiClockRange(state, state.poseClock, 'poseTime');
-      resetGimiTrack(state);
       state.dirty = true;
       state.lastGeometryTime = null;
     }
@@ -685,9 +765,6 @@ export function resumeAnimatedMesh(mesh) {
     installAnimationBounds(mesh, meshState?.animationBounds);
     if (meshState) meshState.lastFrame = null;
     if (state.kind === 'gimi_compute') {
-      syncGimiClockRange(state, state.shapeClock, 'shapePhase');
-      syncGimiClockRange(state, state.poseClock, 'poseTime');
-      resetGimiTrack(state);
       state.dirty = true;
       state.lastGeometryTime = null;
     }

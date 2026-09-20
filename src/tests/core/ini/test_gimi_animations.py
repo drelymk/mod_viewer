@@ -3,7 +3,8 @@
 import struct
 
 from app.mods.analysis import analyze_mod_inis
-from core.ini.animations import discover_compute_animations
+from core.ini.animations import (_compile_condition, _identify_compute_shader,
+                                 discover_compute_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.ini.draw_resources import _collect_resource_copy_sources
@@ -53,6 +54,21 @@ void main(uint3 threadID : SV_DispatchThreadID) {
   rw_buffer[i].normal = normalize(v.normal);
 }
 """
+
+OPTIMIZED_POSE_SHADER = POSE_SHADER.replace(
+    "rw_buffer[i].position = v.position * p.S + p.T;",
+    """float3 scale = p.S;
+  float3 bias = p.T;
+  float4 pos = float4(v.position, 1.0);
+  pos.xyz = pos.xyz * scale + bias;
+  float m00 = 1.0;
+  float4 pos_result;
+  pos_result.x = m00*pos.x + m01*pos.y + m02*pos.z + t0*pos.w;
+  float4 normal_result;
+  normal_result.x = m00*normal.x + m01*normal.y + m02*normal.z;
+  rw_buffer[i].position = float3(pos_result.x, pos_result.y, pos_result.z);
+  rw_buffer[i].normal = normalize(float3(normal_result.x, normal_result.y,
+                                         normal_result.z));""")
 
 
 def _sections(root, *, stride=40, pose_bytes=None, shader=True):
@@ -131,7 +147,7 @@ cs-t51 = copy ResourceKey1
 cs = shape.hlsl
 cs-u5 = copy ResourcePosition.2
 Dispatch = 1, 1, 1
-x88 = $Freq_key - 0.05236
+x88 = $Freq_key-0.05236
 cs-t51 = copy ResourceKey2
 cs = shape.hlsl
 ResourcePosition.1 = ref cs-u5
@@ -213,28 +229,21 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     assert len(discovered) == 1
     animation = discovered[0]
     assert [item["dispatch_vertices"] for item in animation["shape_passes"]] == [64, 64]
-    assert [item["phase_offset"] for item in animation["shape_passes"]] == [0., -0.05236]
+    assert [item["phase_expr"]["kind"] for item in animation["shape_passes"]] == [
+        "variable", "binary"]
     assert animation["shape_passes"][0]["amplitude"] == 0.5
     assert animation["shape_passes"][0]["angular_scale"] == 30
     assert animation["shape_passes"][0]["bias"] == 0.5
     assert animation["pose"]["bone_count"] == 2
     assert animation["pose"]["frame_count"] == 2
-    assert animation["pose_clock"]["rate"] == {
-        "kind": "literal", "value": 30.0}
-    assert animation["shape_clock"]["wrap_limit"] == {
-        "kind": "variable", "variable": "ShapeLimit", "offset": 0}
-    assert animation["pose_clock"]["wrap_target"] == {
-        "kind": "variable", "variable": "strat_frame", "offset": 0}
-    assert animation["pose_clock"]["reset_rules"] == [{
-        "conditions": [[{
-            "var": "anime_state", "value": "1", "negate": False}]],
-        "value": {"kind": "literal", "value": 0.0},
-        "clear": {
-            "variable": "anime_state",
-            "value": {"kind": "literal", "value": 0.0},
-        },
-    }]
-    assert "anime_auto_play" not in repr(animation)
+    assert animation["pose"]["phase_expr"] == {
+        "kind": "variable", "variable": "Freq_pose"}
+    program = animation["program"]
+    assert program["id"] == animation["program_id"]
+    assert program["version"] == 1
+    assert any(command["op"] == "dispatch" for command in program["commands"])
+    assert "anime_auto_play" in program["variables"]
+    assert program["time_dependent"]
 
     bad_shader = tmp_path / "bad-shader"
     bad_sections = _sections(bad_shader, shader=False)
@@ -273,6 +282,73 @@ def test_compute_animation_requires_verified_shader_and_dimensions(tmp_path):
     assert not _discover(bad_bone_count, bad_count_sections)
 
 
+def test_compute_program_accepts_truthy_and_qualified_gates(tmp_path):
+    root = tmp_path / "qualified-gates"
+    sections = _sections(root)
+    sections["Present"] = [
+        "if $active",
+        r"    if $\Odette\Master\swapvar == 4",
+        "        $anime_loop = $anime_loop + 1",
+        "    endif",
+        "endif",
+    ]
+
+    animation = _discover(root, sections)[0]
+    assignment = next(
+        command for command in animation["program"]["commands"]
+        if command.get("variable") == "anime_loop")
+    assert assignment["condition"]["kind"] == "and"
+    assert _compile_condition("$active", {})["kind"] == "truthy"
+
+
+def test_compute_animation_accepts_verified_optimized_pose_adapter():
+    adapter = _identify_compute_shader(OPTIMIZED_POSE_SHADER)
+    assert adapter["operation"] == "dq_pose"
+    assert adapter["shader_variant"] == "optimized"
+    changed = OPTIMIZED_POSE_SHADER.replace(
+        "pos_result.x = m00*pos.x", "pos_result.x = m01*pos.x")
+    assert _identify_compute_shader(changed) is None
+
+
+def test_compute_program_preserves_dispatch_guards(tmp_path):
+    root = tmp_path / "guarded-dispatch"
+    sections = _sections(root)
+    lines = sections["CustomShaderPose"]
+    dispatch_index = lines.index("Dispatch = 1, 1, 1")
+    sections["CustomShaderPose"] = (
+        lines[:dispatch_index]
+        + ["if $pause == 1", lines[dispatch_index], "endif"]
+        + lines[dispatch_index + 1:])
+
+    animation = _discover(root, sections)[0]
+    pose_dispatch = next(
+        command for command in animation["program"]["commands"]
+        if command.get("kind") == "pose")
+    assert pose_dispatch["condition"] == {
+        "kind": "compare", "op": "==",
+        "left": {"kind": "variable", "variable": "pause"},
+        "right": {"kind": "literal", "value": 1.0},
+    }
+
+
+def test_compute_program_inlines_reached_command_lists(tmp_path):
+    root = tmp_path / "command-list"
+    sections = _sections(root)
+    assignment = "$Freq_pose = $Freq_pose + 30 * $dt"
+    pose_lines = sections["CustomShaderPose"]
+    sections["CustomShaderPose"] = [
+        "run = CommandListPose" if line == assignment else line
+        for line in pose_lines
+    ]
+    sections["CommandListPose"] = [assignment]
+
+    animation = _discover(root, sections)[0]
+    assert any(
+        command.get("op") == "set"
+        and command.get("variable") == "Freq_pose"
+        for command in animation["program"]["commands"])
+
+
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     root = tmp_path / "packed"
     sections = _sections(root)
@@ -294,6 +370,10 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
         payload["base_normals"]["offset"] + payload["base_normals"]["length"]]
     assert struct.unpack_from("<fff", raw_normals, 0) == (0., 2., 0.)
     assert payload["pose"]["frames"]["length"] == 2 * 2 * 56
+    assert payload["program_id"] == animation[0]["program_id"]
+    assert payload["operation_id"] == animation[0]["track_id"]
+    assert "shape_clock" not in payload
+    assert "pose_clock" not in payload
 
 
 def test_compute_resource_copy_edges_track_uav_slots_and_sections(tmp_path):
@@ -443,6 +523,13 @@ def test_compute_animation_keeps_sequential_pose_dispatch_snapshots(tmp_path):
     assert by_output["ResourceAcc1"]["pose"]["bone_count"] == 8
     assert by_output["ResourceAcc1"]["pose"]["blend_file"] == "acc1_blend.buf"
     assert by_output["ResourceAcc1"]["pose"]["file"] == "acc1_pose.buf"
+    assert by_output["ResourcePosition"]["program_id"] == \
+        by_output["ResourceAcc1"]["program_id"]
+    dispatches = by_output["ResourcePosition"]["program"]["commands"]
+    operations = [item["operation"] for item in dispatches
+                  if item["op"] == "dispatch"]
+    assert by_output["ResourcePosition"]["track_id"] in operations
+    assert by_output["ResourceAcc1"]["track_id"] in operations
 
 
 def test_compute_animation_rejects_multiple_pose_passes_in_one_chain(tmp_path):
@@ -462,6 +549,12 @@ def test_compute_animation_rejects_unsupported_shape_chain(tmp_path):
 
     assert not _discover(root, sections)
 
+    changed_math = tmp_path / "changed-shape-math"
+    changed_sections = _sections(changed_math)
+    (changed_math / "shape.hlsl").write_text(
+        SHAPE_SHADER.replace("0.5 * (sin", "0.75 * (sin"))
+    assert not _discover(changed_math, changed_sections)
+
 
 def test_compute_animation_rejects_shape_chain_when_phase_is_unparseable(tmp_path):
     root = tmp_path / "unparseable-shape"
@@ -471,6 +564,25 @@ def test_compute_animation_rejects_shape_chain_when_phase_is_unparseable(tmp_pat
         for line in sections["CustomShaderShape"]
     ]
     assert not _discover(root, sections)
+
+
+def test_compute_animation_preserves_zero_multiplication(tmp_path):
+    root = tmp_path / "zero-rate"
+    sections = _sections(root)
+    sections["CustomShaderPose"] = [
+        line.replace("$Freq_pose + 30 * $dt",
+                     "$Freq_pose + $Speed * 0")
+        for line in sections["CustomShaderPose"]]
+
+    animation = _discover(root, sections)[0]
+    assignment = next(command for command in animation["program"]["commands"]
+                       if command.get("op") == "set"
+                       and command["variable"] == "Freq_pose")
+    assert assignment["expression"]["right"] == {
+        "kind": "binary", "op": "*",
+        "left": {"kind": "variable", "variable": "Speed"},
+        "right": {"kind": "literal", "value": 0.0},
+    }
 
 
 def test_compute_animation_rejects_non_linear_dispatch(tmp_path):
@@ -491,7 +603,9 @@ def test_compute_animation_only_accepts_same_variable_reset_clear(tmp_path):
 
     animation = _discover(root, sections)[0]
 
-    assert "clear" not in animation["pose_clock"]["reset_rules"][0]
+    assert any(
+        command["op"] == "set" and command["variable"] == "unrelated"
+        for command in animation["program"]["commands"])
 
 
 def test_compute_animation_is_attached_per_ini_with_duplicate_resources(tmp_path):
