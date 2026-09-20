@@ -824,21 +824,19 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         if item.get("kind") == "pose"
     }
 
-    literals = _literal_assignments(sections, canonical)
+    literals = _literal_constant_assignments(sections, canonical)
 
     def phase_expression(expression):
         return _compile_expression(expression, canonical, var_prefix)
 
     def parse_shape_passes(items):
         parsed = []
-        shape_expressions = []
         for item in items:
             expression = phase_expression(item.get("phase_expr", ""))
             if expression is None:
-                return [], None
-            shape_expressions.append(expression)
+                return []
             parsed.append((item, expression))
-        return parsed, shape_expressions
+        return parsed
 
     animations = []
     for chain_index, chain in enumerate(chains):
@@ -858,8 +856,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 mod_dir=mod_dir, source=source)
             if validated is None:
                 continue
-            parsed_shape_passes, _shape_expressions = parse_shape_passes(
-                shape_passes)
+            parsed_shape_passes = parse_shape_passes(shape_passes)
             if not parsed_shape_passes:
                 continue
             identity = json.dumps({
@@ -875,11 +872,9 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "kind": "gimi_compute",
                 "track_id": track_id,
                 "position_resource": output_resource,
-                "base_resource": shape_passes[0]["base_resource"],
                 "base_file": validated["base_file"],
                 "vertex_count": validated["vertex_count"],
                 "shape_passes": [{
-                    "target_resource": item["target_resource"],
                     "target_file": _resolved_resource(
                         resources, copy_sources, item["target_resource"])[
                             "filename"],
@@ -915,7 +910,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         if pose_expression is None:
             continue
 
-        parsed_shape_passes, _shape_expressions = parse_shape_passes(shape_passes)
+        parsed_shape_passes = parse_shape_passes(shape_passes)
         if shape_passes and not parsed_shape_passes:
             continue
 
@@ -932,12 +927,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             "kind": "gimi_compute",
             "track_id": track_id,
             "position_resource": output_resource,
-            "base_resource": pose_pass["base_resource"],
             "base_file": validated["base_file"],
             "vertex_count": validated["vertex_count"],
             "coordinate_variant": pose_pass.get("coordinate_variant", "standard"),
             "shape_passes": [{
-                "target_resource": item["target_resource"],
                 "target_file": _resolved_resource(
                     resources, copy_sources, item["target_resource"])[
                         "filename"],
@@ -946,14 +939,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "dispatch_key": item["dispatch_key"],
             } for (item, expression) in parsed_shape_passes],
             "pose": {
-                "base_resource": pose_pass["base_resource"],
-                "blend_resource": pose_pass["blend_resource"],
                 "blend_file": validated["blend_file"],
-                "resource": pose_pass["pose_resource"],
                 "file": validated["pose_file"],
                 "bone_count": bone_count,
                 "frame_count": validated["frame_count"],
-                "dispatch_vertices": pose_pass["dispatch_vertices"],
                 "phase_expr": pose_expression,
                 "dispatch_key": pose_pass["dispatch_key"],
             },
@@ -970,6 +959,14 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
     program_id = "gimi-program::" + hashlib.sha1(
         str(identity).encode("utf-8")).hexdigest()[:12]
     for animation in animations:
+        for item in animation.get("shape_passes", ()):
+            item.pop("phase_expr", None)
+            item.pop("dispatch_key", None)
+        pose = animation.get("pose")
+        if pose is not None:
+            pose.pop("phase_expr", None)
+            pose.pop("dispatch_key", None)
+        animation.pop("kind", None)
         animation["program_id"] = program_id
         animation["program"] = program
     return animations

@@ -204,8 +204,19 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
         pending.delete(nextId);
         const paused = Array.from(position.array);
         const pendingAfterPause = pending.size;
+        setControlValue('pause', '0');
+        runtime.wakeAnimationRuntime();
+        const resumeId = Math.max(...pending.keys());
+        pending.get(resumeId)(11000);
+        pending.delete(resumeId);
+        const resumed = Array.from(position.array);
+        const continuedId = Math.max(...pending.keys());
+        pending.get(continuedId)(11034);
+        pending.delete(continuedId);
+        const continued = Array.from(position.array);
         runtime.resetAnimationRuntime();
-        return {first, firstNormals, paused, pendingAfterPause,
+        return {first, firstNormals, paused, resumed, continued,
+          pendingAfterPause,
           positionUpdates};
       } finally {
         window.requestAnimationFrame = oldRequest;
@@ -215,8 +226,10 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
     assert result["first"] == [0.5, 0, 0, 2, 0, 0]
     assert result["firstNormals"] == [0, 1, 0, 0, 1, 0]
     assert result["paused"] == result["first"]
+    assert result["resumed"] == result["paused"]
+    assert result["continued"] != result["resumed"]
     assert result["pendingAfterPause"] == 0
-    assert result["positionUpdates"] == 1
+    assert result["positionUpdates"] == 3
 
 
 def test_gimi_compute_animation_shares_program_state_across_outputs(module_page):

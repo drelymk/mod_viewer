@@ -683,6 +683,7 @@ export function wakeAnimationRuntime() {
     if (state.kind === 'gimi_compute') {
       state.dirty = true;
       state.lastGeometryTime = null;
+      state.lastNow = null;
     }
   }
   schedule();
@@ -699,6 +700,7 @@ export function resumeAnimatedMesh(mesh) {
     if (state.kind === 'gimi_compute') {
       state.dirty = true;
       state.lastGeometryTime = null;
+      state.lastNow = null;
     }
     invalidateCharacterShadowGeometry({request: false});
     requestRender();
