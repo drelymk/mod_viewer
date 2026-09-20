@@ -71,6 +71,11 @@ function gimiClockRate(clock) {
   return Number.isFinite(rate) && rate > 0 ? rate : 0;
 }
 
+function gimiClockAdvancing(clock) {
+  return !!clock && dnfSatisfied(clock.advance_conditions || [])
+    && gimiClockRate(clock) > 0;
+}
+
 function gimiClockRange(clock) {
   const target = gimiOperand(clock?.wrap_target, Number.NaN);
   const limit = gimiOperand(clock?.wrap_limit, Number.NaN);
@@ -127,11 +132,6 @@ function applyGimiPose(mesh, meshState, track) {
   const indices = meshState.indices;
   const pose = track.poseFrames;
   const boneCount = track.poseBoneCount;
-  const basis = track.poseBasis || {};
-  const pre = Array.isArray(basis.pre) && basis.pre.length === 9
-    ? basis.pre : null;
-  const post = Array.isArray(basis.post) && basis.post.length === 9
-    ? basis.post : null;
 
   for (let vertex = 0; vertex < vertexCount; vertex += 1) {
     const blendOffset = vertex * 4;
@@ -246,21 +246,9 @@ function applyGimiPose(mesh, meshState, track) {
     qdZ /= qrLength;
     qdW /= qrLength;
 
-    const baseX = pre
-      ? pre[0] * px + pre[1] * py + pre[2] * pz : px;
-    const baseY = pre
-      ? pre[3] * px + pre[4] * py + pre[5] * pz : py;
-    const baseZ = pre
-      ? pre[6] * px + pre[7] * py + pre[8] * pz : pz;
-    const normalX = pre
-      ? pre[0] * nx + pre[1] * ny + pre[2] * nz : nx;
-    const normalY = pre
-      ? pre[3] * nx + pre[4] * ny + pre[5] * nz : ny;
-    const normalZ = pre
-      ? pre[6] * nx + pre[7] * ny + pre[8] * nz : nz;
-    const posedX = baseX * scaleX + biasX;
-    const posedY = baseY * scaleY + biasY;
-    const posedZ = baseZ * scaleZ + biasZ;
+    const posedX = px * scaleX + biasX;
+    const posedY = py * scaleY + biasY;
+    const posedZ = pz * scaleZ + biasZ;
     const m00 = 1 - 2 * qrY * qrY - 2 * qrZ * qrZ;
     const m10 = 2 * (qrX * qrY + qrW * qrZ);
     const m20 = 2 * (qrX * qrZ - qrW * qrY);
@@ -276,24 +264,12 @@ function applyGimiPose(mesh, meshState, track) {
     const transformedX = m00 * posedX + m01 * posedY + m02 * posedZ + t0;
     const transformedY = m10 * posedX + m11 * posedY + m12 * posedZ + t1;
     const transformedZ = m20 * posedX + m21 * posedY + m22 * posedZ + t2;
-    positions[positionOffset] = post
-      ? post[0] * transformedX + post[1] * transformedY
-        + post[2] * transformedZ : transformedX;
-    positions[positionOffset + 1] = post
-      ? post[3] * transformedX + post[4] * transformedY
-        + post[5] * transformedZ : transformedY;
-    positions[positionOffset + 2] = post
-      ? post[6] * transformedX + post[7] * transformedY
-        + post[8] * transformedZ : transformedZ;
-    const outX = m00 * normalX + m01 * normalY + m02 * normalZ;
-    const outY = m10 * normalX + m11 * normalY + m12 * normalZ;
-    const outZ = m20 * normalX + m21 * normalY + m22 * normalZ;
-    const transformedNormalX = post
-      ? post[0] * outX + post[1] * outY + post[2] * outZ : outX;
-    const transformedNormalY = post
-      ? post[3] * outX + post[4] * outY + post[5] * outZ : outY;
-    const transformedNormalZ = post
-      ? post[6] * outX + post[7] * outY + post[8] * outZ : outZ;
+    positions[positionOffset] = transformedX;
+    positions[positionOffset + 1] = transformedY;
+    positions[positionOffset + 2] = transformedZ;
+    const transformedNormalX = m00 * nx + m01 * ny + m02 * nz;
+    const transformedNormalY = m10 * nx + m11 * ny + m12 * nz;
+    const transformedNormalZ = m20 * nx + m21 * ny + m22 * nz;
     const normalLength = Math.hypot(
       transformedNormalX, transformedNormalY, transformedNormalZ);
     normals[positionOffset] = normalLength > 1e-12
@@ -321,16 +297,15 @@ function applyGimiTrack(track) {
 }
 
 function advanceGimiClock(track, clock, phaseKey, dt) {
-  if (!clock) return;
-  if (!dnfSatisfied(clock.advance_conditions || [])) return;
+  if (!gimiClockAdvancing(clock) || dt <= 0) return false;
   const rate = gimiClockRate(clock);
-  if (rate <= 0 || dt <= 0) return;
   track[phaseKey] += rate * dt;
   const limit = gimiOperand(clock.wrap_limit, Number.NaN);
   if (Number.isFinite(limit) && track[phaseKey] > limit) {
     track[phaseKey] = gimiOperand(clock.wrap_target, track[phaseKey]);
     track.dirty = true;
   }
+  return true;
 }
 
 function resetGimiTrack(track) {
@@ -361,12 +336,15 @@ function resetGimiTrack(track) {
 function advanceGimiTrack(track, now) {
   if (track.lastNow === null) {
     track.lastNow = now;
-    return;
+    return false;
   }
   const dt = Math.max(0, (now - track.lastNow) / 1000);
   track.lastNow = now;
-  advanceGimiClock(track, track.shapeClock, 'shapePhase', dt);
-  advanceGimiClock(track, track.poseClock, 'poseTime', dt);
+  const shapeAdvanced = advanceGimiClock(
+    track, track.shapeClock, 'shapePhase', dt);
+  const poseAdvanced = advanceGimiClock(
+    track, track.poseClock, 'poseTime', dt);
+  return shapeAdvanced || poseAdvanced;
 }
 
 function restoreCanonical(mesh) {
@@ -477,17 +455,20 @@ function tick(now) {
         state.lastNow = now;
         continue;
       }
-      playing = true;
-      advanceGimiTrack(state, now);
+      const advanced = advanceGimiTrack(state, now);
       const poseRate = gimiClockRate(state.poseClock);
       const geometryInterval = poseRate > 0 ? 1000 / poseRate : 1000 / 60;
       const due = state.lastGeometryTime === null
         || now - state.lastGeometryTime >= geometryInterval;
-      if (state.dirty || due) {
+      if (state.dirty || (advanced && due)) {
         changed = applyGimiTrack(state) || changed;
         state.dirty = false;
         state.lastGeometryTime = now;
       }
+      playing = advanced
+        || gimiClockAdvancing(state.shapeClock)
+        || gimiClockAdvancing(state.poseClock)
+        || state.dirty;
       continue;
     }
     const selected = selectedClock(state);
@@ -567,7 +548,6 @@ function registerGimiMesh(mesh, animationId, geometry) {
         kind: 'gimi_compute',
         meshes: new Set(), meshesByMesh: new Map(),
         poseFrames: decodedPoseFrames, poseBoneCount, poseFrameCount,
-        poseBasis: poseInfo?.basis || null,
         shapeClock: geometry.shape_clock || null,
         poseClock: geometry.pose_clock || null,
         shapePhase: 0, poseTime: 0,

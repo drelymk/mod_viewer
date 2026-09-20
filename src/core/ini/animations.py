@@ -58,10 +58,6 @@ _COMPUTE_DISPATCH_RE = re.compile(
 _NUMTHREADS_RE = re.compile(
     r"\[\s*numthreads\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]",
     re.I)
-_REGISTER_RE = re.compile(
-    r"\b(?P<kind>rwstructuredbuffer|structuredbuffer)\s*<[^>]+>\s+"
-    r"(?P<name>\w+)\s*:\s*register\s*\(\s*(?P<reg>[ut]\d+)\s*\)",
-    re.I)
 _X88_RE = re.compile(r"^\s*x88\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _X89_RE = re.compile(r"^\s*x89\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _RUNTIME_UPDATE_RE = re.compile(
@@ -70,9 +66,6 @@ _RUNTIME_UPDATE_RE = re.compile(
     r"(?P<dt>\$\w+|[-+]?\d+(?:\.\d+)?)\s*$", re.I)
 _PHASE_WRAP_RE = re.compile(
     r"^\s*if\s+\$(?P<var>\w+)\s*>\s*(?P<limit>.+?)\s*$", re.I)
-_SHADER_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
-
-
 def _unprefix(value, var_prefix):
     value = str(value)
     if var_prefix and value.startswith(var_prefix):
@@ -384,140 +377,45 @@ def _strip_hlsl_comments(text):
     return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
 
-def _shape_constants(text):
-    """Read the small sinusoid form used by the supported shape kernel."""
-    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
-    number = _SHADER_NUMBER
-    match = re.search(
-        rf"(?P<amplitude>{number})\*\(sin\([^()]+\*(?P<angular>{number})\)\+1\)",
-        compact)
-    if match:
-        amplitude = float(match.group("amplitude"))
-        return {
-            "amplitude": amplitude,
-            "angular_scale": float(match.group("angular")),
-            "bias": amplitude,
-        }
-    match = re.search(
-        rf"(?P<amplitude>{number})\*sin\([^()]+\*(?P<angular>{number})\)"
-        rf"\+(?P<bias>{number})", compact)
-    if match:
-        return {
-            "amplitude": float(match.group("amplitude")),
-            "angular_scale": float(match.group("angular")),
-            "bias": float(match.group("bias")),
-        }
-    return None
-
-
-def _pose_basis(text, base_name, output_name):
-    """Recognize the conservative axis-basis conversion used by some kernels."""
-    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
-    base = re.escape(base_name)
-    output = re.escape(output_name)
-    pre = (
-        rf"(?P<position>[a-z_]\w*)\.x={base}\[i\]\.position\.x\*-1\.0f?"
-        rf".*(?P=position)\.z={base}\[i\]\.position\.y\*-1\.0f?"
-        rf".*(?P=position)\.y={base}\[i\]\.position\.z"
-    )
-    pre_normal = (
-        rf"(?P<normal>[a-z_]\w*)\.x={base}\[i\]\.normal\.x\*-1\.0f?"
-        rf".*(?P=normal)\.z={base}\[i\]\.normal\.y\*-1\.0f?"
-        rf".*(?P=normal)\.y={base}\[i\]\.normal\.z"
-    )
-    post = (
-        rf"{output}\[i\]\.position\.x=(?P<position_result>[a-z_]\w*)\.x\*-1\.0f?"
-        rf".*{output}\[i\]\.position\.y=(?P=position_result)\.z\*-1\.0f?"
-        rf".*{output}\[i\]\.position\.z=(?P=position_result)\.y"
-    )
-    post_normal = (
-        rf"{output}\[i\]\.normal\.x=(?P<normal_result>[a-z_]\w*)\.x\*-1\.0f?"
-        rf".*{output}\[i\]\.normal\.y=(?P=normal_result)\.z\*-1\.0f?"
-        rf".*{output}\[i\]\.normal\.z=(?P=normal_result)\.y"
-    )
-    if not all(re.search(pattern, compact) for pattern in
-               (pre, pre_normal, post, post_normal)):
-        return None
-    return {
-        "pre": [-1, 0, 0, 0, 0, 1, 0, -1, 0],
-        "post": [-1, 0, 0, 0, 0, -1, 0, 1, 0],
-    }
-
-
 def _shader_signature(text):
-    """Classify the fixed-layout kernels by their declarations and operations."""
+    """Recognize the two fixed-layout kernels supported by the viewer."""
     if not text:
         return None
-    cleaned = _strip_hlsl_comments(text)
-    compact = re.sub(r"\s+", "", cleaned).lower()
-    declarations = {
-        match.group("reg").lower(): {
-            "kind": match.group("kind").lower(),
-            "name": match.group("name").lower(),
-        }
-        for match in _REGISTER_RE.finditer(cleaned)
-    }
-    threads = _NUMTHREADS_RE.search(cleaned)
+    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
+    threads = _NUMTHREADS_RE.search(compact)
     if threads is None or "sv_dispatchthreadid" not in compact:
         return None
     thread_dims = tuple(int(threads.group(index)) for index in range(1, 4))
     if thread_dims[0] <= 0 or thread_dims[1:] != (1, 1):
         return None
-    required = {"u5", "t50", "t51"}
-    if not required.issubset(declarations):
-        return None
-
-    def alias(reg):
-        item = declarations.get(reg)
-        return re.escape(item["name"]) if item else None
-
-    output = alias("u5")
-    base = alias("t50")
-    target = alias("t51")
-    shape = False
-    shape_data = None
-    if output and base and target:
-        has_position_delta = re.search(
-            rf"{target}\[i\]\.position-{base}\[i\]\.position", compact)
-        has_normal_delta = re.search(
-            rf"{target}\[i\]\.normal-{base}\[i\]\.normal", compact)
-        has_position_write = re.search(
-            rf"{output}\[i\]\.position\+=", compact)
-        has_normal_write = re.search(
-            rf"{output}\[i\]\.normal\+=", compact)
-        shape = bool(has_position_delta and has_normal_delta
-                     and has_position_write and has_normal_write
-                     and "sin(" in compact)
-        if shape:
-            shape_data = _shape_constants(cleaned)
-
-    pose = False
-    if {"u5", "t50", "t51", "t52"}.issubset(declarations):
-        pose_aliases = [alias(reg) for reg in ("u5", "t50", "t51", "t52")]
-        pose = bool(
-            all(pose_aliases)
-            and re.search(r"\[[^]]*88[^]]*\]", compact)
-            and re.search(r"\[[^]]*89[^]]*\]", compact)
-            and ("frac(time)" in compact or "time-floor(time)" in compact)
-            and ".qr" in compact and ".qd" in compact
-            and ".s" in compact and ".t" in compact
-            and ("normalize" in compact or "length(" in compact)
-            and "dot(" in compact
-            and re.search(rf"{pose_aliases[1]}\[i\]", compact)
-            and re.search(rf"{pose_aliases[2]}\[i\]", compact)
-            and re.search(rf"{pose_aliases[3]}\[", compact)
-            and re.search(rf"{pose_aliases[0]}\[i\]\.position", compact)
-            and re.search(rf"{pose_aliases[0]}\[i\]\.normal", compact)
-        )
+    has_registers = lambda *registers: all(
+        f"register({register})" in compact for register in registers)
+    shape = (
+        has_registers("u5", "t50", "t51", "t120")
+        and all(marker in compact for marker in (
+            "position-", "normal-", "position+=", "normal+=",
+            "sin(freq*30)",
+        ))
+        and "[88]" in compact
+    )
+    pose = (
+        has_registers("u5", "t50", "t51", "t52", "t120")
+        and all(marker in compact for marker in (
+            "[88]", "[89]", ".qr", ".qd", ".s", ".t", "dot(",
+            "position", "normal",
+        ))
+        and ("frac(" in compact or "floor(" in compact)
+        and ("normalize(" in compact or "length(" in compact)
+    )
     if pose and not shape:
-        return {
-            "kind": "pose", "threads": thread_dims[0],
-            "basis": _pose_basis(cleaned, declarations["t50"]["name"],
-                                  declarations["u5"]["name"]),
-        }
+        return {"kind": "pose", "threads": thread_dims[0]}
     if shape and not pose:
-        return {"kind": "shape", "threads": thread_dims[0],
-                "shape": shape_data}
+        return {
+            "kind": "shape",
+            "threads": thread_dims[0],
+            "shape": {"amplitude": 0.5, "angular_scale": 30.0,
+                       "bias": 0.5},
+        }
     return None
 
 
@@ -872,7 +770,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                                 "dispatch_vertices": dispatch,
                                 "phase_expr": phase_expr,
                                 "bone_count_expr": bone_count_expr,
-                                "basis": active.get("basis"),
                             }
                 current_chain["passes"].append(snapshot)
                 continue
@@ -939,6 +836,11 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     or len(shape_passes) != len(chain["passes"])
                     or str(output_resource).casefold() in pose_inputs):
                 continue
+            shape_base = str(shape_passes[0]["base_resource"]).casefold()
+            if (str(chain["uav_resource"]).casefold() != shape_base
+                    or any(str(item["base_resource"]).casefold()
+                           != shape_base for item in shape_passes)):
+                continue
             validated = _validate_shape_buffers(
                 resources, copy_sources, shape_passes,
                 mod_dir=mod_dir, source=source)
@@ -978,7 +880,9 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "pose_clock": None,
             })
             continue
-        pose_pass = pose_passes[-1]
+        if len(pose_passes) != 1:
+            continue
+        pose_pass = pose_passes[0]
         matching_shapes = output_chains.get(
             str(pose_pass["base_resource"]).casefold(), ())
         shape_passes = []
@@ -992,6 +896,11 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             if item.get("kind") == "shape"]
             if not shape_passes or len(shape_passes) != len(
                     shape_chain["passes"]):
+                continue
+            shape_base = str(shape_passes[0]["base_resource"]).casefold()
+            if (str(shape_chain["uav_resource"]).casefold() != shape_base
+                    or any(str(item["base_resource"]).casefold()
+                           != shape_base for item in shape_passes)):
                 continue
         elif not _resolved_resource(
                 resources, copy_sources, pose_pass["base_resource"]).get(
@@ -1056,7 +965,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "bone_count": bone_count,
                 "frame_count": validated["frame_count"],
                 "dispatch_vertices": pose_pass["dispatch_vertices"],
-                "basis": pose_pass.get("basis"),
             },
             "shape_clock": shape_clock,
             "pose_clock": pose_clock,

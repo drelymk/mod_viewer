@@ -214,7 +214,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     runtime_evidence = []
     texture_api_evidence = []
     animations = []
-    compute_animations = []
     animation_control_vars = set()
     resource_files = []
     texture_override_indexes = []
@@ -317,7 +316,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             secs, resources, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,
             canonical_vars=record["canonical_vars"])
-        compute_animations.extend(compute)
+        animation_control_vars.update(
+            compute_animation_control_vars(compute, analysis.state_rules))
         record["analysis"] = analysis
         resource_files.extend(
             info["filename"] for info in analysis.resources.values()
@@ -497,8 +497,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             "sync_error": sync_error,
         }
     present = {"target_inis": present_sources, "item": present_item}
-    animation_control_vars = compute_animation_control_vars(
-        compute_animations, state_rules)
     return ParsedModAnalysis(
         groups=groups,
         toggles=toggle_keys,

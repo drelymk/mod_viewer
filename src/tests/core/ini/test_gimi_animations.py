@@ -389,26 +389,70 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
 def test_compute_animation_keeps_sequential_pose_dispatch_snapshots(tmp_path):
     root = tmp_path / "sequential-pose"
     sections = _sections(root)
+    sections["Constants"] = [
+        line.replace("$VG_count = 2", "$VG_count = 139")
+        for line in sections["Constants"]
+    ] + ["global $Acc1_count = 8"]
+    sections["ResourcePose"] = [
+        line.replace("pose.buf", "main_pose.buf")
+        for line in sections["ResourcePose"]
+    ]
     sections["ResourceAcc1"] = []
     sections["ResourceAcc1.1"] = [
         "stride = 40",
-        "filename = position.buf",
+        "filename = acc1_position.buf",
+    ]
+    sections["ResourceAcc1Blend"] = [
+        "stride = 32",
+        "filename = acc1_blend.buf",
+    ]
+    sections["ResourceAcc1Pose"] = [
+        "stride = 56",
+        "filename = acc1_pose.buf",
     ]
     sections["CustomShaderPose"].extend([
         "cs-u5 = null",
+        "x89 = $Acc1_count",
         "cs-t50 = copy ResourceAcc1.1",
+        "cs-t51 = copy ResourceAcc1Blend",
+        "cs-t52 = copy ResourceAcc1Pose",
         "cs-u5 = copy ResourceAcc1.1",
         "ResourceAcc1 = ref cs-u5",
         "Dispatch = 1, 1, 1",
         "cs-u5 = null",
     ])
+    pose_record = struct.pack(
+        "<3f3f4f4f", 1., 1., 1., 0., 0., 0.,
+        0., 0., 0., 1., 0., 0., 0., 0.)
+    (root / "main_pose.buf").write_bytes(pose_record * (139 * 2))
+    (root / "acc1_position.buf").write_bytes(
+        (root / "position.buf").read_bytes())
+    (root / "acc1_blend.buf").write_bytes(
+        (root / "blend.buf").read_bytes())
+    (root / "acc1_pose.buf").write_bytes(pose_record * (8 * 2))
 
     discovered = _discover(root, sections)
 
-    assert {item["position_resource"] for item in discovered} == {
-        "ResourcePosition", "ResourceAcc1"}
-    assert all(item["pose"]["dispatch_vertices"] == 64
-               for item in discovered)
+    by_output = {item["position_resource"]: item for item in discovered}
+    assert set(by_output) == {"ResourcePosition", "ResourceAcc1"}
+    assert by_output["ResourcePosition"]["base_file"] == "position.buf"
+    assert by_output["ResourcePosition"]["pose"]["bone_count"] == 139
+    assert by_output["ResourcePosition"]["pose"]["blend_file"] == "blend.buf"
+    assert by_output["ResourcePosition"]["pose"]["file"] == "main_pose.buf"
+    assert by_output["ResourceAcc1"]["base_file"] == "acc1_position.buf"
+    assert by_output["ResourceAcc1"]["pose"]["bone_count"] == 8
+    assert by_output["ResourceAcc1"]["pose"]["blend_file"] == "acc1_blend.buf"
+    assert by_output["ResourceAcc1"]["pose"]["file"] == "acc1_pose.buf"
+
+
+def test_compute_animation_rejects_multiple_pose_passes_in_one_chain(tmp_path):
+    root = tmp_path / "multiple-pose-passes"
+    sections = _sections(root)
+    sections["CustomShaderPose"].insert(
+        sections["CustomShaderPose"].index("cs-u5 = null"),
+        "Dispatch = 1, 1, 1")
+
+    assert not _discover(root, sections)
 
 
 def test_compute_animation_rejects_unsupported_shape_chain(tmp_path):
@@ -417,19 +461,6 @@ def test_compute_animation_rejects_unsupported_shape_chain(tmp_path):
     (root / "shape.hlsl").write_text("void main() {}")
 
     assert not _discover(root, sections)
-
-
-def test_compute_animation_uses_shape_kernel_constants(tmp_path):
-    root = tmp_path / "shape-constants"
-    sections = _sections(root)
-    shader = (root / "shape.hlsl").read_text()
-    shader = shader.replace("0.5 * (sin(FREQ * 30) + 1)",
-                            "0.25 * (sin(FREQ * 12) + 1)")
-    (root / "shape.hlsl").write_text(shader)
-    animation = _discover(root, sections)[0]
-    assert animation["shape_passes"][0]["amplitude"] == 0.25
-    assert animation["shape_passes"][0]["angular_scale"] == 12
-    assert animation["shape_passes"][0]["bias"] == 0.25
 
 
 def test_compute_animation_rejects_shape_chain_when_phase_is_unparseable(tmp_path):

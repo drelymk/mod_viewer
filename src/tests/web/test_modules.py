@@ -153,7 +153,11 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
             pose[offset + 9] = 1;
           }
         }
-        const position = {array: new Float32Array(base), needsUpdate: false};
+        let positionUpdates = 0;
+        const position = {
+          array: new Float32Array(base),
+          set needsUpdate(value) { if (value) positionUpdates += 1; },
+        };
         const normal = {array: new Float32Array(normals), needsUpdate: false};
         const mesh = {
           visible: true,
@@ -171,20 +175,24 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
             active: encode(poseActive)}, frames: encode(pose), bone_count: 2,
             frame_count: 2, dispatch_vertices: 2},
           shape_clock: null,
-          pose_clock: {rate: {kind: 'literal', value: 0},
+          pose_clock: {rate: {kind: 'literal', value: 30},
             advance_conditions: [[{var: 'pause', value: '0', negate: false}]],
             reset_rules: []},
         });
         const firstId = Math.min(...pending.keys());
         pending.get(firstId)(0);
+        pending.delete(firstId);
         const first = Array.from(position.array);
         const firstNormals = Array.from(normal.array);
         setControlValue('pause', '1');
         const nextId = Math.max(...pending.keys());
         pending.get(nextId)(1000);
+        pending.delete(nextId);
         const paused = Array.from(position.array);
+        const pendingAfterPause = pending.size;
         runtime.resetAnimationRuntime();
-        return {first, firstNormals, paused};
+        return {first, firstNormals, paused, pendingAfterPause,
+          positionUpdates};
       } finally {
         window.requestAnimationFrame = oldRequest;
         window.cancelAnimationFrame = oldCancel;
@@ -193,6 +201,8 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
     assert result["first"] == [0.5, 0, 0, 2, 0, 0]
     assert result["firstNormals"] == [0, 1, 0, 0, 1, 0]
     assert result["paused"] == result["first"]
+    assert result["pendingAfterPause"] == 0
+    assert result["positionUpdates"] == 1
 
 
 def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
