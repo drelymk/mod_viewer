@@ -320,7 +320,7 @@ $\WWMIv1\shapekey_value = 0
 run = WWMIv1SetShapeKey
 
 [CustomShaderChouChaAnim]
-cs-u5 = ResourcePosition
+cs-u5 = ResourceCustomShapeKeyValuesRW
 cs = res/anim.hlsl
 x0 = 0
 y0 =
@@ -328,7 +328,7 @@ z0 = $ChouChaFreq
 dispatch = 1, 1, 1
 
 [CustomShaderGangChaAnim]
-cs-u5 = ResourcePosition
+cs-u5 = ResourceCustomShapeKeyValuesRW
 cs = res/anim.hlsl
 x0 = 0
 y0 =
@@ -367,7 +367,6 @@ def test_wwmi_sparse_animation_discovers_one_two_pass_track(tmp_path):
     animation = discovered[0]
     assert animation["kind"] == "wwmi_sparse"
     assert animation["overlay"] is True
-    assert animation["position_only"] is True
     assert [item["sparse_shape"]["shape_id"]
             for item in animation["shape_passes"]] == [165, 166]
     assert [item["sparse_shape"]["buffer_shape_id"]

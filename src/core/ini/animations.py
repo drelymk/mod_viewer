@@ -866,7 +866,6 @@ def _wwmi_animation_shader(sections, child_section, *, mod_dir, ini_path,
                 shader_text.decode("utf-8", errors="ignore")) is None):
         return None
     return {
-        "child_section": child_section,
         "phase_var": phase_expr["variable"],
     }
 
@@ -1061,7 +1060,6 @@ def discover_wwmi_sparse_animations(sections, shape_sliders, *, mod_dir=None,
             "track_id": track_id,
             "base_file": template["base_file"],
             "shape_passes": passes,
-            "position_only": True,
             "overlay": True,
             "program_id": program_id,
             "program": {
