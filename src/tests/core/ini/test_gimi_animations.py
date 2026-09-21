@@ -300,6 +300,56 @@ def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
     assert payload["conditions"] == animation["conditions"]
 
 
+def test_nested_animation_is_fallback_for_supported_parent_chain(tmp_path):
+    root = tmp_path / "parent-supported"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"] = [
+        "x88 = $Freq",
+        "cs-u5 = copy ResourcePositionBase",
+        "cs-t50 = copy ResourcePositionBase",
+        "cs-t51 = copy ResourceStaticShape",
+        "cs = shape.hlsl",
+        "Dispatch = 1, 1, 1",
+        "if $mode == 2",
+        "run = CustomShaderAnim",
+        "endif",
+        "ResourcePosition = ref cs-u5",
+        "cs-u5 = null",
+    ]
+
+    discovered = _discover(root, sections)
+
+    assert len(discovered) == 1
+    assert "overlay" not in discovered[0]
+    assert discovered[0]["shape_passes"][0]["target_file"] == "static.buf"
+    assert any(command["op"] == "dispatch"
+               and command["kind"] == "shape"
+               for command in discovered[0]["program"]["commands"])
+
+
+def test_nested_animation_rejects_mismatched_parent_u5_and_t50(tmp_path):
+    root = tmp_path / "mismatched-bindings"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"] = [
+        line.replace(
+            "cs-u5 = copy ResourcePositionBase",
+            "cs-u5 = copy ResourcePositionOther")
+        for line in sections["CustomShaderParent"]]
+
+    assert not _discover(root, sections)
+
+
+def test_nested_animation_rejects_multiple_children_for_one_output(tmp_path):
+    root = tmp_path / "multiple-children"
+    sections = _nested_sections(root)
+    sections["CustomShaderAnim2"] = list(sections["CustomShaderAnim"])
+    parent = sections["CustomShaderParent"]
+    parent.insert(parent.index("run = CustomShaderAnim") + 1,
+                  "run = CustomShaderAnim2")
+
+    assert not _discover(root, sections)
+
+
 def _attach_animation(groups, animation):
     for group in groups:
         if (str(group.get("position_resource", "")).casefold()

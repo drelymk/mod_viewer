@@ -728,9 +728,11 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             combined = dnf_and(combined, frame["cur"])
         return normalize_dnf(combined, tracked_vars, var_prefix)
 
-    def nested_shape_passes(child_section, inherited_base):
+    def nested_shape_passes(child_section, inherited_base, inherited_u5):
         """Read one child that inherits the parent's t50/u5 bindings."""
-        if not inherited_base:
+        if (not inherited_base or not inherited_u5
+                or str(inherited_base).casefold()
+                != str(inherited_u5).casefold()):
             return []
         t_sources = {50: inherited_base}
         active = None
@@ -818,6 +820,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     close_chain()
                     current_chain = {
                         "output_resource": None,
+                        "u5_resource": match.group(2),
                         "passes": [],
                     }
                 continue
@@ -843,13 +846,18 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                         and str(child_section).casefold().startswith(
                             "customshader")):
                     child_passes = nested_shape_passes(
-                        child_section, t_sources.get(50))
+                        child_section, t_sources.get(50),
+                        current_chain.get("u5_resource"))
                     if child_passes:
-                        current_chain.setdefault("nested_runs", []).append({
+                        nested = {
                             "child_section": child_section,
                             "conditions": current_conditions(condition_stack),
                             "passes": child_passes,
-                        })
+                        }
+                        if current_chain.get("nested_run") is not None:
+                            current_chain["nested_ambiguous"] = True
+                        else:
+                            current_chain["nested_run"] = nested
                 continue
             match = _COMPUTE_SHADER_RE.fullmatch(line)
             if match:
@@ -932,128 +940,124 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         output_resource = chain.get("output_resource")
         if not output_resource:
             continue
-        nested_runs = chain.get("nested_runs", ())
-        nested_animations = []
-        for nested_index, nested in enumerate(nested_runs):
-            shape_passes = nested["passes"]
-            validated = _validate_compute_layout(
-                resources, copy_sources, shape_passes,
-                mod_dir=mod_dir, source=source)
-            if validated is None:
-                continue
-            parsed_shape_passes = parse_shape_passes(shape_passes)
-            if not parsed_shape_passes:
-                continue
-            identity = json.dumps({
-                "ini": (source.logical_path(ini_path) if source is not None
-                        and source.is_resource_reference(ini_path)
-                        else os.path.basename(str(ini_path or ""))),
-                "output": output_resource,
-                "base": shape_passes[0]["base_resource"],
-                "child": nested["child_section"],
-                "chain": chain_index,
-                "nested": nested_index,
-            }, sort_keys=True, separators=(",", ":"))
-            track_id = "gimi::" + hashlib.sha1(
-                identity.encode()).hexdigest()[:12]
-            nested_animations.append({
-                "track_id": track_id,
-                "position_resource": output_resource,
-                "base_file": validated["base_file"],
-                "vertex_count": validated["vertex_count"],
-                "shape_passes": [{
-                    "target_file": _resolved_resource(
-                        resources, copy_sources, item["target_resource"])[
-                            "filename"],
-                    "dispatch_vertices": item["dispatch_vertices"],
-                    "phase_expr": expression,
-                    "dispatch_key": item["dispatch_key"],
-                } for (item, expression) in parsed_shape_passes],
-                "pose": None,
-                "overlay": True,
-                "conditions": nested["conditions"],
-            })
-        if nested_animations:
-            animations.extend(nested_animations)
-            # The parent owns the ordinary slider shape work. It is only the
-            # inherited child pass that belongs in the GIMI animation track.
-            continue
         pose_passes = [item for item in chain["passes"]
                        if item.get("kind") == "pose"]
+        parent_animation = None
         if not pose_passes:
             shape_passes = [item for item in chain["passes"]
                             if item.get("kind") == "shape"]
-            if (not shape_passes
-                    or str(output_resource).casefold() in pose_inputs):
-                continue
-            validated = _validate_compute_layout(
-                resources, copy_sources, shape_passes,
-                mod_dir=mod_dir, source=source)
-            if validated is None:
-                continue
-            parsed_shape_passes = parse_shape_passes(shape_passes)
-            if not parsed_shape_passes:
-                continue
-            identity = json.dumps({
-                "ini": (source.logical_path(ini_path) if source is not None
-                        and source.is_resource_reference(ini_path)
-                        else os.path.basename(str(ini_path or ""))),
-                "output": output_resource,
-                "base": shape_passes[0]["base_resource"],
-                "chain": chain_index,
-            }, sort_keys=True, separators=(",", ":"))
-            track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
-            animations.append({
-                "track_id": track_id,
-                "position_resource": output_resource,
-                "base_file": validated["base_file"],
-                "vertex_count": validated["vertex_count"],
-                "shape_passes": [{
-                    "target_file": _resolved_resource(
-                        resources, copy_sources, item["target_resource"])[
-                            "filename"],
-                    "dispatch_vertices": item["dispatch_vertices"],
-                    "phase_expr": expression,
-                    "dispatch_key": item["dispatch_key"],
-                } for (item, expression) in parsed_shape_passes],
-                "pose": None,
-            })
-            continue
-        pose_pass = pose_passes[0]
-        matching_shapes = output_chains.get(
-            str(pose_pass["base_resource"]).casefold(), ())
-        shape_passes = []
-        if matching_shapes:
-            shape_chain = matching_shapes[0]
-            shape_passes = [item for item in shape_chain["passes"]
-                            if item.get("kind") == "shape"]
-            if not shape_passes:
-                continue
+            if (shape_passes
+                    and str(output_resource).casefold() not in pose_inputs):
+                validated = _validate_compute_layout(
+                    resources, copy_sources, shape_passes,
+                    mod_dir=mod_dir, source=source)
+                parsed_shape_passes = parse_shape_passes(shape_passes)
+                if validated is not None and parsed_shape_passes:
+                    identity = json.dumps({
+                        "ini": (source.logical_path(ini_path)
+                                if source is not None
+                                and source.is_resource_reference(ini_path)
+                                else os.path.basename(str(ini_path or ""))),
+                        "output": output_resource,
+                        "base": shape_passes[0]["base_resource"],
+                        "chain": chain_index,
+                    }, sort_keys=True, separators=(",", ":"))
+                    track_id = "gimi::" + hashlib.sha1(
+                        identity.encode()).hexdigest()[:12]
+                    parent_animation = {
+                        "track_id": track_id,
+                        "position_resource": output_resource,
+                        "base_file": validated["base_file"],
+                        "vertex_count": validated["vertex_count"],
+                        "shape_passes": [{
+                            "target_file": _resolved_resource(
+                                resources, copy_sources,
+                                item["target_resource"])["filename"],
+                            "dispatch_vertices": item["dispatch_vertices"],
+                            "phase_expr": expression,
+                            "dispatch_key": item["dispatch_key"],
+                        } for (item, expression) in parsed_shape_passes],
+                        "pose": None,
+                    }
+        else:
+            pose_pass = pose_passes[0]
+            matching_shapes = output_chains.get(
+                str(pose_pass["base_resource"]).casefold(), ())
+            shape_passes = []
+            parent_valid = True
+            if matching_shapes:
+                shape_chain = matching_shapes[0]
+                shape_passes = [item for item in shape_chain["passes"]
+                                if item.get("kind") == "shape"]
+                parent_valid = bool(shape_passes)
 
-        bone_count = _integer(_operand_value(
-            pose_pass.get("bone_count_expr"), literals, canonical))
-        if bone_count is None:
+            bone_count = _integer(_operand_value(
+                pose_pass.get("bone_count_expr"), literals, canonical))
+            if parent_valid and bone_count is not None:
+                validated = _validate_compute_layout(
+                    resources, copy_sources, shape_passes, pose_pass,
+                    mod_dir=mod_dir, source=source, bone_count=bone_count)
+                pose_expression = phase_expression(
+                    pose_pass.get("phase_expr", ""))
+                parsed_shape_passes = parse_shape_passes(shape_passes)
+                if (validated is not None and pose_expression is not None
+                        and (not shape_passes or parsed_shape_passes)):
+                    identity = json.dumps({
+                        "ini": (source.logical_path(ini_path)
+                                if source is not None
+                                and source.is_resource_reference(ini_path)
+                                else os.path.basename(str(ini_path or ""))),
+                        "output": output_resource,
+                        "base": pose_pass["base_resource"],
+                        "chain": chain_index,
+                    }, sort_keys=True, separators=(",", ":"))
+                    track_id = "gimi::" + hashlib.sha1(
+                        identity.encode()).hexdigest()[:12]
+                    parent_animation = {
+                        "track_id": track_id,
+                        "position_resource": output_resource,
+                        "base_file": validated["base_file"],
+                        "vertex_count": validated["vertex_count"],
+                        "coordinate_variant": pose_pass.get(
+                            "coordinate_variant", "standard"),
+                        "shape_passes": [{
+                            "target_file": _resolved_resource(
+                                resources, copy_sources,
+                                item["target_resource"])["filename"],
+                            "dispatch_vertices": item["dispatch_vertices"],
+                            "phase_expr": expression,
+                            "dispatch_key": item["dispatch_key"],
+                        } for (item, expression) in parsed_shape_passes],
+                        "pose": {
+                            "blend_file": validated["blend_file"],
+                            "file": validated["pose_file"],
+                            "bone_count": bone_count,
+                            "frame_count": validated["frame_count"],
+                            "phase_expr": pose_expression,
+                            "dispatch_key": pose_pass["dispatch_key"],
+                        },
+                    }
+        if parent_animation is not None:
+            animations.append(parent_animation)
             continue
+
+        nested = chain.get("nested_run")
+        if chain.get("nested_ambiguous") or nested is None:
+            continue
+        shape_passes = nested["passes"]
         validated = _validate_compute_layout(
-            resources, copy_sources, shape_passes, pose_pass,
-            mod_dir=mod_dir, source=source, bone_count=bone_count)
-        if validated is None:
-            continue
-
-        pose_expression = phase_expression(pose_pass.get("phase_expr", ""))
-        if pose_expression is None:
-            continue
-
+            resources, copy_sources, shape_passes,
+            mod_dir=mod_dir, source=source)
         parsed_shape_passes = parse_shape_passes(shape_passes)
-        if shape_passes and not parsed_shape_passes:
+        if validated is None or not parsed_shape_passes:
             continue
-
         identity = json.dumps({
             "ini": (source.logical_path(ini_path) if source is not None
                     and source.is_resource_reference(ini_path)
                     else os.path.basename(str(ini_path or ""))),
             "output": output_resource,
-            "base": pose_pass["base_resource"],
+            "base": shape_passes[0]["base_resource"],
+            "child": nested["child_section"],
             "chain": chain_index,
         }, sort_keys=True, separators=(",", ":"))
         track_id = "gimi::" + hashlib.sha1(identity.encode()).hexdigest()[:12]
@@ -1062,7 +1066,6 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             "position_resource": output_resource,
             "base_file": validated["base_file"],
             "vertex_count": validated["vertex_count"],
-            "coordinate_variant": pose_pass.get("coordinate_variant", "standard"),
             "shape_passes": [{
                 "target_file": _resolved_resource(
                     resources, copy_sources, item["target_resource"])[
@@ -1071,14 +1074,9 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "phase_expr": expression,
                 "dispatch_key": item["dispatch_key"],
             } for (item, expression) in parsed_shape_passes],
-            "pose": {
-                "blend_file": validated["blend_file"],
-                "file": validated["pose_file"],
-                "bone_count": bone_count,
-                "frame_count": validated["frame_count"],
-                "phase_expr": pose_expression,
-                "dispatch_key": pose_pass["dispatch_key"],
-            },
+            "pose": None,
+            "overlay": True,
+            "conditions": nested["conditions"],
         })
     if not animations:
         return []
