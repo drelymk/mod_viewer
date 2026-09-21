@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, parse_condition_dnf)
@@ -60,6 +61,15 @@ _X88_RE = re.compile(r"^\s*x88\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _X89_RE = re.compile(r"^\s*x89\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _COMPUTE_UNSUPPORTED_CONDITION_RE = re.compile(
     r"[<>+*/%]|\btime\b", re.I)
+_WWMI_U5_RE = re.compile(
+    r"^\s*cs-u5\s*=\s*(?:copy\s+)?(Resource\S+)\s*$", re.I)
+_WWMI_REGISTER_RE = re.compile(
+    r"^\s*(?P<register>[xyz]0)\s*=\s*(?P<value>.*?)\s*$", re.I)
+_WWMI_TOGGLE_RE = re.compile(
+    r"^\s*\$(?P<var>\w+)\s*==\s*1\s*$", re.I)
+_WWMI_PHASE_RE = re.compile(
+    r"^\s*\$(?P<phase>\w+)\s*=\s*\$(?P=phase)\s*\+\s*"
+    r"\$(?P<speed>\w+)\s*\*\s*\$dt\s*$", re.I)
 
 
 def _compute_condition_is_supported(expression):
@@ -622,6 +632,36 @@ _NUMTHREADS_RE = re.compile(
     re.I)
 
 
+def _identify_wwmi_animation_shader(text):
+    """Recognize Yangyang's direct WWMI phase-to-shape formula."""
+    if not text:
+        return None
+    source = _strip_hlsl_comments(text)
+    threads = _NUMTHREADS_RE.search(source)
+    if threads is None or tuple(map(int, threads.groups())) != (1, 1, 1):
+        return None
+    compact = re.sub(r"\s+", "", source).lower()
+    macro = re.search(
+        r"#define(?P<phase>[a-z_]\w*)iniParams\[0\]\.z", compact, re.I)
+    if macro is None:
+        return None
+    phase_name = macro.group("phase")
+    value_assignment = re.search(
+        rf"(?:float|half)(?P<value>[a-z_]\w*)=float\({re.escape(phase_name)}\)",
+        compact, re.I)
+    if value_assignment is None:
+        return None
+    value_name = value_assignment.group("value")
+    number = r"(?:\.\d*)?f?"
+    formula = re.compile(
+        rf"0\.5f?\*\(sin\(({re.escape(value_name)}|"
+        rf"{re.escape(phase_name)})\*30{number}\)\+1{number}\)",
+        re.I)
+    if formula.search(compact) is None:
+        return None
+    return True
+
+
 def _identify_compute_shader(text):
     """Read the small adapter surface needed by GIMI compute shaders."""
     if not text:
@@ -713,6 +753,324 @@ def _validate_compute_layout(resources, copy_sources, shape_passes, pose=None,
         "pose_file": pose_info["filename"],
         "frame_count": frame_count,
     })
+    return result
+
+
+def _wwmi_toggle_condition(expression, canonical, var_prefix):
+    match = _WWMI_TOGGLE_RE.fullmatch(expression)
+    if match is None:
+        return None
+    variable = f"{var_prefix or ''}{_canonical(match.group('var'), canonical)}"
+    return {
+        "toggle_var": variable,
+        "condition": [{
+            "kind": "compare", "op": "==",
+            "left": {"kind": "variable", "variable": variable},
+            "right": {"kind": "literal", "value": 1},
+        }],
+    }
+
+
+def _wwmi_present_runs(sections, canonical, var_prefix):
+    present_name = next((name for name in sections
+                         if str(name).casefold() == "present"), None)
+    if present_name is None:
+        return []
+    lookup = {str(name).casefold(): name for name in sections}
+    stack, records = [], []
+    for raw in sections[present_name]:
+        line = str(raw).split(";", 1)[0].strip()
+        low = line.casefold()
+        if not line:
+            continue
+        if low.startswith("if "):
+            stack.append(_wwmi_toggle_condition(line[3:], canonical, var_prefix))
+        elif low.startswith("elif ") or low.startswith("else if "):
+            if stack:
+                expression = line.split(None, 1)[1]
+                stack[-1] = _wwmi_toggle_condition(
+                    expression[3:] if low.startswith("else if ") else expression,
+                    canonical, var_prefix)
+        elif low == "else":
+            if stack:
+                stack[-1] = None
+        elif low == "endif":
+            if stack:
+                stack.pop()
+        else:
+            match = _COMPUTE_RUN_RE.fullmatch(line)
+            if not match or not stack or stack[-1] is None:
+                continue
+            child = lookup.get(match.group("section").casefold())
+            if child is not None and str(child).casefold().startswith("commandlist"):
+                records.append({"section": child, **stack[-1]})
+    return records
+
+
+def _wwmi_phase_update(lines, canonical, var_prefix):
+    found = None
+    for raw in lines:
+        line = str(raw).split(";", 1)[0].strip()
+        match = _WWMI_PHASE_RE.fullmatch(line)
+        if match is None:
+            continue
+        if found is not None:
+            return None
+        phase = _canonical(match.group("phase"), canonical)
+        speed = _canonical(match.group("speed"), canonical)
+        found = {"phase_var": f"{var_prefix or ''}{phase}",
+                 "speed_var": f"{var_prefix or ''}{speed}"}
+    return found
+
+
+def _wwmi_animation_shader(sections, child_section, *, mod_dir, ini_path,
+                           source, canonical, var_prefix):
+    u5_resource = None
+    shader_value = None
+    registers = {}
+    dispatch = None
+    for raw in sections.get(child_section, ()):
+        line = str(raw).split(";", 1)[0].strip()
+        if not line:
+            continue
+        match = _WWMI_U5_RE.fullmatch(line)
+        if match:
+            u5_resource = match.group(1)
+            continue
+        match = _COMPUTE_SHADER_RE.fullmatch(line)
+        if match:
+            shader_value = match.group(1)
+            continue
+        match = _WWMI_REGISTER_RE.fullmatch(line)
+        if match:
+            registers[match.group("register").lower()] = match.group("value")
+            continue
+        match = _COMPUTE_DISPATCH_RE.fullmatch(line)
+        if match:
+            dispatch = tuple(int(match.group(index)) for index in range(1, 4))
+    if not u5_resource or not shader_value or dispatch != (1, 1, 1):
+        return None
+    x0 = _integer(registers.get("x0"))
+    phase_expr = _compile_expression(
+        registers.get("z0"), canonical, var_prefix)
+    if (x0 != 0 or "y0" not in registers
+            or registers["y0"].strip()
+            or phase_expr is None):
+        return None
+    if phase_expr.get("kind") != "variable":
+        return None
+    shader_path = _shader_path(mod_dir, ini_path, shader_value, source)
+    shader_text = _read_resource_bytes(shader_path, source)
+    if (not shader_text
+            or _identify_wwmi_animation_shader(
+                shader_text.decode("utf-8", errors="ignore")) is None):
+        return None
+    return {
+        "phase_var": phase_expr["variable"],
+    }
+
+
+def _wwmi_shape_key_template_key(shape):
+    try:
+        shape_id = int(shape["shape_id"])
+        return tuple(str(shape[key]).casefold() for key in (
+            "base_file", "offset_file", "vertex_id_file",
+            "vertex_offset_file")) + (
+                shape_id // 127, int(shape.get("sparse_entry_offset", 0)))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _wwmi_resolve_shape_ids(candidates, template, shape_sliders, *, mod_dir,
+                            source):
+    template_key = _wwmi_shape_key_template_key(template)
+    if template_key is None:
+        return None
+    known = []
+    for shape in shape_sliders or ():
+        if _wwmi_shape_key_template_key(shape) != template_key:
+            continue
+        try:
+            shape_id = int(shape["shape_id"])
+            known.append(int(shape.get("buffer_shape_id",
+                                      shape_id + shape_id // 127)))
+        except (KeyError, TypeError, ValueError):
+            continue
+    known = sorted(set(known))
+    if not known or known != list(range(known[0], known[-1] + 1)):
+        return None
+    data = _read_resource_bytes(_resource_path(
+        mod_dir, template["offset_file"], source), source)
+    try:
+        entry_offset = int(template.get("sparse_entry_offset", 0))
+    except (TypeError, ValueError):
+        return None
+    if data is None:
+        return None
+
+    def populated(container):
+        if (container + 2) * 4 > len(data):
+            return False
+        begin, end = struct.unpack_from("<II", data, container * 4)
+        return begin + entry_offset < end + entry_offset
+
+    inferred = range(known[-1] + 1, known[-1] + 1 + len(candidates))
+    if not all(populated(container) for container in inferred):
+        return None
+    resolved = []
+    for item, container_shape_id in zip(candidates, inferred):
+        user_shape_id = container_shape_id - container_shape_id // 128
+        if user_shape_id + user_shape_id // 127 != container_shape_id:
+            user_shape_id = None
+        if user_shape_id is None:
+            return None
+        resolved.append({**item, "shape_id": user_shape_id,
+                         "container_shape_id": container_shape_id})
+    return resolved
+
+
+def discover_wwmi_sparse_animations(sections, shape_sliders, *, mod_dir=None,
+                                    ini_path=None, source=None,
+                                    var_prefix=None, canonical_vars=None):
+    """Discover the narrow WWMI sparse shape-key animation contract."""
+    canonical = canonical_vars or canonical_var_names(sections)
+    present_runs = _wwmi_present_runs(sections, canonical, var_prefix)
+    if not present_runs:
+        return []
+    section_lookup = {
+        str(name).casefold(): name for name in sections
+    }
+
+    candidates = []
+    for record in present_runs:
+        phase_update = _wwmi_phase_update(
+            sections.get(record["section"], ()), canonical, var_prefix)
+        if phase_update is None:
+            continue
+        run_sections = [section_lookup.get(match.group("section").casefold())
+                        for raw in sections[record["section"]]
+                        for match in [_COMPUTE_RUN_RE.fullmatch(
+                            str(raw).split(";", 1)[0].strip())]
+                        if match is not None]
+        if (len(run_sections) != 1
+                or not str(run_sections[0]).casefold().startswith("customshader")):
+            continue
+        child_section = run_sections[0]
+        shader = _wwmi_animation_shader(
+            sections, child_section, mod_dir=mod_dir,
+            ini_path=ini_path, source=source, canonical=canonical,
+            var_prefix=var_prefix)
+        if shader is None:
+            continue
+        if shader["phase_var"] != phase_update["phase_var"]:
+            continue
+        candidates.append({
+            **shader, **phase_update,
+            "toggle_var": record["toggle_var"],
+            "conditions": record["condition"],
+        })
+
+    if not candidates:
+        return []
+
+    literals = _literal_constant_assignments(sections, canonical)
+    for item in candidates:
+        local_speed = _unprefix(item["speed_var"], var_prefix)
+        speed = literals.get(local_speed.casefold())
+        if speed is None:
+            return []
+        item["speed"] = speed
+
+    templates = []
+    seen_templates = set()
+    for shape in shape_sliders or ():
+        if shape.get("shape_id") is None:
+            continue
+        key = _wwmi_shape_key_template_key(shape)
+        if key is None or not all(shape.get(name) for name in (
+                "base_file", "offset_file", "vertex_id_file",
+                "vertex_offset_file")):
+            continue
+        if key in seen_templates:
+            continue
+        seen_templates.add(key)
+        templates.append(shape)
+    if not templates:
+        return []
+
+    identity_name = (source.logical_path(ini_path) if source is not None
+                     and source.is_resource_reference(ini_path)
+                     else os.path.basename(str(ini_path or "")))
+    result = []
+    for template in templates:
+        template_batch = int(template["shape_id"]) // 127
+        resolved = _wwmi_resolve_shape_ids(
+            candidates, template, shape_sliders, mod_dir=mod_dir,
+            source=source)
+        if resolved is None:
+            continue
+        if any(item["shape_id"] // 127 != template_batch
+               for item in resolved):
+            continue
+        identity = json.dumps({
+            "ini": identity_name,
+            "base": template["base_file"],
+            "shape_ids": sorted(item["shape_id"] for item in resolved),
+            "container_shape_ids": sorted(
+                item["container_shape_id"] for item in resolved),
+        }, sort_keys=True, separators=(",", ":"))
+        track_id = "wwmi-sparse::" + hashlib.sha1(
+            identity.encode("utf-8")).hexdigest()[:12]
+        program_id = "wwmi-sparse-program::" + hashlib.sha1(
+            identity.encode("utf-8")).hexdigest()[:12]
+        commands = []
+        initials = {}
+        passes = []
+        for index, item in enumerate(resolved):
+            phase_var = item["phase_var"]
+            initials.setdefault(phase_var, 0.0)
+            initials[item["speed_var"]] = item["speed"]
+            command_condition = item["conditions"]
+            commands.append({
+                "op": "set", "variable": phase_var,
+                "expression": {"kind": "binary", "op": "+",
+                                "left": {"kind": "variable",
+                                         "variable": phase_var},
+                                "right": {"kind": "binary", "op": "*",
+                                           "left": {"kind": "variable",
+                                                    "variable": item["speed_var"]},
+                                           "right": {"kind": "dt"}}},
+                "conditions": command_condition,
+            })
+            commands.append({
+                "op": "dispatch", "track_id": track_id, "kind": "shape",
+                "pass": index,
+                "phase": {"kind": "variable", "variable": phase_var},
+                "conditions": command_condition,
+            })
+            animated_shape = dict(template)
+            shape_id = item["shape_id"]
+            animated_shape["shape_id"] = shape_id
+            animated_shape["buffer_shape_id"] = item["container_shape_id"]
+            passes.append({
+                "sparse_shape": animated_shape,
+            })
+        result.append({
+            "kind": "wwmi_sparse",
+            "track_id": track_id,
+            "base_file": template["base_file"],
+            "shape_passes": passes,
+            "overlay": True,
+            "program_id": program_id,
+            "program": {
+                "external_variables": sorted(
+                    {variable for item in resolved
+                     for variable in (item["toggle_var"],
+                                       item["speed_var"])}),
+                "initials": initials,
+                "commands": commands,
+            },
+        })
     return result
 
 
@@ -1154,5 +1512,6 @@ def compute_animation_control_vars(animations, state_rules=()):
 __all__ = [
     "AnimationAnalysis", "AnimationClock", "discover_animation_clocks",
     "frame_condition", "discover_compute_animations",
+    "discover_wwmi_sparse_animations",
     "compute_animation_control_vars",
 ]

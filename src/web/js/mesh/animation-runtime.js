@@ -186,7 +186,9 @@ function applyGimiPose(mesh, meshState, output) {
     ? (mesh.userData?.humanoidRestNormals || meshState.baseNormals)
     : meshState.baseNormals;
   const vertexCount = meshState.vertexCount;
-  if (!position || !normal || !basePositions || !baseNormals) return false;
+  const positionOnly = meshState.positionOnly === true;
+  if (!position || !normal || !basePositions
+      || (!baseNormals && !positionOnly)) return false;
 
   const positions = position.array;
   const normals = normal.array;
@@ -215,17 +217,20 @@ function applyGimiPose(mesh, meshState, output) {
     let px = basePositions[positionOffset];
     let py = basePositions[positionOffset + 1];
     let pz = basePositions[positionOffset + 2];
-    let nx = baseNormals[positionOffset];
-    let ny = baseNormals[positionOffset + 1];
-    let nz = baseNormals[positionOffset + 2];
+    let nx = baseNormals ? baseNormals[positionOffset] : normals[positionOffset];
+    let ny = baseNormals
+      ? baseNormals[positionOffset + 1] : normals[positionOffset + 1];
+    let nz = baseNormals
+      ? baseNormals[positionOffset + 2] : normals[positionOffset + 2];
     for (let passIndex = 0;
       passIndex < meshState.shapePasses.length; passIndex += 1) {
       const pass = meshState.shapePasses[passIndex];
-      const source = vertex * 6;
       const weight = shapeWeights[passIndex];
+      const source = vertex * (positionOnly ? 3 : 6);
       px += pass.deltas[source] * weight;
       py += pass.deltas[source + 1] * weight;
       pz += pass.deltas[source + 2] * weight;
+      if (positionOnly) continue;
       nx += pass.deltas[source + 3] * weight;
       ny += pass.deltas[source + 4] * weight;
       nz += pass.deltas[source + 5] * weight;
@@ -244,9 +249,11 @@ function applyGimiPose(mesh, meshState, output) {
       positions[positionOffset] = px;
       positions[positionOffset + 1] = py;
       positions[positionOffset + 2] = pz;
-      normals[positionOffset] = nx;
-      normals[positionOffset + 1] = ny;
-      normals[positionOffset + 2] = nz;
+      if (!positionOnly) {
+        normals[positionOffset] = nx;
+        normals[positionOffset + 1] = ny;
+        normals[positionOffset + 2] = nz;
+      }
       continue;
     }
 
@@ -371,7 +378,7 @@ function applyGimiPose(mesh, meshState, output) {
       ? outputNormalZ / normalLength : 0;
   }
   position.needsUpdate = true;
-  normal.needsUpdate = true;
+  if (!positionOnly) normal.needsUpdate = true;
   return true;
 }
 
@@ -607,7 +614,8 @@ function registerGimiMesh(mesh, animationId, geometry) {
       };
       tracks.set(programId, state);
     }
-    const baseNormals = decodeF32(geometry.base_normals);
+    const baseNormals = geometry.base_normals
+      ? decodeF32(geometry.base_normals) : null;
     let weights = null;
     let indices = null;
     if (hasPose) {
@@ -623,6 +631,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     }));
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
+      positionOnly: geometry.position_only === true,
       poseFrames: decodedPoseFrames,
       poseBoneCount, poseFrameCount, trackId,
       overlay: geometry.overlay === true,
