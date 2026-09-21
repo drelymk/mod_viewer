@@ -306,6 +306,8 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
             "visible": [True, True, True],
             "manual": [True, False, True],
         }
+        rows.first.click()
+        assert rows.first.get_attribute("class").find("selected") >= 0
         page.evaluate("""() => window.dispatchEvent(new CustomEvent(
           'mod-viewer-recording-state', {detail: {recording: false}}))""")
         rows = page.locator("#mesh-list .draw-item")
@@ -314,6 +316,9 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
             "9, 0, 0 - Part 2",
             "9, 0, 0 - Part 3",
         ]
+        assert page.locator("#mesh-list .draw-item.selected").count() == 0
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.viewerOutline.userData.selectionSelected""") is False
         assert page.evaluate("""() => window.modViewer.activeMeshes[0]
           .userData.looseParts.map(part => part.visible)""") == [True, False, True]
         rows.nth(1).locator(".mesh-state-btn").click()

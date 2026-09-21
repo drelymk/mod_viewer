@@ -484,10 +484,16 @@ function showRecordingSourceRows() {
 }
 
 function restoreLoosePartRows() {
+  let selectionCleared = false;
   for (const group of groupsUI) {
     group.itemObjs.forEach(source => {
-      if (!getLooseParts(source).length) return;
-      getLooseParts(source).forEach(part => {
+      const parts = getLooseParts(source);
+      if (!parts.length) return;
+      if (!selectionCleared) {
+        clearSelection();
+        selectionCleared = true;
+      }
+      parts.forEach(part => {
         applyMeshVisibility(part, {notify: false, render: false});
       });
       showLoosePartRows(source);
