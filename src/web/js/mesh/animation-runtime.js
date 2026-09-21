@@ -186,8 +186,7 @@ function applyGimiPose(mesh, meshState, output) {
     ? (mesh.userData?.humanoidRestNormals || meshState.baseNormals)
     : meshState.baseNormals;
   const vertexCount = meshState.vertexCount;
-  const positionOnly = meshState.shapePasses.length > 0
-    && meshState.shapePasses.every(pass => pass.positionOnly === true);
+  const positionOnly = meshState.positionOnly === true;
   if (!position || !normal || !basePositions
       || (!baseNormals && !positionOnly)) return false;
 
@@ -227,11 +226,11 @@ function applyGimiPose(mesh, meshState, output) {
       passIndex < meshState.shapePasses.length; passIndex += 1) {
       const pass = meshState.shapePasses[passIndex];
       const weight = shapeWeights[passIndex];
-      const source = vertex * (pass.positionOnly ? 3 : 6);
+      const source = vertex * (positionOnly ? 3 : 6);
       px += pass.deltas[source] * weight;
       py += pass.deltas[source + 1] * weight;
       pz += pass.deltas[source + 2] * weight;
-      if (pass.positionOnly) continue;
+      if (positionOnly) continue;
       nx += pass.deltas[source + 3] * weight;
       ny += pass.deltas[source + 4] * weight;
       nz += pass.deltas[source + 5] * weight;
@@ -629,10 +628,10 @@ function registerGimiMesh(mesh, animationId, geometry) {
     }
     const shapePasses = (geometry.shape_passes || []).map(pass => ({
       deltas: decodeF32(pass.deltas),
-      positionOnly: pass.position_only === true,
     }));
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
+      positionOnly: geometry.position_only === true,
       poseFrames: decodedPoseFrames,
       poseBoneCount, poseFrameCount, trackId,
       overlay: geometry.overlay === true,

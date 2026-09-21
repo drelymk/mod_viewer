@@ -54,6 +54,18 @@ class ParsedModAnalysis:
         yield self.present
 
 
+def _group_position_files(group):
+    """Return every position buffer used by a group's draws."""
+    def path_key(path):
+        return os.path.normcase(os.path.normpath(path)) if path else None
+
+    position_files = {path_key(group.get("position_file"))}
+    position_files.update(path_key(draw.get("position_file"))
+                          for draw in group.get("draws", []))
+    position_files.discard(None)
+    return position_files
+
+
 def _attach_shape_sliders(groups, shape_sliders):
     """Attach morphs to groups that use their base buffer on any draw.
 
@@ -62,34 +74,24 @@ def _attach_shape_sliders(groups, shape_sliders):
     ``mesh_builder`` performs the final per-draw filter; it needs every
     matching morph here.
     """
-    def path_key(path):
-        return os.path.normcase(os.path.normpath(path)) if path else None
-
     for group in groups:
-        position_files = {path_key(group.get("position_file"))}
-        position_files.update(path_key(draw.get("position_file"))
-                              for draw in group.get("draws", []))
-        position_files.discard(None)
+        position_files = _group_position_files(group)
         matches = [slider for slider in shape_sliders
-                   if path_key(slider.get("base_file")) in position_files]
+                   if os.path.normcase(os.path.normpath(
+                       slider.get("base_file", ""))) in position_files]
         if matches:
             group["shape_sliders"] = matches
 
 
 def _attach_sparse_animations(groups, animations):
     """Attach WWMI sparse animations by their authored base position file."""
-    def path_key(path):
-        return os.path.normcase(os.path.normpath(path)) if path else None
-
     for group in groups:
         if group.get("_compute_animation") is not None:
             continue
-        position_files = {path_key(group.get("position_file"))}
-        position_files.update(path_key(draw.get("position_file"))
-                              for draw in group.get("draws", []))
-        position_files.discard(None)
+        position_files = _group_position_files(group)
         matches = [animation for animation in animations
-                   if path_key(animation.get("base_file")) in position_files]
+                   if os.path.normcase(os.path.normpath(
+                       animation.get("base_file", ""))) in position_files]
         if len(matches) == 1:
             group["_compute_animation"] = matches[0]
 

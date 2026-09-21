@@ -158,9 +158,9 @@ def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
              "pass": 1, "phase": {"kind": "literal", "value": 0}},
         ]},
         "shape_passes": [
-            {"position_only": True, "sparse_shape": {
+            {"sparse_shape": {
                 **static, "shape_id": 165, "buffer_shape_id": 166}},
-            {"position_only": True, "sparse_shape": {
+            {"sparse_shape": {
                 **static, "shape_id": 166, "buffer_shape_id": 167}},
         ],
     }
@@ -176,8 +176,9 @@ def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
     entry = result.meshes["Body-1"]
     assert len(entry["shape_targets"]) == 1
     animation_geometry = entry["animation_geometry"]
-    assert [item["position_only"] for item in animation_geometry[
-        "shape_passes"]] == [True, True]
+    assert animation_geometry["position_only"] is True
+    assert all("position_only" not in item
+               for item in animation_geometry["shape_passes"])
     deltas = [geometry_values(geometry, item["deltas"])
               for item in animation_geometry["shape_passes"]]
     assert deltas == [

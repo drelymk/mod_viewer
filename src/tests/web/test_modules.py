@@ -277,7 +277,8 @@ def test_wwmi_sparse_animation_composes_overlay_and_freezes_disabled_passes(
           geometry: {attributes: {position, normal}},
         };
         const program = {
-          external_variables: ['ChouChaAnim', 'gangChaAnim'],
+          external_variables: ['ChouChaAnim', 'ChouChaAnimSpeed',
+            'gangChaAnim', 'gangChaAnimSpeed'],
           initials: {ChouChaFreq: 0, gangChaFreq: 0,
             ChouChaAnimSpeed: 0.25, gangChaAnimSpeed: 0.5},
           commands: [
@@ -307,13 +308,12 @@ def test_wwmi_sparse_animation_composes_overlay_and_freezes_disabled_passes(
         setControlValue('gangChaAnim', '0');
         runtime.registerAnimatedMesh(mesh, 'wwmi-test', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'wwmi-program-test', track_id: 'wwmi-test', program,
-          overlay: true,
-          shape_passes: [
-            {position_only: true, deltas: encode(
-              new Float32Array([1, 0, 0]))},
-            {position_only: true, deltas: encode(
-              new Float32Array([0, 2, 0]))},
+              program_id: 'wwmi-program-test', track_id: 'wwmi-test', program,
+              overlay: true,
+              position_only: true,
+              shape_passes: [
+            {deltas: encode(new Float32Array([1, 0, 0]))},
+            {deltas: encode(new Float32Array([0, 2, 0]))},
           ],
           pose: null,
         });
@@ -326,14 +326,25 @@ def test_wwmi_sparse_animation_composes_overlay_and_freezes_disabled_passes(
         const bothAtStart = Array.from(position.array);
         runNext(2000);
         const bothAfterSecond = Array.from(position.array);
+        setControlValue('ChouChaAnimSpeed', '0.5');
+        runtime.wakeAnimationRuntime();
+        runNext(3000);
+        runNext(4000);
+        const afterChouSpeed = Array.from(position.array);
+        setControlValue('gangChaAnimSpeed', '1');
+        runtime.wakeAnimationRuntime();
+        runNext(5000);
+        runNext(6000);
+        const afterGangSpeed = Array.from(position.array);
         setControlValue('ChouChaAnim', '0');
         setControlValue('gangChaAnim', '0');
         runtime.wakeAnimationRuntime();
-        runNext(3000);
+        runNext(7000);
         const restored = Array.from(position.array);
         runtime.resetAnimationRuntime();
-        return {chouOnly, bothAtStart, bothAfterSecond, restored,
-          restNormal, normal: Array.from(normal.array)};
+        return {chouOnly, bothAtStart, bothAfterSecond, afterChouSpeed,
+          afterGangSpeed, restored, restNormal,
+          normal: Array.from(normal.array)};
       } finally {
         window.requestAnimationFrame = oldRequest;
         window.cancelAnimationFrame = oldCancel;
@@ -344,6 +355,14 @@ def test_wwmi_sparse_animation_composes_overlay_and_freezes_disabled_passes(
     assert result["bothAfterSecond"] == pytest.approx([
         10 + 0.5 * (math.sin(0.25 * 30) + 1),
         2 * 0.5 * (math.sin(0.5 * 30) + 1), 0,
+    ])
+    assert result["afterChouSpeed"] == pytest.approx([
+        10 + 0.5 * (math.sin(0.75 * 30) + 1),
+        2 * 0.5 * (math.sin(1.0 * 30) + 1), 0,
+    ])
+    assert result["afterGangSpeed"] == pytest.approx([
+        10 + 0.5 * (math.sin(1.25 * 30) + 1),
+        2 * 0.5 * (math.sin(2.0 * 30) + 1), 0,
     ])
     assert result["restored"] == [10, 0, 0]
     assert result["normal"] == result["restNormal"] == [0, 1, 0]

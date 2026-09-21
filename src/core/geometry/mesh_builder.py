@@ -460,7 +460,6 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
                 struct.pack_into("<3f", deltas, output * 12, *values)
             shape_entries.append({
                 "deltas": _geometry_ref(deltas, geometry),
-                "position_only": True,
             })
         result = {
             "kind": "gimi_compute",
@@ -469,6 +468,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
             "program": animation.get("program"),
             "shape_passes": shape_entries,
             "vertex_count": len(used_vertices),
+            "position_only": True,
         }
         if animation.get("overlay"):
             result["overlay"] = True
