@@ -85,6 +85,74 @@ def _payload(label="A"):
     }
 
 
+def _texture_run_payload():
+    """Small ordered draw corpus for automatic texture-run regressions."""
+    texture_a = "diffuse::TextureRuns-A.png"
+    texture_b = "diffuse::TextureRuns-B.png"
+    pool = [
+        {"tex_key": texture_a, "label": "Texture A"},
+        {"tex_key": texture_b, "label": "Texture B"},
+    ]
+    entries = {}
+
+    def add_draw(component, index, key=None, variants=None):
+        name = f"{component}-{index}"
+        entry = {
+            "component": component,
+            "drawindexed": [3, index * 3, 0],
+            "pos": _f32(0, 0, 0, 1, 0, 0, 0, 1, 0),
+            "idx": _u32(0, 1, 2),
+            "skinning_available": True,
+            "texture_pool_id": "runs",
+            "conditions": [],
+            "sources": [{"ini": "TextureRuns.ini", "line": index + 1,
+                          "section": "TextureOverrideRuns",
+                          "occurrence": {
+                              "section": "TextureOverrideRuns",
+                              "ordinal": index, "path": [],
+                          }}],
+        }
+        if key is not None:
+            entry["tex_key"] = key
+        if variants is not None:
+            entry["texture_variants"] = variants
+        entries[name] = entry
+
+    for component, keys in {
+        "Same": [texture_a, texture_a],
+        "Switch": [texture_a, texture_b],
+        "Revisit": [texture_a, texture_b, texture_a],
+        "Runs": [texture_a, texture_a, texture_b, texture_b,
+                  texture_a, texture_a],
+        "Claret": [texture_a, texture_a, texture_b, texture_a, None],
+    }.items():
+        for index, key in enumerate(keys):
+            add_draw(component, index, key)
+
+    conditional = [{
+        "conditions": [[{
+            "var": "mode", "value": "1", "negate": False,
+        }]],
+        "tex_key": texture_a,
+    }]
+    add_draw("Conditional", 0, variants=conditional)
+    add_draw("Conditional", 1)
+
+    payload = _payload("TextureRuns")
+    payload["meshes"] = entries
+    payload["texture_pools"] = {"runs": pool}
+    payload["textures"] = {
+        texture_a: _PNG_URI,
+        texture_b: _PNG_URI,
+    }
+    payload["controls"]["menu"]["mode"] = {
+        "name": "Mode", "var": "mode", "kind": "menu", "default": "0",
+        "values": ["0", "1"], "effects": [],
+    }
+    payload["state"]["defaults"]["mode"] = "0"
+    return payload
+
+
 def _present_payload(label="Present"):
     payload = _payload(label)
     payload["controls"]["present"] = {
