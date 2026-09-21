@@ -6,6 +6,7 @@ from app.settings import paths
 from .support import _open, _open_library, _page as _create_page
 from .payloads import (
     _MOD_LIBRARY, _PNG_URI, _f32, _payload, _source_payload,
+    _texture_run_payload,
 )
 
 
@@ -305,6 +306,84 @@ def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         assert first_header.locator(".group-toggle.collapsed").count() == 1
         first_header.click()
         assert page.locator("#mesh-list .mesh-src-items.collapsed").count() == 0
+    finally:
+        context.close()
+
+
+def test_automatic_texture_runs_follow_authored_transitions_and_revisit_texture(
+        edge_browser, frontend_url):
+    texture_a = "diffuse::TextureRuns-A.png"
+    texture_b = "diffuse::TextureRuns-B.png"
+    context, page = _page(
+        edge_browser, frontend_url, {"TextureRuns": _texture_run_payload()})
+    try:
+        _open(page, "TextureRuns")
+        page.locator(".draw-item").last.wait_for()
+        def read_state():
+            return page.evaluate("""() => Object.fromEntries(
+          window.modViewer.activeMeshes.map(mesh => [mesh.userData.semanticKey, {
+            boundary: mesh.userData.automaticTextureBoundary === true,
+            resolved: mesh.userData.resolvedTexKey || null,
+            texture: mesh.userData.texKey || null,
+          }]))""")
+
+        state = read_state()
+
+        def component_state(component, count):
+            return [state[f"{component}-{index}"] for index in range(count)]
+
+        assert component_state("Same", 2) == [
+            {"boundary": True, "resolved": texture_a, "texture": texture_a},
+            {"boundary": False, "resolved": texture_a, "texture": texture_a},
+        ]
+        assert component_state("Switch", 2) == [
+            {"boundary": True, "resolved": texture_a, "texture": texture_a},
+            {"boundary": True, "resolved": texture_b, "texture": texture_b},
+        ]
+        assert component_state("Revisit", 3) == [
+            {"boundary": True, "resolved": texture_a, "texture": texture_a},
+            {"boundary": True, "resolved": texture_b, "texture": texture_b},
+            {"boundary": True, "resolved": texture_a, "texture": texture_a},
+        ]
+        assert [item["boundary"] for item in component_state("Runs", 6)] == [
+            True, False, True, False, True, False,
+        ]
+        assert [item["texture"] for item in component_state("Runs", 6)] == [
+            texture_a, texture_a, texture_b, texture_b, texture_a, texture_a,
+        ]
+        assert [item["texture"] for item in component_state("Claret", 5)] == [
+            texture_a, texture_a, texture_b, texture_a, texture_a,
+        ]
+        assert [item["boundary"] for item in component_state("Claret", 5)] == [
+            True, False, True, True, False,
+        ]
+
+        conditional = component_state("Conditional", 2)
+        assert conditional == [
+            {"boundary": True, "resolved": texture_a, "texture": texture_a},
+            {"boundary": False, "resolved": None, "texture": texture_a},
+        ]
+
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} =
+            await import('./js/mesh/visibility.js');
+          setToggleValue('mode', '0');
+          refreshAll();
+        }""")
+        state = read_state()
+        assert [item["texture"] for item in component_state("Conditional", 2)] == [
+            None, None,
+        ]
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} =
+            await import('./js/mesh/visibility.js');
+          setToggleValue('mode', '1');
+          refreshAll();
+        }""")
+        state = read_state()
+        assert [item["texture"] for item in component_state("Conditional", 2)] == [
+            texture_a, texture_a,
+        ]
     finally:
         context.close()
 

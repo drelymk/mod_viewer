@@ -344,7 +344,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         .find(Boolean) || null;
 
       const itemCbs = [], itemObjs = [];
-      const highlightedDefaults = new Set();
+      let previousBoundaryIdentity = null;
       const componentDescriptor = {
         type: 'component', component: groupName, source: src,
         meshes: itemObjs, texturePool, modPath,
@@ -447,9 +447,12 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         if (!mesh) throw new Error(`Missing live mesh for ${name}`);
         mesh.userData.componentDescriptor = componentDescriptor;
         itemObjs.push(mesh);
-        // The first mesh for each resolved texture becomes an automatic
-        // boundary. The ordered pass below propagates each boundary only
-        // downward, stopping at the next one in this component.
+        // Rebuilding the panel must not retain an automatic boundary from a
+        // previous semantic state or panel instance.
+        mesh.userData.automaticTextureBoundary = false;
+        // An automatic boundary starts a new authored texture run. Track the
+        // previous authored state in draw order so a texture can become a
+        // boundary again after another texture intervenes.
         const defaultKey = mesh.userData.defaultTexKey;
         const variantKeys = mesh.userData.textureVariants || [];
         // A draw can have only conditional texture assignments and therefore
@@ -457,10 +460,22 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         // otherwise the later run reconciliation clears the resolved variant
         // before it reaches the material.
         const boundaryKey = defaultKey || mesh.userData.resolvedTexKey;
-        if ((defaultKey || variantKeys.length) && boundaryKey
-            && !highlightedDefaults.has(boundaryKey)) {
-          highlightedDefaults.add(boundaryKey);
+        const hasAuthoredTexture = !!(defaultKey || variantKeys.length);
+        const boundaryIdentity = hasAuthoredTexture && boundaryKey
+          ? JSON.stringify({
+            defaultKey: defaultKey || null,
+            variants: variantKeys.map(variant => ({
+              conditions: variant?.conditions || [],
+              tex_key: variant?.tex_key || null,
+            })),
+            resolvedKey: mesh.userData.resolvedTexKey || null,
+          })
+          : null;
+        if (boundaryIdentity && boundaryIdentity !== previousBoundaryIdentity) {
           mesh.userData.automaticTextureBoundary = true;
+        }
+        if (hasAuthoredTexture && boundaryIdentity) {
+          previousBoundaryIdentity = boundaryIdentity;
         }
         const { wrap } = buildDrawRow(
           name, groupName, meshes[name], mesh, itemCbs, masterCb);
