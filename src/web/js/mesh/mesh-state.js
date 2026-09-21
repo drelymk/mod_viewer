@@ -399,6 +399,10 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   // Shape targets define the rest geometry for semantic fitting. Capture it
   // before the Weight runtime re-baselines or applies any pose/Physics state.
   mesh.userData.humanoidRestPositions = new Float32Array(attr.array);
+  const normal = mesh.geometry.attributes.normal;
+  if (normal) {
+    mesh.userData.humanoidRestNormals = new Float32Array(normal.array);
+  }
   refreshSkinningAfterShapeChange(mesh);
   invalidateCharacterShadowGeometry({ request: render });
   return true;

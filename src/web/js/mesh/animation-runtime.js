@@ -171,11 +171,20 @@ function executeGimiProgram(track, now) {
   return changed || (previousNow === null && activeDtCommand);
 }
 
+function gimiMeshActive(meshState) {
+  return dnfSatisfied(meshState?.conditions || []);
+}
+
 function applyGimiPose(mesh, meshState, output) {
   const position = mesh.geometry?.attributes?.position;
   const normal = mesh.geometry?.attributes?.normal;
-  const basePositions = mesh.userData?.basePositions;
-  const baseNormals = meshState.baseNormals;
+  const basePositions = meshState.overlay
+    ? (mesh.userData?.humanoidRestPositions
+      || mesh.userData?.basePositions)
+    : mesh.userData?.basePositions;
+  const baseNormals = meshState.overlay
+    ? (mesh.userData?.humanoidRestNormals || meshState.baseNormals)
+    : meshState.baseNormals;
   const vertexCount = meshState.vertexCount;
   if (!position || !normal || !basePositions || !baseNormals) return false;
 
@@ -373,6 +382,7 @@ function applyGimiTrack(track) {
     if (mesh.visible === false || mesh.userData?.animationSuspended === true) {
       continue;
     }
+    if (!gimiMeshActive(meshState)) continue;
     const output = track.outputs.get(meshState.trackId);
     if (!output) continue;
     changed = applyGimiPose(mesh, meshState, output) || changed;
@@ -382,19 +392,30 @@ function applyGimiTrack(track) {
 
 function restoreCanonical(mesh) {
   const position = mesh.geometry?.attributes?.position;
-  const base = mesh.userData?.basePositions;
+  const meshState = mesh.userData?.animationState;
+  const base = meshState?.overlay
+    ? (mesh.userData?.humanoidRestPositions
+      || mesh.userData?.basePositions)
+    : mesh.userData?.basePositions;
+  let changed = false;
   if (position && base && position.array.length === base.length) {
+    changed = position.array.some((value, index) => value !== base[index]);
     position.array.set(base);
     position.needsUpdate = true;
   }
   const normal = mesh.geometry?.attributes?.normal;
-  const baseNormals = mesh.userData?.baseNormals;
+  const baseNormals = meshState?.overlay
+    ? (mesh.userData?.humanoidRestNormals || mesh.userData?.baseNormals)
+    : mesh.userData?.baseNormals;
   if (normal && baseNormals && normal.array.length === baseNormals.length) {
+    changed = normal.array.some((value, index) => value !== baseNormals[index])
+      || changed;
     normal.array.set(baseNormals);
     normal.needsUpdate = true;
   } else if (normal) {
     mesh.geometry.computeVertexNormals?.();
   }
+  return changed;
 }
 
 function installAnimationBounds(mesh, bounds) {
@@ -478,13 +499,19 @@ function tick(now) {
   for (const state of tracks.values()) {
     if (state.kind === 'gimi_compute') {
       let visible = false;
+      let active = false;
       for (const mesh of state.meshes) {
-        if (mesh.visible !== false && mesh.userData?.animationSuspended !== true) {
+        const meshState = state.meshesByMesh.get(mesh);
+        if (mesh.visible !== false
+            && mesh.userData?.animationSuspended !== true) {
           visible = true;
-          break;
+          if (gimiMeshActive(meshState)) active = true;
+          else if (meshState?.overlay) {
+            changed = restoreCanonical(mesh) || changed;
+          }
         }
       }
-      if (!visible) {
+      if (!visible || !active) {
         state.lastNow = now;
         continue;
       }
@@ -598,6 +625,8 @@ function registerGimiMesh(mesh, animationId, geometry) {
       vertexCount, baseNormals, weights, indices, shapePasses,
       poseFrames: decodedPoseFrames,
       poseBoneCount, poseFrameCount, trackId,
+      overlay: geometry.overlay === true,
+      conditions: geometry.conditions || [],
       animationBounds: geometry.bounds || null,
     };
     if (!state.outputs.has(trackId)) {

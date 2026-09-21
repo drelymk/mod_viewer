@@ -489,6 +489,10 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
         "shape_passes": shape_entries,
         "vertex_count": len(used_vertices),
     }
+    if animation.get("overlay"):
+        result["overlay"] = True
+    if animation.get("conditions"):
+        result["conditions"] = animation["conditions"]
     if pose:
         weights = bytearray(len(used_vertices) * 16)
         indices = bytearray(len(used_vertices) * 16)

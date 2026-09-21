@@ -6936,3 +6936,122 @@ def test_humanoid_ik_driver_changes_a_weighted_mesh_vertex(module_page):
     assert result["solved"]
     assert result["changedVertexCount"] == 1
     assert result["output"] != pytest.approx(result["baseline"])
+
+
+def test_gimi_overlay_uses_shaped_rest_and_nested_conditions(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      const runNext = now => {
+        const id = Math.min(...pending.keys());
+        const callback = pending.get(id);
+        pending.delete(id);
+        callback(now);
+      };
+      try {
+        const {setControlValue} = await import('./js/editing/control-state.js');
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const basePositions = new Float32Array([0, 0, 0]);
+        const shapedPositions = new Float32Array([10, 0, 0]);
+        const shapedNormals = new Float32Array([0, 0, 1]);
+        const position = {array: new Float32Array(shapedPositions),
+          needsUpdate: false};
+        const normal = {array: new Float32Array(shapedNormals),
+          needsUpdate: false};
+        const mesh = {
+          visible: true,
+          userData: {
+            basePositions: new Float32Array(basePositions),
+            humanoidRestPositions: new Float32Array(shapedPositions),
+            humanoidRestNormals: new Float32Array(shapedNormals),
+          },
+          geometry: {attributes: {position, normal}},
+        };
+        const program = {
+          external_variables: ['nested_speed'],
+          initials: {Freq: 0},
+          commands: [
+            {op: 'set', variable: 'Freq',
+              expression: {kind: 'binary', op: '+',
+                left: {kind: 'variable', variable: 'Freq'},
+                right: {kind: 'binary', op: '*',
+                  left: {kind: 'variable', variable: 'nested_speed'},
+                  right: {kind: 'dt'}}}},
+            {op: 'dispatch', track_id: 'nested-overlay', kind: 'shape',
+              pass: 0, phase: {kind: 'variable', variable: 'Freq'}},
+          ],
+        };
+        setControlValue('nested_mode', '0');
+        setControlValue('nested_speed', '1');
+        runtime.registerAnimatedMesh(mesh, 'nested-overlay', {
+          kind: 'gimi_compute', vertex_count: 1,
+          base_normals: encode(new Float32Array([0, 1, 0])),
+          program_id: 'nested-overlay-program', track_id: 'nested-overlay',
+          program, overlay: true,
+          conditions: [[{var: 'nested_mode', value: '2', negate: false}]],
+          shape_passes: [{deltas: encode(new Float32Array([2, 0, 0, 0, 0, 0]))}],
+          pose: null,
+        });
+        runNext(0);
+        const inactive = Array.from(position.array);
+        const stoppedWhileInactive = pending.size;
+
+        setControlValue('nested_mode', '2');
+        runtime.wakeAnimationRuntime();
+        runNext(1000);
+        const active = Array.from(position.array);
+        const weightAtResume = 0.5;
+
+        setControlValue('nested_speed', '2');
+        runtime.wakeAnimationRuntime();
+        runNext(1100);
+        runNext(1200);
+        const faster = Array.from(position.array);
+
+        mesh.userData.humanoidRestPositions = new Float32Array([20, 0, 0]);
+        runtime.wakeAnimationRuntime();
+        runNext(2000);
+        const reshaped = Array.from(position.array);
+
+        setControlValue('nested_mode', '0');
+        runtime.wakeAnimationRuntime();
+        runNext(3000);
+        const restored = Array.from(position.array);
+        const stoppedAfterDeactivate = pending.size;
+        setControlValue('nested_mode', '2');
+        runtime.wakeAnimationRuntime();
+        runNext(4000);
+        const reenabled = Array.from(position.array);
+        runtime.resetAnimationRuntime();
+        return {inactive, stoppedWhileInactive, active, faster, reshaped,
+          restored, stoppedAfterDeactivate, reenabled, weightAtResume};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["inactive"] == [10, 0, 0]
+    assert result["stoppedWhileInactive"] == 0
+    assert result["active"] == pytest.approx([
+        10 + 2 * result["weightAtResume"], 0, 0])
+    assert result["faster"] != pytest.approx(result["active"])
+    assert result["reshaped"] != pytest.approx(result["active"])
+    assert result["reshaped"][0] > 20
+    assert result["restored"] == [20, 0, 0]
+    assert result["stoppedAfterDeactivate"] == 0
+    assert result["reenabled"] == pytest.approx(result["reshaped"])
