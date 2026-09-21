@@ -471,6 +471,19 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 }
 .panel-action-menu button:hover:not(:disabled) { background: var(--surface-active); }
 .panel-action-menu button:disabled { color: var(--text-muted); opacity: .55; cursor: default; }
+.mesh-context-menu {
+  position: fixed; z-index: 260; min-width: 180px; padding: 5px;
+  background: rgba(22,27,34,.98); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
+.mesh-context-menu[hidden] { display: none; }
+.mesh-context-menu button {
+  display: block; width: 100%; min-height: 30px; padding: 5px 8px;
+  border: 0; border-radius: var(--radius-sm); color: var(--text);
+  background: transparent; text-align: left; cursor: pointer; font: inherit;
+  font-size: 11px; white-space: nowrap;
+}
+.mesh-context-menu button:hover { background: var(--surface-active); }
 
 /* Collapse chevron, shared by both panels. */
 .group-toggle {
@@ -890,6 +903,17 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
 }
+.dialog-range-field {
+  display: none; flex-direction: column; gap: 4px; margin-top: 12px;
+  color: var(--text-muted); font-size: 11px;
+}
+.dialog-range-input {
+  box-sizing: border-box; width: 100%;
+  background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
+}
+.dialog-range-input:invalid { border-color: var(--danger); }
+.dialog-range-hint { color: var(--text-muted); font-size: 10px; }
 #dialog-cancel { background: var(--bg-control); color: var(--text); }
 #dialog-cancel:hover { background: var(--border); }
 #dialog-ok { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }

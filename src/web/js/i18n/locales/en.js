@@ -600,4 +600,8 @@ export default {
   'mesh.hiddenManual': 'Hidden (manual override)',
   'mesh.visibleAutomatic': 'Visible automatically',
   'mesh.hiddenAutomatic': 'Hidden automatically',
+  'mesh.separateLooseParts': 'Separate Loose Parts',
+  'mesh.separate': 'Separate',
+  'mesh.connectionTolerance': 'Connection tolerance',
+  'mesh.connectionToleranceRange': 'Range: 0 – 0.01',
 };

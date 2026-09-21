@@ -5,7 +5,8 @@ import json
 from app.settings import paths
 from .support import _open, _open_library, _page as _create_page
 from .payloads import (
-    _MOD_LIBRARY, _PNG_URI, _f32, _payload, _source_payload,
+    _MOD_LIBRARY, _PNG_URI, _f32, _loose_parts_payload, _payload,
+    _source_payload,
     _texture_run_payload,
 )
 
@@ -237,6 +238,255 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
         assert page.evaluate("window.modViewer.getRenderCount()") == final_count
     finally:
         context.close()
+
+
+def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
+        edge_browser, frontend_url):
+    path = "LooseParts"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.wait_for()
+        assert source_row.inner_text() == "9, 0, 0"
+
+        source_row.click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        menu.wait_for()
+        assert menu.is_visible()
+        assert menu.inner_text() == "Separate Loose Parts"
+        page.locator("#toolbar").click()
+        assert menu.is_hidden()
+
+        source_row.click(button="right")
+        page.keyboard.press("Escape")
+        assert menu.is_hidden()
+        source_row.click(button="right")
+        menu.locator("button").click()
+        dialog = page.locator("#dialog-backdrop")
+        dialog.wait_for()
+        assert dialog.is_visible()
+        tolerance = page.locator("#dialog-range-input")
+        assert tolerance.input_value() == "0"
+        assert tolerance.get_attribute("min") == "0"
+        assert tolerance.get_attribute("max") == "0.01"
+        assert tolerance.get_attribute("step") == "0.0001"
+        page.locator("#dialog-ok").click()
+
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.all_inner_texts() == [
+            "9, 0, 0 - Part 1",
+            "9, 0, 0 - Part 2",
+            "9, 0, 0 - Part 3",
+        ]
+        rows.nth(1).locator(".mesh-state-btn").click()
+        assert page.evaluate("""() => {
+          const parts = window.modViewer.activeMeshes[0].userData.looseParts;
+          return parts.map(part => ({
+            visible: part.visible, manual: part.userData.manualVisible,
+          }));
+        }""") == [
+            {"visible": True, "manual": True},
+            {"visible": False, "manual": False},
+            {"visible": True, "manual": True},
+        ]
+        page.evaluate("""() => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-recording-state', {detail: {recording: true}}))""")
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "9, 0, 0",
+        ]
+        assert page.evaluate("""() => {
+          const parts = window.modViewer.activeMeshes[0].userData.looseParts;
+          return {
+            visible: parts.map(part => part.visible),
+            manual: parts.map(part => part.userData.manualVisible),
+          };
+        }""") == {
+            "visible": [True, True, True],
+            "manual": [True, False, True],
+        }
+        rows.first.click()
+        assert rows.first.get_attribute("class").find("selected") >= 0
+        page.evaluate("""() => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-recording-state', {detail: {recording: false}}))""")
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.all_inner_texts() == [
+            "9, 0, 0 - Part 1",
+            "9, 0, 0 - Part 2",
+            "9, 0, 0 - Part 3",
+        ]
+        assert page.locator("#mesh-list .draw-item.selected").count() == 0
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.viewerOutline.userData.selectionSelected""") is False
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part => part.visible)""") == [True, False, True]
+        rows.nth(1).locator(".mesh-state-btn").click()
+        state = page.evaluate("""() => {
+          const source = window.modViewer.activeMeshes[0];
+          window.__looseSource = source;
+          const parts = source.userData.looseParts;
+          return {
+            activeCount: window.modViewer.activeMeshes.length,
+            sameSource: window.modViewer.activeMeshes[0] === source,
+            drawRange: source.geometry.drawRange.count,
+            childCount: source.children.length,
+            labels: parts.map(part => part.userData.loosePartLabel),
+            positionsShared: parts.every(part =>
+              part.geometry.getAttribute('position') ===
+                source.geometry.getAttribute('position')),
+            indexesIndependent: parts[0].geometry.index !==
+              parts[1].geometry.index &&
+              parts[1].geometry.index !== parts[2].geometry.index,
+            materialsShared: parts.every(part => part.material === source.material),
+            sourceVisible: source.visible,
+            sourceManualVisible: source.userData.manualVisible,
+          };
+        }""")
+        assert state == {
+            "activeCount": 1,
+            "sameSource": True,
+            "drawRange": 0,
+            "childCount": 4,
+            "labels": [
+                "9, 0, 0 - Part 1",
+                "9, 0, 0 - Part 2",
+                "9, 0, 0 - Part 3",
+            ],
+            "positionsShared": True,
+            "indexesIndependent": True,
+            "materialsShared": True,
+            "sourceVisible": True,
+            "sourceManualVisible": True,
+        }
+
+        rows.nth(1).click()
+        assert rows.nth(1).get_attribute("class").find("selected") >= 0
+        assert rows.nth(0).get_attribute("class").find("selected") == -1
+        assert page.locator("#inspector-content .inspector-header h3").inner_text() == (
+            "9, 0, 0 - Part 2")
+        semantic_selection = page.evaluate("""async () => {
+          const {getInspectorSelection} = await import(
+            './js/panels/inspector-panel.js');
+          const selection = getInspectorSelection();
+          const source = window.__looseSource;
+          return {
+            selectedPart: selection?.mesh === source.userData.looseParts[1],
+            sourceResolved: selection?.mesh?.userData?.loosePartParent === source,
+            partHasSemanticKey: Object.hasOwn(
+              source.userData.looseParts[1].userData, 'semanticKey'),
+          };
+        }""")
+        assert semantic_selection == {
+            "selectedPart": True,
+            "sourceResolved": True,
+            "partHasSemanticKey": False,
+        }
+        rows.nth(1).locator(".mesh-state-btn").click()
+        part_visibility = page.evaluate("""() => {
+          const source = window.__looseSource;
+          return {
+            parts: source.userData.looseParts.map(part => part.visible),
+            sourceManualVisible: source.userData.manualVisible,
+            recordCalls: window.__fakeApi.calls.recordToggle.length,
+          };
+        }""")
+        assert part_visibility == {
+            "parts": [True, False, True],
+            "sourceManualVisible": True,
+            "recordCalls": 0,
+        }
+        assert rows.nth(1).locator(".mesh-state-btn").get_attribute("title") == (
+            "Hidden (manual override)")
+        rows.nth(2).click()
+        assert rows.nth(2).get_attribute("class").find("selected") >= 0
+        assert rows.nth(1).get_attribute("class").find("selected") == -1
+        assert page.evaluate("""() => {
+          const parts = window.__looseSource.userData.looseParts;
+          return parts.map(part => part.userData.viewerOutline
+            .userData.selectionSelected);
+        }""") == [False, False, True]
+
+        material_state = page.evaluate("""async () => {
+          const {replaceMeshMaterial} = await import(
+            './js/mesh/mesh-material-state.js');
+          const source = window.__looseSource;
+          replaceMeshMaterial(source, null, {material_profile_id: 'none'},
+            {render: false});
+          return source.userData.looseParts.every(part =>
+            part.material === source.material);
+        }""")
+        assert material_state is True
+
+        rows.nth(0).locator(".mesh-name").dblclick()
+        editor = rows.nth(0).locator(".mesh-name-input")
+        editor.fill("Renamed Part")
+        editor.press("Enter")
+        assert rows.nth(0).inner_text() == "Renamed Part"
+        assert page.evaluate("window.__fakeApi.calls.saveMeshNames.length") == 0
+
+        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.locator("#mesh-list .draw-item").first.wait_for()
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "9, 0, 0",
+        ]
+        assert page.evaluate("""() => {
+          const source = window.modViewer.activeMeshes[0];
+          return {
+            looseParts: source.userData.looseParts?.length || 0,
+            children: source.children.length,
+            drawRangeRestored: source.geometry.drawRange.count === Infinity,
+          };
+        }""") == {
+            "looseParts": 0, "children": 1, "drawRangeRestored": True,
+        }
+    finally:
+        context.close()
+
+
+def test_loose_part_tolerance_dialog_can_cancel_reject_invalid_and_join(
+        edge_browser, frontend_url):
+    path = "LoosePartsTolerance"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.wait_for()
+        source_row.locator(".mesh-name").dblclick()
+        editor = source_row.locator(".mesh-name-input")
+        editor.fill("Hair Ornament")
+        editor.press("Enter")
+        assert source_row.inner_text() == "Hair Ornament"
+
+        source_row.click(button="right")
+        page.locator(".mesh-context-menu button").click()
+        dialog = page.locator("#dialog-backdrop")
+        dialog.wait_for()
+        tolerance = page.locator("#dialog-range-input")
+        page.locator("#dialog-cancel").click()
+        assert dialog.is_hidden()
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "Hair Ornament",
+        ]
+
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(".mesh-context-menu button").click()
+        tolerance = page.locator("#dialog-range-input")
+        tolerance.fill("-1")
+        page.locator("#dialog-ok").click()
+        assert dialog.is_visible()
+        assert page.locator("#mesh-list .draw-item").count() == 1
+        tolerance.fill("0.002")
+        page.keyboard.press("Enter")
+        assert dialog.is_hidden()
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "Hair Ornament - Part 1",
+            "Hair Ornament - Part 2",
+        ]
+    finally:
+        context.close()
+
 
 def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         edge_browser, frontend_url):

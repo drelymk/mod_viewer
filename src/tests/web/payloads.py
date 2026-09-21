@@ -85,6 +85,20 @@ def _payload(label="A"):
     }
 
 
+def _loose_parts_payload(label="Loose"):
+    payload = _payload(label)
+    entry = next(iter(payload["meshes"].values()))
+    entry.pop("shape_targets", None)
+    entry["drawindexed"] = [9, 0, 0]
+    entry["pos"] = _f32(
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        10, 0, 0, 11, 0, 0, 10, 1, 0,
+        0.001, 0, 0, 1.001, 0, 0, 0.001, 1, 0,
+    )
+    entry["idx"] = _u32(0, 1, 2, 3, 4, 5, 6, 7, 8)
+    return payload
+
+
 def _texture_run_payload():
     """Small ordered draw corpus for automatic texture-run regressions."""
     texture_a = "diffuse::TextureRuns-A.png"

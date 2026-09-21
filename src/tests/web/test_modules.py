@@ -20,6 +20,228 @@ def _call_module(page, module_path, export_name, *args):
     })
 
 
+def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {findLooseParts, separateLooseParts, clearLooseParts,
+        syncLoosePartMaterial} =
+        await import('./js/mesh/loose-parts.js');
+      const makeMesh = (positions, indices) => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(
+          new Float32Array(positions), 3));
+        geometry.setIndex(new THREE.BufferAttribute(
+          new Uint32Array(indices), 1));
+        return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
+      };
+      const parts = mesh => findLooseParts(mesh).map(index => Array.from(index));
+      const disconnected = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        10, 0, 0, 11, 0, 0, 10, 1, 0,
+      ], [0, 1, 2, 3, 4, 5]);
+      const connected = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0,
+      ], [0, 1, 2, 2, 1, 3]);
+      const duplicatedSeam = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+      ], [0, 1, 2, 3, 4, 5]);
+      const nearlyIdentical = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0, 0, 0.000001, 1, 0, 0.000001, 0, 1, 0.000001,
+      ], [0, 1, 2, 3, 4, 5]);
+      const ordered = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        20, 0, 0, 21, 0, 0, 20, 1, 0,
+        10, 0, 0, 11, 0, 0, 10, 1, 0,
+      ], [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+      const oneIsland = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0,
+      ], [0, 1, 2, 2, 1, 3]);
+
+      const source = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        10, 0, 0, 11, 0, 0, 10, 1, 0,
+      ], [0, 1, 2, 3, 4, 5]);
+      const normal = new THREE.BufferAttribute(new Float32Array(18), 3);
+      const uv = new THREE.BufferAttribute(new Float32Array(12), 2);
+      source.geometry.setAttribute('normal', normal);
+      source.geometry.setAttribute('uv', uv);
+      source.geometry.setDrawRange(2, 4);
+      const originalIndex = source.geometry.index;
+      const originalMaterial = source.material;
+      const created = separateLooseParts(source, {label: 'Fixture'});
+      const heatmapColor = new THREE.BufferAttribute(
+        new Float32Array(18), 3);
+      const heatmapMaterial = new THREE.MeshBasicNodeMaterial();
+      source.geometry.setAttribute('color', heatmapColor);
+      source.material = heatmapMaterial;
+      syncLoosePartMaterial(source);
+      const heatmapEnabled = created.every(part =>
+        part.material === heatmapMaterial
+        && part.geometry.getAttribute('color') === heatmapColor);
+      source.geometry.deleteAttribute('color');
+      source.material = originalMaterial;
+      syncLoosePartMaterial(source);
+      const heatmapDisabled = created.every(part =>
+        part.material === originalMaterial
+        && !part.geometry.getAttribute('color'));
+      const shared = created.every(part =>
+        part.geometry.getAttribute('position') ===
+          source.geometry.getAttribute('position') &&
+        part.geometry.getAttribute('normal') === normal &&
+        part.geometry.getAttribute('uv') === uv &&
+        part.material === originalMaterial);
+      const independentIndexes = created.length === 2
+        && created[0].geometry.index !== created[1].geometry.index
+        && source.geometry.index === originalIndex;
+      const beforeCleanup = {
+        labels: created.map(part => part.userData.loosePartLabel),
+        drawCount: source.geometry.drawRange.count,
+        attached: created.every(part => part.parent === source),
+        sharedBounds: created.every(part =>
+          part.geometry.boundingBox === source.geometry.boundingBox
+          && part.geometry.boundingSphere === source.geometry.boundingSphere),
+        frustumCulled: created.every(part => part.frustumCulled === false),
+        heatmapEnabled,
+        heatmapDisabled,
+        shared, independentIndexes,
+      };
+      clearLooseParts(source);
+      return {
+        disconnected: parts(disconnected),
+        connected: parts(connected),
+        duplicatedSeam: parts(duplicatedSeam),
+        nearlyIdentical: parts(nearlyIdentical),
+        ordered: parts(ordered),
+        oneIsland: parts(oneIsland),
+        beforeCleanup,
+        afterCleanup: {
+          children: source.children.length,
+          looseParts: source.userData.looseParts?.length || 0,
+          drawStart: source.geometry.drawRange.start,
+          drawCount: source.geometry.drawRange.count,
+        },
+      };
+    }""")
+    assert result["disconnected"] == [[0, 1, 2], [3, 4, 5]]
+    assert result["connected"] == []
+    assert result["duplicatedSeam"] == []
+    assert result["nearlyIdentical"] == [[0, 1, 2], [3, 4, 5]]
+    assert result["ordered"] == [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    assert result["oneIsland"] == []
+    assert result["beforeCleanup"] == {
+        "labels": ["Fixture - Part 1", "Fixture - Part 2"],
+        "drawCount": 0,
+        "attached": True,
+        "sharedBounds": True,
+        "frustumCulled": True,
+        "heatmapEnabled": True,
+        "heatmapDisabled": True,
+        "shared": True,
+        "independentIndexes": True,
+    }
+    assert result["afterCleanup"] == {
+        "children": 0,
+        "looseParts": 0,
+        "drawStart": 2,
+        "drawCount": 4,
+    }
+
+
+def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {findLooseParts} = await import('./js/mesh/loose-parts.js');
+      const makeMesh = positions => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(
+          new Float32Array(positions), 3));
+        geometry.setIndex([0, 1, 2, 3, 4, 5]);
+        return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
+      };
+      const gapped = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0.001, 0, 0, 2, 0, 0, 1, 1, 0,
+      ]);
+      const boundary = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0.005, 0, 0, 2, 0, 0, 1, 1, 0,
+      ]);
+      const cellBoundary = makeMesh([
+        0.00199, 0, 0, 1, 0, 0, 0, 1, 0,
+        0.00201, 0, 0, 2, 0, 0, 1, 1, 0,
+      ]);
+      const count = (mesh, tolerance) =>
+        findLooseParts(mesh, {tolerance}).length;
+      return {
+        largerGap: count(gapped, 0.0001),
+        insideGap: count(gapped, 0.002),
+        exactBoundary: count(boundary, 0.005),
+        adjacentCells: count(cellBoundary, 0.002),
+        invalidLow: count(gapped, -0.1),
+        invalidHigh: count(gapped, 0.011),
+      };
+    }""")
+    assert result == {
+        "largerGap": 2,
+        "insideGap": 0,
+        "exactBoundary": 0,
+        "adjacentCells": 0,
+        "invalidLow": 0,
+        "invalidHigh": 0,
+    }
+
+
+def test_model_picking_flattens_only_split_mesh_render_targets(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {separateLooseParts} = await import('./js/mesh/loose-parts.js');
+      const {raycastModelAtClientPoint} = await import(
+        './js/scene/model-picking.js');
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([
+          -1, 0, 0, -0.5, 0, 0, -1, 0.5, 0,
+          0.5, 0, 0, 1, 0, 0, 0.5, 0.5, 0,
+        ]), 3));
+      geometry.setIndex([0, 1, 2, 3, 4, 5]);
+      const source = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+      const parts = separateLooseParts(source);
+      source.updateMatrixWorld(true);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateMatrixWorld(true);
+      const point = new THREE.Vector3(0.6, 0.1, 0)
+        .applyMatrix4(parts[1].matrixWorld).project(camera);
+      const hit = raycastModelAtClientPoint({
+        clientX: 50 + point.x * 50,
+        clientY: 50 - point.y * 50,
+        canvas: {getBoundingClientRect: () => ({
+          left: 0, top: 0, width: 100, height: 100,
+        })},
+        camera,
+        meshes: [source],
+      });
+      source.visible = false;
+      const hiddenHit = raycastModelAtClientPoint({
+        clientX: 50 + point.x * 50,
+        clientY: 50 - point.y * 50,
+        canvas: {getBoundingClientRect: () => ({
+          left: 0, top: 0, width: 100, height: 100,
+        })},
+        camera,
+        meshes: [source],
+      });
+      return {
+        partCount: parts.length, hitIsPart: hit?.object === parts[1],
+        hiddenHit: hiddenHit === null,
+      };
+    }""")
+    assert result == {"partCount": 2, "hitIsPart": True, "hiddenHit": True}
+
+
 def test_baked_animation_updates_existing_attributes_and_wraps_frames(module_page):
     result = module_page.evaluate("""async () => {
       const pending = new Map();

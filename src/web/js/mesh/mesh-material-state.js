@@ -7,6 +7,7 @@ import {
 import { setMeshTextureState } from './mesh-factory.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
+import { syncLoosePartMaterial } from './loose-parts.js';
 
 const MATERIAL_METADATA_FIELDS = [
   ['materialKind', 'material_kind'],
@@ -61,6 +62,7 @@ export function replaceMeshMaterial(
     { hasUv: !!mesh.geometry?.attributes?.uv });
   try {
     mesh.material = nextMaterial;
+    syncLoosePartMaterial(mesh);
     initializeMeshRenderModes(mesh);
     restoreGameMaterialViewerState(nextMaterial, viewerState);
     updateMeshMaterialMetadata(mesh, metadata, profile);
@@ -77,6 +79,7 @@ export function replaceMeshMaterial(
     }, { render: false });
   } catch (error) {
     mesh.material = oldMaterial;
+    syncLoosePartMaterial(mesh);
     for (const [target, value] of Object.entries(previousMetadata)) {
       mesh.userData[target] = value;
     }

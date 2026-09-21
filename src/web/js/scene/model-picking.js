@@ -1,6 +1,13 @@
 // Shared viewport raycasting for model selection and one-shot tools.
 
 import * as THREE from 'three';
+import {getLooseParts} from '../mesh/loose-parts.js';
+
+function meshPickTargets(mesh) {
+  const parts = getLooseParts(mesh);
+  if (!parts.length) return [mesh];
+  return mesh?.visible ? parts : [];
+}
 
 /** Return the first visible model intersection at a client-space point. */
 export function raycastModelAtClientPoint({
@@ -16,6 +23,8 @@ export function raycastModelAtClientPoint({
     -((Number(clientY) - rect.top) / height) * 2 + 1);
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(pointer, camera);
-  const visibleMeshes = [...(meshes || [])].filter(mesh => mesh?.visible);
+  const visibleMeshes = [...(meshes || [])]
+    .flatMap(meshPickTargets)
+    .filter(mesh => mesh?.visible);
   return raycaster.intersectObjects(visibleMeshes, false)[0] || null;
 }

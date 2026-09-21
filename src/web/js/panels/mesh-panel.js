@@ -22,11 +22,34 @@ import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import {
   assetDetailLabel, assetSummaryLabel, summarizeAssetBindings,
 } from './asset-diagnostics.js';
-import { noteRecordMeshEdit } from '../editing/record-session.js';
+import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { requestRender } from '../scene/render-scheduler.js';
+import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
+import { rangeInputDialog } from '../ui/dialogs.js';
+import {
+  MAX_LOOSE_PART_TOLERANCE, getLooseParts, isLoosePart, separateLooseParts,
+} from '../mesh/loose-parts.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
+let meshContextMenu = null;
+let meshContextAction = null;
+let meshContextTarget = null;
+let meshContextListenersInstalled = false;
+const meshPanelContexts = new WeakMap();
+
+function meshRowWrap(mesh) {
+  return getMeshView(mesh)?.row?.closest('.draw-item-wrap') || null;
+}
+
+function meshRowLabel(mesh, context) {
+  const label = getMeshView(mesh)?.row?.querySelector('.mesh-name')?.textContent.trim();
+  if (label) return label;
+  if (mesh.userData.displayName) return mesh.userData.displayName;
+  if (context?.entry?.drawindexed) return context.entry.drawindexed.join(', ');
+  return mesh.name || 'Mesh';
+}
 
 function saveComponentMaterialKind(modPath, source, component, kind) {
   if (!modPath || !window.pywebview?.api?.save_component_material_kind) {
@@ -34,6 +57,69 @@ function saveComponentMaterialKind(modPath, source, component, kind) {
   }
   return window.pywebview.api.save_component_material_kind(
     modPath, source, component, kind);
+}
+
+function closeMeshContextMenu() {
+  if (!meshContextMenu) return;
+  meshContextMenu.hidden = true;
+  meshContextTarget = null;
+}
+
+function ensureMeshContextMenu() {
+  if (meshContextMenu) return meshContextMenu;
+  meshContextMenu = document.createElement('div');
+  meshContextMenu.className = 'mesh-context-menu';
+  meshContextMenu.setAttribute('role', 'menu');
+  meshContextMenu.hidden = true;
+  meshContextAction = document.createElement('button');
+  meshContextAction.type = 'button';
+  meshContextAction.setAttribute('role', 'menuitem');
+  meshContextAction.dataset.i18n = 'mesh.separateLooseParts';
+  meshContextAction.textContent = t('mesh.separateLooseParts');
+  meshContextMenu.appendChild(meshContextAction);
+  document.body.appendChild(meshContextMenu);
+  meshContextAction.addEventListener('click', () => {
+    const source = meshContextTarget;
+    closeMeshContextMenu();
+    if (source) void separateMeshRow(source);
+  });
+  if (!meshContextListenersInstalled) {
+    document.addEventListener('pointerdown', event => {
+      if (!meshContextMenu?.contains(event.target)) closeMeshContextMenu();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeMeshContextMenu();
+    });
+    meshContextListenersInstalled = true;
+  }
+  return meshContextMenu;
+}
+
+function openMeshContextMenu(event, mesh) {
+  if (isRecording()) {
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const menu = ensureMeshContextMenu();
+  const container = document.getElementById('canvas-container') || document.body;
+  const bounds = container.getBoundingClientRect();
+  const left = Number(event.clientX);
+  const top = Number(event.clientY);
+  menu.hidden = false;
+  meshContextTarget = mesh;
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
+  requestAnimationFrame(() => {
+    if (menu.hidden) return;
+    const maxLeft = Math.max(4, window.innerWidth - menu.offsetWidth - 4);
+    const maxTop = Math.max(
+      bounds.top + 4, Math.min(window.innerHeight, bounds.bottom)
+        - menu.offsetHeight - 4);
+    menu.style.left = `${Math.min(Math.max(4, left), maxLeft)}px`;
+    menu.style.top = `${Math.min(Math.max(bounds.top + 4, top), maxTop)}px`;
+  });
 }
 
 function syncMeshPanel() {
@@ -182,7 +268,7 @@ function updateComponentAssetLabel(header, summary) {
 }
 
 function updateDrawAssetLabel(mesh) {
-  const row = mesh?.userData?.assetRow;
+  const row = getMeshView(mesh)?.row;
   if (!row) return;
   let assetSpan = row.querySelector('.asset-draw-label');
   const label = assetDetailLabel(
@@ -206,9 +292,12 @@ function updateDrawAssetLabel(mesh) {
  * Returns `{wrap, rebuildTexList}` -- the caller collects `rebuildTexList`
  * alongside every other mesh in the component so the "manage textures"
  * popup can refresh them all after an add/remove (see buildMeshPanel). */
-function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
+function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
+                      {labelOverride = null, onContextMenu = null,
+                        includeInGroup = true} = {}) {
   const row = document.createElement('div');
   row.className = 'draw-item';
+  const loosePart = isLoosePart(mesh);
 
   const cb = document.createElement('button');
   cb.type = 'button';
@@ -219,6 +308,13 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     e.stopPropagation();
     const nextVisible = !mesh.visible;
     cb.checked = nextVisible;
+    if (loosePart) {
+      mesh.userData.manualVisible = nextVisible;
+      mesh.userData.manuallyToggled = true;
+      applyMeshVisibility(mesh, {notify: false});
+      updateStateIndicator(mesh);
+      return;
+    }
     mesh.userData.manualVisible = nextVisible;
     const automaticVisible = conditionsSatisfied(mesh);
     mesh.userData.manuallyToggled = nextVisible !== automaticVisible;
@@ -230,14 +326,16 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     masterCb.indeterminate = any && !all;
     masterCb.checked = all;
   });
-  itemCbs.push(cb);
+  if (!loosePart && includeInGroup) itemCbs.push(cb);
 
   const label = entry.drawindexed
     ? entry.drawindexed.join(', ')
     : '#' + name.slice(groupName.length + 1);
   const labelSpan = document.createElement('span');
   labelSpan.className = 'mesh-name';
-  labelSpan.textContent = mesh.userData.displayName || label;
+  const displayLabel = labelOverride || mesh.userData.loosePartLabel
+    || mesh.userData.displayName || label;
+  labelSpan.textContent = displayLabel;
   row.append(cb, labelSpan);
   const assetLabel = assetDetailLabel(entry.asset_binding);
   if (assetLabel) {
@@ -247,7 +345,6 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     assetSpan.title = assetLabel;
     row.appendChild(assetSpan);
   }
-  mesh.userData.assetRow = row;
   const updateStateIndicator = (m) => {
     cb.checked = m.visible;
     cb.classList.toggle('state-hidden', !m.visible);
@@ -280,6 +377,10 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
       finished = true;
       labelSpan.textContent = apply ? next : original;
       if (!apply || next === original) return;
+      if (loosePart) {
+        mesh.userData.loosePartLabel = next;
+        return;
+      }
       mesh.userData.displayName = next;
       mesh.userData.meshNames[mesh.userData.metadataKey] = next;
       if (mesh.userData.modPath) {
@@ -313,11 +414,118 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb) {
     if (e.target === cb) return;
     selectMesh(mesh);
   });
+  if (onContextMenu) {
+    row.addEventListener('contextmenu', event => onContextMenu(event, mesh));
+  }
 
   const wrap = document.createElement('div');
   wrap.className = 'draw-item-wrap';
   wrap.append(row);
-  return { wrap };
+  return {wrap, cb};
+}
+
+function buildPartRows(source, context) {
+  return getLooseParts(source).map((part, index) => {
+    const {wrap} = buildDrawRow(
+      `${context.name}::loose-part-${index + 1}`,
+      context.groupName,
+      context.entry,
+      part,
+      [],
+      null,
+      {labelOverride: part.userData.loosePartLabel, includeInGroup: false});
+    registerInspectorMesh(part, context.inspectorRecord);
+    return wrap;
+  });
+}
+
+function connectedPartWraps(source) {
+  return getLooseParts(source).map(part =>
+    getMeshView(part)?.row?.closest('.draw-item-wrap')).filter(Boolean);
+}
+
+function showLoosePartRows(source) {
+  const context = meshPanelContexts.get(source);
+  const sourceRow = getMeshView(source)?.row;
+  const sourceWrap = sourceRow?.closest('.draw-item-wrap');
+  if (!context || !sourceWrap?.isConnected) return false;
+  sourceWrap.replaceWith(...buildPartRows(source, context));
+  return true;
+}
+
+function showRecordingSourceRows() {
+  closeMeshContextMenu();
+  let selectionCleared = false;
+  let partsChanged = false;
+  for (const group of groupsUI) {
+    group.itemObjs.forEach((source, sourceIndex) => {
+      const context = meshPanelContexts.get(source);
+      const partWraps = connectedPartWraps(source);
+      if (!context || !partWraps.length) return;
+      for (const part of getLooseParts(source)) {
+        if (part.visible) continue;
+        part.visible = true;
+        partsChanged = true;
+      }
+      if (!selectionCleared) {
+        clearSelection();
+        selectionCleared = true;
+      }
+      const {wrap, cb} = buildDrawRow(
+        context.name, context.groupName, context.entry, source,
+        group.itemCbs, group.masterCb, {includeInGroup: false});
+      group.itemCbs[sourceIndex] = cb;
+      partWraps[0].replaceWith(wrap);
+      partWraps.slice(1).forEach(partWrap => partWrap.remove());
+    });
+  }
+  if (partsChanged) invalidateCharacterShadowVisibility({request: false});
+  requestRender();
+}
+
+function restoreLoosePartRows() {
+  let selectionCleared = false;
+  for (const group of groupsUI) {
+    group.itemObjs.forEach(source => {
+      const parts = getLooseParts(source);
+      if (!parts.length) return;
+      if (!selectionCleared) {
+        clearSelection();
+        selectionCleared = true;
+      }
+      parts.forEach(part => {
+        applyMeshVisibility(part, {notify: false, render: false});
+      });
+      showLoosePartRows(source);
+    });
+  }
+  requestRender();
+}
+
+async function separateMeshRow(source) {
+  if (isRecording()) return false;
+  const context = meshPanelContexts.get(source);
+  const sourceRow = getMeshView(source)?.row;
+  const sourceWrap = sourceRow?.closest('.draw-item-wrap');
+  if (!context || !sourceWrap?.isConnected) return false;
+  const tolerance = await rangeInputDialog(t('mesh.separateLooseParts'), {
+    label: t('mesh.connectionTolerance'),
+    rangeText: t('mesh.connectionToleranceRange'),
+    value: 0,
+    min: 0,
+    max: MAX_LOOSE_PART_TOLERANCE,
+    step: 0.0001,
+    okKey: 'mesh.separate',
+  });
+  if (tolerance === null || isRecording()) return false;
+  const parts = separateLooseParts(source, {
+    label: meshRowLabel(source, context), tolerance,
+  });
+  if (parts.length <= 1) return false;
+  sourceWrap.replaceWith(...buildPartRows(source, context));
+  selectMesh(parts[0]);
+  requestRender();
+  return true;
 }
 
 /** Build the panel for already-constructed live meshes. `modPath` is threaded
@@ -331,6 +539,7 @@ export function buildMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const list = document.getElementById('mesh-list');
   const replace = options.replace !== false;
+  closeMeshContextMenu();
   if (replace) {
     list.innerHTML = '';
     groupsUI = [];
@@ -477,12 +686,17 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         mesh.userData.componentDescriptor = componentDescriptor;
         itemObjs.push(mesh);
         const { wrap } = buildDrawRow(
-          name, groupName, meshes[name], mesh, itemCbs, masterCb);
+          name, groupName, meshes[name], mesh, itemCbs, masterCb,
+          {onContextMenu: isRecording() ? null : openMeshContextMenu});
         itemsWrap.appendChild(wrap);
-        registerInspectorMesh(mesh, {
+        const inspectorRecord = {
           component: componentDescriptor,
           entry: meshes[name],
           label: mesh.userData.displayName || name,
+        };
+        registerInspectorMesh(mesh, inspectorRecord);
+        meshPanelContexts.set(mesh, {
+          name, groupName, entry: meshes[name], inspectorRecord,
         });
       }
       recomputeAutomaticTextureBoundaries(itemObjs);
@@ -517,10 +731,14 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
     }
   }
 
+  if (isRecording()) showRecordingSourceRows();
   document.getElementById('camera-panel').style.display = 'none';
 }
 
 window.addEventListener(LANGUAGE_CHANGED, () => {
+  if (meshContextAction) {
+    meshContextAction.textContent = t('mesh.separateLooseParts');
+  }
   groupsUI.forEach(group => {
     group.syncLabels?.();
     group.itemObjs.forEach(mesh => getMeshView(mesh)?.syncStateIndicator?.());
@@ -529,7 +747,13 @@ window.addEventListener(LANGUAGE_CHANGED, () => {
   });
 });
 
+window.addEventListener('mod-viewer-recording-state', event => {
+  if (event.detail?.recording) showRecordingSourceRows();
+  else restoreLoosePartRows();
+});
+
 export function removeAssetFillMeshPanel(targetMeshes = null) {
+  closeMeshContextMenu();
   const target = targetMeshes === null ? null : new Set(targetMeshes);
   const groups = groupsUI.filter(group => group.assetFill
     && (!target || group.itemObjs.some(mesh => target.has(mesh))));
@@ -541,7 +765,14 @@ export function removeAssetFillMeshPanel(targetMeshes = null) {
       ? group.itemObjs.filter(mesh => target.has(mesh))
       : [...group.itemObjs];
     members.forEach(mesh => {
-      mesh.userData.assetRow?.closest('.draw-item-wrap')?.remove();
+      const rowWraps = new Set();
+      const sourceWrap = meshRowWrap(mesh);
+      if (sourceWrap) rowWraps.add(sourceWrap);
+      getLooseParts(mesh).forEach(part => {
+        const partWrap = getMeshView(part)?.row?.closest('.draw-item-wrap');
+        if (partWrap) rowWraps.add(partWrap);
+      });
+      rowWraps.forEach(rowWrap => rowWrap.remove());
       removed.push(mesh);
       const index = group.itemObjs.indexOf(mesh);
       if (index >= 0) {
