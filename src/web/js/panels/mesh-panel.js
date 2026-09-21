@@ -25,9 +25,10 @@ import {
 import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
+import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
 import { rangeInputDialog } from '../ui/dialogs.js';
 import {
-  getLooseParts, isLoosePart, separateLooseParts,
+  MAX_LOOSE_PART_TOLERANCE, getLooseParts, isLoosePart, separateLooseParts,
 } from '../mesh/loose-parts.js';
 
 let groupsUI = [];
@@ -36,11 +37,10 @@ let meshContextMenu = null;
 let meshContextAction = null;
 let meshContextTarget = null;
 let meshContextListenersInstalled = false;
-const meshPanelViews = new WeakMap();
 const meshPanelContexts = new WeakMap();
 
 function meshRowWrap(mesh) {
-  return meshPanelViews.get(mesh)?.wrap || null;
+  return getMeshView(mesh)?.row?.closest('.draw-item-wrap') || null;
 }
 
 function meshRowLabel(mesh, context) {
@@ -310,6 +310,7 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
     cb.checked = nextVisible;
     if (loosePart) {
       mesh.userData.manualVisible = nextVisible;
+      mesh.userData.manuallyToggled = true;
       applyMeshVisibility(mesh, {notify: false});
       updateStateIndicator(mesh);
       return;
@@ -420,7 +421,6 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
   const wrap = document.createElement('div');
   wrap.className = 'draw-item-wrap';
   wrap.append(row);
-  meshPanelViews.set(mesh, {row, wrap});
   return {wrap, cb};
 }
 
@@ -456,11 +456,17 @@ function showLoosePartRows(source) {
 function showRecordingSourceRows() {
   closeMeshContextMenu();
   let selectionCleared = false;
+  let partsChanged = false;
   for (const group of groupsUI) {
     group.itemObjs.forEach((source, sourceIndex) => {
       const context = meshPanelContexts.get(source);
       const partWraps = connectedPartWraps(source);
       if (!context || !partWraps.length) return;
+      for (const part of getLooseParts(source)) {
+        if (part.visible) continue;
+        part.visible = true;
+        partsChanged = true;
+      }
       if (!selectionCleared) {
         clearSelection();
         selectionCleared = true;
@@ -473,6 +479,7 @@ function showRecordingSourceRows() {
       partWraps.slice(1).forEach(partWrap => partWrap.remove());
     });
   }
+  if (partsChanged) invalidateCharacterShadowVisibility({request: false});
   requestRender();
 }
 
@@ -480,6 +487,9 @@ function restoreLoosePartRows() {
   for (const group of groupsUI) {
     group.itemObjs.forEach(source => {
       if (!getLooseParts(source).length) return;
+      getLooseParts(source).forEach(part => {
+        applyMeshVisibility(part, {notify: false, render: false});
+      });
       showLoosePartRows(source);
     });
   }
@@ -497,7 +507,7 @@ async function separateMeshRow(source) {
     rangeText: t('mesh.connectionToleranceRange'),
     value: 0,
     min: 0,
-    max: 0.01,
+    max: MAX_LOOSE_PART_TOLERANCE,
     step: 0.0001,
     okKey: 'mesh.separate',
   });

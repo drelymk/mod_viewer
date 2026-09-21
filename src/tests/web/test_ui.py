@@ -280,11 +280,32 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
             "9, 0, 0 - Part 2",
             "9, 0, 0 - Part 3",
         ]
+        rows.nth(1).locator(".mesh-state-btn").click()
+        assert page.evaluate("""() => {
+          const parts = window.modViewer.activeMeshes[0].userData.looseParts;
+          return parts.map(part => ({
+            visible: part.visible, manual: part.userData.manualVisible,
+          }));
+        }""") == [
+            {"visible": True, "manual": True},
+            {"visible": False, "manual": False},
+            {"visible": True, "manual": True},
+        ]
         page.evaluate("""() => window.dispatchEvent(new CustomEvent(
           'mod-viewer-recording-state', {detail: {recording: true}}))""")
         assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
             "9, 0, 0",
         ]
+        assert page.evaluate("""() => {
+          const parts = window.modViewer.activeMeshes[0].userData.looseParts;
+          return {
+            visible: parts.map(part => part.visible),
+            manual: parts.map(part => part.userData.manualVisible),
+          };
+        }""") == {
+            "visible": [True, True, True],
+            "manual": [True, False, True],
+        }
         page.evaluate("""() => window.dispatchEvent(new CustomEvent(
           'mod-viewer-recording-state', {detail: {recording: false}}))""")
         rows = page.locator("#mesh-list .draw-item")
@@ -293,6 +314,9 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
             "9, 0, 0 - Part 2",
             "9, 0, 0 - Part 3",
         ]
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part => part.visible)""") == [True, False, True]
+        rows.nth(1).locator(".mesh-state-btn").click()
         state = page.evaluate("""() => {
           const source = window.modViewer.activeMeshes[0];
           window.__looseSource = source;
@@ -367,6 +391,8 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
             "sourceManualVisible": True,
             "recordCalls": 0,
         }
+        assert rows.nth(1).locator(".mesh-state-btn").get_attribute("title") == (
+            "Hidden (manual override)")
         rows.nth(2).click()
         assert rows.nth(2).get_attribute("class").find("selected") >= 0
         assert rows.nth(1).get_attribute("class").find("selected") == -1

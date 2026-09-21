@@ -102,6 +102,7 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         sharedBounds: created.every(part =>
           part.geometry.boundingBox === source.geometry.boundingBox
           && part.geometry.boundingSphere === source.geometry.boundingSphere),
+        frustumCulled: created.every(part => part.frustumCulled === false),
         heatmapEnabled,
         heatmapDisabled,
         shared, independentIndexes,
@@ -134,6 +135,7 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         "drawCount": 0,
         "attached": True,
         "sharedBounds": True,
+        "frustumCulled": True,
         "heatmapEnabled": True,
         "heatmapDisabled": True,
         "shared": True,

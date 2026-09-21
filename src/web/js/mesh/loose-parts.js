@@ -184,7 +184,9 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
     part.name = `${source.name || 'mesh'}-loose-part-${partIndex + 1}`;
     part.castShadow = source.castShadow;
     part.receiveShadow = source.receiveShadow;
-    part.frustumCulled = source.frustumCulled;
+    // Parts share the source bounds, but rig dragging intentionally marks
+    // only the semantic source as uncullable while its bounds are dirty.
+    part.frustumCulled = false;
     part.layers.mask = source.layers.mask;
     part.userData.loosePartParent = source;
     part.userData.loosePartIndex = partIndex;
