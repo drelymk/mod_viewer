@@ -191,6 +191,51 @@ class _ShapeBuffer:
     low_bytes: bytearray | None = None
 
 
+def _decode_sparse_shape(shape, *, buffers, mod_dir, sparse_shape_cache,
+                         source=None):
+    """Decode one WWMI sparse shape into raw-vertex deltas.
+
+    The padded key id and batch entry offset are authored by the same shape
+    analysis used for ordinary sliders.  Animation packing calls this helper
+    too, so both paths retain the exact WWMI id -> sparse-entry mapping.
+    """
+    if shape.get("shape_id") is None:
+        return None
+    resolve = source.resolve_resource if source is not None else \
+        lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    try:
+        paths = tuple(resolve(shape[key]) for key in
+                      ("offset_file", "vertex_id_file", "vertex_offset_file"))
+        key_id = shape.get(
+            "buffer_shape_id",
+            int(shape["shape_id"]) + int(shape["shape_id"]) // 127)
+        entry_offset = int(shape.get("sparse_entry_offset", 0))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(path and exists(path) for path in paths):
+        return None
+    cache_key = paths + (key_id, entry_offset)
+    if cache_key in sparse_shape_cache:
+        return sparse_shape_cache[cache_key]
+    offsets, vertex_ids, deltas = (buffers.raw(path) for path in paths)
+    if (key_id + 2) * 4 > len(offsets):
+        return None
+    begin, end = struct.unpack_from("<II", offsets, key_id * 4)
+    begin += entry_offset
+    end += entry_offset
+    limit = min(end, len(vertex_ids) // 4, len(deltas) // 12)
+    sparse = {}
+    for index in range(begin, limit):
+        vertex_id = struct.unpack_from("<I", vertex_ids, index * 4)[0]
+        delta = struct.unpack_from("<eee", deltas, index * 12)
+        prior = sparse.get(vertex_id, (0., 0., 0.))
+        sparse[vertex_id] = tuple(
+            prior[j] + delta[j] for j in range(3))
+    sparse_shape_cache[cache_key] = sparse
+    return sparse
+
+
 def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
                          buffers, sparse_shape_cache, source=None):
     """Load and prepare dense or sparse shape targets for one draw."""
@@ -206,35 +251,13 @@ def _build_shape_buffers(shape_sliders, mod_dir, effective_pos_path, used,
         if not same(shape_base_path, effective_pos_path):
             continue
         if shape.get("shape_id") is not None:
-            paths = tuple(resolve(shape[key]) for key in
-                          ("offset_file", "vertex_id_file", "vertex_offset_file"))
-            if not all(path and exists(path) for path in paths):
+            sparse = _decode_sparse_shape(
+                shape, buffers=buffers, mod_dir=mod_dir,
+                sparse_shape_cache=sparse_shape_cache, source=source)
+            if sparse is None:
                 continue
-            # WWMI aligns each 127-key batch to a 128-entry container;
-            # user-facing IDs omit that padding slot (SkapeKeySetter.hlsl).
-            key_id = shape.get(
-                "buffer_shape_id",
-                shape["shape_id"] + shape["shape_id"] // 127)
-            cache_key = paths + (key_id,)
-            if cache_key not in sparse_shape_cache:
-                offsets, vertex_ids, deltas = (buffers.raw(path) for path in paths)
-                if (key_id + 2) * 4 > len(offsets):
-                    continue
-                begin, end = struct.unpack_from("<II", offsets, key_id * 4)
-                entry_offset = shape.get("sparse_entry_offset", 0)
-                begin += entry_offset
-                end += entry_offset
-                limit = min(end, len(vertex_ids) // 4, len(deltas) // 12)
-                sparse = {}
-                for index in range(begin, limit):
-                    vertex_id = struct.unpack_from("<I", vertex_ids, index * 4)[0]
-                    delta = struct.unpack_from("<eee", deltas, index * 12)
-                    prior = sparse.get(vertex_id, (0., 0., 0.))
-                    sparse[vertex_id] = tuple(
-                        prior[j] + delta[j] for j in range(3))
-                sparse_shape_cache[cache_key] = sparse
             shape_buffers.append(_ShapeBuffer(
-                shape, sparse_shape_cache[cache_key],
+                shape, sparse,
                 bytearray(len(used) * 12), True))
         else:
             target_path = resolve(shape["target_file"])

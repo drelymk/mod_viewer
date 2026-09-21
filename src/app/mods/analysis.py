@@ -14,6 +14,7 @@ from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, merge_sections)
 from core.ini.animations import (
     compute_animation_control_vars, discover_compute_animations,
+    discover_wwmi_sparse_animations,
 )
 from core.materials.game_profile import GameDetection, resolve_game_detection
 
@@ -73,6 +74,24 @@ def _attach_shape_sliders(groups, shape_sliders):
                    if path_key(slider.get("base_file")) in position_files]
         if matches:
             group["shape_sliders"] = matches
+
+
+def _attach_sparse_animations(groups, animations):
+    """Attach WWMI sparse animations by their authored base position file."""
+    def path_key(path):
+        return os.path.normcase(os.path.normpath(path)) if path else None
+
+    for group in groups:
+        if group.get("_compute_animation") is not None:
+            continue
+        position_files = {path_key(group.get("position_file"))}
+        position_files.update(path_key(draw.get("position_file"))
+                              for draw in group.get("draws", []))
+        position_files.discard(None)
+        matches = [animation for animation in animations
+                   if path_key(animation.get("base_file")) in position_files]
+        if len(matches) == 1:
+            group["_compute_animation"] = matches[0]
 
 
 def _ini_scope(ini_path, folder_path, multi, source=None):
@@ -318,6 +337,13 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             canonical_vars=record["canonical_vars"])
         animation_control_vars.update(
             compute_animation_control_vars(compute, analysis.state_rules))
+        sparse_compute = discover_wwmi_sparse_animations(
+            secs, analysis.shapes, mod_dir=folder_path, ini_path=ini_path,
+            source=source, var_prefix=var_prefix,
+            canonical_vars=record["canonical_vars"])
+        animation_control_vars.update(
+            compute_animation_control_vars(
+                sparse_compute, analysis.state_rules))
         record["analysis"] = analysis
         resource_files.extend(
             info["filename"] for info in analysis.resources.values()
@@ -341,6 +367,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
                 # Keep the descriptor on the group that came from this INI.
                 # Mesh construction must not match resources across siblings.
                 group["_compute_animation"] = matches[0]
+        _attach_sparse_animations(ini_groups, sparse_compute)
         shape_sliders = analysis.shapes
         state_rules.extend(analysis.state_rules)
         game_evidence.extend(analysis.game_evidence)

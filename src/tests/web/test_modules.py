@@ -232,6 +232,123 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
     assert result["positionUpdates"] == 3
 
 
+def test_wwmi_sparse_animation_composes_overlay_and_freezes_disabled_passes(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      const condition = variable => [{kind: 'compare', op: '==',
+        left: {kind: 'variable', variable},
+        right: {kind: 'literal', value: 1}}];
+      const runNext = now => {
+        const id = Math.min(...pending.keys());
+        const callback = pending.get(id);
+        pending.delete(id);
+        callback(now);
+      };
+      try {
+        const {setControlValue} = await import(
+          './js/editing/control-state.js');
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const position = {array: new Float32Array([10, 0, 0])};
+        const normal = {array: new Float32Array([0, 1, 0])};
+        const mesh = {
+          visible: true,
+          userData: {
+            basePositions: new Float32Array([0, 0, 0]),
+            humanoidRestPositions: new Float32Array([10, 0, 0]),
+            humanoidRestNormals: new Float32Array([0, 1, 0]),
+          },
+          geometry: {attributes: {position, normal}},
+        };
+        const program = {
+          external_variables: ['ChouChaAnim', 'gangChaAnim'],
+          initials: {ChouChaFreq: 0, gangChaFreq: 0,
+            ChouChaAnimSpeed: 0.25, gangChaAnimSpeed: 0.5},
+          commands: [
+            {op: 'set', variable: 'ChouChaFreq',
+              expression: {kind: 'binary', op: '+',
+                left: {kind: 'variable', variable: 'ChouChaFreq'},
+                right: {kind: 'binary', op: '*',
+                  left: {kind: 'variable', variable: 'ChouChaAnimSpeed'},
+                  right: {kind: 'dt'}}},
+              conditions: condition('ChouChaAnim')},
+            {op: 'dispatch', track_id: 'wwmi-test', kind: 'shape', pass: 0,
+              phase: {kind: 'variable', variable: 'ChouChaFreq'},
+              conditions: condition('ChouChaAnim')},
+            {op: 'set', variable: 'gangChaFreq',
+              expression: {kind: 'binary', op: '+',
+                left: {kind: 'variable', variable: 'gangChaFreq'},
+                right: {kind: 'binary', op: '*',
+                  left: {kind: 'variable', variable: 'gangChaAnimSpeed'},
+                  right: {kind: 'dt'}}},
+              conditions: condition('gangChaAnim')},
+            {op: 'dispatch', track_id: 'wwmi-test', kind: 'shape', pass: 1,
+              phase: {kind: 'variable', variable: 'gangChaFreq'},
+              conditions: condition('gangChaAnim')},
+          ],
+        };
+        setControlValue('ChouChaAnim', '1');
+        setControlValue('gangChaAnim', '0');
+        runtime.registerAnimatedMesh(mesh, 'wwmi-test', {
+          kind: 'gimi_compute', vertex_count: 1,
+          program_id: 'wwmi-program-test', track_id: 'wwmi-test', program,
+          overlay: true,
+          shape_passes: [
+            {position_only: true, deltas: encode(
+              new Float32Array([1, 0, 0]))},
+            {position_only: true, deltas: encode(
+              new Float32Array([0, 2, 0]))},
+          ],
+          pose: null,
+        });
+        runNext(0);
+        const chouOnly = Array.from(position.array);
+        const restNormal = Array.from(normal.array);
+        setControlValue('gangChaAnim', '1');
+        runtime.wakeAnimationRuntime();
+        runNext(1000);
+        const bothAtStart = Array.from(position.array);
+        runNext(2000);
+        const bothAfterSecond = Array.from(position.array);
+        setControlValue('ChouChaAnim', '0');
+        setControlValue('gangChaAnim', '0');
+        runtime.wakeAnimationRuntime();
+        runNext(3000);
+        const restored = Array.from(position.array);
+        runtime.resetAnimationRuntime();
+        return {chouOnly, bothAtStart, bothAfterSecond, restored,
+          restNormal, normal: Array.from(normal.array)};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["chouOnly"] == pytest.approx([10.5, 0, 0])
+    assert result["bothAtStart"] == pytest.approx([10.5, 1, 0])
+    assert result["bothAfterSecond"] == pytest.approx([
+        10 + 0.5 * (math.sin(0.25 * 30) + 1),
+        2 * 0.5 * (math.sin(0.5 * 30) + 1), 0,
+    ])
+    assert result["restored"] == [10, 0, 0]
+    assert result["normal"] == result["restNormal"] == [0, 1, 0]
+
+
 def test_gimi_compute_animation_shares_program_state_across_outputs(module_page):
     result = module_page.evaluate("""async () => {
       const pending = new Map();

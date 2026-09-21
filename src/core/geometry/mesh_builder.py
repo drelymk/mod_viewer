@@ -15,6 +15,7 @@ from .buffers import (
 from .conventions import geometry_convention_for
 from .packing import (
     PackedAnimationFrame, _prepare_draw_vertices,
+    _decode_sparse_shape,
     pack_animation_frame_attributes, pack_animation_position_frame,
     pack_draw_geometry,
 )
@@ -441,8 +442,38 @@ def _prepare_gimi_shared(animation, *, mod_dir, buffers, source, geometry):
 
 
 def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
-                           source, geometry, shared):
+                           source, geometry, shared, sparse_shape_cache):
     """Pack fixed-layout compute inputs in the draw's compact vertex order."""
+    sparse = animation.get("kind") == "wwmi_sparse"
+    if sparse:
+        shape_entries = []
+        for item in animation.get("shape_passes", ()):
+            sparse_values = _decode_sparse_shape(
+                item.get("sparse_shape") or {}, buffers=buffers,
+                mod_dir=mod_dir, sparse_shape_cache=sparse_shape_cache,
+                source=source)
+            if sparse_values is None:
+                return None
+            deltas = bytearray(len(used_vertices) * 12)
+            for output, raw_index in enumerate(used_vertices):
+                values = sparse_values.get(raw_index, (0., 0., 0.))
+                struct.pack_into("<3f", deltas, output * 12, *values)
+            shape_entries.append({
+                "deltas": _geometry_ref(deltas, geometry),
+                "position_only": True,
+            })
+        result = {
+            "kind": "gimi_compute",
+            "track_id": animation["track_id"],
+            "program_id": animation.get("program_id"),
+            "program": animation.get("program"),
+            "shape_passes": shape_entries,
+            "vertex_count": len(used_vertices),
+        }
+        if animation.get("overlay"):
+            result["overlay"] = True
+        return result
+
     base_path = _gimi_path(mod_dir, animation["base_file"], source)
     pose = animation.get("pose")
     blend_path = (_gimi_path(mod_dir, pose["blend_file"], source)
@@ -660,7 +691,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     gimi_payload = _prepare_gimi_geometry(
                         gimi, packed.used_vertices, mod_dir=mod_dir,
                         buffers=buffers, source=source, geometry=geometry,
-                        shared=shared)
+                        shared=shared, sparse_shape_cache=sparse_shape_cache)
 
             if draw.skinning_source is not None:
                 skinning_manifest[draw.label] = \

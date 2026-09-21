@@ -2,11 +2,12 @@
 
 import struct
 
-from app.mods.analysis import analyze_mod_inis
+from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
 from core.ini.animations import (_identify_compute_shader,
                                  compute_animation_control_vars,
-                                 discover_compute_animations)
+                                 discover_compute_animations,
+                                 discover_wwmi_sparse_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.ini.sections import extract_resources, parse_sections
@@ -259,6 +260,194 @@ filename = texcoord.buf
 format = DXGI_FORMAT_R32_UINT
 filename = index.buf
 """)
+
+
+WWMI_ANIMATION_SHADER = """
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+  float value = 0.5 * (sin(z0 * 30.0) + 1.0);
+}
+"""
+
+
+def _wwmi_sparse_sections():
+    return parse_sections("fixture.ini", text=r"""
+[Constants]
+global $ChouChaAnim = 0
+global $gangChaAnim = 0
+global $ChouChaAnimSpeed = 0.25
+global $gangChaAnimSpeed = 0.5
+global $ChouChaFreq = 0
+global $gangChaFreq = 0
+global $dt
+
+[Present]
+if $ChouChaAnim == 1
+    run = CommandListAnimChouCha
+else
+    run = CommandListResetChouChaAnim
+endif
+if $gangChaAnim == 1
+    run = CommandListAnimGangCha
+else
+    run = CommandListResetGangChaAnim
+endif
+
+[CommandListAnimChouCha]
+$ChouChaFreq = $ChouChaFreq + $ChouChaAnimSpeed * $dt
+run = CustomShaderChouChaAnim
+
+[CommandListAnimGangCha]
+$gangChaFreq = $gangChaFreq + $gangChaAnimSpeed * $dt
+run = CustomShaderGangChaAnim
+
+[CommandListResetChouChaAnim]
+$\WWMIv1\shapekey_id = 165
+$\WWMIv1\shapekey_value = 0
+run = WWMIv1SetShapeKey
+
+[CommandListResetGangChaAnim]
+$\WWMIv1\shapekey_id = 166
+$\WWMIv1\shapekey_value = 0
+run = WWMIv1SetShapeKey
+
+[CustomShaderChouChaAnim]
+cs-u5 = ResourcePosition
+cs = res/anim.hlsl
+x0 = 0
+y0 = 165
+z0 = $ChouChaFreq
+dispatch = 1, 1, 1
+
+[CustomShaderGangChaAnim]
+cs-u5 = ResourcePosition
+cs = res/anim.hlsl
+x0 = 0
+y0 = 166
+z0 = $gangChaFreq
+dispatch = 1, 1, 1
+""")
+
+
+def test_wwmi_sparse_animation_discovers_one_two_pass_track(tmp_path):
+    (tmp_path / "res").mkdir()
+    (tmp_path / "res" / "anim.hlsl").write_text(WWMI_ANIMATION_SHADER)
+    static_shape = {
+        "kind": "shape_slider", "var": "BoobsSize",
+        "base_file": "Meshes/Position.buf", "shape_id": 161,
+        "buffer_shape_id": 162, "sparse_entry_offset": 43085,
+        "offset_file": "Meshes/ShapeKeyOffset.buf",
+        "vertex_id_file": "Meshes/ShapeKeyVertexId.buf",
+        "vertex_offset_file": "Meshes/ShapeKeyVertexOffset.buf",
+    }
+    discovered = discover_wwmi_sparse_animations(
+        _wwmi_sparse_sections(), [static_shape], mod_dir=str(tmp_path),
+        ini_path=str(tmp_path / "fixture.ini"))
+    assert len(discovered) == 1
+    animation = discovered[0]
+    assert animation["kind"] == "wwmi_sparse"
+    assert animation["overlay"] is True
+    assert [item["sparse_shape"]["shape_id"]
+            for item in animation["shape_passes"]] == [165, 166]
+    assert [item["sparse_shape"]["buffer_shape_id"]
+            for item in animation["shape_passes"]] == [166, 167]
+    assert all(item["position_only"] for item in animation["shape_passes"])
+    assert animation["program"]["external_variables"] == [
+        "ChouChaAnim", "gangChaAnim"]
+    assert compute_animation_control_vars(discovered) == {
+        "ChouChaAnim", "gangChaAnim",
+    }
+    assert animation["program"]["initials"] == {
+        "ChouChaFreq": 0.0, "ChouChaAnimSpeed": 0.25,
+        "gangChaFreq": 0.0, "gangChaAnimSpeed": 0.5,
+    }
+    groups = [{"position_file": "Meshes/Position.buf", "draws": []}]
+    _attach_sparse_animations(groups, discovered)
+    assert groups[0]["_compute_animation"] is animation
+
+
+def test_wwmi_sparse_animation_rejects_incomplete_authored_contract(tmp_path):
+    static_shape = {
+        "kind": "shape_slider", "var": "BoobsSize",
+        "base_file": "Meshes/Position.buf", "shape_id": 161,
+        "buffer_shape_id": 162, "sparse_entry_offset": 43085,
+        "offset_file": "Meshes/ShapeKeyOffset.buf",
+        "vertex_id_file": "Meshes/ShapeKeyVertexId.buf",
+        "vertex_offset_file": "Meshes/ShapeKeyVertexOffset.buf",
+    }
+    cases = {
+        "mismatched-reset": (lambda sections: sections[
+            "CommandListResetChouChaAnim"].__setitem__(
+                0, r"$\WWMIv1\shapekey_id = 166"), WWMI_ANIMATION_SHADER),
+        "blank-id": (lambda sections: sections[
+            "CustomShaderChouChaAnim"].__setitem__(3, "y0 = "),
+            WWMI_ANIMATION_SHADER),
+        "unsupported-shader": (lambda sections: None,
+            "[numthreads(1, 1, 1)] void main() { float value = z0; }"),
+    }
+    for name, (mutate, shader) in cases.items():
+        root = tmp_path / name
+        (root / "res").mkdir(parents=True)
+        (root / "res" / "anim.hlsl").write_text(shader)
+        sections = _wwmi_sparse_sections()
+        mutate(sections)
+        assert discover_wwmi_sparse_animations(
+            sections, [static_shape], mod_dir=str(root),
+            ini_path=str(root / "fixture.ini")) == []
+
+    missing = tmp_path / "missing-shader"
+    missing.mkdir()
+    assert discover_wwmi_sparse_animations(
+        _wwmi_sparse_sections(), [static_shape], mod_dir=str(missing),
+        ini_path=str(missing / "fixture.ini")) == []
+
+
+def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
+    root = tmp_path / "analysis"
+    root.mkdir()
+    (root / "res").mkdir()
+    (root / "res" / "anim.hlsl").write_text(WWMI_ANIMATION_SHADER)
+    sections = _wwmi_sparse_sections()
+    sections["Constants"].extend([
+        "global $BoobsSize = 0",
+        "global $shapekey_vertex_offset_batch1 = 0",
+    ])
+    sections.update({
+        "CommandListDrawSlider.Boobs": ["x87 = $BoobsSize * x87"],
+        "CommandListSetBoobs": [
+            r"$\WWMIv1\shapekey_id = 161",
+            r"$\WWMIv1\shapekey_value = $BoobsSize",
+        ],
+        "CommandListSetupShapeKeysBatch": [
+            "cs-t33 = ResourceShapeKeyOffsetBuffer"],
+        "CommandListLoadShapeKeysBatch": [
+            "cs-t0 = ResourceShapeKeyVertexIdBuffer",
+            "cs-t1 = ResourceShapeKeyVertexOffsetBuffer"],
+        "CommandListApplyShapeKeys": ["cs-t6 = ResourcePosition"],
+        "TextureOverrideBody": [
+            "vb0 = ResourcePosition", "vb1 = ResourceTexcoord",
+            "ib = ResourceIB", "drawindexed = 3, 0, 0"],
+        "ResourcePosition": ["stride = 12", "filename = Meshes/Position.buf"],
+        "ResourceTexcoord": ["stride = 8", "filename = Meshes/Texcoord.buf"],
+        "ResourceIB": ["format = DXGI_FORMAT_R32_UINT",
+                        "filename = Meshes/Body.ib"],
+        "ResourceShapeKeyOffsetBuffer": [
+            "filename = Meshes/ShapeKeyOffset.buf"],
+        "ResourceShapeKeyVertexIdBuffer": [
+            "filename = Meshes/ShapeKeyVertexId.buf"],
+        "ResourceShapeKeyVertexOffsetBuffer": [
+            "filename = Meshes/ShapeKeyVertexOffset.buf"],
+    })
+    ini = root / "fixture.ini"
+    ini.write_text("\n".join(
+        line for name, lines in sections.items()
+        for line in [f"[{name}]", *map(str, lines), ""]))
+
+    parsed = analyze_mod_inis([str(ini)], str(root))
+    assert len(parsed.groups) == 1
+    animation = parsed.groups[0]["_compute_animation"]
+    assert animation["kind"] == "wwmi_sparse"
+    assert parsed.animation_control_vars == {"ChouChaAnim", "gangChaAnim"}
 
 
 def test_nested_compute_animation_uses_only_inherited_child(tmp_path):

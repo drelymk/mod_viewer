@@ -118,6 +118,74 @@ def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
         0., 0., 0., 2., 2., 3., 0., 1., 0.)
 
 
+def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
+    """Animated WWMI keys reuse the static sparse decoder and stay compact."""
+    (tmp_path / "position.buf").write_bytes(struct.pack(
+        "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
+    (tmp_path / "texcoord.buf").write_bytes(b"\0" * 24)
+    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+
+    offsets = bytearray(170 * 4)
+    struct.pack_into("<II", offsets, 162 * 4, 0, 1)
+    struct.pack_into("<II", offsets, 166 * 4, 1, 2)
+    struct.pack_into("<II", offsets, 167 * 4, 2, 3)
+    (tmp_path / "shape-offsets.buf").write_bytes(offsets)
+    (tmp_path / "shape-vertex-ids.buf").write_bytes(
+        struct.pack("<3I", 1, 1, 1))
+    (tmp_path / "shape-deltas.buf").write_bytes(b"".join(
+        struct.pack("<eee", *delta) + b"\0" * 6
+        for delta in ((1., 0., 0.), (0., 2., 0.), (0., 0., 3.))))
+
+    draw = DrawCall(
+        label="Body-1", count=3, ib_file="body.ib", index_size=4,
+        position_file="position.buf", position_stride=12,
+        texcoord_file="texcoord.buf", texcoord_stride=8)
+    static = {
+        "var": "BodyShape", "base_file": "position.buf", "shape_id": 161,
+        "buffer_shape_id": 162, "sparse_entry_offset": 0,
+        "offset_file": "shape-offsets.buf",
+        "vertex_id_file": "shape-vertex-ids.buf",
+        "vertex_offset_file": "shape-deltas.buf",
+    }
+    animation = {
+        "kind": "wwmi_sparse", "track_id": "wwmi-track",
+        "base_file": "position.buf", "overlay": True,
+        "program_id": "wwmi-program",
+        "program": {"external_variables": [], "initials": {}, "commands": [
+            {"op": "dispatch", "track_id": "wwmi-track", "kind": "shape",
+             "pass": 0, "phase": {"kind": "literal", "value": 0}},
+            {"op": "dispatch", "track_id": "wwmi-track", "kind": "shape",
+             "pass": 1, "phase": {"kind": "literal", "value": 0}},
+        ]},
+        "shape_passes": [
+            {"position_only": True, "sparse_shape": {
+                **static, "shape_id": 165, "buffer_shape_id": 166}},
+            {"position_only": True, "sparse_shape": {
+                **static, "shape_id": 166, "buffer_shape_id": 167}},
+        ],
+    }
+    groups = [{
+        "position_file": "position.buf", "position_stride": 12,
+        "texcoord_file": "texcoord.buf", "texcoord_stride": 8,
+        "ib_file": "body.ib", "index_size": 4, "draws": [draw],
+        "shape_sliders": [static], "_compute_animation": animation,
+    }]
+
+    geometry = GeometryBlob()
+    result = build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    entry = result.meshes["Body-1"]
+    assert len(entry["shape_targets"]) == 1
+    animation_geometry = entry["animation_geometry"]
+    assert [item["position_only"] for item in animation_geometry[
+        "shape_passes"]] == [True, True]
+    deltas = [geometry_values(geometry, item["deltas"])
+              for item in animation_geometry["shape_passes"]]
+    assert deltas == [
+        (0., 0., 0., 0., 2., 0., 0., 0., 0.),
+        (0., 0., 0., 0., 0., 3., 0., 0., 0.),
+    ]
+
+
 CROSS_IB_VB_INI = """[TextureOverrideSBSBlend]
 vb0 = ResourceSBSPosition
 vb1 = ResourceSBSTexcoord
