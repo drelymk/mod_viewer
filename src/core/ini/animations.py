@@ -659,7 +659,7 @@ def _identify_wwmi_animation_shader(text):
         re.I)
     if formula.search(compact) is None:
         return None
-    return {"phase_scale": 30.0}
+    return True
 
 
 def _identify_compute_shader(text):
@@ -851,11 +851,10 @@ def _wwmi_animation_shader(sections, child_section, *, mod_dir, ini_path,
     if not u5_resource or not shader_value or dispatch != (1, 1, 1):
         return None
     x0 = _integer(registers.get("x0"))
-    container_shape_id = _integer(registers.get("y0"))
     phase_expr = _compile_expression(
         registers.get("z0"), canonical, var_prefix)
     if (x0 != 0 or "y0" not in registers
-            or (container_shape_id is not None and container_shape_id <= 0)
+            or registers["y0"].strip()
             or phase_expr is None):
         return None
     if phase_expr.get("kind") != "variable":
@@ -868,7 +867,6 @@ def _wwmi_animation_shader(sections, child_section, *, mod_dir, ini_path,
         return None
     return {
         "child_section": child_section,
-        "container_shape_id": container_shape_id,
         "phase_var": phase_expr["variable"],
     }
 
@@ -900,35 +898,28 @@ def _wwmi_resolve_shape_ids(candidates, template, shape_sliders, *, mod_dir,
         except (KeyError, TypeError, ValueError):
             continue
     known = sorted(set(known))
-    explicit = [item["container_shape_id"] for item in candidates]
-    if any(value is None for value in explicit):
-        if not known or known != list(range(known[0], known[-1] + 1)):
-            return None
-        data = _read_resource_bytes(_resource_path(
-            mod_dir, template["offset_file"], source), source)
-        try:
-            entry_offset = int(template.get("sparse_entry_offset", 0))
-        except (TypeError, ValueError):
-            return None
-        if data is None:
-            return None
-        def populated(container):
-            if (container + 2) * 4 > len(data):
-                return False
-            begin, end = struct.unpack_from("<II", data, container * 4)
-            return begin + entry_offset < end + entry_offset
-        inferred = range(known[-1] + 1, known[-1] + 1
-                         + sum(value is None for value in explicit))
-        if not all(populated(container) for container in inferred):
-            return None
-        if any(value in inferred for value in explicit if value is not None):
-            return None
-        inferred_iter = iter(inferred)
-        explicit = [next(inferred_iter) if value is None else value
-                    for value in explicit]
+    if not known or known != list(range(known[0], known[-1] + 1)):
+        return None
+    data = _read_resource_bytes(_resource_path(
+        mod_dir, template["offset_file"], source), source)
+    try:
+        entry_offset = int(template.get("sparse_entry_offset", 0))
+    except (TypeError, ValueError):
+        return None
+    if data is None:
+        return None
+
+    def populated(container):
+        if (container + 2) * 4 > len(data):
+            return False
+        begin, end = struct.unpack_from("<II", data, container * 4)
+        return begin + entry_offset < end + entry_offset
+
+    inferred = range(known[-1] + 1, known[-1] + 1 + len(candidates))
+    if not all(populated(container) for container in inferred):
+        return None
     resolved = []
-    for item, container_shape_id in zip(candidates, explicit):
-        container_shape_id = int(container_shape_id)
+    for item, container_shape_id in zip(candidates, inferred):
         user_shape_id = container_shape_id - container_shape_id // 128
         if user_shape_id + user_shape_id // 127 != container_shape_id:
             user_shape_id = None

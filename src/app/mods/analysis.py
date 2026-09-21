@@ -54,13 +54,15 @@ class ParsedModAnalysis:
         yield self.present
 
 
+def _path_key(path):
+    """Normalize an optional authored resource path for matching."""
+    return os.path.normcase(os.path.normpath(path)) if path else None
+
+
 def _group_position_files(group):
     """Return every position buffer used by a group's draws."""
-    def path_key(path):
-        return os.path.normcase(os.path.normpath(path)) if path else None
-
-    position_files = {path_key(group.get("position_file"))}
-    position_files.update(path_key(draw.get("position_file"))
+    position_files = {_path_key(group.get("position_file"))}
+    position_files.update(_path_key(draw.get("position_file"))
                           for draw in group.get("draws", []))
     position_files.discard(None)
     return position_files
@@ -77,8 +79,7 @@ def _attach_shape_sliders(groups, shape_sliders):
     for group in groups:
         position_files = _group_position_files(group)
         matches = [slider for slider in shape_sliders
-                   if os.path.normcase(os.path.normpath(
-                       slider.get("base_file", ""))) in position_files]
+                   if _path_key(slider.get("base_file")) in position_files]
         if matches:
             group["shape_sliders"] = matches
 
@@ -90,8 +91,7 @@ def _attach_sparse_animations(groups, animations):
             continue
         position_files = _group_position_files(group)
         matches = [animation for animation in animations
-                   if os.path.normcase(os.path.normpath(
-                       animation.get("base_file", ""))) in position_files]
+                   if _path_key(animation.get("base_file")) in position_files]
         if len(matches) == 1:
             group["_compute_animation"] = matches[0]
 

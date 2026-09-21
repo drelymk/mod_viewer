@@ -430,6 +430,10 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
         "CommandListDrawSlider.Nipple": ["x87 = $NippleSize * x87"],
         "CommandListDrawSlider.ShortClo": ["x87 = $ShortClo * x87"],
         "CommandListDrawSlider.Pussy": ["x87 = $Pussy * x87"],
+        "CommandListDrawSlider.AnimSpeed": [
+            "x87 = $ChouChaAnimSpeed * x87"],
+        "CommandListDrawSlider.gangSpeed": [
+            "x87 = $gangChaAnimSpeed * x87"],
         "CommandListSetBoobs": [
             r"$\WWMIv1\shapekey_id = 161",
             r"$\WWMIv1\shapekey_value = $BoobsSize",
@@ -479,6 +483,22 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
         "ChouChaAnim", "ChouChaAnimSpeed", "gangChaAnim",
         "gangChaAnimSpeed",
     }
+
+
+def test_wwmi_sparse_animation_rejects_nonblank_y0(tmp_path):
+    root = tmp_path / "nonblank-y0"
+    (root / "res").mkdir(parents=True)
+    (root / "res" / "anim.hlsl").write_text(WWMI_ANIMATION_SHADER)
+    _write_wwmi_offset_table(root, range(162, 168))
+    sections = _wwmi_sparse_sections()
+    for section in ("CustomShaderChouChaAnim", "CustomShaderGangChaAnim"):
+        y0_index = next(index for index, line in enumerate(sections[section])
+                        if line.strip().casefold() == "y0 =")
+        sections[section][y0_index] = "y0 = $SomeShape"
+
+    assert discover_wwmi_sparse_animations(
+        sections, _wwmi_static_shapes(), mod_dir=str(root),
+        ini_path=str(root / "fixture.ini")) == []
 
 
 def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
