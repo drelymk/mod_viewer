@@ -194,6 +194,170 @@ def _discover(root, sections):
         ini_path=str(root / "fixture.ini"))
 
 
+def _nested_sections(root):
+    root.mkdir()
+    (root / "shape.hlsl").write_text(SHAPE_SHADER)
+    (root / "anim.hlsl").write_text(SHAPE_SHADER)
+    for name, delta in (
+            ("base.buf", 0.), ("static.buf", 1.), ("anim.buf", 2.)):
+        position = bytearray()
+        for x in (0., 1., 2.):
+            position.extend(struct.pack("<fff", x + delta, 0., 0.))
+            position.extend(struct.pack("<fff", 0., 2. + delta, 0.))
+            position.extend(b"\0" * 16)
+        (root / name).write_bytes(position)
+    (root / "texcoord.buf").write_bytes(b"\0" * 60)
+    (root / "index.buf").write_bytes(struct.pack("<III", 0, 1, 2))
+    return parse_sections("fixture.ini", text="""
+[Constants]
+global $mode = 0
+global $hidden = 0
+global $covered = 0
+global $Freq = 0
+global $Speed = 0.1
+global $dt
+
+[CustomShaderParent]
+if $mode == 2 && !($hidden || $covered)
+cs-u5 = copy ResourcePositionBase
+cs-t50 = copy ResourcePositionBase
+cs-t51 = copy ResourceStaticShape
+cs = shape.hlsl
+Dispatch = 1, 1, 1
+run = CustomShaderAnim
+endif
+ResourcePosition = ref cs-u5
+cs-u5 = null
+
+[CustomShaderAnim]
+$Freq = $Freq + $Speed * $dt
+x88 = $Freq
+cs-t51 = copy ResourcePositionAnim
+cs = anim.hlsl
+Dispatch = 1, 1, 1
+
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceIB
+drawindexed = 3, 0, 0
+
+[ResourcePosition]
+[ResourcePositionBase]
+stride = 40
+filename = base.buf
+[ResourceStaticShape]
+stride = 40
+filename = static.buf
+[ResourcePositionAnim]
+stride = 40
+filename = anim.buf
+[ResourceTexcoord]
+stride = 20
+filename = texcoord.buf
+[ResourceIB]
+format = DXGI_FORMAT_R32_UINT
+filename = index.buf
+""")
+
+
+def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
+    root = tmp_path / "nested"
+    sections = _nested_sections(root)
+    discovered = _discover(root, sections)
+
+    assert len(discovered) == 1
+    animation = discovered[0]
+    assert animation["base_file"] == "base.buf"
+    assert animation["position_resource"] == "ResourcePosition"
+    assert animation["overlay"] is True
+    assert animation["conditions"] == [[
+        {"var": "mode", "value": "2", "negate": False},
+        {"var": "hidden", "value": "0", "negate": False},
+        {"var": "covered", "value": "0", "negate": False},
+    ]]
+    assert [item["target_file"] for item in animation["shape_passes"]] == [
+        "anim.buf"]
+    assert compute_animation_control_vars([animation]) >= {
+        "mode", "hidden", "covered", "Speed",
+    }
+    program = animation["program"]
+    assert program["external_variables"] == ["Speed"]
+    assert any(command["op"] == "set"
+               and command["variable"] == "Freq"
+               for command in program["commands"])
+    dispatches = [command for command in program["commands"]
+                  if command["op"] == "dispatch"]
+    assert len(dispatches) == 1
+    assert dispatches[0]["track_id"] == animation["track_id"]
+
+    analysis = analyze_ini(sections, resources=extract_resources(sections))
+    _attach_animation(analysis.draw_groups, animation)
+    built = build_mesh_result(analysis.draw_groups, str(root))
+    payload = next(iter(built.meshes.values()))["animation_geometry"]
+    assert payload["kind"] == "gimi_compute"
+    assert payload["overlay"] is True
+    assert payload["conditions"] == animation["conditions"]
+
+
+def test_nested_animation_is_fallback_for_supported_parent_chain(tmp_path):
+    root = tmp_path / "parent-supported"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"] = [
+        "x88 = $Freq",
+        "cs-u5 = copy ResourcePositionBase",
+        "cs-t50 = copy ResourcePositionBase",
+        "cs-t51 = copy ResourceStaticShape",
+        "cs = shape.hlsl",
+        "Dispatch = 1, 1, 1",
+        "if $mode == 2",
+        "run = CustomShaderAnim",
+        "endif",
+        "ResourcePosition = ref cs-u5",
+        "cs-u5 = null",
+    ]
+
+    discovered = _discover(root, sections)
+
+    assert len(discovered) == 1
+    assert "overlay" not in discovered[0]
+    assert discovered[0]["shape_passes"][0]["target_file"] == "static.buf"
+    assert any(command["op"] == "dispatch"
+               and command["kind"] == "shape"
+               for command in discovered[0]["program"]["commands"])
+
+
+def test_nested_animation_rejects_mismatched_parent_u5_and_t50(tmp_path):
+    root = tmp_path / "mismatched-bindings"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"] = [
+        line.replace(
+            "cs-u5 = copy ResourcePositionBase",
+            "cs-u5 = copy ResourcePositionOther")
+        for line in sections["CustomShaderParent"]]
+
+    assert not _discover(root, sections)
+
+
+def test_nested_animation_rejects_unsupported_parent_condition(tmp_path):
+    root = tmp_path / "unsupported-condition"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"][0] = "if $mode > 1"
+
+    assert not _discover(root, sections)
+
+
+def test_nested_animation_rejects_multiple_children_for_one_output(tmp_path):
+    root = tmp_path / "multiple-children"
+    sections = _nested_sections(root)
+    sections["CustomShaderAnim2"] = list(sections["CustomShaderAnim"])
+    parent = sections["CustomShaderParent"]
+    parent.insert(parent.index("run = CustomShaderAnim") + 1,
+                  "run = CustomShaderAnim2")
+
+    assert not _discover(root, sections)
+
+
 def _attach_animation(groups, animation):
     for group in groups:
         if (str(group.get("position_resource", "")).casefold()
