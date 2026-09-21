@@ -12,11 +12,21 @@ import {
 } from '../mesh/texture-save-session.js';
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { getLoosePartSource } from '../mesh/loose-parts.js';
 
 const meshRecords = new WeakMap();
 let current = null;
 let selectionCount = 0;
 const $ = id => document.getElementById(id);
+
+function semanticMesh(mesh) {
+  return getLoosePartSource(mesh) || mesh;
+}
+
+function meshDisplayLabel(mesh, fallback) {
+  return mesh?.userData?.loosePartLabel
+    || mesh?.userData?.displayName || fallback || t('inspector.mesh');
+}
 
 const MATERIAL_KIND_OPTIONS = Object.freeze([
   ['auto', 'inspector.materialKind.auto'],
@@ -364,7 +374,8 @@ function buildTextureSaveAction(section, mesh) {
       bake.disabled = true;
       try {
         await openTextureSaveModal(mesh, {
-          isCurrent: () => current?.type === 'mesh' && current.mesh === mesh,
+          isCurrent: () => current?.type === 'mesh'
+            && semanticMesh(current.mesh) === mesh,
         });
       } finally {
         bake.disabled = getTextureSaveTargets(mesh).length === 0;
@@ -531,14 +542,15 @@ function buildComponent(record) {
 function buildMesh(mesh, record) {
   const content = showContent();
   content.replaceChildren();
-  const name = mesh.userData.displayName || record.label || t('inspector.mesh');
+  const source = semanticMesh(mesh);
+  const name = meshDisplayLabel(mesh, record.label);
   const component = record.component;
   const componentName = component?.component || component || t('inspector.component');
   buildHeader(content, name, componentName,
     record.entry?.source?.[0]?.ini || '');
   buildMaterialSection(content, component || {});
-  buildTextureControls(content, record, mesh);
-  buildColorSection(content, mesh);
+  buildTextureControls(content, record, source);
+  buildColorSection(content, source);
 }
 
 function updateInspectorState() {
@@ -551,8 +563,9 @@ function updateInspectorState() {
     material.value = owner?.getMaterialKind?.() || 'auto';
   }
   if (current.type === 'mesh') {
-    updateTextureControlState(content, current.mesh, current.record.component);
-    if (!updateColorControlState(content, current.mesh)) {
+    const source = semanticMesh(current.mesh);
+    updateTextureControlState(content, source, current.record.component);
+    if (!updateColorControlState(content, source)) {
       buildMesh(current.mesh, current.record);
     }
   } else {
@@ -596,7 +609,7 @@ function selectMesh(mesh) {
   if (status) {
     const componentName = record.component?.component || record.component
       || t('inspector.component');
-    const meshName = mesh.userData.displayName || record.label || t('inspector.mesh');
+    const meshName = meshDisplayLabel(mesh, record.label);
     status.textContent = `${componentName} > ${meshName}`;
   }
 }
@@ -614,8 +627,7 @@ export function initInspectorPanel() {
       if (status) {
         const componentName = current.record.component?.component
           || current.record.component || t('inspector.component');
-        const meshName = current.mesh.userData.displayName
-          || current.record.label || t('inspector.mesh');
+        const meshName = meshDisplayLabel(current.mesh, current.record.label);
         status.textContent = `${componentName} > ${meshName}`;
       }
     }
@@ -652,7 +664,7 @@ export function initInspectorPanel() {
     const changed = event.detail?.meshes || [];
     if (!current || !changed.length) return;
     const affected = current.type === 'mesh'
-      ? changed.includes(current.mesh)
+      ? changed.includes(semanticMesh(current.mesh))
       : (current.record.meshes || []).some(mesh => changed.includes(mesh));
     if (affected) updateInspectorState();
   });

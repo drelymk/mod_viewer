@@ -9,11 +9,16 @@ import { getMeshView } from '../mesh/mesh-view-bindings.js';
 import { setMeshSelectionOutline } from './outline-renderer.js';
 import { raycastModelAtClientPoint } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
+import { setLoosePartSelectionCleanup } from '../mesh/loose-parts.js';
 import {
   isRigTransformInteractionActive, isRigJointPickingActive,
 } from './rig-overlay-state.js';
 
 let selected = null; // currently selected mesh, or null
+
+setLoosePartSelectionCleanup(mesh => {
+  if (selected === mesh) clearSelection();
+});
 
 function setHighlight(mesh, on) {
   setMeshSelectionOutline(mesh, on);

@@ -18,6 +18,7 @@ import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
+import { clearLooseParts, syncLoosePartMaterial } from './loose-parts.js';
 import {
   disposeSkinningExperiment, getSkinningBaseMaterial,
   destroyModelPhysicsSession, registerSkinningMesh,
@@ -90,6 +91,7 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
   // disposed. This keeps teardown callbacks on live meshes.
   destroyModelPhysicsSession();
   activeMeshes.forEach(mesh => {
+    clearLooseParts(mesh);
     disposeSkinningExperiment(mesh);
     detachOutline(mesh);
     scene.remove(mesh);
@@ -136,6 +138,7 @@ export function removeMesh(mesh) {
   if (!mesh) return false;
   const index = activeMeshes.indexOf(mesh);
   if (index < 0) return false;
+  clearLooseParts(mesh);
   disposeSkinningExperiment(mesh);
   detachOutline(mesh);
   scene.remove(mesh);
@@ -293,6 +296,7 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       withSkinningBaseMaterial(mesh, () => {
         mesh.material = oldMaterial;
       });
+      syncLoosePartMaterial(mesh);
     }
     snapshots.forEach(restoreMeshSemantics);
     return {success: false, materialChangedMeshes: []};

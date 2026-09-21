@@ -600,4 +600,5 @@ export default {
   'mesh.hiddenManual': 'Hidden (manual override)',
   'mesh.visibleAutomatic': 'Visible automatically',
   'mesh.hiddenAutomatic': 'Hidden automatically',
+  'mesh.separateLooseParts': 'Separate Loose Parts',
 };

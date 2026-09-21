@@ -600,4 +600,5 @@ export default {
   'mesh.hiddenManual': '隐藏（手动覆盖）',
   'mesh.visibleAutomatic': '自动可见',
   'mesh.hiddenAutomatic': '自动隐藏',
+  'mesh.separateLooseParts': '分离松散部件',
 };
