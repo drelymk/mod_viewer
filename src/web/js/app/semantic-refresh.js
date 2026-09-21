@@ -2,7 +2,9 @@
 
 import { viewerState, samePath } from './state.js';
 import { refreshAll, setStateRules, updateMeshSemantics } from '../mesh/visibility.js';
-import { refreshMeshAssetDiagnostics } from '../panels/mesh-panel.js';
+import {
+  refreshAutomaticTextureBoundaries, refreshMeshAssetDiagnostics,
+} from '../panels/mesh-panel.js';
 import { buildMenuPanel } from '../panels/menu-panel.js';
 import { buildPresentPanel } from '../panels/present-panel.js';
 import { t } from '../i18n/index.js';
@@ -61,6 +63,7 @@ function applyMeshSemanticResult(result) {
     materialProfiles: result.material_profiles || {},
   });
   if (!update.success) return update;
+  refreshAutomaticTextureBoundaries();
   const assetResolution = result.asset_resolution || null;
   refreshMeshAssetDiagnostics(assetResolution);
   setAssetResolution(assetResolution);

@@ -146,10 +146,10 @@ def _texture_run_payload():
         texture_b: _PNG_URI,
     }
     payload["controls"]["menu"]["mode"] = {
-        "name": "Mode", "var": "mode", "kind": "menu", "default": "1",
+        "name": "Mode", "var": "mode", "kind": "menu", "default": "0",
         "values": ["0", "1"], "effects": [],
     }
-    payload["state"]["defaults"]["mode"] = "1"
+    payload["state"]["defaults"]["mode"] = "0"
     return payload
 
 

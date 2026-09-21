@@ -360,8 +360,30 @@ def test_automatic_texture_runs_follow_authored_transitions_and_revisit_texture(
 
         conditional = component_state("Conditional", 2)
         assert conditional == [
+            {"boundary": True, "resolved": None, "texture": None},
+            {"boundary": False, "resolved": None, "texture": None},
+        ]
+
+        page.evaluate("""async () => {
+          const {setToggleValue, refreshAll} =
+            await import('./js/mesh/visibility.js');
+          setToggleValue('mode', '1');
+          refreshAll();
+        }""")
+        state = read_state()
+        assert [item["texture"] for item in component_state("Conditional", 2)] == [
+            texture_a, texture_a,
+        ]
+
+        page.evaluate("""({path, key}) => {
+          window.__fakeApi.responses[path].meshes['Same-1'].tex_key = key;
+        }""", {"path": "TextureRuns", "key": texture_b})
+        assert page.evaluate("""async () =>
+          await window.modViewer.refreshMeshSemantics()""")
+        state = read_state()
+        assert component_state("Same", 2) == [
             {"boundary": True, "resolved": texture_a, "texture": texture_a},
-            {"boundary": False, "resolved": None, "texture": texture_a},
+            {"boundary": True, "resolved": texture_b, "texture": texture_b},
         ]
 
         page.evaluate("""async () => {
@@ -373,16 +395,6 @@ def test_automatic_texture_runs_follow_authored_transitions_and_revisit_texture(
         state = read_state()
         assert [item["texture"] for item in component_state("Conditional", 2)] == [
             None, None,
-        ]
-        page.evaluate("""async () => {
-          const {setToggleValue, refreshAll} =
-            await import('./js/mesh/visibility.js');
-          setToggleValue('mode', '1');
-          refreshAll();
-        }""")
-        state = read_state()
-        assert [item["texture"] for item in component_state("Conditional", 2)] == [
-            texture_a, texture_a,
         ]
     finally:
         context.close()

@@ -73,6 +73,36 @@ function groupByComponent(names, meshes) {
   return grouped;
 }
 
+function automaticTextureBoundaryIdentity(mesh) {
+  const defaultKey = mesh.userData.defaultTexKey;
+  const variantKeys = mesh.userData.textureVariants || [];
+  if (!defaultKey && !variantKeys.length) return null;
+  return JSON.stringify({
+    defaultKey: defaultKey || null,
+    variants: variantKeys.map(variant => ({
+      conditions: variant?.conditions || [],
+      tex_key: variant?.tex_key || null,
+    })),
+  });
+}
+
+function recomputeAutomaticTextureBoundaries(groupMeshes) {
+  let previousBoundaryIdentity = null;
+  for (const mesh of groupMeshes) {
+    mesh.userData.automaticTextureBoundary = false;
+    const boundaryIdentity = automaticTextureBoundaryIdentity(mesh);
+    if (boundaryIdentity && boundaryIdentity !== previousBoundaryIdentity) {
+      mesh.userData.automaticTextureBoundary = true;
+    }
+    if (boundaryIdentity) previousBoundaryIdentity = boundaryIdentity;
+  }
+}
+
+/** Rebuild authored texture-run boundaries after an in-place semantic update. */
+export function refreshAutomaticTextureBoundaries() {
+  groupsUI.forEach(group => recomputeAutomaticTextureBoundaries(group.itemObjs));
+}
+
 function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
                           assetSummary = null) {
   const hdr = document.createElement('div');
@@ -344,7 +374,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         .find(Boolean) || null;
 
       const itemCbs = [], itemObjs = [];
-      let previousBoundaryIdentity = null;
       const componentDescriptor = {
         type: 'component', component: groupName, source: src,
         meshes: itemObjs, texturePool, modPath,
@@ -447,36 +476,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         if (!mesh) throw new Error(`Missing live mesh for ${name}`);
         mesh.userData.componentDescriptor = componentDescriptor;
         itemObjs.push(mesh);
-        // Rebuilding the panel must not retain an automatic boundary from a
-        // previous semantic state or panel instance.
-        mesh.userData.automaticTextureBoundary = false;
-        // An automatic boundary starts a new authored texture run. Track the
-        // previous authored state in draw order so a texture can become a
-        // boundary again after another texture intervenes.
-        const defaultKey = mesh.userData.defaultTexKey;
-        const variantKeys = mesh.userData.textureVariants || [];
-        // A draw can have only conditional texture assignments and therefore
-        // no unconditional tex_key. It is still an authored texture boundary;
-        // otherwise the later run reconciliation clears the resolved variant
-        // before it reaches the material.
-        const boundaryKey = defaultKey || mesh.userData.resolvedTexKey;
-        const hasAuthoredTexture = !!(defaultKey || variantKeys.length);
-        const boundaryIdentity = hasAuthoredTexture && boundaryKey
-          ? JSON.stringify({
-            defaultKey: defaultKey || null,
-            variants: variantKeys.map(variant => ({
-              conditions: variant?.conditions || [],
-              tex_key: variant?.tex_key || null,
-            })),
-            resolvedKey: mesh.userData.resolvedTexKey || null,
-          })
-          : null;
-        if (boundaryIdentity && boundaryIdentity !== previousBoundaryIdentity) {
-          mesh.userData.automaticTextureBoundary = true;
-        }
-        if (hasAuthoredTexture && boundaryIdentity) {
-          previousBoundaryIdentity = boundaryIdentity;
-        }
         const { wrap } = buildDrawRow(
           name, groupName, meshes[name], mesh, itemCbs, masterCb);
         itemsWrap.appendChild(wrap);
@@ -486,6 +485,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
           label: mesh.userData.displayName || name,
         });
       }
+      recomputeAutomaticTextureBoundaries(itemObjs);
       recomputeTextureRuns(itemObjs);
       registerTextureRunGroup(itemObjs);
 
