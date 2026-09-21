@@ -600,5 +600,9 @@ export default {
   'mesh.hiddenManual': 'Скрыт (ручное переопределение)',
   'mesh.visibleAutomatic': 'Видим автоматически',
   'mesh.hiddenAutomatic': 'Скрыт автоматически',
+  'mesh.separateLooseParts': 'Отделить несвязанные части',
   'mesh.mergeLooseParts': 'Объединить меши',
+  'mesh.separate': 'Отделить',
+  'mesh.connectionTolerance': 'Допуск соединения',
+  'mesh.connectionToleranceRange': 'Диапазон: 0 – 0.01',
 };

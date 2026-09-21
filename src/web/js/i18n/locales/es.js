@@ -600,5 +600,9 @@ export default {
   'mesh.hiddenManual': 'Oculta (anulación manual)',
   'mesh.visibleAutomatic': 'Visible automáticamente',
   'mesh.hiddenAutomatic': 'Oculta automáticamente',
+  'mesh.separateLooseParts': 'Separar partes sueltas',
   'mesh.mergeLooseParts': 'Combinar mallas',
+  'mesh.separate': 'Separar',
+  'mesh.connectionTolerance': 'Tolerancia de conexión',
+  'mesh.connectionToleranceRange': 'Rango: 0 – 0.01',
 };
