@@ -14,7 +14,6 @@ import re
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, parse_condition_dnf)
 from .sections import canonical_var_names
-from .state import _condition_is_supported
 
 
 _ASSIGN_RE = re.compile(
@@ -59,6 +58,13 @@ _COMPUTE_DISPATCH_RE = re.compile(
     re.I)
 _X88_RE = re.compile(r"^\s*x88\s*=\s*(?P<expr>.+?)\s*$", re.I)
 _X89_RE = re.compile(r"^\s*x89\s*=\s*(?P<expr>.+?)\s*$", re.I)
+_COMPUTE_UNSUPPORTED_CONDITION_RE = re.compile(
+    r"[<>+*/%]|\btime\b", re.I)
+
+
+def _compute_condition_is_supported(expression):
+    """Reject condition syntax the DNF activation state cannot represent."""
+    return _COMPUTE_UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
 
 
 class _ExpressionParser:
@@ -729,22 +735,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             combined = dnf_and(combined, frame["cur"])
         if not all(support_stack):
             return None
-        conditions = normalize_dnf(combined, tracked_vars, var_prefix)
-        source_vars = {
-            str(clause.get("var", "")).casefold()
-            for group in combined for clause in group
-        }
-        retained_vars = {
-            str(clause.get("var", "")).casefold()
-            for group in conditions for clause in group
-        }
-        expected_vars = {
-            f"{var_prefix or ''}{variable}".casefold()
-            for variable in source_vars
-        }
-        if not expected_vars.issubset(retained_vars):
-            return None
-        return conditions
+        return normalize_dnf(combined, tracked_vars, var_prefix)
 
     def nested_shape_passes(child_section, inherited_base, inherited_u5):
         """Read one child that inherits the parent's t50/u5 bindings."""
@@ -831,10 +822,11 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 if condition_support:
                     condition_support[-1] = (
                         condition_support[-1]
-                        and _condition_is_supported(elif_match.group(1)))
+                        and _compute_condition_is_supported(
+                            elif_match.group(1)))
             elif line.casefold().startswith("if "):
                 condition_support.append(
-                    _condition_is_supported(line[3:]))
+                    _compute_condition_is_supported(line[3:]))
             elif line.casefold() == "endif":
                 if condition_support:
                     condition_support.pop()
