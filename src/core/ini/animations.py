@@ -14,6 +14,7 @@ import re
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, parse_condition_dnf)
 from .sections import canonical_var_names
+from .state import _condition_is_supported
 
 
 _ASSIGN_RE = re.compile(
@@ -722,11 +723,28 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         str(name).casefold(): name for name in sections
     }
 
-    def current_conditions(stack):
+    def current_conditions(stack, support_stack):
         combined = DNF_TRUE
         for frame in stack:
             combined = dnf_and(combined, frame["cur"])
-        return normalize_dnf(combined, tracked_vars, var_prefix)
+        if not all(support_stack):
+            return None
+        conditions = normalize_dnf(combined, tracked_vars, var_prefix)
+        source_vars = {
+            str(clause.get("var", "")).casefold()
+            for group in combined for clause in group
+        }
+        retained_vars = {
+            str(clause.get("var", "")).casefold()
+            for group in conditions for clause in group
+        }
+        expected_vars = {
+            f"{var_prefix or ''}{variable}".casefold()
+            for variable in source_vars
+        }
+        if not expected_vars.issubset(retained_vars):
+            return None
+        return conditions
 
     def nested_shape_passes(child_section, inherited_base, inherited_u5):
         """Read one child that inherits the parent's t50/u5 bindings."""
@@ -796,6 +814,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         bone_count_expr = None
         current_chain = None
         condition_stack = []
+        condition_support = []
 
         def close_chain():
             nonlocal current_chain
@@ -807,6 +826,18 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             line = str(raw).split(";", 1)[0].strip()
             if not line:
                 continue
+            elif_match = _CLOCK_ELIF_RE.fullmatch(line)
+            if elif_match:
+                if condition_support:
+                    condition_support[-1] = (
+                        condition_support[-1]
+                        and _condition_is_supported(elif_match.group(1)))
+            elif line.casefold().startswith("if "):
+                condition_support.append(
+                    _condition_is_supported(line[3:]))
+            elif line.casefold() == "endif":
+                if condition_support:
+                    condition_support.pop()
             if _condition_stack_line(line, condition_stack, aliases):
                 continue
             match = _COMPUTE_T_COPY_RE.fullmatch(line)
@@ -848,10 +879,12 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     child_passes = nested_shape_passes(
                         child_section, t_sources.get(50),
                         current_chain.get("u5_resource"))
-                    if child_passes:
+                    conditions = current_conditions(
+                        condition_stack, condition_support)
+                    if child_passes and conditions is not None:
                         nested = {
                             "child_section": child_section,
-                            "conditions": current_conditions(condition_stack),
+                            "conditions": conditions,
                             "passes": child_passes,
                         }
                         if current_chain.get("nested_run") is not None:

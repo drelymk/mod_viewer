@@ -339,6 +339,29 @@ def test_nested_animation_rejects_mismatched_parent_u5_and_t50(tmp_path):
     assert not _discover(root, sections)
 
 
+def test_nested_animation_rejects_unsupported_parent_condition(tmp_path):
+    root = tmp_path / "unsupported-condition"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"][0] = "if $mode > 1"
+
+    assert not _discover(root, sections)
+
+
+def test_nested_animation_rejects_dropped_parent_condition_variable(tmp_path):
+    root = tmp_path / "dropped-condition-variable"
+    sections = _nested_sections(root)
+    sections["CustomShaderParent"][0] = "if $untracked == 1"
+    canonical = {
+        "mode": "mode", "Freq": "Freq", "Speed": "Speed", "dt": "dt",
+    }
+
+    discovered = discover_compute_animations(
+        sections, extract_resources(sections), mod_dir=str(root),
+        ini_path=str(root / "fixture.ini"), canonical_vars=canonical)
+
+    assert not discovered
+
+
 def test_nested_animation_rejects_multiple_children_for_one_output(tmp_path):
     root = tmp_path / "multiple-children"
     sections = _nested_sections(root)
