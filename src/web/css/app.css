@@ -903,6 +903,17 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
 }
+.dialog-range-field {
+  display: none; flex-direction: column; gap: 4px; margin-top: 12px;
+  color: var(--text-muted); font-size: 11px;
+}
+.dialog-range-input {
+  box-sizing: border-box; width: 100%;
+  background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
+}
+.dialog-range-input:invalid { border-color: var(--danger); }
+.dialog-range-hint { color: var(--text-muted); font-size: 10px; }
 #dialog-cancel { background: var(--bg-control); color: var(--text); }
 #dialog-cancel:hover { background: var(--border); }
 #dialog-ok { background: var(--success); color: #fff; border-color: rgba(240,246,252,.15); }

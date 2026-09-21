@@ -264,7 +264,29 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         assert menu.is_hidden()
         source_row.click(button="right")
         menu.locator("button").click()
+        dialog = page.locator("#dialog-backdrop")
+        dialog.wait_for()
+        assert dialog.is_visible()
+        tolerance = page.locator("#dialog-range-input")
+        assert tolerance.input_value() == "0"
+        assert tolerance.get_attribute("min") == "0"
+        assert tolerance.get_attribute("max") == "0.01"
+        assert tolerance.get_attribute("step") == "0.0001"
+        page.locator("#dialog-ok").click()
 
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.all_inner_texts() == [
+            "9, 0, 0 - Part 1",
+            "9, 0, 0 - Part 2",
+            "9, 0, 0 - Part 3",
+        ]
+        page.evaluate("""() => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-recording-state', {detail: {recording: true}}))""")
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "9, 0, 0",
+        ]
+        page.evaluate("""() => window.dispatchEvent(new CustomEvent(
+          'mod-viewer-recording-state', {detail: {recording: false}}))""")
         rows = page.locator("#mesh-list .draw-item")
         assert rows.all_inner_texts() == [
             "9, 0, 0 - Part 1",
@@ -389,6 +411,51 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         }
     finally:
         context.close()
+
+
+def test_loose_part_tolerance_dialog_can_cancel_reject_invalid_and_join(
+        edge_browser, frontend_url):
+    path = "LoosePartsTolerance"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.wait_for()
+        source_row.locator(".mesh-name").dblclick()
+        editor = source_row.locator(".mesh-name-input")
+        editor.fill("Hair Ornament")
+        editor.press("Enter")
+        assert source_row.inner_text() == "Hair Ornament"
+
+        source_row.click(button="right")
+        page.locator(".mesh-context-menu button").click()
+        dialog = page.locator("#dialog-backdrop")
+        dialog.wait_for()
+        tolerance = page.locator("#dialog-range-input")
+        page.locator("#dialog-cancel").click()
+        assert dialog.is_hidden()
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "Hair Ornament",
+        ]
+
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(".mesh-context-menu button").click()
+        tolerance = page.locator("#dialog-range-input")
+        tolerance.fill("-1")
+        page.locator("#dialog-ok").click()
+        assert dialog.is_visible()
+        assert page.locator("#mesh-list .draw-item").count() == 1
+        tolerance.fill("0.002")
+        page.keyboard.press("Enter")
+        assert dialog.is_hidden()
+        assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
+            "Hair Ornament - Part 1",
+            "Hair Ornament - Part 2",
+        ]
+    finally:
+        context.close()
+
 
 def test_source_grouping_and_collapse_are_shared_without_losing_duplicates(
         edge_browser, frontend_url):

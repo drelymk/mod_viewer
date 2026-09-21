@@ -20,6 +20,7 @@ import {
 import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
 import {createWorkBudget} from './cooperative-scheduler.js';
 import {resumeAnimatedMesh} from './animation-runtime.js';
+import {syncLoosePartMaterial} from './loose-parts.js';
 
 function clockNow() {
   return typeof globalThis.performance?.now === 'function'
@@ -637,12 +638,14 @@ export function createSkinningRuntime({
       });
     }
     mesh.material = state.debugMaterial;
+    syncLoosePartMaterial(mesh);
   }
 
   function disableHeatmap(mesh, state) {
     state.heatmapMode = null;
     mesh.material = state.originalMaterial;
     mesh.geometry.deleteAttribute('color');
+    syncLoosePartMaterial(mesh);
     if (state.debugMaterial) {
       state.debugMaterial.dispose();
       state.debugMaterial = null;
@@ -677,13 +680,19 @@ export function createSkinningRuntime({
     const heatmapActive = state.heatmapMode && state.debugMaterial
       && mesh.material === state.debugMaterial;
     const displayedMaterial = mesh.material;
-    if (heatmapActive) mesh.material = state.originalMaterial || mesh.material;
+    if (heatmapActive) {
+      mesh.material = state.originalMaterial || mesh.material;
+      syncLoosePartMaterial(mesh);
+    }
     try {
       const result = operation();
       state.originalMaterial = mesh.material;
       return result;
     } finally {
-      if (heatmapActive) mesh.material = displayedMaterial;
+      if (heatmapActive) {
+        mesh.material = displayedMaterial;
+        syncLoosePartMaterial(mesh);
+      }
     }
   }
 

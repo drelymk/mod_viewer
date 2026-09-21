@@ -188,6 +188,9 @@ function enterRecordingUI() {
 
   document.getElementById('open-btn').disabled = true;
   ui.disableOthers();
+  window.dispatchEvent(new CustomEvent('mod-viewer-recording-state', {
+    detail: {recording: true},
+  }));
 }
 
 function exitRecordingUI() {
@@ -206,6 +209,9 @@ function exitRecordingUI() {
   document.getElementById('open-btn').disabled = false;
   ui.enableOthers();
   active = null;
+  window.dispatchEvent(new CustomEvent('mod-viewer-recording-state', {
+    detail: {recording: false},
+  }));
 }
 
 /** Snapshot the checkbox state the user actually left the current position

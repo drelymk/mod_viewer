@@ -601,4 +601,7 @@ export default {
   'mesh.visibleAutomatic': '自动可见',
   'mesh.hiddenAutomatic': '自动隐藏',
   'mesh.separateLooseParts': '分离松散部件',
+  'mesh.separate': '分离',
+  'mesh.connectionTolerance': '连接容差',
+  'mesh.connectionToleranceRange': '范围：0 – 0.01',
 };

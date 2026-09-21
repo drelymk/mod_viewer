@@ -23,7 +23,8 @@ def _call_module(page, module_path, export_name, *args):
 def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {findLooseParts, separateLooseParts, clearLooseParts} =
+      const {findLooseParts, separateLooseParts, clearLooseParts,
+        syncLoosePartMaterial} =
         await import('./js/mesh/loose-parts.js');
       const makeMesh = (positions, indices) => {
         const geometry = new THREE.BufferGeometry();
@@ -70,6 +71,21 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
       const originalIndex = source.geometry.index;
       const originalMaterial = source.material;
       const created = separateLooseParts(source, {label: 'Fixture'});
+      const heatmapColor = new THREE.BufferAttribute(
+        new Float32Array(18), 3);
+      const heatmapMaterial = new THREE.MeshBasicNodeMaterial();
+      source.geometry.setAttribute('color', heatmapColor);
+      source.material = heatmapMaterial;
+      syncLoosePartMaterial(source);
+      const heatmapEnabled = created.every(part =>
+        part.material === heatmapMaterial
+        && part.geometry.getAttribute('color') === heatmapColor);
+      source.geometry.deleteAttribute('color');
+      source.material = originalMaterial;
+      syncLoosePartMaterial(source);
+      const heatmapDisabled = created.every(part =>
+        part.material === originalMaterial
+        && !part.geometry.getAttribute('color'));
       const shared = created.every(part =>
         part.geometry.getAttribute('position') ===
           source.geometry.getAttribute('position') &&
@@ -83,6 +99,11 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         labels: created.map(part => part.userData.loosePartLabel),
         drawCount: source.geometry.drawRange.count,
         attached: created.every(part => part.parent === source),
+        sharedBounds: created.every(part =>
+          part.geometry.boundingBox === source.geometry.boundingBox
+          && part.geometry.boundingSphere === source.geometry.boundingSphere),
+        heatmapEnabled,
+        heatmapDisabled,
         shared, independentIndexes,
       };
       clearLooseParts(source);
@@ -112,6 +133,9 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         "labels": ["Fixture - Part 1", "Fixture - Part 2"],
         "drawCount": 0,
         "attached": True,
+        "sharedBounds": True,
+        "heatmapEnabled": True,
+        "heatmapDisabled": True,
         "shared": True,
         "independentIndexes": True,
     }
@@ -120,6 +144,50 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         "looseParts": 0,
         "drawStart": 2,
         "drawCount": 4,
+    }
+
+
+def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {findLooseParts} = await import('./js/mesh/loose-parts.js');
+      const makeMesh = positions => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(
+          new Float32Array(positions), 3));
+        geometry.setIndex([0, 1, 2, 3, 4, 5]);
+        return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
+      };
+      const gapped = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0.001, 0, 0, 2, 0, 0, 1, 1, 0,
+      ]);
+      const boundary = makeMesh([
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        0.005, 0, 0, 2, 0, 0, 1, 1, 0,
+      ]);
+      const cellBoundary = makeMesh([
+        0.00199, 0, 0, 1, 0, 0, 0, 1, 0,
+        0.00201, 0, 0, 2, 0, 0, 1, 1, 0,
+      ]);
+      const count = (mesh, tolerance) =>
+        findLooseParts(mesh, {tolerance}).length;
+      return {
+        largerGap: count(gapped, 0.0001),
+        insideGap: count(gapped, 0.002),
+        exactBoundary: count(boundary, 0.005),
+        adjacentCells: count(cellBoundary, 0.002),
+        invalidLow: count(gapped, -0.1),
+        invalidHigh: count(gapped, 0.011),
+      };
+    }""")
+    assert result == {
+        "largerGap": 2,
+        "insideGap": 0,
+        "exactBoundary": 0,
+        "adjacentCells": 0,
+        "invalidLow": 0,
+        "invalidHigh": 0,
     }
 
 
