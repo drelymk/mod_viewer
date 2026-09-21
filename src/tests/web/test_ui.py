@@ -260,6 +260,20 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         ]
         assert menu.locator("button").nth(0).is_enabled()
         assert menu.locator("button").nth(1).is_disabled()
+        disabled_menu_style = menu.locator("button").nth(1).evaluate(
+            "button => ({color: getComputedStyle(button).color,"
+            " opacity: getComputedStyle(button).opacity,"
+            " cursor: getComputedStyle(button).cursor,"
+            " background: getComputedStyle(button).backgroundColor})")
+        menu.locator("button").nth(1).hover()
+        disabled_hover_style = menu.locator("button").nth(1).evaluate(
+            "button => getComputedStyle(button).backgroundColor")
+        enabled_menu_color = menu.locator("button").nth(0).evaluate(
+            "button => getComputedStyle(button).color")
+        assert disabled_menu_style["opacity"] == "0.55"
+        assert disabled_menu_style["cursor"] == "default"
+        assert disabled_menu_style["color"] != enabled_menu_color
+        assert disabled_hover_style == disabled_menu_style["background"]
         page.locator("#toolbar").click()
         assert menu.is_hidden()
 
@@ -511,7 +525,21 @@ def test_mesh_panel_multiselect_and_merge_loose_parts(
         rows.nth(1).click(button="right")
         assert menu.locator("button").nth(0).is_disabled()
         assert menu.locator("button").nth(1).is_enabled()
+        render_before_merge = page.evaluate("window.modViewer.getRenderCount()")
+        shadow_before_merge = page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import(
+            './js/scene/scene.js');
+          return getCharacterShadowDebugState().shadowUpdateCount;
+        }""")
         menu.locator("button").nth(1).click()
+        page.wait_for_function(
+            "previous => window.modViewer.getRenderCount() > previous",
+            arg=render_before_merge)
+        page.wait_for_function("""async previous => {
+          const {getCharacterShadowDebugState} = await import(
+            './js/scene/scene.js');
+          return getCharacterShadowDebugState().shadowUpdateCount > previous;
+        }""", arg=shadow_before_merge)
         rows = page.locator("#mesh-list .draw-item")
         assert rows.all_inner_texts() == [
             "9, 0, 0 - Part 1", "9, 0, 0 - Part 3",

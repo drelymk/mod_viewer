@@ -245,17 +245,14 @@ export function mergeLooseParts(meshes) {
   const source = getLoosePartSource(requested[0]);
   const sourceParts = getLooseParts(source);
   const selectedParts = sourceParts.filter(part => selected.has(part));
-  const anyVisible = selectedParts.some(part => part.visible);
-  const anyManual = selectedParts.some(part => part.userData.manuallyToggled);
 
   if (selectedParts.length === sourceParts.length) {
-    source.visible = anyVisible;
-    source.userData.manualVisible = anyVisible;
-    source.userData.manuallyToggled = anyManual;
     clearLooseParts(source);
     return {source, mesh: source, full: true};
   }
 
+  const anyVisible = selectedParts.some(part => part.visible);
+  const anyManual = selectedParts.some(part => part.userData.manuallyToggled);
   const survivor = selectedParts[0];
   const indexes = selectedParts.map(part => part.geometry?.index?.array);
   if (indexes.some(index => !index)) return null;

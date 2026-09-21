@@ -579,6 +579,7 @@ function mergeSelectedLooseParts() {
     return false;
   }
   selectMesh(result.mesh);
+  invalidateCharacterShadowVisibility({request: false});
   requestRender();
   return true;
 }

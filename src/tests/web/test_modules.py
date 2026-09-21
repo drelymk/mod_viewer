@@ -219,6 +219,9 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
         return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
       };
       const source = makeSource(0);
+      source.visible = false;
+      source.userData.manualVisible = false;
+      source.userData.manuallyToggled = true;
       const parts = separateLooseParts(source, {label: 'Merge'});
       const otherSource = makeSource(100);
       const otherParts = separateLooseParts(otherSource);
@@ -260,6 +263,9 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
         looseParts: source.userData.looseParts.length,
         drawCount: source.geometry.drawRange.count,
         children: source.children.length,
+        sourceVisible: source.visible,
+        sourceManualVisible: source.userData.manualVisible,
+        sourceManuallyToggled: source.userData.manuallyToggled,
       };
       clearLooseParts(otherSource);
       return {eligibility, partialState, fullState};
@@ -291,6 +297,9 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
             "looseParts": 0,
             "drawCount": 9,
             "children": 0,
+            "sourceVisible": False,
+            "sourceManualVisible": False,
+            "sourceManuallyToggled": True,
         },
     }
 

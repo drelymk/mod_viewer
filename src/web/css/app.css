@@ -483,7 +483,12 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: transparent; text-align: left; cursor: pointer; font: inherit;
   font-size: 11px; white-space: nowrap;
 }
-.mesh-context-menu button:hover { background: var(--surface-active); }
+.mesh-context-menu button:hover:not(:disabled) { background: var(--surface-active); }
+.mesh-context-menu button:disabled {
+  color: var(--text-muted);
+  opacity: .55;
+  cursor: default;
+}
 .mesh-selection-box {
   position: fixed; z-index: 240; pointer-events: none; box-sizing: border-box;
   border: 1px solid var(--accent-soft); background: rgba(88,166,255,.14);
