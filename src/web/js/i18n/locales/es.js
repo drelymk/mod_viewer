@@ -600,4 +600,5 @@ export default {
   'mesh.hiddenManual': 'Oculta (anulación manual)',
   'mesh.visibleAutomatic': 'Visible automáticamente',
   'mesh.hiddenAutomatic': 'Oculta automáticamente',
+  'mesh.mergeLooseParts': 'Combinar mallas',
 };

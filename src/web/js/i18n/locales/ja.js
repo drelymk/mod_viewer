@@ -600,4 +600,5 @@ export default {
   'mesh.hiddenManual': '非表示（手動オーバーライド）',
   'mesh.visibleAutomatic': '自動表示',
   'mesh.hiddenAutomatic': '自動非表示',
+  'mesh.mergeLooseParts': 'メッシュを結合',
 };

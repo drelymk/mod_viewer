@@ -14,7 +14,10 @@ import {
 import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
-import { clearSelection, selectMesh } from '../scene/selection.js';
+import {
+  clearSelection, getSelectedMeshes, isMeshSelected, selectMesh,
+  toggleMeshSelection,
+} from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
@@ -28,13 +31,15 @@ import { requestRender } from '../scene/render-scheduler.js';
 import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
 import { rangeInputDialog } from '../ui/dialogs.js';
 import {
-  MAX_LOOSE_PART_TOLERANCE, getLooseParts, isLoosePart, separateLooseParts,
+  MAX_LOOSE_PART_TOLERANCE, canMergeLooseParts, getLoosePartSource,
+  getLooseParts, isLoosePart, mergeLooseParts, separateLooseParts,
 } from '../mesh/loose-parts.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
 let meshContextMenu = null;
-let meshContextAction = null;
+let meshContextSeparateAction = null;
+let meshContextMergeAction = null;
 let meshContextTarget = null;
 let meshContextListenersInstalled = false;
 const meshPanelContexts = new WeakMap();
@@ -71,17 +76,27 @@ function ensureMeshContextMenu() {
   meshContextMenu.className = 'mesh-context-menu';
   meshContextMenu.setAttribute('role', 'menu');
   meshContextMenu.hidden = true;
-  meshContextAction = document.createElement('button');
-  meshContextAction.type = 'button';
-  meshContextAction.setAttribute('role', 'menuitem');
-  meshContextAction.dataset.i18n = 'mesh.separateLooseParts';
-  meshContextAction.textContent = t('mesh.separateLooseParts');
-  meshContextMenu.appendChild(meshContextAction);
+  meshContextSeparateAction = document.createElement('button');
+  meshContextSeparateAction.type = 'button';
+  meshContextSeparateAction.setAttribute('role', 'menuitem');
+  meshContextSeparateAction.dataset.i18n = 'mesh.separateLooseParts';
+  meshContextSeparateAction.textContent = t('mesh.separateLooseParts');
+  meshContextMenu.appendChild(meshContextSeparateAction);
+  meshContextMergeAction = document.createElement('button');
+  meshContextMergeAction.type = 'button';
+  meshContextMergeAction.setAttribute('role', 'menuitem');
+  meshContextMergeAction.dataset.i18n = 'mesh.mergeLooseParts';
+  meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
+  meshContextMenu.appendChild(meshContextMergeAction);
   document.body.appendChild(meshContextMenu);
-  meshContextAction.addEventListener('click', () => {
+  meshContextSeparateAction.addEventListener('click', () => {
     const source = meshContextTarget;
     closeMeshContextMenu();
-    if (source) void separateMeshRow(source);
+    if (source && !isLoosePart(source)) void separateMeshRow(source);
+  });
+  meshContextMergeAction.addEventListener('click', () => {
+    closeMeshContextMenu();
+    void mergeSelectedLooseParts();
   });
   if (!meshContextListenersInstalled) {
     document.addEventListener('pointerdown', event => {
@@ -102,6 +117,7 @@ function openMeshContextMenu(event, mesh) {
   }
   event.preventDefault();
   event.stopPropagation();
+  if (!isMeshSelected(mesh)) selectMesh(mesh);
   const menu = ensureMeshContextMenu();
   const container = document.getElementById('canvas-container') || document.body;
   const bounds = container.getBoundingClientRect();
@@ -109,6 +125,8 @@ function openMeshContextMenu(event, mesh) {
   const top = Number(event.clientY);
   menu.hidden = false;
   meshContextTarget = mesh;
+  meshContextSeparateAction.disabled = isLoosePart(mesh);
+  meshContextMergeAction.disabled = !canMergeLooseParts(getSelectedMeshes());
   menu.style.left = `${Math.max(4, left)}px`;
   menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
   requestAnimationFrame(() => {
@@ -412,7 +430,8 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
   });
   row.addEventListener('click', (e) => {
     if (e.target === cb) return;
-    selectMesh(mesh);
+    if (e.ctrlKey) toggleMeshSelection(mesh);
+    else selectMesh(mesh);
   });
   if (onContextMenu) {
     row.addEventListener('contextmenu', event => onContextMenu(event, mesh));
@@ -433,7 +452,8 @@ function buildPartRows(source, context) {
       part,
       [],
       null,
-      {labelOverride: part.userData.loosePartLabel, includeInGroup: false});
+      {labelOverride: part.userData.loosePartLabel, includeInGroup: false,
+        onContextMenu: isRecording() ? null : openMeshContextMenu});
     registerInspectorMesh(part, context.inspectorRecord);
     return wrap;
   });
@@ -524,6 +544,41 @@ async function separateMeshRow(source) {
   if (parts.length <= 1) return false;
   sourceWrap.replaceWith(...buildPartRows(source, context));
   selectMesh(parts[0]);
+  requestRender();
+  return true;
+}
+
+function replaceRowsAfterLoosePartMerge(source, oldPartWraps, result) {
+  const context = meshPanelContexts.get(source);
+  const group = groupsUI.find(candidate => candidate.itemObjs.includes(source));
+  if (!context || !group || !oldPartWraps.length) return false;
+  if (result.full) {
+    const sourceIndex = group.itemObjs.indexOf(source);
+    const {wrap, cb} = buildDrawRow(
+      context.name, context.groupName, context.entry, source,
+      group.itemCbs, group.masterCb,
+      {onContextMenu: isRecording() ? null : openMeshContextMenu});
+    group.itemCbs[sourceIndex] = cb;
+    oldPartWraps[0].replaceWith(wrap);
+  } else {
+    oldPartWraps[0].replaceWith(...buildPartRows(source, context));
+  }
+  oldPartWraps.slice(1).forEach(partWrap => partWrap.remove());
+  return true;
+}
+
+function mergeSelectedLooseParts() {
+  if (isRecording()) return false;
+  const selectedMeshes = getSelectedMeshes();
+  if (!canMergeLooseParts(selectedMeshes)) return false;
+  const source = getLoosePartSource(selectedMeshes[0]);
+  const oldPartWraps = getLooseParts(source).map(meshRowWrap).filter(Boolean);
+  clearSelection();
+  const result = mergeLooseParts(selectedMeshes);
+  if (!result || !replaceRowsAfterLoosePartMerge(source, oldPartWraps, result)) {
+    return false;
+  }
+  selectMesh(result.mesh);
   requestRender();
   return true;
 }
@@ -736,8 +791,9 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 }
 
 window.addEventListener(LANGUAGE_CHANGED, () => {
-  if (meshContextAction) {
-    meshContextAction.textContent = t('mesh.separateLooseParts');
+  if (meshContextSeparateAction) {
+    meshContextSeparateAction.textContent = t('mesh.separateLooseParts');
+    meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
   }
   groupsUI.forEach(group => {
     group.syncLabels?.();

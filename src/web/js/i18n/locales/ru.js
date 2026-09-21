@@ -600,4 +600,5 @@ export default {
   'mesh.hiddenManual': 'Скрыт (ручное переопределение)',
   'mesh.visibleAutomatic': 'Видим автоматически',
   'mesh.hiddenAutomatic': 'Скрыт автоматически',
+  'mesh.mergeLooseParts': 'Объединить меши',
 };

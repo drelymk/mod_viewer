@@ -255,7 +255,11 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         menu = page.locator(".mesh-context-menu")
         menu.wait_for()
         assert menu.is_visible()
-        assert menu.inner_text() == "Separate Loose Parts"
+        assert menu.locator("button").all_inner_texts() == [
+            "Separate Loose Parts", "Merge Meshes",
+        ]
+        assert menu.locator("button").nth(0).is_enabled()
+        assert menu.locator("button").nth(1).is_disabled()
         page.locator("#toolbar").click()
         assert menu.is_hidden()
 
@@ -263,7 +267,7 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         page.keyboard.press("Escape")
         assert menu.is_hidden()
         source_row.click(button="right")
-        menu.locator("button").click()
+        menu.locator("button").first.click()
         dialog = page.locator("#dialog-backdrop")
         dialog.wait_for()
         assert dialog.is_visible()
@@ -444,6 +448,253 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         context.close()
 
 
+def test_mesh_panel_multiselect_and_merge_loose_parts(
+        edge_browser, frontend_url):
+    path = "LoosePartsMerge"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.wait_for()
+        initial_draw_count = page.evaluate(
+            "window.modViewer.activeMeshes[0].geometry.drawRange.count")
+        source_row.click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        menu.locator("button").first.click()
+        page.locator("#dialog-ok").click()
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.all_inner_texts() == [
+            "9, 0, 0 - Part 1",
+            "9, 0, 0 - Part 2",
+            "9, 0, 0 - Part 3",
+        ]
+        page.evaluate("""() => {
+          window.__selectionEvents = [];
+          window.addEventListener('mod-viewer-mesh-selected', event => {
+            window.__selectionEvents.push(event.detail);
+          });
+        }""")
+
+        rows.nth(0).click()
+        assert page.locator(".draw-item.selected").count() == 1
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part =>
+            part.userData.viewerOutline.userData.selectionSelected)""") == [
+            True, False, False,
+        ]
+        rows.nth(1).click(modifiers=["Control"])
+        assert page.locator(".draw-item.selected").count() == 2
+        selected_event = page.evaluate("""() => {
+          const source = window.modViewer.activeMeshes[0];
+          const detail = window.__selectionEvents.at(-1);
+          return {
+            primaryIsPart2: detail.mesh === source.userData.looseParts[1],
+            count: detail.meshes.length,
+            selected: source.userData.looseParts.map(part =>
+              part.userData.viewerOutline.userData.selectionSelected),
+          };
+        }""")
+        assert selected_event == {
+            "primaryIsPart2": True,
+            "count": 2,
+            "selected": [True, True, False],
+        }
+        rows.nth(0).click(modifiers=["Control"])
+        assert page.locator(".draw-item.selected").count() == 1
+        rows.nth(2).click()
+        assert page.locator(".draw-item.selected").count() == 1
+        assert rows.nth(2).get_attribute("class").find("selected") >= 0
+
+        rows.nth(0).click()
+        rows.nth(1).click(modifiers=["Control"])
+        rows.nth(1).click(button="right")
+        assert menu.locator("button").nth(0).is_disabled()
+        assert menu.locator("button").nth(1).is_enabled()
+        menu.locator("button").nth(1).click()
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.all_inner_texts() == [
+            "9, 0, 0 - Part 1", "9, 0, 0 - Part 3",
+        ]
+        assert rows.nth(0).get_attribute("class").find("selected") >= 0
+        assert page.evaluate("""() => {
+          const source = window.modViewer.activeMeshes[0];
+          return {
+            partCount: source.userData.looseParts.length,
+            index: Array.from(source.userData.looseParts[0].geometry.index.array),
+          };
+        }""") == {"partCount": 2, "index": [0, 1, 2, 3, 4, 5]}
+
+        rows.nth(1).click(modifiers=["Control"])
+        rows.nth(1).click(button="right")
+        assert menu.locator("button").nth(1).is_enabled()
+        menu.locator("button").nth(1).click()
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.all_inner_texts() == ["9, 0, 0"]
+        assert rows.first.get_attribute("class").find("selected") >= 0
+        assert page.evaluate("""() => {
+          const source = window.modViewer.activeMeshes[0];
+            return {
+              looseParts: source.userData.looseParts.length,
+              drawCount: source.geometry.drawRange.count,
+            };
+        }""") == {"looseParts": 0, "drawCount": initial_draw_count}
+    finally:
+        context.close()
+
+
+def test_viewport_ctrl_box_selection_is_additive_and_excludes_hidden_parts(
+        edge_browser, frontend_url):
+    path = "LoosePartsBox"
+    payload = _loose_parts_payload(path)
+    entry = next(iter(payload["meshes"].values()))
+    entry["pos"] = _f32(
+        -10, 0, 0, -9, 0, 0, -10, 1, 0,
+        0, 0, 0, 1, 0, 0, 0, 1, 0,
+        10, 0, 0, 11, 0, 0, 10, 1, 0,
+    )
+    context, page = _page(edge_browser, frontend_url, {path: payload})
+    try:
+        _open(page, path)
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.click(button="right")
+        page.locator(".mesh-context-menu button").first.click()
+        page.locator("#dialog-ok").click()
+        rows = page.locator("#mesh-list .draw-item")
+        rows.nth(2).click()
+        box_data = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {camera, renderer} = await import('./js/scene/scene.js');
+          const source = window.modViewer.activeMeshes[0];
+          source.updateMatrixWorld(true);
+          const rect = renderer.domElement.getBoundingClientRect();
+          const project = part => {
+            const position = part.geometry.getAttribute('position');
+            const index = part.geometry.index;
+            const points = [];
+            for (let i = 0; i < index.count; i += 1) {
+              const vertex = index.getX(i);
+              points.push(new THREE.Vector3(
+                position.getX(vertex), position.getY(vertex), position.getZ(vertex))
+                .applyMatrix4(part.matrixWorld).project(camera));
+            }
+            return {
+              left: rect.left + (Math.min(...points.map(point => point.x)) + 1)
+                * rect.width / 2,
+              right: rect.left + (Math.max(...points.map(point => point.x)) + 1)
+                * rect.width / 2,
+              top: rect.top + (1 - Math.max(...points.map(point => point.y)))
+                * rect.height / 2,
+              bottom: rect.top + (1 - Math.min(...points.map(point => point.y)))
+                * rect.height / 2,
+            };
+          };
+          const parts = source.userData.looseParts;
+          const projected = parts.map(project);
+          const firstTwo = projected.slice(0, 2);
+          return {
+            rect,
+            selection: {
+              left: Math.max(rect.left + 2,
+                Math.min(...firstTwo.map(part => part.left)) - 6),
+              top: Math.max(rect.top + 2,
+                Math.min(...firstTwo.map(part => part.top)) - 6),
+              right: Math.min(rect.right - 2,
+                Math.max(...firstTwo.map(part => part.right)) + 6),
+              bottom: Math.min(rect.bottom - 2,
+                Math.max(...firstTwo.map(part => part.bottom)) + 6),
+            },
+            projected,
+            camera: camera.position.toArray(),
+          };
+        }""")
+        rect = box_data["selection"]
+        projected = box_data["projected"]
+        first_center = (
+            projected[0]["left"]
+            + (projected[0]["right"] - projected[0]["left"]) / 3,
+            projected[0]["top"]
+            + 2 * (projected[0]["bottom"] - projected[0]["top"]) / 3,
+        )
+        second_center = (
+            projected[1]["left"]
+            + (projected[1]["right"] - projected[1]["left"]) / 3,
+            projected[1]["top"]
+            + 2 * (projected[1]["bottom"] - projected[1]["top"]) / 3,
+        )
+        assert page.evaluate("""async ({x, y}) => {
+          const {camera, renderer} = await import('./js/scene/scene.js');
+          const {raycastModelAtClientPoint} = await import(
+            './js/scene/model-picking.js');
+          const source = window.modViewer.activeMeshes[0];
+          const hit = raycastModelAtClientPoint({
+            clientX: x, clientY: y, canvas: renderer.domElement, camera,
+            meshes: [source],
+          });
+          return hit?.object === source.userData.looseParts[1];
+        }""", {"x": second_center[0], "y": second_center[1]}) is True
+        page.mouse.click(*first_center)
+        page.keyboard.down("Control")
+        page.mouse.click(*second_center)
+        page.keyboard.up("Control")
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part =>
+            part.userData.viewerOutline.userData.selectionSelected)""") == [
+            True, True, False,
+        ]
+        page.keyboard.down("Control")
+        page.mouse.click(*first_center)
+        page.keyboard.up("Control")
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part =>
+            part.userData.viewerOutline.userData.selectionSelected)""") == [
+            False, True, False,
+        ]
+        rows.nth(2).click()
+        page.keyboard.down("Control")
+        page.mouse.click(box_data["rect"]["left"] + 4,
+                         box_data["rect"]["top"] + 4)
+        page.keyboard.up("Control")
+        assert page.locator(".draw-item.selected").count() == 1
+        page.keyboard.down("Control")
+        page.mouse.move(rect["left"], rect["top"])
+        page.mouse.down()
+        page.mouse.move(rect["right"], rect["bottom"], steps=4)
+        assert page.locator(".mesh-selection-box").is_visible()
+        page.mouse.up()
+        page.keyboard.up("Control")
+        assert page.locator(".mesh-selection-box").is_hidden()
+        actual_box_selection = page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part =>
+            part.userData.viewerOutline.userData.selectionSelected)""")
+        assert actual_box_selection == [True, True, True], actual_box_selection
+        after_camera = page.evaluate("""async () => {
+          const {camera} = await import('./js/scene/scene.js');
+          return camera.position.toArray();
+        }""")
+        assert after_camera == box_data["camera"]
+
+        rows.nth(1).locator(".mesh-state-btn").click()
+        rows.nth(2).click()
+        page.keyboard.down("Control")
+        page.mouse.move(rect["left"], rect["top"])
+        page.mouse.down()
+        page.mouse.move(rect["right"], rect["bottom"], steps=4)
+        page.mouse.up()
+        page.keyboard.up("Control")
+        assert page.evaluate("""() => window.modViewer.activeMeshes[0]
+          .userData.looseParts.map(part => ({
+            visible: part.visible,
+            selected: part.userData.viewerOutline.userData.selectionSelected,
+          }))""") == [
+            {"visible": True, "selected": True},
+            {"visible": False, "selected": False},
+            {"visible": True, "selected": True},
+        ]
+    finally:
+        context.close()
+
+
 def test_loose_part_tolerance_dialog_can_cancel_reject_invalid_and_join(
         edge_browser, frontend_url):
     path = "LoosePartsTolerance"
@@ -460,7 +711,7 @@ def test_loose_part_tolerance_dialog_can_cancel_reject_invalid_and_join(
         assert source_row.inner_text() == "Hair Ornament"
 
         source_row.click(button="right")
-        page.locator(".mesh-context-menu button").click()
+        page.locator(".mesh-context-menu button").first.click()
         dialog = page.locator("#dialog-backdrop")
         dialog.wait_for()
         tolerance = page.locator("#dialog-range-input")
@@ -471,7 +722,7 @@ def test_loose_part_tolerance_dialog_can_cancel_reject_invalid_and_join(
         ]
 
         page.locator("#mesh-list .draw-item").first.click(button="right")
-        page.locator(".mesh-context-menu button").click()
+        page.locator(".mesh-context-menu button").first.click()
         tolerance = page.locator("#dialog-range-input")
         tolerance.fill("-1")
         page.locator("#dialog-ok").click()

@@ -600,4 +600,5 @@ export default {
   'mesh.hiddenManual': '숨김 (수동 오버라이드)',
   'mesh.visibleAutomatic': '자동으로 표시됨',
   'mesh.hiddenAutomatic': '자동으로 숨겨짐',
+  'mesh.mergeLooseParts': '메시 병합',
 };
