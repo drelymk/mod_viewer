@@ -168,7 +168,8 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
     assert "drawindexed = 3, 10, 9\n" in staged
 
 
-def _overlap_fixture(tmp_path, other_start, other_count):
+def _overlap_fixture(tmp_path, other_start, other_count,
+                     other_ib_file="Body.ib"):
     ini = tmp_path / "body.ini"
     ib = tmp_path / "Body.ib"
     ini.write_text(
@@ -194,7 +195,7 @@ def _overlap_fixture(tmp_path, other_start, other_count):
             "ini_path": str(ini), "line_no": 4, "section": "Overlay",
             "occurrence": {"section": "Overlay", "ordinal": 0, "path": []},
         }],
-        ib_file="Body.ib", index_size=2)
+        ib_file=other_ib_file, index_size=2)
     body_group = {"identity_source": "body.ini", "display_name": "Body",
                   "name": "Body"}
     overlay_group = {"identity_source": "body.ini",
@@ -240,6 +241,33 @@ def test_apply_allows_identical_complete_overlap_with_another_draw(
         tmp_path, monkeypatch):
     ini, ib, _original, body, overlay, body_group, overlay_group, context = (
         _overlap_fixture(tmp_path, 0, 12))
+    monkeypatch.setattr(mesh_edit, "resolved_draws",
+                        lambda _context, _overrides: (None, {
+                            body.label: (body, body_group),
+                            overlay.label: (overlay, overlay_group),
+                        }))
+    request = {
+        "component": "Body",
+        "meshes": [{
+            "identity": mesh_identity_for_draw(body, body_group).to_dict(),
+            "sources": [{
+                "ini": "body.ini", "line": 2, "section": "Body",
+                "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+            }],
+            "parts": [[0, 2], [1, 3]],
+        }],
+    }
+
+    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+
+    assert result == {"ok": True, "component": "Body", "meshes": 1}
+    assert edit_session.has_pending(str(context.mod_dir))
+    assert str(ib) in edit_session.ib_overrides_for(str(context.mod_dir))
+
+
+def test_apply_ignores_unrelated_missing_index_buffer(tmp_path, monkeypatch):
+    ini, ib, _original, body, overlay, body_group, overlay_group, context = (
+        _overlap_fixture(tmp_path, 6, 6, other_ib_file="Missing.ib"))
     monkeypatch.setattr(mesh_edit, "resolved_draws",
                         lambda _context, _overrides: (None, {
                             body.label: (body, body_group),

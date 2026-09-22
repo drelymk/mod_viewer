@@ -63,6 +63,19 @@ def _resolve_ib_path(context, draw):
     return os.path.abspath(resolved)
 
 
+def _resolve_ib_reference(context, draw):
+    """Resolve another draw's IB without requiring the resource to exist."""
+    path = draw.ib_file
+    if not path:
+        return None
+    source = getattr(context, "source", None)
+    try:
+        resolved = source.resolve_resource(path) if source is not None else path
+        return os.path.abspath(resolved) if resolved else None
+    except (ModSourceError, OSError, TypeError, ValueError):
+        return None
+
+
 def _ib_path_key(path):
     return os.path.normcase(os.path.abspath(path))
 
@@ -82,7 +95,9 @@ def _validate_draw_overlap(context, authoritative, edited_draw, edited_path,
                            edited_range, data_length):
     edited_path_key = _ib_path_key(edited_path)
     for other_draw, _group in authoritative.values():
-        other_path = _resolve_ib_path(context, other_draw)
+        other_path = _resolve_ib_reference(context, other_draw)
+        if other_path is None:
+            continue
         if _ib_path_key(other_path) != edited_path_key:
             continue
         other_range = _draw_byte_range(other_draw, data_length)
