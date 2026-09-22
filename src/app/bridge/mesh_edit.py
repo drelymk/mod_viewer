@@ -63,6 +63,42 @@ def _resolve_ib_path(context, draw):
     return os.path.abspath(resolved)
 
 
+def _ib_path_key(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _draw_byte_range(draw, data_length):
+    index_size = int(draw.index_size)
+    if index_size <= 0:
+        raise ValueError("The authored index size is invalid.")
+    if draw.count is None:
+        return 0, data_length
+    start = int(draw.start)
+    count = int(draw.count)
+    return start * index_size, (start + count) * index_size
+
+
+def _validate_draw_overlap(context, authoritative, edited_draw, edited_path,
+                           edited_range, data_length):
+    edited_path_key = _ib_path_key(edited_path)
+    for other_draw, _group in authoritative.values():
+        other_path = _resolve_ib_path(context, other_draw)
+        if _ib_path_key(other_path) != edited_path_key:
+            continue
+        other_range = _draw_byte_range(other_draw, data_length)
+        if not (edited_range[0] < other_range[1]
+                and other_range[0] < edited_range[1]):
+            continue
+        same_authored_range = (
+            other_draw.start == edited_draw.start
+            and other_draw.count == edited_draw.count
+            and other_draw.index_size == edited_draw.index_size)
+        if not same_authored_range:
+            raise ValueError(
+                "The edited index range overlaps another draw in the same "
+                "index buffer.")
+
+
 def _rewrite_draw_line(doc, line_no, ranges):
     match = _DRAW_LINE.match(doc.lines[line_no].raw)
     if match is None:
@@ -141,8 +177,10 @@ def apply_component_mesh_changes(context, overrides, request):
                 data, draw.start, draw.count, draw.index_size, parts)
             byte_range = (draw.start * draw.index_size,
                           (draw.start + draw.count) * draw.index_size)
+            _validate_draw_overlap(
+                context, authoritative, draw, path, byte_range, len(data))
             existing = edit_session.ib_edits_for(context.mod_dir).get(
-                os.path.normcase(os.path.abspath(path)))
+                _ib_path_key(path))
             previous = ib_ranges.setdefault(path, [])
             if existing is not None:
                 previous.extend(existing["ranges"])

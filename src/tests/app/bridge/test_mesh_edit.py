@@ -166,3 +166,99 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
     assert "drawindexed = 3, 4, 7\n" in staged
     assert "drawindexed = 3, 7, 9\n" in staged
     assert "drawindexed = 3, 10, 9\n" in staged
+
+
+def _overlap_fixture(tmp_path, other_start, other_count):
+    ini = tmp_path / "body.ini"
+    ib = tmp_path / "Body.ib"
+    ini.write_text(
+        "[Body]\n"
+        "drawindexed = 12, 0, 0\n"
+        "[Overlay]\n"
+        f"drawindexed = {other_count}, {other_start}, 0\n",
+        encoding="utf-8")
+    original = b"".join(value.to_bytes(2, "little") for value in range(12))
+    ib.write_bytes(original)
+    source = DirectoryModSource(tmp_path)
+    edit_session.load_documents(str(tmp_path), [str(ini)], source=source)
+    body = DrawCall(
+        label="Body-1", count=12, start=0, base=0,
+        sources=[{
+            "ini_path": str(ini), "line_no": 2, "section": "Body",
+            "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+        }],
+        ib_file="Body.ib", index_size=2)
+    overlay = DrawCall(
+        label="Overlay-1", count=other_count, start=other_start, base=0,
+        sources=[{
+            "ini_path": str(ini), "line_no": 4, "section": "Overlay",
+            "occurrence": {"section": "Overlay", "ordinal": 0, "path": []},
+        }],
+        ib_file="Body.ib", index_size=2)
+    body_group = {"identity_source": "body.ini", "display_name": "Body",
+                  "name": "Body"}
+    overlay_group = {"identity_source": "body.ini",
+                     "display_name": "Overlay", "name": "Overlay"}
+    context = SimpleNamespace(
+        mod_dir=str(tmp_path), source=source, ini_paths=[str(ini)],
+        docs=edit_session.documents_for(str(tmp_path)))
+    return ini, ib, original, body, overlay, body_group, overlay_group, context
+
+
+def test_apply_rejects_partial_overlap_with_another_draw(tmp_path, monkeypatch):
+    ini, ib, original, body, overlay, body_group, overlay_group, context = (
+        _overlap_fixture(tmp_path, 6, 6))
+    monkeypatch.setattr(mesh_edit, "resolved_draws",
+                        lambda _context, _overrides: (None, {
+                            body.label: (body, body_group),
+                            overlay.label: (overlay, overlay_group),
+                        }))
+    request = {
+        "component": "Body",
+        "meshes": [{
+            "identity": mesh_identity_for_draw(body, body_group).to_dict(),
+            "sources": [{
+                "ini": "body.ini", "line": 2, "section": "Body",
+                "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+            }],
+            "parts": [[0, 2], [1, 3]],
+        }],
+    }
+
+    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+
+    assert "overlaps another draw" in result["error"]
+    assert ib.read_bytes() == original
+    assert not edit_session.has_pending(str(context.mod_dir))
+    assert edit_session.ib_overrides_for(str(context.mod_dir)) == {}
+    staged = edit_session.peek(str(context.mod_dir), str(ini)).to_string()
+    assert staged.replace("\r\n", "\n") == ini.read_text(
+        encoding="utf-8").replace("\r\n", "\n")
+
+
+def test_apply_allows_identical_complete_overlap_with_another_draw(
+        tmp_path, monkeypatch):
+    ini, ib, _original, body, overlay, body_group, overlay_group, context = (
+        _overlap_fixture(tmp_path, 0, 12))
+    monkeypatch.setattr(mesh_edit, "resolved_draws",
+                        lambda _context, _overrides: (None, {
+                            body.label: (body, body_group),
+                            overlay.label: (overlay, overlay_group),
+                        }))
+    request = {
+        "component": "Body",
+        "meshes": [{
+            "identity": mesh_identity_for_draw(body, body_group).to_dict(),
+            "sources": [{
+                "ini": "body.ini", "line": 2, "section": "Body",
+                "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+            }],
+            "parts": [[0, 2], [1, 3]],
+        }],
+    }
+
+    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+
+    assert result == {"ok": True, "component": "Body", "meshes": 1}
+    assert edit_session.has_pending(str(context.mod_dir))
+    assert str(ib) in edit_session.ib_overrides_for(str(context.mod_dir))
