@@ -247,6 +247,7 @@ export default {
   'present.completeTitle': 'PRESENTを完了',
   'present.addTitle': 'PRESENTを追加',
   'inspector.material': 'マテリアル',
+  'inspector.asset': 'アセット',
   'inspector.materialKind': 'マテリアルの種類',
   'inspector.manageTextures': 'テクスチャを管理',
   'inspector.textures': 'テクスチャ',

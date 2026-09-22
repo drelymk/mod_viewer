@@ -247,6 +247,7 @@ export default {
   'present.completeTitle': '补全 PRESENT',
   'present.addTitle': '添加 PRESENT',
   'inspector.material': '材质',
+  'inspector.asset': '资源',
   'inspector.materialKind': '材质类型',
   'inspector.manageTextures': '管理纹理',
   'inspector.textures': '纹理',

@@ -24,7 +24,7 @@ def _sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def _source_key(mod_dir, source):
+def _source_key(source):
     ini = str(source.get("ini", "")).replace("\\", "/")
     return (ini.casefold(), str(source.get("section", "")).casefold(),
             _occurrence_key(source.get("occurrence")))
@@ -153,8 +153,7 @@ def apply_component_mesh_changes(context, overrides, request):
         ib_ranges = {}
         seen_identities = set()
         for entry in entries:
-            identity = entry.get("identity") if isinstance(entry, dict) else None
-            key = identity.get("key") if isinstance(identity, dict) else None
+            key = entry.get("key") if isinstance(entry, dict) else None
             if not isinstance(key, str) or not key:
                 raise ValueError("Mesh changes require a canonical mesh identity.")
             if key in seen_identities:
@@ -177,7 +176,7 @@ def apply_component_mesh_changes(context, overrides, request):
                 _authoritative_source_key(context.mod_dir, item, source)
                 for item in draw.sources
             }
-            submitted = {_source_key(context.mod_dir, item) for item in sources}
+            submitted = {_source_key(item) for item in sources}
             if submitted != expected:
                 raise ValueError("Mesh source provenance is stale.")
             parts = entry.get("parts")
@@ -247,8 +246,7 @@ def apply_component_mesh_changes(context, overrides, request):
                     path, candidate, original, [byte_range],
                     dependent_inis={edit_session.document(
                         context.mod_dir, source_ref.get("ini"))[0]
-                        for entry_ref in entries
-                        for source_ref in entry_ref.get("sources", [])})
+                        for source_ref in entry.get("sources", [])})
         return {"ok": True, "component": component,
                 "meshes": len(selected)}
     except (KeyError, TypeError, ValueError, ModSourceError,

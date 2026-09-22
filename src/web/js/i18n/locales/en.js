@@ -247,6 +247,7 @@ export default {
   'present.completeTitle': 'Complete PRESENT',
   'present.addTitle': 'Add PRESENT',
   'inspector.material': 'Material',
+  'inspector.asset': 'Asset',
   'inspector.materialKind': 'Material kind',
   'inspector.manageTextures': 'Manage textures',
   'inspector.textures': 'Textures',

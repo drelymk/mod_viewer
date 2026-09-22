@@ -247,6 +247,7 @@ export default {
   'present.completeTitle': 'PRESENT 완료',
   'present.addTitle': 'PRESENT 추가',
   'inspector.material': '머티리얼',
+  'inspector.asset': '에셋',
   'inspector.materialKind': '머티리얼 종류',
   'inspector.manageTextures': '텍스처 관리',
   'inspector.textures': '텍스처',

@@ -22,6 +22,35 @@ def _page(edge_browser, frontend_url, responses, **kwargs):
         edge_browser, frontend_url, responses,
         api_features=sorted(features), **kwargs)
 
+
+def _multi_row_payload(label, count=5):
+    payload = _payload(label)
+    template = next(iter(payload["meshes"].values()))
+    payload["meshes"] = {}
+    for index in range(count):
+        entry = copy.deepcopy(template)
+        entry["component"] = f"Body {label}"
+        entry["drawindexed"] = [3, index * 3, 0]
+        entry["sources"][0]["line"] = 10 + index
+        entry["sources"][0]["occurrence"]["ordinal"] = index
+        payload["meshes"][f"Body-{label}-{index}"] = entry
+    return payload
+
+
+def _ctrl_drag_rows(page, rows, start, end):
+    rects = rows.evaluate_all("""items => items.map(item => {
+      const rect = item.getBoundingClientRect();
+      return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+    })""")
+    page.keyboard.down("Control")
+    try:
+        page.mouse.move(rects[start]["x"], rects[start]["y"])
+        page.mouse.down()
+        page.mouse.move(rects[end]["x"], rects[end]["y"], steps=5)
+        page.mouse.up()
+    finally:
+        page.keyboard.up("Control")
+
 def test_right_dock_tabs_toggle_without_reopening_on_refresh(edge_browser, frontend_url):
     path = "fixture-model"
     context, page = _page(edge_browser, frontend_url, {path: _payload()})
@@ -599,10 +628,9 @@ def test_mesh_panel_apply_stages_only_triangle_provenance_and_reloads(
             "window.__fakeApi.calls.loadMod.length === 2")
         request = page.evaluate("window.__fakeApi.calls.applyMeshChanges[0][1]")
         assert set(request) == {"component", "meshes"}
-        assert set(request["meshes"][0]) == {
-            "identity", "drawindexed", "sources", "parts",
-        }
+        assert set(request["meshes"][0]) == {"key", "sources", "parts"}
         assert request["meshes"][0]["parts"] == [[0], [1], [2]]
+        assert request["meshes"][0]["key"] == "mesh:fixture-apply"
         assert "C:\\" not in str(request)
         assert "bytes" not in str(request)
     finally:
@@ -634,6 +662,90 @@ def test_mesh_panel_hides_edited_badge_after_apply(
         page.wait_for_function(
             "document.querySelector('.mesh-edit-badge')?.dataset.state === 'applied'")
         assert page.locator(".mesh-edit-badge").is_hidden()
+    finally:
+        context.close()
+
+
+def test_mesh_panel_ctrl_drag_adds_ordered_rows_without_toggling(
+        edge_browser, frontend_url):
+    path = "PanelDrag"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _multi_row_payload(path)})
+    try:
+        _open(page, path)
+        rows = page.locator("#mesh-list .draw-item")
+        rows.nth(4).wait_for()
+        rows.nth(0).click(modifiers=["Control"])
+        _ctrl_drag_rows(page, rows, 2, 4)
+        assert [rows.nth(index).get_attribute("class").find("selected") >= 0
+                for index in range(5)] == [True, False, True, True, True]
+        assert page.evaluate("window.modViewer.activeMeshes.map(mesh => "
+                              "mesh.userData.viewerOutline.userData.selectionSelected)") == [
+            True, False, True, True, True,
+        ]
+
+        _ctrl_drag_rows(page, rows, 2, 4)
+        assert page.locator(".draw-item.selected").count() == 4
+    finally:
+        context.close()
+
+
+def test_mesh_panel_ctrl_click_threshold_and_controls_do_not_start_drag(
+        edge_browser, frontend_url):
+    path = "PanelDragControls"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _multi_row_payload(path)})
+    try:
+        _open(page, path)
+        rows = page.locator("#mesh-list .draw-item")
+        rows.nth(4).wait_for()
+        rects = rows.evaluate_all("""items => items.map(item => {
+          const rect = item.getBoundingClientRect();
+          const button = item.querySelector('.mesh-state-btn').getBoundingClientRect();
+          return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2,
+                  buttonX: button.left + button.width / 2,
+                  buttonY: button.top + button.height / 2};
+        })""")
+        page.keyboard.down("Control")
+        try:
+            page.mouse.move(rects[0]["x"], rects[0]["y"])
+            page.mouse.down()
+            page.mouse.move(rects[0]["x"], rects[0]["y"] + 2)
+            page.mouse.up()
+        finally:
+            page.keyboard.up("Control")
+        assert page.locator(".draw-item.selected").count() == 1
+
+        page.keyboard.down("Control")
+        try:
+            page.mouse.move(rects[0]["buttonX"], rects[0]["buttonY"])
+            page.mouse.down()
+            page.mouse.move(rects[3]["x"], rects[3]["y"], steps=5)
+            page.mouse.up()
+        finally:
+            page.keyboard.up("Control")
+        assert page.locator(".draw-item.selected").count() == 1
+    finally:
+        context.close()
+
+
+def test_mesh_panel_ctrl_drag_selects_loose_parts_for_merge(
+        edge_browser, frontend_url):
+    path = "PanelDragParts"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.click(button="right")
+        page.locator(".mesh-context-menu button").first.click()
+        page.locator("#dialog-ok").click()
+        rows = page.locator("#mesh-list .draw-item")
+        rows.nth(2).wait_for()
+        _ctrl_drag_rows(page, rows, 0, 2)
+        assert page.locator(".draw-item.selected").count() == 3
+        rows.nth(2).click(button="right")
+        assert page.locator(".mesh-context-menu button").nth(1).is_enabled()
     finally:
         context.close()
 

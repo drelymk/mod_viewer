@@ -247,6 +247,7 @@ export default {
   'present.completeTitle': 'Завершить PRESENT',
   'present.addTitle': 'Добавить PRESENT',
   'inspector.material': 'Материал',
+  'inspector.asset': 'Ресурс',
   'inspector.materialKind': 'Тип материала',
   'inspector.manageTextures': 'Управление текстурами',
   'inspector.textures': 'Текстуры',

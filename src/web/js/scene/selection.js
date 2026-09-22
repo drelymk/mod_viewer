@@ -34,7 +34,6 @@ function setRowSelected(mesh, on) {
   const row = getMeshView(mesh)?.row;
   if (!row) return;
   row.classList.toggle('selected', on);
-  if (on) expandAncestorsAndScrollTo(row);
 }
 
 /** Un-collapse every collapsed group/source section a row is hiding inside,
@@ -78,6 +77,10 @@ function replaceSelection(meshes, nextPrimary) {
   selected.clear();
   next.forEach(mesh => selected.add(mesh));
   primary = next.has(nextPrimary) ? nextPrimary : [...next].pop() || null;
+  if (primary) {
+    const row = getMeshView(primary)?.row;
+    if (row) expandAncestorsAndScrollTo(row);
+  }
   dispatchSelectionChanged();
 }
 

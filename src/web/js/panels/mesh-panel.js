@@ -15,16 +15,14 @@ import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import {
-  clearSelection, getSelectedMeshes, isMeshSelected, selectMesh,
-  toggleMeshSelection,
+  addMeshesToSelection, clearSelection, getSelectedMeshes, isMeshSelected,
+  selectMesh, toggleMeshSelection,
 } from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
-import {
-  assetDetailLabel, assetSummaryLabel, summarizeAssetBindings,
-} from './asset-diagnostics.js';
+import { summarizeAssetBindings } from './asset-diagnostics.js';
 import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -43,7 +41,12 @@ let meshContextMergeAction = null;
 let meshContextApplyAction = null;
 let meshContextTarget = null;
 let meshContextListenersInstalled = false;
+let panelSelectionListenersInstalled = false;
+let panelSelectionDrag = null;
+let suppressNextPanelClick = null;
 const meshPanelContexts = new WeakMap();
+const meshByRow = new WeakMap();
+const PANEL_SELECTION_THRESHOLD = 5;
 
 function meshRowWrap(mesh) {
   return getMeshView(mesh)?.row?.closest('.draw-item-wrap') || null;
@@ -69,6 +72,103 @@ function closeMeshContextMenu() {
   if (!meshContextMenu) return;
   meshContextMenu.hidden = true;
   meshContextTarget = null;
+}
+
+function positionMeshContextMenu(menu, event) {
+  const container = document.getElementById('canvas-container') || document.body;
+  const bounds = container.getBoundingClientRect();
+  const left = Number(event.clientX);
+  const top = Number(event.clientY);
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
+  requestAnimationFrame(() => {
+    if (menu.hidden) return;
+    const maxLeft = Math.max(4, window.innerWidth - menu.offsetWidth - 4);
+    const maxTop = Math.max(
+      bounds.top + 4, Math.min(window.innerHeight, bounds.bottom)
+        - menu.offsetHeight - 4);
+    menu.style.left = `${Math.min(Math.max(4, left), maxLeft)}px`;
+    menu.style.top = `${Math.min(Math.max(bounds.top + 4, top), maxTop)}px`;
+  });
+}
+
+function panelRowAtPoint(clientX, clientY) {
+  const element = document.elementFromPoint(clientX, clientY);
+  const row = element?.closest?.('.draw-item');
+  return row?.isConnected ? row : null;
+}
+
+function panelRowsInRange(list, startY, currentY) {
+  const top = Math.min(startY, currentY);
+  const bottom = Math.max(startY, currentY);
+  const meshes = [];
+  list.querySelectorAll('.draw-item').forEach(row => {
+    if (!row.isConnected) return;
+    const rect = row.getBoundingClientRect();
+    if (rect.height <= 0 || rect.bottom < top || rect.top > bottom) return;
+    const mesh = meshByRow.get(row);
+    if (mesh) meshes.push(mesh);
+  });
+  return meshes;
+}
+
+function isPanelSelectionInteractiveTarget(target) {
+  return target instanceof Element
+    && !!target.closest('button, input, select, textarea, a, [contenteditable="true"]');
+}
+
+function onPanelPointerDown(event) {
+  if (event.button !== 0 || !event.ctrlKey || event.defaultPrevented
+      || isPanelSelectionInteractiveTarget(event.target)) return;
+  const row = event.target.closest?.('.draw-item');
+  if (!row || !row.isConnected) return;
+  panelSelectionDrag = {
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    lastRow: row,
+    list: event.currentTarget,
+    dragging: false,
+  };
+}
+
+function onPanelPointerMove(event) {
+  const gesture = panelSelectionDrag;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  const row = panelRowAtPoint(event.clientX, event.clientY);
+  if (row) gesture.lastRow = row;
+  if (!gesture.dragging
+      && Math.abs(event.clientY - gesture.startY) <= PANEL_SELECTION_THRESHOLD) {
+    return;
+  }
+  gesture.dragging = true;
+  event.preventDefault();
+  event.stopPropagation();
+  addMeshesToSelection(panelRowsInRange(
+    gesture.list, gesture.startY, event.clientY));
+}
+
+function finishPanelPointerGesture(event) {
+  const gesture = panelSelectionDrag;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  panelSelectionDrag = null;
+  if (!gesture.dragging) return;
+  event.preventDefault();
+  event.stopPropagation();
+  suppressNextPanelClick = gesture.lastRow || panelRowAtPoint(
+    event.clientX, event.clientY);
+  const suppressedRow = suppressNextPanelClick;
+  window.setTimeout(() => {
+    if (suppressNextPanelClick === suppressedRow) suppressNextPanelClick = null;
+  }, 500);
+}
+
+function installPanelSelectionDrag(list) {
+  if (panelSelectionListenersInstalled) return;
+  list.addEventListener('pointerdown', onPanelPointerDown);
+  document.addEventListener('pointermove', onPanelPointerMove, true);
+  document.addEventListener('pointerup', finishPanelPointerGesture, true);
+  document.addEventListener('pointercancel', finishPanelPointerGesture, true);
+  panelSelectionListenersInstalled = true;
 }
 
 function ensureMeshContextMenu() {
@@ -131,10 +231,6 @@ function openMeshContextMenu(event, mesh) {
   event.stopPropagation();
   if (!isMeshSelected(mesh)) selectMesh(mesh);
   const menu = ensureMeshContextMenu();
-  const container = document.getElementById('canvas-container') || document.body;
-  const bounds = container.getBoundingClientRect();
-  const left = Number(event.clientX);
-  const top = Number(event.clientY);
   menu.hidden = false;
   meshContextTarget = mesh;
   const descriptor = mesh.userData?.componentDescriptor;
@@ -144,17 +240,7 @@ function openMeshContextMenu(event, mesh) {
   meshContextApplyAction.hidden = true;
   meshContextSeparateAction.disabled = locked || isLoosePart(mesh);
   meshContextMergeAction.disabled = locked || !canMergeLooseParts(getSelectedMeshes());
-  menu.style.left = `${Math.max(4, left)}px`;
-  menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
-  requestAnimationFrame(() => {
-    if (menu.hidden) return;
-    const maxLeft = Math.max(4, window.innerWidth - menu.offsetWidth - 4);
-    const maxTop = Math.max(
-      bounds.top + 4, Math.min(window.innerHeight, bounds.bottom)
-        - menu.offsetHeight - 4);
-    menu.style.left = `${Math.min(Math.max(4, left), maxLeft)}px`;
-    menu.style.top = `${Math.min(Math.max(bounds.top + 4, top), maxTop)}px`;
-  });
+  positionMeshContextMenu(menu, event);
 }
 
 function openComponentContextMenu(event, descriptor) {
@@ -165,10 +251,6 @@ function openComponentContextMenu(event, descriptor) {
   event.preventDefault();
   event.stopPropagation();
   const menu = ensureMeshContextMenu();
-  const container = document.getElementById('canvas-container') || document.body;
-  const bounds = container.getBoundingClientRect();
-  const left = Number(event.clientX);
-  const top = Number(event.clientY);
   menu.hidden = false;
   meshContextTarget = descriptor;
   meshContextSeparateAction.hidden = true;
@@ -176,17 +258,7 @@ function openComponentContextMenu(event, descriptor) {
   meshContextApplyAction.hidden = false;
   meshContextApplyAction.disabled = descriptor.meshEditState !== 'edited'
     || descriptor.meshEditApplying === true || !descriptor.meshEditWritable;
-  menu.style.left = `${Math.max(4, left)}px`;
-  menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
-  requestAnimationFrame(() => {
-    if (menu.hidden) return;
-    const maxLeft = Math.max(4, window.innerWidth - menu.offsetWidth - 4);
-    const maxTop = Math.max(
-      bounds.top + 4, Math.min(window.innerHeight, bounds.bottom)
-        - menu.offsetHeight - 4);
-    menu.style.left = `${Math.min(Math.max(4, left), maxLeft)}px`;
-    menu.style.top = `${Math.min(Math.max(bounds.top + 4, top), maxTop)}px`;
-  });
+  positionMeshContextMenu(menu, event);
 }
 
 function syncMeshPanel() {
@@ -257,7 +329,7 @@ export function refreshAutomaticTextureBoundaries() {
 }
 
 function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
-                          assetSummary = null, componentDescriptor = null) {
+                          componentDescriptor = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -293,18 +365,9 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     const state = componentDescriptor?.meshEditState || 'clean';
     editBadge.hidden = state !== 'edited';
     editBadge.dataset.state = state;
-    editBadge.title = state === 'applied'
-      ? t('mesh.applyMeshChangesHint') : t('toolbar.edited');
+    editBadge.title = t('toolbar.edited');
   };
   hdr.appendChild(editBadge);
-  const summaryLabel = assetSummaryLabel(assetSummary);
-  if (summaryLabel) {
-    const assetSpan = document.createElement('span');
-    assetSpan.className = 'asset-secondary-label asset-component-label';
-    assetSpan.textContent = summaryLabel;
-    assetSpan.title = summaryLabel;
-    hdr.appendChild(assetSpan);
-  }
   nameSpan.addEventListener('click', event => {
     event.stopPropagation();
     onComponentSelected?.();
@@ -332,42 +395,6 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
 
   syncEditState();
   return { hdr, masterCb, syncLabels, syncEditState };
-}
-
-function updateComponentAssetLabel(header, summary) {
-  if (!header) return;
-  let assetSpan = header.querySelector('.asset-component-label');
-  const label = assetSummaryLabel(summary);
-  if (!label) {
-    assetSpan?.remove();
-    return;
-  }
-  if (!assetSpan) {
-    assetSpan = document.createElement('span');
-    assetSpan.className = 'asset-secondary-label asset-component-label';
-    header.appendChild(assetSpan);
-  }
-  assetSpan.textContent = label;
-  assetSpan.title = label;
-}
-
-function updateDrawAssetLabel(mesh) {
-  const row = getMeshView(mesh)?.row;
-  if (!row) return;
-  let assetSpan = row.querySelector('.asset-draw-label');
-  const label = assetDetailLabel(
-    mesh.userData.assetEntry?.asset_binding);
-  if (!label) {
-    assetSpan?.remove();
-    return;
-  }
-  if (!assetSpan) {
-    assetSpan = document.createElement('span');
-    assetSpan.className = 'asset-secondary-label asset-draw-label';
-    row.appendChild(assetSpan);
-  }
-  assetSpan.textContent = label;
-  assetSpan.title = label;
 }
 
 /** "count, start, base" from the ini's own drawindexed line — falls back to
@@ -421,14 +448,6 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
     || mesh.userData.displayName || label;
   labelSpan.textContent = displayLabel;
   row.append(cb, labelSpan);
-  const assetLabel = assetDetailLabel(entry.asset_binding);
-  if (assetLabel) {
-    const assetSpan = document.createElement('span');
-    assetSpan.className = 'asset-secondary-label asset-draw-label';
-    assetSpan.textContent = assetLabel;
-    assetSpan.title = assetLabel;
-    row.appendChild(assetSpan);
-  }
   const updateStateIndicator = (m) => {
     cb.checked = m.visible;
     cb.classList.toggle('state-hidden', !m.visible);
@@ -494,8 +513,15 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
     stateButton: cb,
     syncStateIndicator: () => updateStateIndicator(mesh),
   });
+  meshByRow.set(row, mesh);
   row.addEventListener('click', (e) => {
     if (e.target === cb) return;
+    if (suppressNextPanelClick === row) {
+      suppressNextPanelClick = null;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.ctrlKey) toggleMeshSelection(mesh);
     else selectMesh(mesh);
   });
@@ -595,8 +621,6 @@ function componentForMesh(mesh) {
 function setComponentMeshEditState(descriptor, state) {
   if (!descriptor || descriptor.meshEditState === state) return;
   descriptor.meshEditState = state;
-  descriptor.header?.querySelector('.mesh-edit-badge')?.toggleAttribute(
-    'hidden', state !== 'edited');
   descriptor.syncEditState?.();
   window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-state', {
     detail: { component: descriptor, state },
@@ -624,8 +648,7 @@ async function applyComponentMeshChanges(descriptor) {
   const request = {
     component: descriptor.component,
     meshes: meshes.map(({mesh, context}) => ({
-      identity: context.entry.identity,
-      drawindexed: context.entry.drawindexed,
+      key: context.entry.identity?.key,
       sources: context.entry.sources || [],
       parts: getLooseParts(mesh).map(part =>
         [...(part.userData.loosePartTriangles || [])]),
@@ -732,6 +755,7 @@ export function buildMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 
 export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const list = document.getElementById('mesh-list');
+  installPanelSelectionDrag(list);
   const replace = options.replace !== false;
   closeMeshContextMenu();
   if (replace) {
@@ -875,7 +899,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         groupName, itemsWrap,
         () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
           detail: { component: componentDescriptor },
-        })), assetSummary, componentDescriptor);
+        })), componentDescriptor);
       componentDescriptor.header = hdr;
       componentDescriptor.syncEditState = syncEditState;
       container.append(hdr, itemsWrap);
@@ -945,9 +969,7 @@ window.addEventListener(LANGUAGE_CHANGED, () => {
   groupsUI.forEach(group => {
     group.syncLabels?.();
     group.itemObjs.forEach(mesh => getMeshView(mesh)?.syncStateIndicator?.());
-    updateComponentAssetLabel(group.header, group.componentDescriptor.assetSummary);
     group.componentDescriptor.syncEditState?.();
-    group.itemObjs.forEach(updateDrawAssetLabel);
   });
 });
 
@@ -1016,8 +1038,6 @@ export function refreshMeshAssetDiagnostics(assetResolution = undefined) {
       group.itemObjs.map(mesh => mesh.userData.assetEntry),
       group.assetResolution);
     group.componentDescriptor.assetSummary = summary;
-    updateComponentAssetLabel(group.componentDescriptor.header, summary);
-    group.itemObjs.forEach(updateDrawAssetLabel);
     window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
       detail: {
         component: group.componentDescriptor,

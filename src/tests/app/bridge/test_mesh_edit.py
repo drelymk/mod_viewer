@@ -38,12 +38,11 @@ def test_apply_component_mesh_changes_stages_lossless_ini_and_ib(tmp_path,
     monkeypatch.setattr(mesh_edit, "resolved_draws",
                         lambda _context, _overrides: (None, {
                             draw.label: (draw, group)}))
-    identity = mesh_identity_for_draw(draw, group).to_dict()
+    identity = mesh_identity_for_draw(draw, group).key
     request = {
         "component": "Body",
         "meshes": [{
-            "identity": identity,
-            "drawindexed": [6, 1, 7],
+            "key": identity,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
@@ -76,7 +75,7 @@ def test_apply_rejects_incomplete_partition_without_staging(tmp_path, monkeypatc
     request = {
         "component": "Body",
         "meshes": [{
-            "identity": mesh_identity_for_draw(draw, group).to_dict(),
+            "key": mesh_identity_for_draw(draw, group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
@@ -137,9 +136,9 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
         return {
             "component": component,
             "meshes": [{
-                "identity": mesh_identity_for_draw(
+                "key": mesh_identity_for_draw(
                     draw, body_group if component == "Body" else hair_group
-                ).to_dict(),
+                ).key,
                 "sources": [source_ref],
                 "parts": [[1], [0]],
             }],
@@ -217,7 +216,7 @@ def test_apply_rejects_partial_overlap_with_another_draw(tmp_path, monkeypatch):
     request = {
         "component": "Body",
         "meshes": [{
-            "identity": mesh_identity_for_draw(body, body_group).to_dict(),
+            "key": mesh_identity_for_draw(body, body_group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
@@ -249,7 +248,7 @@ def test_apply_allows_identical_complete_overlap_with_another_draw(
     request = {
         "component": "Body",
         "meshes": [{
-            "identity": mesh_identity_for_draw(body, body_group).to_dict(),
+            "key": mesh_identity_for_draw(body, body_group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
@@ -276,7 +275,7 @@ def test_apply_ignores_unrelated_missing_index_buffer(tmp_path, monkeypatch):
     request = {
         "component": "Body",
         "meshes": [{
-            "identity": mesh_identity_for_draw(body, body_group).to_dict(),
+            "key": mesh_identity_for_draw(body, body_group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
@@ -290,3 +289,75 @@ def test_apply_ignores_unrelated_missing_index_buffer(tmp_path, monkeypatch):
     assert result == {"ok": True, "component": "Body", "meshes": 1}
     assert edit_session.has_pending(str(context.mod_dir))
     assert str(ib) in edit_session.ib_overrides_for(str(context.mod_dir))
+
+
+def test_apply_tracks_each_index_buffer_dependency_to_its_sources(
+        tmp_path, monkeypatch):
+    a_ini = tmp_path / "a.ini"
+    b_ini = tmp_path / "b.ini"
+    a_ib = tmp_path / "A.ib"
+    b_ib = tmp_path / "B.ib"
+    a_ini.write_text("[Body]\ndrawindexed = 6, 0, 0\n", encoding="utf-8")
+    b_ini.write_text("[Body]\ndrawindexed = 6, 0, 0\n", encoding="utf-8")
+    a_ib.write_bytes(bytes(range(12)))
+    b_ib.write_bytes(bytes(range(12)))
+    source = DirectoryModSource(tmp_path)
+    edit_session.load_documents(
+        str(tmp_path), [str(a_ini), str(b_ini)], source=source)
+    draw_a = DrawCall(
+        label="A-1", count=6, start=0, base=0,
+        sources=[{
+            "ini_path": str(a_ini), "line_no": 2, "section": "Body",
+            "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+        }],
+        ib_file="A.ib", index_size=2)
+    draw_b = DrawCall(
+        label="B-1", count=6, start=0, base=0,
+        sources=[{
+            "ini_path": str(b_ini), "line_no": 2, "section": "Body",
+            "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+        }],
+        ib_file="B.ib", index_size=2)
+    group_a = {"identity_source": "a.ini", "display_name": "Body",
+               "name": "Body"}
+    group_b = {"identity_source": "b.ini", "display_name": "Body",
+               "name": "Body"}
+    context = SimpleNamespace(
+        mod_dir=str(tmp_path), source=source,
+        ini_paths=[str(a_ini), str(b_ini)],
+        docs=edit_session.documents_for(str(tmp_path)))
+    monkeypatch.setattr(mesh_edit, "resolved_draws",
+                        lambda _context, _overrides: (None, {
+                            draw_a.label: (draw_a, group_a),
+                            draw_b.label: (draw_b, group_b),
+                        }))
+
+    def entry(draw, ini_name, group):
+        return {
+            "key": mesh_identity_for_draw(draw, group).key,
+            "sources": [{
+                "ini": ini_name, "line": 2, "section": "Body",
+                "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+            }],
+            "parts": [[1], [0]],
+        }
+
+    result = mesh_edit.apply_component_mesh_changes(context, {}, {
+        "component": "Body",
+        "meshes": [entry(draw_a, "a.ini", group_a),
+                   entry(draw_b, "b.ini", group_b)],
+    })
+
+    assert result == {"ok": True, "component": "Body", "meshes": 2}
+    a_ib.write_bytes(b"external")
+    exported = edit_session.export(str(tmp_path))
+
+    assert exported["buffers_failed"] == [{
+        "buffer": str(a_ib),
+        "error": "The index buffer changed outside the viewer.",
+    }]
+    assert exported["buffers_saved"] == [str(b_ib)]
+    assert exported["saved"] == ["b.ini"]
+    assert exported["failed"] == []
+    assert b_ib.read_bytes() != bytes(range(12))
+    assert "drawindexed = 6, 0, 0" in a_ini.read_text(encoding="utf-8")
