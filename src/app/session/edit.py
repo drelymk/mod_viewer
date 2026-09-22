@@ -34,7 +34,7 @@ mod_loader.build_toggle_panel/unwired_pending_sections.
 import hashlib
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from copy import deepcopy
 
 from core.ini.document import IniDocument
@@ -559,6 +559,15 @@ def export(mod_dir):
     blocked_inis = set()
     for record in list(_session.ib_edits.values()):
         if record["committed"]:
+            try:
+                if _sha256(_read_bytes(record["path"])) != _sha256(
+                        record["candidate"]):
+                    raise ValueError(
+                        "The committed index buffer changed outside the viewer.")
+            except Exception as error:
+                buffers_failed.append({"buffer": record["path"],
+                                       "error": str(error)})
+                blocked_inis.update(record["dependent_inis"])
             continue
         try:
             path = record["path"]
@@ -617,14 +626,10 @@ def _sha256(data):
 def _write_buffer_backup(path, data):
     directory = os.path.dirname(path)
     stem, extension = os.path.splitext(os.path.basename(path))
-    backup_stem = (stem if stem.casefold().endswith("ib") else stem + "IB") \
-        if extension.casefold() == ".buf" else stem
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    index = 0
-    while True:
-        suffix = f"-{index}" if index else ""
-        backup = os.path.join(directory,
-                              f"{backup_stem}-{timestamp}{suffix}{extension}")
+    moment = datetime.now()
+    for _index in range(10000):
+        backup = os.path.join(
+            directory, f"{stem}-{moment.strftime('%Y%m%d%H%M%S')}{extension}")
         try:
             with open(backup, "xb") as stream:
                 stream.write(data)
@@ -632,7 +637,8 @@ def _write_buffer_backup(path, data):
                 os.fsync(stream.fileno())
             return backup
         except FileExistsError:
-            index += 1
+            moment += timedelta(seconds=1)
+    raise OSError("Could not create a unique index-buffer backup name.")
 
 
 def _atomic_replace_buffer(path, candidate, original_hash):

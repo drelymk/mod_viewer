@@ -609,6 +609,35 @@ def test_mesh_panel_apply_stages_only_triangle_provenance_and_reloads(
         context.close()
 
 
+def test_mesh_panel_hides_edited_badge_after_apply(
+        edge_browser, frontend_url):
+    path = "ApplyBadge"
+    payload = _loose_parts_payload(path)
+    next(iter(payload["meshes"].values()))["identity"] = {
+        "key": "mesh:fixture-badge",
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {path: payload})
+    try:
+        _open(page, path)
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(".mesh-context-menu button").first.click()
+        page.locator("#dialog-ok").click()
+        page.locator(".group-hdr").click(button="right")
+        page.evaluate("""() => {
+          window.modViewer.activeMeshes[0].userData.componentDescriptor
+            .onAllMeshChangesApplied = async () => {};
+        }""")
+        page.locator(".mesh-context-menu button").nth(2).click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.applyMeshChanges.length === 1")
+        page.wait_for_function(
+            "document.querySelector('.mesh-edit-badge')?.dataset.state === 'applied'")
+        assert page.locator(".mesh-edit-badge").is_hidden()
+    finally:
+        context.close()
+
+
 def test_viewport_ctrl_box_selection_is_additive_and_excludes_hidden_parts(
         edge_browser, frontend_url):
     path = "LoosePartsBox"

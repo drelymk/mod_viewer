@@ -201,7 +201,10 @@ def prepare_texture_save(context, overrides, active_mesh_keys,
         requested_targets.append((semantic_key, metadata_key, draw_pair,
                                   adjustment))
 
-    buffers = BufferStore()
+    buffers = BufferStore(
+        source=getattr(context, "source", None),
+        overrides=getattr(context, "buffer_overrides", None),
+    )
     sparse_shape_cache = {}
     convention = geometry_convention_for(parsed.game.game)
     prepared_targets = []

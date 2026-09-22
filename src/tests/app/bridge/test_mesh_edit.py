@@ -90,3 +90,79 @@ def test_apply_rejects_incomplete_partition_without_staging(tmp_path, monkeypatc
     assert "overlap" in result["error"]
     assert ib.read_bytes() == original
     assert not edit_session.has_pending(str(context.mod_dir))
+
+
+def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypatch):
+    ini = tmp_path / "body.ini"
+    ib = tmp_path / "Body.ib"
+    ini.write_text(
+        "[Body]\n"
+        "drawindexed = 6, 1, 7\n"
+        "[Hair]\n"
+        "drawindexed = 6, 7, 9\n",
+        encoding="utf-8")
+    original = b"".join(value.to_bytes(2, "little") for value in range(13))
+    ib.write_bytes(original)
+    source = DirectoryModSource(tmp_path)
+    edit_session.load_documents(str(tmp_path), [str(ini)], source=source)
+
+    body = DrawCall(
+        label="Body-1", count=6, start=1, base=7,
+        sources=[{
+            "ini_path": str(ini), "line_no": 2, "section": "Body",
+            "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+        }],
+        ib_file="Body.ib", index_size=2)
+    hair = DrawCall(
+        label="Hair-1", count=6, start=7, base=9,
+        sources=[{
+            "ini_path": str(ini), "line_no": 4, "section": "Hair",
+            "occurrence": {"section": "Hair", "ordinal": 0, "path": []},
+        }],
+        ib_file="Body.ib", index_size=2)
+    body_group = {"identity_source": "body.ini", "display_name": "Body",
+                  "name": "Body"}
+    hair_group = {"identity_source": "body.ini", "display_name": "Hair",
+                  "name": "Hair"}
+    context = SimpleNamespace(
+        mod_dir=str(tmp_path), source=source, ini_paths=[str(ini)],
+        docs=edit_session.documents_for(str(tmp_path)))
+    monkeypatch.setattr(mesh_edit, "resolved_draws",
+                        lambda _context, _overrides: (None, {
+                            body.label: (body, body_group),
+                            hair.label: (hair, hair_group),
+                        }))
+
+    def request(component, source_ref, draw):
+        return {
+            "component": component,
+            "meshes": [{
+                "identity": mesh_identity_for_draw(
+                    draw, body_group if component == "Body" else hair_group
+                ).to_dict(),
+                "sources": [source_ref],
+                "parts": [[1], [0]],
+            }],
+        }
+
+    body_source = {
+        "ini": "body.ini", "line": 2, "section": "Body",
+        "occurrence": {"section": "Body", "ordinal": 0, "path": []},
+    }
+    hair_source = {
+        "ini": "body.ini", "line": 4, "section": "Hair",
+        "occurrence": {"section": "Hair", "ordinal": 0, "path": []},
+    }
+    first = mesh_edit.apply_component_mesh_changes(
+        context, {}, request("Body", body_source, body))
+    second = mesh_edit.apply_component_mesh_changes(
+        context, {}, request("Hair", hair_source, hair))
+
+    assert first == {"ok": True, "component": "Body", "meshes": 1}
+    assert second == {"ok": True, "component": "Hair", "meshes": 1}
+    staged = edit_session.peek(str(tmp_path), str(ini)).to_string()
+    staged = staged.replace("\r\n", "\n")
+    assert "drawindexed = 3, 1, 7\n" in staged
+    assert "drawindexed = 3, 4, 7\n" in staged
+    assert "drawindexed = 3, 7, 9\n" in staged
+    assert "drawindexed = 3, 10, 9\n" in staged

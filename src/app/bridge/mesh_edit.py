@@ -26,9 +26,21 @@ def _sha256(data):
 
 def _source_key(mod_dir, source):
     ini = str(source.get("ini", "")).replace("\\", "/")
-    occurrence = source.get("occurrence") or {}
     return (ini.casefold(), str(source.get("section", "")).casefold(),
-            int(source.get("line", 0)), int(occurrence.get("ordinal", -1)))
+            _occurrence_key(source.get("occurrence")))
+
+
+def _occurrence_key(value):
+    if hasattr(value, "to_dict"):
+        value = value.to_dict()
+    if not isinstance(value, dict):
+        return ("", -1, ())
+    path = []
+    for item in value.get("path") or []:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            path.append((str(item[0] or "").casefold(), item[1]))
+    return (str(value.get("section", "")).casefold(),
+            int(value.get("ordinal", -1)), tuple(path))
 
 
 def _authoritative_source_key(mod_dir, source, source_object):
@@ -38,10 +50,8 @@ def _authoritative_source_key(mod_dir, source, source_object):
     else:
         ini = os.path.relpath(path, mod_dir).replace(os.sep, "/")
     occurrence = source.get("occurrence") or {}
-    if hasattr(occurrence, "to_dict"):
-        occurrence = occurrence.to_dict()
     return (ini.casefold(), str(source.get("section", "")).casefold(),
-            int(source.get("line_no", 0)), int(occurrence.get("ordinal", -1)))
+            _occurrence_key(occurrence))
 
 
 def _resolve_ib_path(context, draw):

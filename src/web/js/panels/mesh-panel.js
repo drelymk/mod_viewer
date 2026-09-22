@@ -291,7 +291,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
   editBadge.textContent = t('toolbar.edited');
   const syncEditState = () => {
     const state = componentDescriptor?.meshEditState || 'clean';
-    editBadge.hidden = state === 'clean';
+    editBadge.hidden = state !== 'edited';
     editBadge.dataset.state = state;
     editBadge.title = state === 'applied'
       ? t('mesh.applyMeshChangesHint') : t('toolbar.edited');
@@ -596,7 +596,7 @@ function setComponentMeshEditState(descriptor, state) {
   if (!descriptor || descriptor.meshEditState === state) return;
   descriptor.meshEditState = state;
   descriptor.header?.querySelector('.mesh-edit-badge')?.toggleAttribute(
-    'hidden', state === 'clean');
+    'hidden', state !== 'edited');
   descriptor.syncEditState?.();
   window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-state', {
     detail: { component: descriptor, state },
