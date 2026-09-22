@@ -49,8 +49,8 @@ export function normalizeLoosePartTolerance(value) {
     && tolerance <= MAX_LOOSE_PART_TOLERANCE ? tolerance : null;
 }
 
-/** Find original index-buffer subsets for each position-connected triangle island. */
-export function findLooseParts(mesh, {tolerance = 0} = {}) {
+/** Find original index-buffer subsets and triangle ordinals for each island. */
+function findLoosePartGroups(mesh, {tolerance = 0} = {}) {
   const geometry = mesh?.geometry;
   const index = geometry?.index;
   const position = geometry?.getAttribute?.('position')
@@ -127,16 +127,26 @@ export function findLooseParts(mesh, {tolerance = 0} = {}) {
     const root = components.find(triangle);
     let indices = groups.get(root);
     if (!indices) {
-      indices = [];
+      indices = {indices: [], triangles: []};
       groups.set(root, indices);
     }
     const offset = triangle * 3;
-    indices.push(index.getX(offset), index.getX(offset + 1), index.getX(offset + 2));
+    indices.indices.push(index.getX(offset), index.getX(offset + 1),
+      index.getX(offset + 2));
+    indices.triangles.push(triangle);
   }
   if (groups.size <= 1) return [];
 
   const IndexArray = index.array?.constructor || Uint32Array;
-  return [...groups.values()].map(indices => new IndexArray(indices));
+  return [...groups.values()].map(group => ({
+    indices: new IndexArray(group.indices),
+    triangles: group.triangles,
+  }));
+}
+
+/** Preserve the original viewer API while keeping provenance internally. */
+export function findLooseParts(mesh, options = {}) {
+  return findLoosePartGroups(mesh, options).map(group => group.indices);
 }
 
 function copyGeometryAttributes(sourceGeometry, partGeometry) {
@@ -160,8 +170,8 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
   if (!source?.geometry || source.userData?.looseParts?.length) {
     return source?.userData?.looseParts || [];
   }
-  const indexSubsets = findLooseParts(source, {tolerance});
-  if (indexSubsets.length <= 1) return [];
+  const groups = findLoosePartGroups(source, {tolerance});
+  if (groups.length <= 1) return [];
 
   const sourceGeometry = source.geometry;
   if (!sourceGeometry.boundingBox) sourceGeometry.computeBoundingBox();
@@ -173,7 +183,8 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
   source.userData.looseParts = [];
   sourceGeometry.setDrawRange(0, 0);
 
-  for (const [partIndex, partIndexArray] of indexSubsets.entries()) {
+  for (const [partIndex, group] of groups.entries()) {
+    const partIndexArray = group.indices;
     const geometry = new THREE.BufferGeometry();
     copyGeometryAttributes(sourceGeometry, geometry);
     geometry.setIndex(new THREE.BufferAttribute(partIndexArray, 1));
@@ -191,6 +202,7 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
     part.userData.loosePartParent = source;
     part.userData.loosePartIndex = partIndex;
     part.userData.loosePartLabel = partLabel(source, partIndex, label);
+    part.userData.loosePartTriangles = [...group.triangles];
     part.userData.manualVisible = true;
     attachOutline(part);
     source.add(part);
@@ -256,6 +268,9 @@ export function mergeLooseParts(meshes) {
   const survivor = selectedParts[0];
   const indexes = selectedParts.map(part => part.geometry?.index?.array);
   if (indexes.some(index => !index)) return null;
+  if (selectedParts.some(part =>
+    !Array.isArray(part.userData?.loosePartTriangles))) return null;
+  const triangles = selectedParts.flatMap(part => part.userData.loosePartTriangles);
   const IndexArray = indexes[0].constructor;
   const combined = new IndexArray(indexes.reduce(
     (count, index) => count + index.length, 0));
@@ -265,6 +280,7 @@ export function mergeLooseParts(meshes) {
     offset += index.length;
   });
   survivor.geometry.setIndex(new THREE.BufferAttribute(combined, 1));
+  survivor.userData.loosePartTriangles = triangles;
   survivor.visible = anyVisible;
   survivor.userData.manualVisible = anyVisible;
   survivor.userData.manuallyToggled = anyManual;

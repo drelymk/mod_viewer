@@ -133,11 +133,12 @@ class VertexStreams:
 class BufferStore:
     """Build-scoped raw-buffer cache with the existing safety limits."""
 
-    def __init__(self, source=None):
+    def __init__(self, source=None, overrides=None):
         self._raw = {}
         self._streams = {}
         self._total_bytes = 0
         self.source = source
+        self.overrides = dict(overrides or {})
 
     def raw(self, path):
         if path not in self._raw:
@@ -151,6 +152,16 @@ class BufferStore:
         return self._read(path, cached=False)
 
     def _read(self, path, *, cached):
+        override = self._override_for(path)
+        if override is not None:
+            data = bytes(override)
+            size = len(data)
+            if size > _MAX_BUFFER_FILE_BYTES:
+                raise ValueError(
+                    f"Buffer file is too large ({size / 1048576:.1f} MiB).")
+            if cached and self._total_bytes + size > _MAX_TOTAL_BUFFER_BYTES:
+                raise ValueError("Mod buffer data exceeds the 2 GiB safety limit.")
+            return data
         source_backed = (self.source is not None
                          and getattr(self.source, "virtual", False)
                          and self.source.is_resource_reference(path))
@@ -167,6 +178,18 @@ class BufferStore:
             with open(path, "rb") as stream:
                 data = stream.read()
         return data
+
+    def _override_for(self, path):
+        if not self.overrides:
+            return None
+        candidates = [path]
+        if isinstance(path, str):
+            candidates.extend((os.path.normcase(os.path.abspath(path)),
+                               path.replace("\\", "/")))
+        for candidate in candidates:
+            if candidate in self.overrides:
+                return self.overrides[candidate]
+        return None
 
     def vertex_streams(
         self,

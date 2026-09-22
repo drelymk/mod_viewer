@@ -483,6 +483,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: transparent; text-align: left; cursor: pointer; font: inherit;
   font-size: 11px; white-space: nowrap;
 }
+.mesh-context-menu button[hidden] { display: none; }
 .mesh-context-menu button:hover:not(:disabled) { background: var(--surface-active); }
 .mesh-context-menu button:disabled {
   color: var(--text-muted);
@@ -913,6 +914,16 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
 }
+.mesh-edit-badge {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.mesh-edit-badge[data-state="applied"] { color: var(--accent-soft); }
 .dialog-range-field {
   display: none; flex-direction: column; gap: 4px; margin-top: 12px;
   color: var(--text-muted); font-size: 11px;

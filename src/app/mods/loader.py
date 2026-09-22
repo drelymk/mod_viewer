@@ -59,6 +59,7 @@ class ModLoadContext:
     # Private state retained by the bridge for the exact loaded model.
     skinning_manifest: dict = field(default_factory=dict)
     source: ModSource | None = None
+    buffer_overrides: dict = field(default_factory=dict)
 
 
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
@@ -266,7 +267,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             parsed.groups, context.mod_dir, geometry=geometry,
             texture_source=texture_source,
             game_profile=parsed.game.game, source=context.source,
-            animations=parsed.animations)
+            animations=parsed.animations,
+            buffer_overrides=getattr(context, "buffer_overrides", None))
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}

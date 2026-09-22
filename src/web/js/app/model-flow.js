@@ -14,7 +14,9 @@ import {
 import { setTextures } from '../mesh/mesh-factory.js';
 import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
-import { buildMeshPanel } from '../panels/mesh-panel.js';
+import {
+  buildMeshPanel, hasUnappliedMeshChanges,
+} from '../panels/mesh-panel.js';
 import { setMeshesAvailable } from '../panels/left-dock.js';
 import { buildTogglePanel } from '../panels/toggle-panel.js';
 import { buildMenuPanel } from '../panels/menu-panel.js';
@@ -85,17 +87,25 @@ export async function refreshPendingState(
   if ((guard && !guard()) || (path && !samePath(viewerState.currentModPath, path))) {
     return false;
   }
-  $('pending-indicator').classList.toggle('show', pending);
-  const blocked = pending && hasUnwiredToggle();
+  const unapplied = hasUnappliedMeshChanges();
+  const edited = pending || unapplied;
+  $('pending-indicator').classList.toggle('show', edited);
+  const blocked = unapplied || (pending && hasUnwiredToggle());
   const readOnlySource = viewerState.currentSource?.kind === 'mod'
     && viewerState.currentSource?.readOnly === true;
   $('export-btn').disabled = readOnlySource || !pending || blocked;
-  $('export-btn').title = readOnlySource
+  $('export-btn').title = unapplied
+    ? t('errors.exportBlocked', {detail: t('mesh.unappliedChangesDetail')})
+    : readOnlySource
     ? t('errors.exportBlocked', {detail: t('model.exportCompressedDetail')})
     : blocked
     ? t('errors.exportBlocked', {detail: t('model.unwiredToggleDetail')})
     : '';
 }
+
+window.addEventListener('mod-viewer-mesh-edit-state', () => {
+  void refreshPendingState();
+});
 
 export function clearScene({ preserveModelOrientation = false } = {}) {
   resetAnimationRuntime();
@@ -200,6 +210,7 @@ export async function displayMeshPayload(payload, {
   onToggleChange = null,
   onPresentChange = null,
   onMaterialKindChanged = reloadCurrentMod,
+  onReload = reloadCurrentMod,
 } = {}) {
   const geometry = payload.geometry;
   if (geometry) {
@@ -262,10 +273,12 @@ export async function displayMeshPayload(payload, {
         // only at the persistence boundary; viewer controls can still stage
         // session-local state while Export remains disabled.
         readOnlySource: assetMode,
+        meshEditReadOnly: assetMode || sourceReadOnly,
         canPersistMetadata: !assetMode && !sourceReadOnly,
         texturePicker: assetMode
           ? (role => window.pywebview.api.pick_asset_texture_file(
             viewerState.currentSource.path, role)) : null,
+        onAllMeshChangesApplied: assetMode ? null : onReload,
       });
   });
   measureLoadStage('control_panels', () => {
@@ -399,7 +412,8 @@ async function performModSwitch(path, handlers = {}) {
   // not-yet-exported edits would silently strand them in memory, so ask first.
   if (viewerState.currentSource?.kind === 'mod' && viewerState.currentModPath
       && !samePath(viewerState.currentModPath, path)
-      && await window.pywebview.api.has_pending_changes(viewerState.currentModPath)) {
+      && (hasUnappliedMeshChanges()
+        || await window.pywebview.api.has_pending_changes(viewerState.currentModPath))) {
     const proceed = await confirmDialog(t('confirm.unsavedSwitch'));
     if (!proceed) return false;
     await window.pywebview.api.discard_changes(viewerState.currentModPath);
@@ -411,7 +425,10 @@ async function performModSwitch(path, handlers = {}) {
 
 async function confirmLeaveCurrentModIfDirty() {
   if (viewerState.currentSource?.kind !== 'mod' || !viewerState.currentModPath) return true;
-  if (!await window.pywebview.api.has_pending_changes(viewerState.currentModPath)) return true;
+  if (!hasUnappliedMeshChanges()
+      && !await window.pywebview.api.has_pending_changes(viewerState.currentModPath)) {
+    return true;
+  }
   const proceed = await confirmDialog(t('confirm.unsavedAsset'));
   if (!proceed) return false;
   await window.pywebview.api.discard_changes(viewerState.currentModPath);
@@ -488,6 +505,10 @@ export async function reloadCurrentMod(handlers = {}) {
   if (!viewerState.currentModPath) return false;
   return await runModTransition(async () => {
     try {
+      if (hasUnappliedMeshChanges()) {
+        const proceed = await confirmDialog(t('confirm.unsavedAsset'));
+        if (!proceed) return false;
+      }
       return await loadModAt(viewerState.currentModPath, undefined, handlers);
     } catch (error) {
       showLoading(false);
@@ -508,16 +529,26 @@ export async function exportChanges() {
       // button is normally already disabled for this case, so reaching here
       // means the panel was momentarily stale; nothing was written either way.
       await alertDialog(t('errors.exportBlocked', {detail: result.error}));
-    } else if (result.failed && result.failed.length) {
-      const detail = result.failed.map((failure) =>
-        `${failure.ini}: ${failure.error}`).join('\n');
+    } else if ((result.failed && result.failed.length)
+               || (result.buffers_failed && result.buffers_failed.length)) {
+      const failures = [
+        ...(result.failed || []).map(failure =>
+          `${failure.ini}: ${failure.error}`),
+        ...(result.buffers_failed || []).map(failure =>
+          `${failure.buffer}: ${failure.error}`),
+      ];
+      const detail = failures.join('\n');
       await alertDialog(t('errors.exportPartial', {
-        saved: result.saved.length, failed: result.failed.length, detail,
+        saved: (result.saved || []).length
+          + (result.buffers_saved || []).length,
+        failed: failures.length, detail,
       }));
     }
-    // Export writes the authoritative staged documents but does not change
-    // the current model or control semantics. Refresh only session status;
-    // partial failures leave the affected edits pending for retry.
+    if (Object.hasOwn(result, 'buffers_saved')
+        && (result.buffers_saved?.length || result.saved?.length)
+        && !result.buffers_failed?.length && !result.failed?.length) {
+      await reloadCurrentMod();
+    }
     await refreshPendingState();
     void refreshHealthReport();
   } catch (error) {

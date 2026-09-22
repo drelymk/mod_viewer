@@ -256,8 +256,9 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         menu.wait_for()
         assert menu.is_visible()
         assert menu.locator("button").all_inner_texts() == [
-            "Separate Loose Parts", "Merge Meshes",
+            "Separate Loose Parts", "Merge Meshes", "Apply Mesh Changes",
         ]
+        assert menu.locator("button").nth(2).is_hidden()
         assert menu.locator("button").nth(0).is_enabled()
         assert menu.locator("button").nth(1).is_disabled()
         disabled_menu_style = menu.locator("button").nth(1).evaluate(
@@ -443,7 +444,9 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         assert rows.nth(0).inner_text() == "Renamed Part"
         assert page.evaluate("window.__fakeApi.calls.saveMeshNames.length") == 0
 
-        page.evaluate("window.modViewer.reloadCurrentMod()")
+        page.evaluate("void window.modViewer.reloadCurrentMod()")
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
         page.locator("#mesh-list .draw-item").first.wait_for()
         assert page.locator("#mesh-list .draw-item").all_inner_texts() == [
             "9, 0, 0",
@@ -567,6 +570,41 @@ def test_mesh_panel_multiselect_and_merge_loose_parts(
               drawCount: source.geometry.drawRange.count,
             };
         }""") == {"looseParts": 0, "drawCount": initial_draw_count}
+    finally:
+        context.close()
+
+
+def test_mesh_panel_apply_stages_only_triangle_provenance_and_reloads(
+        edge_browser, frontend_url):
+    path = "ApplyLooseParts"
+    payload = _loose_parts_payload(path)
+    next(iter(payload["meshes"].values()))["identity"] = {
+        "key": "mesh:fixture-apply",
+    }
+    context, page = _page(
+        edge_browser, frontend_url, {path: payload})
+    try:
+        _open(page, path)
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(".mesh-context-menu button").first.click()
+        page.locator("#dialog-ok").click()
+        page.locator(".group-hdr").click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        assert menu.locator("button").nth(2).is_visible()
+        assert menu.locator("button").nth(2).is_enabled()
+        menu.locator("button").nth(2).click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.applyMeshChanges.length === 1")
+        page.wait_for_function(
+            "window.__fakeApi.calls.loadMod.length === 2")
+        request = page.evaluate("window.__fakeApi.calls.applyMeshChanges[0][1]")
+        assert set(request) == {"component", "meshes"}
+        assert set(request["meshes"][0]) == {
+            "identity", "drawindexed", "sources", "parts",
+        }
+        assert request["meshes"][0]["parts"] == [[0], [1], [2]]
+        assert "C:\\" not in str(request)
+        assert "bytes" not in str(request)
     finally:
         context.close()
 

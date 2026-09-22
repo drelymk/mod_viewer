@@ -330,6 +330,10 @@ class ModViewerAPI:
         return toggle_api.has_pending_changes(
             self._access.mod_folder(folder_path))
 
+    def apply_component_mesh_changes(self, folder_path, request):
+        return self._mod_preview.apply_component_mesh_changes(
+            self._access.mod_folder(folder_path), request)
+
     def export_changes(self, folder_path):
         return toggle_api.export_changes(
             self._access.mod_folder(folder_path))

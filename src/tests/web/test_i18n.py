@@ -50,6 +50,8 @@ def test_loose_part_labels_do_not_fall_back_for_non_english_locales(module_page)
         'mesh.separateLooseParts', 'mesh.mergeLooseParts',
         'mesh.separate', 'mesh.connectionTolerance',
         'mesh.connectionToleranceRange',
+        'mesh.applyMeshChanges', 'mesh.applyMeshChangesHint',
+        'mesh.unappliedChangesDetail',
       ];
       const missing = [];
       const fallbacks = [];

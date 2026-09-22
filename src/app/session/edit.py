@@ -31,7 +31,10 @@ without also surfacing every other already-on-disk, never-gating
 mod_loader.build_toggle_panel/unwired_pending_sections.
 """
 
+import hashlib
 import os
+import tempfile
+from datetime import datetime
 from copy import deepcopy
 
 from core.ini.document import IniDocument
@@ -41,7 +44,7 @@ from core.mod_source import mod_source_for_path
 class _Session:
     __slots__ = ("mod_dir", "source", "docs", "baselines", "dirty", "new_sections",
                  "present_names_baseline", "present_names", "revision",
-                 "diagnostics_cache")
+                 "diagnostics_cache", "ib_edits")
 
     def __init__(self, mod_dir, source=None):
         self.mod_dir = mod_dir
@@ -55,6 +58,7 @@ class _Session:
         self.present_names = _NO_METADATA_BASELINE
         self.revision = 0
         self.diagnostics_cache = None
+        self.ib_edits = {}
 
 
 _session = None
@@ -80,6 +84,7 @@ class _EditTransaction:
         self._metadata_on_disk = _NO_METADATA_BASELINE
         self._metadata_sidecar_exists = False
         self._metadata_mutated = False
+        self._ib_edits = _clone_ib_edits(self.sess.ib_edits)
 
         requested = list(paths or [])
         missing = [path for path in requested
@@ -130,6 +135,34 @@ class _EditTransaction:
         except KeyError as error:
             raise KeyError(f"{path!r} is not part of this transaction") from error
 
+    def stage_ib_edit(self, path, candidate, original_hash, ranges,
+                      dependent_inis=()):
+        """Stage disjoint byte ranges in one shared physical index buffer."""
+        key = _ib_key(path)
+        normalized_ranges = tuple((int(start), int(end))
+                                  for start, end in ranges)
+        record = self.sess.ib_edits.get(key)
+        if record is not None:
+            if record["original_hash"] != original_hash:
+                raise ValueError("The staged index buffer baseline changed.")
+            for start, end in normalized_ranges:
+                if any(start < other_end and other_start < end
+                       for other_start, other_end in record["ranges"]):
+                    raise ValueError("Mesh edits overlap in the same index buffer.")
+            record["candidate"] = bytes(candidate)
+            record["ranges"].extend(normalized_ranges)
+            record["dependent_inis"].update(dependent_inis)
+            return
+        self.sess.ib_edits[key] = {
+            "path": os.path.abspath(path),
+            "original_hash": original_hash,
+            "candidate": bytes(candidate),
+            "ranges": list(normalized_ranges),
+            "dependent_inis": set(dependent_inis),
+            "committed": False,
+            "backup": None,
+        }
+
     def mark_metadata_mutation(self):
         """Mark that this transaction is about to change PRESENT metadata."""
         if self.present_metadata:
@@ -164,6 +197,7 @@ class _EditTransaction:
                 self.sess.new_sections[key] = set(entry["new_sections"])
             else:
                 self.sess.new_sections.pop(key, None)
+        self.sess.ib_edits = _clone_ib_edits(self._ib_edits)
         if self.present_metadata:
             self.sess.present_names_baseline = _copy_metadata_state(
                 self._present_baseline)
@@ -221,6 +255,22 @@ def _touch(sess):
     sess.diagnostics_cache = None
 
 
+def _ib_key(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _clone_ib_edits(records):
+    return {
+        key: {
+            **record,
+            "candidate": bytes(record["candidate"]),
+            "ranges": list(record["ranges"]),
+            "dependent_inis": set(record["dependent_inis"]),
+        }
+        for key, record in records.items()
+    }
+
+
 def load_documents(mod_dir, ini_paths, *, source=None):
     """Load every active INI into the authoritative in-memory session.
 
@@ -260,6 +310,7 @@ def has_pending(mod_dir):
     """True if mod_dir has at least one staged, not-yet-exported edit."""
     return (_same_mod(mod_dir)
             and (bool(_session.dirty)
+                 or bool(_session.ib_edits)
                  or _session.present_names_baseline is not _NO_METADATA_BASELINE))
 
 
@@ -409,6 +460,21 @@ def overrides_for(mod_dir):
     return {doc.path: doc.to_string() for doc in _session.docs.values()}
 
 
+def ib_overrides_for(mod_dir):
+    """Return staged physical buffer bytes for the normal load path."""
+    if not _same_mod(mod_dir):
+        return {}
+    return {record["path"]: bytes(record["candidate"])
+            for record in _session.ib_edits.values()}
+
+
+def ib_edits_for(mod_dir):
+    """Return detached staged-buffer records for export and diagnostics."""
+    if not _same_mod(mod_dir):
+        return {}
+    return _clone_ib_edits(_session.ib_edits)
+
+
 def stage_present_metadata(mod_dir):
     """Remember PRESENT names before their first staged authoring change."""
     from app.mods import metadata
@@ -468,21 +534,53 @@ def export(mod_dir):
     """
     if not _same_mod(mod_dir):
         return {"saved": [], "failed": []}
+    had_buffers = bool(_session.ib_edits)
     if _session.source.read_only:
-        return {
+        result = {
             "saved": [],
             "failed": [{"ini": key, "error":
                         "Export is unavailable for compressed mods."}
                        for key in _session.dirty],
             "error": "Export is unavailable for compressed mods.",
         }
-    if not _session.dirty:
+        if had_buffers:
+            result.update({"buffers_saved": [], "buffers_failed": [
+                {"buffer": record["path"], "error": result["error"]}
+                for record in _session.ib_edits.values()],
+                "buffer_backups": []})
+        return result
+    if not _session.dirty and not _session.ib_edits:
         _session.present_names_baseline = _NO_METADATA_BASELINE
         _session.present_names = _NO_METADATA_BASELINE
         return {"saved": [], "failed": []}
 
     saved, failed = [], []
+    buffers_saved, buffers_failed, buffer_backups = [], [], []
+    blocked_inis = set()
+    for record in list(_session.ib_edits.values()):
+        if record["committed"]:
+            continue
+        try:
+            path = record["path"]
+            current = _read_bytes(path)
+            if _sha256(current) != record["original_hash"]:
+                raise ValueError("The index buffer changed outside the viewer.")
+            backup = _write_buffer_backup(path, current)
+            if _sha256(_read_bytes(path)) != record["original_hash"]:
+                raise ValueError("The index buffer changed outside the viewer.")
+            _atomic_replace_buffer(path, record["candidate"],
+                                    record["original_hash"])
+            record["committed"] = True
+            record["backup"] = backup
+            buffers_saved.append(path)
+            buffer_backups.append(backup)
+        except Exception as error:
+            buffers_failed.append({"buffer": record["path"],
+                                   "error": str(error)})
+            blocked_inis.update(record["dependent_inis"])
     for key in [name for name in _session.docs if name in _session.dirty]:
+        if key in blocked_inis:
+            continue
         doc = _session.docs[key]
         try:
             doc.save()
@@ -492,7 +590,69 @@ def export(mod_dir):
             _session.new_sections.pop(key, None)
         except Exception as e:
             failed.append({"ini": key, "error": str(e)})
-    if not _session.dirty:
+    for key, record in list(_session.ib_edits.items()):
+        if record["committed"] and not any(
+                ini in _session.dirty for ini in record["dependent_inis"]):
+            _session.ib_edits.pop(key, None)
+    if not _session.dirty and not _session.ib_edits:
         _session.present_names_baseline = _NO_METADATA_BASELINE
         _session.present_names = _NO_METADATA_BASELINE
-    return {"saved": saved, "failed": failed}
+    result = {"saved": saved, "failed": failed}
+    if had_buffers:
+        result.update({"buffers_saved": buffers_saved,
+                       "buffers_failed": buffers_failed,
+                       "buffer_backups": buffer_backups})
+    return result
+
+
+def _read_bytes(path):
+    with open(path, "rb") as stream:
+        return stream.read()
+
+
+def _sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _write_buffer_backup(path, data):
+    directory = os.path.dirname(path)
+    stem, extension = os.path.splitext(os.path.basename(path))
+    backup_stem = (stem if stem.casefold().endswith("ib") else stem + "IB") \
+        if extension.casefold() == ".buf" else stem
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    index = 0
+    while True:
+        suffix = f"-{index}" if index else ""
+        backup = os.path.join(directory,
+                              f"{backup_stem}-{timestamp}{suffix}{extension}")
+        try:
+            with open(backup, "xb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return backup
+        except FileExistsError:
+            index += 1
+
+
+def _atomic_replace_buffer(path, candidate, original_hash):
+    directory = os.path.dirname(path)
+    fd, temporary = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.",
+                                     suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(candidate)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if len(candidate) != os.path.getsize(path):
+            raise ValueError("The staged index buffer changed length.")
+        if _sha256(_read_bytes(path)) != original_hash:
+            raise ValueError("The index buffer changed outside the viewer.")
+        if _sha256(_read_bytes(temporary)) != _sha256(candidate):
+            raise ValueError("The temporary index buffer could not be verified.")
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass

@@ -103,6 +103,7 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
           part.geometry.boundingBox === source.geometry.boundingBox
           && part.geometry.boundingSphere === source.geometry.boundingSphere),
         frustumCulled: created.every(part => part.frustumCulled === false),
+        triangles: created.map(part => part.userData.loosePartTriangles),
         heatmapEnabled,
         heatmapDisabled,
         shared, independentIndexes,
@@ -136,6 +137,7 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         "attached": True,
         "sharedBounds": True,
         "frustumCulled": True,
+        "triangles": [[0], [1]],
         "heatmapEnabled": True,
         "heatmapDisabled": True,
         "shared": True,
@@ -255,6 +257,7 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
           source.geometry.getAttribute('color'),
         visible: parts[0].visible,
         manualVisible: parts[0].userData.manualVisible,
+        triangles: parts[0].userData.loosePartTriangles,
       };
       const full = mergeLooseParts([remaining[1], remaining[0]]);
       const fullState = {
@@ -289,7 +292,8 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
             "uvShared": True,
             "colorShared": True,
             "visible": True,
-            "manualVisible": True,
+        "manualVisible": True,
+        "triangles": [0, 2],
         },
         "fullState": {
             "sourceMesh": True,

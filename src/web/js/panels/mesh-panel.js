@@ -29,7 +29,7 @@ import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
-import { rangeInputDialog } from '../ui/dialogs.js';
+import { alertDialog, rangeInputDialog } from '../ui/dialogs.js';
 import {
   MAX_LOOSE_PART_TOLERANCE, canMergeLooseParts, getLoosePartSource,
   getLooseParts, isLoosePart, mergeLooseParts, separateLooseParts,
@@ -40,6 +40,7 @@ let meshSectionId = 0;
 let meshContextMenu = null;
 let meshContextSeparateAction = null;
 let meshContextMergeAction = null;
+let meshContextApplyAction = null;
 let meshContextTarget = null;
 let meshContextListenersInstalled = false;
 const meshPanelContexts = new WeakMap();
@@ -88,6 +89,12 @@ function ensureMeshContextMenu() {
   meshContextMergeAction.dataset.i18n = 'mesh.mergeLooseParts';
   meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
   meshContextMenu.appendChild(meshContextMergeAction);
+  meshContextApplyAction = document.createElement('button');
+  meshContextApplyAction.type = 'button';
+  meshContextApplyAction.setAttribute('role', 'menuitem');
+  meshContextApplyAction.dataset.i18n = 'mesh.applyMeshChanges';
+  meshContextApplyAction.textContent = t('mesh.applyMeshChanges');
+  meshContextMenu.appendChild(meshContextApplyAction);
   document.body.appendChild(meshContextMenu);
   meshContextSeparateAction.addEventListener('click', () => {
     const source = meshContextTarget;
@@ -97,6 +104,11 @@ function ensureMeshContextMenu() {
   meshContextMergeAction.addEventListener('click', () => {
     closeMeshContextMenu();
     void mergeSelectedLooseParts();
+  });
+  meshContextApplyAction.addEventListener('click', () => {
+    const descriptor = meshContextTarget;
+    closeMeshContextMenu();
+    void descriptor?.applyMeshChanges?.();
   });
   if (!meshContextListenersInstalled) {
     document.addEventListener('pointerdown', event => {
@@ -125,8 +137,45 @@ function openMeshContextMenu(event, mesh) {
   const top = Number(event.clientY);
   menu.hidden = false;
   meshContextTarget = mesh;
-  meshContextSeparateAction.disabled = isLoosePart(mesh);
-  meshContextMergeAction.disabled = !canMergeLooseParts(getSelectedMeshes());
+  const descriptor = mesh.userData?.componentDescriptor;
+  const locked = descriptor?.meshEditState === 'applied';
+  meshContextSeparateAction.hidden = false;
+  meshContextMergeAction.hidden = false;
+  meshContextApplyAction.hidden = true;
+  meshContextSeparateAction.disabled = locked || isLoosePart(mesh);
+  meshContextMergeAction.disabled = locked || !canMergeLooseParts(getSelectedMeshes());
+  menu.style.left = `${Math.max(4, left)}px`;
+  menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
+  requestAnimationFrame(() => {
+    if (menu.hidden) return;
+    const maxLeft = Math.max(4, window.innerWidth - menu.offsetWidth - 4);
+    const maxTop = Math.max(
+      bounds.top + 4, Math.min(window.innerHeight, bounds.bottom)
+        - menu.offsetHeight - 4);
+    menu.style.left = `${Math.min(Math.max(4, left), maxLeft)}px`;
+    menu.style.top = `${Math.min(Math.max(bounds.top + 4, top), maxTop)}px`;
+  });
+}
+
+function openComponentContextMenu(event, descriptor) {
+  if (isRecording()) {
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const menu = ensureMeshContextMenu();
+  const container = document.getElementById('canvas-container') || document.body;
+  const bounds = container.getBoundingClientRect();
+  const left = Number(event.clientX);
+  const top = Number(event.clientY);
+  menu.hidden = false;
+  meshContextTarget = descriptor;
+  meshContextSeparateAction.hidden = true;
+  meshContextMergeAction.hidden = true;
+  meshContextApplyAction.hidden = false;
+  meshContextApplyAction.disabled = descriptor.meshEditState !== 'edited'
+    || descriptor.meshEditApplying === true || !descriptor.meshEditWritable;
   menu.style.left = `${Math.max(4, left)}px`;
   menu.style.top = `${Math.max(bounds.top + 4, top)}px`;
   requestAnimationFrame(() => {
@@ -208,7 +257,7 @@ export function refreshAutomaticTextureBoundaries() {
 }
 
 function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
-                          assetSummary = null) {
+                          assetSummary = null, componentDescriptor = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -236,6 +285,18 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
   nameSpan.title = groupName;
 
   hdr.append(chevron, masterCb, nameSpan);
+  const editBadge = document.createElement('span');
+  editBadge.className = 'mesh-edit-badge';
+  editBadge.hidden = true;
+  editBadge.textContent = t('toolbar.edited');
+  const syncEditState = () => {
+    const state = componentDescriptor?.meshEditState || 'clean';
+    editBadge.hidden = state === 'clean';
+    editBadge.dataset.state = state;
+    editBadge.title = state === 'applied'
+      ? t('mesh.applyMeshChangesHint') : t('toolbar.edited');
+  };
+  hdr.appendChild(editBadge);
   const summaryLabel = assetSummaryLabel(assetSummary);
   if (summaryLabel) {
     const assetSpan = document.createElement('span');
@@ -264,8 +325,13 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     if (e.target === masterCb) return;
     onComponentSelected?.();
   });
+  if (componentDescriptor) {
+    hdr.addEventListener('contextmenu', event =>
+      openComponentContextMenu(event, componentDescriptor));
+  }
 
-  return { hdr, masterCb, syncLabels };
+  syncEditState();
+  return { hdr, masterCb, syncLabels, syncEditState };
 }
 
 function updateComponentAssetLabel(header, summary) {
@@ -522,8 +588,71 @@ function restoreLoosePartRows() {
   requestRender();
 }
 
+function componentForMesh(mesh) {
+  return mesh?.userData?.componentDescriptor || null;
+}
+
+function setComponentMeshEditState(descriptor, state) {
+  if (!descriptor || descriptor.meshEditState === state) return;
+  descriptor.meshEditState = state;
+  descriptor.header?.querySelector('.mesh-edit-badge')?.toggleAttribute(
+    'hidden', state === 'clean');
+  descriptor.syncEditState?.();
+  window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-state', {
+    detail: { component: descriptor, state },
+  }));
+}
+
+function markComponentMeshEdited(descriptor) {
+  if (descriptor?.meshEditState !== 'applied') {
+    setComponentMeshEditState(descriptor, 'edited');
+  }
+}
+
+export function hasUnappliedMeshChanges() {
+  return groupsUI.some(group =>
+    group.componentDescriptor?.meshEditState === 'edited');
+}
+
+async function applyComponentMeshChanges(descriptor) {
+  if (!descriptor || descriptor.meshEditState !== 'edited'
+      || !descriptor.meshEditWritable || !descriptor.modPath) return false;
+  const meshes = descriptor.meshes
+    .map(mesh => ({mesh, context: meshPanelContexts.get(mesh)}))
+    .filter(item => getLooseParts(item.mesh).length && item.context);
+  if (!meshes.length) return false;
+  const request = {
+    component: descriptor.component,
+    meshes: meshes.map(({mesh, context}) => ({
+      identity: context.entry.identity,
+      drawindexed: context.entry.drawindexed,
+      sources: context.entry.sources || [],
+      parts: getLooseParts(mesh).map(part =>
+        [...(part.userData.loosePartTriangles || [])]),
+    })),
+  };
+  descriptor.meshEditApplying = true;
+  try {
+    const result = await window.pywebview.api.apply_component_mesh_changes(
+      descriptor.modPath, request);
+    if (!result || result.error || result.ok === false) {
+      throw new Error(result?.error || t('mesh.applyMeshChangesHint'));
+    }
+    setComponentMeshEditState(descriptor, 'applied');
+    if (!hasUnappliedMeshChanges()) await descriptor.onAllMeshChangesApplied?.();
+    return true;
+  } catch (error) {
+    await alertDialog(String(error?.message || error));
+    return false;
+  } finally {
+    descriptor.meshEditApplying = false;
+  }
+}
+
 async function separateMeshRow(source) {
   if (isRecording()) return false;
+  const descriptor = componentForMesh(source);
+  if (descriptor?.meshEditState === 'applied') return false;
   const context = meshPanelContexts.get(source);
   const sourceRow = getMeshView(source)?.row;
   const sourceWrap = sourceRow?.closest('.draw-item-wrap');
@@ -543,6 +672,7 @@ async function separateMeshRow(source) {
   });
   if (parts.length <= 1) return false;
   sourceWrap.replaceWith(...buildPartRows(source, context));
+  markComponentMeshEdited(descriptor);
   selectMesh(parts[0]);
   requestRender();
   return true;
@@ -572,6 +702,8 @@ function mergeSelectedLooseParts() {
   const selectedMeshes = getSelectedMeshes();
   if (!canMergeLooseParts(selectedMeshes)) return false;
   const source = getLoosePartSource(selectedMeshes[0]);
+  const descriptor = componentForMesh(source);
+  if (descriptor?.meshEditState === 'applied') return false;
   const oldPartWraps = getLooseParts(source).map(meshRowWrap).filter(Boolean);
   clearSelection();
   const result = mergeLooseParts(selectedMeshes);
@@ -579,6 +711,12 @@ function mergeSelectedLooseParts() {
     return false;
   }
   selectMesh(result.mesh);
+  if (result.full && descriptor
+      && descriptor.meshes.every(mesh => !getLooseParts(mesh).length)) {
+    setComponentMeshEditState(descriptor, 'clean');
+  } else {
+    markComponentMeshEdited(descriptor);
+  }
   invalidateCharacterShadowVisibility({request: false});
   requestRender();
   return true;
@@ -604,6 +742,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   registerViewSync('mesh-panel', syncMeshPanel);
   const texturePools = options.texturePools || {};
   const readOnlySource = options.readOnlySource === true;
+  const meshEditReadOnly = options.meshEditReadOnly === true;
   const canPersistMetadata = options.canPersistMetadata !== false;
   const texturePicker = options.texturePicker || null;
 
@@ -642,6 +781,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       const componentDescriptor = {
         type: 'component', component: groupName, source: src,
         meshes: itemObjs, texturePool, modPath,
+        meshEditState: 'clean', meshEditApplying: false,
       };
       const assetSummary = summarizeAssetBindings(
         names.map(name => meshes[name]), options.assetResolution);
@@ -651,6 +791,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       let materialKindInFlight = false;
       const canPersist = !readOnlySource && canPersistMetadata && !!modPath;
       const canEdit = !readOnlySource && !!componentIdentity && !!modPath;
+      componentDescriptor.meshEditWritable = !meshEditReadOnly && canEdit;
       const setMaterialKind = async kind => {
         if (!canEdit || materialKindInFlight) return false;
         if (!canPersist) {
@@ -725,14 +866,18 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
           groupName, texturePool, modPath, onPoolChange, texturePicker),
         getTextureOverride,
         setTextureOverride,
+        applyMeshChanges: () => applyComponentMeshChanges(componentDescriptor),
+        onAllMeshChangesApplied: options.onAllMeshChangesApplied
+          || options.onReload,
       });
 
-      const { hdr, masterCb, syncLabels } = buildGroupHeader(
+      const { hdr, masterCb, syncLabels, syncEditState } = buildGroupHeader(
         groupName, itemsWrap,
         () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
           detail: { component: componentDescriptor },
-        })), assetSummary);
+        })), assetSummary, componentDescriptor);
       componentDescriptor.header = hdr;
+      componentDescriptor.syncEditState = syncEditState;
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
@@ -795,11 +940,13 @@ window.addEventListener(LANGUAGE_CHANGED, () => {
   if (meshContextSeparateAction) {
     meshContextSeparateAction.textContent = t('mesh.separateLooseParts');
     meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
+    meshContextApplyAction.textContent = t('mesh.applyMeshChanges');
   }
   groupsUI.forEach(group => {
     group.syncLabels?.();
     group.itemObjs.forEach(mesh => getMeshView(mesh)?.syncStateIndicator?.());
     updateComponentAssetLabel(group.header, group.componentDescriptor.assetSummary);
+    group.componentDescriptor.syncEditState?.();
     group.itemObjs.forEach(updateDrawAssetLabel);
   });
 });
