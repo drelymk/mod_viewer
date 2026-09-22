@@ -32,6 +32,24 @@ void main(uint3 threadID : SV_DispatchThreadID) {
 }
 """
 
+LINEAR_SHAPE_SHADER = """
+struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
+RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
+StructuredBuffer<VertexAttributes> base : register(t50);
+StructuredBuffer<VertexAttributes> shapekey : register(t51);
+Texture1D<float4> IniParams : register(t120);
+#define VALUE IniParams[88].x
+[numthreads(64, 1, 1)]
+void main(uint3 threadID : SV_DispatchThreadID) {
+  uint i = threadID.x;
+  VertexAttributes diff;
+  diff.position = shapekey[i].position - base[i].position;
+  diff.normal = shapekey[i].normal - base[i].normal;
+  rw_buffer[i].position += diff.position * VALUE;
+  rw_buffer[i].normal += diff.normal * VALUE;
+}
+"""
+
 POSE_SHADER = """
 struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
 struct BlendAttributes { float4 weights; int4 indicies; };
@@ -783,6 +801,92 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
     payload = next(iter(built.meshes.values()))["animation_geometry"]
     assert payload["pose"] is None
     assert len(payload["shape_passes"]) == 2
+
+
+def _write_lucy_shape_fixture(root, shader, *, authored_slider=False):
+    root.mkdir()
+    (root / "Shapes.hlsl").write_text(shader)
+    vertex_data = bytearray()
+    flat_data = bytearray()
+    for x in (0., 1., 2.):
+        vertex_data.extend(struct.pack("<fff", x, 0., 0.))
+        vertex_data.extend(struct.pack("<fff", 0., 2., 0.))
+        vertex_data.extend(b"\0" * 16)
+        flat_data.extend(struct.pack("<fff", x + 1., 0., 0.))
+        flat_data.extend(struct.pack("<fff", 0., 3., 0.))
+        flat_data.extend(b"\0" * 16)
+    (root / "BodyPosition.buf").write_bytes(vertex_data)
+    (root / "BodyPositionFlat.buf").write_bytes(flat_data)
+    (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
+    (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
+    ini = root / "LucySummer.ini"
+    slider_section = ("\n[CommandListDrawSlider.Flat]\n"
+                      "x87 = $currFlat * x87\n" if authored_slider else "")
+    ini.write_text(f"""
+[Constants]
+global persist $currFlat = 0.5
+{slider_section}
+
+[CustomShaderComputeShapes]
+cs = Shapes.hlsl
+cs-u5 = copy ResourceBodyPosition.Base
+x88 = $currFlat
+cs-t50 = copy ResourceBodyPosition.Base
+cs-t51 = copy ResourceBodyPosition.Flat
+ResourceBodyPosition = ref cs-u5
+Dispatch = 1, 1, 1
+cs-u5 = null
+
+[TextureOverrideBody]
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+stride = 40
+filename = BodyPosition.buf
+[ResourceBodyPosition.Base]
+stride = 40
+filename = BodyPosition.buf
+[ResourceBodyPosition.Flat]
+stride = 40
+filename = BodyPositionFlat.buf
+[ResourceBodyTexcoord]
+stride = 20
+filename = BodyTexcoord.buf
+[ResourceBodyIB]
+format = DXGI_FORMAT_R32_UINT
+filename = Body.ib
+""".strip() + "\n", encoding="utf-8")
+    return ini
+
+
+def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
+    ini = _write_lucy_shape_fixture(
+        tmp_path / "lucy-like", LINEAR_SHAPE_SHADER, authored_slider=True)
+
+    parsed = analyze_mod_inis([str(ini)], str(ini.parent))
+    group = parsed.groups[0]
+    assert [slider["var"] for slider in group["shape_sliders"]] == [
+        "currFlat"]
+    assert group["shape_sliders"][0]["authored_slider"] is True
+    assert "_compute_animation" not in group
+
+    built = build_mesh_result(parsed.groups, str(ini.parent))
+    entry = next(iter(built.meshes.values()))
+    assert entry["shape_targets"]
+    assert "animation_geometry" not in entry
+
+
+def test_single_pass_sinusoidal_shape_without_authored_slider_stays_compute(
+        tmp_path):
+    ini = _write_lucy_shape_fixture(tmp_path / "sinusoidal", SHAPE_SHADER)
+
+    parsed = analyze_mod_inis([str(ini)], str(tmp_path / "sinusoidal"))
+    group = parsed.groups[0]
+    assert group["shape_sliders"][0]["authored_slider"] is False
+    assert group.get("_compute_animation") is not None
 
 
 def test_compute_animation_is_attached_per_ini_with_duplicate_resources(tmp_path):

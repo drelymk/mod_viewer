@@ -84,6 +84,44 @@ def _attach_shape_sliders(groups, shape_sliders):
             group["shape_sliders"] = matches
 
 
+def _is_plain_shape_slider_compute(animation, shape_sliders):
+    """Identify a compute pass already represented by a plain shape slider."""
+    if animation.get("pose") is not None or animation.get("conditions"):
+        return False
+    passes = animation.get("shape_passes") or ()
+    if len(passes) != 1:
+        return False
+    program = animation.get("program") or {}
+    phase_vars = {
+        str(command.get("phase", {}).get("variable", "")).casefold()
+        for command in program.get("commands", ())
+        if command.get("track_id") == animation.get("track_id")
+        and command.get("op") == "dispatch"
+        and command.get("kind") == "shape"
+        and command.get("phase", {}).get("kind") == "variable"
+        and command.get("phase", {}).get("variable")
+    }
+    if len(phase_vars) != 1:
+        return False
+    phase_var = next(iter(phase_vars)).casefold()
+    assigned_vars = {
+        str(command.get("variable", "")).casefold()
+        for command in program.get("commands", ())
+        if command.get("op") == "set"
+    }
+    if phase_var in assigned_vars:
+        return False
+    animation_base = _path_key(animation.get("base_file"))
+    animation_target = _path_key(passes[0].get("target_file"))
+    return any(
+        str(slider.get("var", "")).casefold() == phase_var
+        and slider.get("authored_slider") is True
+        and _path_key(slider.get("base_file")) == animation_base
+        and _path_key(slider.get("target_file")) == animation_target
+        for slider in shape_sliders or ()
+    )
+
+
 def _attach_sparse_animations(groups, animations):
     """Attach WWMI sparse animations by their authored base position file."""
     for group in groups:
@@ -337,6 +375,10 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             secs, resources, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,
             canonical_vars=record["canonical_vars"])
+        shape_sliders = analysis.shapes
+        compute = [item for item in compute
+                   if not _is_plain_shape_slider_compute(
+                       item, shape_sliders)]
         animation_control_vars.update(
             compute_animation_control_vars(compute, analysis.state_rules))
         sparse_compute = discover_wwmi_sparse_animations(
@@ -370,7 +412,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
                 # Mesh construction must not match resources across siblings.
                 group["_compute_animation"] = matches[0]
         _attach_sparse_animations(ini_groups, sparse_compute)
-        shape_sliders = analysis.shapes
         state_rules.extend(analysis.state_rules)
         game_evidence.extend(analysis.game_evidence)
         runtime_evidence.extend(analysis.runtime_evidence)
