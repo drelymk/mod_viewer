@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 from .support import _open, _page as _create_page
@@ -10,6 +12,24 @@ def _page(edge_browser, frontend_url, responses, **kwargs):
     return _create_page(
         edge_browser, frontend_url, responses,
         api_features=sorted(features), **kwargs)
+
+
+def _mixed_asset_payload(label="Mixed"):
+    payload = _payload(label)
+    template = next(iter(payload["meshes"].values()))
+    payload["meshes"] = {}
+    for index, asset in enumerate(("Alice", "Bob")):
+        entry = copy.deepcopy(template)
+        entry["drawindexed"] = [3, index * 3, 0]
+        entry["sources"][0]["line"] = 10 + index
+        entry["sources"][0]["occurrence"]["ordinal"] = index
+        entry["asset_binding"] = {
+            "status": "exact", "component_status": "exact",
+            "range_status": "exact", "asset": asset,
+            "component_name": "Body",
+        }
+        payload["meshes"][f"Body-{label}-{index}"] = entry
+    return payload
 
 def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         edge_browser, frontend_url):
@@ -111,8 +131,31 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator(".group-hdr .group-name").first.click()
         assert inspector.locator(".inspector-asset-section").count() == 1
         assert inspector.locator(".inspector-asset-detail").inner_text() == (
-            "Alice · Body")
-        assert inspector.locator(".inspector-asset-status").inner_text() == "Exact"
+            "Asset: Alice · Body")
+        assert inspector.locator(".inspector-asset-status").count() == 0
+    finally:
+        context.close()
+
+
+def test_mixed_component_asset_summary_stays_mixed(
+        edge_browser, frontend_url):
+    path = "MixedAsset"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _mixed_asset_payload(path)})
+    try:
+        _open(page, path)
+        page.locator(".draw-item").nth(1).wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        inspector = page.locator("#inspector-content")
+        assert inspector.locator(".inspector-asset-section").count() == 1
+        assert inspector.locator(".inspector-asset-detail").inner_text() == (
+            "Asset: Mixed")
+        assert inspector.locator(".inspector-asset-status").count() == 0
+        assert "Alice" not in inspector.locator(
+            ".inspector-asset-section").inner_text()
+        assert "Ambiguous" not in inspector.locator(
+            ".inspector-asset-section").inner_text()
     finally:
         context.close()
 

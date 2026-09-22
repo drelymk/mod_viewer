@@ -108,33 +108,30 @@ function buildHeader(content, title, context, titleHint = '') {
   content.appendChild(header);
 }
 
-function assetBindingForSummary(summary) {
-  if (!summary || summary.status === 'unavailable') return null;
-  const status = summary.status === 'mixed' || summary.status === 'ambiguous'
-    ? 'ambiguous' : 'exact';
-  return {
-    status,
-    component_status: status === 'exact' ? 'exact' : 'ambiguous',
-    range_status: summary.status === 'partial' ? 'unknown' : 'exact',
-    asset: summary.asset,
-    component_name: summary.component,
-    component_ordinal: summary.componentOrdinal,
-  };
-}
-
 function buildAssetSection(content, value, isSummary = false) {
-  const binding = isSummary ? assetBindingForSummary(value) : value;
-  if (!binding) return null;
+  if (isSummary) {
+    const detail = assetSummaryLabel(value);
+    if (!detail) return null;
+    const section = document.createElement('section');
+    section.className = 'inspector-section inspector-asset-section';
+    const title = document.createElement('div');
+    title.className = 'inspector-section-title';
+    title.textContent = t('inspector.asset');
+    section.appendChild(title);
+    addText(section, 'inspector-asset-detail', detail);
+    content.appendChild(section);
+    return section;
+  }
+  if (!value) return null;
   const section = document.createElement('section');
   section.className = 'inspector-section inspector-asset-section';
   const title = document.createElement('div');
   title.className = 'inspector-section-title';
   title.textContent = t('inspector.asset');
   section.appendChild(title);
-  const detail = assetDetailLabel(binding)
-    || (isSummary ? assetSummaryLabel(value) : '');
+  const detail = assetDetailLabel(value);
   if (detail) addText(section, 'inspector-asset-detail', detail);
-  addText(section, 'inspector-asset-status', assetMatchLabel(binding));
+  addText(section, 'inspector-asset-status', assetMatchLabel(value));
   content.appendChild(section);
   return section;
 }

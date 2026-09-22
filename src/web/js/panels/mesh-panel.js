@@ -43,7 +43,7 @@ let meshContextTarget = null;
 let meshContextListenersInstalled = false;
 let panelSelectionListenersInstalled = false;
 let panelSelectionDrag = null;
-let suppressNextPanelClick = null;
+let suppressPanelClick = false;
 const meshPanelContexts = new WeakMap();
 const meshByRow = new WeakMap();
 const PANEL_SELECTION_THRESHOLD = 5;
@@ -92,12 +92,6 @@ function positionMeshContextMenu(menu, event) {
   });
 }
 
-function panelRowAtPoint(clientX, clientY) {
-  const element = document.elementFromPoint(clientX, clientY);
-  const row = element?.closest?.('.draw-item');
-  return row?.isConnected ? row : null;
-}
-
 function panelRowsInRange(list, startY, currentY) {
   const top = Math.min(startY, currentY);
   const bottom = Math.max(startY, currentY);
@@ -125,7 +119,6 @@ function onPanelPointerDown(event) {
   panelSelectionDrag = {
     pointerId: event.pointerId,
     startY: event.clientY,
-    lastRow: row,
     list: event.currentTarget,
     dragging: false,
   };
@@ -134,8 +127,6 @@ function onPanelPointerDown(event) {
 function onPanelPointerMove(event) {
   const gesture = panelSelectionDrag;
   if (!gesture || event.pointerId !== gesture.pointerId) return;
-  const row = panelRowAtPoint(event.clientX, event.clientY);
-  if (row) gesture.lastRow = row;
   if (!gesture.dragging
       && Math.abs(event.clientY - gesture.startY) <= PANEL_SELECTION_THRESHOLD) {
     return;
@@ -154,17 +145,23 @@ function finishPanelPointerGesture(event) {
   if (!gesture.dragging) return;
   event.preventDefault();
   event.stopPropagation();
-  suppressNextPanelClick = gesture.lastRow || panelRowAtPoint(
-    event.clientX, event.clientY);
-  const suppressedRow = suppressNextPanelClick;
+  suppressPanelClick = true;
   window.setTimeout(() => {
-    if (suppressNextPanelClick === suppressedRow) suppressNextPanelClick = null;
-  }, 500);
+    suppressPanelClick = false;
+  }, 0);
+}
+
+function onPanelClickCapture(event) {
+  if (!suppressPanelClick) return;
+  suppressPanelClick = false;
+  event.preventDefault();
+  event.stopImmediatePropagation();
 }
 
 function installPanelSelectionDrag(list) {
   if (panelSelectionListenersInstalled) return;
   list.addEventListener('pointerdown', onPanelPointerDown);
+  list.addEventListener('click', onPanelClickCapture, true);
   document.addEventListener('pointermove', onPanelPointerMove, true);
   document.addEventListener('pointerup', finishPanelPointerGesture, true);
   document.addEventListener('pointercancel', finishPanelPointerGesture, true);
@@ -516,12 +513,6 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
   meshByRow.set(row, mesh);
   row.addEventListener('click', (e) => {
     if (e.target === cb) return;
-    if (suppressNextPanelClick === row) {
-      suppressNextPanelClick = null;
-      e.preventDefault();
-      e.stopPropagation();
-      return;
-    }
     if (e.ctrlKey) toggleMeshSelection(mesh);
     else selectMesh(mesh);
   });

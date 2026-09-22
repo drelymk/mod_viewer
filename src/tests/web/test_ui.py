@@ -684,6 +684,10 @@ def test_mesh_panel_ctrl_drag_adds_ordered_rows_without_toggling(
             True, False, True, True, True,
         ]
 
+        rows.nth(4).click()
+        assert page.locator(".draw-item.selected").count() == 1
+        assert rows.nth(4).get_attribute("class").find("selected") >= 0
+        rows.nth(0).click(modifiers=["Control"])
         _ctrl_drag_rows(page, rows, 2, 4)
         assert page.locator(".draw-item.selected").count() == 4
     finally:
