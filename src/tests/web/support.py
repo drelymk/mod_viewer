@@ -325,6 +325,10 @@ def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
               state.pending[path] = false;
               return copy({saved: [], failed: []});
             },
+            apply_component_mesh_changes: async (path, request) => {
+              state.calls.applyMeshChanges.push([path, request]);
+              return copy(state.applyMeshChangesResult || {ok: true});
+            },
             has_pending_changes: async path => !!state.pending[path],
             discard_changes: async path => {
               state.calls.discardChanges.push(path);

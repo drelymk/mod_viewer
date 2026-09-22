@@ -1,7 +1,9 @@
+import copy
+
 import pytest
 
 from .support import _open, _page as _create_page
-from .payloads import _f32, _payload
+from .payloads import _f32, _loose_parts_payload, _payload
 
 
 def _page(edge_browser, frontend_url, responses, **kwargs):
@@ -10,6 +12,24 @@ def _page(edge_browser, frontend_url, responses, **kwargs):
     return _create_page(
         edge_browser, frontend_url, responses,
         api_features=sorted(features), **kwargs)
+
+
+def _mixed_asset_payload(label="Mixed"):
+    payload = _payload(label)
+    template = next(iter(payload["meshes"].values()))
+    payload["meshes"] = {}
+    for index, asset in enumerate(("Alice", "Bob")):
+        entry = copy.deepcopy(template)
+        entry["drawindexed"] = [3, index * 3, 0]
+        entry["sources"][0]["line"] = 10 + index
+        entry["sources"][0]["occurrence"]["ordinal"] = index
+        entry["asset_binding"] = {
+            "status": "exact", "component_status": "exact",
+            "range_status": "exact", "asset": asset,
+            "component_name": "Body",
+        }
+        payload["meshes"][f"Body-{label}-{index}"] = entry
+    return payload
 
 def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         edge_browser, frontend_url):
@@ -45,7 +65,8 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
     try:
         _open(page, "Asset")
         page.locator(".draw-item").wait_for()
-        assert page.locator(".asset-draw-label").inner_text() == "Alice · Body B"
+        assert page.locator(".asset-draw-label").count() == 0
+        assert page.locator(".asset-component-label").count() == 0
         page.locator("#health-btn").click()
         page.locator("#health-modal-backdrop.show").wait_for()
         assert page.locator("#health-asset-summary").inner_text() == (
@@ -88,7 +109,10 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         inspector = page.locator("#inspector-content")
-        assert inspector.locator(".inspector-asset-section").count() == 0
+        assert inspector.locator(".inspector-asset-section").count() == 1
+        assert inspector.locator(".inspector-asset-detail").inner_text() == (
+            "Alice · Body B")
+        assert inspector.locator(".inspector-asset-status").inner_text() == "Exact"
         assert inspector.locator(".inspector-slot-section").count() == 0
         assert "Asset resolution" not in inspector.inner_text()
         assert "Texture provenance" not in inspector.inner_text()
@@ -105,7 +129,33 @@ def test_asset_identity_and_texture_provenance_are_diagnostic_only(
         page.locator("#health-close").click()
 
         page.locator(".group-hdr .group-name").first.click()
-        assert "Asset resolution" not in inspector.inner_text()
+        assert inspector.locator(".inspector-asset-section").count() == 1
+        assert inspector.locator(".inspector-asset-detail").inner_text() == (
+            "Asset: Alice · Body")
+        assert inspector.locator(".inspector-asset-status").count() == 0
+    finally:
+        context.close()
+
+
+def test_mixed_component_asset_summary_stays_mixed(
+        edge_browser, frontend_url):
+    path = "MixedAsset"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _mixed_asset_payload(path)})
+    try:
+        _open(page, path)
+        page.locator(".draw-item").nth(1).wait_for()
+        page.locator("#inspector-tab").click()
+        page.locator(".group-hdr .group-name").first.click()
+        inspector = page.locator("#inspector-content")
+        assert inspector.locator(".inspector-asset-section").count() == 1
+        assert inspector.locator(".inspector-asset-detail").inner_text() == (
+            "Asset: Mixed")
+        assert inspector.locator(".inspector-asset-status").count() == 0
+        assert "Alice" not in inspector.locator(
+            ".inspector-asset-section").inner_text()
+        assert "Ambiguous" not in inspector.locator(
+            ".inspector-asset-section").inner_text()
     finally:
         context.close()
 
@@ -131,7 +181,10 @@ def test_asset_diagnostics_refresh_with_semantic_updates(
         page.locator("#inspector-tab").click()
         page.locator(".draw-item").first.click()
         inspector = page.locator("#inspector-content")
-        assert inspector.locator(".inspector-asset-section").count() == 0
+        assert inspector.locator(".inspector-asset-section").count() == 1
+        assert inspector.locator(".inspector-asset-detail").inner_text() == (
+            "Alice · Body")
+        assert inspector.locator(".inspector-asset-status").inner_text() == "Exact"
 
         page.evaluate("""() => {
           const state = window.__fakeApi;
@@ -164,15 +217,41 @@ def test_asset_diagnostics_refresh_with_semantic_updates(
             "window.modViewer.activeMeshes[0].userData.assetEntry"
             ".asset_binding.status === 'not_found'")
         assert page.locator(".asset-draw-label").count() == 0
-        assert inspector.locator(".inspector-asset-section").count() == 0
-        assert "Not found" not in inspector.inner_text()
-        assert page.locator(".asset-component-label").inner_text() == (
-            "Asset: Partial")
+        assert page.locator(".asset-component-label").count() == 0
+        assert inspector.locator(".inspector-asset-section").count() == 1
+        assert inspector.locator(".inspector-asset-detail").count() == 0
+        assert inspector.locator(".inspector-asset-status").inner_text() == (
+            "Not found")
         page.locator("#health-btn").click()
         page.locator("#health-modal-backdrop.show").wait_for()
         health_asset_summary = page.locator("#health-asset-summary").inner_text()
         assert "Asset resolution: 0 / 1 draws exact" in health_asset_summary
         assert "Not found: 1" in health_asset_summary
+    finally:
+        context.close()
+
+
+def test_loose_part_inspector_uses_semantic_asset_binding(
+        edge_browser, frontend_url):
+    payload = _loose_parts_payload("AssetParts")
+    entry = next(iter(payload["meshes"].values()))
+    entry["asset_binding"] = {
+        "status": "exact", "component_status": "exact",
+        "range_status": "exact", "asset": "Alice",
+        "component_name": "Body", "classification": "B",
+    }
+    context, page = _page(edge_browser, frontend_url, {"AssetParts": payload})
+    try:
+        _open(page, "AssetParts")
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(".mesh-context-menu button").first.click()
+        page.locator("#dialog-ok").click()
+        page.locator("#inspector-tab").click()
+        page.locator("#mesh-list .draw-item").first.click()
+        inspector = page.locator("#inspector-content")
+        assert inspector.locator(".inspector-asset-detail").inner_text() == (
+            "Alice · Body B")
+        assert inspector.locator(".inspector-asset-status").inner_text() == "Exact"
     finally:
         context.close()
 

@@ -53,3 +53,10 @@ def test_buffer_store_reads_zip_members_through_the_source(tmp_path):
     member = source.resolve_resource("mesh.buf")
 
     assert buffers.BufferStore(source=source).raw(member) == b"mesh"
+
+
+def test_buffer_store_prefers_staged_override(tmp_path):
+    path = tmp_path / "Body.ib"
+    path.write_bytes(b"disk")
+    assert buffers.BufferStore(overrides={str(path): b"staged"}).raw(
+        str(path)) == b"staged"

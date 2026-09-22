@@ -26,6 +26,7 @@ from core.textures.profiles import texture_profile_for
 
 from app.assets import folders as asset_folders
 from app.mods import loader as mod_loader
+from app.bridge import mesh_edit
 from app.mods import metadata
 from app.runtime import server
 from app.session import edit as edit_session
@@ -95,6 +96,7 @@ class ModPreview:
             folder_path, ini_paths, edit_session.documents_for(folder_path),
             saved_metadata,
             source=source)
+        context.buffer_overrides = edit_session.ib_overrides_for(folder_path)
         cache_key = os.path.normcase(os.path.abspath(folder_path))
         with self._model_state_lock:
             cache = self._dds_classification_caches.pop(cache_key, None)
@@ -238,6 +240,16 @@ class ModPreview:
             present = mod_loader.load_present_state(context, overrides)
             metadata.hydrate_present(folder_path, present, context.metadata)
             return {"present": present}
+        except Exception:
+            return self._semantic_read_error()
+
+    def apply_component_mesh_changes(self, folder_path, request):
+        """Validate and stage one viewer component's mesh changes."""
+        try:
+            folder_path, overrides, _pending, context = \
+                self.authoritative_context(folder_path)
+            return mesh_edit.apply_component_mesh_changes(
+                context, overrides, request)
         except Exception:
             return self._semantic_read_error()
 
@@ -417,7 +429,9 @@ class ModPreview:
             meshes = {}
             pieces = []
             offset = 0
-            buffers = BufferStore(source=getattr(context, "source", None))
+            buffers = BufferStore(
+                source=getattr(context, "source", None),
+                overrides=edit_session.ib_overrides_for(folder_path))
             convention = (geometry_convention_for(parsed.game.game)
                           if parsed is not None else None)
             for mesh_key in sorted(selected_items):

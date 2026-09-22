@@ -13,6 +13,9 @@ import {
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
+import {
+  assetDetailLabel, assetMatchLabel, assetSummaryLabel,
+} from './asset-diagnostics.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -103,6 +106,34 @@ function buildHeader(content, title, context, titleHint = '') {
   const subtitle = addText(header, 'inspector-context', context || '');
   subtitle.dataset.inspectorContext = 'true';
   content.appendChild(header);
+}
+
+function buildAssetSection(content, value, isSummary = false) {
+  if (isSummary) {
+    const detail = assetSummaryLabel(value);
+    if (!detail) return null;
+    const section = document.createElement('section');
+    section.className = 'inspector-section inspector-asset-section';
+    const title = document.createElement('div');
+    title.className = 'inspector-section-title';
+    title.textContent = t('inspector.asset');
+    section.appendChild(title);
+    addText(section, 'inspector-asset-detail', detail);
+    content.appendChild(section);
+    return section;
+  }
+  if (!value) return null;
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-asset-section';
+  const title = document.createElement('div');
+  title.className = 'inspector-section-title';
+  title.textContent = t('inspector.asset');
+  section.appendChild(title);
+  const detail = assetDetailLabel(value);
+  if (detail) addText(section, 'inspector-asset-detail', detail);
+  addText(section, 'inspector-asset-status', assetMatchLabel(value));
+  content.appendChild(section);
+  return section;
 }
 
 function buildMaterialControl(record) {
@@ -535,6 +566,7 @@ function buildComponent(record) {
   content.replaceChildren();
   buildHeader(content, record.component || t('inspector.component'),
     componentContext(record), record.source || '');
+  buildAssetSection(content, record.assetSummary, true);
   buildMaterialSection(content, record);
   buildComponentTextureSection(content, record);
 }
@@ -548,6 +580,7 @@ function buildMesh(mesh, record) {
   const componentName = component?.component || component || t('inspector.component');
   buildHeader(content, name, componentName,
     record.entry?.source?.[0]?.ini || '');
+  buildAssetSection(content, source.userData.assetEntry?.asset_binding);
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
   buildColorSection(content, source);

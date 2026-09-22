@@ -729,6 +729,11 @@ def _resolve_target_refs(doc, target_lines, target_ini=None):
     return resolved
 
 
+def resolve_draw_references(doc, target_lines, target_ini=None):
+    """Public stable authored-draw resolver shared by mesh editing."""
+    return _resolve_target_refs(doc, target_lines, target_ini)
+
+
 def _dnf_satisfied(conds, bindings):
     """True if a DNF condition list (conds; [] means unconditional) is
     satisfied given `bindings` ({var: value string})."""

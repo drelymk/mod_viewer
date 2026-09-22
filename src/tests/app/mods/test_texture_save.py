@@ -68,6 +68,51 @@ def _role_keys(diffuse="diffuse::body.dds"):
     }
 
 
+def test_texture_coverage_uses_staged_buffer_overrides(tmp_path, monkeypatch):
+    texture = tmp_path / "body.dds"
+    texture.write_bytes(_dx10_dds(bytes(16), width=1, height=1))
+    source = object()
+    staged = {str(tmp_path / "Body.ib"): b"staged-index-buffer"}
+    context = SimpleNamespace(
+        mod_dir=str(tmp_path), source=source, buffer_overrides=staged)
+    draw = DrawCall(count=3, start=0, base=0)
+    group = {"display_name": "Body"}
+    entries = ({"semantic_key": "Body-1", "texture_keys": _role_keys()},)
+    parsed = SimpleNamespace(game=SimpleNamespace(game="GIMI"))
+    monkeypatch.setattr(save_coverage, "resolve_save_request",
+                        lambda *_args: (
+                            entries, str(texture), SimpleNamespace(), parsed,
+                            {"Body-1": (draw, group)}))
+    monkeypatch.setattr(save_coverage, "geometry_convention_for",
+                        lambda _game: object())
+    monkeypatch.setattr(save_coverage, "draw_metadata_key",
+                        lambda _draw, _group: "Body::one")
+    captured = {}
+
+    class ProbeBufferStore:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(save_coverage, "BufferStore", ProbeBufferStore)
+    monkeypatch.setattr(
+        save_coverage, "prepare_uv_geometry",
+        lambda _draw, _group, _mod_dir, buffers, _cache, _convention: (
+            captured.setdefault("consumer", buffers), object())[1])
+    monkeypatch.setattr(save_coverage, "rasterize_geometry",
+                        lambda *_args: SimpleNamespace(mask=(1,)))
+
+    prepared = save_coverage.prepare_texture_save(
+        context, {}, ["Body-1"], "diffuse::body.dds", [{
+            "semantic_key": "Body-1", "metadata_key": "Body::one",
+            "adjustment": {"hue": 30},
+        }], [{"semantic_key": "Body-1", "texture_keys": _role_keys()}])
+
+    assert captured["source"] is source
+    assert captured["overrides"] == staged
+    assert captured["consumer"].__class__ is ProbeBufferStore
+    assert len(prepared.targets) == 1
+
+
 def _write_prepared_save(path):
     layout = inspect_dds_layout(path)
     return SimpleNamespace(

@@ -13,6 +13,7 @@ EXPECTED_API_METHODS = {
     "add_mod_folder",
     "add_present",
     "add_toggle",
+    "apply_component_mesh_changes",
     "capture_present",
     "consume_startup_request",
     "delete_asset_folder",

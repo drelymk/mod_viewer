@@ -551,7 +551,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
 
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                       texture_source=None, game_profile=None, source=None,
-                      animations=None):
+                      animations=None, buffer_overrides=None):
     """Build mesh draw entries and a shared texture registry.
 
     Geometry packing and texture publication are delegated to focused stages;
@@ -564,7 +564,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     validate_draw_count(groups)
     registry = TextureRegistry(
         mod_dir, texture_profile, texture_source, source=source)
-    buffers = BufferStore(source=source)
+    buffers = BufferStore(source=source, overrides=buffer_overrides)
     sparse_shape_cache = {}
     result = {}
     skinning_manifest = {}

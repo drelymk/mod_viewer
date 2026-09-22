@@ -483,6 +483,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: transparent; text-align: left; cursor: pointer; font: inherit;
   font-size: 11px; white-space: nowrap;
 }
+.mesh-context-menu button[hidden] { display: none; }
 .mesh-context-menu button:hover:not(:disabled) { background: var(--surface-active); }
 .mesh-context-menu button:disabled {
   color: var(--text-muted);
@@ -542,13 +543,6 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .mesh-state-btn { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; font-size: 13px; line-height: 18px; cursor: pointer; flex-shrink: 0; }
 .draw-item.selected { background: rgba(88,166,255,.15); outline: 1px solid var(--accent-soft); border-radius: 4px; }
 .mesh-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.asset-secondary-label {
-  min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; color: #768390; font-size: 10px; font-weight: 400;
-}
-.asset-secondary-label:hover { color: var(--accent-soft); }
-.asset-component-label { flex: 0 1 auto; }
-.asset-draw-label { flex: 0 1 auto; }
 .draw-item .mesh-name-input {
   width: 100%; min-width: 0; box-sizing: border-box; padding: 2px 4px;
   height: auto; cursor: text; flex-shrink: 1;
@@ -913,6 +907,16 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   background: var(--bg-canvas); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 7px 9px; font-size: 12px; font-family: inherit;
 }
+.mesh-edit-badge {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.mesh-edit-badge[data-state="applied"] { color: var(--accent-soft); }
 .dialog-range-field {
   display: none; flex-direction: column; gap: 4px; margin-top: 12px;
   color: var(--text-muted); font-size: 11px;
