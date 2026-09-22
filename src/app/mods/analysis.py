@@ -93,25 +93,29 @@ def _is_plain_shape_slider_compute(animation, shape_sliders):
         return False
     program = animation.get("program") or {}
     phase_vars = {
-        command.get("phase", {}).get("variable")
+        str(command.get("phase", {}).get("variable", "")).casefold()
         for command in program.get("commands", ())
-        if command.get("op") == "dispatch"
+        if command.get("track_id") == animation.get("track_id")
+        and command.get("op") == "dispatch"
         and command.get("kind") == "shape"
         and command.get("phase", {}).get("kind") == "variable"
+        and command.get("phase", {}).get("variable")
     }
     if len(phase_vars) != 1:
         return False
     phase_var = next(iter(phase_vars)).casefold()
-    external_vars = {
-        str(value).casefold()
-        for value in program.get("external_variables", ())
+    assigned_vars = {
+        str(command.get("variable", "")).casefold()
+        for command in program.get("commands", ())
+        if command.get("op") == "set"
     }
-    if external_vars != {phase_var}:
+    if phase_var in assigned_vars:
         return False
     animation_base = _path_key(animation.get("base_file"))
     animation_target = _path_key(passes[0].get("target_file"))
     return any(
         str(slider.get("var", "")).casefold() == phase_var
+        and slider.get("authored_slider") is True
         and _path_key(slider.get("base_file")) == animation_base
         and _path_key(slider.get("target_file")) == animation_target
         for slider in shape_sliders or ()
