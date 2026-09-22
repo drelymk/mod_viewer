@@ -785,6 +785,73 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
     assert len(payload["shape_passes"]) == 2
 
 
+def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
+    root = tmp_path / "lucy-like"
+    root.mkdir()
+    (root / "Shapes.hlsl").write_text(SHAPE_SHADER)
+    vertex_data = bytearray()
+    flat_data = bytearray()
+    for x in (0., 1., 2.):
+        vertex_data.extend(struct.pack("<fff", x, 0., 0.))
+        vertex_data.extend(struct.pack("<fff", 0., 2., 0.))
+        vertex_data.extend(b"\0" * 16)
+        flat_data.extend(struct.pack("<fff", x + 1., 0., 0.))
+        flat_data.extend(struct.pack("<fff", 0., 3., 0.))
+        flat_data.extend(b"\0" * 16)
+    (root / "BodyPosition.buf").write_bytes(vertex_data)
+    (root / "BodyPositionFlat.buf").write_bytes(flat_data)
+    (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
+    (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
+    ini = root / "LucySummer.ini"
+    ini.write_text("""
+[Constants]
+global persist $currFlat = 0.5
+
+[CustomShaderComputeShapes]
+cs = Shapes.hlsl
+cs-u5 = copy ResourceBodyPosition.Base
+x88 = $currFlat
+cs-t50 = copy ResourceBodyPosition.Base
+cs-t51 = copy ResourceBodyPosition.Flat
+ResourceBodyPosition = ref cs-u5
+Dispatch = 1, 1, 1
+cs-u5 = null
+
+[TextureOverrideBody]
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+ib = ResourceBodyIB
+drawindexed = 3, 0, 0
+
+[ResourceBodyPosition]
+stride = 40
+filename = BodyPosition.buf
+[ResourceBodyPosition.Base]
+stride = 40
+filename = BodyPosition.buf
+[ResourceBodyPosition.Flat]
+stride = 40
+filename = BodyPositionFlat.buf
+[ResourceBodyTexcoord]
+stride = 20
+filename = BodyTexcoord.buf
+[ResourceBodyIB]
+format = DXGI_FORMAT_R32_UINT
+filename = Body.ib
+""".strip() + "\n", encoding="utf-8")
+
+    parsed = analyze_mod_inis([str(ini)], str(root))
+    group = parsed.groups[0]
+    assert [slider["var"] for slider in group["shape_sliders"]] == [
+        "currFlat"]
+    assert "_compute_animation" not in group
+
+    built = build_mesh_result(parsed.groups, str(root))
+    entry = next(iter(built.meshes.values()))
+    assert entry["shape_targets"]
+    assert "animation_geometry" not in entry
+
+
 def test_compute_animation_is_attached_per_ini_with_duplicate_resources(tmp_path):
     ini_paths = []
     (tmp_path / "pose.hlsl").write_text(POSE_SHADER)
