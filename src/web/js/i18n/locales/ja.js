@@ -600,4 +600,9 @@ export default {
   'mesh.hiddenManual': '非表示（手動オーバーライド）',
   'mesh.visibleAutomatic': '自動表示',
   'mesh.hiddenAutomatic': '自動非表示',
+  'mesh.separateLooseParts': 'ルーズパーツを分離',
+  'mesh.mergeLooseParts': 'メッシュを結合',
+  'mesh.separate': '分離',
+  'mesh.connectionTolerance': '接続許容値',
+  'mesh.connectionToleranceRange': '範囲：0 ～ 0.01',
 };

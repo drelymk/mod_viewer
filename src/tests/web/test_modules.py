@@ -193,6 +193,117 @@ def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module
     }
 
 
+def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {canMergeLooseParts, clearLooseParts, mergeLooseParts,
+        separateLooseParts} = await import('./js/mesh/loose-parts.js');
+      const makeSource = offset => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(
+          new Float32Array([
+            offset, 0, 0, offset + 1, 0, 0, offset, 1, 0,
+            offset + 10, 0, 0, offset + 11, 0, 0, offset + 10, 1, 0,
+            offset + 20, 0, 0, offset + 21, 0, 0, offset + 20, 1, 0,
+          ]), 3));
+        geometry.setAttribute('normal', new THREE.BufferAttribute(
+          new Float32Array(27), 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(
+          new Float32Array(18), 2));
+        geometry.setAttribute('color', new THREE.BufferAttribute(
+          new Float32Array(27), 3));
+        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array([
+          0, 1, 2, 3, 4, 5, 6, 7, 8,
+        ]), 1));
+        geometry.setDrawRange(0, 9);
+        return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
+      };
+      const source = makeSource(0);
+      source.visible = false;
+      source.userData.manualVisible = false;
+      source.userData.manuallyToggled = true;
+      const parts = separateLooseParts(source, {label: 'Merge'});
+      const otherSource = makeSource(100);
+      const otherParts = separateLooseParts(otherSource);
+      const normal = new THREE.Mesh(
+        new THREE.BufferGeometry(), new THREE.MeshBasicNodeMaterial());
+      const eligibility = {
+        empty: canMergeLooseParts([]),
+        one: canMergeLooseParts([parts[0]]),
+        sameTwo: canMergeLooseParts([parts[0], parts[1]]),
+        sameThree: canMergeLooseParts(parts),
+        differentSources: canMergeLooseParts([parts[0], otherParts[0]]),
+        partAndNormal: canMergeLooseParts([parts[0], normal]),
+        normalMeshes: canMergeLooseParts([normal, otherSource]),
+      };
+      parts[0].visible = false;
+      parts[0].userData.manualVisible = false;
+      parts[2].visible = true;
+      const partial = mergeLooseParts([parts[2], parts[0]]);
+      const remaining = source.userData.looseParts;
+      const partialState = {
+        partCount: remaining.length,
+        survivor: partial.mesh === parts[0],
+        index: Array.from(parts[0].geometry.index.array),
+        positionShared: parts[0].geometry.getAttribute('position') ===
+          source.geometry.getAttribute('position'),
+        normalShared: parts[0].geometry.getAttribute('normal') ===
+          source.geometry.getAttribute('normal'),
+        uvShared: parts[0].geometry.getAttribute('uv') ===
+          source.geometry.getAttribute('uv'),
+        colorShared: parts[0].geometry.getAttribute('color') ===
+          source.geometry.getAttribute('color'),
+        visible: parts[0].visible,
+        manualVisible: parts[0].userData.manualVisible,
+      };
+      const full = mergeLooseParts([remaining[1], remaining[0]]);
+      const fullState = {
+        sourceMesh: full.mesh === source,
+        full: full.full,
+        looseParts: source.userData.looseParts.length,
+        drawCount: source.geometry.drawRange.count,
+        children: source.children.length,
+        sourceVisible: source.visible,
+        sourceManualVisible: source.userData.manualVisible,
+        sourceManuallyToggled: source.userData.manuallyToggled,
+      };
+      clearLooseParts(otherSource);
+      return {eligibility, partialState, fullState};
+    }""")
+    assert result == {
+        "eligibility": {
+            "empty": False,
+            "one": False,
+            "sameTwo": True,
+            "sameThree": True,
+            "differentSources": False,
+            "partAndNormal": False,
+            "normalMeshes": False,
+        },
+        "partialState": {
+            "partCount": 2,
+            "survivor": True,
+            "index": [0, 1, 2, 6, 7, 8],
+            "positionShared": True,
+            "normalShared": True,
+            "uvShared": True,
+            "colorShared": True,
+            "visible": True,
+            "manualVisible": True,
+        },
+        "fullState": {
+            "sourceMesh": True,
+            "full": True,
+            "looseParts": 0,
+            "drawCount": 9,
+            "children": 0,
+            "sourceVisible": False,
+            "sourceManualVisible": False,
+            "sourceManuallyToggled": True,
+        },
+    }
+
+
 def test_model_picking_flattens_only_split_mesh_render_targets(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
@@ -240,6 +351,44 @@ def test_model_picking_flattens_only_split_mesh_render_targets(module_page):
       };
     }""")
     assert result == {"partCount": 2, "hitIsPart": True, "hiddenHit": True}
+
+
+def test_model_box_picking_uses_visible_loose_part_geometry(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {separateLooseParts} = await import('./js/mesh/loose-parts.js');
+      const {meshesInClientRect} = await import('./js/scene/model-picking.js');
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([
+          -1, 0, 0, -0.5, 0, 0, -1, 0.5, 0,
+          0.5, 0, 0, 1, 0, 0, 0.5, 0.5, 0,
+        ]), 3));
+      geometry.setIndex([0, 1, 2, 3, 4, 5]);
+      const source = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+      const parts = separateLooseParts(source);
+      source.updateMatrixWorld(true);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateMatrixWorld(true);
+      const canvas = {getBoundingClientRect: () => ({
+        left: 0, top: 0, width: 100, height: 100,
+      })};
+      const right = {left: 52, top: 40, right: 80, bottom: 65};
+      const selected = meshesInClientRect({
+        meshes: [source], camera, canvas, selectionRect: right,
+      });
+      parts[1].visible = false;
+      const hidden = meshesInClientRect({
+        meshes: [source], camera, canvas, selectionRect: right,
+      });
+      return {
+        selectedRightPart: selected.length === 1 && selected[0] === parts[1],
+        hiddenExcluded: hidden.length === 0,
+      };
+    }""")
+    assert result == {"selectedRightPart": True, "hiddenExcluded": True}
 
 
 def test_baked_animation_updates_existing_attributes_and_wraps_frames(module_page):

@@ -42,6 +42,34 @@ def test_catalog_placeholders_match_english(module_page):
     assert result == []
 
 
+def test_loose_part_labels_do_not_fall_back_for_non_english_locales(module_page):
+    result = module_page.evaluate("""async () => {
+      const i18n = await import('./js/i18n/index.js');
+      const locales = ['zh-CN', 'ja', 'ko', 'es', 'ru'];
+      const keys = [
+        'mesh.separateLooseParts', 'mesh.mergeLooseParts',
+        'mesh.separate', 'mesh.connectionTolerance',
+        'mesh.connectionToleranceRange',
+      ];
+      const missing = [];
+      const fallbacks = [];
+      for (const locale of locales) {
+        i18n.setLocale(locale);
+        for (const key of keys) {
+          if (!Object.hasOwn(i18n.LOCALES[locale], key)) {
+            missing.push(`${locale}:${key}`);
+          }
+          if (i18n.t(key) === i18n.LOCALES.en[key]) {
+            fallbacks.push(`${locale}:${key}`);
+          }
+        }
+      }
+      i18n.setLocale('en');
+      return {missing, fallbacks};
+    }""")
+    assert result == {"missing": [], "fallbacks": []}
+
+
 def test_asset_resolution_count_phrases_are_complete_for_each_locale(module_page):
     result = module_page.evaluate("""async () => {
       const i18n = await import('./js/i18n/index.js');

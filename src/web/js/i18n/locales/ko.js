@@ -600,4 +600,9 @@ export default {
   'mesh.hiddenManual': '숨김 (수동 오버라이드)',
   'mesh.visibleAutomatic': '자동으로 표시됨',
   'mesh.hiddenAutomatic': '자동으로 숨겨짐',
+  'mesh.separateLooseParts': '분리된 파트 나누기',
+  'mesh.mergeLooseParts': '메시 병합',
+  'mesh.separate': '분리',
+  'mesh.connectionTolerance': '연결 허용 오차',
+  'mesh.connectionToleranceRange': '범위: 0 – 0.01',
 };

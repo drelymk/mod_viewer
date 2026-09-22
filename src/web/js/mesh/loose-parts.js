@@ -211,6 +211,16 @@ export function getLoosePartSource(mesh) {
   return mesh?.userData?.loosePartParent || null;
 }
 
+export function canMergeLooseParts(meshes) {
+  const selected = [...new Set(meshes || [])];
+  if (selected.length < 2) return false;
+  const source = getLoosePartSource(selected[0]);
+  if (!source) return false;
+  const parts = getLooseParts(source);
+  return selected.every(part => getLoosePartSource(part) === source
+    && parts.includes(part));
+}
+
 export function syncLoosePartMaterial(source) {
   const color = source.geometry?.getAttribute?.('color') || null;
   for (const part of getLooseParts(source)) {
@@ -220,15 +230,56 @@ export function syncLoosePartMaterial(source) {
   }
 }
 
+function disposeLoosePart(source, part) {
+  selectionCleanup?.(part);
+  detachOutline(part);
+  source.remove(part);
+  part.geometry?.dispose?.();
+}
+
+/** Merge selected index subsets without changing the semantic source mesh. */
+export function mergeLooseParts(meshes) {
+  const requested = [...new Set(meshes || [])];
+  if (!canMergeLooseParts(requested)) return null;
+  const selected = new Set(requested);
+  const source = getLoosePartSource(requested[0]);
+  const sourceParts = getLooseParts(source);
+  const selectedParts = sourceParts.filter(part => selected.has(part));
+
+  if (selectedParts.length === sourceParts.length) {
+    clearLooseParts(source);
+    return {source, mesh: source, full: true};
+  }
+
+  const anyVisible = selectedParts.some(part => part.visible);
+  const anyManual = selectedParts.some(part => part.userData.manuallyToggled);
+  const survivor = selectedParts[0];
+  const indexes = selectedParts.map(part => part.geometry?.index?.array);
+  if (indexes.some(index => !index)) return null;
+  const IndexArray = indexes[0].constructor;
+  const combined = new IndexArray(indexes.reduce(
+    (count, index) => count + index.length, 0));
+  let offset = 0;
+  indexes.forEach(index => {
+    combined.set(index, offset);
+    offset += index.length;
+  });
+  survivor.geometry.setIndex(new THREE.BufferAttribute(combined, 1));
+  survivor.visible = anyVisible;
+  survivor.userData.manualVisible = anyVisible;
+  survivor.userData.manuallyToggled = anyManual;
+  selectedParts.slice(1).forEach(part => disposeLoosePart(source, part));
+  source.userData.looseParts = sourceParts.filter(part =>
+    part === survivor || !selected.has(part));
+  return {source, mesh: survivor, full: false};
+}
+
 /** Remove transient children and restore the source draw range. */
 export function clearLooseParts(source) {
   const parts = getLooseParts(source);
   if (!parts.length) return false;
   for (const part of parts) {
-    selectionCleanup?.(part);
-    detachOutline(part);
-    source.remove(part);
-    part.geometry?.dispose?.();
+    disposeLoosePart(source, part);
   }
   const drawRange = source.userData.loosePartDrawRange;
   if (drawRange) source.geometry.setDrawRange(drawRange.start, drawRange.count);
