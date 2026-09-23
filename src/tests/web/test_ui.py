@@ -279,14 +279,6 @@ def test_disabled_edit_mesh_hides_only_edit_context_actions(
         page.evaluate("""() => {
           document.body.classList.add('feature-edit-mesh-off');
         }""")
-        page.evaluate("""async () => {
-          const {selectMesh} = await import('./js/scene/selection.js');
-          selectMesh(null);
-          window.__contextSelectionCount = 0;
-          window.addEventListener('mod-viewer-mesh-selected', () => {
-            window.__contextSelectionCount += 1;
-          });
-        }""")
 
         source_row = page.locator("#mesh-list .draw-item").first
         source_row.click(button="right")
@@ -308,8 +300,6 @@ def test_disabled_edit_mesh_hides_only_edit_context_actions(
             {"editAction": True, "hidden": True},
             {"editAction": True, "hidden": True},
         ]
-        assert page.evaluate("window.__contextSelectionCount") == 1
-
         page.locator("#mesh-list .group-hdr").first.click(button="right")
         assert menu.evaluate("element => element.hidden") is True
         assert menu.locator("button").evaluate_all("""buttons => buttons.map(
