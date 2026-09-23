@@ -8,7 +8,7 @@ import {
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
 import {
-  setMeshTextureState, updateGeometryNormals,
+  refreshMeshTexture, setMeshTextureState, updateGeometryNormals,
 } from './mesh-factory.js';
 import {
   replaceMeshMaterial, updateMeshMaterialMetadata,
@@ -356,6 +356,10 @@ export function applyMeshVisibility(mesh, { notify = true, render = true } = {})
   const previous = mesh.visible;
   mesh.visible = mesh.userData.manualVisible !== false;
   const changed = previous !== mesh.visible;
+  if (changed && mesh.visible
+      && mesh.userData.textureRequestsDeferred !== true) {
+    refreshMeshTexture(mesh, {render: false});
+  }
   if (changed) invalidateCharacterShadowVisibility({ request: render });
   if (notify) notifyMeshStateChanged([mesh]);
   if (render) requestRender();
@@ -402,7 +406,8 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   mesh.geometry.computeBoundingSphere();
   // Shape targets define the rest geometry for semantic fitting. Capture it
   // before the Weight runtime re-baselines or applies any pose/Physics state.
-  mesh.userData.humanoidRestPositions = new Float32Array(attr.array);
+  mesh.userData.humanoidRestPositions = deformed
+    ? new Float32Array(attr.array) : base;
   const normal = mesh.geometry.attributes.normal;
   if (normal) {
     mesh.userData.humanoidRestNormals = new Float32Array(normal.array);
@@ -436,6 +441,13 @@ export function refreshMeshes(options) {
   const normalMeshes = activeMeshes.filter(mesh => mesh.userData.assetFill !== true);
   const textureDirty = texturesForced || normalMeshes.some(mesh =>
     intersects(dependenciesFor(mesh).textures, changed));
+  // A control refresh can reveal a mesh before its conditional variant and
+  // ordered component run have settled. Suppress requests across that whole
+  // transaction so only the final visible binding reaches the loader.
+  const requestDeferred = (textureDirty ? normalMeshes : []).filter(
+    mesh => mesh.userData.textureRequestsDeferred !== true);
+  requestDeferred.forEach(
+    mesh => { mesh.userData.textureRequestsDeferred = true; });
   const changedMeshes = new Set();
   for (const mesh of additionalMeshes || []) {
     if (activeMeshes.includes(mesh)) changedMeshes.add(mesh);
@@ -444,43 +456,51 @@ export function refreshMeshes(options) {
   let texturesChanged = false;
   let shapesChanged = false;
 
-  for (const mesh of activeMeshes) {
-    const dependencies = dependenciesFor(mesh);
-    const needsVisibility = visibilityForced
-      || mesh.userData.manuallyToggled === true
-      || intersects(dependencies.visibility, changed);
-    if (needsVisibility) {
-      mesh.userData.manualVisible = conditionsSatisfied(mesh);
-      mesh.userData.manuallyToggled = false;
-      visibilityChanged = applyMeshVisibility(mesh, {
-        notify: false, render: false,
-      }) || visibilityChanged;
-      changedMeshes.add(mesh);
-      if (!mesh.userData.defaultCaptured) {
-        mesh.userData.loadedVisible = mesh.visible;
-        mesh.userData.defaultCaptured = true;
-      }
-    }
-
-    if (textureDirty && mesh.userData.assetFill !== true) {
-      const changed = applyTextureVariant(mesh, { render: false });
-      texturesChanged = changed || texturesChanged;
-      if (changed) changedMeshes.add(mesh);
-    }
-
-    if (shapesForced || intersects(dependencies.shapes, changed)) {
-      if (applyShapeTargets(mesh, { render: false })) {
-        shapesChanged = true;
+  try {
+    for (const mesh of activeMeshes) {
+      const dependencies = dependenciesFor(mesh);
+      const needsVisibility = visibilityForced
+        || mesh.userData.manuallyToggled === true
+        || intersects(dependencies.visibility, changed);
+      if (needsVisibility) {
+        mesh.userData.manualVisible = conditionsSatisfied(mesh);
+        mesh.userData.manuallyToggled = false;
+        visibilityChanged = applyMeshVisibility(mesh, {
+          notify: false, render: false,
+        }) || visibilityChanged;
         changedMeshes.add(mesh);
+        if (!mesh.userData.defaultCaptured) {
+          mesh.userData.loadedVisible = mesh.visible;
+          mesh.userData.defaultCaptured = true;
+        }
+      }
+
+      if (textureDirty && mesh.userData.assetFill !== true) {
+        const changed = applyTextureVariant(mesh, { render: false });
+        texturesChanged = changed || texturesChanged;
+        if (changed) changedMeshes.add(mesh);
+      }
+
+      if (shapesForced || intersects(dependencies.shapes, changed)) {
+        if (applyShapeTargets(mesh, { render: false })) {
+          shapesChanged = true;
+          changedMeshes.add(mesh);
+        }
       }
     }
-  }
 
-  if (textureDirty) {
-    const runChangedMeshes = recomputeAllTextureRuns({ render: false });
-    for (const mesh of runChangedMeshes) changedMeshes.add(mesh);
-    texturesChanged = runChangedMeshes.size > 0 || texturesChanged;
+    if (textureDirty) {
+      const runChangedMeshes = recomputeAllTextureRuns({ render: false });
+      for (const mesh of runChangedMeshes) changedMeshes.add(mesh);
+      texturesChanged = runChangedMeshes.size > 0 || texturesChanged;
+    }
+  } finally {
+    requestDeferred.forEach(
+      mesh => { mesh.userData.textureRequestsDeferred = false; });
   }
+  requestDeferred.forEach(mesh => {
+    if (mesh.visible) refreshMeshTexture(mesh, {render: false});
+  });
 
   const changedList = [...changedMeshes];
   if (changedList.length) notifyMeshStateChanged(changedList);

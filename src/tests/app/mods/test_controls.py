@@ -1,6 +1,7 @@
 """Control-panel projections and lightweight semantic reads."""
 
 from types import SimpleNamespace
+import struct
 
 import pytest
 
@@ -9,9 +10,76 @@ from app.mods.controls import (
     _gating_vars, _gating_vars_from_groups, load_control_state,
     load_present_state,
 )
-from app.mods.loader import ModLoadContext
+from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
 
 from app.mods.controls import build_toggle_panel
+
+
+def test_indirect_controls_survive_load_staged_reload_and_dependency_cycles(tmp_path):
+    text = """[Present]
+if $Style < 2
+$stage = 1
+else
+$stage = 0
+endif
+if $stage == 1
+$visible = 1
+else
+$visible = 0
+endif
+if $visible == 1
+$stage = 1
+endif
+[Constants]
+global persist $Style = 0
+global $stage = 0
+global $visible = 0
+global persist $Unused = 0
+[KeyStyle]
+type = cycle
+$Style = 0,1,2
+[KeyUnused]
+type = cycle
+$Unused = 0,1
+[TextureOverrideBody]
+vb0 = ResourcePosition
+vb1 = ResourceTexcoord
+ib = ResourceBodyIB
+if $visible == 1
+drawindexed = 3,0,0
+endif
+[ResourcePosition]
+filename = position.buf
+stride = 12
+[ResourceTexcoord]
+filename = texcoord.buf
+stride = 8
+[ResourceBodyIB]
+filename = body.ib
+format = R32_UINT
+"""
+    path = tmp_path / "mod.ini"
+    path.write_text(text, encoding="utf-8")
+    original = path.read_bytes()
+    (tmp_path / "position.buf").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
+    (tmp_path / "texcoord.buf").write_bytes(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
+    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+    context = ModLoadContext(str(tmp_path), [str(path)])
+    full = load_mod(context=context)
+    assert not full.get("error")
+    assert set(full["controls"]["toggles"]) == {"KeyStyle"}
+    assert full["state"]["defaults"]["stage"] == "0"
+    assert len(full["meshes"]) == 1
+    active = set(full["meshes"])
+    for state in (load_control_state(context, active_mesh_keys=active),
+                  load_semantic_state(context, active_mesh_keys=active)):
+        assert state["controls"] == full["controls"]
+    staged = text.replace("if $stage == 1", "if $Unused == 1")
+    updated = load_control_state(context, overrides={str(path): staged}, active_mesh_keys=active)
+    assert set(updated["controls"]["toggles"]) == {"KeyUnused"}
+    restored = load_control_state(context, active_mesh_keys=active)
+    assert restored["controls"] == full["controls"]
+    assert path.read_bytes() == original
 
 
 def _key(name, varvals, key="", key_display="", source=None, ini_path="mod.ini"):

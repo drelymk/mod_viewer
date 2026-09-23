@@ -1208,11 +1208,13 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
     # Rebuild each shared component pool from ini options plus saved boundary
     # textures. The pool no longer needs to be duplicated for every draw in JSON.
     pools = {}
+    pool_options = {}
     for name, entry in meshes.items():
         if not isinstance(entry, dict) or entry.get("error"):
             continue
         group = (entry.get("source"), entry.get("component"))
         pool = pools.setdefault(group, [])
+        options_by_key = pool_options.setdefault(group, {})
         candidates = list(entry.get("texture_options") or [])
         mesh_key = _canonical_mesh_key(name, entry)
         if mesh_key in restored:
@@ -1223,10 +1225,10 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
             opt = _pool_option(raw_opt)
             if opt is None:
                 continue
-            old = next((item for item in pool
-                        if item["tex_key"] == opt["tex_key"]), None)
+            old = options_by_key.get(opt["tex_key"])
             if old is None:
                 pool.append(opt)
+                options_by_key[opt["tex_key"]] = opt
             else:
                 for field in ("normal_map", "normal_data", "light_map",
                               "material_map", "emission_map"):

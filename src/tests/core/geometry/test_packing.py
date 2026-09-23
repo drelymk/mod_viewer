@@ -261,3 +261,15 @@ def test_no_uv_path_remains_valid_without_a_texcoord_payload(tmp_path):
     assert packed.texcoords is None
     assert _unpack_f32(packed.positions) == (
         0., 0., 0., 1., 0., 0., 0., 1., 0.)
+
+
+def test_index_bulk_packing_crosses_chunk_boundary(tmp_path):
+    indices = (0, 1, 2) * 21846
+
+    packed = _pack_fixture(
+        tmp_path, indices,
+        [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.)])
+
+    decoded = _unpack_indices(packed.indices)
+    assert len(decoded) == len(indices)
+    assert decoded == indices

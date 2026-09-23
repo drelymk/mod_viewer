@@ -90,7 +90,10 @@ def extract_variable_defaults(sections, var_prefix=None, canonical_vars=None):
     defaults = {}
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
-    for lines in sections.values():
+    # Constants initialize the model independently of where the section appears.
+    # Keep the legacy assignment fallback only for variables without a default.
+    ordered = sorted(sections.items(), key=lambda item: item[0].casefold() != "constants")
+    for _section, lines in ordered:
         for line in lines:
             m = _DEFAULT_VAR_RE.match(line.strip())
             if m:

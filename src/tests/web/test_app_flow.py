@@ -440,6 +440,16 @@ def test_record_advances_read_only_vars_across_complete_cycle(
         edge_browser, frontend_url, {"RecordCycle": payload})
     try:
         _open(page, "RecordCycle")
+        cycle = page.locator("#toggle-list .toggle-cycle-btn")
+        cycle.wait_for()
+        value = page.locator("#toggle-list .toggle-value")
+        for local, helper in [("1", "1"), ("1", "2"), ("0", "0")]:
+            cycle.click()
+            assert value.inner_text() == f"local={local}"
+            assert page.evaluate(r"""async () => {
+              const state = await import('./js/editing/control-state.js');
+              return state.getControlValue('\\Other\\Master\\Mode');
+            }""") == helper
         page.evaluate("""
           () => {
             window.pywebview.api.get_record_positions = async () => ({

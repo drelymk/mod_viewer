@@ -9,6 +9,7 @@ from .state import extract_state_rules
 from .shapes import extract_shape_sliders
 from .draw_groups import build_draw_groups
 from .draw_scan import _scan_sections_for_draws
+from .dnf import build_bool_alias_map
 from .texture_roles import TextureOverrideIndex
 from .animations import discover_animation_clocks
 from ..materials.game_profile import collect_game_evidence
@@ -34,6 +35,7 @@ class IniAnalysis:
     texture_api_evidence: list = field(default_factory=list)
     texture_override_index: TextureOverrideIndex = field(
         default_factory=TextureOverrideIndex)
+    condition_aliases: dict = field(default_factory=dict)
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
@@ -58,8 +60,11 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     menu = extract_menu_toggles(
         sections, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
+    condition_aliases = build_bool_alias_map(
+        sections, toggle_keys=toggles, menu=menu, var_prefix=var_prefix)
     state_rules = extract_state_rules(
-        sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
+        sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
+        condition_aliases=condition_aliases)
     shapes = extract_shape_sliders(
         sections, resources, var_prefix=var_prefix, source=source,
         canonical_vars=canonical_vars)
@@ -67,7 +72,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars)
     animation_analysis = discover_animation_clocks(
         sections, var_prefix=var_prefix, canonical_vars=canonical_vars,
-        qualified_vars=qualified_vars)
+        qualified_vars=qualified_vars, condition_aliases=condition_aliases)
 
     gating_vars = {
         var for info in toggles.values() for var in info.get("vars", {})
@@ -92,7 +97,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     }
     section_info = _scan_sections_for_draws(
         sections, var_prefix, scan_gating_vars, animation_analysis.frame_vars,
-        qualified_vars, resources=resources)
+        qualified_vars, resources=resources, condition_aliases=condition_aliases)
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
         seen=seen, gating_vars=scan_gating_vars,
@@ -114,4 +119,5 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         runtime_evidence=runtime_evidence,
         texture_api_evidence=texture_api_evidence,
         texture_override_index=section_info.texture_override_index,
+        condition_aliases=condition_aliases,
     )

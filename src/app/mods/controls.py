@@ -4,6 +4,7 @@ import os
 
 from core.geometry.mesh_builder import build_mesh_semantics
 from core.ini.condition import is_namespaced
+from core.ini.state import control_dependencies
 from core.mod_discovery import discover_ini_paths
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_data_uri
@@ -49,9 +50,10 @@ def _gating_vars_from_mesh_semantics(semantics, active_mesh_keys=None):
 
 
 def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
-                       pending_new_sections=None):
+                       pending_new_sections=None, *, state_rules=()):
     """Build the Toggle panel projection from analyzed key sections."""
     pending_new_sections = pending_new_sections or {}
+    gating_vars = control_dependencies(gating_vars, state_rules)
     panel = {}
     for section, info in toggle_keys.items():
         gated = {v: vals for v, vals in info["vars"].items()
@@ -190,7 +192,8 @@ def _control_semantic_projection(parsed, context, pending_new_sections=None,
         "controls": {
             "toggles": build_toggle_panel(
                 parsed.toggles, parsed.defaults, gating_vars,
-                context.mod_dir, pending_new_sections),
+                context.mod_dir, pending_new_sections,
+                state_rules=parsed.state_rules),
             "menu": build_menu_panel(
                 parsed.menu, parsed.defaults, context.mod_dir,
                 source=context.source),

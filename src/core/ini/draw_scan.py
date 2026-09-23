@@ -2,6 +2,8 @@
 
 import re
 
+from .draw_arguments import immutable_draw_constants, resolve_drawindexed
+
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
                                   normalize_geometry_hash)
@@ -168,14 +170,16 @@ def _split_animation_conditions(conditions, animation_vars):
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                              animation_vars=None, qualified_vars=None, *,
-                             resources=None):
+                             resources=None, condition_aliases=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
     animation_vars = set(animation_vars or ())
     tracked_vars = set(toggle_vars) | animation_vars
     section_lookup = {str(name).lower(): name for name in sections}
-    alias_map = build_bool_alias_map(sections)
+    alias_map = (condition_aliases if condition_aliases is not None
+                 else build_bool_alias_map(sections))
+    draw_constants = immutable_draw_constants(sections)
     texture_override_index = _collect_texture_override_index(
         sections, toggle_vars, alias_map, var_prefix, qualified_vars)
     if resources is not None:
@@ -420,13 +424,16 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 info["_cur_ib"] = match.group(1)
             if re.match(r"handling\s*=\s*skip\b", line, re.I):
                 info["handling_skip"] = True
-            match = re.fullmatch(
-                r"drawindexed\s*=\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*",
-                line, re.I)
+            match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
             if match:
                 occurrence = DrawOccurrence(
                     section_name, draw_ordinal, execution_path)
                 draw_ordinal += 1
+                arguments = resolve_drawindexed(match[1], draw_constants)
+                if arguments is None:
+                    if match[1].strip().casefold() != "auto":
+                        info["unresolved_draws"] = True
+                    continue
                 combined = DNF_TRUE
                 for frame in cond_stack:
                     combined = dnf_and(combined, frame["cur"])
@@ -443,8 +450,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         "occurrence": occurrence.to_dict(),
                     }
                 info["draws"].append(AuthoredDrawCall(
-                    count=int(match.group(1)), start=int(match.group(2)),
-                    base=int(match.group(3)), conditions=conditions,
+                    count=arguments[0], start=arguments[1],
+                    base=arguments[2], conditions=conditions,
                     animation_conditions=animation_conditions,
                     source=source,
                     occurrence=occurrence,

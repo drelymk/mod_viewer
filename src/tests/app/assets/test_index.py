@@ -8,6 +8,7 @@ from app.assets import folders as asset_folders
 from app.settings import paths as paths
 from app.bridge.api import ModViewerAPI
 from app.assets.index import (
+    AssetIndexError,
     IndividualAssetError,
     NoValidAssetsError,
     build_index,
@@ -109,6 +110,78 @@ def test_gimi_index_merges_ranges_and_builds_reverse_lookup(tmp_path, monkeypatc
     save_index(index)
     assert load_index("GIMI", str(root))["stats"] == index["stats"]
     assert index_status("GIMI", str(root))["status"] == "ready"
+
+
+def test_index_cache_is_isolated_and_tracks_replacement_and_deletion(
+        tmp_path, monkeypatch):
+    root = _gimi_root(tmp_path)
+    config = _config(tmp_path)
+    monkeypatch.setattr(paths, "config_path", lambda: config)
+    index = build_index("GIMI", str(root))
+    from app.assets.index import (
+        delete_index, restore_index, save_index, snapshot_index,
+    )
+    filename = save_index(index)
+    snapshot = snapshot_index("GIMI", str(root))
+    load_calls = 0
+    original_load = json.load
+
+    def count_loads(*args, **kwargs):
+        nonlocal load_calls
+        if getattr(args[0], "name", None) == filename:
+            load_calls += 1
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(json, "load", count_loads)
+
+    first = load_index("GIMI", str(root))
+    first["stats"]["assetCount"] = 999
+    assert load_index("GIMI", str(root))["stats"]["assetCount"] == 1
+    assert load_calls == 1
+
+    original_stat = os.stat(filename)
+    replacement = snapshot.replace(b'"assetCount": 1', b'"assetCount": 2')
+    replacement_path = tmp_path / "replacement-index.json"
+    replacement_path.write_bytes(replacement)
+    os.utime(replacement_path, ns=(original_stat.st_atime_ns,
+                                   original_stat.st_mtime_ns))
+    os.replace(replacement_path, filename)
+    assert load_index("GIMI", str(root))["stats"]["assetCount"] == 2
+    assert load_calls == 2
+
+    replacement_path.write_bytes(b"{")
+    os.replace(replacement_path, filename)
+    with pytest.raises(AssetIndexError):
+        load_index("GIMI", str(root))
+
+    delete_index("GIMI", str(root))
+    assert load_index("GIMI", str(root)) is None
+    restore_index("GIMI", str(root), snapshot)
+    assert load_index("GIMI", str(root))["stats"]["assetCount"] == 1
+    restore_index("GIMI", str(root), None)
+    assert load_index("GIMI", str(root)) is None
+
+
+def test_index_cache_does_not_fail_a_read_when_file_is_deleted(
+        tmp_path, monkeypatch):
+    from app.assets.index import save_index
+
+    root = _gimi_root(tmp_path)
+    config = _config(tmp_path)
+    monkeypatch.setattr(paths, "config_path", lambda: config)
+    filename = save_index(build_index("GIMI", str(root)))
+    original_load = json.load
+
+    def delete_after_read(stream, *args, **kwargs):
+        value = original_load(stream, *args, **kwargs)
+        if getattr(stream, "name", None) == filename:
+            stream.close()
+            os.remove(filename)
+        return value
+
+    monkeypatch.setattr(json, "load", delete_after_read)
+    assert load_index("GIMI", str(root))["stats"]["assetCount"] == 1
+    assert load_index("GIMI", str(root)) is None
 
 
 def test_zzmi_uses_optional_index_counts(tmp_path):

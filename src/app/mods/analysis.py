@@ -374,7 +374,8 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         compute = discover_compute_animations(
             secs, resources, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,
-            canonical_vars=record["canonical_vars"])
+            canonical_vars=record["canonical_vars"],
+            condition_aliases=analysis.condition_aliases)
         shape_sliders = analysis.shapes
         compute = [item for item in compute
                    if not _is_plain_shape_slider_compute(

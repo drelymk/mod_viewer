@@ -13,7 +13,8 @@ import re
 import struct
 
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
-                  normalize_dnf, parse_condition_dnf)
+                  normalize_dnf, ordered_conditions_supported,
+                  parse_condition_dnf)
 from .sections import canonical_var_names
 
 
@@ -72,9 +73,11 @@ _WWMI_PHASE_RE = re.compile(
     r"\$(?P<speed>\w+)\s*\*\s*\$dt\s*$", re.I)
 
 
-def _compute_condition_is_supported(expression):
+def _compute_condition_is_supported(expression, aliases=None):
     """Reject condition syntax the DNF activation state cannot represent."""
-    return _COMPUTE_UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
+    return (_COMPUTE_UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
+            and ordered_conditions_supported(
+                str(expression), aliases if aliases is not None else {}))
 
 
 class _ExpressionParser:
@@ -448,7 +451,8 @@ def _condition_stack_line(line, stack, aliases):
 
 
 def discover_animation_clocks(sections, *, var_prefix=None,
-                              canonical_vars=None, qualified_vars=None):
+                              canonical_vars=None, qualified_vars=None,
+                              condition_aliases=None):
     """Discover supported clocks and the source-spelling frame variables.
 
     The returned ``frame_vars`` intentionally uses the local INI spelling;
@@ -457,22 +461,39 @@ def discover_animation_clocks(sections, *, var_prefix=None,
     """
     canonical = canonical_vars or canonical_var_names(sections)
     literals = _literal_assignments(sections, canonical)
-    aliases = build_bool_alias_map(sections)
+    aliases = (condition_aliases if condition_aliases is not None
+               else build_bool_alias_map(sections))
     all_vars = set(canonical.values())
     clocks = []
     seen = set()
 
     for section_name, lines in sections.items():
         stack = []
+        condition_support = []
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             if not line:
                 continue
+            elif_match = _CLOCK_ELIF_RE.fullmatch(line)
+            if elif_match:
+                if condition_support:
+                    condition_support[-1] = (
+                        condition_support[-1]
+                        and ordered_conditions_supported(
+                            elif_match.group(1), aliases))
+            elif line.casefold().startswith("if "):
+                condition_support.append(
+                    ordered_conditions_supported(line[3:], aliases))
+            elif line.casefold() == "endif":
+                if condition_support:
+                    condition_support.pop()
             if _condition_stack_line(line, stack, aliases):
                 continue
             match = (_CLOCK_RE.fullmatch(line)
                      or _CLOCK_LITERAL_RANGE_RE.fullmatch(line))
             if not match:
+                continue
+            if not all(condition_support):
                 continue
             frame_local = _canonical(match.group("frame"), canonical)
             start_token = match.group("start")
@@ -1076,12 +1097,14 @@ def discover_wwmi_sparse_animations(sections, shape_sliders, *, mod_dir=None,
 
 def discover_compute_animations(sections, resources, *, mod_dir=None,
                                ini_path=None, source=None, var_prefix=None,
-                               canonical_vars=None):
+                               canonical_vars=None, condition_aliases=None):
     """Discover the conservative fixed-layout compute-animation contract."""
-    canonical = canonical_vars or canonical_var_names(sections)
+    canonical = (canonical_vars if canonical_vars is not None
+                 else canonical_var_names(sections))
     from .draw_resources import _collect_resource_copy_sources
     copy_sources = _collect_resource_copy_sources(sections, resources)
-    aliases = build_bool_alias_map(sections)
+    aliases = (condition_aliases if condition_aliases is not None
+               else build_bool_alias_map(sections))
     tracked_vars = set(canonical.values())
     section_lookup = {
         str(name).casefold(): name for name in sections
@@ -1181,10 +1204,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     condition_support[-1] = (
                         condition_support[-1]
                         and _compute_condition_is_supported(
-                            elif_match.group(1)))
+                            elif_match.group(1), aliases))
             elif line.casefold().startswith("if "):
                 condition_support.append(
-                    _compute_condition_is_supported(line[3:]))
+                    _compute_condition_is_supported(line[3:], aliases))
             elif line.casefold() == "endif":
                 if condition_support:
                     condition_support.pop()
@@ -1499,14 +1522,8 @@ def compute_animation_control_vars(animations, state_rules=()):
         dependencies.update(animation.get("program", {}).get(
             "external_variables", ()))
 
-    # State rules can derive one of those direct inputs from a user-facing
-    # controller. Follow that small existing rule chain without introducing a
-    # second dependency graph for compute animations.
-    direct = {value.casefold() for value in dependencies}
-    for rule in state_rules or ():
-        if str(rule.get("var", "")).casefold() in direct:
-            add_conditions(rule.get("conditions"))
-    return dependencies
+    from .state import control_dependencies
+    return control_dependencies(dependencies, state_rules or ())
 
 
 __all__ = [

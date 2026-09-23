@@ -414,20 +414,23 @@ export function refreshMeshTexture(mesh, { render = true } = {}) {
     showMaterialMaps && gameMaterialSources.has(role);
   const normalSource = mesh.material?.userData?.gameMaterial?.normalSource
     || 'normal_map';
-  const map = showDiffuse ? getTexture(mesh, mesh.userData.texKey) : null;
+  const requestTextures = mesh.visible !== false
+    && mesh.userData.textureRequestsDeferred !== true;
+  const texture = key => requestTextures ? getTexture(mesh, key) : null;
+  const map = showDiffuse ? texture(mesh.userData.texKey) : null;
   const normalMap = showNormal && normalSource === 'normal_map'
     && mesh.userData.normalMapEnabled !== false
-    ? getTexture(mesh, mesh.userData.normalMapKey) : null;
+    ? texture(mesh.userData.normalMapKey) : null;
   const normalData = (usePackedSource('normal_data')
       || (showNormal && normalSource === 'normal_data'
         && gameMaterialSources.has('normal_data')))
-    ? getTexture(mesh, mesh.userData.normalDataKey) : null;
+    ? texture(mesh.userData.normalDataKey) : null;
   const lightMap = usePackedSource('light_map')
-    ? getTexture(mesh, mesh.userData.lightMapKey) : null;
+    ? texture(mesh.userData.lightMapKey) : null;
   const materialMap = usePackedSource('material_map')
-    ? getTexture(mesh, mesh.userData.materialMapKey) : null;
+    ? texture(mesh.userData.materialMapKey) : null;
   const emissionMap = usePackedSource('emission_map')
-    ? getTexture(mesh, mesh.userData.emissionMapKey) : null;
+    ? texture(mesh.userData.emissionMapKey) : null;
   const changed = updateGameMaterialTextures(mesh, {
     diffuse: map,
     normal_map: normalMap,
@@ -489,7 +492,12 @@ function fallbackColor(name) {
   return 0xcccccc;
 }
 
-export function buildMesh(name, data, materialProfile = null) {
+export function activateMeshTextures(mesh, {render = true} = {}) {
+  mesh.userData.textureRequestsDeferred = false;
+  return refreshMeshTexture(mesh, {render});
+}
+
+export function buildMesh(name, data, materialProfile = null, options = {}) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(decodeF32(data.pos), 3));
   if (data.uv) {
@@ -514,8 +522,7 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.basePositions = new Float32Array(geo.attributes.position.array);
   // Keep immutable rest positions for the primary geometry-fitted humanoid
   // control rig and its binding diagnostics.
-  mesh.userData.humanoidRestPositions = new Float32Array(
-    mesh.userData.basePositions);
+  mesh.userData.humanoidRestPositions = mesh.userData.basePositions;
   mesh.userData.baseNormals = data.normal
     ? new Float32Array(geo.attributes.normal.array) : null;
   mesh.userData.hasAuthoredNormals = !!data.normal;
@@ -558,6 +565,7 @@ export function buildMesh(name, data, materialProfile = null) {
   mesh.userData.defaultMaterialMapKey = mesh.userData.materialMapKey;
   mesh.userData.defaultEmissionMapKey = mesh.userData.emissionMapKey;
   mesh.userData.fallbackColor = fallback;
+  mesh.userData.textureRequestsDeferred = options.deferTextureRequests === true;
   refreshMeshTexture(mesh);
   mesh.castShadow = mesh.receiveShadow = true;
   return mesh;

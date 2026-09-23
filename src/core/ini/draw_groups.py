@@ -227,6 +227,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
     groups = []
     for section_name, info in draw_sections:
+        if info.get("unresolved_draws") and not info["draws"]:
+            continue
         display_name = section_name[len("TextureOverride"):] or section_name
         seen[display_name] = seen.get(display_name, 0) + 1
         label = (display_name if seen[display_name] == 1

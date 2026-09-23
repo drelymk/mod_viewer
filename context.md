@@ -1,7 +1,8 @@
 # 3DMigoto Mod Viewer - Project Context
 
 A pywebview desktop viewer for ZZZ/ZZMI, Genshin/GIMI, WuWa/WWMI and HSR/SRMI
-mods: Three.js/WebGPU rendering, menu previews and staged INI editing.
+mods: Three.js/WebGPU rendering, archive previews, animation reconstruction and
+staged INI/mesh editing.
 
 Keep this file limited to durable contracts and non-obvious failure modes.
 Use source and README for implementation details and usage. Keep credentials,
@@ -33,8 +34,12 @@ of documentation, comments and tests; use portable fixtures instead.
 - Mod Folder browsing lists immediate directory children deterministically and
   skips symlink escapes. Navigation must not load/validate mods, discover INIs
   or expose root Edit/Delete actions on ordinary children.
+- ZIP, 7z and RAR mods are virtual, read-only `ModSource` instances. Normalize
+  member paths, reject traversal and case-ambiguous members, and keep resource
+  lookup inside the archive. Preview and diagnostics may read them; Export,
+  metadata mutation, mesh editing and texture saving must remain unavailable.
 
-## Lossless INI editing
+## Lossless staged editing
 
 - `core.ini.parser` is read-only analysis. All INI edits use `IniDocument` and
   the shared `app.session.edit` session. Preserve BOM, mixed line terminators
@@ -45,10 +50,12 @@ of documentation, comments and tests; use portable fixtures instead.
 - Reload, diagnostics, Toggle CRUD and Record consume staged documents.
   Reopening the current mod must not overwrite them from disk. `peek()` exposes
   live staged state; all edits use begin/commit/rollback, atomically across INIs.
-- INI writes happen only at Export: write each dirty document once, create its
-  timestamped `.BAK`, leave failures pending, and exclude backups from discovery.
-  A confirmed mod switch or restart discards the session; there is no standalone
-  Discard action. Viewer metadata and confirmed texture saves have separate writes.
+- INI and index-buffer edits share the staged session and reload through its text
+  and byte overrides. INI writes happen only at Export: write each dirty document
+  once, create its timestamped `.BAK`, leave failures pending, and exclude backups
+  from discovery. A confirmed mod switch or restart discards the session; there
+  is no standalone Discard action. Viewer metadata and confirmed texture saves
+  have separate writes.
 - Namespaced globals are cross-INI and read-only. Toggle CRUD targets only plain
   variables declared in that INI. Existing unwired utility keys stay hidden;
   newly added unwired keys appear only while session-pending and block Export.
@@ -60,6 +67,17 @@ of documentation, comments and tests; use portable fixtures instead.
   ambiguous or partially observed cases, independently reparse the result and
   roll back failed verification. Toggle controls use assignable `.onclick` so
   Record can replace and restore exactly one handler.
+- Persisting separated mesh parts requires a writable, authored draw with one
+  current canonical identity and exact source provenance. Accept only a complete,
+  non-overlapping partition of every authored triangle in a 16- or 32-bit IB;
+  reject synthetic/stale draws, partial overlap with another draw, duplicate
+  submissions and cross-component requests. Reorder only that draw's raw triangle
+  records and rewrite every authored `drawindexed` source in one transaction.
+- Stage dependent INI and IB changes atomically. Export revalidates the IB source
+  hash, writes a collision-safe sibling backup, verifies an equal-length temporary
+  file and atomically replaces the buffer before its dependent INIs. A failed IB
+  blocks those INIs; a committed IB remains tracked and revalidated until all of
+  its dependent INIs export, so retry never applies the byte edit twice.
 
 ## Parsing, execution order and identity
 
@@ -76,6 +94,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Texture bindings are per-draw execution-order state: retain the latest
   applicable assignment, conditional alternatives and no-map fallbacks for
   every role. Never collapse bindings to a component-level texture.
+- Follow explicit `Resource = copy ...` and compute UAV copy/ref chains when
+  resolving authored geometry and animation sources. Preserve ordered alternatives,
+  stop cycles, and never infer a source through an unsupported shader operation.
 - A direct root INI anchors bounded depth/count discovery; do not merge unrelated
   library/category folders. Resolve resources relative to the declaring INI,
   but publish resource/editor identities relative to the selected mod root.
@@ -117,6 +138,29 @@ of documentation, comments and tests; use portable fixtures instead.
   unsupported, transformed, oversized or malformed sources use PNG fallback
   with the same orientation and role-based color space.
 
+## Animation reconstruction
+
+- Baked clocks, GIMI compute animation and WWMI sparse shape animation are
+  conservative reconstructions, not a general INI or shader interpreter. Emit
+  typed, ordered programs only for verified condition syntax, shader adapters,
+  resource layouts, strides and file sizes; reject an unsupported or ambiguous
+  chain without weakening its guards or hiding otherwise valid static geometry.
+- Keep discovery and resource state per INI. Nested GIMI children may inherit
+  only the validated parent bindings they do not replace. WWMI sparse tracks must
+  match the narrow Present/two-pass shader contract and the exact shape-buffer
+  layout. A matching authored plain slider with an externally driven phase remains
+  a slider; synthetic sinusoidal or program-assigned phases remain compute tracks.
+- Execute program assignments, resets, conditions and dispatches in authored
+  order. Controls remain external inputs and state rules are the shared derived
+  dependency model. Tracks from one program share program state while retaining
+  independent output identities; visibility and control changes wake existing
+  tracks rather than rebuilding meshes.
+- Mutate stable position/normal attributes from an immutable canonical baseline.
+  Sparse WWMI output overlays shape/rest state; disabled passes freeze without
+  erasing other passes. Rig/Physics temporarily suspends animation ownership;
+  release restores canonical geometry and bounds before resuming. Advance program
+  time at render cadence but cap expensive compute-geometry application at 30 Hz.
+
 ## Asset loading and composition
 
 - Index Assets through metadata only. Heavy geometry/textures require explicit
@@ -152,45 +196,34 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Texture color preview and saving
 
-- Inspector Color adjustments are per-mesh diffuse previews persisted under the
-  mesh's metadata identity in `.mod_viewer.json`; preserve unrelated metadata
-  and remove neutral entries. Disable editing without a diffuse texture or for
-  Asset textures. Reset Color clears the preview, not a previously saved DDS.
-- CPU saving and GPU preview share normalization and operation order: optional
-  target-color tint first seeds the editor-sRGB color while preserving source
-  intensity/shading, then hue, saturation, brightness, contrast, and RGB
-  channel adjustments are applied. Brightness supports up to 400%; its Inspector
-  slider uses a centered nonlinear mapping so 100% remains at the midpoint
-  while the stored/backend range stays 0–4. Adjust in editor-sRGB, preserving
-  alpha;
-  convert at shader boundaries and do not run picker hex values through
-  Three.js's implicit linear color conversion.
-  Preview changes update stable material nodes without recreating textures.
-- Save to Texture has its own confirmation and immediately writes one mod-owned
-  BC7 UNORM/sRGB DDS, independently of INI Export. Include every changed mesh
-  sharing that texture, including hidden meshes. Flush queued preview metadata
-  before saving; changed targets require renewed review and pending saves block
-  modal dismissal and duplicate submission.
-- The backend authorizes the mod, validates canonical texture/mesh/metadata
-  identities and the complete model-wide role snapshot, and derives UV coverage
-  from resolved authored geometry. Never accept browser-supplied paths or UVs as
-  authority. Reject Asset sources, stale identities, non-BC7 DDS, unknown target
-  coverage and overlaps with different adjustments. The same physical DDS used
-  in any auxiliary role is unsupported, including inactive authored variants.
-- Recolor affected BC7 blocks while preserving layout, headers, decoded alpha
-  and unrelated blocks. A partially covered block with one color intent pads
-  that intent across valid pixels; multiple intents retain per-pixel targets.
-  Propagate weighted intent through authored mips. Preserve BC7 structure and
-  keep the source block if refitting worsens RGB error.
-- Validate the temporary DDS layout, check source hashes around backup creation,
-  create a collision-safe timestamped sibling DDS backup, then atomically replace
-  the source. Abort stale-source writes. Report an actual replacement as committed
-  even if later cleanup fails; never invite a second application of the color.
-- After commit, clear only saved preview metadata and reload affected texture
-  keys in place. A metadata-reset failure remains a committed save with a visible
-  warning and recovery attempt. Async completion must check the current mod and
-  target identity/state before clearing live previews; refresh failures must
-  disclose that the file was saved. Recovery uses the backup, not Reset Color.
+- Color adjustments are per-mesh diffuse previews stored by metadata identity in
+  `.mod_viewer.json`; preserve unrelated data and omit neutral entries. Disable
+  them for Asset/no-diffuse meshes. Reset Color clears only the preview.
+- CPU save and GPU preview share normalization and order: optional target tint,
+  then hue, saturation, brightness, contrast and RGB channels in editor-sRGB
+  while preserving alpha. Brightness is 0–4 with a nonlinear slider centered at
+  100%. Convert only at shader boundaries; picker hex is already sRGB. Update
+  stable material nodes without recreating textures.
+- Save to Texture has separate confirmation and immediately writes one mod-owned
+  BC7 UNORM/sRGB DDS, independent of INI Export. Include hidden changed meshes
+  sharing it, flush preview metadata first, renew review when targets change and
+  block dismissal/duplicate submission while saving.
+- The backend authorizes the mod, validates canonical texture/mesh/metadata IDs
+  and the complete role snapshot, and derives UV coverage from authored geometry;
+  browser paths/UVs are never authority. Reject Asset/stale/non-BC7 sources,
+  unknown coverage, conflicting overlaps, and any physical DDS also used in an
+  auxiliary role, including inactive variants.
+- Recolor only covered BC7 blocks while preserving layout, headers, alpha and
+  unrelated blocks. Pad one intent across valid pixels of a partial block, retain
+  per-pixel targets for multiple intents, propagate weighted intent through mips,
+  and keep the source block when refitting worsens RGB error.
+- Validate temporary layout and source hashes, create a collision-safe timestamped
+  sibling backup, then atomically replace. Abort stale writes. Once replacement
+  occurs it is committed even if cleanup fails; never invite a second application.
+- After commit clear only saved preview metadata and reload affected keys in place.
+  Async completion must recheck current mod/target state before clearing live
+  previews. Metadata reset or refresh failure remains a committed save with a
+  visible warning and backup-based recovery; Reset Color is not recovery.
 
 ## Material interpretation and rendering
 
@@ -215,176 +248,100 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Weight and secondary motion
 
-- Normal loading only advertises usable skinning streams. First Weight access
-  lazily decodes model-wide into one binary blob with per-mesh ranges; failures
-  degrade the feature without failing model load.
-- Weights come from authored Blend streams; IBs only preserve compact vertex
-  mapping. Bone identity is normalized mod-relative Blend source plus resolved
-  bone offset, with framework handling in the backend. Model-wide selections
-  remain source-scoped, shared only by exact source keys, and persist in
-  `.mod_viewer.json` without losing unrelated metadata or filtered selections.
-- Pick-from-model discovers influences on the exact hit mesh within 2% of model
-  bounding-sphere radius, distance-weighted with exact-triangle fallback. Keep
-  results source-scoped; discovery never selects bones or enables physics.
-- A nonempty bone selection enables model-scoped physics; empty disables it.
-  Unselected influence stays at baseline, selected influence receives the bone
-  transform; never renormalize selected weights or add depth-derived mobility.
-- One rig per exact skinning source owns canonical centers, topology, physics
-  state and bone transforms. All loaded members, including hidden meshes,
-  contribute evidence; member meshes consume shared transforms with their own
-  authored weights to avoid seams tearing.
-- Rig influence evidence integrates linearly interpolated skin weights over
-  indexed (or non-indexed consecutive) valid triangles when every loaded
-  member of a source has usable positive-area geometry. Node support, moments,
-  overlap, pivots and root evidence are then triangle-domain quantities; raw
-  Weight-panel statistics remain vertex-weighted and are never mixed into the
-  Rig graph.
-- If any member of a source lacks usable surface evidence, the complete source
-  falls back to vertex evidence. Aggregate graphs reject mixed evidence modes.
-  Exact duplicate members are counted once for Rig evidence; their provenance
-  still participates in source-scoped reconciliation. Shape rebaselines
-  invalidate and lazily rebuild surface evidence; visibility, material,
-  texture and per-frame paths do not rebuild it.
-- Infer topology only from influence overlap and weighted centers. Blend data
-  supplies no names, canonical skeleton, hierarchy, bind pose or animation.
-  Keep maximum-spanning relationships, weak-bridge pruning and static-boundary
-  attachments conservative; never infer semantic labels such as hair or skirt.
-- Cross-source Rig/Pose reconciliation is a viewer-owned model graph layered
-  over the source rigs. Preserve `SourceBoneRef {sourceKey,boneId}` and the
-  canonical `${sourceKey}#bone=${boneId}` key; validated VertexVG sources
-  explicitly mark their numeric IDs as model-wide, so an all-VertexVG model
-  may group equal IDs directly while mixed or source-local models retain the
-  geometry/topology evidence requirement. Authored indices and weight buffers
-  are never rewritten. Build model joints from strict mutual-best
-  equivalences, guarded one-member-per-source clusters, topology-assisted
-  propagation and ambiguity rejection. Collapse source edges into a
-  model-level maximum-spanning forest, then add only conservative, cycle-free
-  cross-source attachment edges between component/boundary joints.
-- Cross-source reconciliation connects multiple skinning palettes for inferred
-  posing. Because the model-wide inferred hierarchy may differ from each source
-  palette's original weighting topology, some cross-source weighted regions can
-  stretch during rotation. This remains a known Rig limitation.
- - Each ModelJoint exposes a stable signature made from its sorted canonical
-   source-bone keys. The ModelRig builder assigns deterministic zero-based
-   `joint_id` values and persists the necessary joint structure in the separate
-   `.mod_viewer.rig.json` sidecar. A sidecar is reusable when its format,
-   builder version and source table match; automatic asset-change detection is
-   intentionally deferred. Component and root indices remain runtime
-   structure details, while Main Rig control mappings refer to hydrated
-   `joint_id` values and pose presets continue to use signatures.
-- M3 Rig pose presets use the existing per-mod `.mod_viewer.json` under
-  `rig.version = 1` with an array of stable-ID records containing only a name,
-  explicit root signatures and normalized non-identity local joint quaternions.
-  Preset names are trimmed and bounded; IDs do not change on rename, and
-  unrelated metadata is preserved on save, rename and delete. Missing or
-  malformed preset metadata is a partial feature failure and must not prevent
-  the model from loading.
-- Preset resolution is exact by ModelJoint signature. Missing, ambiguous,
-  duplicate or malformed entries are reported and skipped individually; valid
-  entries still apply. Saved presets are never auto-applied after load or shape
-  rebaseline, and Reset Pose returns to the default inferred roots and identity
- rotations without deleting saved presets.
-- Applying a preset is one batch transaction: restore valid model-root
-  overrides first, rebuild rest frames/caches once, install all valid local
-  rotations, run one model deformation/bounds pass, then notify and render once.
-  Pose presets and manual Rig edits remain available while Character Physics is
-  active; Rename and Delete remain metadata-only operations.
-- Normalize reconciliation distances by model reference radius with candidate,
-  strict, propagation and attachment gates; retain candidate evidence and
-  rejection reasons for diagnostics. Model joints own rest center/pivot/frame,
-  source members, model parent/children and the representative member.
-  `ModelSkinningRig.poseRotationByJointId` is authoritative for manual pose;
-  source pose maps are derived aliases only. Reuse the forest transform builder,
-  alias model transforms back to each source's authored IDs, preserve affected
-  vertex caching and baseline restoration, and keep Character Physics
-  source-scoped secondary rotation/velocity offsets. Physics never clears or
-  overwrites the manual model pose.
-- Normal Rig snapshots contain only the panel and overlay view model. Source
-  membership, reconciliation evidence and performance diagnostics stay
-  private to the runtime and are not part of the application-facing API.
-- Final deformation composes manual source transforms with Physics offsets
-  before one authored-baseline skinning pass. Never skin already-deformed
-  geometry a second time. The final active vertex set is the union of manual
-  pose vertices and Physics-selected vertices; every influence receives its
-  manual transform, while selected influences additionally receive Physics,
-  without renormalizing weights. Positions and normals use the same composed
-  transform/rotation maps.
-- Physics solver angular, translation and velocity vectors are expressed in
-  the model reference frame. Composition applies an offset in that frame and
-  conjugates it only by the accumulated parent Physics delta, never by a
-  child's manual model rotation.
-- A nonempty Weight selection continues to enable model-scoped Physics and an
-  empty selection disables it. Starting, stopping or reconfiguring Physics
-  preserves manual pose. Manual pose changes, presets, Reset Joint and Reset
-  Pose preserve Physics rotation/velocity state, refresh pose-dependent
-  equilibrium, and wake the existing simulation rather than restarting it.
-  Reset Physics changes only secondary motion; Reset Pose changes only manual
-  pose/root state. Saved presets serialize manual Rig state only, never
-  instantaneous Physics offsets.
-- The Rig picker maps source influences to model joints. The Rig panel selects
-  model joints and displays topology without semantic labels; the combined
-  overlay renders model joints and topology edges with O(1) Three.js objects.
-  Reconciliation runs only when the sidecar is absent or incompatible and
-  resets pose; model structure revisions do not change for pose, materials,
-  textures, visibility or model turns.
-- The `HumanoidControlRig` is the primary automatic pose skeleton. It fits the
-  fixed 16-control topology (Chest/Pelvis/Neck/Head plus bilateral
-  Shoulder/Elbow/Hand and Hip/Knee/Foot) from immutable A-pose geometry and
-  semantic orientation. Edit Rig always starts from the model's rest pose;
-  saved control overrides and pose presets remain separate state.
-  `ModelJoint` topology no longer defines human anatomy or IK paths.
-- `humanoid-rig-binding.js` uses ordered direct ownership. Explicitly mapped
-  controls claim only their exact ModelJoint; each unmapped control first
-  reserves one nearest point-to-point anchor inside one shared,
-  height-normalized radius, then claims every remaining in-radius joint as an
-  additional direct seed. All direct seeds are reserved before a
-  parent-to-child inheritance pass walks every descendant branch, including
-  attachment descendants, with every direct seed acting as a boundary. No
-  whole-model geometric classification or alternate binding topology is
-  used.
-  These bindings use `inverse(restDriverWorld) * restJointWorld` offsets.
-  Posed absolute driver targets are converted to authored-rest deltas before
-  ModelJoint transforms are aliased back to source bones, so directly bound
-  parent/child joints are not double-transformed. IK availability depends only
-  on the accepted Main Rig controls, never on ModelJoint mapping.
-- Saving or resetting Main Rig metadata reuses the loaded ModelRig and only
-  refreshes humanoid overrides, mappings, bindings and pose; it must not rerun
-  source preparation or ModelJoint reconciliation.
-- Humanoid IK uses guaranteed virtual two-bone controls. Manual ModelJoint
-  rotations, presets, and Physics remain available and compose after the
-  humanoid driver base. Reset clears both virtual pose and manual deltas
-  exactly.
-- Joint selection is independent from pose state: Clear removes the selected
-  ModelJoint through the state API, leaving
-  manual pose, presets, Weight selection, Physics and overlay visibility
-  unchanged. Reset Joint preserves the selected Joint; Reset Pose preserves
-  it too, clears only the runtime selected-preset/apply-result state, and never
-  deletes saved preset records.
-- Step each source rig once at fixed 1/120 second with bounded catch-up; deform
-  visible members only at selected-weight vertices and transform baseline normals
-  with the same influence. Defer exact bounds and shadow-camera fitting until
-  settling, retaining conservative frustum behavior. Update character shadows
-  on every visible deformation frame; optimize cost without lowering frequency.
-- Shape changes rebaseline positions/normals and invalidate affected rigs.
-  Material, texture and visibility changes must not reload weights or redefine
-  rigs. Release participants before disposing member geometry.
+- Advertise only usable authored Blend streams. First Weight access lazily decodes
+  one model-wide blob with per-mesh ranges; failures degrade the feature, not model
+  loading. Bone identity is mod-relative Blend source plus resolved offset; IBs
+  only preserve compact vertex mapping. Selection is exact-source-scoped and
+  persists without dropping unrelated metadata or filtered choices. Picking is
+  distance-weighted on the exact hit mesh within 2% of model radius, with triangle
+  fallback; discovery never selects bones or enables Physics.
+- One rig per exact skinning source owns centers, topology, Physics and transforms;
+  hidden members still contribute, while each mesh uses its authored weights.
+  Use triangle-integrated evidence only when every member has positive-area
+  geometry, otherwise fall the entire source back to vertex evidence. Never mix
+  modes or mix vertex-weighted panel statistics into the Rig graph. Deduplicate
+  exact members for evidence but keep provenance. Infer only conservative
+  maximum-spanning topology from overlap/centers: Blend data provides no names,
+  canonical skeleton, hierarchy, bind pose, animation or semantic labels.
+- Cross-source reconciliation is a viewer-owned graph over source rigs. Preserve
+  `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
+  validated all-VertexVG models may group equal numeric IDs directly. Otherwise
+  require normalized mutual-best geometry/topology evidence, one member per
+  source, ambiguity rejection, a maximum-spanning forest and cycle-free boundary
+  attachments; retain rejected evidence for diagnostics and never rewrite authored
+  indices/weights. Cross-palette posing may stretch where inferred and authored
+  topology differ. `ModelJoint` signatures sort canonical source-bone keys and
+  deterministic `joint_id` values hydrate Main Rig mappings. Persist structure in
+  `.mod_viewer.rig.json`; reuse only for matching format, builder and source table.
+  Automatic asset-change detection is deferred.
+- Rig presets use `rig.version = 1` in `.mod_viewer.json`: stable IDs, bounded
+  names, explicit root signatures and normalized non-identity local quaternions.
+  Preserve unrelated metadata and IDs on rename; resolve entries exactly by
+  signature and skip malformed/ambiguous ones without failing model load. Never
+  auto-apply after load/rebaseline. Apply valid state as one restore, cache rebuild,
+  deformation, bounds and notification transaction.
+- `ModelSkinningRig.poseRotationByJointId` is authoritative; source pose maps are
+  aliases. Compose manual transforms with source-scoped Physics offsets in one
+  authored-baseline pass for positions and normals. Never skin deformed geometry,
+  renormalize weights, move unselected influence, add depth-derived mobility or
+  let Physics replace manual pose. Solver vectors stay in model space and are
+  conjugated only by accumulated parent Physics delta. Nonempty Weight selection
+  enables Physics; empty disables it. State changes wake rather than restart the
+  simulation. Reset Physics affects only motion; Reset Pose/Joint affects only
+  manual state, and presets never serialize live Physics offsets.
+- `HumanoidControlRig` is the primary automatic skeleton: fixed 16 controls fitted
+  from immutable A-pose geometry/orientation, independent of non-semantic
+  `ModelJoint` topology. Edit Rig starts at rest; control overrides and presets
+  remain separate. Binding uses ordered direct ownership, nearest normalized
+  anchors and boundary-aware descendant inheritance with
+  `inverse(restDriverWorld) * restJointWorld`; convert posed targets to authored-rest
+  deltas before source aliasing. IK depends on accepted controls, uses virtual
+  two-bone controls and composes before manual pose/Physics. Metadata save/reset
+  refreshes mappings and pose on the loaded ModelRig without reconciliation.
+- Rig snapshots expose only panel/overlay view models; evidence and performance
+  stay private. Joint selection is independent of pose, Weight selection, Physics
+  and overlay state; Reset Joint/Pose preserves selection and saved presets. Keep
+  O(1) overlay objects. Reconcile only for absent/incompatible sidecars. Step each
+  source rig once at fixed 1/120 second with bounded catch-up; deform visible
+  selected-weight vertices and baseline normals, defer exact bounds until settling,
+  retain conservative culling and update character shadows every deformation frame.
+- Shape changes rebaseline positions/normals and lazily rebuild affected rigs and
+  surface evidence. Material, texture, visibility, pose and animation-frame changes
+  must not redefine rigs. Release participants before disposing member geometry.
 
 ## Frontend ownership
 
 - Manual textures persist as viewer metadata: undefined is automatic, null is
   none, a key is sticky. Clearing restores the immutable draw default; automatic
   highlighting follows the live resolved key.
+- Automatic texture runs follow ordered authored binding identities, not the
+  first occurrence of each resolved texture key. A later repeated key starts a
+  new run when its default/conditional binding differs, and in-place semantic
+  refresh must recompute those boundaries before reconciling the run.
 - Environment, outlines and render modes are viewer state, never staged INI or
   material reinterpretation. Outlines use child inverted hulls sharing geometry;
   wireframe/debug suppression retains the user's preference.
 - MESHES provides navigation, Inspector owns mesh/material/texture/color editing,
   and Controls owns Present/Toggle/Menu. Group Meshes/Toggles by subfolder, root
-  INI stem or None for a single INI; retain source INI rows. Selection is
-  event-driven. Visibility, reset, refresh and texture mutations publish shared
+  INI stem or None for a single INI; retain source INI rows. Selection is an
+  event-driven set with one primary Inspector target: plain click replaces,
+  Ctrl-click toggles and Ctrl-drag additively selects visible geometry crossing
+  the viewport rectangle. Rig picking/dragging owns its gestures and must block
+  view selection. Visibility, reset, refresh and texture mutations publish shared
   state notifications so Inspector and rendering stay synchronized.
+- Loose-part separation is transient viewer state. Detect connected triangle
+  islands from exact positions or a bounded user tolerance, retain original
+  triangle ordinals, share the semantic source's attributes/material/state, and
+  create no authored draw or independent metadata identity. Merging is allowed
+  only for selected siblings from one source and preserves their stable source
+  order. Clearing/disposal restores the source draw range and selection safely;
+  only explicit Apply enters the staged mesh-edit path.
 - Tabs, panel collapse and library expansion live only in localStorage and
   cannot affect mod state, geometry, materials or Export. Global panel opacity
   belongs to app config under the persistence rule above.
+- Runtime UI text goes through the locale catalog with placeholder-compatible
+  translations and English fallback. Language is app configuration, never mod
+  state; do not localize stable resource, mesh, section or metadata identities.
 - Reset/Turn/Tilt stay in the viewport toolbar. Apply auto-upright, game/base
   facing and manual rotation in that order, including late-adopted meshes.
   Reset retains the base transform; removed meshes leave the reset baseline.

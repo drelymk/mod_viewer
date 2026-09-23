@@ -96,12 +96,13 @@ async function handleDelete(info, ctx) {
 }
 
 function buildToggleItem(info, ctx) {
-  for (const v of info.vars) {
+  const cycleVars = info.cycle_vars?.length ? info.cycle_vars : info.vars;
+  for (const v of cycleVars) {
     if (getToggleValue(v.var) === undefined) setToggleValue(v.var, v.default);
   }
 
-  const positions = cyclePositionCount(info.vars);
-  let cyclePosition = findCyclePosition(info.vars, positions);
+  const positions = cyclePositionCount(cycleVars);
+  let cyclePosition = findCyclePosition(cycleVars, positions);
 
   const item = document.createElement('div');
   item.className = 'toggle-item';
@@ -184,16 +185,16 @@ function buildToggleItem(info, ctx) {
   // swap this button's behaviour to "advance position" and restore it again
   // afterwards without both handlers firing at once.
   btn.onclick = () => {
-    cyclePosition = findCyclePosition(info.vars, positions, cyclePosition);
+    cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
     const next = (cyclePosition + 1) % positions;
-    for (const v of info.vars) {
+    for (const v of cycleVars) {
       setToggleValue(v.var, cycleValueAt(v, next));
     }
     cyclePosition = next;
     refreshAll();
   };
   valueSyncers.push(() => {
-    cyclePosition = findCyclePosition(info.vars, positions, cyclePosition);
+    cyclePosition = findCyclePosition(cycleVars, positions, cyclePosition);
     valSpan.textContent = describe();
   });
 

@@ -290,7 +290,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             parsed.toggles, parsed.defaults,
             _gating_vars(mesh_payload)
             | set(getattr(parsed, "animation_control_vars", ()) or ()),
-            context.mod_dir, pending_new_sections)
+            context.mod_dir, pending_new_sections,
+            state_rules=parsed.state_rules)
         menu = build_menu_panel(
             parsed.menu, parsed.defaults, context.mod_dir,
             source=context.source)
