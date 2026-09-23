@@ -4,6 +4,75 @@ from .test_menu import _by_slot, sections
 from core.ini.menu import extract_menu_toggles
 from core.ini.state import extract_state_rules
 from core.ini.parser import gating_var_names
+from core.ini.analysis import analyze_ini
+from core.ini.sections import parse_sections
+from core.ini.toggles import extract_variable_defaults
+import pytest
+
+
+@pytest.mark.parametrize("comparison", ["< 2", "<= 1", "> 1", ">= 2"])
+def test_menu_numeric_conditions_share_draw_and_present_semantics(comparison):
+    from .test_menu import MENU_INI
+    text = MENU_INI + f"""
+[Present]
+if $glasses {comparison}
+$piece = 1
+else
+$piece = 0
+endif
+[TextureOverrideBody]
+if $glasses {comparison}
+drawindexed = 3,0,0
+endif
+"""
+    from core.ini.draw_scan import _scan_sections_for_draws
+    secs = parse_sections("fixture.ini", text=text)
+    analysis = analyze_ini(secs, var_prefix="Menu::")
+    scan = _scan_sections_for_draws(
+        secs, "Menu::", {"glasses"}, condition_aliases=analysis.condition_aliases)
+    conditions = scan["TextureOverrideBody"]["draws"][0].conditions
+    assert conditions
+    rules = analysis.state_rules
+    assert len(rules) == 2
+    for value in range(3):
+        def matches(groups):
+            return not groups or any(all(
+                (str(value) == c["value"]) != c["negate"] for c in group
+            ) for group in groups)
+        expected = value < 2 if comparison in ("< 2", "<= 1") else value >= 2
+        assert matches(conditions) == expected
+        assert [rule["value"] for rule in rules if matches(rule["conditions"])] == ["1" if expected else "0"]
+
+
+def test_unknown_numeric_elif_blocks_its_later_branches():
+    secs = parse_sections("fixture.ini", text="""[KeyStyle]
+type = cycle
+$Style = 0,1,2
+[Present]
+if $Style == 0
+$piece = 0
+elif $unknown > 2
+$piece = 1
+elif $Style < 2
+$piece = 2
+else
+$piece = 3
+endif
+""")
+    rules = extract_state_rules(secs)
+    assert [rule["value"] for rule in rules] == ["0"]
+
+
+@pytest.mark.parametrize("before", [
+    "[Present]\nif $active == 1\n$style = 2\nendif\n",
+    "[KeyPreset]\ntype = cycle\n$style = 2\n",
+])
+def test_constants_defaults_win_over_earlier_runtime_and_preset_assignments(before):
+    secs = parse_sections("fixture.ini", text=(before +
+        "[cOnStAnTs]\nglobal persist $Style = 0\n"
+        "[CommandListFallback]\n$legacy = 3\n"))
+    assert extract_variable_defaults(secs, var_prefix="Mod::") == {
+        "Mod::Style": "0", "Mod::legacy": "3"}
 
 def test_modulo_cycle_and_present_derived_rules():
     text = r"""

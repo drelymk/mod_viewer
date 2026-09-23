@@ -1,9 +1,12 @@
 """Build, persist, and query lightweight Asset Folder indexes."""
 
+from collections import OrderedDict
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import pickle
+import threading
 
 from app.assets import folders as asset_folders
 from app.settings import config, paths
@@ -13,6 +16,17 @@ from .models import AssetRecord
 
 
 INDEX_VERSION = 4
+_LOAD_CACHE_LIMIT = 8
+_LOAD_CACHE_BYTES = 64 * 1024 * 1024
+_load_cache = OrderedDict()
+_load_cache_lock = threading.RLock()
+
+
+def _stat_signature(stat):
+    return (stat.st_dev, stat.st_ino, stat.st_ctime_ns,
+            stat.st_mtime_ns, stat.st_size)
+
+
 _HASH_GROUPS = frozenset({
     "enemydata",
     "miscellaneousdata",
@@ -393,14 +407,52 @@ def _validate_index(value, asset_type, root):
 def load_index(asset_type, root):
     """Load a validated index, returning None when its cache file is absent."""
     filename = index_path(asset_type, root)
-    if not os.path.isfile(filename):
-        return None
-    try:
-        with open(filename, encoding="utf-8") as stream:
-            value = json.load(stream)
-    except (OSError, json.JSONDecodeError, UnicodeError) as error:
-        raise InvalidIndexError(f"Could not read Asset index: {error}") from error
-    return _validate_index(value, asset_type, root)
+    cache_key = os.path.normcase(os.path.abspath(filename))
+    with _load_cache_lock:
+        try:
+            stat = os.stat(filename)
+        except FileNotFoundError:
+            _load_cache.pop(cache_key, None)
+            return None
+        except OSError as error:
+            raise InvalidIndexError(f"Could not read Asset index: {error}") from error
+        signature = _stat_signature(stat)
+        cached = _load_cache.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            _load_cache.move_to_end(cache_key)
+            # The blob is produced only from JSON parsed and validated in this
+            # process; no on-disk or caller-provided pickle is ever loaded.
+            return pickle.loads(cached[1])
+        try:
+            with open(filename, encoding="utf-8") as stream:
+                value = json.load(stream)
+        except (OSError, json.JSONDecodeError, UnicodeError) as error:
+            raise InvalidIndexError(f"Could not read Asset index: {error}") from error
+        value = _validate_index(value, asset_type, root)
+        try:
+            current_signature = _stat_signature(os.stat(filename))
+        except OSError:
+            # A concurrent deletion must not invalidate the already-read
+            # snapshot or make an optional cache fail the caller's load.
+            current_signature = None
+        if current_signature != signature:
+            _load_cache.pop(cache_key, None)
+        if current_signature == signature:
+            _load_cache[cache_key] = (
+                current_signature,
+                pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL))
+            _load_cache.move_to_end(cache_key)
+            while (_load_cache and (len(_load_cache) > _LOAD_CACHE_LIMIT
+                    or sum(len(item[1]) for item in _load_cache.values())
+                    > _LOAD_CACHE_BYTES)):
+                _load_cache.popitem(last=False)
+        return value
+
+
+def _invalidate_load_cache(filename):
+    cache_key = os.path.normcase(os.path.abspath(filename))
+    with _load_cache_lock:
+        _load_cache.pop(cache_key, None)
 
 
 def _atomic_bytes(filename, payload):
@@ -427,6 +479,7 @@ def save_index(value):
     except (TypeError, ValueError) as error:
         raise AssetIndexError(f"Could not serialize Asset index: {error}") from error
     _atomic_bytes(filename, payload)
+    _invalidate_load_cache(filename)
     return filename
 
 
@@ -447,20 +500,26 @@ def restore_index(asset_type, root, payload):
         try:
             os.remove(filename)
         except FileNotFoundError:
+            _invalidate_load_cache(filename)
             return
         except OSError as error:
             raise AssetIndexError(f"Could not remove Asset index: {error}") from error
+        _invalidate_load_cache(filename)
         return
     _atomic_bytes(filename, payload)
+    _invalidate_load_cache(filename)
 
 
 def delete_index(asset_type, root):
+    filename = index_path(asset_type, root)
     try:
-        os.remove(index_path(asset_type, root))
+        os.remove(filename)
     except FileNotFoundError:
+        _invalidate_load_cache(filename)
         return
     except OSError as error:
         raise AssetIndexError(f"Could not remove Asset index: {error}") from error
+    _invalidate_load_cache(filename)
 
 
 def index_status(asset_type, root):

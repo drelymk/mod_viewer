@@ -151,15 +151,16 @@ def _prepare_draw_vertices(
     valid_raw = []
     append_valid = valid_raw.append
     reverse_winding = geometry_convention.reverse_winding
+    decode = decode_vertex
     for triangle_start in range(0, len(raw) - 2, 3):
         a = raw[triangle_start]
         b = raw[triangle_start + 1]
         c = raw[triangle_start + 2]
-        if decode_vertex(a) is None:
+        if decode(a) is None:
             continue
-        if decode_vertex(b) is None:
+        if decode(b) is None:
             continue
-        if decode_vertex(c) is None:
+        if decode(c) is None:
             continue
         append_valid(a)
         if reverse_winding:
@@ -331,15 +332,17 @@ def pack_draw_geometry(
     uv_bytes = bytearray(len(used) * 8) if tc_data else None
     bounds_min = [math.inf, math.inf, math.inf]
     bounds_max = [-math.inf, -math.inf, -math.inf]
+    position_struct = struct.Struct("<fff")
+    uv_struct = struct.Struct("<ff")
     for output_index, vertex_index in enumerate(used):
         x, y, z, u, v = prepared.decoded_vertices[vertex_index]
-        struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
-        bounds_min[0] = min(bounds_min[0], x)
-        bounds_min[1] = min(bounds_min[1], y)
-        bounds_min[2] = min(bounds_min[2], z)
-        bounds_max[0] = max(bounds_max[0], x)
-        bounds_max[1] = max(bounds_max[1], y)
-        bounds_max[2] = max(bounds_max[2], z)
+        position_struct.pack_into(pos_bytes, output_index * 12, x, y, z)
+        if x < bounds_min[0]: bounds_min[0] = x
+        if y < bounds_min[1]: bounds_min[1] = y
+        if z < bounds_min[2]: bounds_min[2] = z
+        if x > bounds_max[0]: bounds_max[0] = x
+        if y > bounds_max[1]: bounds_max[1] = y
+        if z > bounds_max[2]: bounds_max[2] = z
         for item in shape_buffers:
             shape = item.shape
             if item.sparse:
@@ -352,8 +355,8 @@ def pack_draw_geometry(
                         "<fff", item.target_data, target_offset)
                 else:
                     tx, ty, tz = x, y, z
-            struct.pack_into("<fff", item.target_bytes, output_index * 12,
-                             tx, ty, tz)
+            position_struct.pack_into(
+                item.target_bytes, output_index * 12, tx, ty, tz)
             if item.low_data is not None:
                 low_offset = vertex_index * shape["stride"] + POSITION_OFFSET
                 if low_offset + 12 <= len(item.low_data):
@@ -361,15 +364,21 @@ def pack_draw_geometry(
                         "<fff", item.low_data, low_offset)
                 else:
                     lx, ly, lz = x, y, z
-                struct.pack_into("<fff", item.low_bytes, output_index * 12,
-                                 lx, ly, lz)
+                position_struct.pack_into(
+                    item.low_bytes, output_index * 12, lx, ly, lz)
         if tc_data:
-            struct.pack_into("<ff", uv_bytes, output_index * 8,
-                             u, 1.0 - v)  # flip V for Three.js
+            uv_struct.pack_into(
+                uv_bytes, output_index * 8, u, 1.0 - v)  # flip V for Three.js
 
     idx_bytes = bytearray(len(raw) * 4)
-    for output_index, value in enumerate(raw):
-        struct.pack_into("<I", idx_bytes, output_index * 4, remap[value])
+    # Bulk packing removes one Python call per index while bounding the
+    # temporary argument tuple for unusually large draws.
+    chunk_size = 65536
+    for start in range(0, len(raw), chunk_size):
+        chunk = raw[start:start + chunk_size]
+        struct.pack_into(
+            f"<{len(chunk)}I", idx_bytes, start * 4,
+            *(remap[value] for value in chunk))
 
     shape_targets = [PackedShapeTarget(
         var=item.shape["var"],

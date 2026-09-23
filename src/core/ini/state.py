@@ -3,17 +3,38 @@
 import re
 
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not,
-                      dnf_or, normalize_dnf, parse_condition_dnf)
+                      dnf_or, normalize_dnf, ordered_conditions_supported,
+                      parse_condition_dnf)
 from .sections import canonical_var_names
 
 _ASSIGN_RE = re.compile(r"^\$(\w+)\s*=\s*(-?\d+(?:\.\d+)?)\s*$")
 _ELIF_RE = re.compile(r"(?:else\s+if|elif)\s+(.*)$", re.I)
-_UNSUPPORTED_CONDITION_RE = re.compile(r"[<>+*/%]|\btime\b", re.I)
+_UNSUPPORTED_CONDITION_RE = re.compile(r"[+*/%]|\btime\b", re.I)
 
 
-def _condition_is_supported(expression):
+def control_dependencies(variables, state_rules=()):
+    """Trace derived inputs back to their controllers, including cyclic rules."""
+    dependencies = {}
+    for rule in state_rules:
+        target = str(rule.get("var", "")).casefold()
+        inputs = dependencies.setdefault(target, set())
+        inputs.update(clause["var"] for group in rule.get("conditions", ())
+                      for clause in group)
+    found = {str(variable).casefold(): variable for variable in variables}
+    pending = list(found)
+    while pending:
+        for variable in dependencies.get(pending.pop(), ()):
+            key = variable.casefold()
+            if key not in found:
+                found[key] = variable
+                pending.append(key)
+    return set(found.values())
+
+
+def _condition_is_supported(expression, aliases):
     """Reject branches whose truth value cannot be represented by DNF."""
-    return _UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
+    return (_UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
+            and ordered_conditions_supported(str(expression), aliases))
 
 
 def _possible_groups(groups):
@@ -46,7 +67,8 @@ def _possible_groups(groups):
     return out
 
 
-def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
+def extract_state_rules(sections, var_prefix=None, canonical_vars=None, *,
+                        condition_aliases=None):
     """Return ordered literal assignments guarded by conditions in Present.
 
     This intentionally models only deterministic numeric assignments. It is
@@ -59,7 +81,8 @@ def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     tracked = set(canon.values())
-    aliases = build_bool_alias_map(sections)
+    aliases = (condition_aliases if condition_aliases is not None
+               else build_bool_alias_map(sections))
     stack = []
     rules = []
 
@@ -75,16 +98,18 @@ def extract_state_rules(sections, var_prefix=None, canonical_vars=None):
                 branch = parse_condition_dnf(match.group(1), aliases)
                 frame["cur"] = dnf_and(dnf_not(frame["seen"]), branch)
                 frame["seen"] = dnf_or(frame["seen"], branch)
+                frame["condition_supported"] = (
+                    frame["condition_supported"]
+                    and _condition_is_supported(match.group(1), aliases))
                 frame["supported"] = (
                     frame["parent_supported"]
-                    and frame["condition_supported"]
-                    and _condition_is_supported(match.group(1)))
+                    and frame["condition_supported"])
             continue
         if low.startswith("if "):
             branch = parse_condition_dnf(line[3:], aliases)
             parent_supported = all(
                 frame["supported"] for frame in stack)
-            condition_supported = _condition_is_supported(line[3:])
+            condition_supported = _condition_is_supported(line[3:], aliases)
             stack.append({
                 "cur": branch, "seen": branch,
                 "parent_supported": parent_supported,

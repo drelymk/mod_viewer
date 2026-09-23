@@ -367,6 +367,66 @@ def test_webgpu_startup_uses_actual_webgpu_backend(edge_browser, frontend_url):
         context.close()
 
 
+def test_environment_fill_preserves_diffuse_and_metal_shadow_detail(
+        edge_browser, frontend_url):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        _wait_for_environment_preparation(page)
+        page.add_style_tag(content="#hint,#empty-actions{display:none!important}")
+        points = page.evaluate("""async () => {
+          const THREE = await import('three/webgpu');
+          const {scene, camera, controls, renderer, setKeyLightIntensity} =
+            await import('./js/scene/scene.js');
+          setKeyLightIntensity(0);
+          scene.traverse(object => {
+            if (object.type === 'GridHelper') object.visible = false;
+          });
+          const samples = [[-1.5, 0x282828, 0.9, 0],
+            [0, 0xaaaaaa, 0.65, 0], [1.5, 0xaaaaaa, 0.2, 1]];
+          for (const [x, color, roughness, metalness] of samples) {
+            const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.6, 64, 32),
+              new THREE.MeshStandardNodeMaterial({color, roughness, metalness}));
+            sphere.position.set(x, 0.8, 0);
+            scene.add(sphere);
+          }
+          camera.position.set(0, 1, 6);
+          controls.target.set(0, 0.8, 0);
+          camera.lookAt(controls.target);
+          controls.update();
+          camera.updateMatrixWorld();
+          const rect = renderer.domElement.getBoundingClientRect();
+          return samples.map(([x]) => [0, -0.4].map(y => {
+            const p = new THREE.Vector3(x, 0.8 + y, Math.sqrt(0.36 - y*y))
+              .project(camera);
+            return [(p.x * 0.5 + 0.5) * rect.width,
+              (-p.y * 0.5 + 0.5) * rect.height];
+          }));
+        }""")
+        for preset in ("studio", "indoor", "studio"):
+            before = page.evaluate("window.modViewer.getRenderCount()")
+            page.evaluate("id => window.modViewer.setEnvironmentPreset(id)", preset)
+            _wait_for_render(page, before)
+            image = Image.open(io.BytesIO(page.locator(
+                "#canvas-container canvas").first.screenshot())).convert("RGB")
+
+            def brightness(point):
+                x, y = map(round, point)
+                pixels = [image.getpixel((x + dx, y + dy))
+                          for dx in (-1, 0, 1) for dy in (-1, 0, 1)]
+                return sum(sum(pixel) / 3 for pixel in pixels) / len(pixels)
+
+            cloth, diffuse, metal = points
+            # Test rendered readability, not a particular preset intensity.
+            # The manual key is off, so it cannot conceal a dark environment.
+            assert brightness(cloth[1]) > 5
+            assert brightness(diffuse[1]) > 45
+            assert brightness(metal[1]) > 10
+            assert brightness(diffuse[0]) > brightness(diffuse[1]) + 15
+            assert brightness(diffuse[0]) < 200
+    finally:
+        context.close()
+
+
 def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         edge_browser, frontend_url):
     context, page = _page(edge_browser, frontend_url, {})
@@ -438,13 +498,13 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         indoor = select_preset("indoor")
         assert indoor["activeIblPreset"] == "indoor"
         assert indoor["environmentActive"]
-        assert indoor["environmentIntensity"] == pytest.approx(0.15)
-        assert indoor["ambientColor"] == 0xffd4af
-        assert indoor["ambientIntensity"] == pytest.approx(0.05)
-        assert indoor["hemisphereColor"] == 0xffd3a6
-        assert indoor["hemisphereGroundColor"] == 0x2b3440
-        assert indoor["hemisphereIntensity"] == pytest.approx(0.1)
-        assert indoor["accentColor"] == 0xffb36b
+        assert indoor["environmentIntensity"] == pytest.approx(0.38)
+        assert indoor["ambientColor"] == 0xfff2e5
+        assert indoor["ambientIntensity"] == pytest.approx(0.13)
+        assert indoor["hemisphereColor"] == 0xfff0dc
+        assert indoor["hemisphereGroundColor"] == 0x686868
+        assert indoor["hemisphereIntensity"] == pytest.approx(0.24)
+        assert indoor["accentColor"] == 0xffd2aa
         assert indoor["accentPosition"] == [4, 8, 5]
         assert indoor["accentIntensity"] == pytest.approx(0.3)
         assert indoor["activeDominantDirection"] == pytest.approx(
@@ -478,12 +538,12 @@ def test_environment_ibl_resources_are_cached_and_presets_restore_original(
         studio = select_preset("studio")
         assert studio["activeIblPreset"] == "studio"
         assert studio["environmentActive"]
-        assert studio["environmentIntensity"] == pytest.approx(0.18)
+        assert studio["environmentIntensity"] == pytest.approx(0.4)
         assert studio["ambientColor"] == 0xf5f7fa
-        assert studio["ambientIntensity"] == pytest.approx(0.04)
+        assert studio["ambientIntensity"] == pytest.approx(0.14)
         assert studio["hemisphereColor"] == 0xe1e9f3
-        assert studio["hemisphereGroundColor"] == 0x454b55
-        assert studio["hemisphereIntensity"] == pytest.approx(0.08)
+        assert studio["hemisphereGroundColor"] == 0x737b85
+        assert studio["hemisphereIntensity"] == pytest.approx(0.26)
         assert studio["accentColor"] == 0xffffff
         assert studio["accentPosition"] == [4, 8, 6]
         assert studio["accentIntensity"] == pytest.approx(0.24)
@@ -779,10 +839,10 @@ def test_environment_ibl_failure_is_isolated_and_uses_legacy_lighting(
                     "ambient": 0.04, "hemisphere": 0.08, "accent": 0.4,
                 },
                 "indoor": {
-                    "ambient": 0.05, "hemisphere": 0.1, "accent": 0.3,
+                    "ambient": 0.13, "hemisphere": 0.24, "accent": 0.3,
                 },
                 "studio": {
-                    "ambient": 0.04, "hemisphere": 0.08, "accent": 0.24,
+                    "ambient": 0.14, "hemisphere": 0.26, "accent": 0.24,
                 },
             }[working_profile]
             assert {key: working[key] for key in expected} == expected
@@ -3282,6 +3342,105 @@ def test_texture_stays_fallback_until_png_load_completes(
     finally:
         context.close()
 
+
+def test_texture_requests_follow_initial_override_and_reveal_state(
+        edge_browser, frontend_url):
+    payload = _payload("HiddenTexture")
+    uri = f"{frontend_url}/hidden-reveal.png"
+    entry = next(iter(payload["meshes"].values()))
+    entry["tex_key"] = "diffuse::startup-default.png"
+    entry["saved_texture_override"] = "diffuse::startup-saved.png"
+    requests = {name: 0 for name in (
+        "startup-default.png", "startup-saved.png", "hidden-reveal.png",
+        "stale.png", "final.png",
+    )}
+    for name in ("startup-default.png", "startup-saved.png"):
+        payload["textures"][f"diffuse::{name}"] = f"{frontend_url}/{name}"
+    context, page = _page(
+        edge_browser, frontend_url, {"HiddenTexture": payload})
+
+    def fulfill(route):
+        name = route.request.url.rsplit("/", 1)[-1]
+        requests[name] += 1
+        route.fulfill(
+            status=200, content_type="image/png",
+            body=base64.b64decode(_PNG_URI.split(",", 1)[1]))
+
+    for name in requests:
+        page.route(f"**/{name}", fulfill)
+    try:
+        _open(page, "HiddenTexture")
+        page.locator(".draw-item").wait_for()
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+        assert requests["startup-default.png"] == 0
+        assert requests["startup-saved.png"] == 1
+        page.evaluate("""async ({uri}) => {
+          const {addTexture, setMeshTextureState} =
+            await import('./js/mesh/mesh-factory.js');
+          const {applyMeshVisibility} = await import('./js/mesh/mesh-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          mesh.userData.manualVisible = false;
+          applyMeshVisibility(mesh, {render: false});
+          addTexture('diffuse::hidden-reveal.png', uri);
+          setMeshTextureState(mesh, {diffuse: 'diffuse::hidden-reveal.png'},
+            {render: false});
+        }""", {"uri": uri})
+        assert requests["hidden-reveal.png"] == 0
+
+        page.evaluate("""async () => {
+          const {applyMeshVisibility} = await import('./js/mesh/mesh-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          mesh.userData.manualVisible = true;
+          applyMeshVisibility(mesh, {render: false});
+        }""")
+        page.wait_for_function("""() => window.modViewer.activeMeshes[0]
+          ?.material?.userData?.gameMaterial?.bindings?.diffuse
+          ?.enabledNode?.value === true""")
+        assert requests["hidden-reveal.png"] == 1
+
+        page.evaluate("""async ({base}) => {
+          const {addTexture, setMeshTextureState} =
+            await import('./js/mesh/mesh-factory.js');
+          const {applyMeshVisibility, invalidateControlDependencies,
+            refreshMeshes} =
+            await import('./js/mesh/mesh-state.js');
+          const {setControlValue} =
+            await import('./js/editing/control-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          addTexture('diffuse::stale.png', `${base}/stale.png`);
+          addTexture('diffuse::final.png', `${base}/final.png`);
+          setControlValue('choice', 0);
+          mesh.userData.conditions = [[{
+            var: 'choice', value: 1, negate: false,
+          }]];
+          mesh.userData.textureVariants = [{
+            conditions: [[{var: 'choice', value: 1, negate: false}]],
+            tex_key: 'diffuse::final.png',
+          }];
+          mesh.userData.defaultTexKey = 'diffuse::stale.png';
+          mesh.userData.automaticTextureBoundary = true;
+          mesh.userData.manualTexOverride = undefined;
+          invalidateControlDependencies(mesh);
+          mesh.userData.manualVisible = false;
+          applyMeshVisibility(mesh, {render: false});
+          setMeshTextureState(mesh, {diffuse: 'diffuse::stale.png'},
+            {render: false});
+          setControlValue('choice', 1);
+          refreshMeshes({changedVariables: new Set(['choice'])});
+        }""", {"base": frontend_url})
+        page.wait_for_function("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return mesh?.userData?.texKey === 'diffuse::final.png'
+            && mesh.material?.userData?.gameMaterial?.bindings?.diffuse
+              ?.enabledNode?.value === true;
+        }""")
+        assert requests["stale.png"] == 0
+        assert requests["final.png"] == 1
+    finally:
+        context.close()
+
 def test_mesh_color_adjustment_does_not_recolor_flat_texture_fallback(
         edge_browser, frontend_url):
     payload = _payload("FallbackColor")
@@ -5645,11 +5804,14 @@ def test_authored_normals_survive_render_modes_and_neutral_shape(
             authored: mesh.userData.hasAuthoredNormals,
             base: [...mesh.userData.baseNormals],
             flat: mesh.material.flatShading,
+            sharedInitialRest:
+              mesh.userData.humanoidRestPositions === mesh.userData.basePositions,
           };
         }""")
         assert initial["authored"]
         assert initial["normals"] == initial["base"]
         assert not initial["flat"]
+        assert initial["sharedInitialRest"]
 
         page.locator("#shading-btn").click()
         shaded = page.evaluate("""() => {
@@ -5668,9 +5830,16 @@ def test_authored_normals_survive_render_modes_and_neutral_shape(
           setControlValue('shape', '1');
           refreshMeshes();
         }""")
-        deformed = page.evaluate(
-            "() => [...window.modViewer.activeMeshes[0].geometry.attributes.normal.array]")
-        assert deformed != initial["normals"]
+        deformed = page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return {
+            normals: [...mesh.geometry.attributes.normal.array],
+            replacedRest:
+              mesh.userData.humanoidRestPositions !== mesh.userData.basePositions,
+          };
+        }""")
+        assert deformed["normals"] != initial["normals"]
+        assert deformed["replacedRest"]
 
         page.evaluate("""async () => {
           const {setControlValue} = await import('./js/editing/control-state.js');

@@ -23,7 +23,9 @@ export function buildPayloadMeshes(entries = {}, modPath = null,
   for (const [name, entry] of Object.entries(entries)) {
     if (entry?.error) continue;
     const materialProfile = materialProfiles?.[entry.material_profile_id] || null;
-    const mesh = buildMesh(name, entry, materialProfile);
+    const mesh = buildMesh(name, entry, materialProfile, {
+      deferTextureRequests: options.deferTextureRequests === true,
+    });
     const metadataKey = entry.identity?.key
       || legacyMeshMetadataKey(name, entry);
     const texturePool = entry.texture_pool_id

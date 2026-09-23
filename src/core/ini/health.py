@@ -11,7 +11,8 @@ import re
 
 from .document import IniDocument, OTHER
 from . import migoto_semantics as semantics
-from .sections import extract_ini_namespace
+from .sections import extract_ini_namespace, sections_from_document
+from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 from ..mod_discovery import discover_ini_paths
 from ..mod_source import ModSourceError, mod_source_for_path
 from ..resource_paths import safe_resource_path
@@ -23,10 +24,6 @@ _LOCAL_RESOURCE_RE = re.compile(r"^Resource[A-Za-z0-9_.-]+$", re.I)
 _REFERENCE_LHS_RE = re.compile(r"^(?:ib|vb\d+|ps-t\d+|cs-t\d+)$", re.I)
 _RESOURCE_REFERENCE_RE = re.compile(
     r"^(?P<prefix>\S+)\s+(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
-# Viewer reconstruction handles literal triples; this is not 3DMigoto's
-# operand grammar and must only drive viewer-compatibility findings.
-_VIEWER_LITERAL_DRAWINDEXED_RE = re.compile(
-    r"^\d+\s*,\s*\d+\s*,\s*-?\d+$")
 _ASSET_EXTENSIONS = {
     ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".tga", ".bmp",
 }
@@ -135,6 +132,7 @@ def _analyze_statements(doc, ini_rel, issues, global_variables,
                         run_targets, ini_namespace=None):
     """Check conservative statement-level mistakes outside condition syntax."""
     seen_keys = {}
+    draw_constants = immutable_draw_constants(sections_from_document(doc))
 
     for line in doc.lines:
         if line.section is not None or line.kind in ("blank", "comment", "section"):
@@ -204,11 +202,12 @@ def _analyze_statements(doc, ini_rel, issues, global_variables,
                     part.strip() for part in line.text.split("=", 1))
                 if (draw_lhs.lower() == "drawindexed"
                         and draw_rhs.casefold() != "auto"
-                        and not _VIEWER_LITERAL_DRAWINDEXED_RE.fullmatch(draw_rhs)):
+                        and resolve_drawindexed(draw_rhs, draw_constants) is None):
                     issues.append(_issue(
                         "unsupported_drawindexed_arguments", "warning", "viewer",
                         "The viewer cannot currently reconstruct this drawindexed "
-                        "form as an authored draw; 3DMigoto may accept it.",
+                        "form as an authored draw; it is skipped instead of "
+                        "loading the whole index buffer. 3DMigoto may accept it.",
                         ini_rel, section.name, line.no + 1, line.raw.strip(),
                         arguments=draw_rhs,
                     ))

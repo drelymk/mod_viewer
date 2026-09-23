@@ -193,6 +193,19 @@ def test_semantic_analysis_shares_one_canonical_scan():
     assert (analysis.toggles == {} and analysis.menu == {} and analysis.draw_groups == []), ("one analysis handles control-free INIs without synthetic geometry")
 
 
+def test_mod_analysis_reuses_control_discovery_for_compute(tmp_path):
+    from core.ini import toggles, menu, dnf
+    path = tmp_path / "mod.ini"
+    path.write_text("[Constants]\nglobal persist $Style = 0\n"
+                    "[KeyStyle]\ntype = cycle\n$Style = 0,1\n", encoding="utf-8")
+    with patch("core.ini.analysis.extract_toggle_keys", wraps=toggles.extract_toggle_keys) as keys, \
+         patch("core.ini.analysis.extract_menu_toggles", wraps=menu.extract_menu_toggles) as menus, \
+         patch("core.ini.analysis.build_bool_alias_map", wraps=dnf.build_bool_alias_map) as aliases, \
+         patch("core.ini.animations.build_bool_alias_map", side_effect=AssertionError("duplicate condition discovery")):
+        mod_analysis.analyze_mod_inis([str(path)], str(tmp_path))
+    assert keys.call_count == menus.call_count == aliases.call_count == 1
+
+
 def test_geometry_blob_bypasses_base64_intermediate():
     with tempfile.TemporaryDirectory() as root:
         with open(os.path.join(root, "p.buf"), "wb") as fh:

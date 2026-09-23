@@ -11,7 +11,7 @@ import { clearInspector } from '../panels/inspector-panel.js';
 import {
   activeMeshes, refreshAll, reset, setStateRules,
 } from '../mesh/visibility.js';
-import { setTextures } from '../mesh/mesh-factory.js';
+import { activateMeshTextures, setTextures } from '../mesh/mesh-factory.js';
 import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
 import {
@@ -256,13 +256,15 @@ export async function displayMeshPayload(payload, {
     toggles: controls.toggles || {}, menu: controls.menu || {},
   });
   setTextures(payload.textures);
+  let liveMeshes;
   measureLoadStage('build_mesh_panel', () => {
-    const liveMeshes = buildPayloadMeshes(
+    liveMeshes = buildPayloadMeshes(
       meshes, modelPath, payload.metadata?.mesh_names || {},
       payload.metadata?.material_profiles || {}, {
         colorAdjustments: payload.metadata?.mesh_color_adjustments || {},
         texturePools: payload.texture_pools || {},
         animations: payload.animations || {},
+        deferTextureRequests: true,
       });
     buildMeshPanel(
       meshes, liveMeshes, modelPath, {
@@ -293,6 +295,9 @@ export async function displayMeshPayload(payload, {
   measureLoadStage('refresh_all', () => refreshAll({
     force: { visibility: true, textures: true, shapes: true },
   }));
+  measureLoadStage('activate_textures', () => {
+    liveMeshes.forEach(mesh => activateMeshTextures(mesh, {render: false}));
+  });
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();

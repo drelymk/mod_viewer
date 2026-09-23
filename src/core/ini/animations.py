@@ -448,7 +448,8 @@ def _condition_stack_line(line, stack, aliases):
 
 
 def discover_animation_clocks(sections, *, var_prefix=None,
-                              canonical_vars=None, qualified_vars=None):
+                              canonical_vars=None, qualified_vars=None,
+                              condition_aliases=None):
     """Discover supported clocks and the source-spelling frame variables.
 
     The returned ``frame_vars`` intentionally uses the local INI spelling;
@@ -457,7 +458,8 @@ def discover_animation_clocks(sections, *, var_prefix=None,
     """
     canonical = canonical_vars or canonical_var_names(sections)
     literals = _literal_assignments(sections, canonical)
-    aliases = build_bool_alias_map(sections)
+    aliases = (condition_aliases if condition_aliases is not None
+               else build_bool_alias_map(sections))
     all_vars = set(canonical.values())
     clocks = []
     seen = set()
@@ -1076,12 +1078,14 @@ def discover_wwmi_sparse_animations(sections, shape_sliders, *, mod_dir=None,
 
 def discover_compute_animations(sections, resources, *, mod_dir=None,
                                ini_path=None, source=None, var_prefix=None,
-                               canonical_vars=None):
+                               canonical_vars=None, condition_aliases=None):
     """Discover the conservative fixed-layout compute-animation contract."""
-    canonical = canonical_vars or canonical_var_names(sections)
+    canonical = (canonical_vars if canonical_vars is not None
+                 else canonical_var_names(sections))
     from .draw_resources import _collect_resource_copy_sources
     copy_sources = _collect_resource_copy_sources(sections, resources)
-    aliases = build_bool_alias_map(sections)
+    aliases = (condition_aliases if condition_aliases is not None
+               else build_bool_alias_map(sections))
     tracked_vars = set(canonical.values())
     section_lookup = {
         str(name).casefold(): name for name in sections
@@ -1499,14 +1503,8 @@ def compute_animation_control_vars(animations, state_rules=()):
         dependencies.update(animation.get("program", {}).get(
             "external_variables", ()))
 
-    # State rules can derive one of those direct inputs from a user-facing
-    # controller. Follow that small existing rule chain without introducing a
-    # second dependency graph for compute animations.
-    direct = {value.casefold() for value in dependencies}
-    for rule in state_rules or ():
-        if str(rule.get("var", "")).casefold() in direct:
-            add_conditions(rule.get("conditions"))
-    return dependencies
+    from .state import control_dependencies
+    return control_dependencies(dependencies, state_rules or ())
 
 
 __all__ = [
