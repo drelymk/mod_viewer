@@ -42,7 +42,7 @@ $Style = -1, 0.5, 2
             assert _visible(conditions, Style=value) == (compare(value, threshold) != invert)
 
 
-def test_ordered_domain_includes_other_literal_writes_to_cycle_variable():
+def test_other_writer_disables_ordered_cycle_domain():
     sections = parse_sections("fixture.ini", text="""[KeyStyle]
 type = cycle
 $Style = 0,1,2
@@ -54,13 +54,14 @@ drawindexed = 3, 0, 0
 endif
 """)
     aliases = build_bool_alias_map(sections)
+    assert "style" not in aliases.domains
+    assert not ordered_conditions_supported("$Style >= 3", aliases)
     scan = _scan_sections_for_draws(
         sections, None, {"Style"}, condition_aliases=aliases)
 
     draws = scan["TextureOverrideBody"]["draws"]
     assert len(draws) == 1
     assert _visible(draws[0].conditions, Style=3)
-    assert not _visible(draws[0].conditions, Style=2)
 
 
 @pytest.mark.parametrize("write", [
@@ -78,20 +79,6 @@ $Style = 0,1,2
 
     assert "style" not in aliases.domains
     assert not ordered_conditions_supported("$Style >= 3", aliases)
-
-
-def test_unbounded_menu_increment_does_not_create_a_finite_domain():
-    sections = parse_sections("fixture.ini", text="""[CommandListSlots]
-if $slot == 0
-$Style = $Style + 1
-elif $slot == 1
-$Style = $Style + 1
-endif
-""")
-
-    aliases = build_bool_alias_map(sections)
-
-    assert "style" not in aliases.domains
 
 
 @pytest.mark.parametrize("declaration,mutation,arguments,expected", [

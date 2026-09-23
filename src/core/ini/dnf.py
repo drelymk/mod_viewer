@@ -24,11 +24,11 @@ _ORDER_RE = re.compile(rf'\$({_VAR_TOKEN})\s*(<=|>=|<|>)\s*([-+\w.]+)')
 _ORDER_OPERATORS = {"<": operator.lt, "<=": operator.le,
                     ">": operator.gt, ">=": operator.ge}
 _ASSIGN_BOOL_RE = re.compile(rf'^\$({_VAR_TOKEN})\s*=\s*(.+)$')
-_ASSIGNMENT_RE = re.compile(
+_WRITE_RE = re.compile(
     r"^(?:(?:pre|post)\s+)?(?:(?:global(?:\s+persist)?|local)\s+)?"
-    r"\$([\w\\]+)\s*(\+=|-=|\*=|/=|%=|=(?!=))\s*(.*?)\s*$", re.I)
-_NUMBER_LITERAL_RE = re.compile(
-    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$")
+    r"\$([\w\\]+)\s*(\+=|-=|\*=|/=|%=|=(?!=))", re.I)
+_CONSTANT_DEFAULT_RE = re.compile(
+    r"global\s+(?:persist\s+)?\$(\w+)\s*=\s*(.+)", re.I)
 _STRUCT_RE = re.compile(r'(\(|\)|&&|\|\||!(?!=))')
 
 DNF_TRUE:  list = [[]]
@@ -65,75 +65,62 @@ def _without_prefix(name, var_prefix):
     return name
 
 
-def _add_domain_value(domain, value):
-    value = str(value).strip()
-    if value not in domain:
-        domain.append(value)
-
-
 def _cycle_domains(sections, toggle_keys, menu, var_prefix):
     values = {}
-    toggle_sections = {}
+    cycle_sections = {}
     for info in toggle_keys.values():
         section = str(info.get("section", "")).casefold()
         for name, cycle in info["vars"].items():
             name = _without_prefix(name, var_prefix)
             domain = values.setdefault(name.casefold(), [])
-            for value in cycle:
-                _add_domain_value(domain, value)
-            toggle_sections.setdefault(name.casefold(), set()).add(section)
+            domain.extend(value for value in cycle if value not in domain)
+            cycle_sections.setdefault(name.casefold(), set()).add(section)
 
-    menu_writes = set()
-    unknown_writes = set()
     for info in menu.values():
         name = _without_prefix(info["var"], var_prefix)
         domain = values.setdefault(name.casefold(), [])
-        for value in info["values"]:
-            _add_domain_value(domain, value)
-        if (info.get("_cycle_domain_conflict")
-                or info.get("_cycle_domain_complete") is False):
-            unknown_writes.add(name.casefold())
+        domain.extend(value for value in info["values"] if value not in domain)
         section = str(info.get("section", "")).casefold()
-        locations = info.get("_cycle_write_locations")
-        if locations is None:
-            locations = [(section, line_no)
-                         for line_no in info.get("_cycle_write_lines", ())]
-        for write_section, line_no in locations:
-            menu_writes.add((str(write_section).casefold(), int(line_no),
-                             name.casefold()))
+        cycle_sections.setdefault(name.casefold(), set()).add(section)
+        # Arrow menus use a separate command list for each direction.
+        button = re.fullmatch(r"(commandlistbutton\d+)(?:left|right)",
+                              section)
+        if button:
+            cycle_sections[name.casefold()].update(
+                (button[1] + "left", button[1] + "right"))
 
     for section, lines in sections.items():
+        if str(section).casefold() != "constants":
+            continue
+        for line in lines:
+            match = _CONSTANT_DEFAULT_RE.fullmatch(str(line).strip())
+            if match and match[1].casefold() in values:
+                name = match[1].casefold()
+                domain = values[name]
+                value = match[2].strip()
+                if value not in domain:
+                    domain.append(value)
+
+    # A discovered cycle is a complete domain only while its known cycle
+    # sections (and one Constants default) are the variable's only writers.
+    # Other writes make ordered comparisons fail open; their values are not
+    # inferred here.
+    unknown_writes = set()
+    for section, lines in sections.items():
         section_key = str(section).casefold()
-        for line_no, raw in enumerate(lines):
+        for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
-            match = _ASSIGNMENT_RE.fullmatch(line)
+            match = _WRITE_RE.match(line)
             if not match:
                 continue
-            name, assignment, expression = match.groups()
+            name, assignment = match.groups()
             name = name.rsplit("\\", 1)[-1].casefold()
-            domain = values.get(name)
-            if domain is None:
+            if name not in values:
                 continue
-            if assignment != "=":
-                unknown_writes.add(name)
+            if section_key in cycle_sections.get(name, ()) and assignment == "=":
                 continue
-            expression = expression.strip()
-            if (section_key in toggle_sections.get(name, ())
-                    and "," in expression):
-                cycle = [value.strip() for value in expression.split(",")]
-                if cycle and all(_NUMBER_LITERAL_RE.fullmatch(value)
-                                 and _numeric_value(value) is not None
-                                 for value in cycle):
-                    for value in cycle:
-                        _add_domain_value(domain, value)
-                    continue
-                unknown_writes.add(name)
-                continue
-            if (_NUMBER_LITERAL_RE.fullmatch(expression)
-                    and _numeric_value(expression) is not None):
-                _add_domain_value(domain, expression)
-                continue
-            if (section_key, line_no, name) in menu_writes:
+            if (section_key == "constants" and assignment == "="
+                    and _CONSTANT_DEFAULT_RE.fullmatch(line)):
                 continue
             unknown_writes.add(name)
 
