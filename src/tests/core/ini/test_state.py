@@ -129,3 +129,20 @@ endif
         "conditions": [[{
             "var": "anime_state", "value": "0", "negate": False}]],
     }]
+
+
+def test_state_rules_reject_unsupported_ordered_conditions_through_alias():
+    secs = parse_sections("fixture.ini", text="""[Constants]
+global $piece = 0
+[CommandListAlias]
+$allowed = ($runtime_value > 2)
+[Present]
+if $allowed
+$piece = 1
+endif
+""")
+
+    analysis = analyze_ini(secs)
+
+    assert "allowed" in analysis.condition_aliases.unsupported
+    assert analysis.state_rules == []

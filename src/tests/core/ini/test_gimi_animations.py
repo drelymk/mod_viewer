@@ -5,11 +5,14 @@ import struct
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
 from core.ini.animations import (_identify_compute_shader,
+                                 _compute_condition_is_supported,
                                  compute_animation_control_vars,
+                                 discover_animation_clocks,
                                  discover_compute_animations,
                                  discover_wwmi_sparse_animations)
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.ini.dnf import build_bool_alias_map
 from core.ini.sections import extract_resources, parse_sections
 from core.ini.toggles import extract_toggle_keys, extract_variable_defaults
 
@@ -211,6 +214,41 @@ def _discover(root, sections):
     return discover_compute_animations(
         sections, extract_resources(sections), mod_dir=str(root),
         ini_path=str(root / "fixture.ini"))
+
+
+def test_animations_reject_unknown_ordered_alias_conditions():
+    sections = parse_sections("fixture.ini", text="""[Constants]
+global $fps = 30
+global $start = 0
+global $end = 1
+[CommandListAlias]
+$allowed = ($runtime_value > 2)
+[Present]
+if $allowed
+$frame = time * $fps % ($end - $start + 1) + $start // 1
+endif
+""")
+    aliases = build_bool_alias_map(sections)
+
+    assert not _compute_condition_is_supported("$allowed", aliases)
+    assert discover_animation_clocks(
+        sections, condition_aliases=aliases).clocks == ()
+
+
+def test_compute_animations_reject_unknown_ordered_alias_guard(tmp_path):
+    root = tmp_path / "mod"
+    sections = _sections(root)
+    sections["CommandListAlias"] = [
+        "$allowed = ($runtime_value > 2)"]
+    sections["CustomShaderShape"] = [
+        "if $allowed", *sections["CustomShaderShape"], "endif"]
+    aliases = build_bool_alias_map(sections)
+
+    animations = discover_compute_animations(
+        sections, extract_resources(sections), mod_dir=str(root),
+        ini_path=str(root / "fixture.ini"), condition_aliases=aliases)
+
+    assert not any(animation.get("shape_passes") for animation in animations)
 
 
 def _nested_sections(root):

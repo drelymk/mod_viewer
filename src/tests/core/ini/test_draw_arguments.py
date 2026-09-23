@@ -5,8 +5,10 @@ import operator
 import pytest
 
 from core.ini.analysis import analyze_ini
-from core.ini.dnf import build_bool_alias_map, normalize_dnf, parse_condition_dnf
+from core.ini.dnf import (build_bool_alias_map, normalize_dnf,
+                          ordered_conditions_supported, parse_condition_dnf)
 from core.ini.draw_arguments import immutable_draw_constants, resolve_drawindexed
+from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.health import analyze_mod
 from core.ini.sections import parse_sections
 
@@ -38,6 +40,58 @@ $Style = -1, 0.5, 2
             parse_condition_dnf(expression, aliases), {"Style"})
         for value in [-2, -1, 0.5, 2]:
             assert _visible(conditions, Style=value) == (compare(value, threshold) != invert)
+
+
+def test_ordered_domain_includes_other_literal_writes_to_cycle_variable():
+    sections = parse_sections("fixture.ini", text="""[KeyStyle]
+type = cycle
+$Style = 0,1,2
+[CommandListSetStyle]
+$Style = 3
+[TextureOverrideBody]
+if $Style >= 3
+drawindexed = 3, 0, 0
+endif
+""")
+    aliases = build_bool_alias_map(sections)
+    scan = _scan_sections_for_draws(
+        sections, None, {"Style"}, condition_aliases=aliases)
+
+    draws = scan["TextureOverrideBody"]["draws"]
+    assert len(draws) == 1
+    assert _visible(draws[0].conditions, Style=3)
+    assert not _visible(draws[0].conditions, Style=2)
+
+
+@pytest.mark.parametrize("write", [
+    "$Style = $runtime_value",
+    "$Style += 1",
+])
+def test_unknown_write_disables_numeric_cycle_domain(write):
+    sections = parse_sections("fixture.ini", text="""[KeyStyle]
+type = cycle
+$Style = 0,1,2
+[CommandListSetStyle]
+""" + write + "\n")
+
+    aliases = build_bool_alias_map(sections)
+
+    assert "style" not in aliases.domains
+    assert not ordered_conditions_supported("$Style >= 3", aliases)
+
+
+def test_unbounded_menu_increment_does_not_create_a_finite_domain():
+    sections = parse_sections("fixture.ini", text="""[CommandListSlots]
+if $slot == 0
+$Style = $Style + 1
+elif $slot == 1
+$Style = $Style + 1
+endif
+""")
+
+    aliases = build_bool_alias_map(sections)
+
+    assert "style" not in aliases.domains
 
 
 @pytest.mark.parametrize("declaration,mutation,arguments,expected", [

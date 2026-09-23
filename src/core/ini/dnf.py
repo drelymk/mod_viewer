@@ -24,6 +24,11 @@ _ORDER_RE = re.compile(rf'\$({_VAR_TOKEN})\s*(<=|>=|<|>)\s*([-+\w.]+)')
 _ORDER_OPERATORS = {"<": operator.lt, "<=": operator.le,
                     ">": operator.gt, ">=": operator.ge}
 _ASSIGN_BOOL_RE = re.compile(rf'^\$({_VAR_TOKEN})\s*=\s*(.+)$')
+_ASSIGNMENT_RE = re.compile(
+    r"^(?:(?:pre|post)\s+)?(?:(?:global(?:\s+persist)?|local)\s+)?"
+    r"\$([\w\\]+)\s*(\+=|-=|\*=|/=|%=|=(?!=))\s*(.*?)\s*$", re.I)
+_NUMBER_LITERAL_RE = re.compile(
+    r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$")
 _STRUCT_RE = re.compile(r'(\(|\)|&&|\|\||!(?!=))')
 
 DNF_TRUE:  list = [[]]
@@ -41,6 +46,7 @@ class _BoolAliases(dict):
     def __init__(self, domains):
         super().__init__()
         self.domains = domains
+        self.unsupported = set()
 
 
 def _numeric_value(value):
@@ -51,33 +57,89 @@ def _numeric_value(value):
         return None
 
 
+def _without_prefix(name, var_prefix):
+    name = str(name)
+    prefix = str(var_prefix or "")
+    if prefix and name.casefold().startswith(prefix.casefold()):
+        return name[len(prefix):]
+    return name
+
+
+def _add_domain_value(domain, value):
+    value = str(value).strip()
+    if value not in domain:
+        domain.append(value)
+
+
 def _cycle_domains(sections, toggle_keys, menu, var_prefix):
     values = {}
+    toggle_sections = {}
     for info in toggle_keys.values():
+        section = str(info.get("section", "")).casefold()
         for name, cycle in info["vars"].items():
-            if var_prefix and name.startswith(var_prefix):
-                name = name[len(var_prefix):]
+            name = _without_prefix(name, var_prefix)
             domain = values.setdefault(name.casefold(), [])
-            domain.extend(value for value in cycle if value not in domain)
+            for value in cycle:
+                _add_domain_value(domain, value)
+            toggle_sections.setdefault(name.casefold(), set()).add(section)
+
+    menu_writes = set()
+    unknown_writes = set()
     for info in menu.values():
-        name = info["var"]
-        if var_prefix and name.startswith(var_prefix):
-            name = name[len(var_prefix):]
+        name = _without_prefix(info["var"], var_prefix)
         domain = values.setdefault(name.casefold(), [])
-        domain.extend(value for value in info["values"] if value not in domain)
+        for value in info["values"]:
+            _add_domain_value(domain, value)
+        if (info.get("_cycle_domain_conflict")
+                or info.get("_cycle_domain_complete") is False):
+            unknown_writes.add(name.casefold())
+        section = str(info.get("section", "")).casefold()
+        locations = info.get("_cycle_write_locations")
+        if locations is None:
+            locations = [(section, line_no)
+                         for line_no in info.get("_cycle_write_lines", ())]
+        for write_section, line_no in locations:
+            menu_writes.add((str(write_section).casefold(), int(line_no),
+                             name.casefold()))
+
     for section, lines in sections.items():
-        if section.casefold() != "constants":
-            continue
-        for line in lines:
-            match = re.fullmatch(
-                r"global\s+(?:persist\s+)?\$(\w+)\s*=\s*(.+)", line, re.I)
-            if match and match[1].casefold() in values:
-                domain = values[match[1].casefold()]
-                value = match[2].strip()
-                if value not in domain:
-                    domain.append(value)
+        section_key = str(section).casefold()
+        for line_no, raw in enumerate(lines):
+            line = str(raw).split(";", 1)[0].strip()
+            match = _ASSIGNMENT_RE.fullmatch(line)
+            if not match:
+                continue
+            name, assignment, expression = match.groups()
+            name = name.rsplit("\\", 1)[-1].casefold()
+            domain = values.get(name)
+            if domain is None:
+                continue
+            if assignment != "=":
+                unknown_writes.add(name)
+                continue
+            expression = expression.strip()
+            if (section_key in toggle_sections.get(name, ())
+                    and "," in expression):
+                cycle = [value.strip() for value in expression.split(",")]
+                if cycle and all(_NUMBER_LITERAL_RE.fullmatch(value)
+                                 and _numeric_value(value) is not None
+                                 for value in cycle):
+                    for value in cycle:
+                        _add_domain_value(domain, value)
+                    continue
+                unknown_writes.add(name)
+                continue
+            if (_NUMBER_LITERAL_RE.fullmatch(expression)
+                    and _numeric_value(expression) is not None):
+                _add_domain_value(domain, expression)
+                continue
+            if (section_key, line_no, name) in menu_writes:
+                continue
+            unknown_writes.add(name)
+
     return {name: domain for name, domain in values.items()
-            if 0 < len(domain) <= _MAX_DNF_GROUPS
+            if name not in unknown_writes
+            and 0 < len(domain) <= _MAX_DNF_GROUPS
             and all(_numeric_value(value) is not None for value in domain)}
 
 
@@ -105,12 +167,28 @@ def ordered_conditions_supported(content, alias_map):
     safely do that, because it would turn a conditional write into a real one.
     """
     domains = getattr(alias_map, "domains", {})
+    unsupported = getattr(alias_map, "unsupported", set())
     for token in _STRUCT_RE.split(content):
-        if "<" not in token and ">" not in token:
+        atom = token.strip()
+        if not atom:
             continue
-        match = _ORDER_RE.fullmatch(token.strip())
-        if (not match or not domains.get(match[1].casefold())
-                or _numeric_value(match[3]) is None):
+        if "<" in atom or ">" in atom:
+            match = _ORDER_RE.fullmatch(atom)
+            if (not match or match[1].casefold() in unsupported
+                    or not domains.get(match[1].casefold())
+                    or _numeric_value(match[3]) is None):
+                return False
+            continue
+        clause = _CLAUSE_RE.fullmatch(atom)
+        if clause:
+            if clause[1].casefold() in unsupported:
+                return False
+            continue
+        bare = atom
+        while bare.startswith("!"):
+            bare = bare[1:].strip()
+        alias = re.fullmatch(rf"\$({_VAR_TOKEN})", bare)
+        if alias and alias[1].casefold() in unsupported:
             return False
     return True
 
@@ -325,8 +403,22 @@ def build_bool_alias_map(sections, *, toggle_keys=None, menu=None, var_prefix=No
             if alias not in raw_defs:
                 raw_defs[alias] = rhs
 
+    for alias, rhs in raw_defs.items():
+        if not ordered_conditions_supported(rhs, alias_map):
+            alias_map.unsupported.add(alias.casefold())
+    changed = True
+    while changed:
+        changed = False
+        for alias, rhs in raw_defs.items():
+            if (alias.casefold() not in alias_map.unsupported
+                    and not ordered_conditions_supported(rhs, alias_map)):
+                alias_map.unsupported.add(alias.casefold())
+                changed = True
+
     for _ in range(2):
         for alias, rhs in raw_defs.items():
+            if alias.casefold() in alias_map.unsupported:
+                continue
             dnf = parse_condition_dnf(rhs, alias_map)
             if dnf and dnf != DNF_TRUE:
                 alias_map[alias] = dnf

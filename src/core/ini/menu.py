@@ -41,12 +41,13 @@ def _split_slot_branches(lines):
     slot/navigation chain. Body lines keep their nested if/endif so
     _parse_branch can read the guards inside.
     """
-    cleaned = [raw.split(";")[0].strip() for raw in lines]
+    cleaned = [(index, raw.split(";")[0].strip())
+               for index, raw in enumerate(lines)]
 
     def scan(block):
         found, i = [], 0
         while i < len(block):
-            line = block[i]
+            line = block[i][1]
             if not line.lower().startswith("if "):
                 i += 1
                 continue
@@ -55,7 +56,7 @@ def _split_slot_branches(lines):
             parts = [(line[3:].strip(), i + 1, None)]
             end = None
             while j < len(block):
-                cur = block[j]
+                cur = block[j][1]
                 low = cur.lower()
                 if low.startswith("if "):
                     depth += 1
@@ -96,7 +97,7 @@ def _split_slot_branches(lines):
                 for cond, start, stop in parts:
                     match = _SLOT_RE.fullmatch(cond or "")
                     if match and match.group(1).lower() == slot_var.lower():
-                        body = [text for text in block[start:stop] if text]
+                        body = [item for item in block[start:stop] if item[1]]
                         slot_parts.append((match.group(1), match.group(2), body))
             if len(slot_parts) >= _MIN_SLOTS and not nested:
                 found.extend(slot_parts)
@@ -121,18 +122,24 @@ def _negate(guard):
 
 
 def _parse_branch(body):
-    """Return (var, values, effects) for one slot, or None if it cycles nothing.
+    """Return the cycle and exact cycle-write lines for one slot.
 
     `effects` are the branch's other assignments — the mutual-exclusion rules a
     real click also applies (`if $bikinitop == 0 then $nipplepasties = 1`) —
     as [{when: {var, op, value} | None, var, value}] in source order.
     """
-    var, values, effects = None, None, []
+    var, values, effects, cycle_writes = None, None, [], []
+    cycle_complete = False
+    pending_increments = 0
     cycle_kind = None
     stack = []                    # {guard, branches} per open `if`
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
 
-    for line in body:
+    for body_index, body_item in enumerate(body):
+        if isinstance(body_item, tuple):
+            line_index, line = body_item
+        else:
+            line_index, line = body_index, body_item
         low = line.lower()
         if low.startswith("if "):
             stack.append({"guard": _guard(line[3:]), "branches": 1})
@@ -169,6 +176,8 @@ def _parse_branch(body):
         if flip and flip.group(1) == lhs:
             var, values = lhs, ["0", "1"]
             cycle_kind = "flip"
+            cycle_complete = pending_increments == 0
+            cycle_writes.append(line_index)
             continue
         incr_mod = _INCR_MOD_RE.fullmatch(rhs)
         if incr_mod and incr_mod.group(1) == lhs:
@@ -176,11 +185,17 @@ def _parse_branch(body):
             if count > 0:
                 var, values = lhs, _cycle_values(0, count - 1)
                 cycle_kind = "increment_mod"
+                pending_increments = 0
+                cycle_complete = True
+                cycle_writes.append(line_index)
             continue
         incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
         if incr and incr.group(1) == lhs:
             var, values = lhs, ["0", "1"]   # replaced below once the wrap is seen
             cycle_kind = "increment"
+            pending_increments += 1
+            cycle_complete = False
+            cycle_writes.append(line_index)
             if guard and guard["var"] == lhs and guard["op"] in ("<", "<="):
                 wrap = (guard, len(stack))
             continue
@@ -189,6 +204,9 @@ def _parse_branch(body):
             count = int(mod.group(2))
             if count > 0:
                 values = _cycle_values(0, count - 1)
+                pending_increments = 0
+                cycle_complete = True
+                cycle_writes.append(line_index)
             continue
 
         if not _LITERAL_RE.fullmatch(rhs):
@@ -199,8 +217,10 @@ def _parse_branch(body):
                 and wrap[0]["var"] == var):
             hi = int(wrap[0]["value"]) + (1 if wrap[0]["op"] == "<=" else 0)
             lo = int(rhs)
-            if hi >= lo:
+            if hi >= lo and pending_increments == 1:
                 values = _cycle_values(lo, hi)
+                pending_increments = 0
+                cycle_complete = True
             continue
         # `if $v > 2 / $v = 0 / endif` closes the cycle opened by `$v = $v + 1`.
         if (cycle_kind == "increment" and guard and lhs == var
@@ -208,8 +228,10 @@ def _parse_branch(body):
                 and guard["op"] in (">", ">=")):
             hi = int(guard["value"]) - (1 if guard["op"] == ">=" else 0)
             lo = int(rhs)
-            if hi >= lo:
+            if hi >= lo and pending_increments == 1:
                 values = _cycle_values(lo, hi)
+                pending_increments = 0
+                cycle_complete = True
             continue
         # A binary flip's reset is bookkeeping only when its guard is
         # demonstrably unreachable for the flip's known range. Reachable
@@ -229,7 +251,7 @@ def _parse_branch(body):
 
     if var is None:
         return None
-    return var, values, effects
+    return var, values, effects, cycle_writes, cycle_complete
 
 
 def _prefixed(name, var_prefix):
@@ -251,7 +273,8 @@ def _parse_arrow_button(lines):
     """
     cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
     variable = direction = None
-    for line in cleaned:
+    step_line = None
+    for line_index, line in enumerate(cleaned):
         match = _ASSIGN_RE.fullmatch(line)
         if not match:
             continue
@@ -259,6 +282,7 @@ def _parse_arrow_button(lines):
         step = _STEP_RE.fullmatch(rhs)
         if step and step.group(1).lower() == lhs.lower():
             variable, direction = lhs, step.group(2)
+            step_line = line_index
             break
     if variable is None:
         return None
@@ -296,7 +320,7 @@ def _parse_arrow_button(lines):
         hi = boundary - (1 if guard["op"] == ">=" else 0)
     if hi < lo:
         return None
-    return variable, _cycle_values(lo, hi)
+    return variable, _cycle_values(lo, hi), [step_line]
 
 
 def _controller_records(sections, section_filter=None):
@@ -462,7 +486,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
             continue
 
         src = first_source(lines) or {}
-        for slot_value, (var, values, effects) in parsed:
+        for slot_value, (var, values, effects, cycle_writes,
+                         cycle_complete) in parsed:
             var = declared(var)
             base_key = _prefixed(f"{name}#{slot_value}", var_prefix)
             key = base_key
@@ -475,6 +500,9 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                 "slot": int(slot_value),
                 "var": _prefixed(var, var_prefix),
                 "values": values,
+                "_cycle_write_locations": [
+                    (name, line_no) for line_no in cycle_writes],
+                "_cycle_domain_complete": cycle_complete,
                 "effects": [
                     {
                         "when": (None if e["when"] is None else
@@ -505,21 +533,25 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         if not parsed:
             continue
         slot = int(match.group(1))
-        variable, values = parsed
+        variable, values, cycle_writes = parsed
         arrow_items.setdefault(slot, []).append(
-            (variable, values, name, first_source(lines) or {}))
+            (variable, values, name, first_source(lines) or {}, cycle_writes))
 
     if len(arrow_items) >= _MIN_SLOTS:
         for slot, candidates in sorted(arrow_items.items()):
             # Both directions normally agree. Prefer the first range and only
             # merge candidates that drive the same case-insensitive variable.
-            variable, values, section, src = candidates[0]
+            variable, values, section, src, cycle_writes = candidates[0]
             same_var = [item for item in candidates
                         if item[0].lower() == variable.lower()]
-            if len(same_var) > 1:
-                ranges = {tuple(item[1]) for item in same_var}
-                if len(ranges) == 1:
-                    values = same_var[0][1]
+            ranges = {tuple(item[1]) for item in same_var}
+            range_conflict = len(ranges) > 1
+            if len(same_var) > 1 and not range_conflict:
+                values = same_var[0][1]
+            write_candidates = same_var if not range_conflict else []
+            cycle_write_locations = [
+                (item[2], line_no)
+                for item in write_candidates for line_no in item[4]]
             variable = declared(variable)
             button_section = re.sub(r"(?:Left|Right)$", "", section,
                                     flags=re.I)
@@ -534,6 +566,9 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                 "slot": slot,
                 "var": _prefixed(variable, var_prefix),
                 "values": values,
+                "_cycle_write_locations": cycle_write_locations,
+                "_cycle_domain_complete": not range_conflict,
+                "_cycle_domain_conflict": range_conflict,
                 "effects": [],
                 "source": source,
                 "ini_path": src.get("ini_path"),

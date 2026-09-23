@@ -13,7 +13,8 @@ import re
 import struct
 
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
-                  normalize_dnf, parse_condition_dnf)
+                  normalize_dnf, ordered_conditions_supported,
+                  parse_condition_dnf)
 from .sections import canonical_var_names
 
 
@@ -72,9 +73,11 @@ _WWMI_PHASE_RE = re.compile(
     r"\$(?P<speed>\w+)\s*\*\s*\$dt\s*$", re.I)
 
 
-def _compute_condition_is_supported(expression):
+def _compute_condition_is_supported(expression, aliases=None):
     """Reject condition syntax the DNF activation state cannot represent."""
-    return _COMPUTE_UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
+    return (_COMPUTE_UNSUPPORTED_CONDITION_RE.search(str(expression)) is None
+            and ordered_conditions_supported(
+                str(expression), aliases if aliases is not None else {}))
 
 
 class _ExpressionParser:
@@ -466,15 +469,31 @@ def discover_animation_clocks(sections, *, var_prefix=None,
 
     for section_name, lines in sections.items():
         stack = []
+        condition_support = []
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
             if not line:
                 continue
+            elif_match = _CLOCK_ELIF_RE.fullmatch(line)
+            if elif_match:
+                if condition_support:
+                    condition_support[-1] = (
+                        condition_support[-1]
+                        and ordered_conditions_supported(
+                            elif_match.group(1), aliases))
+            elif line.casefold().startswith("if "):
+                condition_support.append(
+                    ordered_conditions_supported(line[3:], aliases))
+            elif line.casefold() == "endif":
+                if condition_support:
+                    condition_support.pop()
             if _condition_stack_line(line, stack, aliases):
                 continue
             match = (_CLOCK_RE.fullmatch(line)
                      or _CLOCK_LITERAL_RANGE_RE.fullmatch(line))
             if not match:
+                continue
+            if not all(condition_support):
                 continue
             frame_local = _canonical(match.group("frame"), canonical)
             start_token = match.group("start")
@@ -1185,10 +1204,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     condition_support[-1] = (
                         condition_support[-1]
                         and _compute_condition_is_supported(
-                            elif_match.group(1)))
+                            elif_match.group(1), aliases))
             elif line.casefold().startswith("if "):
                 condition_support.append(
-                    _compute_condition_is_supported(line[3:]))
+                    _compute_condition_is_supported(line[3:], aliases))
             elif line.casefold() == "endif":
                 if condition_support:
                     condition_support.pop()
