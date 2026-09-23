@@ -269,6 +269,62 @@ def test_mesh_row_selection_invalidates_on_demand_renderer(
         context.close()
 
 
+def test_disabled_edit_mesh_hides_only_edit_context_actions(
+        edge_browser, frontend_url):
+    path = "EditMeshFeatureDisabled"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        page.evaluate("""() => {
+          document.body.classList.add('feature-edit-mesh-off');
+        }""")
+
+        source_row = page.locator("#mesh-list .draw-item").first
+        source_row.click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        page.wait_for_function(
+            "document.querySelector('.mesh-context-menu') !== null")
+        assert menu.count() == 1
+        assert menu.get_attribute("class") == "mesh-context-menu"
+        assert menu.evaluate("element => element.hidden") is True
+        assert menu.locator("button").all_inner_texts() == [
+            "Separate Loose Parts", "Merge Meshes", "Apply Mesh Changes",
+        ]
+        assert menu.locator("button").evaluate_all("""buttons => buttons.map(
+          button => ({
+            editAction: button.classList.contains('mesh-edit-context-action'),
+            hidden: button.hidden || getComputedStyle(button).display === 'none',
+          }))""") == [
+            {"editAction": True, "hidden": True},
+            {"editAction": True, "hidden": True},
+            {"editAction": True, "hidden": True},
+        ]
+        page.locator("#mesh-list .group-hdr").first.click(button="right")
+        assert menu.evaluate("element => element.hidden") is True
+        assert menu.locator("button").evaluate_all("""buttons => buttons.map(
+          button => button.hidden || getComputedStyle(button).display === 'none')""") == [
+            True, True, True,
+        ]
+
+        page.evaluate("""() => {
+          const action = document.createElement('button');
+          action.type = 'button';
+          action.setAttribute('role', 'menuitem');
+          action.className = 'future-context-action';
+          action.textContent = 'Copy Mesh Info';
+          document.querySelector('.mesh-context-menu').appendChild(action);
+        }""")
+        source_row.click(button="right")
+        assert menu.is_visible()
+        assert menu.locator(".future-context-action").is_visible()
+        assert menu.locator(".mesh-edit-context-action").evaluate_all("""actions =>
+          actions.every(action => action.hidden
+            || getComputedStyle(action).display === 'none')""") is True
+    finally:
+        context.close()
+
+
 def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         edge_browser, frontend_url):
     path = "LooseParts"

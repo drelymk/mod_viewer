@@ -581,9 +581,9 @@ def start():
     tsl_url = f"{_VENDOR_PREFIX}three.tsl.js"
     addons_url = f"{_VENDOR_PREFIX}addons/"
 
-    # Feature flags only ever hide a button (app/settings/features.py) -- baked into
-    # a <body> class server-side so there's no flash of a button appearing
-    # then disappearing after load.
+    # Feature flags only ever hide optional UI actions
+    # (app/settings/features.py) -- baked into a <body> class server-side so
+    # there's no flash of a control appearing then disappearing after load.
     flags = features.get_features()
     body_classes = []
     if not flags["export"]:
@@ -592,6 +592,8 @@ def start():
         body_classes.append("feature-modify-toggle-off")
     if not flags["open_disabled_mod"]:
         body_classes.append("feature-open-disabled-mod-off")
+    if not flags["edit_mesh"]:
+        body_classes.append("feature-edit-mesh-off")
 
     template_vars = {
         "__THREE_URL__": three_url,

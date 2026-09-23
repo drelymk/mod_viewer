@@ -21,6 +21,7 @@ def _read_index(tmp_path, monkeypatch, feature_flags=None):
     monkeypatch.setattr(server.paths, "vendor_dir", lambda: str(web))
     monkeypatch.setattr(server.features, "get_features", lambda: {
         "export": True, "modify_toggle": True, "open_disabled_mod": True,
+        "edit_mesh": True,
     } if feature_flags is None else feature_flags)
 
     response = urllib.request.urlopen(server.start(), timeout=5)
@@ -49,10 +50,21 @@ def test_server_generates_fresh_nonce_and_applies_it_consistently(
 def test_server_marks_disabled_mod_feature_as_hidden(tmp_path, monkeypatch):
     _headers, body = _read_index(
         tmp_path, monkeypatch,
-        {"export": True, "modify_toggle": True, "open_disabled_mod": False},
+        {"export": True, "modify_toggle": True, "open_disabled_mod": False,
+         "edit_mesh": True},
     )
 
     assert "feature-open-disabled-mod-off" in body
+
+
+def test_server_marks_disabled_mesh_edit_feature_as_hidden(tmp_path, monkeypatch):
+    _headers, body = _read_index(
+        tmp_path, monkeypatch,
+        {"export": True, "modify_toggle": True, "open_disabled_mod": True,
+         "edit_mesh": False},
+    )
+
+    assert "feature-edit-mesh-off" in body
 
 
 def test_zip_texture_publication_keeps_member_bytes_private(tmp_path):
