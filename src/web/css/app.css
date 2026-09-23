@@ -934,16 +934,18 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 #dialog-ok:hover { background: var(--success-hover); }
 
 /* ── build-time feature flags (app/settings/features.py) ────────────────── */
-/* Only hides the button; the frontend/backend behind it is unaffected -- see
- * app/settings/features.py's docstring. Classes are baked server-side into <body> (see
- * app/runtime/server.py), so a hidden feature never flashes visible on load. Always
- * absent when running from source (python viewer_app.py shows everything). */
+/* Only hides optional UI actions; their implementations are unaffected -- see
+ * app/settings/features.py's docstring. Classes are baked server-side into
+ * <body> (see app/runtime/server.py), so hidden features never flash visible
+ * on load. Always absent when running from source (python viewer_app.py shows
+ * everything). */
 body.feature-export-off #export-btn { display: none; }
 body.feature-modify-toggle-off #toggle-add-btn { display: none; }
 body.feature-modify-toggle-off .toggle-actions { display: none; }
 body.feature-modify-toggle-off #present-action-btn { display: none; }
 body.feature-modify-toggle-off .present-author-actions { display: none; }
 body.feature-open-disabled-mod-off #open-disabled-mod { display: none; }
+body.feature-edit-mesh-off .mesh-edit-context-action { display: none; }
 .menu-slider-item {
   gap: 7px;
 }

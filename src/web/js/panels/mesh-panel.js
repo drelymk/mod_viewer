@@ -176,18 +176,21 @@ function ensureMeshContextMenu() {
   meshContextMenu.hidden = true;
   meshContextSeparateAction = document.createElement('button');
   meshContextSeparateAction.type = 'button';
+  meshContextSeparateAction.className = 'mesh-edit-context-action';
   meshContextSeparateAction.setAttribute('role', 'menuitem');
   meshContextSeparateAction.dataset.i18n = 'mesh.separateLooseParts';
   meshContextSeparateAction.textContent = t('mesh.separateLooseParts');
   meshContextMenu.appendChild(meshContextSeparateAction);
   meshContextMergeAction = document.createElement('button');
   meshContextMergeAction.type = 'button';
+  meshContextMergeAction.className = 'mesh-edit-context-action';
   meshContextMergeAction.setAttribute('role', 'menuitem');
   meshContextMergeAction.dataset.i18n = 'mesh.mergeLooseParts';
   meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
   meshContextMenu.appendChild(meshContextMergeAction);
   meshContextApplyAction = document.createElement('button');
   meshContextApplyAction.type = 'button';
+  meshContextApplyAction.className = 'mesh-edit-context-action';
   meshContextApplyAction.setAttribute('role', 'menuitem');
   meshContextApplyAction.dataset.i18n = 'mesh.applyMeshChanges';
   meshContextApplyAction.textContent = t('mesh.applyMeshChanges');
@@ -228,7 +231,6 @@ function openMeshContextMenu(event, mesh) {
   event.stopPropagation();
   if (!isMeshSelected(mesh)) selectMesh(mesh);
   const menu = ensureMeshContextMenu();
-  menu.hidden = false;
   meshContextTarget = mesh;
   const descriptor = mesh.userData?.componentDescriptor;
   const locked = descriptor?.meshEditState === 'applied';
@@ -237,7 +239,7 @@ function openMeshContextMenu(event, mesh) {
   meshContextApplyAction.hidden = true;
   meshContextSeparateAction.disabled = locked || isLoosePart(mesh);
   meshContextMergeAction.disabled = locked || !canMergeLooseParts(getSelectedMeshes());
-  positionMeshContextMenu(menu, event);
+  showMeshContextMenuIfActionsVisible(menu, event);
 }
 
 function openComponentContextMenu(event, descriptor) {
@@ -248,13 +250,25 @@ function openComponentContextMenu(event, descriptor) {
   event.preventDefault();
   event.stopPropagation();
   const menu = ensureMeshContextMenu();
-  menu.hidden = false;
   meshContextTarget = descriptor;
   meshContextSeparateAction.hidden = true;
   meshContextMergeAction.hidden = true;
   meshContextApplyAction.hidden = false;
   meshContextApplyAction.disabled = descriptor.meshEditState !== 'edited'
     || descriptor.meshEditApplying === true || !descriptor.meshEditWritable;
+  showMeshContextMenuIfActionsVisible(menu, event);
+}
+
+function showMeshContextMenuIfActionsVisible(menu, event) {
+  const hasVisibleAction = Array.from(
+    menu.querySelectorAll('button, [role="menuitem"]')).some(action =>
+    !action.hidden && getComputedStyle(action).display !== 'none'
+      && getComputedStyle(action).visibility !== 'hidden');
+  if (!hasVisibleAction) {
+    menu.hidden = true;
+    return;
+  }
+  menu.hidden = false;
   positionMeshContextMenu(menu, event);
 }
 

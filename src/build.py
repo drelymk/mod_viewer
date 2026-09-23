@@ -430,6 +430,7 @@ _FEATURE_DEFAULTS = {
     "export": True,
     "modify_toggle": True,
     "open_disabled_mod": True,
+    "edit_mesh": True,
 }
 
 
@@ -450,8 +451,7 @@ def resolve_features(ini_path):
         return flags
     for key in flags:
         # ConfigParser lowercases option names on read (its default
-        # optionxform), so "Export"/"Modify_Toggle" in the ini file are looked
-        # up here in lowercase to match.
+        # optionxform), so ini keys are looked up here in lowercase.
         if parser.has_option("features", key):
             try:
                 flags[key] = parser.getboolean("features", key)
@@ -478,6 +478,7 @@ def write_baked_features(flags, path=BAKED_FEATURES_MODULE):
             f"EXPORT = {flags['export']!r}\n"
             f"MODIFY_TOGGLE = {flags['modify_toggle']!r}\n"
             f"OPEN_DISABLED_MOD = {flags['open_disabled_mod']!r}\n"
+            f"EDIT_MESH = {flags['edit_mesh']!r}\n"
         )
 
 
