@@ -135,8 +135,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Texture pools and backend loading must not eagerly decode/render sources.
   Production texture rendering stays at two concurrent jobs unless controlled
   benchmarks justify changing it. Native DDS uses validated eligibility only;
-  unsupported, transformed, oversized or malformed sources use PNG fallback
-  with the same orientation and role-based color space.
+  model DDS must be supported, untransformed, no larger than 8192 in either
+  dimension, and structurally valid; otherwise publication rejects it. Menu
+  DDS alone uses the existing lazy 256px PNG thumbnail path.
 
 ## Animation reconstruction
 

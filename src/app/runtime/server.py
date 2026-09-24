@@ -26,7 +26,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 
-from core.textures.dds import (DDSInfo, native_dds_info,
+from core.textures.dds import (DDSInfo, MAX_MODEL_DDS_SIZE, native_dds_info,
                                native_dds_info_from_header)
 from core.textures import (render_texture_png, normalize_texture_role,
                            normalize_texture_transform)
@@ -61,6 +61,7 @@ class TextureSource:
     preserve_alpha: bool = False
     transform: str = "passthrough"
     native_dds: bool = False
+    force_png: bool = False
     dds_info: DDSInfo | None = None
     data: bytes | None = None
     logical_path: str | None = None
@@ -94,8 +95,8 @@ class TexturePublication:
         registry still requires a real file and never exposes that path in the
         URL, so browser requests can only address sources registered here.
         ``validate=True`` is reserved for explicit manual picks and performs
-        one immediate render so corrupt files return an error before they are
-        persisted in viewer metadata.
+        one immediate validation so corrupt files return an error before they
+        are persisted in viewer metadata.
         """
         if not path:
             return None
@@ -126,8 +127,9 @@ class TexturePublication:
         if max_size <= 0:
             return None
         preserve_alpha = bool(preserve_alpha)
+        force_png = bool(force_png)
         dedupe_key = (path_identity, role, max_size, preserve_alpha,
-                      transform)
+                      transform, force_png)
         existing_source = None
         with _texture_lock:
             if (_texture_publications.get(self.token) is not self
@@ -137,14 +139,13 @@ class TexturePublication:
             if source_id is not None:
                 existing_source = self._sources[source_id]
                 if not validate:
-                    return _texture_url(
-                        self.token, source_id, existing_source,
-                        force_png=force_png)
+                    return _texture_url(self.token, source_id, existing_source)
+
+        is_dds = (logical_path if source_ref else path).lower().endswith(".dds")
 
         if source_ref:
             dds_info = None
-            if (logical_path.lower().endswith(".dds")
-                    and transform == "passthrough"):
+            if is_dds and not force_png and transform == "passthrough":
                 try:
                     header = self.source.read_prefix(path, 148)
                     file_size = self.source.size(path)
@@ -152,19 +153,23 @@ class TexturePublication:
                     pass
                 else:
                     dds_info = native_dds_info_from_header(
-                        header, file_size, max_size, transform,
+                        header, file_size, MAX_MODEL_DDS_SIZE, transform,
                         source_name=logical_path)
         else:
-            dds_info = native_dds_info(
-                path, max_size, transform, source_name=logical_path)
+            dds_info = (native_dds_info(
+                path, MAX_MODEL_DDS_SIZE, transform, source_name=logical_path)
+                if is_dds and not force_png else None)
+        if is_dds and not force_png and dds_info is None:
+            return None
         source = existing_source or TextureSource(
             path=None if source_ref else path, data=data,
             logical_path=logical_path, role=role, max_size=max_size,
             preserve_alpha=preserve_alpha, transform=transform,
             dds_info=dds_info, native_dds=dds_info is not None,
+            force_png=force_png,
             mod_source=self.source if source_ref else None,
             source_ref=path if source_ref else None)
-        if validate and _render_texture_source(source) is None:
+        if validate and not source.native_dds and _render_texture_source(source) is None:
             return None
 
         with _texture_lock:
@@ -176,8 +181,7 @@ class TexturePublication:
                 source_id = str(len(self._sources))
                 self._dedupe[dedupe_key] = source_id
                 self._sources[source_id] = source
-            return _texture_url(
-                self.token, source_id, source, force_png=force_png)
+            return _texture_url(self.token, source_id, source)
 
     def register_menu_image(self, path):
         """Register a small PNG preview without decoding it during load."""
@@ -252,8 +256,8 @@ def _lookup_texture(token, source_id):
         return publication._sources.get(source_id)
 
 
-def _texture_url(token, source_id, source, *, force_png=False):
-    suffix = ".dds" if source.native_dds and not force_png else ".png"
+def _texture_url(token, source_id, source):
+    suffix = ".dds" if source.native_dds else ".png"
     return f"{_TEXTURE_PREFIX}{token}/{source_id}{suffix}"
 
 
@@ -488,7 +492,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(blob)
 
     def _send_texture(self, address):
-        """Serve one registered native DDS or PNG fallback."""
+        """Serve one registered native DDS or PNG texture."""
         parts = address.split("/")
         if len(parts) != 2 or not all(parts):
             self.send_error(404, "Texture not found")
@@ -517,6 +521,9 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, "Texture not found")
                 return
             return self._send_native_dds(token, source_id, source)
+        if source.native_dds and not source.force_png:
+            self.send_error(404, "Texture not found")
+            return
         png = _render_texture_request(token, source_id, source)
         if png is None:
             self.send_error(404, "Texture unavailable")

@@ -16,6 +16,7 @@ _DDSCAPS2_VOLUME = 0x200000
 _D3D10_RESOURCE_DIMENSION_TEXTURE2D = 3
 _D3D10_RESOURCE_MISC_TEXTURECUBE = 0x4
 _MAX_DDS_DIMENSION = 65536
+MAX_MODEL_DDS_SIZE = 8192
 
 
 @dataclass(frozen=True)
@@ -254,7 +255,7 @@ def inspect_dds_header(header, file_size=None):
     return info
 
 
-def native_dds_info(path, max_size=2048, transform="passthrough",
+def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, transform="passthrough",
                     source_name=None):
     """Return native-delivery metadata when the source meets PR21 rules."""
     try:
@@ -278,7 +279,8 @@ def native_dds_info(path, max_size=2048, transform="passthrough",
     return info
 
 
-def native_dds_info_from_header(header, file_size, max_size=2048,
+def native_dds_info_from_header(header, file_size,
+                                max_size=MAX_MODEL_DDS_SIZE,
                                 transform="passthrough", source_name=None):
     """Return native-delivery metadata from a bounded header read."""
     try:

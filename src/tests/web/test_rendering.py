@@ -3220,10 +3220,14 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
         edge_browser, frontend_url, tmp_path):
     dds_path = tmp_path / "orientation.dds"
     dds_path.write_bytes(_dxt1_vertical_gradient())
+    png_path = tmp_path / "orientation-reference.png"
+    reference = Image.new("RGB", (4, 4), (255, 0, 0))
+    reference.paste((0, 0, 255), (0, 2, 4, 4))
+    reference.save(png_path)
     publication = server.begin_texture_publication(str(tmp_path))
     dds_url = publication.register(str(dds_path))
+    png_url = publication.register(str(png_path))
     publication.commit()
-    png_url = dds_url[:-4] + ".png"
     payload = _parity_payload(dds_url)
     context, page = _page(edge_browser, frontend_url, {"Parity": payload})
     try:
@@ -3249,8 +3253,8 @@ def test_direct_dds_matches_png_orientation_and_diffuse_color(
         png_pixels = _sample_mesh_pixels_at(page, [(0, 0.65), (0, -0.65)])
 
         assert all(
-            max(abs(left - right) for left, right in zip(direct, fallback)) <= 40
-            for direct, fallback in zip(direct_pixels, png_pixels)), (
+            max(abs(left - right) for left, right in zip(direct, png)) <= 40
+            for direct, png in zip(direct_pixels, png_pixels)), (
                 direct_pixels, png_pixels)
         assert direct_pixels[0] != direct_pixels[1]
         assert png_pixels[0] != png_pixels[1]
@@ -3692,7 +3696,7 @@ def test_failed_texture_stays_fallback_without_retrying(
     finally:
         context.close()
 
-def test_native_dds_failure_falls_back_without_black_frame(
+def test_native_dds_failure_stays_flat_without_png_request(
         edge_browser, frontend_url):
     payload = _payload("NativeDDS")
     entry = payload["meshes"]["Body-NativeDDS-0"]
@@ -3705,30 +3709,16 @@ def test_native_dds_failure_falls_back_without_black_frame(
 
     context, page = _page(edge_browser, frontend_url, {"NativeDDS": payload})
     try:
-        supported = page.evaluate("""
-          async () => {
-            const {supportsBCTextureCompression} =
-              await import('./js/scene/renderer-capabilities.js');
-            return supportsBCTextureCompression();
-          }
-        """)
-        if not supported:
-            pytest.skip("native DDS is not supported by the test renderer")
-
         def hold_dds(route):
             requests["dds"] += 1
             pending["dds"] = route
 
-        def fulfill_png(route):
+        def count_png(route):
             requests["png"] += 1
-            route.fulfill(
-                status=200,
-                content_type="image/png",
-                body=base64.b64decode(_PNG_URI.split(",", 1)[1]),
-            )
+            route.abort()
 
-        page.route("**/native.dds", hold_dds)
-        page.route("**/native.png", fulfill_png)
+        page.route("**/native.dds**", hold_dds)
+        page.route("**/native.png", count_png)
         _open(page, "NativeDDS")
         page.locator(".draw-item").wait_for()
         page.wait_for_function("""
@@ -3738,16 +3728,64 @@ def test_native_dds_failure_falls_back_without_black_frame(
         assert requests == {"dds": 1, "png": 0}
 
         pending["dds"].abort()
-        page.wait_for_function("""
-          () => {
-            const binding = window.modViewer.activeMeshes[0]?.material
-              ?.userData?.gameMaterial?.bindings?.diffuse;
-            return binding?.enabledNode?.value === true
-              && binding.textureNode.value?.isCompressedTexture !== true
-              && binding.textureNode.value?.image?.width === 1;
-          }
-        """)
-        assert requests == {"dds": 1, "png": 1}
+        page.wait_for_function("""async key => {
+          const {hasTexture} = await import('./js/mesh/mesh-factory.js');
+          return hasTexture(key) === false;
+        }""", arg=key)
+        assert requests == {"dds": 1, "png": 0}
+        assert page.evaluate("""() => {
+          const mesh = window.modViewer.activeMeshes[0];
+          return mesh.material.userData.gameMaterial.bindings.diffuse
+            .enabledNode.value;
+        }""") is False
+        page.evaluate("""async key => {
+          const {reloadTextures} = await import('./js/mesh/mesh-factory.js');
+          window.__reloadFailedDDS = reloadTextures([key], {force: true})
+            .then(() => false, () => true);
+        }""", key)
+        for _ in range(50):
+            if requests["dds"] == 2:
+                break
+            page.wait_for_timeout(20)
+        assert requests["dds"] == 2
+        pending["dds"].abort()
+        assert page.evaluate("() => window.__reloadFailedDDS") is True
+        assert requests == {"dds": 2, "png": 0}
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("game,api,source,packing", [
+    ("genshin", "gimi", "normal_map", "rg"),
+    ("zzz", "zzmi", "normal_map", "rg"),
+    ("wuwa", "rabbitfx", "normal_data", "rg"),
+    ("hsr", "srmi", "normal_map", "rgb"),
+])
+def test_material_normal_rg_packing_uses_profile_source(
+        edge_browser, frontend_url, game, api, source, packing):
+    context, page = _page(edge_browser, frontend_url, {})
+    try:
+        profile = material_profile_for(game, api).to_metadata()
+        state = page.evaluate("""async profile => {
+          const {createGameMaterial} = await import(
+            './js/mesh/material-profile.js');
+          const material = createGameMaterial(profile, 0xcccccc);
+          const game = material.userData.gameMaterial;
+          const result = {
+            source: game.normalSource,
+            packing: game.normalPacking,
+            bindingRole: game.nodes.normal.role,
+            normalNode: !!material.normalNode,
+          };
+          material.dispose();
+          return result;
+        }""", profile)
+        assert state == {
+            "source": source,
+            "packing": packing,
+            "bindingRole": source,
+            "normalNode": True,
+        }
     finally:
         context.close()
 

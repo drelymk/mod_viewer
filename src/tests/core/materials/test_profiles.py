@@ -19,6 +19,8 @@ def test_zzz_uses_light_map_g_for_metalness_and_material_map_b_for_specular():
     assert profile.direct_shadow_model == "zzz_toon"
     metadata = profile.to_metadata()
     assert metadata["direct_shadow_model"] == "zzz_toon"
+    assert metadata["normal_source"] == "normal_map"
+    assert metadata["normal_xy"] == ["r", "g"]
 
 
 def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
@@ -35,6 +37,8 @@ def test_genshin_uses_light_map_r_response_and_g_toon_shadow():
     assert profile.direct_shadow_model == "genshin_toon"
     metadata = profile.to_metadata()
     assert metadata["direct_shadow_model"] == "genshin_toon"
+    assert metadata["normal_source"] == "normal_map"
+    assert metadata["normal_xy"] == ["r", "g"]
 
 
 def test_material_profile_accepts_known_toon_models_and_rejects_unknown():
@@ -76,6 +80,7 @@ def test_wuwa_keeps_normal_data_available_for_raw_or_unknown_api():
 
         assert profile.id == f"wuwa:{texture_api}"
         assert profile.normal_xy == ("r", "g")
+        assert profile.normal_source == "normal_data"
         assert profile.normal_data_b == ChannelRef("normal_data", "b")
         assert profile.normal_data_a == ChannelRef("normal_data", "a")
         assert profile.shadow_mask is None

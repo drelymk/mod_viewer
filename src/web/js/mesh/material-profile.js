@@ -127,10 +127,10 @@ function profileNormalXY(profile) {
 }
 
 function profileNormalSources(profile) {
-  // MaterialInterpretation.normal_xy is defined against WuWa's intact
-  // normal_data source.  Keep this dependency separate from packed response
-  // classification: raw WuWa still uses a standard material.
-  return profileNormalXY(profile) ? ['normal_data'] : [];
+  // The source is part of the material profile, independent of packed
+  // response classification.
+  return profileNormalXY(profile) && profile?.normal_source === 'normal_data'
+    ? ['normal_data'] : [];
 }
 
 function profileDebugSource(profile, mode) {
@@ -250,7 +250,8 @@ function createProfileNormalNode(profile, bindings, normalScaleNode,
   fallbackNormal) {
   const xy = profileNormalXY(profile);
   if (xy) {
-    const binding = bindings.normal_data;
+    const binding = bindings[profile?.normal_source === 'normal_data'
+      ? 'normal_data' : 'normal_map'];
     const sampled = vec3(
       binding.textureNode[xy[0]], binding.textureNode[xy[1]], 1);
     const packedNormal = normalMap(sampled, normalScaleNode);
@@ -832,7 +833,7 @@ export function configureGameMaterial(material, profile, options = {}) {
   const packedResponse = Boolean(
     (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
   const resolvedProfile = profile || { id: 'none' };
-  const normalSource = profileNormalXY(resolvedProfile)
+  const normalSource = resolvedProfile.normal_source === 'normal_data'
     ? 'normal_data' : 'normal_map';
   const hasMaterialId = hasUv
     && validRef(resolvedProfile.material_id)
@@ -855,7 +856,7 @@ export function configureGameMaterial(material, profile, options = {}) {
   const state = {
     profile: resolvedProfile,
     normalSource,
-    normalPacking: normalSource === 'normal_data' ? 'rg' : 'rgb',
+    normalPacking: profileNormalXY(resolvedProfile) ? 'rg' : 'rgb',
     packedResponse,
     hasUv,
     bindings: createBindings(hasUv),

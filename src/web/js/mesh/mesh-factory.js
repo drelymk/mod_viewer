@@ -10,7 +10,6 @@ import { syncMeshColorAdjustment } from './mesh-color-session.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture, reloadDDSTexture } from '../textures/dds-loader.js';
 import { requestRender } from '../scene/render-scheduler.js';
-import { supportsBCTextureCompression } from '../scene/renderer-capabilities.js';
 import { splitTextureKey } from '../textures/texture-key.js';
 import { CHARACTER_AO_LAYER } from '../scene/viewer-layers.js';
 
@@ -20,7 +19,6 @@ let registry = {};
 const loaders = {};
 const readyTextures = new Set();
 const failedTextures = new Set();
-const nativeDDSFallbacks = new Set();
 const textureUsers = new Map();
 const reloadTokens = new Map();
 // all: every authored map; diffuse-normal: color + the material's actual
@@ -42,7 +40,6 @@ export function setTextures(textures) {
   }
   failedTextures.clear();
   readyTextures.clear();
-  nativeDDSFallbacks.clear();
   reloadTokens.clear();
   textureUsers.clear();
 }
@@ -57,7 +54,6 @@ export function addTexture(key, uri) {
   delete loaders[key];
   readyTextures.delete(key);
   failedTextures.delete(key);
-  nativeDDSFallbacks.delete(key);
   reloadTokens.delete(key);
   textureUsers.delete(key);
   return true;
@@ -72,7 +68,6 @@ export function removeTextures(keys) {
     delete loaders[key];
     readyTextures.delete(key);
     failedTextures.delete(key);
-    nativeDDSFallbacks.delete(key);
     reloadTokens.delete(key);
     textureUsers.delete(key);
     removed += 1;
@@ -153,7 +148,6 @@ function loadPngReload(key, uri, requestUri, oldTexture, token,
 
 function reloadNativeTexture(key, uri, requestUri, texture, token) {
   return new Promise((resolve, reject) => {
-    let fallbackPromise = null;
     let errorHandled = false;
     const onLoad = () => {
       if (reloadTokens.get(key) !== token || registry[key] !== uri) {
@@ -163,26 +157,19 @@ function reloadNativeTexture(key, uri, requestUri, texture, token) {
       handleTextureReady(key, texture, uri);
       resolve(true);
     };
-    const onError = () => {
+    const onError = error => {
       errorHandled = true;
       if (reloadTokens.get(key) !== token || registry[key] !== uri) {
         resolve(false);
         return;
       }
-      nativeDDSFallbacks.add(key);
-      readyTextures.delete(key);
-      if (loaders[key] === texture) delete loaders[key];
-      disposeTexture(texture);
-      fallbackPromise = loadPngReload(
-        key, uri, reloadUri(pngFallbackUri(uri), token), null, token, false);
-      fallbackPromise.then(resolve, reject);
+      handleTextureError(key, texture, uri);
+      reject(error);
     };
     reloadDDSTexture(
       texture, requestUri, onLoad, onError,
       () => reloadTokens.get(key) === token && registry[key] === uri,
-    ).catch(error => {
-      if (!errorHandled) reject(error);
-    });
+    ).catch(error => { if (!errorHandled) reject(error); });
   });
 }
 
@@ -200,19 +187,14 @@ function loadNativeReload(key, uri, requestUri, token) {
       handleTextureReady(key, texture, uri);
       resolve(true);
     };
-    const finishError = () => {
+    const finishError = error => {
       if (reloadTokens.get(key) !== token || registry[key] !== uri) {
         disposeTexture(texture);
         resolve(false);
         return;
       }
-      nativeDDSFallbacks.add(key);
-      readyTextures.delete(key);
-      if (loaders[key] === texture) delete loaders[key];
-      disposeTexture(texture);
-      loadPngReload(
-        key, uri, reloadUri(pngFallbackUri(uri), token), null, token, false)
-        .then(resolve, reject);
+      handleTextureError(key, texture, uri);
+      reject(error);
     };
     texture = loadDDSTexture(
       requestUri,
@@ -220,13 +202,13 @@ function loadNativeReload(key, uri, requestUri, token) {
         if (!texture) loadedBeforeAssignment = true;
         else finishReady();
       },
-      () => {
-        if (!texture) errorBeforeAssignment = true;
-        else finishError();
+      error => {
+        if (!texture) errorBeforeAssignment = error || new Error('DDS load failed');
+        else finishError(error);
       });
     loaders[key] = texture;
     if (loadedBeforeAssignment) finishReady();
-    if (errorBeforeAssignment) finishError();
+    if (errorBeforeAssignment) finishError(errorBeforeAssignment);
   });
 }
 
@@ -240,11 +222,9 @@ export function reloadTextures(keys, {force = false} = {}) {
     const token = (reloadTokens.get(key) || 0) + 1;
     reloadTokens.set(key, token);
     const oldTexture = loaders[key];
-    const nativeDDS = isDDSUri(uri)
-      && supportsBCTextureCompression()
-      && !nativeDDSFallbacks.has(key);
+    const nativeDDS = isDDSUri(uri);
     if (nativeDDS) {
-      reloads.push(oldTexture?.isCompressedTexture
+      reloads.push(oldTexture?.isCompressedTexture || oldTexture?.isDataTexture
         ? reloadNativeTexture(
           key, uri, force ? reloadUri(uri, token) : uri, oldTexture, token)
         : loadNativeReload(
@@ -252,14 +232,12 @@ export function reloadTextures(keys, {force = false} = {}) {
       continue;
     }
 
-    const requestUri = reloadUri(
-      isDDSUri(uri) ? pngFallbackUri(uri) : uri, token);
+    const requestUri = reloadUri(uri, token);
     if (!force) {
       disposeTexture(oldTexture);
       delete loaders[key];
       readyTextures.delete(key);
       failedTextures.delete(key);
-      nativeDDSFallbacks.delete(key);
     }
     reloads.push(loadPngReload(
       key, uri, requestUri, force ? oldTexture : null, token, force));
@@ -323,25 +301,6 @@ function isDDSUri(uri) {
   return typeof uri === 'string' && /\.dds(?:[?#]|$)/i.test(uri);
 }
 
-function pngFallbackUri(uri) {
-  return uri.replace(/\.dds(?=([?#]|$))/i, '.png');
-}
-
-function handleNativeDDSFailure(key, texture, uri) {
-  // A stale native request must not evict a replacement texture.  The next
-  // refresh uses the same registry key and the existing PNG publication.
-  if (registry[key] !== uri || loaders[key] !== texture) {
-    disposeTexture(texture);
-    return;
-  }
-  if (nativeDDSFallbacks.has(key)) return;
-  nativeDDSFallbacks.add(key);
-  readyTextures.delete(key);
-  if (loaders[key] === texture) delete loaders[key];
-  disposeTexture(texture);
-  for (const mesh of textureUsers.get(key) || []) refreshMeshTexture(mesh);
-}
-
 function getTexture(mesh, key) {
   const parsed = splitTextureKey(key);
   if (!parsed || !registry[key]) return null;
@@ -349,11 +308,8 @@ function getTexture(mesh, key) {
   if (failedTextures.has(key)) return null;
   if (!loaders[key]) {
     const uri = registry[key];
-    const nativeDDS = isDDSUri(uri)
-      && supportsBCTextureCompression()
-      && !nativeDDSFallbacks.has(key);
-    const requestUri = nativeDDS ? uri
-      : isDDSUri(uri) ? pngFallbackUri(uri) : uri;
+    const nativeDDS = isDDSUri(uri);
+    const requestUri = uri;
     let texture;
     let failedBeforeAssignment = false;
     let readyBeforeAssignment = false;
@@ -372,9 +328,7 @@ function getTexture(mesh, key) {
       handleTextureReady(key, texture, uri);
     };
     if (nativeDDS) {
-      texture = loadDDSTexture(
-        requestUri, onReady,
-        () => handleNativeDDSFailure(key, texture, uri));
+      texture = loadDDSTexture(requestUri, onReady, onError);
     } else {
       texture = new THREE.TextureLoader().load(
         requestUri, onReady, undefined, onError);

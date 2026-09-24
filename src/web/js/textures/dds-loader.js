@@ -1,7 +1,6 @@
 // Minimal, strict DDS transport for the formats the viewer can publish.
-// Parsing is deliberately independent from Three's loaders so a malformed or
-// unsupported payload can fall back to the existing PNG path without changing
-// the material or registry semantics.
+// Parsing is deliberately independent from Three's loaders. Malformed or
+// unsupported model DDS stays in the ordinary failed-texture state.
 
 import * as THREE from 'three';
 
