@@ -128,6 +128,41 @@ $\\Target\\style = $value
     }]]
 
 
+def test_forwarded_numbered_button_image_uses_source_key(tmp_path):
+    parsed = _forwarded_fixture(tmp_path, r"""
+[Constants]
+global $key_24 = 0
+global $value_24 = 0
+
+[CommandListUpdateSliderPage3]
+$value_24 = 1 - $value_24
+
+[CommandListDrawSliderButtonPage3]
+if $value_24 == 0
+    ps-t100 = ResourceSliderButton24_1
+else
+    ps-t100 = ResourceSliderButton24_2
+endif
+
+[Present]
+$\Target\key_24 = $key_24
+$key_24 = $key_24 + $value_24
+if $key_24 > 1
+    $key_24 = 0
+endif
+
+[ResourceSliderButton24_1]
+filename = ui/24.dds
+
+[ResourceSliderButton24_2]
+filename = ui/24.dds
+""", target_var="key_24", target_default="0")
+    control = next(iter(parsed.menu.values()))
+    assert control["slot"] == 1
+    assert control["var"] == "mod(5)::key_24"
+    assert control["image_file"] == "ui/24.dds"
+
+
 def test_nested_namespace_forwarding_exposes_target_control(tmp_path):
     parsed = _forwarded_fixture(tmp_path, """
 [Constants]

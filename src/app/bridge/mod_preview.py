@@ -61,6 +61,11 @@ class ModPreview:
 
         return register
 
+    @staticmethod
+    def _active_menu_image_source(folder_path):
+        publication = server.active_texture_publication(folder_path)
+        return publication.register_menu_image if publication else None
+
     def authoritative_context(self, folder_path, disabled_ini=False,
                               serialize_overrides=False):
         """Load selected INI documents while preserving the current session."""
@@ -178,7 +183,8 @@ class ModPreview:
             result = mod_loader.load_mod(
                 context=context, overrides=overrides,
                 pending_new_sections=pending_new_sections, geometry=geometry,
-                texture_source=publication.register)
+                texture_source=publication.register,
+                menu_image_source=publication.register_menu_image)
             if (disabled_ini and isinstance(result, dict)
                     and not context.ini_paths
                     and result.get("error") ==
@@ -260,7 +266,8 @@ class ModPreview:
                 self.authoritative_context(folder_path)
             result = mod_loader.load_control_state(
                 context, overrides, pending,
-                active_mesh_keys=self._active_mesh_keys.get(folder_path))
+                active_mesh_keys=self._active_mesh_keys.get(folder_path),
+                menu_image_source=self._active_menu_image_source(folder_path))
             metadata.hydrate_present(
                 folder_path, result["controls"]["present"], context.metadata)
             return result
@@ -284,7 +291,8 @@ class ModPreview:
                 self.authoritative_context(folder_path)
             result = mod_loader.load_semantic_state(
                 context, overrides, pending,
-                active_mesh_keys=self._active_mesh_keys.get(folder_path))
+                active_mesh_keys=self._active_mesh_keys.get(folder_path),
+                menu_image_source=self._active_menu_image_source(folder_path))
             metadata.hydrate_present(
                 folder_path, result["controls"]["present"], context.metadata)
             return result

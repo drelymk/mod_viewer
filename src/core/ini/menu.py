@@ -570,6 +570,47 @@ def attach_menu_images(menu, sections, resources):
         return next((info for key, info in resources.items()
                      if key.lower() == lowered), {})
 
+    # Some namespace menus draw numbered buttons through a custom shader.
+    # Accept a static image only when both authored button states use the same
+    # resource, and keep the button number tied to its source variable rather
+    # than the sequential slot assigned to forwarded controls.
+    controller_images = {}
+    button_choices = {}
+    for name, lines in sections.items():
+        if not re.fullmatch(r"CommandListDrawSliderButtonPage\d+", name, re.I):
+            continue
+        current = None
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = re.fullmatch(r"if\s+\$value_(\d+)\s*==\s*0", line, re.I)
+            if match:
+                current = (match.group(1), "1")
+                continue
+            if line.lower() == "else" and current:
+                current = (current[0], "2")
+                continue
+            if line.lower() == "endif" or line.lower().startswith(
+                    ("if ", "else if ", "elif ")):
+                current = None
+                continue
+            if not current:
+                continue
+            match = re.fullmatch(
+                r"ps-t100\s*=\s*(ResourceSliderButton(\d+)_([12]))",
+                line, re.I)
+            if not match or (match.group(2), match.group(3)) != current:
+                continue
+            filename = resource(match.group(1)).get("filename")
+            if filename:
+                button_choices.setdefault(current[0], {}).setdefault(
+                    current[1], set()).add(filename)
+    for number, choices in button_choices.items():
+        first, second = choices.get("1", set()), choices.get("2", set())
+        if len(first) == len(second) == 1:
+            first_file, second_file = next(iter(first)), next(iter(second))
+            if first_file.casefold() == second_file.casefold():
+                controller_images[f"key_{number}"] = first_file
+
     # Arrow-pair menus render item N in its own CommandListIconN section.
     for name, lines in sections.items():
         match = re.fullmatch(r"CommandListIcon(\d+)", name, re.I)
@@ -646,6 +687,12 @@ def attach_menu_images(menu, sections, resources):
         "pussy": ("itempussy", "pussy"),
     }
     for info in menu.values():
+        source_var = info.get("_image_source_var")
+        if source_var is not None:
+            image = controller_images.get(source_var.casefold())
+            if image:
+                info["image_file"] = image
+            continue
         if info.get("slot") in slot_images:
             info["image_file"] = slot_images[info["slot"]]
             continue
