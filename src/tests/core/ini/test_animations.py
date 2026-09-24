@@ -2,6 +2,8 @@
 
 import struct
 
+import pytest
+
 from core.ini.animations import discover_animation_clocks, frame_condition
 from core.ini.analysis import analyze_ini
 from core.ini.draw_scan import _scan_sections_for_draws
@@ -176,23 +178,33 @@ def test_same_frame_variable_ranges_share_one_geometry_track():
     assert (family["frame_start"], family["frame_end"]) == (0, 2)
 
 
-def test_position_buffer_frames_share_one_packed_mesh(tmp_path):
+@pytest.mark.parametrize("static,noncontiguous", [
+    (False, False), (True, False), (True, True),
+])
+def test_position_buffer_frames_share_one_packed_mesh(
+        tmp_path, static, noncontiguous):
     def write_positions(path, z):
         data = bytearray()
-        for x, y in ((0., 0.), (1., 0.), (0., 1.)):
+        points = ((0., 0.), (.5, .5), (1., 0.), (0., 1.)) \
+            if noncontiguous else ((0., 0.), (1., 0.), (0., 1.))
+        for x, y in points:
             data.extend(struct.pack("<fff", x, y, z))
             data.extend(b"\0" * 28)
         path.write_bytes(data)
 
     write_positions(tmp_path / "position0.buf", 0.)
-    write_positions(tmp_path / "position1.buf", 1.)
+    write_positions(tmp_path / "position1.buf", 0. if static else 1.)
     texcoord = bytearray()
-    for u, v in ((0., 0.), (1., 0.), (0., 1.)):
+    uvs = ((0., 0.), (.5, .5), (1., 0.), (0., 1.)) \
+        if noncontiguous else ((0., 0.), (1., 0.), (0., 1.))
+    for u, v in uvs:
         texcoord.extend(b"\0" * 4)
         texcoord.extend(struct.pack("<ee", u, v))
         texcoord.extend(b"\0" * 12)
     (tmp_path / "texcoord.buf").write_bytes(texcoord)
-    (tmp_path / "index.buf").write_bytes(struct.pack("<III", 0, 1, 2))
+    (tmp_path / "index.buf").write_bytes(struct.pack(
+        "<III", 0, 2, 3) if noncontiguous else
+        struct.pack("<III", 0, 1, 2))
 
     sections = _sections(r"""
 [Constants]
@@ -238,18 +250,24 @@ format = DXGI_FORMAT_R32_UINT
 
     assert len(built.meshes) == 1
     entry = next(iter(built.meshes.values()))
+    if static and not noncontiguous:
+        assert "animation_geometry" not in entry
+        assert built.diagnostics["animation_geometry_bytes"] == 0
+        return
     animation = entry["animation_geometry"]
     assert animation["frames"] == 2
     assert animation["clock_ids"]
     assert animation["bounds"] == {
-        "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 1.0],
+        "min": [0.0, 0.0, 0.0],
+        "max": [1.0, 1.0, 0. if static else 1.],
     }
     assert built.diagnostics["animation_prepare_calls"] == 1
     assert animation["position_frame_bytes"] == 36
     assert animation["positions"]["length"] == 72
     positions = geometry.to_bytes()[animation["positions"]["offset"]:]
     assert struct.unpack_from("<fff", positions, 0) == (0., 0., 0.)
-    assert struct.unpack_from("<fff", positions, 36) == (0., 0., 1.)
+    assert struct.unpack_from("<fff", positions, 36) == (
+        0., 0., 0. if static else 1.)
 
 
 def test_commandlist_position_bindings_form_animation_family(tmp_path):
@@ -333,7 +351,8 @@ format = DXGI_FORMAT_R32_UINT
 
 
 def test_draw_range_frames_reuse_compacted_topology_and_reject_mismatch(tmp_path):
-    def build(root, second_uv_offset, include_second=True):
+    def build(root, second_uv_offset, include_second=True,
+              second_indices=(3, 4, 5)):
         root.mkdir()
         positions = bytearray()
         for z in (0., 1.):
@@ -350,7 +369,7 @@ def test_draw_range_frames_reuse_compacted_topology_and_reject_mismatch(tmp_path
                 texcoord.extend(b"\0" * 12)
         (root / "texcoord.buf").write_bytes(texcoord)
         (root / "index.buf").write_bytes(
-            struct.pack("<IIIIII", 0, 1, 2, 3, 4, 5))
+            struct.pack("<IIIIII", 0, 1, 2, *second_indices))
         second_branch = """elif $frame == 1
 drawindexed = 3, 3, 0
 """ if include_second else ""
@@ -405,14 +424,20 @@ format = DXGI_FORMAT_R32_UINT
     compatible_entries = list(compatible.meshes.values())
     assert len(compatible_entries) == 1
     assert compatible_entries[0]["animation_geometry"]["frames"] == 2
-    assert compatible.diagnostics["animation_prepare_calls"] == 2
+    assert compatible.diagnostics["animation_prepare_calls"] == 1
     assert len(compatible_geometry) > static_blob_bytes(compatible)
 
     mismatched, mismatched_geometry = build(tmp_path / "mismatched", 0.25)
     mismatched_entries = list(mismatched.meshes.values())
     assert len(mismatched_entries) == 1
     assert "animation_geometry" not in mismatched_entries[0]
+    assert mismatched.diagnostics["animation_prepare_calls"] == 2
     assert len(mismatched_geometry) == static_blob_length(mismatched)
+
+    differing, _geometry = build(
+        tmp_path / "differing-index", 0., second_indices=(3, 4, 4))
+    assert "animation_geometry" not in next(iter(differing.meshes.values()))
+    assert differing.diagnostics["animation_prepare_calls"] == 2
 
     missing, missing_geometry = build(
         tmp_path / "missing", 0., include_second=False)

@@ -400,28 +400,22 @@ def pack_draw_geometry(
 
 def pack_animation_frame_attributes(
         draw: DrawCall, prepared: PreparedDrawVertices, *, mod_dir,
-        buffers: BufferStore, source=None):
+        buffers: BufferStore, source=None, pack_normals=True):
     """Pack one frame's positions and authored normals for a prepared draw.
 
     Indexes, UVs, textures, and shape targets remain owned by the canonical
     draw.  The caller validates the prepared topology before using this data.
     """
-    pos_bytes = bytearray(len(prepared.used_vertices) * 12)
-    bounds_min = [math.inf, math.inf, math.inf]
-    bounds_max = [-math.inf, -math.inf, -math.inf]
-    for output_index, vertex_index in enumerate(prepared.used_vertices):
-        x, y, z, _u, _v = prepared.decoded_vertices[vertex_index]
-        struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
-        bounds_min[0] = min(bounds_min[0], x)
-        bounds_min[1] = min(bounds_min[1], y)
-        bounds_min[2] = min(bounds_min[2], z)
-        bounds_max[0] = max(bounds_max[0], x)
-        bounds_max[1] = max(bounds_max[1], y)
-        bounds_max[2] = max(bounds_max[2], z)
+    packed = _pack_animation_positions(
+        prepared.streams.position_data, prepared.streams.position_stride,
+        prepared.used_vertices)
+    if packed is None:
+        return None
+    pos_bytes, bounds_min, bounds_max = packed
 
     normal_bytes = None
     normal_source = draw.normal_source
-    if normal_source is not None:
+    if pack_normals and normal_source is not None:
         resolve = source.resolve_resource if source is not None \
             else lambda value: safe_resource_path(mod_dir, value)
         exists = source.is_file if source is not None else os.path.exists
@@ -435,13 +429,50 @@ def pack_animation_frame_attributes(
             normal_bytes = decode_normals(
                 normal_source, normal_data, prepared.used_vertices)
     return PackedAnimationFrame(
-        bytes(pos_bytes), normal_bytes,
-        tuple(bounds_min), tuple(bounds_max))
+        pos_bytes, normal_bytes, bounds_min, bounds_max)
+
+
+def _pack_animation_positions(data, stride, used_vertices):
+    """Validate and bound positions, copying tight contiguous records directly."""
+    count = len(used_vertices)
+    bounds_min = [math.inf, math.inf, math.inf]
+    bounds_max = [-math.inf, -math.inf, -math.inf]
+    direct = (stride == 12 and count > 0
+              and used_vertices[-1] - used_vertices[0] + 1 == count)
+    if direct:
+        begin = used_vertices[0] * 12
+        end = begin + count * 12
+        if begin < 0 or end > len(data):
+            return None
+        output = data[begin:end]
+        positions = struct.iter_unpack("<fff", output)
+    else:
+        output = bytearray(count * 12)
+        positions = None
+    for output_index in range(count):
+        if direct:
+            x, y, z = next(positions)
+        else:
+            offset = used_vertices[output_index] * stride + POSITION_OFFSET
+            if offset < 0 or offset + 12 > len(data):
+                return None
+            x, y, z = struct.unpack_from("<fff", data, offset)
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+            return None
+        if not direct:
+            struct.pack_into("<fff", output, output_index * 12, x, y, z)
+        if x < bounds_min[0]: bounds_min[0] = x
+        if y < bounds_min[1]: bounds_min[1] = y
+        if z < bounds_min[2]: bounds_min[2] = z
+        if x > bounds_max[0]: bounds_max[0] = x
+        if y > bounds_max[1]: bounds_max[1] = y
+        if z > bounds_max[2]: bounds_max[2] = z
+    return bytes(output), tuple(bounds_min), tuple(bounds_max)
 
 
 def pack_animation_position_frame(
         draw: DrawCall, used_vertices, *, mod_dir, buffers: BufferStore,
-        source=None):
+        source=None, pack_normals=True, position_data=None):
     """Pack a frame whose only changing input is its position buffer.
 
     Conditional ``vb0`` animations keep the canonical index/UV mapping. Read
@@ -458,28 +489,17 @@ def pack_animation_position_frame(
     if not position_path or not exists(position_path):
         return None
     position_stride = draw.position_stride or POSITION_STRIDE
-    position_data = buffers.transient(position_path)
-    pos_bytes = bytearray(len(used_vertices) * 12)
-    bounds_min = [math.inf, math.inf, math.inf]
-    bounds_max = [-math.inf, -math.inf, -math.inf]
-    for output_index, vertex_index in enumerate(used_vertices):
-        offset = vertex_index * position_stride + POSITION_OFFSET
-        if offset < 0 or offset + 12 > len(position_data):
-            return None
-        x, y, z = struct.unpack_from("<fff", position_data, offset)
-        if not all(math.isfinite(value) for value in (x, y, z)):
-            return None
-        struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
-        bounds_min[0] = min(bounds_min[0], x)
-        bounds_min[1] = min(bounds_min[1], y)
-        bounds_min[2] = min(bounds_min[2], z)
-        bounds_max[0] = max(bounds_max[0], x)
-        bounds_max[1] = max(bounds_max[1], y)
-        bounds_max[2] = max(bounds_max[2], z)
+    if position_data is None:
+        position_data = buffers.transient(position_path)
+    packed = _pack_animation_positions(
+        position_data, position_stride, used_vertices)
+    if packed is None:
+        return None
+    pos_bytes, bounds_min, bounds_max = packed
 
     normal_bytes = None
     normal_source = draw.normal_source
-    if normal_source is not None:
+    if pack_normals and normal_source is not None:
         normal_path = resolve(normal_source.file)
         if normal_path and exists(normal_path):
             normal_data = (position_data if same(normal_path, position_path)
@@ -487,8 +507,7 @@ def pack_animation_position_frame(
             normal_bytes = decode_normals(
                 normal_source, normal_data, used_vertices)
     return PackedAnimationFrame(
-        bytes(pos_bytes), normal_bytes,
-        tuple(bounds_min), tuple(bounds_max))
+        pos_bytes, normal_bytes, bounds_min, bounds_max)
 
 
 __all__ = [
