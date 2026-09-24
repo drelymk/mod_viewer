@@ -306,7 +306,7 @@ filename = body-texcoord.buf
 stride = 20
 
 [ResourceAltBodyPosition]
-filename = alt-body-position.buf
+filename = body-position.buf
 stride = 40
 
 [ResourceAltBodyTexcoord]
@@ -333,17 +333,19 @@ stride = 40
     assert [(draw.ib_file, draw.position_file, draw.texcoord_file)
             for draw in draws] == [
                 ("body-index.buf", "body-position.buf", "body-texcoord.buf"),
-                ("alt-body-index.buf", "alt-body-position.buf",
+                ("alt-body-index.buf", "body-position.buf",
                  "alt-body-texcoord.buf"),
-                ("alt-body-index.buf", "alt-body-position.buf",
+                ("alt-body-index.buf", "body-position.buf",
                  "alt-body-texcoord.buf"),
             ]
-    assert [(item["position_file"], item["file"])
+    assert [(item["ib_file"], item["position_file"], item["file"])
             for item in groups[0]["animation_vertex_bindings"]] == [
-                ("body-position.buf", "body-frame-0.buf"),
-                ("body-position.buf", "body-frame-1.buf"),
-                ("alt-body-position.buf", "alt-body-frame-0.buf"),
-                ("alt-body-position.buf", "alt-body-frame-1.buf"),
+                ("body-index.buf", "body-position.buf", "body-frame-0.buf"),
+                ("body-index.buf", "body-position.buf", "body-frame-1.buf"),
+                ("alt-body-index.buf", "body-position.buf",
+                 "alt-body-frame-0.buf"),
+                ("alt-body-index.buf", "body-position.buf",
+                 "alt-body-frame-1.buf"),
             ]
 
 

@@ -18,16 +18,17 @@ def _sections(text):
     return parse_sections("fixture.ini", text=text)
 
 
-def test_commandlist_families_match_each_draws_resolved_position():
+def test_commandlist_families_match_each_draws_resolved_geometry():
     active = [[{"var": "animate", "value": "1", "negate": False}]]
     inactive = [[{"var": "animate", "value": "2", "negate": False}]]
     draws = [DrawCall(
         label=name, count=3, ib_file=f"{name}.ib",
-        position_file=f"{name}-position.buf",
+        position_file="shared-position.buf",
         texcoord_file=f"{name}-texcoord.buf", conditions=active,
     ) for name in ("leg", "body")]
     bindings = [{
-        "position_file": f"{name}-position.buf",
+        "position_file": "shared-position.buf",
+        "ib_file": f"{name}.ib",
         "file": f"{name}-position.{frame}.buf",
         "animation_conditions": [[{
             "var": "frame", "value": str(frame), "negate": False,
@@ -188,8 +189,6 @@ stride = 40
 
 
 def test_same_frame_variable_ranges_share_one_geometry_track():
-    from core.geometry.draw_call import DrawCall
-
     def branch(frame):
         return DrawCall(
             label="Body",

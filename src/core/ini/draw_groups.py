@@ -471,7 +471,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             }
             for binding in lookup_component_animation_vertex_bindings(
                     _ib_res_to_component(effective_ib)):
-                item = {**binding, "position_file": draw.position_file}
+                item = {**binding, "position_file": draw.position_file,
+                        "ib_file": draw.ib_file}
                 if item not in animation_bindings:
                     animation_bindings.append(item)
             draws.append(draw)
