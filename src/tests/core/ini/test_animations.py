@@ -11,10 +11,51 @@ from core.ini.sections import extract_resources, parse_sections
 from core.geometry.mesh_builder import (
     GeometryBlob, _animation_families, build_mesh_result,
 )
+from core.geometry.draw_call import DrawCall
 
 
 def _sections(text):
     return parse_sections("fixture.ini", text=text)
+
+
+def test_commandlist_families_match_each_draws_resolved_position():
+    active = [[{"var": "animate", "value": "1", "negate": False}]]
+    inactive = [[{"var": "animate", "value": "2", "negate": False}]]
+    draws = [DrawCall(
+        label=name, count=3, ib_file=f"{name}.ib",
+        position_file=f"{name}-position.buf",
+        texcoord_file=f"{name}-texcoord.buf", conditions=active,
+    ) for name in ("leg", "body")]
+    bindings = [{
+        "position_file": f"{name}-position.buf",
+        "file": f"{name}-position.{frame}.buf",
+        "animation_conditions": [[{
+            "var": "frame", "value": str(frame), "negate": False,
+        }]],
+        "conditions": active,
+    } for name in ("leg", "body") for frame in (0, 1)]
+    bindings.append({**bindings[0], "file": "inactive.buf",
+                     "conditions": inactive})
+    clocks = [
+        {"id": "active", "frame_var": "frame", "frame_start": 0,
+         "frame_end": 1, "conditions": active},
+        {"id": "inactive", "frame_var": "frame", "frame_start": 0,
+         "frame_end": 1, "conditions": inactive},
+    ]
+
+    families = _animation_families(
+        draws, clocks, group={"animation_vertex_bindings": bindings})
+
+    assert len(families) == 2
+    for family in families:
+        name = family["base_draw"].label
+        assert family["position_switching"]
+        assert list(family["clock_ids"]) == ["active"]
+        assert [(frame, draw.position_file)
+                for frame, draw in sorted(family["draws"].items())] == [
+                    (frame, f"{name}-position.{frame}.buf")
+                    for frame in (0, 1)
+                ]
 
 
 def test_animation_clock_and_frame_branches_stay_out_of_toggle_state():
