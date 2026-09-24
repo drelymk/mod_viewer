@@ -854,6 +854,7 @@ def _write_lucy_shape_fixture(root, shader, *, authored_slider=False):
         flat_data.extend(struct.pack("<fff", 0., 3., 0.))
         flat_data.extend(b"\0" * 16)
     (root / "BodyPosition.buf").write_bytes(vertex_data)
+    (root / "BodyPosition.Rest.buf").write_bytes(vertex_data)
     (root / "BodyPositionFlat.buf").write_bytes(flat_data)
     (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
     (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
@@ -867,10 +868,10 @@ global persist $currFlat = 0.5
 
 [CustomShaderComputeShapes]
 cs = Shapes.hlsl
-cs-u5 = copy ResourceBodyPosition.Base
+cs-u5 = copy ResourceBodyOriginal
 x88 = $currFlat
-cs-t50 = copy ResourceBodyPosition.Base
-cs-t51 = copy ResourceBodyPosition.Flat
+cs-t50 = copy ResourceBodyOriginal
+cs-t51 = copy ResourceBodyFlat
 ResourceBodyPosition = ref cs-u5
 Dispatch = 1, 1, 1
 cs-u5 = null
@@ -884,10 +885,10 @@ drawindexed = 3, 0, 0
 [ResourceBodyPosition]
 stride = 40
 filename = BodyPosition.buf
-[ResourceBodyPosition.Base]
+[ResourceBodyOriginal]
 stride = 40
-filename = BodyPosition.buf
-[ResourceBodyPosition.Flat]
+filename = BodyPosition.Rest.buf
+[ResourceBodyFlat]
 stride = 40
 filename = BodyPositionFlat.buf
 [ResourceBodyTexcoord]
@@ -994,6 +995,9 @@ def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
     assert [slider["var"] for slider in group["shape_sliders"]] == [
         "currFlat"]
     assert group["shape_sliders"][0]["authored_slider"] is True
+    assert group["shape_sliders"][0]["base_file"] == "BodyPosition.buf"
+    assert (group["shape_sliders"][0]["shader_base_file"] ==
+            "BodyPosition.Rest.buf")
     assert "_compute_animation" not in group
 
     built = build_mesh_result(parsed.groups, str(ini.parent))
@@ -1029,7 +1033,7 @@ def test_single_pass_sinusoidal_shape_without_authored_slider_stays_compute(
 
     parsed = analyze_mod_inis([str(ini)], str(tmp_path / "sinusoidal"))
     group = parsed.groups[0]
-    assert group["shape_sliders"][0]["authored_slider"] is False
+    assert group.get("shape_sliders", []) == []
     assert group.get("_compute_animation") is not None
 
 

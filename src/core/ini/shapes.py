@@ -10,8 +10,6 @@ import re
 
 from .sections import canonical_var_names, first_source
 
-_VALUE_RE = re.compile(r"^x\d+\s*=\s*\$(\w+)\s*$", re.I)
-_BUFFER_RE = re.compile(r"^cs-t\d+\s*=\s*copy\s+(\S+)\s*$", re.I)
 _SHAPE_BUFFER_RE = re.compile(r"^cs-t(50|51)\s*=\s*copy\s+(\S+)\s*$", re.I)
 _SHAPE_X_RE = re.compile(r"^x88\s*=\s*(.+?)\s*$", re.I)
 _U5_ASSIGN_RE = re.compile(r"^cs-u5\s*=\s*(.*?)\s*$", re.I)
@@ -99,60 +97,11 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 base = runtime_base
         return base, shader_base
 
-    for section, lines in sections.items():
-        if not section.lower().startswith("customshader"):
-            continue
-        writable_outputs = _writable_u5_outputs(lines)
-        variable = None
-        buffer_names = []
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = _VALUE_RE.fullmatch(line)
-            if match and variable is None:
-                variable = canon.get(match.group(1).lower(), match.group(1))
-                continue
-            match = _BUFFER_RE.fullmatch(line)
-            if match:
-                buffer_names.append(match.group(1))
-
-        if (not variable or len(buffer_names) < 2
-                or not buffer_names[0].lower().endswith(".base")):
-            continue
-        base, shader_base = shape_base_resources(
-            buffer_names[0], writable_outputs)
-        target = resource(buffer_names[1])
-        if not base.get("filename") or not target.get("filename"):
-            continue
-        base_stride = base.get("stride", 40)
-        target_stride = target.get("stride", base_stride)
-        if base_stride != target_stride or base_stride < 12:
-            continue
-
-        src = first_source(lines) or {}
-        prefix = var_prefix or ""
-        found.append({
-            "kind": "shape_slider",
-            "name": variable,
-            "var": f"{prefix}{variable}",
-            "authored_slider": variable.lower() in authored_slider_vars,
-            "min": 0.0,
-            "max": 1.0,
-            "step": 0.01,
-            "base_file": base["filename"],
-            "shader_base_file": shader_base.get("filename"),
-            "target_file": target["filename"],
-            "stride": base_stride,
-            "source": source,
-            "ini_path": src.get("ini_path"),
-            "section": section,
-        })
-
     # Some generated ZZMI shaders apply several ordinary full-buffer morphs
     # in sequence.  Each block binds one scalar, the same base at t50, and a
-    # different target at t51.  Resource names are exporter-defined and need
-    # not use the older literal `.Base` suffix.  Require at least two complete
-    # blocks sharing one file-backed base within a CustomShader section; this
-    # distinguishes the pattern from arbitrary one-off shader register use.
+    # different target at t51. Resource names are exporter-defined. Require
+    # multiple complete blocks sharing one file-backed base, except that one
+    # block is accepted when its variable has an authored slider section.
     for section, lines in sections.items():
         if not section.lower().startswith("customshader"):
             continue
@@ -201,7 +150,12 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         complete_remaps = [pair for pair in remapped_targets.values()
                            if pair.get("low") and pair.get("high")]
         base_keys.update(pair["base"].lower() for pair in complete_remaps)
-        if len(candidates) + len(complete_remaps) < 2 or len(base_keys) != 1:
+        candidate_count = len(candidates) + len(complete_remaps)
+        one_authored_candidate = (
+            candidate_count == 1 and len(candidates) == 1
+            and candidates[0][0].lower() in authored_slider_vars)
+        if ((candidate_count < 2 and not one_authored_candidate)
+                or len(base_keys) != 1):
             continue
         src = first_source(lines) or {}
         existing_pairs = {(item.get("var", "").lower(),
