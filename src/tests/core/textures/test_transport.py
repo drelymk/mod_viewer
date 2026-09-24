@@ -348,6 +348,33 @@ def test_native_eligibility_is_role_and_transform_aware(tmp_path):
     assert server._lookup_texture(publication.token, "2").native_dds is False
 
 
+def test_menu_dds_publication_defers_png_render_until_requested(tmp_path):
+    dds = tmp_path / "menu.dds"
+    _write_bc7_dds(dds)
+    publication = server.begin_texture_publication(str(tmp_path))
+    try:
+        with patch("app.runtime.server.render_texture_png",
+                   return_value=b"PNG") as render:
+            url = publication.register_menu_image(str(dds))
+            assert url.endswith(".png")
+            assert render.call_count == 0
+
+            source_id = url.rsplit("/", 1)[1][:-4]
+            source = server._lookup_texture(publication.token, source_id)
+            assert source is not None
+            assert source.native_dds is True
+
+            assert server._render_texture_request(
+                publication.token, source_id, source) == b"PNG"
+            render.assert_called_once()
+            assert render.call_args.args[0] == str(dds)
+            assert render.call_args.kwargs["max_size"] == 256
+            assert render.call_args.kwargs["preserve_alpha"] is True
+            assert render.call_args.kwargs["texture_transform"] == "passthrough"
+    finally:
+        publication.discard()
+
+
 def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_request(
         tmp_path):
     dds = tmp_path / "native.dds"
