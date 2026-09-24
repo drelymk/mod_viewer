@@ -97,9 +97,6 @@ class AssetPreview:
             selected, entry, _index, record = self._asset_selection(folder_path)
             geometry = GeometryBlob()
             publication = server.begin_texture_publication(selected)
-            publication.set_game_profile({
-                "GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa",
-            }[entry["type"]])
             try:
                 loaded = asset_loader.load_asset(
                     entry["type"], entry["path"], record, geometry=geometry,
@@ -167,9 +164,6 @@ class AssetPreview:
 
             geometry = GeometryBlob()
             publication = server.begin_texture_publication(folder_path)
-            publication.set_game_profile({
-                "GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa",
-            }[plan.asset_type])
             try:
                 loaded = asset_loader.load_asset_parts(
                     plan.asset_type, plan.root, plan.asset,

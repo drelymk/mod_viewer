@@ -123,8 +123,8 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
     entry["normal_map_enabled"] = profile.bind_normal_map
 
     # NormalMap is a user-facing authored role, but its transport is
-    # profile-owned. WuWa publishes the intact packed source as normal_data;
-    # Genshin/ZZZ retain the derived normal_map path.
+    # profile-owned. Genshin/ZZZ keep the authored source under normal_map;
+    # WuWa exposes it as normal_data.
     asset_normal = draw.asset_texture_defaults.get("normal_map") or {}
     normal_path = asset_normal.get("path") or registry.resolve(
         draw.texture_default("normal_map"))

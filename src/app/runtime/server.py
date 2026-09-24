@@ -26,7 +26,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 
-from core.textures.dds import (DDSInfo, MAX_MODEL_DDS_SIZE, native_dds_info,
+from core.textures.dds import (MAX_MODEL_DDS_SIZE, native_dds_info,
                                native_dds_info_from_header)
 from core.textures import render_texture_png, normalize_texture_role
 from core.mod_source import ModSourceError
@@ -59,7 +59,6 @@ class TextureSource:
     max_size: int = 2048
     preserve_alpha: bool = False
     native_dds: bool = False
-    dds_info: DDSInfo | None = None
     data: bytes | None = None
     logical_path: str | None = None
     mod_source: object | None = None
@@ -80,7 +79,7 @@ class TexturePublication:
         self.game_profile = "unknown"
 
     def set_game_profile(self, game):
-        """Set the default recipe used by later manual texture requests."""
+        """Retain the detected profile for manual normal-map role selection."""
         self.game_profile = texture_profile_for(game).name
         return self.game_profile
 
@@ -158,7 +157,7 @@ class TexturePublication:
             path=None if source_ref else path, data=data,
             logical_path=logical_path, role=role, max_size=max_size,
             preserve_alpha=preserve_alpha,
-            dds_info=dds_info, native_dds=dds_info is not None,
+            native_dds=dds_info is not None,
             mod_source=self.source if source_ref else None,
             source_ref=path if source_ref else None)
         if validate and not source.native_dds and _render_texture_source(source) is None:

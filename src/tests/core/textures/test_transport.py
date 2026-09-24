@@ -324,7 +324,7 @@ def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_pa
         httpd.server_close()
 
 
-def test_native_eligibility_is_role_aware(tmp_path):
+def test_normal_roles_use_native_dds(tmp_path):
     dds = tmp_path / "shared.dds"
     _write_bc7_dds(dds)
     publication = server.begin_texture_publication(str(tmp_path))
@@ -341,23 +341,6 @@ def test_native_eligibility_is_role_aware(tmp_path):
     assert server._lookup_texture(publication.token, "0").native_dds is True
     assert server._lookup_texture(publication.token, "1").native_dds is True
     assert server._lookup_texture(publication.token, "2").native_dds is True
-
-
-@pytest.mark.parametrize("game", ["genshin", "zzz"])
-def test_game_normal_dds_is_native_without_png_render(tmp_path, game):
-    dds = tmp_path / "normal.dds"
-    _write_bc7_dds(dds)
-    publication = server.begin_texture_publication(str(tmp_path))
-    try:
-        publication.set_game_profile(game)
-        with patch("app.runtime.server.render_texture_png",
-                   side_effect=AssertionError("normal DDS rendered to PNG")):
-            url = publication.register(str(dds), "normal_map", validate=True)
-        assert url.endswith(".dds")
-        source = server._lookup_texture(publication.token, "0")
-        assert source.native_dds is True
-    finally:
-        publication.discard()
 
 
 def test_model_dds_limit_is_independent_of_png_size(tmp_path):

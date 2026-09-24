@@ -75,7 +75,7 @@ def test_dx10_formats_are_reported_with_canonical_ids(tmp_path, format_name):
 
     assert info is not None
     assert info.format == format_name
-    assert info.compressed and info.requires_bc
+    assert info.compressed
     assert native_dds_info(path).format == format_name
 
 
@@ -174,7 +174,6 @@ def test_layout_uses_format_specific_unit_sizes(tmp_path, format_name):
     layout = inspect_dds_layout(path)
     assert layout.info.format == format_name
     assert layout.info.compressed is format_name.startswith("bc")
-    assert layout.info.requires_bc is format_name.startswith("bc")
     bytes_per_unit = (4 if not format_name.startswith("bc")
                       else 8 if format_name.startswith("bc1") else 16)
 

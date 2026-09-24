@@ -59,7 +59,7 @@ def test_srgb_color_pixels_are_color_candidates_and_filename_is_ignored(
     image.putdata([
         ((index * 31) % 256, (index * 67) % 256,
          (index * 103) % 256) for index in range(64)])
-    info = DDSInfo(8, 8, 1, "bc7_srgb", True, True)
+    info = DDSInfo(8, 8, 1, "bc7_srgb", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
         dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
@@ -79,7 +79,7 @@ def test_linear_packed_pixels_are_normal(tmp_path, monkeypatch):
     image.putdata([
         (112 + (index % 8) * 4, 112 + (index // 8) * 4, 0)
         for index in range(64)])
-    info = DDSInfo(8, 8, 1, "bc7_unorm", True, True)
+    info = DDSInfo(8, 8, 1, "bc7_unorm", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
         dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
@@ -100,7 +100,7 @@ def test_flat_and_gently_varying_centered_normals_are_accepted(
     images[1].putdata([
         (120 + index % 9, 122 + (index // 8) * 2, 0)
         for index in range(64)])
-    info = DDSInfo(8, 8, 1, "bc7_unorm", True, True)
+    info = DDSInfo(8, 8, 1, "bc7_unorm", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
 
     for image in images:
@@ -114,7 +114,7 @@ def test_flat_and_gently_varying_centered_normals_are_accepted(
 def test_off_center_packed_data_is_not_promoted_to_normal(
         tmp_path, monkeypatch):
     image = Image.new("RGB", (8, 8), (32, 128, 0))
-    info = DDSInfo(8, 8, 1, "bc7_unorm", True, True)
+    info = DDSInfo(8, 8, 1, "bc7_unorm", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
         dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
@@ -127,7 +127,7 @@ def test_off_center_packed_data_is_not_promoted_to_normal(
 
 def test_effects_masks_and_grayscale_images_are_not_diffuse(
         tmp_path, monkeypatch):
-    info = DDSInfo(8, 8, 1, "bc7_srgb", True, True)
+    info = DDSInfo(8, 8, 1, "bc7_srgb", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     images = [
         Image.new("RGB", (8, 8), (80, 160, 220)),
@@ -149,7 +149,7 @@ def test_channel_dominant_color_data_is_not_diffuse(tmp_path, monkeypatch):
     image.putdata([
         (0, 160, 0) if index % 2 == 0 else (100, 250, 100)
         for index in range(64)])
-    info = DDSInfo(8, 8, 1, "bc3_srgb", True, True)
+    info = DDSInfo(8, 8, 1, "bc3_srgb", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
         dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
@@ -167,7 +167,7 @@ def test_dominant_channel_palette_exposes_structural_color_evidence(
          (index * 53) % 160,
          max((index * 37) % 160, (index * 53) % 160) + 30)
         for index in range(64)])
-    info = DDSInfo(8, 8, 1, "bc7_srgb", True, True)
+    info = DDSInfo(8, 8, 1, "bc7_srgb", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
         dds_classifier, "load_texture_image", lambda _path, **_kwargs: image)
@@ -181,7 +181,7 @@ def test_dominant_channel_palette_exposes_structural_color_evidence(
 
 
 def test_tiny_texture_is_diagnostic_lookup_only(tmp_path, monkeypatch):
-    info = DDSInfo(4, 4, 1, "bc7_srgb", True, True)
+    info = DDSInfo(4, 4, 1, "bc7_srgb", True)
     monkeypatch.setattr(dds_classifier, "inspect_dds", lambda _path: info)
     monkeypatch.setattr(
         dds_classifier, "load_texture_image",

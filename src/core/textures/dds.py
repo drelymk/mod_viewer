@@ -28,7 +28,6 @@ class DDSInfo:
     mip_count: int
     format: str
     compressed: bool
-    requires_bc: bool
 
 
 @dataclass(frozen=True)
@@ -102,8 +101,7 @@ def _mip_count(raw_count, width, height):
 
 def _info(width, height, mip_count, format_name):
     compressed = format_name in _COMPRESSED_FORMATS
-    return DDSInfo(width, height, mip_count, format_name, compressed,
-                   compressed)
+    return DDSInfo(width, height, mip_count, format_name, compressed)
 
 
 def _bytes_per_unit(format_name):
@@ -301,7 +299,8 @@ def native_dds_info_from_header(header, file_size,
 
 
 __all__ = [
-    "DDSInfo", "DDSMipLayout", "DDSLayout", "dds_layout_for_info",
+    "MAX_MODEL_DDS_SIZE", "DDSInfo", "DDSMipLayout", "DDSLayout",
+    "dds_layout_for_info",
     "inspect_dds", "inspect_dds_header", "inspect_dds_layout",
     "native_dds_info", "native_dds_info_from_header",
 ]
