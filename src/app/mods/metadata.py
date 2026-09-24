@@ -1278,7 +1278,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                     continue
                 encoded = encode_texture_key(
                     folder_path, key, role, texture_source=texture_source,
-                    texture_profile=texture_profile, source=source)
+                    source=source)
                 if encoded and not encoded.get("error"):
                     textures[encoded["tex_key"]] = encoded["uri"]
 

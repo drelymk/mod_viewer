@@ -833,7 +833,8 @@ export function configureGameMaterial(material, profile, options = {}) {
   const packedResponse = Boolean(
     (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
   const resolvedProfile = profile || { id: 'none' };
-  const normalSource = resolvedProfile.normal_source === 'normal_data'
+  const normalSource = profileNormalXY(resolvedProfile)
+    && resolvedProfile.normal_source === 'normal_data'
     ? 'normal_data' : 'normal_map';
   const hasMaterialId = hasUv
     && validRef(resolvedProfile.material_id)

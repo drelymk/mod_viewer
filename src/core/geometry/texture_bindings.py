@@ -4,8 +4,8 @@ import os
 
 from ..resource_paths import safe_resource_path
 from ..textures.pipeline import (
-    _begin_texture_cache, _texture_source_uri, encode_texture_data_uri,
-    normalize_texture_role, normalize_texture_transform, texture_key,
+    _begin_texture_cache, encode_texture_data_uri,
+    normalize_texture_role, texture_key,
 )
 
 
@@ -21,7 +21,7 @@ class TextureRegistry:
         self._sources = {}
         self._keys = {}
 
-    def key(self, path, role=None, *, identity=None, transform=None):
+    def key(self, path, role=None, *, identity=None):
         exists = (self.source.is_file(path)
                   if self.source is not None
                   and self.source.is_resource_reference(path)
@@ -29,10 +29,7 @@ class TextureRegistry:
         if not path or not exists:
             return None
         role = normalize_texture_role(role)
-        if transform is None:
-            transform = self.profile.recipe_for(role)
-        transform = normalize_texture_transform(transform)
-        cache_key = (path, role, transform, identity)
+        cache_key = (path, role, identity)
         if cache_key not in self._keys:
             relative_path = identity or (
                 self.source.logical_path(path)
@@ -44,8 +41,7 @@ class TextureRegistry:
 
     def ensure(self, path, role=None, *, identity=None):
         role = normalize_texture_role(role)
-        transform = self.profile.recipe_for(role)
-        key = self.key(path, role, identity=identity, transform=transform)
+        key = self.key(path, role, identity=identity)
         if key and key not in self._sources:
             if self.texture_source is None:
                 if (self.source is not None
@@ -54,14 +50,12 @@ class TextureRegistry:
                     value = encode_texture_data_uri(
                         self.source.read_bytes(path),
                         texture_role=role,
-                        texture_transform=transform,
                         source_name=self.source.logical_path(path))
                 else:
                     value = encode_texture_data_uri(
-                        path, texture_role=role, texture_transform=transform)
+                        path, texture_role=role)
             else:
-                value = _texture_source_uri(
-                    self.texture_source, path, role, transform)
+                value = self.texture_source(path, role)
             self._sources[key] = value or ""
         return key
 

@@ -30,11 +30,6 @@ class TextureProfile:
         """Alias useful to callers that treat a profile as game metadata."""
         return self.name
 
-    def recipe_for(self, role=None):
-        role = role if role in TEXTURE_ROLES else "diffuse"
-        return "passthrough"
-
-
 _PROFILES = {
     "genshin": TextureProfile("genshin", -1, True),
     "zzz": TextureProfile("zzz", -1, True),

@@ -255,17 +255,15 @@ def inspect_dds_header(header, file_size=None):
     return info
 
 
-def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, transform="passthrough",
-                    source_name=None):
-    """Return native-delivery metadata when the source meets PR21 rules."""
+def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, source_name=None):
+    """Return metadata for a valid model DDS within the viewer size limit."""
     try:
         path_string = (source_name if isinstance(source_name, str)
                        else os.fsdecode(os.fspath(path)))
     except (TypeError, ValueError):
         return None
     if (not isinstance(path, (str, bytes, os.PathLike))
-            or not path_string.lower().endswith(".dds")
-            or transform != "passthrough"):
+            or not path_string.lower().endswith(".dds")):
         return None
     try:
         max_size = int(max_size)
@@ -281,15 +279,14 @@ def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, transform="passthrough",
 
 def native_dds_info_from_header(header, file_size,
                                 max_size=MAX_MODEL_DDS_SIZE,
-                                transform="passthrough", source_name=None):
+                                source_name=None):
     """Return native-delivery metadata from a bounded header read."""
     try:
         path_string = (source_name if isinstance(source_name, str)
                        else os.fsdecode(os.fspath(source_name)))
     except (TypeError, ValueError):
         return None
-    if (not path_string.lower().endswith(".dds")
-            or transform != "passthrough"):
+    if not path_string.lower().endswith(".dds"):
         return None
     try:
         max_size = int(max_size)

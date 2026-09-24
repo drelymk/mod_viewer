@@ -3755,17 +3755,20 @@ def test_native_dds_failure_stays_flat_without_png_request(
         context.close()
 
 
-@pytest.mark.parametrize("game,api,source,packing", [
-    ("genshin", "gimi", "normal_map", "rg"),
-    ("zzz", "zzmi", "normal_map", "rg"),
-    ("wuwa", "rabbitfx", "normal_data", "rg"),
-    ("hsr", "srmi", "normal_map", "rgb"),
+@pytest.mark.parametrize("game,api,source,packing,override", [
+    ("genshin", "gimi", "normal_map", "rg", None),
+    ("zzz", "zzmi", "normal_map", "rg", None),
+    ("wuwa", "rabbitfx", "normal_data", "rg", None),
+    ("hsr", "srmi", "normal_map", "rgb", None),
+    ("hsr", "srmi", "normal_map", "rgb", "normal_data"),
 ])
 def test_material_normal_rg_packing_uses_profile_source(
-        edge_browser, frontend_url, game, api, source, packing):
+        edge_browser, frontend_url, game, api, source, packing, override):
     context, page = _page(edge_browser, frontend_url, {})
     try:
         profile = material_profile_for(game, api).to_metadata()
+        if override:
+            profile["normal_source"] = override
         state = page.evaluate("""async profile => {
           const {createGameMaterial} = await import(
             './js/mesh/material-profile.js');
@@ -3812,16 +3815,6 @@ def test_texture_save_awaits_in_place_native_dds_reload(
         edge_browser, frontend_url, {"BakeNativeReload": payload},
         api_features={"texture"})
     try:
-        supported = page.evaluate("""
-          async () => {
-            const {supportsBCTextureCompression} =
-              await import('./js/scene/renderer-capabilities.js');
-            return supportsBCTextureCompression();
-          }
-        """)
-        if not supported:
-            pytest.skip("native DDS is not supported by the test renderer")
-
         def fulfill_dds(route):
             requests.append(route.request.url)
             body = first_dds if len(requests) == 1 else second_dds

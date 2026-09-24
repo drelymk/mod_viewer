@@ -225,8 +225,7 @@ def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
     assert "normal_data_key" not in result
     assert "normal_data_file" not in result
     assert "normal_data_uri" not in result
-    assert server._lookup_texture(publication.token, "0").transform == (
-        "passthrough")
+    assert server._lookup_texture(publication.token, "0").role == "normal_data"
 
 
 
@@ -253,8 +252,8 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
     }
     registered = []
 
-    def register(path, role, transform=None):
-        registered.append((os.path.basename(path), role, transform))
+    def register(path, role):
+        registered.append((os.path.basename(path), role))
         return f"/texture/test/{role}"
 
     with patch("core.textures.render_texture_png",
@@ -269,7 +268,7 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
         "normal_data::packed.png", "light_map::light.png",
         "material_map::material.png",
     }
-    assert {role for _name, role, _transform in registered} == {
+    assert {role for _name, role in registered} == {
         "diffuse", "normal_map", "normal_data", "light_map", "material_map",
     }
 
@@ -325,24 +324,23 @@ def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_pa
         httpd.server_close()
 
 
-def test_native_eligibility_is_role_and_transform_aware(tmp_path):
+def test_native_eligibility_is_role_aware(tmp_path):
     dds = tmp_path / "shared.dds"
     _write_bc7_dds(dds)
     publication = server.begin_texture_publication(str(tmp_path))
 
-    normal_map_url = publication.register(
-        str(dds), "normal_map", transform="normal_xy_reconstruct")
-    normal_data_url = publication.register(
-        str(dds), "normal_data", transform="passthrough")
+    normal_map_url = publication.register(str(dds), "normal_map")
+    normal_data_url = publication.register(str(dds), "normal_data")
     within_limit = tmp_path / "within-limit.dds"
     _write_bc7_dds(within_limit, width=2049, height=4)
     within_limit_url = publication.register(str(within_limit))
 
-    assert normal_map_url is None
+    assert normal_map_url.endswith(".dds")
     assert normal_data_url.endswith(".dds")
     assert within_limit_url.endswith(".dds")
     assert server._lookup_texture(publication.token, "0").native_dds is True
     assert server._lookup_texture(publication.token, "1").native_dds is True
+    assert server._lookup_texture(publication.token, "2").native_dds is True
 
 
 @pytest.mark.parametrize("game", ["genshin", "zzz"])
@@ -358,7 +356,6 @@ def test_game_normal_dds_is_native_without_png_render(tmp_path, game):
         assert url.endswith(".dds")
         source = server._lookup_texture(publication.token, "0")
         assert source.native_dds is True
-        assert source.transform == "passthrough"
     finally:
         publication.discard()
 
@@ -393,7 +390,6 @@ def test_menu_dds_publication_defers_png_render_until_requested(tmp_path):
             source = server._lookup_texture(publication.token, source_id)
             assert source is not None
             assert source.native_dds is False
-            assert source.force_png is True
 
             assert server._render_texture_request(
                 publication.token, source_id, source) == b"PNG"
@@ -401,7 +397,6 @@ def test_menu_dds_publication_defers_png_render_until_requested(tmp_path):
             assert render.call_args.args[0] == str(dds)
             assert render.call_args.kwargs["max_size"] == 256
             assert render.call_args.kwargs["preserve_alpha"] is True
-            assert render.call_args.kwargs["texture_transform"] == "passthrough"
     finally:
         publication.discard()
 
@@ -461,43 +456,6 @@ def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_reque
         publication.discard()
 
 
-def test_zip_transformed_dds_is_rejected_without_render(tmp_path):
-    dds = tmp_path / "normal.dds"
-    _write_bc7_dds(dds)
-    archive_path = tmp_path / "mod.zip"
-    with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("Mod/normal.dds", dds.read_bytes())
-
-    source = ZipModSource(archive_path)
-    prefix_reads = []
-    full_reads = []
-    original_read_prefix = source.read_prefix
-    original_read_bytes = source.read_bytes
-
-    def read_prefix(reference, length):
-        prefix_reads.append((reference, length))
-        return original_read_prefix(reference, length)
-
-    def read_bytes(reference):
-        full_reads.append(reference)
-        return original_read_bytes(reference)
-
-    source.read_prefix = read_prefix
-    source.read_bytes = read_bytes
-    publication = server.begin_texture_publication(
-        str(archive_path), source=source)
-    try:
-        member = source.resolve_resource("normal.dds")
-        url = publication.register(
-            member, transform="normal_xy_reconstruct")
-        assert url is None
-        assert server._lookup_texture(publication.token, "0") is None
-        assert prefix_reads == []
-        assert full_reads == []
-    finally:
-        publication.discard()
-
-
 @pytest.mark.parametrize("archive_suffix", [".7z", ".rar"])
 def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
         tmp_path, archive_suffix):
@@ -547,43 +505,6 @@ def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
         if httpd is not None:
             httpd.shutdown()
             httpd.server_close()
-        publication.discard()
-
-
-def test_rar_transformed_dds_is_rejected_without_render(tmp_path):
-    dds = tmp_path / "normal.dds"
-    _write_bc7_dds(dds)
-    dds_bytes = dds.read_bytes()
-    archive_path = tmp_path / "mod.rar"
-    archive_path.write_bytes(b"mock archive")
-
-    class Client:
-        def __init__(self):
-            self.calls = []
-
-        def list_members(self, _path):
-            self.calls.append("list")
-            return [SevenZipEntry("Wrapper/normal.dds", len(dds_bytes))]
-
-        def extract_all(self, _path, output_dir):
-            self.calls.append("extract")
-            target = os.path.join(output_dir, "Wrapper", "normal.dds")
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as stream:
-                stream.write(dds_bytes)
-
-    client = Client()
-    source = SevenZipModSource(archive_path, client=client)
-    publication = server.begin_texture_publication(
-        str(archive_path), source=source)
-    try:
-        member = source.resolve_resource("normal.dds")
-        url = publication.register(
-            member, transform="normal_xy_reconstruct")
-        assert url is None
-        assert server._lookup_texture(publication.token, "0") is None
-        assert client.calls == ["list", "extract"]
-    finally:
         publication.discard()
 
 

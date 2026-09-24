@@ -49,7 +49,7 @@ def _group(root):
 def _build(root):
     _write_geometry(root)
 
-    def register(path, role, transform=None):
+    def register(path, role):
         return f"/texture/{role}/{os.path.basename(path)}"
 
     return build_mesh_result(
@@ -225,7 +225,7 @@ filename = Textures/Components-2 t=missing.dds
     assert draw.asset_texture_defaults == {}
     published = []
 
-    def register(path, role, transform=None):
+    def register(path, role):
         published.append((path, role))
         return f"/texture/{len(published)}"
 

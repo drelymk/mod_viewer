@@ -5,7 +5,8 @@ import struct
 import pytest
 
 from core.textures.dds import (MAX_MODEL_DDS_SIZE, inspect_dds,
-                               inspect_dds_layout, native_dds_info)
+                               inspect_dds_header, inspect_dds_layout,
+                               native_dds_info, native_dds_info_from_header)
 
 
 _DXGI = {
@@ -97,10 +98,9 @@ def test_invalid_or_unsafe_dds_is_rejected(tmp_path, kwargs):
     assert native_dds_info(path) is None
 
 
-def test_transform_and_size_caps_disable_native_delivery(tmp_path):
+def test_size_cap_disables_native_delivery(tmp_path):
     path = tmp_path / "normal.dds"
     path.write_bytes(_dds())
-    assert native_dds_info(path, transform="normal_xy_reconstruct") is None
     assert native_dds_info(path, max_size=2) is None
 
 
@@ -135,17 +135,14 @@ def test_malformed_and_truncated_dds_are_rejected(tmp_path):
 
 
 @pytest.mark.parametrize("dimension,accepted", [(8192, True), (8193, False)])
-def test_model_limit_uses_sparse_dds_payload(tmp_path, dimension, accepted):
-    path = tmp_path / "large.dds"
+def test_model_limit_uses_header_and_payload_size(dimension, accepted):
     header = _dds(dimension, dimension, payload=False)
     payload_size = ((dimension + 3) // 4) ** 2 * 16
-    with path.open("wb") as stream:
-        stream.write(header)
-        stream.seek(len(header) + payload_size - 1)
-        stream.write(b"\0")
+    file_size = len(header) + payload_size
     assert MAX_MODEL_DDS_SIZE == 8192
-    assert inspect_dds(path) is not None
-    assert (native_dds_info(path, MAX_MODEL_DDS_SIZE) is not None) is accepted
+    assert inspect_dds_header(header, file_size) is not None
+    assert (native_dds_info_from_header(
+        header, file_size, source_name="large.dds") is not None) is accepted
 
 
 @pytest.mark.parametrize(("format_name", "width", "height", "expected"), [
