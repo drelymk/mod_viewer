@@ -2793,6 +2793,11 @@ def test_viewport_pipeline_uses_model_scale_and_wireframe_bypass(
         page.locator(".draw-item").wait_for()
         page.wait_for_function("window.modViewer.getRenderCount() > 0")
         _set_ao_level(page, 100)
+        page.wait_for_function("""async () => {
+          const {getViewportRenderPipelineDebugState} =
+            await import('./js/scene/scene.js');
+          return getViewportRenderPipelineDebugState().aoRenderCount > 0;
+        }""")
         initial = page.evaluate("""async () => {
           const {getViewportRenderPipelineDebugState} =
             await import('./js/scene/scene.js');
@@ -3961,7 +3966,7 @@ def test_webgpu_unsupported_state_is_visible_and_never_falls_back(
     page = context.new_page()
     try:
         page.goto(frontend_url)
-        page.locator("#renderer-error.show").wait_for(timeout=5000)
+        page.locator("#renderer-error.show").wait_for()
         assert "WebGPU is required" in page.locator("#renderer-error").inner_text()
         assert page.locator("#open-btn").is_disabled()
         assert not page.evaluate("window.__webglFallbackRequested")
@@ -5624,10 +5629,14 @@ def test_wuwa_body_missing_toon_mask_keeps_physical_direct_specular(
         context, page = _page(edge_browser, frontend_url, {"Packed": payload})
         try:
             _open(page, "Packed")
-            page.wait_for_function(
-                "window.modViewer.activeMeshes[0]?.material?.userData"
-                "?.gameMaterial?.bindings.normal_data.enabledNode.value === true")
-            page.evaluate("""
+            page.wait_for_function("""() => {
+              const bindings = window.modViewer.activeMeshes[0]?.material
+                ?.userData?.gameMaterial?.bindings;
+              return ['diffuse', 'light_map', 'normal_data'].every(role =>
+                bindings?.[role]?.enabledNode.value === true
+                && bindings[role].textureNode.value?.image?.width === 4);
+            }""")
+            before_render = page.evaluate("""
               async () => {
                 const THREE = await import('three');
                 const {scene, controls} = await import('./js/scene/scene.js');
@@ -5644,10 +5653,12 @@ def test_wuwa_body_missing_toon_mask_keeps_physical_direct_specular(
                 key.position.copy(controls.target).add(new THREE.Vector3(0, 0, 3));
                 key.intensity = 3;
                 window.modViewer.activeMeshes[0].material.roughness = 0.2;
+                const beforeRender = window.modViewer.getRenderCount();
                 requestRender();
+                return beforeRender;
               }
             """)
-            page.wait_for_timeout(400)
+            _wait_for_render(page, before_render)
             return _sample_mesh_pixel(page)
         finally:
             context.close()
