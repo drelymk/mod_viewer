@@ -197,6 +197,9 @@ def _animation_families(draws, clocks, group=None):
     # the normal topology/material path remains authoritative.
     for draw in draws:
         for binding in (group or {}).get("animation_vertex_bindings") or ():
+            if (binding.get("position_file") != draw.position_file
+                    or binding.get("ib_file") != draw.ib_file):
+                continue
             candidate = frame_condition(
                 binding.get("animation_conditions"), by_var.keys())
             if candidate is None:

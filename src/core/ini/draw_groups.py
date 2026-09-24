@@ -292,6 +292,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             slot_textures=info.get("slot_textures_at_end") or [],
         )]
         draws = []
+        animation_bindings = []
         for number, authored in enumerate(authored_draws, 1):
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
@@ -468,6 +469,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 for role, provenance in draw.texture_provenance.items()
                 if draw.texture_default(role) or draw.texture_rules(role)
             }
+            for binding in lookup_component_animation_vertex_bindings(
+                    _ib_res_to_component(effective_ib)):
+                item = {**binding, "position_file": draw.position_file,
+                        "ib_file": draw.ib_file}
+                if item not in animation_bindings:
+                    animation_bindings.append(item)
             draws.append(draw)
 
         pool_files = []
@@ -494,8 +501,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "index_size": index_size,
             "geometry_match": info.get("geometry_match_at_end"),
             "draws": draws,
-            "animation_vertex_bindings": (
-                lookup_component_animation_vertex_bindings(component)),
+            "animation_vertex_bindings": animation_bindings,
             "_texture_override_index": texture_override_index,
         })
     return groups
