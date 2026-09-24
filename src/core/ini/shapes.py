@@ -14,6 +14,10 @@ _VALUE_RE = re.compile(r"^x\d+\s*=\s*\$(\w+)\s*$", re.I)
 _BUFFER_RE = re.compile(r"^cs-t\d+\s*=\s*copy\s+(\S+)\s*$", re.I)
 _SHAPE_BUFFER_RE = re.compile(r"^cs-t(50|51)\s*=\s*copy\s+(\S+)\s*$", re.I)
 _SHAPE_X_RE = re.compile(r"^x88\s*=\s*(.+?)\s*$", re.I)
+_U5_ASSIGN_RE = re.compile(r"^cs-u5\s*=\s*(.*?)\s*$", re.I)
+_U5_COPY_RE = re.compile(r"^copy\s+(\S+)\s*$", re.I)
+_U5_OUTPUT_RE = re.compile(
+    r"^(Resource\S+)\s*=\s*ref\s+cs-u5\s*$", re.I)
 _NEGATED_VALUE_RE = re.compile(r"^\$(\w+)\s*\*\s*-1$", re.I)
 _REMAP_RE = re.compile(
     r"^\$(\w+)\s*=\s*\(?\s*\$(\w+)\s*\*\s*2\s*-\s*1\s*\)?$", re.I)
@@ -25,6 +29,24 @@ _SHAPE_VALUE_RE = re.compile(
 _BIND_RE = re.compile(r"^(cs-t(?:0|1|6|33))\s*=\s*(?:copy\s+|ref\s+)?(\S+)\s*$", re.I)
 _BATCH_OFFSET_RE = re.compile(
     r"^global\s+\$shapekey_vertex_offset_batch(\d+)\s*=\s*(\d+)\s*$", re.I)
+
+
+def _writable_u5_outputs(lines):
+    """Map each copied u5 source resource to resources written from it."""
+    outputs = {}
+    current_source = None
+    for raw in lines:
+        line = str(raw).split(";", 1)[0].strip()
+        assignment = _U5_ASSIGN_RE.fullmatch(line)
+        if assignment:
+            copied = _U5_COPY_RE.fullmatch(assignment.group(1).strip())
+            current_source = copied.group(1).casefold() if copied else None
+            continue
+        output = _U5_OUTPUT_RE.fullmatch(line)
+        if output and current_source:
+            outputs.setdefault(current_source, set()).add(
+                output.group(1).casefold())
+    return outputs
 
 
 def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
@@ -66,9 +88,21 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 return value
         return {}
 
+    def shape_base_resources(base_name, writable_outputs):
+        """Resolve shader input and writable runtime output for a base."""
+        shader_base = resource(base_name)
+        base = shader_base
+        runtime_names = writable_outputs.get(base_name.casefold(), ())
+        if len(runtime_names) == 1:
+            runtime_base = resource(next(iter(runtime_names)))
+            if runtime_base.get("filename"):
+                base = runtime_base
+        return base, shader_base
+
     for section, lines in sections.items():
         if not section.lower().startswith("customshader"):
             continue
+        writable_outputs = _writable_u5_outputs(lines)
         variable = None
         buffer_names = []
         for raw in lines:
@@ -84,13 +118,17 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         if (not variable or len(buffer_names) < 2
                 or not buffer_names[0].lower().endswith(".base")):
             continue
-        base = resource(buffer_names[0])
+        base, shader_base = shape_base_resources(
+            buffer_names[0], writable_outputs)
         target = resource(buffer_names[1])
-        if not base.get("filename") or not target.get("filename"):
+        if (not base.get("filename") or not shader_base.get("filename")
+                or not target.get("filename")):
             continue
         base_stride = base.get("stride", 40)
-        target_stride = target.get("stride", base_stride)
-        if base_stride != target_stride or base_stride < 12:
+        shader_base_stride = shader_base.get("stride", base_stride)
+        target_stride = target.get("stride", shader_base_stride)
+        if (base_stride != target_stride
+                or shader_base_stride != target_stride or base_stride < 12):
             continue
 
         src = first_source(lines) or {}
@@ -104,6 +142,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             "max": 1.0,
             "step": 0.01,
             "base_file": base["filename"],
+            "shader_base_file": shader_base["filename"],
             "target_file": target["filename"],
             "stride": base_stride,
             "source": source,
@@ -122,6 +161,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             continue
         candidates = []
         remapped_targets = {}
+        writable_outputs = _writable_u5_outputs(lines)
         variable = base_name = None
         remap_side = None
         for raw in lines:
@@ -173,23 +213,23 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         for variable, base_name, target_name in candidates:
             if authored_slider_vars and variable.lower() not in authored_slider_vars:
                 continue
-            base = resource(base_name)
+            base, shader_base = shape_base_resources(
+                base_name, writable_outputs)
             target = resource(target_name)
-            # A writable ResourceX commonly has a file-backed ResourceX.B
-            # rest pose. When both exist, geometry is drawn from ResourceX;
-            # attach the morph to that runtime buffer while retaining the
-            # shader's conservative shared-base relationship.
-            if base_name.lower().endswith(".b"):
-                runtime_base = resource(base_name[:-2])
-                if runtime_base.get("filename"):
-                    base = runtime_base
+            # When this t50 input is also copied to u5 and written through a
+            # resource ref, attach the slider to that runtime output while
+            # retaining the shader input as its animation identity.
             base_stride = base.get("stride", 40)
-            target_stride = target.get("stride", base_stride)
+            shader_base_stride = shader_base.get("stride", base_stride)
+            target_stride = target.get("stride", shader_base_stride)
             pair = (f"{var_prefix or ''}{variable}".lower(),
                     base.get("filename"), target.get("filename"))
-            if (not all(pair[1:]) or pair in existing_pairs
+            if (not all(pair[1:]) or not shader_base.get("filename")
+                    or pair in existing_pairs
                     or pair[1] == pair[2]
-                    or base_stride != target_stride or base_stride < 12):
+                    or base_stride != target_stride
+                    or shader_base_stride != target_stride
+                    or base_stride < 12):
                 continue
             found.append({
                 "kind": "shape_slider",
@@ -198,6 +238,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "authored_slider": variable.lower() in authored_slider_vars,
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": pair[1],
+                "shader_base_file": shader_base["filename"],
                 "target_file": pair[2],
                 "stride": base_stride,
                 "source": source,
@@ -210,16 +251,15 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             variable = item["var"]
             if authored_slider_vars and variable.lower() not in authored_slider_vars:
                 continue
-            base = resource(item["base"])
-            if item["base"].lower().endswith(".b"):
-                runtime_base = resource(item["base"][:-2])
-                if runtime_base.get("filename"):
-                    base = runtime_base
+            base, shader_base = shape_base_resources(
+                item["base"], writable_outputs)
             low = resource(item["low"])
             high = resource(item["high"])
-            strides = {base.get("stride", 40), low.get("stride", 40),
+            strides = {base.get("stride", 40),
+                       shader_base.get("stride", 40), low.get("stride", 40),
                        high.get("stride", 40)}
-            if (not base.get("filename") or not low.get("filename")
+            if (not base.get("filename") or not shader_base.get("filename")
+                    or not low.get("filename")
                     or not high.get("filename") or len(strides) != 1
                     or next(iter(strides)) < 12):
                 continue
@@ -229,6 +269,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "authored_slider": variable.lower() in authored_slider_vars,
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": base["filename"],
+                "shader_base_file": shader_base["filename"],
                 "low_file": low["filename"],
                 "target_file": high["filename"],
                 "stride": next(iter(strides)), "source": source,
@@ -301,6 +342,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         if shape_id is not None and sparse_ready:
             batch = shape_id // 127
             item.update(sparse_resources)
+            item["shader_base_file"] = sparse_resources["base_file"]
             item["shape_id"] = shape_id
             item["buffer_shape_id"] = shape_id + batch
             item["sparse_entry_offset"] = batch_offsets.get(batch, 0)
@@ -369,6 +411,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "authored_slider": variable.lower() in authored_slider_vars,
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": base["filename"],
+                "shader_base_file": base["filename"],
                 "low_file": low["filename"],
                 "target_file": high["filename"],
                 "stride": base.get("stride", 40),

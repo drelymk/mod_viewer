@@ -133,7 +133,8 @@ def _is_plain_shape_slider_compute(animation, shape_sliders):
             and slider.get("mode") is None
             and not sparse_fields.intersection(slider)
             and str(slider.get("var", "")).casefold() == phase_var
-            and _path_key(slider.get("base_file")) == animation_base
+            and _path_key(slider.get(
+                "shader_base_file", slider.get("base_file"))) == animation_base
             and _path_key(slider.get("target_file")) == target_file
             for slider in shape_sliders or ()
         )

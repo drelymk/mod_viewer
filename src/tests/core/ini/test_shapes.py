@@ -43,6 +43,43 @@ filename = BodyPosition.nipple.buf
 
 
 
+def test_writable_u5_mapping_only_applies_to_matching_shape_base():
+    text = r"""
+[CustomShaderComputeShapes]
+cs-u5 = copy ResourceShaderInput
+ResourceRuntimePosition = ref cs-u5
+x88 = $FirstShape
+cs-t50 = copy ResourceShapeBase
+cs-t51 = copy ResourceFirstTarget
+Dispatch = 3, 1, 1
+x88 = $SecondShape
+cs-t50 = copy ResourceShapeBase
+cs-t51 = copy ResourceSecondTarget
+Dispatch = 3, 1, 1
+[ResourceShaderInput]
+stride = 40
+filename = ShaderInput.buf
+[ResourceRuntimePosition]
+stride = 40
+filename = RuntimePosition.buf
+[ResourceShapeBase]
+stride = 40
+filename = ShapeBase.buf
+[ResourceFirstTarget]
+stride = 40
+filename = FirstTarget.buf
+[ResourceSecondTarget]
+stride = 40
+filename = SecondTarget.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    assert {slider["var"] for slider in sliders} == {
+        "FirstShape", "SecondShape"}
+    assert all(slider["base_file"] == "ShapeBase.buf"
+               and slider["shader_base_file"] == "ShapeBase.buf"
+               for slider in sliders)
+
 
 def test_wwmi_sparse_shape_slider_is_discovered():
     text = r"""

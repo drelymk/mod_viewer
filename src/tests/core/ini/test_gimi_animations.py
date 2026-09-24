@@ -911,6 +911,7 @@ def _write_linear_shape_chain_fixture(
         base.extend(struct.pack("<fff", 0., 2., 0.))
         base.extend(b"\0" * 16)
     (root / "BodyPosition.buf").write_bytes(base)
+    (root / "BodyPosition.Rest.buf").write_bytes(base)
     (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
     (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
 
@@ -934,7 +935,7 @@ def _write_linear_shape_chain_fixture(
         f"${phase_vars[0]} = ${phase_vars[0]} + "
         f"($target_{phase_vars[0]} - ${phase_vars[0]}) * $Speed * $dt",
         "", "[CustomShaderComputeShapeChain]",
-        "cs-u5 = copy ResourceBodyPosition.Base",
+        "cs-u5 = copy ResourceBodyPosition.SomeRestBuffer",
         "cs = Shapes.hlsl",
         "ResourceBodyPosition = ref cs-u5",
     ])
@@ -944,7 +945,7 @@ def _write_linear_shape_chain_fixture(
                 f"${variable} = ${variable} + $Speed * $dt")
         lines.extend([
             f"x88 = ${variable}",
-            "cs-t50 = copy ResourceBodyPosition.Base",
+            "cs-t50 = copy ResourceBodyPosition.SomeRestBuffer",
             f"cs-t51 = copy ResourceBodyPosition.{target_name}",
             "Dispatch = 1, 1, 1",
         ])
@@ -963,14 +964,16 @@ def _write_linear_shape_chain_fixture(
         "drawindexed = 3, 0, 0",
         "", "[ResourceBodyPosition]",
         "stride = 40", "filename = BodyPosition.buf",
-        "", "[ResourceBodyPosition.Base]",
-        "stride = 40", "filename = BodyPosition.buf",
     ])
     for _variable, target_name, target_file in targets:
         lines.extend([
             "", f"[ResourceBodyPosition.{target_name}]",
             "stride = 40", f"filename = {target_file}",
         ])
+    lines.extend([
+        "", "[ResourceBodyPosition.SomeRestBuffer]",
+        "stride = 40", "filename = BodyPosition.Rest.buf",
+    ])
     lines.extend([
         "", "[ResourceBodyTexcoord]",
         "stride = 20", "filename = BodyTexcoord.buf",
@@ -1009,6 +1012,9 @@ def test_all_authored_shape_chain_passes_use_slider_path(tmp_path):
     sliders = {item["var"]: item for item in group["shape_sliders"]}
     assert set(sliders) == set(variables)
     assert all(item["authored_slider"] is True for item in sliders.values())
+    assert all(item["base_file"] == "BodyPosition.buf"
+               and item["shader_base_file"] == "BodyPosition.Rest.buf"
+               for item in sliders.values())
     assert "_compute_animation" not in group
 
     built = build_mesh_result(parsed.groups, str(ini.parent))
