@@ -39,9 +39,82 @@ filename = BodyPosition.nipple.buf
     by_var = {slider["var"]: slider for slider in sliders}
     assert (sorted(by_var) == ["BoobsSize", "NippleLength"] and
           by_var["BoobsSize"]["base_file"] == "BodyPosition.buf" and
+          by_var["BoobsSize"]["shader_base_file"] == "BodyPosition.buf" and
           by_var["NippleLength"]["target_file"] == "BodyPosition.nipple.buf"), (f"repeated t50/t51 morph blocks share their authored base (got {sliders})")
 
 
+
+def test_writable_u5_mapping_only_applies_to_matching_shape_base():
+    text = r"""
+[CustomShaderComputeShapes]
+cs-u5 = copy ResourceShaderInput
+ResourceRuntimePosition = ref cs-u5
+x88 = $FirstShape
+cs-t50 = copy ResourceShapeBase
+cs-t51 = copy ResourceFirstTarget
+Dispatch = 3, 1, 1
+x88 = $SecondShape
+cs-t50 = copy ResourceShapeBase
+cs-t51 = copy ResourceSecondTarget
+Dispatch = 3, 1, 1
+[ResourceShaderInput]
+stride = 40
+filename = ShaderInput.buf
+[ResourceRuntimePosition]
+stride = 40
+filename = RuntimePosition.buf
+[ResourceShapeBase]
+stride = 40
+filename = ShapeBase.buf
+[ResourceFirstTarget]
+stride = 40
+filename = FirstTarget.buf
+[ResourceSecondTarget]
+stride = 40
+filename = SecondTarget.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    assert {slider["var"] for slider in sliders} == {
+        "FirstShape", "SecondShape"}
+    assert all(slider["base_file"] == "ShapeBase.buf"
+               and slider["shader_base_file"] == "ShapeBase.buf"
+               for slider in sliders)
+
+
+def test_writable_u5_mapping_validates_runtime_stride_only():
+    text = r"""
+[CustomShaderComputeShapes]
+cs-u5 = copy ResourceOriginalPosition
+ResourceRuntimePosition = ref cs-u5
+x88 = $FirstShape
+cs-t50 = copy ResourceOriginalPosition
+cs-t51 = copy ResourceFirstTarget
+Dispatch = 3, 1, 1
+x88 = $SecondShape
+cs-t50 = copy ResourceOriginalPosition
+cs-t51 = copy ResourceSecondTarget
+Dispatch = 3, 1, 1
+[ResourceOriginalPosition]
+stride = 20
+filename = OriginalPosition.buf
+[ResourceRuntimePosition]
+stride = 40
+filename = RuntimePosition.buf
+[ResourceFirstTarget]
+stride = 40
+filename = FirstTarget.buf
+[ResourceSecondTarget]
+stride = 40
+filename = SecondTarget.buf
+"""
+    secs = sections(text)
+    sliders = extract_shape_sliders(secs, extract_resources(secs))
+    assert {slider["var"] for slider in sliders} == {
+        "FirstShape", "SecondShape"}
+    assert all(slider["base_file"] == "RuntimePosition.buf"
+               and slider["shader_base_file"] == "OriginalPosition.buf"
+               for slider in sliders)
 
 
 def test_wwmi_sparse_shape_slider_is_discovered():
@@ -82,6 +155,7 @@ filename = Meshes/ShapeKeyVertexOffset.buf
     assert (slider.get("shape_id") == 161 and slider.get("buffer_shape_id") == 162 and
           slider.get("sparse_entry_offset") == 43085 and
           slider.get("vertex_offset_file") == "Meshes/ShapeKeyVertexOffset.buf"), (f"WWMI slider aligns its key ID, batch records, and sparse buffers (got {slider})")
+    assert "shader_base_file" not in slider
 
 
 def test_zzmi_midpoint_pair_sliders_are_discovered():
@@ -124,6 +198,8 @@ filename = BodySmallBreast.buf
     assert (by_var["Bottom"].get("mode") == "midpoint_pair" and
           by_var["Bottom"].get("low_file") == "BodySmallBottom.buf" and
           by_var["Bottom"].get("target_file") == "BodyBigBottom.buf"), (f"bottom slider links its smaller and bigger buffers (got {by_var['Bottom']})")
+    assert all("shader_base_file" not in slider
+               for slider in by_var.values())
 
 
 def test_zzmi_midpoint_bindings_do_not_cross_commandlists():

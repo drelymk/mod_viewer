@@ -85,41 +85,62 @@ def _attach_shape_sliders(groups, shape_sliders):
 
 
 def _is_plain_shape_slider_compute(animation, shape_sliders):
-    """Identify a compute pass already represented by a plain shape slider."""
+    """Identify a compute chain fully represented by authored shape sliders."""
     if animation.get("pose") is not None or animation.get("conditions"):
         return False
     passes = animation.get("shape_passes") or ()
-    if len(passes) != 1:
+    if not passes:
         return False
     program = animation.get("program") or {}
-    phase_vars = {
-        str(command.get("phase", {}).get("variable", "")).casefold()
-        for command in program.get("commands", ())
-        if command.get("track_id") == animation.get("track_id")
-        and command.get("op") == "dispatch"
-        and command.get("kind") == "shape"
-        and command.get("phase", {}).get("kind") == "variable"
-        and command.get("phase", {}).get("variable")
-    }
-    if len(phase_vars) != 1:
+    commands = program.get("commands") or ()
+    track_id = animation.get("track_id")
+    if not track_id:
         return False
-    phase_var = next(iter(phase_vars)).casefold()
     assigned_vars = {
         str(command.get("variable", "")).casefold()
-        for command in program.get("commands", ())
+        for command in commands
         if command.get("op") == "set"
     }
-    if phase_var in assigned_vars:
-        return False
     animation_base = _path_key(animation.get("base_file"))
-    animation_target = _path_key(passes[0].get("target_file"))
-    return any(
-        str(slider.get("var", "")).casefold() == phase_var
-        and slider.get("authored_slider") is True
-        and _path_key(slider.get("base_file")) == animation_base
-        and _path_key(slider.get("target_file")) == animation_target
-        for slider in shape_sliders or ()
-    )
+    if not animation_base:
+        return False
+    sparse_fields = {
+        "shape_id", "buffer_shape_id", "sparse_entry_offset", "offset_file",
+        "vertex_id_file", "vertex_offset_file",
+    }
+
+    for index, shape_pass in enumerate(passes):
+        dispatches = [
+            command for command in commands
+            if command.get("op") == "dispatch"
+            and command.get("kind") == "shape"
+            and command.get("track_id") == track_id
+            and command.get("pass") == index
+        ]
+        if len(dispatches) != 1:
+            return False
+        phase = dispatches[0].get("phase")
+        if not isinstance(phase, dict) or phase.get("kind") != "variable":
+            return False
+        phase_var = str(phase.get("variable") or "").casefold()
+        target_file = _path_key(shape_pass.get("target_file"))
+        if (not phase_var or phase_var in assigned_vars or not target_file):
+            return False
+
+        matched = any(
+            slider.get("kind") == "shape_slider"
+            and slider.get("authored_slider") is True
+            and slider.get("mode") is None
+            and not sparse_fields.intersection(slider)
+            and str(slider.get("var", "")).casefold() == phase_var
+            and _path_key(slider.get(
+                "shader_base_file", slider.get("base_file"))) == animation_base
+            and _path_key(slider.get("target_file")) == target_file
+            for slider in shape_sliders or ()
+        )
+        if not matched:
+            return False
+    return True
 
 
 def _attach_sparse_animations(groups, animations):

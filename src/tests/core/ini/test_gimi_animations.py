@@ -900,6 +900,91 @@ filename = Body.ib
     return ini
 
 
+def _write_linear_shape_chain_fixture(
+        root, phase_vars, *, authored_vars=(), program_assigned=()):
+    root.mkdir()
+    (root / "Shapes.hlsl").write_text(LINEAR_SHAPE_SHADER)
+
+    base = bytearray()
+    for x in (0., 1., 2.):
+        base.extend(struct.pack("<fff", x, 0., 0.))
+        base.extend(struct.pack("<fff", 0., 2., 0.))
+        base.extend(b"\0" * 16)
+    (root / "BodyPosition.buf").write_bytes(base)
+    (root / "BodyPosition.Rest.buf").write_bytes(base)
+    (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
+    (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
+
+    targets = []
+    for index, variable in enumerate(phase_vars, 1):
+        target_name = f"Shape{index}"
+        target_file = f"BodyPosition{target_name}.buf"
+        target = bytearray()
+        for x in (0., 1., 2.):
+            target.extend(struct.pack("<fff", x + index, 0., 0.))
+            target.extend(struct.pack("<fff", 0., 2. + index, 0.))
+            target.extend(b"\0" * 16)
+        (root / target_file).write_bytes(target)
+        targets.append((variable, target_name, target_file))
+
+    lines = ["[Constants]", "global $dt", "global $Speed = 0.25"]
+    lines.extend(f"global ${variable} = 0.25" for variable in phase_vars)
+    lines.extend(f"global $target_{variable} = 1" for variable in phase_vars)
+    lines.extend([
+        "", "[CommandListInterpolateShapes]",
+        f"${phase_vars[0]} = ${phase_vars[0]} + "
+        f"($target_{phase_vars[0]} - ${phase_vars[0]}) * $Speed * $dt",
+        "", "[CustomShaderComputeShapeChain]",
+        "cs-u5 = copy ResourceBodyPosition.SomeRestBuffer",
+        "cs = Shapes.hlsl",
+        "ResourceBodyPosition = ref cs-u5",
+    ])
+    for variable, target_name, _target_file in targets:
+        if variable in program_assigned:
+            lines.append(
+                f"${variable} = ${variable} + $Speed * $dt")
+        lines.extend([
+            f"x88 = ${variable}",
+            "cs-t50 = copy ResourceBodyPosition.SomeRestBuffer",
+            f"cs-t51 = copy ResourceBodyPosition.{target_name}",
+            "Dispatch = 1, 1, 1",
+        ])
+    lines.append("cs-u5 = null")
+    for variable in authored_vars:
+        lines.extend([
+            "", f"[CommandListDrawSlider.{variable}]",
+            f"x87 = ${variable} * x87",
+        ])
+
+    lines.extend([
+        "", "[TextureOverrideBody]",
+        "vb0 = ResourceBodyPosition",
+        "vb1 = ResourceBodyTexcoord",
+        "ib = ResourceBodyIB",
+        "drawindexed = 3, 0, 0",
+        "", "[ResourceBodyPosition]",
+        "stride = 40", "filename = BodyPosition.buf",
+    ])
+    for _variable, target_name, target_file in targets:
+        lines.extend([
+            "", f"[ResourceBodyPosition.{target_name}]",
+            "stride = 40", f"filename = {target_file}",
+        ])
+    lines.extend([
+        "", "[ResourceBodyPosition.SomeRestBuffer]",
+        "stride = 40", "filename = BodyPosition.Rest.buf",
+    ])
+    lines.extend([
+        "", "[ResourceBodyTexcoord]",
+        "stride = 20", "filename = BodyTexcoord.buf",
+        "", "[ResourceBodyIB]",
+        "format = DXGI_FORMAT_R32_UINT", "filename = Body.ib", "",
+    ])
+    ini = root / "ShapeChain.ini"
+    ini.write_text("\n".join(lines), encoding="utf-8")
+    return ini
+
+
 def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
     ini = _write_lucy_shape_fixture(
         tmp_path / "lucy-like", LINEAR_SHAPE_SHADER, authored_slider=True)
@@ -917,6 +1002,27 @@ def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
     assert "animation_geometry" not in entry
 
 
+def test_all_authored_shape_chain_passes_use_slider_path(tmp_path):
+    variables = ("shapeOne", "shapeTwo", "shapeThree")
+    ini = _write_linear_shape_chain_fixture(
+        tmp_path / "linear-chain", variables, authored_vars=variables)
+
+    parsed = analyze_mod_inis([str(ini)], str(ini.parent))
+    group = parsed.groups[0]
+    sliders = {item["var"]: item for item in group["shape_sliders"]}
+    assert set(sliders) == set(variables)
+    assert all(item["authored_slider"] is True for item in sliders.values())
+    assert all(item["base_file"] == "BodyPosition.buf"
+               and item["shader_base_file"] == "BodyPosition.Rest.buf"
+               for item in sliders.values())
+    assert "_compute_animation" not in group
+
+    built = build_mesh_result(parsed.groups, str(ini.parent))
+    entry = next(iter(built.meshes.values()))
+    assert len(entry["shape_targets"]) == 3
+    assert "animation_geometry" not in entry
+
+
 def test_single_pass_sinusoidal_shape_without_authored_slider_stays_compute(
         tmp_path):
     ini = _write_lucy_shape_fixture(tmp_path / "sinusoidal", SHAPE_SHADER)
@@ -925,6 +1031,25 @@ def test_single_pass_sinusoidal_shape_without_authored_slider_stays_compute(
     group = parsed.groups[0]
     assert group["shape_sliders"][0]["authored_slider"] is False
     assert group.get("_compute_animation") is not None
+
+
+def test_mixed_slider_and_animation_pass_keeps_compute_chain(tmp_path):
+    variables = ("shapeControl", "runtimePhase")
+    ini = _write_linear_shape_chain_fixture(
+        tmp_path / "mixed-chain", variables,
+        authored_vars=("shapeControl",),
+        program_assigned=("runtimePhase",))
+
+    parsed = analyze_mod_inis([str(ini)], str(ini.parent))
+    group = parsed.groups[0]
+    animation = group.get("_compute_animation")
+    assert animation is not None
+    assert [command["pass"] for command in animation["program"]["commands"]
+            if command.get("op") == "dispatch"] == [0, 1]
+
+    built = build_mesh_result(parsed.groups, str(ini.parent))
+    entry = next(iter(built.meshes.values()))
+    assert len(entry["animation_geometry"]["shape_passes"]) == 2
 
 
 def test_compute_animation_is_attached_per_ini_with_duplicate_resources(tmp_path):
