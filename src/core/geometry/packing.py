@@ -406,28 +406,12 @@ def pack_animation_frame_attributes(
     Indexes, UVs, textures, and shape targets remain owned by the canonical
     draw.  The caller validates the prepared topology before using this data.
     """
-    used = prepared.used_vertices
-    if (prepared.streams.position_stride == 12
-            and POSITION_OFFSET == 0 and _contiguous_vertices(used)):
-        packed = _pack_animation_positions(
-            prepared.streams.position_data, 12, used)
-        if packed is None:
-            return None
-        pos_bytes, bounds_min, bounds_max = packed
-    else:
-        pos_bytes = bytearray(len(used) * 12)
-        low = [math.inf, math.inf, math.inf]
-        high = [-math.inf, -math.inf, -math.inf]
-        for output_index, vertex_index in enumerate(used):
-            x, y, z, _u, _v = prepared.decoded_vertices[vertex_index]
-            struct.pack_into("<fff", pos_bytes, output_index * 12, x, y, z)
-            if x < low[0]: low[0] = x
-            if y < low[1]: low[1] = y
-            if z < low[2]: low[2] = z
-            if x > high[0]: high[0] = x
-            if y > high[1]: high[1] = y
-            if z > high[2]: high[2] = z
-        pos_bytes, bounds_min, bounds_max = bytes(pos_bytes), tuple(low), tuple(high)
+    packed = _pack_animation_positions(
+        prepared.streams.position_data, prepared.streams.position_stride,
+        prepared.used_vertices)
+    if packed is None:
+        return None
+    pos_bytes, bounds_min, bounds_max = packed
 
     normal_bytes = None
     normal_source = draw.normal_source
@@ -448,19 +432,13 @@ def pack_animation_frame_attributes(
         pos_bytes, normal_bytes, bounds_min, bounds_max)
 
 
-def _contiguous_vertices(vertices):
-    return bool(vertices) and vertices[-1] - vertices[0] + 1 == len(vertices) \
-        and all(value == vertices[0] + index
-                for index, value in enumerate(vertices))
-
-
 def _pack_animation_positions(data, stride, used_vertices):
     """Validate and bound positions, copying tight contiguous records directly."""
     count = len(used_vertices)
     bounds_min = [math.inf, math.inf, math.inf]
     bounds_max = [-math.inf, -math.inf, -math.inf]
-    direct = stride == 12 and POSITION_OFFSET == 0 and \
-        _contiguous_vertices(used_vertices)
+    direct = (stride == 12 and count > 0
+              and used_vertices[-1] - used_vertices[0] + 1 == count)
     if direct:
         begin = used_vertices[0] * 12
         end = begin + count * 12

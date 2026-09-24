@@ -408,8 +408,6 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
             and _static_position_records(family, canonical_prepared,
                                          mod_dir=mod_dir, buffers=buffers,
                                          source=source)):
-        if diagnostics is not None:
-            diagnostics["animation_static_family_count"] += 1
         return None
 
     canonical_topology = None
@@ -438,7 +436,6 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     canonical_bounds = (canonical_packed.bounds_min,
                         canonical_packed.bounds_max)
     pack_started = time.perf_counter()
-    translated_frames = 0
     for frame_index, frame in enumerate(range(start, end + 1)):
         if frame == start:
             packed_frame = PackedAnimationFrame(
@@ -454,7 +451,6 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                 buffers=buffers, default_index_size=default_index_size,
                 geometry_convention=geometry_convention, source=source)
             if translated is not None:
-                translated_frames += 1
                 draw = frames[frame]
                 path = (source.resolve_resource(draw.position_file)
                         if source is not None else
@@ -518,9 +514,6 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         diagnostics["animation_pack_seconds"] += (
             time.perf_counter() - pack_started)
         diagnostics["animation_frame_count"] += frame_count
-        diagnostics["animation_translated_frame_count"] += translated_frames
-        if translated_frames == frame_count - 1 and translated_frames:
-            diagnostics["animation_translated_family_count"] += 1
     has_normals = normal_possible and (
         len(normals) == frame_count if geometry is None else normal_ref is not None)
     if not has_normals:
@@ -710,9 +703,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     gimi_shared = {}
     animation_diagnostics = {
         "animation_family_count": 0,
-        "animation_static_family_count": 0,
-        "animation_translated_family_count": 0,
-        "animation_translated_frame_count": 0,
         "animation_frame_count": 0,
         "animation_prepare_calls": 0,
         "animation_prepare_seconds": 0.0,
