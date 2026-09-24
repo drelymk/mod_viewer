@@ -10,7 +10,6 @@ import {
   resetOutlineProjectionReference,
   updateOutlineProjectionScale,
 } from './outline-renderer.js';
-import { setBCTextureCompression } from './renderer-capabilities.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
 import {
   setCharacterShadowGeometryInvalidator,
@@ -74,14 +73,10 @@ async function initializeRenderer() {
     featureLevel: 'core',
   });
   if (!adapter) throw new Error('No WebGPU adapter is available.');
-  const supportsBC = adapter.features?.has?.(
-    'texture-compression-bc') === true;
   const device = await adapter.requestDevice({
-    requiredFeatures: supportsBC ? ['texture-compression-bc'] : [],
+    requiredFeatures: ['texture-compression-bc'],
   });
   if (!device) throw new Error('The WebGPU device could not be created.');
-  setBCTextureCompression(
-    device.features?.has?.('texture-compression-bc') === true);
 
   // WebGPUBackend accepts an application-owned device through its public
   // parameters object. Supplying the preflighted device keeps renderer.init()

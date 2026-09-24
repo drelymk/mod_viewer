@@ -47,6 +47,7 @@ class MaterialInterpretation:
     texture_api: str
     material_kind: str = "unknown"
     normal_xy: tuple[str, str] | None = None
+    normal_source: str = "normal_map"
     # These are diagnostic-only views of packed WuWa normal data.  They are
     # deliberately separate from metalness/specular so the packed B/A
     # channels cannot become stock PBR inputs by accident.
@@ -109,6 +110,8 @@ class MaterialInterpretation:
                            for channel in self.normal_xy)):
                 raise ValueError(
                     "normal_xy must contain exactly two RGBA channels")
+        if self.normal_source not in ("normal_map", "normal_data"):
+            raise ValueError(f"Unknown normal source: {self.normal_source}")
         if self.direct_shadow_model not in (
                 None, "zzz_toon", "genshin_toon", "wuwa_base"):
             raise ValueError(
@@ -126,6 +129,7 @@ class MaterialInterpretation:
             "texture_api": self.texture_api,
             "material_kind": self.material_kind,
             "normal_xy": list(self.normal_xy) if self.normal_xy else None,
+            "normal_source": self.normal_source,
             "normal_data_b": (self.normal_data_b.to_metadata()
                               if self.normal_data_b else None),
             "normal_data_a": (self.normal_data_a.to_metadata()
@@ -179,6 +183,7 @@ def _base_profile_for(game, texture_api):
     if game == "zzz" and texture_api in ("zzmi", "rabbitfx"):
         return MaterialInterpretation(
             id=f"zzz:{texture_api}", game=game, texture_api=texture_api,
+            normal_xy=("r", "g"),
             material_id=ChannelRef("material_map", "r"),
             # ZZZ toon diffuse currently uses N·L only. LightMap.G remains
             # the validated metallic input and must not be reused as a shadow
@@ -195,6 +200,7 @@ def _base_profile_for(game, texture_api):
         return MaterialInterpretation(
             id=f"genshin:{texture_api}", game=game,
             texture_api=texture_api,
+            normal_xy=("r", "g"),
             # G is the validated first toon-shadow input. A classifies the
             # authored material region and B gates the toon highlight area;
             # both are read from this same intact packed texture.
@@ -225,6 +231,7 @@ def _base_profile_for(game, texture_api):
         # the exact reliable body specialization adds its own response refs.
         kwargs = {
             "normal_xy": ("r", "g"),
+            "normal_source": "normal_data",
             "normal_data_b": ChannelRef("normal_data", "b"),
             "normal_data_a": ChannelRef("normal_data", "a"),
         }

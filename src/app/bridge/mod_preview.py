@@ -55,9 +55,8 @@ class ModPreview:
         if not validate:
             return publication.register
 
-        def register(path, role=None, transform=None):
-            return publication.register(
-                path, role, validate=True, transform=transform)
+        def register(path, role=None):
+            return publication.register(path, role, validate=True)
 
         return register
 
@@ -688,5 +687,5 @@ class ModPreview:
             transport_role = profile.normal_transport_role
         encoded = encode_texture_file(
             folder_path, result[0], transport_role,
-            texture_source=texture_source, texture_profile=profile)
+            texture_source=texture_source)
         return encoded

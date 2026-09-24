@@ -16,6 +16,7 @@ _DDSCAPS2_VOLUME = 0x200000
 _D3D10_RESOURCE_DIMENSION_TEXTURE2D = 3
 _D3D10_RESOURCE_MISC_TEXTURECUBE = 0x4
 _MAX_DDS_DIMENSION = 65536
+MAX_MODEL_DDS_SIZE = 8192
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,6 @@ class DDSInfo:
     mip_count: int
     format: str
     compressed: bool
-    requires_bc: bool
 
 
 @dataclass(frozen=True)
@@ -101,8 +101,7 @@ def _mip_count(raw_count, width, height):
 
 def _info(width, height, mip_count, format_name):
     compressed = format_name in _COMPRESSED_FORMATS
-    return DDSInfo(width, height, mip_count, format_name, compressed,
-                   compressed)
+    return DDSInfo(width, height, mip_count, format_name, compressed)
 
 
 def _bytes_per_unit(format_name):
@@ -254,17 +253,15 @@ def inspect_dds_header(header, file_size=None):
     return info
 
 
-def native_dds_info(path, max_size=2048, transform="passthrough",
-                    source_name=None):
-    """Return native-delivery metadata when the source meets PR21 rules."""
+def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, source_name=None):
+    """Return metadata for a valid model DDS within the viewer size limit."""
     try:
         path_string = (source_name if isinstance(source_name, str)
                        else os.fsdecode(os.fspath(path)))
     except (TypeError, ValueError):
         return None
     if (not isinstance(path, (str, bytes, os.PathLike))
-            or not path_string.lower().endswith(".dds")
-            or transform != "passthrough"):
+            or not path_string.lower().endswith(".dds")):
         return None
     try:
         max_size = int(max_size)
@@ -278,16 +275,16 @@ def native_dds_info(path, max_size=2048, transform="passthrough",
     return info
 
 
-def native_dds_info_from_header(header, file_size, max_size=2048,
-                                transform="passthrough", source_name=None):
+def native_dds_info_from_header(header, file_size,
+                                max_size=MAX_MODEL_DDS_SIZE,
+                                source_name=None):
     """Return native-delivery metadata from a bounded header read."""
     try:
         path_string = (source_name if isinstance(source_name, str)
                        else os.fsdecode(os.fspath(source_name)))
     except (TypeError, ValueError):
         return None
-    if (not path_string.lower().endswith(".dds")
-            or transform != "passthrough"):
+    if not path_string.lower().endswith(".dds"):
         return None
     try:
         max_size = int(max_size)
@@ -302,7 +299,8 @@ def native_dds_info_from_header(header, file_size, max_size=2048,
 
 
 __all__ = [
-    "DDSInfo", "DDSMipLayout", "DDSLayout", "dds_layout_for_info",
+    "MAX_MODEL_DDS_SIZE", "DDSInfo", "DDSMipLayout", "DDSLayout",
+    "dds_layout_for_info",
     "inspect_dds", "inspect_dds_header", "inspect_dds_layout",
     "native_dds_info", "native_dds_info_from_header",
 ]

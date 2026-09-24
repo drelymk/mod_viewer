@@ -23,8 +23,6 @@ def test_texture_keys_normalize_legacy_paths_and_unknown_roles():
     assert textures.normalize_texture_key(r"Texture\Foo.dds") == (
         "diffuse::Texture/Foo.dds")
     assert textures.normalize_texture_role("not-a-role") == "diffuse"
-    assert textures.normalize_texture_transform("not-a-transform") == (
-        "passthrough")
     assert textures.normalize_texture_key("") is None
 
 

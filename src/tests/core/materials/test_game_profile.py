@@ -165,7 +165,5 @@ def test_resolved_texcoord_binding_does_not_inherit_blend_parent():
 
 def test_wuwa_profile_uses_intact_normal_data_for_normal_transport():
     profile = texture_profile_for("wuwa")
-    assert profile.recipe_for("normal_map") == "passthrough"
-    assert profile.recipe_for("normal_data") == "passthrough"
     assert not profile.bind_normal_map
     assert profile.normal_transport_role == "normal_data"

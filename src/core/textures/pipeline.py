@@ -17,9 +17,6 @@ _MAX_IMAGE_PIXELS = 100_000_000
 TEXTURE_ROLES = (
     "diffuse", "normal_map", "normal_data", "light_map", "material_map",
     "emission_map")
-TEXTURE_TRANSFORMS = (
-    "passthrough", "normal_xy_reconstruct",
-)
 _texture_cache = OrderedDict()
 _texture_cache_bytes = 0
 _texture_cache_mod = None
@@ -38,11 +35,6 @@ _SRGB_DXGI_TO_UNORM = {
 def normalize_texture_role(role=None):
     """Return the canonical registry role used for one texture instance."""
     return role if role in TEXTURE_ROLES else "diffuse"
-
-
-def normalize_texture_transform(transform=None):
-    """Return a known image transform, defaulting to raw packed data."""
-    return transform if transform in TEXTURE_TRANSFORMS else "passthrough"
 
 
 def texture_key(relative_path, role=None):
@@ -146,28 +138,6 @@ def _cache_texture(key, png):
             _texture_cache_bytes -= old_size
 
 
-def _reconstruct_normal_z(img):
-    """Expand a game-style two-channel XY normal into tangent-space RGB."""
-    source = img.convert("RGB").tobytes()
-    result = bytearray(len(source))
-    for offset in range(0, len(source), 3):
-        x = source[offset] / 127.5 - 1.0
-        y = source[offset + 1] / 127.5 - 1.0
-        z = max(0.0, 1.0 - x * x - y * y) ** 0.5
-        result[offset] = source[offset]
-        result[offset + 1] = source[offset + 1]
-        result[offset + 2] = round((z * 0.5 + 0.5) * 255.0)
-    from PIL import Image
-    return Image.frombytes("RGB", img.size, bytes(result))
-
-
-def _apply_texture_transform(img, texture_transform):
-    texture_transform = normalize_texture_transform(texture_transform)
-    if texture_transform == "normal_xy_reconstruct":
-        return _reconstruct_normal_z(img)
-    return img
-
-
 def _srgb_dds_as_unorm(data):
     """Return a memory-only DDS header with a typed sRGB format normalized."""
     if (len(data) < 148 or data[:4] != b"DDS "
@@ -263,12 +233,10 @@ def load_texture_image_full(path, preserve_alpha=True, source_name=None):
 
 
 def render_texture_png(path, max_size=2048, preserve_alpha=False,
-                       texture_role=None, texture_transform="passthrough",
-                       source_name=None):
-    """Decode and explicitly transform an image into PNG bytes."""
+                       texture_role=None, source_name=None):
+    """Decode an image into PNG bytes."""
     try:
         texture_role = normalize_texture_role(texture_role)
-        texture_transform = normalize_texture_transform(texture_transform)
         if isinstance(path, (bytes, bytearray, memoryview)):
             cache_identity = ("bytes", source_name or "", hash(bytes(path)))
             cache_size = len(path)
@@ -279,7 +247,7 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
             cache_size = stat.st_size
             cache_mtime = stat.st_mtime_ns
         cache_key = (cache_identity, cache_size, cache_mtime, max_size,
-                     preserve_alpha, texture_role, texture_transform)
+                     preserve_alpha, texture_role)
         cache_started = _profile_started()
         with _texture_cache_lock:
             cached = _texture_cache.pop(cache_key, None)
@@ -288,15 +256,11 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
                 _profile_elapsed(
                     "cache_hit", cache_started,
                     path=cache_key[0], role=texture_role,
-                    transform=texture_transform, bytes=len(cached[0]))
+                    bytes=len(cached[0]))
                 return cached[0]
         _profile_elapsed("cache_miss", cache_started,
-                         path=cache_key[0], role=texture_role,
-                         transform=texture_transform)
-        packed_passthrough = (
-            texture_transform == "passthrough"
-            and texture_role != "diffuse")
-        keep_source_alpha = preserve_alpha or packed_passthrough
+                         path=cache_key[0], role=texture_role)
+        keep_source_alpha = preserve_alpha or texture_role != "diffuse"
         stage_started = _profile_started()
         img = load_texture_image(
             path, max_size=max_size, preserve_alpha=keep_source_alpha,
@@ -304,8 +268,7 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
         if img is None:
             return None
         _profile_elapsed("decode", stage_started,
-                         path=cache_key[0], role=texture_role,
-                         transform=texture_transform)
+                         path=cache_key[0], role=texture_role)
         stage_started = _profile_started()
         try:
             if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
@@ -313,18 +276,7 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
         finally:
             _profile_elapsed(
                 "rgb_rgba_conversion", stage_started,
-                path=cache_key[0], role=texture_role,
-                transform=texture_transform)
-        if texture_transform != "passthrough":
-            stage_started = _profile_started()
-            try:
-                img = _apply_texture_transform(img, texture_transform)
-            finally:
-                _profile_elapsed(
-                    "normal_z_reconstruction",
-                    stage_started,
-                    path=cache_key[0], role=texture_role,
-                    transform=texture_transform)
+                path=cache_key[0], role=texture_role)
         stage_started = _profile_started()
         try:
             buf = io.BytesIO()
@@ -334,12 +286,10 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
             _profile_elapsed(
                 "png_encoding", stage_started,
                 path=cache_key[0], role=texture_role,
-                transform=texture_transform,
                 bytes=len(png) if "png" in locals() else 0)
         _cache_texture(cache_key, png)
         _profile_texture(
             "encoded", 0.0, path=cache_key[0], role=texture_role,
-            transform=texture_transform,
             bytes=len(png))
         return png
     except Exception as error:
@@ -348,43 +298,20 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
 
 
 def encode_texture_data_uri(path, max_size=2048, preserve_alpha=False,
-                            texture_role=None,
-                            texture_transform="passthrough", source_name=None):
+                            texture_role=None, source_name=None):
     """Return the historical base64 data URI compatibility representation."""
     png = render_texture_png(
         path, max_size=max_size, preserve_alpha=preserve_alpha,
-        texture_role=texture_role, texture_transform=texture_transform,
-        source_name=source_name)
+        texture_role=texture_role, source_name=source_name)
     if png is None:
         return None
     return "data:image/png;base64," + base64.b64encode(png).decode()
 
 
-def _texture_source_uri(texture_source, path, role, transform):
-    """Call old two-argument and new transform-aware source callbacks."""
-    if texture_source is None:
-        return None
-    try:
-        return texture_source(path, role, transform=transform)
-    except TypeError as first_error:
-        try:
-            return texture_source(path, role)
-        except TypeError:
-            raise first_error
-
-
 def encode_texture_file(mod_dir, abs_path, texture_role=None,
-                        texture_source=None, texture_profile=None,
-                        texture_transform=None, source=None):
+                        texture_source=None, source=None):
     """Resolve a picked file into ``{tex_key, file, role, uri}``."""
     texture_role = normalize_texture_role(texture_role)
-    if texture_transform is None and (texture_source is None
-                                      or texture_profile is not None):
-        from .profiles import texture_profile_for
-        texture_transform = texture_profile_for(texture_profile).recipe_for(
-            texture_role)
-    if texture_transform is not None:
-        texture_transform = normalize_texture_transform(texture_transform)
     _begin_texture_cache(mod_dir)
     if source is not None and source.is_resource_reference(abs_path):
         resolved = abs_path
@@ -407,17 +334,14 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
                 and source.is_resource_reference(resolved)):
             uri = encode_texture_data_uri(
                 source.read_bytes(resolved), texture_role=texture_role,
-                texture_transform=texture_transform,
                 source_name=source.logical_path(resolved))
         else:
             uri = encode_texture_data_uri(
                 resolved, texture_role=texture_role,
-                texture_transform=texture_transform,
                 source_name=(source.logical_path(resolved)
                              if source is not None else None))
     else:
-        uri = _texture_source_uri(
-            texture_source, resolved, texture_role, texture_transform)
+        uri = texture_source(resolved, texture_role)
     if not uri:
         return {"error": "Could not read this file as an image."}
     relative_path = str(rel).replace("\\", "/")
@@ -426,7 +350,6 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
 
 
 def encode_texture_key(mod_dir, key, texture_role=None, texture_source=None,
-                       texture_profile=None, texture_transform=None,
                        source=None):
     """Encode a role-aware registry key, accepting legacy path-only keys."""
     role, relative_path = split_texture_key(key, texture_role)
@@ -437,5 +360,4 @@ def encode_texture_key(mod_dir, key, texture_role=None, texture_source=None,
         return {"error": "Selected file is not inside the mod folder."}
     return encode_texture_file(
         mod_dir, resolved, role, texture_source=texture_source,
-        texture_profile=texture_profile, texture_transform=texture_transform,
         source=source)

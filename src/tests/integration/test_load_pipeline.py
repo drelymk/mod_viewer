@@ -351,7 +351,7 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
     mod_enrichment._apply_texture_enrichment(
         parsed, context, [[]], complete_index=False)
 
-    def register(path, role, transform=None):
+    def register(path, role):
         return f"/texture/{role}/{os.path.basename(path)}"
 
     built = build_mesh_result(

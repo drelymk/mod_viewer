@@ -15,10 +15,9 @@ class TextureProfile:
     name: str
     normal_y_sign: int
     bind_normal_map: bool
-    # The user-facing NormalMap assignment may be transported either as the
-    # stock derived RGB normal or as the intact authored packed source.  Keep
-    # this decision with the detected profile so callers do not grow game
-    # branches of their own.
+    # The user-facing NormalMap assignment uses this role for the intact
+    # authored source. Keep the decision with the detected profile so callers
+    # do not grow game branches of their own.
     normal_transport_role: str = "normal_map"
 
     def __post_init__(self):
@@ -30,15 +29,6 @@ class TextureProfile:
     def game(self):
         """Alias useful to callers that treat a profile as game metadata."""
         return self.name
-
-    def recipe_for(self, role=None):
-        role = role if role in TEXTURE_ROLES else "diffuse"
-        if role == "normal_map" and self.bind_normal_map:
-            return "normal_xy_reconstruct"
-        if role == "normal_data":
-            return "passthrough"
-        return "passthrough"
-
 
 _PROFILES = {
     "genshin": TextureProfile("genshin", -1, True),

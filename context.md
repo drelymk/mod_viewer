@@ -135,8 +135,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Texture pools and backend loading must not eagerly decode/render sources.
   Production texture rendering stays at two concurrent jobs unless controlled
   benchmarks justify changing it. Native DDS uses validated eligibility only;
-  unsupported, transformed, oversized or malformed sources use PNG fallback
-  with the same orientation and role-based color space.
+  model DDS must be supported, no larger than 8192 in either
+  dimension, and structurally valid; otherwise publication rejects it. Menu
+  DDS alone uses the existing lazy 256px PNG thumbnail path.
 
 ## Animation reconstruction
 
@@ -240,7 +241,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - Genshin LightMap R controls response, G toon shadow, B specular area and A
   regions. ZZZ LightMap G supplies conservative metalness and MaterialMap B
   specular response; MaterialMap R stays ID data and G stays packed/unknown.
-- WuWa reconstructs authored `normal_data` RG in TSL; B/A remain diagnostic or
+- Genshin and ZZZ reconstruct authored `normal_map` RG in TSL. WuWa
+  reconstructs authored `normal_data` RG in TSL; B/A remain diagnostic or
   profile-specific. RabbitFX uses LightMap G for shadow; its base is shadow-only
   and Normalmap B/A response requires reliable exact body-profile evidence.
 - Gate diagnostic modes by material capability; unsupported modes preserve

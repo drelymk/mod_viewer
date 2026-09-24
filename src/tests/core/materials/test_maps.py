@@ -7,8 +7,7 @@ import tempfile
 
 from core.ini import parser as ini_parser
 from core.ini.parser import build_draw_groups, extract_resources, merge_sections, parse_sections
-from core.textures import TEXTURE_TRANSFORMS, encode_texture_file, render_texture_png
-from core.textures.pipeline import _reconstruct_normal_z
+from core.textures import render_texture_png
 from tests.support.provenance import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
                                  geometry_values, texture_file, visible, write)
 
@@ -119,16 +118,6 @@ def test_direct_ps_t_auxiliary_material_maps():
         materials = draw.get("material_map_variants") or []
         assert (len(materials) == 1 and materials[0]["file"] == "material.dds"
               and materials[0]["conditions"]), (f"direct ps-t material map retains its condition (got {materials})")
-
-
-def test_two_channel_normal_reconstructs_z():
-    from PIL import Image
-    source = Image.new("RGB", (2, 1))
-    source.putdata([(128, 128, 0), (255, 128, 0)])
-    rebuilt = _reconstruct_normal_z(source)
-    pixels = [rebuilt.getpixel((x, 0)) for x in range(2)]
-    assert (pixels[0][2] == 255), (f"a flat XY normal reconstructs a forward-facing Z (got {pixels[0]})")
-    assert (127 <= pixels[1][2] <= 129), (f"a full-strength X normal reconstructs a near-zero Z (got {pixels[1]})")
 
 
 def test_packed_light_map_passthrough_preserves_authored_rgb():

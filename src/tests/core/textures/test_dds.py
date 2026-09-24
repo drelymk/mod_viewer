@@ -4,11 +4,18 @@ import struct
 
 import pytest
 
-from core.textures.dds import inspect_dds, inspect_dds_layout, native_dds_info
+from core.textures.dds import (MAX_MODEL_DDS_SIZE, inspect_dds,
+                               inspect_dds_header, inspect_dds_layout,
+                               native_dds_info, native_dds_info_from_header)
 
 
 _DXGI = {
-    "bc1_unorm": 71, "bc2_unorm": 74, "bc3_unorm": 77,
+    "bc1_unorm": 71, "bc1_srgb": 72,
+    "bc2_unorm": 74, "bc2_srgb": 75,
+    "bc3_unorm": 77, "bc3_srgb": 78,
+    "bc4_unorm": 80, "bc4_snorm": 81,
+    "bc5_unorm": 83, "bc5_snorm": 84,
+    "bc6h_ufloat": 95, "bc6h_float": 96,
     "bc7_unorm": 98, "bc7_srgb": 99,
 }
 
@@ -68,7 +75,7 @@ def test_dx10_formats_are_reported_with_canonical_ids(tmp_path, format_name):
 
     assert info is not None
     assert info.format == format_name
-    assert info.compressed and info.requires_bc
+    assert info.compressed
     assert native_dds_info(path).format == format_name
 
 
@@ -84,17 +91,16 @@ def test_legacy_compressed_formats_are_supported(tmp_path):
     {"cube": True},
     {"format_name": "bc7_srgb", "mip_count": 4},
 ])
-def test_invalid_or_unsafe_dds_falls_back(tmp_path, kwargs):
+def test_invalid_or_unsafe_dds_is_rejected(tmp_path, kwargs):
     path = tmp_path / "unsafe.dds"
     path.write_bytes(_dds(**kwargs))
     assert inspect_dds(path) is None
     assert native_dds_info(path) is None
 
 
-def test_transform_and_size_caps_disable_native_delivery(tmp_path):
+def test_size_cap_disables_native_delivery(tmp_path):
     path = tmp_path / "normal.dds"
     path.write_bytes(_dds())
-    assert native_dds_info(path, transform="normal_xy_reconstruct") is None
     assert native_dds_info(path, max_size=2) is None
 
 
@@ -104,6 +110,39 @@ def test_typeless_dxgi_is_rejected(tmp_path):
     struct.pack_into("<I", data, 128, 97)  # BC7 typeless
     path.write_bytes(data)
     assert inspect_dds(path) is None
+
+
+@pytest.mark.parametrize("field,value", [
+    (128, 97),  # BC7 typeless
+    (128, 2),  # Unsupported DXGI format
+    (132, 4),  # Volume resource
+    (140, 2),  # Array resource
+    (136, 4),  # Cube resource
+])
+def test_unsupported_dx10_headers_are_rejected(tmp_path, field, value):
+    path = tmp_path / "unsupported.dds"
+    data = bytearray(_dds())
+    struct.pack_into("<I", data, field, value)
+    path.write_bytes(data)
+    assert inspect_dds(path) is None
+
+
+def test_malformed_and_truncated_dds_are_rejected(tmp_path):
+    path = tmp_path / "broken.dds"
+    for data in (b"DDS ", _dds()[:-1], b"BAD " + _dds()[4:]):
+        path.write_bytes(data)
+        assert inspect_dds(path) is None
+
+
+@pytest.mark.parametrize("dimension,accepted", [(8192, True), (8193, False)])
+def test_model_limit_uses_header_and_payload_size(dimension, accepted):
+    header = _dds(dimension, dimension, payload=False)
+    payload_size = ((dimension + 3) // 4) ** 2 * 16
+    file_size = len(header) + payload_size
+    assert MAX_MODEL_DDS_SIZE == 8192
+    assert inspect_dds_header(header, file_size) is not None
+    assert (native_dds_info_from_header(
+        header, file_size, source_name="large.dds") is not None) is accepted
 
 
 @pytest.mark.parametrize(("format_name", "width", "height", "expected"), [
@@ -135,7 +174,6 @@ def test_layout_uses_format_specific_unit_sizes(tmp_path, format_name):
     layout = inspect_dds_layout(path)
     assert layout.info.format == format_name
     assert layout.info.compressed is format_name.startswith("bc")
-    assert layout.info.requires_bc is format_name.startswith("bc")
     bytes_per_unit = (4 if not format_name.startswith("bc")
                       else 8 if format_name.startswith("bc1") else 16)
 

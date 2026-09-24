@@ -18,9 +18,6 @@ class _Publication:
     def register(self, *args, **kwargs):
         return "/texture/0"
 
-    def set_game_profile(self, value):
-        self.events.append(("profile", value))
-
     def commit(self, **kwargs):
         self.events.append(("commit", kwargs))
 
@@ -53,7 +50,7 @@ def test_direct_asset_load_publishes_geometry_before_commit(monkeypatch):
     result = preview.load_asset("asset")
 
     assert result == {"meshes": {"Body": {}}}
-    assert [event[0] for event in events] == ["profile", "publish", "commit"]
+    assert [event[0] for event in events] == ["publish", "commit"]
 
 
 def test_asset_fill_uses_non_replacing_publication(monkeypatch):
@@ -94,4 +91,4 @@ def test_asset_fill_uses_non_replacing_publication(monkeypatch):
 
     assert result["status"] == "loaded"
     assert published == [{"replace": False}]
-    assert [event[0] for event in events] == ["profile", "commit"]
+    assert [event[0] for event in events] == ["commit"]
