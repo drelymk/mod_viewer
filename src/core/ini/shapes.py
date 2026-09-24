@@ -121,14 +121,11 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         base, shader_base = shape_base_resources(
             buffer_names[0], writable_outputs)
         target = resource(buffer_names[1])
-        if (not base.get("filename") or not shader_base.get("filename")
-                or not target.get("filename")):
+        if not base.get("filename") or not target.get("filename"):
             continue
         base_stride = base.get("stride", 40)
-        shader_base_stride = shader_base.get("stride", base_stride)
-        target_stride = target.get("stride", shader_base_stride)
-        if (base_stride != target_stride
-                or shader_base_stride != target_stride or base_stride < 12):
+        target_stride = target.get("stride", base_stride)
+        if base_stride != target_stride or base_stride < 12:
             continue
 
         src = first_source(lines) or {}
@@ -142,7 +139,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             "max": 1.0,
             "step": 0.01,
             "base_file": base["filename"],
-            "shader_base_file": shader_base["filename"],
+            "shader_base_file": shader_base.get("filename"),
             "target_file": target["filename"],
             "stride": base_stride,
             "source": source,
@@ -220,16 +217,12 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             # resource ref, attach the slider to that runtime output while
             # retaining the shader input as its animation identity.
             base_stride = base.get("stride", 40)
-            shader_base_stride = shader_base.get("stride", base_stride)
-            target_stride = target.get("stride", shader_base_stride)
+            target_stride = target.get("stride", base_stride)
             pair = (f"{var_prefix or ''}{variable}".lower(),
                     base.get("filename"), target.get("filename"))
-            if (not all(pair[1:]) or not shader_base.get("filename")
-                    or pair in existing_pairs
+            if (not all(pair[1:]) or pair in existing_pairs
                     or pair[1] == pair[2]
-                    or base_stride != target_stride
-                    or shader_base_stride != target_stride
-                    or base_stride < 12):
+                    or base_stride != target_stride or base_stride < 12):
                 continue
             found.append({
                 "kind": "shape_slider",
@@ -238,7 +231,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "authored_slider": variable.lower() in authored_slider_vars,
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": pair[1],
-                "shader_base_file": shader_base["filename"],
+                "shader_base_file": shader_base.get("filename"),
                 "target_file": pair[2],
                 "stride": base_stride,
                 "source": source,
@@ -251,15 +244,13 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             variable = item["var"]
             if authored_slider_vars and variable.lower() not in authored_slider_vars:
                 continue
-            base, shader_base = shape_base_resources(
+            base, _shader_base = shape_base_resources(
                 item["base"], writable_outputs)
             low = resource(item["low"])
             high = resource(item["high"])
-            strides = {base.get("stride", 40),
-                       shader_base.get("stride", 40), low.get("stride", 40),
+            strides = {base.get("stride", 40), low.get("stride", 40),
                        high.get("stride", 40)}
-            if (not base.get("filename") or not shader_base.get("filename")
-                    or not low.get("filename")
+            if (not base.get("filename") or not low.get("filename")
                     or not high.get("filename") or len(strides) != 1
                     or next(iter(strides)) < 12):
                 continue
@@ -269,7 +260,6 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "authored_slider": variable.lower() in authored_slider_vars,
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": base["filename"],
-                "shader_base_file": shader_base["filename"],
                 "low_file": low["filename"],
                 "target_file": high["filename"],
                 "stride": next(iter(strides)), "source": source,
@@ -342,7 +332,6 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         if shape_id is not None and sparse_ready:
             batch = shape_id // 127
             item.update(sparse_resources)
-            item["shader_base_file"] = sparse_resources["base_file"]
             item["shape_id"] = shape_id
             item["buffer_shape_id"] = shape_id + batch
             item["sparse_entry_offset"] = batch_offsets.get(batch, 0)
@@ -411,7 +400,6 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "authored_slider": variable.lower() in authored_slider_vars,
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": base["filename"],
-                "shader_base_file": base["filename"],
                 "low_file": low["filename"],
                 "target_file": high["filename"],
                 "stride": base.get("stride", 40),
