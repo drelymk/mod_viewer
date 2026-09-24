@@ -1,18 +1,97 @@
 """Synthetic coverage for the narrow baked-animation analysis path."""
 
 import struct
+from dataclasses import replace
+
+import pytest
 
 from core.ini.animations import discover_animation_clocks, frame_condition
 from core.ini.analysis import analyze_ini
 from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
 from core.geometry.mesh_builder import (
-    GeometryBlob, _animation_families, build_mesh_result,
+    GeometryBlob, _animation_families, _static_position_records,
+    _translated_frame_vertices,
+    build_mesh_result,
 )
+from core.geometry.buffers import BufferStore, VertexStreams
+from core.geometry.conventions import GeometryConvention
+from core.geometry.draw_call import DrawCall
+from core.geometry.packing import PreparedDrawVertices
+from core.geometry.vertex_attributes import VertexAttributeSource
 
 
 def _sections(text):
     return parse_sections("fixture.ini", text=text)
+
+
+def test_static_switched_records_require_identical_contiguous_vertices(tmp_path):
+    normal = VertexAttributeSource("first.buf", 24, 12, "f32x3")
+    records = b"".join(struct.pack("<6f", *point) for point in (
+        (0., 0., 0., 0., 0., 1.),
+        (1., 0., 0., 0., 0., 1.),
+        (0., 1., 0., 0., 0., 1.),
+    ))
+    (tmp_path / "first.buf").write_bytes(records)
+    (tmp_path / "second.buf").write_bytes(records)
+    first = DrawCall(label="first", position_file="first.buf",
+                     position_stride=24, normal_source=normal)
+    second = DrawCall(label="second", position_file="second.buf",
+                      position_stride=24, normal_source=VertexAttributeSource(
+                          "second.buf", 24, 12, "f32x3"))
+    prepared = PreparedDrawVertices(
+        [0, 1, 2], [0, 1, 2], {0: 0, 1: 1, 2: 2}, {},
+        VertexStreams(records, 24, b"", 8, 0, "<ff"),
+        str(tmp_path / "first.buf"), "")
+    family = {"frame_start": 0, "draws": {0: first, 1: second}}
+
+    def static():
+        return _static_position_records(
+            family, prepared, mod_dir=str(tmp_path), buffers=BufferStore(),
+            source=None)
+
+    assert static()
+    changed = bytearray(records)
+    struct.pack_into("<f", changed, 12, -1.)
+    (tmp_path / "second.buf").write_bytes(changed)
+    assert not static()
+    struct.pack_into("<f", changed, 12, 0.)
+    struct.pack_into("<f", changed, 0, 2.)
+    (tmp_path / "second.buf").write_bytes(changed)
+    assert not static()
+    assert not _static_position_records(
+        family, replace(prepared, used_vertices=[0, 2]),
+        mod_dir=str(tmp_path), buffers=BufferStore(), source=None)
+
+
+def test_translated_indices_and_uv_records_require_exact_match(tmp_path):
+    uv_record = struct.pack("<ff", .25, .75)
+    texcoords = uv_record * 6
+    (tmp_path / "texcoord.buf").write_bytes(texcoords)
+    index_path = tmp_path / "index.buf"
+    index_path.write_bytes(struct.pack("<6I", 0, 1, 2, 3, 4, 5))
+    canonical = PreparedDrawVertices(
+        [0, 1, 2], [0, 1, 2], {0: 0, 1: 1, 2: 2}, {},
+        VertexStreams(b"", 12, texcoords, 8, 0, "<ff"),
+        "", str(tmp_path / "texcoord.buf"))
+    draw = DrawCall(label="frame", ib_file="index.buf", start=3,
+                    count=3, index_size=4, texcoord_file="texcoord.buf",
+                    texcoord_stride=8)
+
+    def translated():
+        return _translated_frame_vertices(
+            draw, canonical, mod_dir=str(tmp_path), buffers=BufferStore(),
+            default_index_size=4, geometry_convention=GeometryConvention(),
+            source=None)
+
+    assert translated() == [3, 4, 5]
+    index_path.write_bytes(struct.pack("<6I", 0, 1, 2, 3, 4, 4))
+    assert translated() is None
+    index_path.write_bytes(struct.pack("<6I", 0, 1, 2, 3, 4, 5))
+    changed_uvs = texcoords[:-8] + struct.pack("<ff", .5, .75)
+    canonical = replace(canonical, streams=replace(
+        canonical.streams, texcoord_data=changed_uvs))
+    assert translated() is None
 
 
 def test_animation_clock_and_frame_branches_stay_out_of_toggle_state():
@@ -176,7 +255,8 @@ def test_same_frame_variable_ranges_share_one_geometry_track():
     assert (family["frame_start"], family["frame_end"]) == (0, 2)
 
 
-def test_position_buffer_frames_share_one_packed_mesh(tmp_path):
+@pytest.mark.parametrize("static", [False, True])
+def test_position_buffer_frames_share_one_packed_mesh(tmp_path, static):
     def write_positions(path, z):
         data = bytearray()
         for x, y in ((0., 0.), (1., 0.), (0., 1.)):
@@ -185,7 +265,7 @@ def test_position_buffer_frames_share_one_packed_mesh(tmp_path):
         path.write_bytes(data)
 
     write_positions(tmp_path / "position0.buf", 0.)
-    write_positions(tmp_path / "position1.buf", 1.)
+    write_positions(tmp_path / "position1.buf", 0. if static else 1.)
     texcoord = bytearray()
     for u, v in ((0., 0.), (1., 0.), (0., 1.)):
         texcoord.extend(b"\0" * 4)
@@ -238,6 +318,11 @@ format = DXGI_FORMAT_R32_UINT
 
     assert len(built.meshes) == 1
     entry = next(iter(built.meshes.values()))
+    if static:
+        assert "animation_geometry" not in entry
+        assert built.diagnostics["animation_static_family_count"] == 1
+        assert built.diagnostics["animation_geometry_bytes"] == 0
+        return
     animation = entry["animation_geometry"]
     assert animation["frames"] == 2
     assert animation["clock_ids"]
@@ -405,13 +490,16 @@ format = DXGI_FORMAT_R32_UINT
     compatible_entries = list(compatible.meshes.values())
     assert len(compatible_entries) == 1
     assert compatible_entries[0]["animation_geometry"]["frames"] == 2
-    assert compatible.diagnostics["animation_prepare_calls"] == 2
+    assert compatible.diagnostics["animation_prepare_calls"] == 1
+    assert compatible.diagnostics["animation_translated_family_count"] == 1
+    assert compatible.diagnostics["animation_translated_frame_count"] == 1
     assert len(compatible_geometry) > static_blob_bytes(compatible)
 
     mismatched, mismatched_geometry = build(tmp_path / "mismatched", 0.25)
     mismatched_entries = list(mismatched.meshes.values())
     assert len(mismatched_entries) == 1
     assert "animation_geometry" not in mismatched_entries[0]
+    assert mismatched.diagnostics["animation_prepare_calls"] == 2
     assert len(mismatched_geometry) == static_blob_length(mismatched)
 
     missing, missing_geometry = build(

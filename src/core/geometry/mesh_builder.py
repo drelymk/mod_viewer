@@ -293,6 +293,105 @@ def _compatible_prepared(canonical, other, canonical_topology=None):
     return True
 
 
+def _static_position_records(family, canonical, *, mod_dir, buffers, source):
+    """Recognize identical switched vertex records without retaining frame data."""
+    used = canonical.used_vertices
+    if not used or used[-1] - used[0] + 1 != len(used):
+        return False
+    stride = canonical.streams.position_stride
+    begin = used[0] * stride
+    end = (used[-1] + 1) * stride
+    reference = canonical.streams.position_data
+    if begin < 0 or end > len(reference):
+        return False
+    resolve = source.resolve_resource if source is not None else \
+        lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    same = source.same_reference if source is not None else \
+        lambda left, right: left == right
+    canonical_draw = family["draws"][family["frame_start"]]
+    canonical_normal = canonical_draw.normal_source
+    if canonical_normal is not None and not same(
+            resolve(canonical_normal.file), canonical.position_path):
+        return False
+    for frame, draw in family["draws"].items():
+        if frame == family["frame_start"]:
+            continue
+        if (draw.position_stride or POSITION_STRIDE) != stride:
+            return False
+        normal = draw.normal_source
+        if (normal is None) != (canonical_normal is None):
+            return False
+        if normal is not None and (
+                normal.stride != canonical_normal.stride
+                or normal.offset != canonical_normal.offset
+                or normal.encoding != canonical_normal.encoding):
+            return False
+        if normal is not None and not same(
+                resolve(normal.file), resolve(draw.position_file)):
+            return False
+        path = resolve(draw.position_file)
+        if not path or not exists(path):
+            return False
+        data = buffers.transient(path)
+        if end > len(data) or data[begin:end] != reference[begin:end]:
+            return False
+    return True
+
+
+def _translated_frame_vertices(draw, canonical, *, mod_dir, buffers,
+                               default_index_size, geometry_convention,
+                               source):
+    """Prove index translation and identical contiguous UV records."""
+    used = canonical.used_vertices
+    if not used or used[-1] - used[0] + 1 != len(used):
+        return None
+    resolve = source.resolve_resource if source is not None else \
+        lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    ib_path = resolve(draw.ib_file)
+    tc_path = resolve(draw.texcoord_file)
+    if not ib_path or not tc_path or not exists(ib_path) or not exists(tc_path):
+        return None
+    same = source.same_reference if source is not None else \
+        lambda left, right: left == right
+    if not same(tc_path, canonical.texcoord_path):
+        return None
+    raw = buffers.indices(ib_path, draw.start, draw.count,
+                          draw.index_size if draw.index_size is not None
+                          else default_index_size)
+    expected = canonical.raw_indices
+    if (not raw or len(raw) != len(expected)
+            or draw.count is None or len(raw) != draw.count
+            or len(raw) % 3):
+        return None
+    delta = raw[0] + draw.base - expected[0]
+    if geometry_convention.reverse_winding:
+        for index in range(0, len(raw), 3):
+            if (raw[index] + draw.base != expected[index] + delta
+                    or raw[index + 1] + draw.base != expected[index + 2] + delta
+                    or raw[index + 2] + draw.base != expected[index + 1] + delta):
+                return None
+    elif any(value + draw.base != original + delta
+             for value, original in zip(raw, expected)):
+        return None
+    translated = [value + delta for value in used]
+    if translated[0] < 0:
+        return None
+    stride = canonical.streams.texcoord_stride
+    if (draw.texcoord_stride or stride) != stride:
+        return None
+    original = canonical.streams.texcoord_data
+    left = used[0] * stride
+    right = translated[0] * stride
+    size = len(used) * stride
+    if (left < 0 or right < 0 or left + size > len(original)
+            or right + size > len(original)
+            or original[left:left + size] != original[right:right + size]):
+        return None
+    return translated
+
+
 def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                               mod_dir, group, default_streams,
                               default_index_size, buffers,
@@ -303,6 +402,14 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     end = int(family["frame_end"])
     frames = family["draws"]
     if set(frames) != set(range(start, end + 1)):
+        return None
+
+    if (family.get("position_switching")
+            and _static_position_records(family, canonical_prepared,
+                                         mod_dir=mod_dir, buffers=buffers,
+                                         source=source)):
+        if diagnostics is not None:
+            diagnostics["animation_static_family_count"] += 1
         return None
 
     canonical_topology = None
@@ -331,6 +438,7 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     canonical_bounds = (canonical_packed.bounds_min,
                         canonical_packed.bounds_max)
     pack_started = time.perf_counter()
+    translated_frames = 0
     for frame_index, frame in enumerate(range(start, end + 1)):
         if frame == start:
             packed_frame = PackedAnimationFrame(
@@ -338,24 +446,47 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         elif family.get("position_switching"):
             packed_frame = pack_animation_position_frame(
                 frames[frame], canonical_prepared.used_vertices,
-                mod_dir=mod_dir, buffers=buffers, source=source)
+                mod_dir=mod_dir, buffers=buffers, source=source,
+                pack_normals=normal_possible)
         else:
-            prepare_started = time.perf_counter()
-            prepared = _prepare_draw_vertices(
-                frames[frame], group, mod_dir=mod_dir,
-                default_streams=default_streams,
-                default_index_size=default_index_size, buffers=buffers,
+            translated = _translated_frame_vertices(
+                frames[frame], canonical_prepared, mod_dir=mod_dir,
+                buffers=buffers, default_index_size=default_index_size,
                 geometry_convention=geometry_convention, source=source)
-            if diagnostics is not None:
-                diagnostics["animation_prepare_calls"] += 1
-                diagnostics["animation_prepare_seconds"] += (
-                    time.perf_counter() - prepare_started)
-            if prepared is None or not _compatible_prepared(
-                    canonical_prepared, prepared, canonical_topology):
-                return reject()
-            packed_frame = pack_animation_frame_attributes(
-                frames[frame], prepared, mod_dir=mod_dir,
-                buffers=buffers, source=source)
+            if translated is not None:
+                translated_frames += 1
+                draw = frames[frame]
+                path = (source.resolve_resource(draw.position_file)
+                        if source is not None else
+                        safe_resource_path(mod_dir, draw.position_file))
+                same = source.same_reference if source is not None else \
+                    lambda left, right: left == right
+                position_data = (canonical_prepared.streams.position_data
+                                 if path and same(
+                                     path, canonical_prepared.position_path)
+                                 else None)
+                packed_frame = pack_animation_position_frame(
+                    draw, translated, mod_dir=mod_dir, buffers=buffers,
+                    source=source, pack_normals=normal_possible,
+                    position_data=position_data)
+            else:
+                prepare_started = time.perf_counter()
+                prepared = _prepare_draw_vertices(
+                    frames[frame], group, mod_dir=mod_dir,
+                    default_streams=default_streams,
+                    default_index_size=default_index_size, buffers=buffers,
+                    geometry_convention=geometry_convention, source=source)
+                if diagnostics is not None:
+                    diagnostics["animation_prepare_calls"] += 1
+                    diagnostics["animation_prepare_seconds"] += (
+                        time.perf_counter() - prepare_started)
+                if prepared is None or not _compatible_prepared(
+                        canonical_prepared, prepared, canonical_topology):
+                    return reject()
+                packed_frame = pack_animation_frame_attributes(
+                    frames[frame], prepared, mod_dir=mod_dir,
+                    buffers=buffers, source=source,
+                    pack_normals=normal_possible)
         if packed_frame is None or len(packed_frame.positions) != frame_bytes:
             return reject()
         frame_bounds = (canonical_bounds if frame == start else
@@ -387,6 +518,9 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         diagnostics["animation_pack_seconds"] += (
             time.perf_counter() - pack_started)
         diagnostics["animation_frame_count"] += frame_count
+        diagnostics["animation_translated_frame_count"] += translated_frames
+        if translated_frames == frame_count - 1 and translated_frames:
+            diagnostics["animation_translated_family_count"] += 1
     has_normals = normal_possible and (
         len(normals) == frame_count if geometry is None else normal_ref is not None)
     if not has_normals:
@@ -576,6 +710,9 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     gimi_shared = {}
     animation_diagnostics = {
         "animation_family_count": 0,
+        "animation_static_family_count": 0,
+        "animation_translated_family_count": 0,
+        "animation_translated_frame_count": 0,
         "animation_frame_count": 0,
         "animation_prepare_calls": 0,
         "animation_prepare_seconds": 0.0,
