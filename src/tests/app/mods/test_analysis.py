@@ -128,6 +128,172 @@ $\\Target\\style = $value
     }]]
 
 
+def test_forwarded_numbered_button_image_uses_source_key(tmp_path):
+    parsed = _forwarded_fixture(tmp_path, r"""
+[Constants]
+global $key_24 = 0
+global $value_24 = 0
+
+[CommandListUpdateSliderPage3]
+$value_24 = 1 - $value_24
+
+[CommandListDrawSliderButtonPage3]
+if $value_24 == 0
+    ps-t100 = ResourceSliderButton24_1
+else
+    ps-t100 = ResourceSliderButton24_2
+endif
+
+[Present]
+$\Target\key_24 = $key_24
+$key_24 = $key_24 + $value_24
+if $key_24 > 1
+    $key_24 = 0
+endif
+
+[ResourceSliderButton24_1]
+filename = ui/24.dds
+
+[ResourceSliderButton24_2]
+filename = ui/24.dds
+""", target_var="key_24", target_default="0")
+    control = next(iter(parsed.menu.values()))
+    assert control["slot"] == 1
+    assert control["var"] == "mod(5)::key_24"
+    assert control["image_file"] == "ui/24.dds"
+
+
+def test_forwarded_button_images_follow_controller_pulses_not_slots(tmp_path):
+    menu_path = tmp_path / "Menu.ini"
+    target_path = tmp_path / "mod(5).ini"
+    menu_path.write_text(r"""
+[Constants]
+global $key_24 = 0
+global $value_24 = 0
+global $state_37 = 0
+global $pulse_37 = 0
+
+[CommandListUpdateSliderPage3]
+$value_24 = 1 - $value_24
+
+[CommandListUpdateSliderPage4]
+$pulse_37 = 1 - $pulse_37
+
+[CommandListDrawSliderButtonPage3]
+if $value_24 == 0
+    ps-t100 = ResourceSliderButton24_1
+else
+    ps-t100 = ResourceSliderButton24_2
+endif
+
+[CommandListDrawSliderButtonPage4]
+if $pulse_37 == 0
+    ps-t100 = ResourceSliderButton37_1
+else
+    ps-t100 = ResourceSliderButton37_2
+endif
+
+[Present]
+$\Target\key_24 = $key_24
+$key_24 = $key_24 + $value_24
+if $key_24 > 1
+    $key_24 = 0
+endif
+$\Target\state_37 = $state_37
+$state_37 = $state_37 + $pulse_37
+if $state_37 > 1
+    $state_37 = 0
+endif
+
+[ResourceSliderButton24_1]
+filename = ui/24.dds
+
+[ResourceSliderButton24_2]
+filename = ui/24.dds
+
+[resourcesliderbutton37_1]
+filename = ui/37.dds
+
+[ResourceSliderButton37_2]
+filename = ui/37.dds
+""", encoding="utf-8")
+    target_path.write_text("""namespace = Target
+
+[Constants]
+global $key_24 = 0
+global $state_37 = 0
+
+[TextureOverrideBody]
+ib = ResourceBodyIB
+vb0 = ResourceBodyPosition
+vb1 = ResourceBodyTexcoord
+if $key_24 == 1
+    drawindexed = 3, 0, 0
+endif
+if $state_37 == 1
+    drawindexed = 3, 0, 0
+endif
+
+[ResourceBodyIB]
+filename = body.ib
+format = DXGI_FORMAT_R32_UINT
+
+[ResourceBodyPosition]
+filename = body-position.buf
+stride = 12
+
+[ResourceBodyTexcoord]
+filename = body-texcoord.buf
+stride = 8
+""", encoding="utf-8")
+
+    parsed = analyze_mod_inis(
+        [str(menu_path), str(target_path)], str(tmp_path))
+    controls = {
+        info["var"]: info for info in parsed.menu.values()
+        if info.get("_image_source_var") is not None
+    }
+
+    assert {info["slot"] for info in controls.values()} == {1, 2}
+    assert set(controls) == {"mod(5)::key_24", "mod(5)::state_37"}
+    assert controls["mod(5)::key_24"]["image_file"] == "ui/24.dds"
+    assert controls["mod(5)::state_37"]["image_file"] == "ui/37.dds"
+
+
+def test_forwarded_button_image_requires_both_states_to_match(tmp_path):
+    parsed = _forwarded_fixture(tmp_path, r"""
+[Constants]
+global $key_24 = 0
+global $value_24 = 0
+
+[CommandListUpdateSliderPage3]
+$value_24 = 1 - $value_24
+
+[CommandListDrawSliderButtonPage3]
+if $value_24 == 0
+    ps-t100 = ResourceSliderButton24_1
+else
+    ps-t100 = ResourceSliderButton24_2
+endif
+
+[Present]
+$\Target\key_24 = $key_24
+$key_24 = $key_24 + $value_24
+if $key_24 > 1
+    $key_24 = 0
+endif
+
+[ResourceSliderButton24_1]
+filename = ui/24-on.dds
+
+[ResourceSliderButton24_2]
+filename = ui/24-off.dds
+""", target_var="key_24", target_default="0")
+
+    control = next(iter(parsed.menu.values()))
+    assert control.get("image_file") is None
+
+
 def test_nested_namespace_forwarding_exposes_target_control(tmp_path):
     parsed = _forwarded_fixture(tmp_path, """
 [Constants]

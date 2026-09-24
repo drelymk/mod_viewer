@@ -87,7 +87,7 @@ class TexturePublication:
         return self.game_profile
 
     def register(self, path, role=None, max_size=2048, preserve_alpha=False,
-                 validate=False, transform=None):
+                 validate=False, transform=None, force_png=False):
         """Publish a source once and return its opaque same-origin URL.
 
         The caller has already resolved the path through the core sandbox. The
@@ -137,7 +137,9 @@ class TexturePublication:
             if source_id is not None:
                 existing_source = self._sources[source_id]
                 if not validate:
-                    return _texture_url(self.token, source_id, existing_source)
+                    return _texture_url(
+                        self.token, source_id, existing_source,
+                        force_png=force_png)
 
         if source_ref:
             dds_info = None
@@ -174,7 +176,14 @@ class TexturePublication:
                 source_id = str(len(self._sources))
                 self._dedupe[dedupe_key] = source_id
                 self._sources[source_id] = source
-            return _texture_url(self.token, source_id, source)
+            return _texture_url(
+                self.token, source_id, source, force_png=force_png)
+
+    def register_menu_image(self, path):
+        """Register a small PNG preview without decoding it during load."""
+        return self.register(
+            path, "diffuse", max_size=256, preserve_alpha=True,
+            transform="passthrough", force_png=True)
 
     def commit(self, *, replace=True):
         """Commit a publication, optionally retaining the active one."""
@@ -243,8 +252,8 @@ def _lookup_texture(token, source_id):
         return publication._sources.get(source_id)
 
 
-def _texture_url(token, source_id, source):
-    suffix = ".dds" if source.native_dds else ".png"
+def _texture_url(token, source_id, source, *, force_png=False):
+    suffix = ".dds" if source.native_dds and not force_png else ".png"
     return f"{_TEXTURE_PREFIX}{token}/{source_id}{suffix}"
 
 

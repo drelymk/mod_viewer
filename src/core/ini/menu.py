@@ -397,12 +397,12 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
 
     found = {}
 
-    def add(local, values, section, raw):
+    def add(local, values, section, raw, pulse_var=None):
         local = declared(local)
         if local.casefold() not in allowed:
             return
         src = line_source(raw) or first_source(sections.get(section, ())) or {}
-        found[local] = {
+        controller = {
             "name": local,
             "var": _prefixed(local, var_prefix),
             "values": values,
@@ -411,6 +411,9 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
             "ini_path": src.get("ini_path"),
             "section": section,
         }
+        if pulse_var is not None:
+            controller["_pulse_var"] = declared(pulse_var)
+        found[local] = controller
 
     for local_key in allowed:
         flip = flips.get(local_key)
@@ -428,7 +431,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
             continue
         values = _controller_wrap_values(present_records, lhs)
         if values:
-            add(lhs, values, section, raw)
+            add(lhs, values, section, raw, pulse_var=pulse)
     return found
 
 
@@ -570,6 +573,57 @@ def attach_menu_images(menu, sections, resources):
         return next((info for key, info in resources.items()
                      if key.lower() == lowered), {})
 
+    # Some namespace menus draw numbered buttons through a custom shader.
+    # Associate the draw's pulse variable with the controller parser's
+    # recognized state/pulse relationship. Accept a static image only when
+    # both authored states resolve to the same resource.
+    controller_images = {}
+    button_choices = {}
+    for name, lines in sections.items():
+        if not re.fullmatch(r"CommandListDrawSliderButtonPage\d+", name, re.I):
+            continue
+        current = None
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = re.fullmatch(r"if\s+\$(\w+)\s*==\s*0", line, re.I)
+            if match:
+                current = (match.group(1).casefold(), "1")
+                continue
+            if line.lower() == "else" and current:
+                current = (current[0], "2")
+                continue
+            if line.lower() == "endif" or line.lower().startswith(
+                    ("if ", "else if ", "elif ")):
+                current = None
+                continue
+            if not current:
+                continue
+            match = re.fullmatch(
+                r"ps-t100\s*=\s*(ResourceSliderButton(\d+)_([12]))",
+                line, re.I)
+            if not match or match.group(3) != current[1]:
+                continue
+            filename = resource(match.group(1)).get("filename")
+            if filename:
+                button_choices.setdefault(current[0], {}).setdefault(
+                    match.group(2), {}).setdefault(current[1], set()).add(
+                        filename)
+    for pulse_var, buttons in button_choices.items():
+        images = []
+        safe = True
+        for states in buttons.values():
+            first, second = states.get("1", set()), states.get("2", set())
+            if len(first) != 1 or len(second) != 1:
+                safe = False
+                break
+            first_file, second_file = next(iter(first)), next(iter(second))
+            if first_file.casefold() != second_file.casefold():
+                safe = False
+                break
+            images.append(first_file)
+        if safe and images and len({image.casefold() for image in images}) == 1:
+            controller_images[pulse_var] = images[0]
+
     # Arrow-pair menus render item N in its own CommandListIconN section.
     for name, lines in sections.items():
         match = re.fullmatch(r"CommandListIcon(\d+)", name, re.I)
@@ -646,6 +700,14 @@ def attach_menu_images(menu, sections, resources):
         "pussy": ("itempussy", "pussy"),
     }
     for info in menu.values():
+        source_var = info.get("_image_source_var")
+        if source_var is not None:
+            pulse_var = info.get("_pulse_var")
+            image = (controller_images.get(pulse_var.casefold())
+                     if pulse_var else None)
+            if image:
+                info["image_file"] = image
+            continue
         if info.get("slot") in slot_images:
             info["image_file"] = slot_images[info["slot"]]
             continue

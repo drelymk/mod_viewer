@@ -423,6 +423,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
         ini_toggles = analysis.toggles
         ini_menu = analysis.menu
         own_menu = dict(ini_menu)
+        record["own_menu"] = own_menu
         ini_present = None
         for key, info in ini_toggles.items():
             if info.get("section", "").lower() == PRESENT_SECTION.lower():
@@ -462,7 +463,6 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
             key = f"{var_prefix or ''}{slider['section']}#shape{index}"
             menu_slots[key] = slider
             own_menu[key] = slider
-        attach_menu_images(own_menu, secs, resources)
         for var, val in analysis.defaults.items():
             toggle_defaults.setdefault(var, val)
 
@@ -503,6 +503,7 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
                 "slot": next_controller_slot,
                 "source": record["source"],
                 "ini_path": record["ini_path"],
+                "_image_source_var": local,
             })
             next_controller_slot += 1
             base_key = (
@@ -514,10 +515,16 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
                 key = f"{base_key}_{suffix}"
                 suffix += 1
             menu_slots[key] = controller
+            record["own_menu"][key] = controller
 
             source_default = record["analysis"].defaults.get(info["var"])
             if source_default is not None:
                 toggle_defaults[destination] = source_default
+
+    for record in ini_records:
+        attach_menu_images(
+            record["own_menu"], record["sections"],
+            record["analysis"].resources)
 
     present_items = []
     for present_info in present_infos:

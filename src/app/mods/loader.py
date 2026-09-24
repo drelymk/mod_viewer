@@ -209,7 +209,7 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
 
 
 def load_semantic_state(context, overrides=None, pending_new_sections=None,
-                        active_mesh_keys=None):
+                        active_mesh_keys=None, *, menu_image_source=None):
     """Read mesh and control projections from one authoritative analysis."""
     parsed = analyze_mod_inis(
         context.ini_paths, context.mod_dir, overrides, context.docs,
@@ -223,13 +223,14 @@ def load_semantic_state(context, overrides=None, pending_new_sections=None,
         "material_profiles": material_profiles,
         "asset_resolution": asset_resolution,
         **_control_semantic_projection(
-            parsed, context, pending_new_sections, gating_vars=gating_vars),
+            parsed, context, pending_new_sections, gating_vars=gating_vars,
+            menu_image_source=menu_image_source),
     }
 
 
 def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
              ini_paths=None, documents=None, geometry=None, context=None,
-             texture_source=None):
+             texture_source=None, menu_image_source=None):
     """Parse a mod folder and return the structured application payload.
 
     Errors are returned as ``{"error": ...}`` rather than raised, since this
@@ -294,7 +295,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             state_rules=parsed.state_rules)
         menu = build_menu_panel(
             parsed.menu, parsed.defaults, context.mod_dir,
-            source=context.source)
+            source=context.source, image_source=menu_image_source)
         return _structured_payload(
             meshes=mesh_payload, textures=built.textures, toggles=toggles,
             menu=menu, present=parsed.present,

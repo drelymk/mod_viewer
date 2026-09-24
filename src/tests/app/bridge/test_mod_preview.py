@@ -19,6 +19,9 @@ class _Publication:
     def register(self, *args, **kwargs):
         return "/texture/0"
 
+    def register_menu_image(self, path):
+        return "/texture/menu.png"
+
     def set_game_profile(self, value):
         self.events.append(("profile", value))
         self.game_profile = value

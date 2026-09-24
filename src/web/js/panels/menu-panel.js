@@ -33,6 +33,19 @@ function guardHolds(when) {
   }
 }
 
+let imageObserver = null;
+
+function queueMenuImage(img, url) {
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  if (!imageObserver) {
+    img.src = url;
+    return;
+  }
+  img.dataset.menuSrc = url;
+  imageObserver.observe(img);
+}
+
 function buildMenuItem(info) {
   const item = document.createElement('div');
   item.className = 'menu-item';
@@ -52,8 +65,8 @@ function buildMenuItem(info) {
   }
   if (info.image) {
     const img = document.createElement('img');
-    img.src = info.image;
     img.alt = info.name;
+    queueMenuImage(img, info.image);
     btn.appendChild(img);
   }
 
@@ -92,8 +105,8 @@ function buildShapeSlider(info) {
   if (info.image) {
     const img = document.createElement('img');
     img.className = 'menu-slider-image';
-    img.src = info.image;
     img.alt = info.name;
+    queueMenuImage(img, info.image);
     item.appendChild(img);
   }
   const input = document.createElement('input');
@@ -135,6 +148,20 @@ window.addEventListener(LANGUAGE_CHANGED, refreshMenuValues);
 export function buildMenuPanel(menu) {
   const list = document.getElementById('menu-list');
   const panel = document.getElementById('menu-panel');
+  imageObserver?.disconnect();
+  imageObserver = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver((entries, observer) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const img = entry.target;
+        if (img.isConnected && img.dataset.menuSrc) {
+          img.src = img.dataset.menuSrc;
+          delete img.dataset.menuSrc;
+        }
+        observer.unobserve(img);
+      }
+    }, { rootMargin: '80px' })
+    : null;
   list.innerHTML = '';
   syncers = [];
   registerViewSync('menu-panel', () => {
