@@ -51,21 +51,17 @@ def _has_geometry_sections(document):
     ``core.ini.sections -> core.ini.parser`` dependency.  Missing buffers are allowed;
     geometry loading reports those later.
     """
-    has_draw = False
-    has_index = False
     for section in document.sections:
-        if section.name.lower().startswith("textureoverride"):
-            for raw in section.lines:
-                line = raw.text
-                if _DRAW_RE.match(line):
-                    has_draw = True
-                elif _IB_RE.match(line):
-                    has_index = True
-        elif section.name.lower().startswith("commandlist"):
-            for raw in section.lines:
-                if _IB_RE.match(raw.text):
-                    has_index = True
-    return has_draw or has_index
+        name = section.name.lower()
+        if name.startswith("textureoverride"):
+            for line in section.lines:
+                if _DRAW_RE.match(line.text) or _IB_RE.match(line.text):
+                    return True
+        elif name.startswith("commandlist"):
+            for line in section.lines:
+                if _IB_RE.match(line.text):
+                    return True
+    return False
 
 
 def discover_ini_paths(mod_dir, *, disabled=False, source=None,
