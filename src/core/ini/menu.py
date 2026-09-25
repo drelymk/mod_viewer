@@ -691,56 +691,57 @@ def attach_menu_images(menu, sections, resources):
         return next((info for key, info in resources.items()
                      if key.lower() == lowered), {})
 
-    # Some namespace menus draw numbered buttons through a custom shader.
-    # Associate the draw's pulse variable with the controller parser's
-    # recognized state/pulse relationship. Accept a static image only when
-    # both authored states resolve to the same resource.
-    controller_images = {}
-    button_choices = {}
+    def blocks(nodes):
+        for node in nodes:
+            if isinstance(node, dict):
+                yield node
+                for branch in node["branches"]:
+                    yield from blocks(branch["body"])
+
+    def branch_image(branch):
+        bindings = [re.fullmatch(r"ps-t100\s*=\s*(\S+)", line, re.I)
+                    for line in branch["body"] if isinstance(line, str)]
+        names = [match.group(1) for match in bindings if match]
+        return resource(names[0]).get("filename") if len(names) == 1 else None
+
+    controller_candidates = {}
+    slot_candidates = {}
+    known_slots = {info["slot"] for info in menu.values()
+                   if isinstance(info.get("slot"), int)
+                   and info.get("kind") != "shape_slider"}
     for name, lines in sections.items():
-        if not re.fullmatch(r"CommandListDrawSliderButtonPage\d+", name, re.I):
+        if not name.casefold().startswith("commandlist"):
             continue
-        current = None
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = re.fullmatch(r"if\s+\$(\w+)\s*==\s*0", line, re.I)
-            if match:
-                current = (match.group(1).casefold(), "1")
+        parsed = _conditional_blocks(lines)
+        if parsed is None:
+            continue
+        for block in blocks(parsed[1]):
+            branches = block["branches"]
+            first = _SLOT_RE.fullmatch(branches[0]["condition"] or "")
+            if not first:
                 continue
-            if line.lower() == "else" and current:
-                current = (current[0], "2")
-                continue
-            if line.lower() == "endif" or line.lower().startswith(
-                    ("if ", "else if ", "elif ")):
-                current = None
-                continue
-            if not current:
-                continue
-            match = re.fullmatch(
-                r"ps-t100\s*=\s*(ResourceSliderButton(\d+)_([12]))",
-                line, re.I)
-            if not match or match.group(3) != current[1]:
-                continue
-            filename = resource(match.group(1)).get("filename")
-            if filename:
-                button_choices.setdefault(current[0], {}).setdefault(
-                    match.group(2), {}).setdefault(current[1], set()).add(
-                        filename)
-    for pulse_var, buttons in button_choices.items():
-        images = []
-        safe = True
-        for states in buttons.values():
-            first, second = states.get("1", set()), states.get("2", set())
-            if len(first) != 1 or len(second) != 1:
-                safe = False
-                break
-            first_file, second_file = next(iter(first)), next(iter(second))
-            if first_file.casefold() != second_file.casefold():
-                safe = False
-                break
-            images.append(first_file)
-        if safe and images and len({image.casefold() for image in images}) == 1:
-            controller_images[pulse_var] = images[0]
+            same_var = [(_SLOT_RE.fullmatch(branch["condition"] or ""), branch)
+                        for branch in branches]
+            if len(branches) == 2 and branches[1]["condition"] is None:
+                pulse = first.group(1).casefold()
+                images = [branch_image(branch) for branch in branches]
+                image = (images[0] if all(images) and
+                         images[0].casefold() == images[1].casefold() else None)
+                controller_candidates.setdefault(pulse, []).append(image)
+            mapped = [(int(match.group(2)), branch_image(branch))
+                      for match, branch in same_var if match and
+                      match.group(1).casefold() == first.group(1).casefold()
+                      and int(match.group(2)) in known_slots]
+            if sum(bool(image) for _slot, image in mapped) >= _MIN_SLOTS:
+                for slot, image in mapped:
+                    slot_candidates.setdefault(slot, set()).add(image)
+    controller_images = {
+        pulse: images[0] for pulse, images in controller_candidates.items()
+        if all(images) and len({image.casefold() for image in images}) == 1
+    }
+    for slot, images in slot_candidates.items():
+        if len(images) == 1 and None not in images:
+            slot_images.setdefault(slot, next(iter(images)))
 
     # Arrow-pair menus render item N in its own CommandListIconN section.
     for name, lines in sections.items():
@@ -774,88 +775,40 @@ def attach_menu_images(menu, sections, resources):
                 if image:
                     mouse_images[int(match.group(1))] = image
 
+    slider_images = {}
+    ui_sections = {info["ui_section"].casefold()
+                   for info in menu.values() if info.get("ui_section")}
     for name, lines in sections.items():
-        if "slotitemimage" not in name.lower():
-            continue
-        current_slot = None
+        current = None
         for raw in lines:
             line = str(raw).split(";", 1)[0].strip()
-            match = re.match(r"(?:if|elif|else\s+if)\s+\$slot\s*==\s*(\d+)", line, re.I)
-            if match:
-                current_slot = int(match.group(1))
+            low = line.casefold()
+            if (low.startswith(("if ", "elif ", "else if "))
+                    or low in ("else", "endif")):
+                current = None
                 continue
-            match = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
-            if match and current_slot is not None:
-                info = resource(match.group(1))
-                if info.get("filename") and current_slot not in slot_images:
-                    slot_images[current_slot] = info["filename"]
-
-    # Responsive/MCMI grids draw their buttons by incrementing a counter and
-    # dispatching the icon in a separate CommandList.  Unlike the older
-    # `$slot` convention, the counter name is author-defined (commonly
-    # `$Button_number`) and many slots may intentionally share one frame/icon.
-    # Only accept integer-dispatch CommandLists that actually bind ps-t100;
-    # this keeps ordinary state chains out of image recognition.
-    for name, lines in sections.items():
-        if not name.lower().startswith("commandlist"):
-            continue
-        current_slot = None
-        saw_icon = False
-        candidates = {}
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = re.match(
-                r"(?:if|elif|else\s+if)\s+\$\w+\s*==\s*(\d+)", line, re.I)
-            if match:
-                current_slot = int(match.group(1))
-                continue
-            match = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
-            if match and current_slot is not None:
-                info = resource(match.group(1))
-                if info.get("filename"):
-                    candidates.setdefault(current_slot, info["filename"])
-                    saw_icon = True
-        if saw_icon and len(candidates) >= _MIN_SLOTS:
-            for slot, filename in candidates.items():
-                slot_images.setdefault(slot, filename)
-
-    def compact(text):
-        return re.sub(r"[^a-z0-9]", "", text.lower())
-
-    image_resources = [(compact(name.replace("Resource", "")), info["filename"])
-                       for name, info in resources.items()
-                       if info.get("filename") and
-                       ("menuitem" in name.lower() or "resourceitem" in name.lower())]
-    aliases = {
-        "currflat": ("menuflat", "itemflat", "flat"),
-        "boobssize": ("itemboobs", "boobs"),
-        "nipplesize": ("itemnipple", "nipple"),
-        "shortclo": ("itemshort", "short"),
-        "pussy": ("itempussy", "pussy"),
-    }
+            binding = re.fullmatch(r"ps-t100\s*=\s*(\S+)", line, re.I)
+            if binding:
+                current = resource(binding.group(1)).get("filename")
+            run = re.fullmatch(r"run\s*=\s*(\S+)", line, re.I)
+            if run and run.group(1).casefold() in ui_sections:
+                slider_images.setdefault(run.group(1).casefold(), []).append(current)
     for info in menu.values():
         if info.get("kind") == "mouse_region":
             image = mouse_images.get(info["slot"])
             if image:
                 info["image_file"] = image
             continue
-        source_var = info.get("_image_source_var")
-        if source_var is not None:
-            pulse_var = info.get("_pulse_var")
-            image = (controller_images.get(pulse_var.casefold())
-                     if pulse_var else None)
+        pulse_var = info.get("_pulse_var")
+        if pulse_var is not None:
+            image = controller_images.get(pulse_var.casefold())
             if image:
                 info["image_file"] = image
             continue
+        if info.get("kind") == "shape_slider":
+            images = slider_images.get(str(info.get("ui_section", "")).casefold(), [])
+            if images and all(images) and len({image.casefold() for image in images}) == 1:
+                info["image_file"] = images[0]
+            continue
         if info.get("slot") in slot_images:
             info["image_file"] = slot_images[info["slot"]]
-            continue
-        if info.get("kind") != "shape_slider":
-            continue
-        var = compact(info["name"])
-        needles = list(aliases.get(var, ()))
-        needles += [var, var.replace("swapvarslider", ""), var.replace("size", "")]
-        for resource_name, filename in image_resources:
-            if any(needle and needle in resource_name for needle in needles):
-                info["image_file"] = filename
-                break

@@ -57,7 +57,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
     # When a mod has authored slider drawing sections, they are a strong
     # signal for which x88 variables are user controls. This prevents an
     # internal remapping variable from becoming a duplicate UI slider.
-    authored_slider_vars = set()
+    authored_sliders = {}
     remapped_vars = {}
     for section, lines in sections.items():
         for raw in lines:
@@ -65,8 +65,10 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             if section.lower().startswith("commandlistdrawslider"):
                 match = _SLIDER_RE.fullmatch(line)
                 if match:
-                    authored_slider_vars.add(
-                        canon.get(match.group(1).lower(), match.group(1)).lower())
+                    variable = canon.get(match.group(1).lower(), match.group(1))
+                    authored_sliders.setdefault(variable.lower(), section)
+                    if authored_sliders[variable.lower()] != section:
+                        authored_sliders[variable.lower()] = None
             match = _REMAP_RE.fullmatch(line)
             if match:
                 alias = canon.get(match.group(1).lower(), match.group(1))
@@ -153,7 +155,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
         candidate_count = len(candidates) + len(complete_remaps)
         one_authored_candidate = (
             candidate_count == 1 and len(candidates) == 1
-            and candidates[0][0].lower() in authored_slider_vars)
+            and candidates[0][0].lower() in authored_sliders)
         if ((candidate_count < 2 and not one_authored_candidate)
                 or len(base_keys) != 1):
             continue
@@ -162,7 +164,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                            item.get("base_file"), item.get("target_file"))
                           for item in found}
         for variable, base_name, target_name in candidates:
-            if authored_slider_vars and variable.lower() not in authored_slider_vars:
+            if authored_sliders and variable.lower() not in authored_sliders:
                 continue
             base, shader_base = shape_base_resources(
                 base_name, writable_outputs)
@@ -182,7 +184,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "kind": "shape_slider",
                 "name": variable,
                 "var": f"{var_prefix or ''}{variable}",
-                "authored_slider": variable.lower() in authored_slider_vars,
+                "authored_slider": variable.lower() in authored_sliders,
+                "ui_section": authored_sliders.get(variable.lower()),
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": pair[1],
                 "shader_base_file": shader_base.get("filename"),
@@ -196,7 +199,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
 
         for item in complete_remaps:
             variable = item["var"]
-            if authored_slider_vars and variable.lower() not in authored_slider_vars:
+            if authored_sliders and variable.lower() not in authored_sliders:
                 continue
             base, _shader_base = shape_base_resources(
                 item["base"], writable_outputs)
@@ -211,7 +214,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             found.append({
                 "kind": "shape_slider", "mode": "midpoint_pair",
                 "name": variable, "var": f"{var_prefix or ''}{variable}",
-                "authored_slider": variable.lower() in authored_slider_vars,
+                "authored_slider": variable.lower() in authored_sliders,
+                "ui_section": authored_sliders.get(variable.lower()),
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": base["filename"],
                 "low_file": low["filename"],
@@ -274,7 +278,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
             "kind": "shape_slider",
             "name": variable,
             "var": full_var,
-            "authored_slider": variable.lower() in authored_slider_vars,
+            "authored_slider": variable.lower() in authored_sliders,
+            "ui_section": authored_sliders.get(variable.lower()),
             "min": 0.0,
             "max": 1.0,
             "step": 0.01,
@@ -351,7 +356,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "mode": "midpoint_pair",
                 "name": variable,
                 "var": f"{var_prefix or ''}{variable}",
-                "authored_slider": variable.lower() in authored_slider_vars,
+                "authored_slider": variable.lower() in authored_sliders,
+                "ui_section": authored_sliders.get(variable.lower()),
                 "min": 0.0, "max": 1.0, "step": 0.01,
                 "base_file": base["filename"],
                 "low_file": low["filename"],

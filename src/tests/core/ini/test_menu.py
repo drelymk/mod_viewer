@@ -11,6 +11,7 @@ import base64, io, os, tempfile
 
 from core.ini.menu import (attach_menu_images, extract_menu_toggles,
                            extract_menu_var_names)
+from core.ini.shapes import extract_shape_sliders
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, find_inis, gating_var_names,
                              merge_sections, parse_sections)
@@ -736,6 +737,108 @@ endif
     assert by_slot[0]["values"] == ["0", "1", "2", "3"]
     assert by_slot[1]["var"] == "swapvar_1"
     assert by_slot[1]["values"] == ["0", "1"]
+
+
+def test_shape_slider_artwork_follows_authored_run_section():
+    text = """
+[CommandListDrawSlider.Gauge]
+x87 = $blend * x87
+[CommandListPaint]
+ps-t100 = ResourceOddArtwork
+run = CustomShaderElement
+run = CommandListDrawSlider.Gauge
+[CustomShaderMorph]
+x88 = $blend
+cs-t50 = copy ResourceBase
+cs-t51 = copy ResourceTarget
+[ResourceBase]
+filename = base.buf
+stride = 40
+[ResourceTarget]
+filename = target.buf
+stride = 40
+[ResourceOddArtwork]
+filename = item.dds
+[ResourceOtherArtwork]
+filename = other.dds
+"""
+    secs = sections(text)
+    slider = extract_shape_sliders(secs, extract_resources(secs))[0]
+    assert slider["ui_section"] == "CommandListDrawSlider.Gauge"
+    assert slider["section"] == "CustomShaderMorph"
+    attach_menu_images({"slider": slider}, secs, extract_resources(secs))
+    assert slider["image_file"] == "item.dds"
+
+    ambiguous = sections(text + """
+[CommandListSecondPaint]
+ps-t100 = ResourceOtherArtwork
+run = CommandListDrawSlider.Gauge
+""")
+    slider = extract_shape_sliders(ambiguous, extract_resources(ambiguous))[0]
+    attach_menu_images({"slider": slider}, ambiguous,
+                       extract_resources(ambiguous))
+    assert "image_file" not in slider
+
+
+def test_integer_slot_artwork_uses_known_slots_and_rejects_conflicts():
+    text = """
+[CommandListActions]
+if $clicked == 1
+    $first = 1 - $first
+elif $clicked == 2
+    $second = 1 - $second
+endif
+[CommandListArtwork]
+if $index == 1
+    ps-t100 = ResourceOne
+elif $index == 2
+    ps-t100 = ResourceTwo
+endif
+[ResourceOne]
+filename = one.dds
+[ResourceTwo]
+filename = two.dds
+[ResourceConflict]
+filename = conflict.dds
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
+        1: "one.dds", 2: "two.dds"}
+
+    conflicting = sections(text + """
+[CommandListOtherArtwork]
+if $other == 1
+    ps-t100 = ResourceConflict
+elif $other == 2
+    ps-t100 = ResourceTwo
+endif
+""")
+    menu = extract_menu_toggles(conflicting)
+    attach_menu_images(menu, conflicting, extract_resources(conflicting))
+    assert "image_file" not in _by_slot(menu)[1]
+    assert _by_slot(menu)[2]["image_file"] == "two.dds"
+
+
+def test_fifteen_slot_dispatch_uses_authored_resources():
+    actions = ["[CommandListActions]"]
+    artwork = ["[CommandListArtwork]"]
+    resources = []
+    for slot in range(1, 16):
+        branch = "if" if slot == 1 else "elif"
+        actions.extend((f"{branch} $chosen == {slot}",
+                        f"    $state{slot} = 1 - $state{slot}"))
+        artwork.extend((f"{branch} $imageIndex == {slot}",
+                        f"    ps-t100 = ResourceArt{slot}"))
+        resources.extend((f"[ResourceArt{slot}]", f"filename = art{slot}.dds"))
+    actions.append("endif")
+    artwork.append("endif")
+    secs = sections("\n".join(actions + artwork + resources))
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
+        slot: f"art{slot}.dds" for slot in range(1, 16)}
 
 
 def test_menu_panel_preserves_authored_transparency():

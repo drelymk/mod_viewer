@@ -157,39 +157,40 @@ $\\Target\\style = $value
                              "section": "TextureOverrideBody"}
 
 
-def test_forwarded_numbered_button_image_uses_source_key(tmp_path):
+def test_forwarded_controller_image_follows_pulse(tmp_path):
     parsed = _forwarded_fixture(tmp_path, r"""
 [Constants]
-global $key_24 = 0
-global $value_24 = 0
+global $localStyle = 0
+global $clickPulse = 0
 
-[CommandListUpdateSliderPage3]
-$value_24 = 1 - $value_24
+[CommandListAdvance]
+$clickPulse = 1 - $clickPulse
 
-[CommandListDrawSliderButtonPage3]
-if $value_24 == 0
-    ps-t100 = ResourceSliderButton24_1
+[CommandListArtwork]
+if $clickPulse == 0
+    ps-t100 = ResourceRest
 else
-    ps-t100 = ResourceSliderButton24_2
+    ps-t100 = ResourcePressed
 endif
 
 [Present]
-$\Target\key_24 = $key_24
-$key_24 = $key_24 + $value_24
-if $key_24 > 1
-    $key_24 = 0
+$\Target\style = $localStyle
+$localStyle = $localStyle + $clickPulse
+if $localStyle > 1
+    $localStyle = 0
 endif
 
-[ResourceSliderButton24_1]
-filename = ui/24.dds
+[ResourceRest]
+filename = ui/style.dds
 
-[ResourceSliderButton24_2]
-filename = ui/24.dds
-""", target_var="key_24", target_default="0")
+[ResourcePressed]
+filename = ui/style.dds
+""", target_var="style", target_default="0")
     control = next(iter(parsed.menu.values()))
     assert control["slot"] == 1
-    assert control["var"] == "mod(5)::key_24"
-    assert control["image_file"] == "ui/24.dds"
+    assert control["var"] == "mod(5)::style"
+    assert control["_pulse_var"] == "clickPulse"
+    assert control["image_file"] == "ui/style.dds"
 
 
 def test_forwarded_button_images_follow_controller_pulses_not_slots(tmp_path):
@@ -197,69 +198,69 @@ def test_forwarded_button_images_follow_controller_pulses_not_slots(tmp_path):
     target_path = tmp_path / "mod(5).ini"
     menu_path.write_text(r"""
 [Constants]
-global $key_24 = 0
-global $value_24 = 0
-global $state_37 = 0
-global $pulse_37 = 0
+global $localA = 0
+global $pulseA = 0
+global $localB = 0
+global $pulseB = 0
 
-[CommandListUpdateSliderPage3]
-$value_24 = 1 - $value_24
+[CommandListAdvanceA]
+$pulseA = 1 - $pulseA
 
-[CommandListUpdateSliderPage4]
-$pulse_37 = 1 - $pulse_37
+[CommandListAdvanceB]
+$pulseB = 1 - $pulseB
 
-[CommandListDrawSliderButtonPage3]
-if $value_24 == 0
-    ps-t100 = ResourceSliderButton24_1
+[CommandListArtworkA]
+if $pulseA == 0
+    ps-t100 = ResourceNormalA
 else
-    ps-t100 = ResourceSliderButton24_2
+    ps-t100 = ResourcePressedA
 endif
 
-[CommandListDrawSliderButtonPage4]
-if $pulse_37 == 0
-    ps-t100 = ResourceSliderButton37_1
+[CommandListArtworkB]
+if $pulseB == 0
+    ps-t100 = ResourceNormalB
 else
-    ps-t100 = ResourceSliderButton37_2
+    ps-t100 = ResourcePressedB
 endif
 
 [Present]
-$\Target\key_24 = $key_24
-$key_24 = $key_24 + $value_24
-if $key_24 > 1
-    $key_24 = 0
+$\Target\styleA = $localA
+$localA = $localA + $pulseA
+if $localA > 1
+    $localA = 0
 endif
-$\Target\state_37 = $state_37
-$state_37 = $state_37 + $pulse_37
-if $state_37 > 1
-    $state_37 = 0
+$\Target\styleB = $localB
+$localB = $localB + $pulseB
+if $localB > 1
+    $localB = 0
 endif
 
-[ResourceSliderButton24_1]
-filename = ui/24.dds
+[ResourceNormalA]
+filename = ui/a.dds
 
-[ResourceSliderButton24_2]
-filename = ui/24.dds
+[ResourcePressedA]
+filename = ui/a.dds
 
-[resourcesliderbutton37_1]
-filename = ui/37.dds
+[ResourceNormalB]
+filename = ui/b.dds
 
-[ResourceSliderButton37_2]
-filename = ui/37.dds
+[ResourcePressedB]
+filename = ui/b.dds
 """, encoding="utf-8")
     target_path.write_text("""namespace = Target
 
 [Constants]
-global $key_24 = 0
-global $state_37 = 0
+global $styleA = 0
+global $styleB = 0
 
 [TextureOverrideBody]
 ib = ResourceBodyIB
 vb0 = ResourceBodyPosition
 vb1 = ResourceBodyTexcoord
-if $key_24 == 1
+if $styleA == 1
     drawindexed = 3, 0, 0
 endif
-if $state_37 == 1
+if $styleB == 1
     drawindexed = 3, 0, 0
 endif
 
@@ -280,44 +281,44 @@ stride = 8
         [str(menu_path), str(target_path)], str(tmp_path))
     controls = {
         info["var"]: info for info in parsed.menu.values()
-        if info.get("_image_source_var") is not None
+        if info.get("_pulse_var") is not None
     }
 
     assert {info["slot"] for info in controls.values()} == {1, 2}
-    assert set(controls) == {"mod(5)::key_24", "mod(5)::state_37"}
-    assert controls["mod(5)::key_24"]["image_file"] == "ui/24.dds"
-    assert controls["mod(5)::state_37"]["image_file"] == "ui/37.dds"
+    assert set(controls) == {"mod(5)::styleA", "mod(5)::styleB"}
+    assert controls["mod(5)::styleA"]["image_file"] == "ui/a.dds"
+    assert controls["mod(5)::styleB"]["image_file"] == "ui/b.dds"
 
 
 def test_forwarded_button_image_requires_both_states_to_match(tmp_path):
     parsed = _forwarded_fixture(tmp_path, r"""
 [Constants]
-global $key_24 = 0
-global $value_24 = 0
+global $localState = 0
+global $clickPulse = 0
 
-[CommandListUpdateSliderPage3]
-$value_24 = 1 - $value_24
+[CommandListAdvance]
+$clickPulse = 1 - $clickPulse
 
-[CommandListDrawSliderButtonPage3]
-if $value_24 == 0
-    ps-t100 = ResourceSliderButton24_1
+[CommandListArtwork]
+if $clickPulse == 0
+    ps-t100 = ResourceNormal
 else
-    ps-t100 = ResourceSliderButton24_2
+    ps-t100 = ResourcePressed
 endif
 
 [Present]
-$\Target\key_24 = $key_24
-$key_24 = $key_24 + $value_24
-if $key_24 > 1
-    $key_24 = 0
+$\Target\style = $localState
+$localState = $localState + $clickPulse
+if $localState > 1
+    $localState = 0
 endif
 
-[ResourceSliderButton24_1]
-filename = ui/24-on.dds
+[ResourceNormal]
+filename = ui/on.dds
 
-[ResourceSliderButton24_2]
-filename = ui/24-off.dds
-""", target_var="key_24", target_default="0")
+[ResourcePressed]
+filename = ui/off.dds
+""", target_var="style", target_default="0")
 
     control = next(iter(parsed.menu.values()))
     assert control.get("image_file") is None

@@ -528,7 +528,6 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
                 "slot": next_controller_slot,
                 "source": record["source"],
                 "ini_path": record["ini_path"],
-                "_image_source_var": local,
             })
             next_controller_slot += 1
             base_key = (
