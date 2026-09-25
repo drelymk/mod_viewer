@@ -88,6 +88,25 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 return value
         return {}
 
+    slider_images = {}
+    ui_sections = {name.casefold() for name in authored_sliders.values() if name}
+    for lines in sections.values():
+        bound = rendered = None
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            low = line.casefold()
+            if low.startswith(("if ", "elif ", "else if ")) or low in ("else", "endif"):
+                bound = rendered = None
+                continue
+            binding = re.fullmatch(r"ps-t100\s*=\s*(\S+)", line, re.I)
+            if binding:
+                bound = resource(binding.group(1)).get("filename")
+            run = re.fullmatch(r"run\s*=\s*(\S+)", line, re.I)
+            if run and run.group(1).casefold() == "customshaderelement":
+                rendered = bound
+            elif run and run.group(1).casefold() in ui_sections:
+                slider_images.setdefault(run.group(1).casefold(), []).append(rendered)
+
     def shape_base_resources(base_name, writable_outputs):
         """Resolve shader input and writable runtime output for a base."""
         shader_base = resource(base_name)
@@ -367,4 +386,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "ini_path": src.get("ini_path"),
                 "section": "CommandListComputeShapeKeys",
             })
+    for item in found:
+        images = slider_images.get(str(item.get("ui_section") or "").casefold(), [])
+        if images and all(images) and len({image.casefold() for image in images}) == 1:
+            item["image_file"] = images[0]
     return found

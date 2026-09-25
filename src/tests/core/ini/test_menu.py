@@ -9,8 +9,7 @@ always satisfied) and the viewer shows every variant at once.
 import base64, io, os, tempfile
 
 
-from core.ini.menu import (attach_menu_images, extract_menu_toggles,
-                           extract_menu_var_names)
+from core.ini.menu import extract_menu_toggles, extract_menu_var_names
 from core.ini.shapes import extract_shape_sliders
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, find_inis, gating_var_names,
@@ -590,8 +589,7 @@ filename = ui/top.dds
 filename = ui/hair.dds
 """
     secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
     by_slot = _by_slot(menu)
     assert (sorted(by_slot) == [2, 8]), (f"both numbered arrow-pair items are found (got {sorted(by_slot)})")
     assert (by_slot[2]["var"] == "Top" and
@@ -663,8 +661,7 @@ ps-t100 = ResourceTrimIcon
 filename = icons/trim.png
 """
     secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
     by_slot = _by_slot(menu)
     assert sorted(by_slot) == [0, 2]
     assert by_slot[0]["var"] == "style"
@@ -676,8 +673,8 @@ filename = icons/trim.png
     assert by_slot[2]["image_file"] == "icons/trim.png"
 
     no_artwork = sections(text.replace("ps-t100 = ResourceTrimIcon", ""))
-    plain = _by_slot(extract_menu_toggles(no_artwork))
-    attach_menu_images(plain, no_artwork, extract_resources(no_artwork))
+    plain = _by_slot(extract_menu_toggles(
+        no_artwork, resources=extract_resources(no_artwork)))
     assert 2 in plain and "image_file" not in plain[2]
 
     no_mouse_key = text.replace("key = VK_LBUTTON", "key = k")
@@ -766,17 +763,19 @@ filename = other.dds
     slider = extract_shape_sliders(secs, extract_resources(secs))[0]
     assert slider["ui_section"] == "CommandListDrawSlider.Gauge"
     assert slider["section"] == "CustomShaderMorph"
-    attach_menu_images({"slider": slider}, secs, extract_resources(secs))
     assert slider["image_file"] == "item.dds"
+
+    stale = sections(text.replace("run = CustomShaderElement", ""))
+    assert "image_file" not in extract_shape_sliders(
+        stale, extract_resources(stale))[0]
 
     ambiguous = sections(text + """
 [CommandListSecondPaint]
 ps-t100 = ResourceOtherArtwork
+run = CustomShaderElement
 run = CommandListDrawSlider.Gauge
 """)
     slider = extract_shape_sliders(ambiguous, extract_resources(ambiguous))[0]
-    attach_menu_images({"slider": slider}, ambiguous,
-                       extract_resources(ambiguous))
     assert "image_file" not in slider
 
 
@@ -802,8 +801,7 @@ filename = two.dds
 filename = conflict.dds
 """
     secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
     assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
         1: "one.dds", 2: "two.dds"}
 
@@ -815,8 +813,8 @@ elif $other == 2
     ps-t100 = ResourceTwo
 endif
 """)
-    menu = extract_menu_toggles(conflicting)
-    attach_menu_images(menu, conflicting, extract_resources(conflicting))
+    menu = extract_menu_toggles(
+        conflicting, resources=extract_resources(conflicting))
     assert "image_file" not in _by_slot(menu)[1]
     assert _by_slot(menu)[2]["image_file"] == "two.dds"
 
@@ -835,8 +833,7 @@ def test_fifteen_slot_dispatch_uses_authored_resources():
     actions.append("endif")
     artwork.append("endif")
     secs = sections("\n".join(actions + artwork + resources))
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
     assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
         slot: f"art{slot}.dds" for slot in range(1, 16)}
 

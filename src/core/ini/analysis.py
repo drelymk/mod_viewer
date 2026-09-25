@@ -59,7 +59,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         canonical_vars=canonical_vars)
     menu = extract_menu_toggles(
         sections, var_prefix=var_prefix, source=source,
-        canonical_vars=canonical_vars)
+        canonical_vars=canonical_vars, resources=resources)
     condition_aliases = build_bool_alias_map(
         sections, toggle_keys=toggles, menu=menu, var_prefix=var_prefix)
     state_rules = extract_state_rules(
