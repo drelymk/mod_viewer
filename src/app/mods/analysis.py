@@ -8,10 +8,11 @@ from core.geometry.semantics import deduplicate_draws
 from core.editing.present import SECTION_NAME as PRESENT_SECTION
 from core.ini.analysis import analyze_ini
 from core.ini.document import IniDocument
+from core.ini.snapshot import IniRecord, ModIniSnapshot
 from core.ini.draw_scan import gating_var_names
 from core.ini.menu import attach_menu_images, extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
-                               extract_resources, merge_sections)
+                               extract_resources, sections_from_document)
 from core.ini.animations import (
     compute_animation_control_vars, discover_compute_animations,
     discover_wwmi_sparse_animations,
@@ -279,14 +280,45 @@ def _qualified_vars_from_targets(namespace_targets):
     return result
 
 
-def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
-                     source=None):
-    """Aggregate independent INI analyses into one mod semantic model.
+def build_mod_ini_snapshot(ini_paths, folder_path, documents=None,
+                           overrides=None, source=None, *, require_documents=False,
+                           revision=None):
+    """Project each current document once, retaining its file identity."""
+    paths = list(ini_paths)
+    if source is None and paths:
+        source = getattr(paths[0], "source", None)
+    records = []
+    for path in paths:
+        document = _mapped_value(documents, path)
+        if document is None:
+            if require_documents:
+                raise ValueError(f"Missing authoritative INI document: {path}")
+            text = _mapped_value(overrides, path)
+            if text is not None:
+                document = IniDocument.from_string(text, path=path)
+            elif source is not None and getattr(source, "virtual", False):
+                document = IniDocument.from_string(source.read_text(path), path=path)
+            else:
+                document = IniDocument.load(path)
+        sections = sections_from_document(document)
+        var_prefix, source_name = _ini_scope(
+            path, folder_path, len(paths) > 1, source=source)
+        records.append(IniRecord(
+            path=path, relative_path=_ini_rel(path, folder_path, source),
+            document=document, sections=sections,
+            namespace=extract_ini_namespace(document=document),
+            var_prefix=var_prefix, source_name=source_name,
+            canonical_vars=canonical_var_names(sections)))
+    return ModIniSnapshot(folder_path, source, tuple(records), revision)
 
-    Each INI is parsed separately so resource definitions from sibling files
-    cannot overwrite one another. ``overrides`` and ``documents`` are passed
-    through to ``merge_sections`` so staged edits remain authoritative.
-    """
+
+def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
+                     documents=None, source=None):
+    """Aggregate separate INI records into one mod semantic model."""
+    snapshot = (ini_paths if isinstance(ini_paths, ModIniSnapshot) else
+                build_mod_ini_snapshot(ini_paths, folder_path, documents,
+                                       overrides, source))
+    folder_path, source = snapshot.mod_dir, snapshot.source
     groups = []
     toggle_keys, menu_slots, toggle_defaults, state_rules = {}, {}, {}, []
     present_infos, present_sources = [], []
@@ -297,38 +329,12 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     animation_control_vars = set()
     resource_files = []
     texture_override_indexes = []
-    multi = len(ini_paths) > 1
-    if source is None and ini_paths:
-        source = getattr(ini_paths[0], "source", None)
-    if source is not None and getattr(source, "virtual", False):
-        documents = dict(documents or {})
-        for ini_path in ini_paths:
-            if source.is_resource_reference(ini_path) \
-                    and ini_path not in documents:
-                documents[ini_path] = IniDocument.from_string(
-                    source.read_text(ini_path), path=ini_path)
-
-    # Parse each INI once up front so file-level namespaces and direct
-    # forwarding assignments can be resolved before semantic analysis. The
-    # section projection remains per-INI; only the namespace registry is shared.
-    ini_records = []
-    for ini_path in ini_paths:
-        secs = merge_sections([ini_path], overrides=overrides,
-                              documents=documents)
-        var_prefix, source_name = _ini_scope(
-            ini_path, folder_path, multi, source=source)
-        document = _mapped_value(documents, ini_path)
-        text = _mapped_value(overrides, ini_path)
-        ini_records.append({
-            "ini_path": ini_path,
-            "sections": secs,
-            "var_prefix": var_prefix,
-            "source": source_name,
-            "canonical_vars": canonical_var_names(secs),
-            "namespace": extract_ini_namespace(
-                ini_path, text=text, document=document),
-            "extra_gating_vars": set(),
-        })
+    ini_records = [{
+        "ini_path": record.path, "sections": record.sections,
+        "var_prefix": record.var_prefix, "source": record.source_name,
+        "canonical_vars": record.canonical_vars,
+        "namespace": record.namespace, "extra_gating_vars": set(),
+    } for record in snapshot.records]
 
     namespace_candidates = {}
     for record in ini_records:
@@ -612,11 +618,17 @@ def analyze_mod_inis(ini_paths, folder_path, overrides=None, documents=None,
     )
 
 
+def analyze_context(context, overrides, analyzer=analyze_mod_inis):
+    """Use the authoritative snapshot, retaining direct-call compatibility."""
+    if context.ini is not None and not overrides:
+        return analyzer(context.ini)
+    return analyzer(context.ini_paths, context.mod_dir, overrides,
+                    context.docs, source=context.source)
+
+
 def resolved_draws(context, overrides=None):
     """Resolve the current staged draw map once for analysis consumers."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_context(context, overrides)
     draws = {}
     for group in parsed.groups:
         for draw in deduplicate_draws(group):

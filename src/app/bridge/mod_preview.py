@@ -20,7 +20,7 @@ from core.textures import encode_texture_file, texture_cache_stats
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import ModSourceError, mod_source_for_path
 from core.ini.health import analyze_mod
-from app.mods.analysis import resolved_draws
+from app.mods.analysis import build_mod_ini_snapshot, resolved_draws
 from app.mods.texture_save.service import save_texture_color
 from core.textures.profiles import texture_profile_for
 
@@ -96,10 +96,12 @@ class ModPreview:
                 saved_metadata["present_names"] = staged_names
             else:
                 saved_metadata.pop("present_names", None)
+        snapshot = build_mod_ini_snapshot(
+            ini_paths, folder_path, edit_session.documents_for(folder_path),
+            source=source, require_documents=True,
+            revision=edit_session.current_revision(folder_path))
         context = mod_loader.ModLoadContext(
-            folder_path, ini_paths, edit_session.documents_for(folder_path),
-            saved_metadata,
-            source=source)
+            folder_path, metadata=saved_metadata, ini=snapshot)
         context.buffer_overrides = edit_session.ib_overrides_for(folder_path)
         cache_key = os.path.normcase(os.path.abspath(folder_path))
         with self._model_state_lock:

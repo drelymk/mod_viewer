@@ -9,7 +9,7 @@ from core.mod_discovery import discover_ini_paths
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_data_uri
 
-from app.mods.analysis import _ini_rel, analyze_mod_inis
+from app.mods.analysis import _ini_rel, analyze_context, analyze_mod_inis
 
 
 _VARIANT_FIELDS = (
@@ -215,17 +215,13 @@ def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
 
 def load_present_state(context, overrides=None):
     """Read only the logical PRESENT projection from authoritative INIs."""
-    return analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source).present
+    return analyze_context(context, overrides, analyze_mod_inis).present
 
 
 def load_control_state(context, overrides=None, pending_new_sections=None,
                        active_mesh_keys=None, *, menu_image_source=None):
     """Read control semantics without constructing mesh geometry."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_context(context, overrides, analyze_mod_inis)
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
                 source=context.source)

@@ -7,7 +7,6 @@ implementation details.
 """
 
 import traceback
-from dataclasses import dataclass, field
 
 from core.geometry.mesh_builder import build_mesh_result, build_mesh_semantics
 from core.ini.health import analyze_mod
@@ -17,7 +16,8 @@ from core.mod_source import (
     ModSource, ModSourceError, mod_source_for_path,
 )
 
-from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
+from app.mods.analysis import (ParsedModAnalysis, analyze_context,
+                               analyze_mod_inis)
 from app.mods.controls import (
     _control_semantic_projection,
     _gating_vars,
@@ -46,21 +46,44 @@ RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
 find_inis = discover_ini_paths
 
 
-@dataclass
 class ModLoadContext:
     """Inputs shared by one open/reload of a mod."""
 
-    mod_dir: str
-    ini_paths: list[str]
-    docs: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=dict)
-    asset_folders: list = field(default_factory=list)
-    dds_classification_cache: dict = field(default_factory=dict)
-    # Private state retained by the bridge for the exact loaded model.
-    skinning_manifest: dict = field(default_factory=dict)
-    source: ModSource | None = None
-    buffer_overrides: dict = field(default_factory=dict)
+    def __init__(self, mod_dir, ini_paths=None, docs=None, metadata=None,
+                 *, ini=None, source=None):
+        self.mod_dir = mod_dir
+        self.ini = ini
+        self._legacy_paths = list(ini_paths or ())
+        self._legacy_docs = dict(docs or {})
+        self.metadata = metadata or {}
+        self.asset_folders = []
+        self.dds_classification_cache = {}
+        self.skinning_manifest = {}
+        self.source = source if source is not None else (
+            ini.source if ini is not None else None)
+        self.buffer_overrides = {}
 
+    @property
+    def ini_paths(self):
+        return ([record.path for record in self.ini.records]
+                if self.ini is not None else self._legacy_paths)
+
+    @ini_paths.setter
+    def ini_paths(self, paths):
+        if self.ini is not None:
+            raise ValueError("Cannot replace paths in an authoritative snapshot")
+        self._legacy_paths = list(paths)
+
+    @property
+    def docs(self):
+        return ({record.path: record.document for record in self.ini.records}
+                if self.ini is not None else self._legacy_docs)
+
+    @docs.setter
+    def docs(self, documents):
+        if self.ini is not None:
+            raise ValueError("Cannot replace documents in an authoritative snapshot")
+        self._legacy_docs = dict(documents)
 
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
     if context is not None:
@@ -90,7 +113,7 @@ def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
 def _normalize_virtual_context(context):
     """Keep direct ModLoadContext callers on logical source identities."""
     source = getattr(context, "source", None)
-    if not getattr(source, "virtual", False):
+    if context.ini is not None or not getattr(source, "virtual", False):
         return context
     normalized_paths = []
     for path in context.ini_paths:
@@ -196,9 +219,7 @@ def _mesh_semantic_projection(parsed, context, active_mesh_keys=None):
 
 def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     """Read draw and material semantics without building geometry."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_context(context, overrides, analyze_mod_inis)
     mesh_payload, material_profiles, asset_resolution = \
         _mesh_semantic_projection(parsed, context, active_mesh_keys)
     return {
@@ -211,9 +232,7 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
 def load_semantic_state(context, overrides=None, pending_new_sections=None,
                         active_mesh_keys=None, *, menu_image_source=None):
     """Read mesh and control projections from one authoritative analysis."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_context(context, overrides, analyze_mod_inis)
     mesh_payload, material_profiles, asset_resolution = \
         _mesh_semantic_projection(parsed, context, active_mesh_keys)
     gating_vars = _gating_vars_from_mesh_semantics(
@@ -252,9 +271,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             source=context.source)
 
     try:
-        parsed = analyze_mod_inis(
-            context.ini_paths, context.mod_dir, overrides, context.docs,
-            source=context.source)
+        parsed = analyze_context(context, overrides, analyze_mod_inis)
         if not parsed.groups:
             health = _failure_health(context, overrides)
             return _structured_payload(

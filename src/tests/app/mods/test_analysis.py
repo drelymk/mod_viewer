@@ -3,7 +3,7 @@
 import os
 import tempfile
 
-from app.mods.analysis import analyze_mod_inis
+from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.controls import build_menu_panel
 from core.ini.document import IniDocument
 from core.ini.sections import extract_ini_namespace
@@ -126,6 +126,35 @@ $\\Target\\style = $value
     assert parsed.groups[0]["draws"][0].conditions == [[{
         "var": "mod(5)::style", "value": "1", "negate": False,
     }]]
+
+
+def test_snapshot_forwarding_keeps_menu_draw_and_provenance(tmp_path,
+                                                            monkeypatch):
+    _forwarded_fixture(tmp_path, """
+[Constants]
+global persist $value = 1
+[CommandListButton]
+$value = 1 - $value
+[Present]
+$\\Target\\style = $value
+""")
+    paths = [str(tmp_path / name) for name in ("Menu.ini", "mod(5).ini")]
+    documents = {path: IniDocument.load(path) for path in paths}
+    expected = analyze_mod_inis(paths, str(tmp_path), documents=documents)
+    snapshot = build_mod_ini_snapshot(paths, str(tmp_path), documents,
+                                      require_documents=True)
+    monkeypatch.setattr("core.ini.sections.merge_sections", lambda *_a, **_k:
+                        (_ for _ in ()).throw(AssertionError("merged INIs")))
+    parsed = analyze_mod_inis(snapshot)
+    assert parsed.menu == expected.menu
+    assert parsed.toggles == expected.toggles
+    assert parsed.defaults == expected.defaults
+    assert parsed.groups == expected.groups
+    assert parsed.groups[0]["draws"][0].conditions == [[{
+        "var": "mod(5)::style", "value": "1", "negate": False}]]
+    line = snapshot.records[1].sections["TextureOverrideBody"][0]
+    assert line.source() == {"ini_path": paths[1], "line_no": 7,
+                             "section": "TextureOverrideBody"}
 
 
 def test_forwarded_numbered_button_image_uses_source_key(tmp_path):

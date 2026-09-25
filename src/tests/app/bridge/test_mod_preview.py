@@ -4,6 +4,7 @@ import pytest
 
 from app.bridge.mod_preview import ModPreview
 from core.geometry.skinning import SkinningSource
+from core.ini.document import IniDocument
 
 
 class _Access:
@@ -70,7 +71,8 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.documents_for",
-        lambda _folder: {},
+        lambda _folder: {ini_path: IniDocument.from_string(
+            "[Constants]\n", path=ini_path)},
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.metadata.load",
