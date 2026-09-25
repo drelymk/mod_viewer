@@ -132,17 +132,15 @@ function modelHandlers() {
 }
 
 async function handlePresentChange(change = {}) {
-  const presentRefreshed = await refreshPresentStateFlow(change, semanticHandlers());
-  if (!presentRefreshed) return false;
   // PRESENT authoring can insert or remove lines in every participating INI,
-  // shifting draw provenance just like toggle Add/Edit. Refresh only the
-  // geometry-free semantics; the rendered meshes and their geometry survive.
+  // shifting draw provenance just like toggle Add/Edit. Refresh the combined
+  // geometry-free semantics once while keeping the existing rendered meshes.
   if (['add-key', 'complete-key', 'edit-key', 'delete-key',
        'new-position', 'update-position', 'delete-position']
       .includes(change.type)) {
-    return refreshMeshSemanticsFlow(semanticHandlers());
+    return refreshSemanticStateFlow(semanticHandlers(), change);
   }
-  return true;
+  return refreshPresentStateFlow(change, semanticHandlers());
 }
 
 async function handleToggleChange(change = {}) {
