@@ -7,8 +7,8 @@ layout is a convention — `$clickedSlot` is not.
 
 import re
 
+from . import condition
 from .sections import canonical_var_names, first_source, line_source
-from .toggles import extract_variable_defaults
 
 # A branch head that dispatches on an integer slot: `$clickedSlot == 3`.
 _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
@@ -21,7 +21,7 @@ _INCR_MOD_RE = re.compile(                              # $v = ($v + 1) % N
     r'^\(\s*\$(\w+)\s*\+\s*1\s*\)\s*%\s*(\d+)$')
 _STEP_RE    = re.compile(r'^\$(\w+)\s*([+-])\s*1$')  # $v = $v +/- 1
 _MOD_RE     = re.compile(r'^\$(\w+)\s*%\s*(\d+)$')   # $v = $v % N
-_GUARD_RE   = re.compile(r'^\$(\w+)\s*(==|!=|>=|<=|>|<)\s*(-?\d+)$')
+_GUARD_RE   = re.compile(r'^\$(\w+)\s*(==|!=|>=|<=|>|<)\s*(-?\d+|\$\w+)$')
 _LITERAL_RE = re.compile(r'^-?\d+(?:\.\d+)?$')
 _ELSE_RE    = re.compile(r'(?:else\s+if|elif)\s+(.*)$', re.I)
 _STATE_ADD_RE = re.compile(
@@ -112,16 +112,23 @@ def _cycle_values(lo, hi):
     return [str(i) for i in range(lo, hi + 1)]
 
 
-def _guard(text):
+def _guard(text, numeric_defaults=None):
     m = _GUARD_RE.fullmatch(text.strip())
-    return {"var": m.group(1), "op": m.group(2), "value": m.group(3)} if m else None
+    if not m:
+        return None
+    value = m.group(3)
+    if value.startswith("$"):
+        value = (numeric_defaults or {}).get(value[1:].casefold())
+        if value is None:
+            return None
+    return {"var": m.group(1), "op": m.group(2), "value": value}
 
 
 def _negate(guard):
     return None if not guard else {**guard, "op": _NEGATED_OP[guard["op"]]}
 
 
-def _parse_branch(body):
+def _parse_branch(body, numeric_defaults=None, require_finite=False):
     """Return (var, values, effects) for one slot, or None if it cycles nothing.
 
     `effects` are the branch's other assignments — the mutual-exclusion rules a
@@ -129,14 +136,15 @@ def _parse_branch(body):
     as [{when: {var, op, value} | None, var, value}] in source order.
     """
     var, values, effects = None, None, []
-    cycle_kind = None
+    cycle_kind, finite = None, False
     stack = []                    # {guard, branches} per open `if`
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
 
     for line in body:
         low = line.lower()
         if low.startswith("if "):
-            stack.append({"guard": _guard(line[3:]), "branches": 1})
+            stack.append({"guard": _guard(line[3:], numeric_defaults),
+                          "branches": 1})
             continue
         if low == "endif":
             if stack:
@@ -152,7 +160,7 @@ def _parse_branch(body):
                 if m_elif:
                     # The earlier branches' exclusion isn't modelled, so this is
                     # a necessary condition for the body, not a sufficient one.
-                    frame["guard"] = _guard(m_elif.group(1))
+                    frame["guard"] = _guard(m_elif.group(1), numeric_defaults)
                 else:
                     # Negating `else` is only exact while there was one branch.
                     frame["guard"] = (_negate(frame["guard"])
@@ -170,6 +178,7 @@ def _parse_branch(body):
         if flip and flip.group(1) == lhs:
             var, values = lhs, ["0", "1"]
             cycle_kind = "flip"
+            finite = True
             continue
         incr_mod = _INCR_MOD_RE.fullmatch(rhs)
         if incr_mod and incr_mod.group(1) == lhs:
@@ -177,11 +186,13 @@ def _parse_branch(body):
             if count > 0:
                 var, values = lhs, _cycle_values(0, count - 1)
                 cycle_kind = "increment_mod"
+                finite = True
             continue
         incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
         if incr and incr.group(1) == lhs:
             var, values = lhs, ["0", "1"]   # replaced below once the wrap is seen
             cycle_kind = "increment"
+            finite = False
             if guard and guard["var"] == lhs and guard["op"] in ("<", "<="):
                 wrap = (guard, len(stack))
             continue
@@ -190,6 +201,7 @@ def _parse_branch(body):
             count = int(mod.group(2))
             if count > 0:
                 values = _cycle_values(0, count - 1)
+                finite = True
             continue
 
         if not _LITERAL_RE.fullmatch(rhs):
@@ -202,6 +214,7 @@ def _parse_branch(body):
             lo = int(rhs)
             if hi >= lo:
                 values = _cycle_values(lo, hi)
+                finite = True
             continue
         # `if $v > 2 / $v = 0 / endif` closes the cycle opened by `$v = $v + 1`.
         if (cycle_kind == "increment" and guard and lhs == var
@@ -211,6 +224,7 @@ def _parse_branch(body):
             lo = int(rhs)
             if hi >= lo:
                 values = _cycle_values(lo, hi)
+                finite = True
             continue
         # A binary flip's reset is bookkeeping only when its guard is
         # demonstrably unreachable for the flip's known range. Reachable
@@ -228,7 +242,7 @@ def _parse_branch(body):
                 continue
         effects.append({"when": guard, "var": lhs, "value": rhs})
 
-    if var is None:
+    if var is None or (require_finite and not finite):
         return None
     return var, values, effects
 
@@ -300,21 +314,110 @@ def _parse_arrow_button(lines):
     return variable, _cycle_values(lo, hi)
 
 
-def _mouse_button_items(sections, canon):
-    """Find numbered cursor hit regions with a click-gated increment/wrap."""
-    defaults = extract_variable_defaults(sections, canonical_vars=canon)
-    numbers = {name.casefold(): value for name, value in defaults.items()}
-    sections_ci = {str(name).casefold(): lines for name, lines in sections.items()}
+def _static_numeric_defaults(sections):
+    """Numeric globals with one declaration and no runtime assignments."""
+    defaults, mutable = {}, set()
+    declaration = re.compile(r'^global\s+\$(\w+)\s*=\s*(-?\d+)\s*$', re.I)
+    any_declaration = re.compile(r'^global\s+(?:persist\s+)?\$(\w+)\b', re.I)
+    assignment = re.compile(r'^(?:post\s+)?\$(\w+)\s*(?:=|\+=|-=)', re.I)
+    for section, lines in sections.items():
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            match = declaration.fullmatch(line) if section.casefold() == "constants" else None
+            if match:
+                name, value = match.groups()
+                name = name.casefold()
+                if name in defaults:
+                    mutable.add(name)
+                defaults[name] = value
+            else:
+                match = assignment.match(line) or any_declaration.match(line)
+                if match:
+                    mutable.add(match.group(1).casefold())
+    return {name: value for name, value in defaults.items()
+            if name not in mutable}
+
+
+def _mouse_press_vars(sections):
+    """Find variables set by mouse-bound Key sections."""
+    pressed = {}
+    mouse_key = re.compile(r'VK_(?:[LRM]BUTTON|XBUTTON[12])$', re.I)
+    for section, lines in sections.items():
+        if not str(section).casefold().startswith("key"):
+            continue
+        cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
+        keys = [line.partition("=")[2].strip() for line in cleaned
+                if line.partition("=")[0].strip().casefold() == "key"]
+        if not any(mouse_key.fullmatch(token) for key in keys
+                   for token in key.split()):
+            continue
+        for line in cleaned:
+            assignment = _ASSIGN_RE.fullmatch(line)
+            if assignment and _LITERAL_RE.fullmatch(assignment.group(2).strip()):
+                value = assignment.group(2).strip()
+                if float(value) != 0:
+                    pressed[assignment.group(1).casefold()] = value
+    return pressed
+
+
+def _cursor_comparisons(text):
+    """Count cursor bounds in a parsed condition."""
     try:
-        button_count = int(numbers.get("button_amount", ""))
-    except ValueError:
-        button_count = None
+        node = condition.parse(text)
+    except condition.ConditionError:
+        return 0
+
+    def comparisons(part):
+        if isinstance(part, condition.Paren):
+            return comparisons(part.inner)
+        if isinstance(part, condition.And):
+            return sum(comparisons(child) for child in part.parts)
+        if isinstance(part, condition.Or):
+            return max(comparisons(child) for child in part.parts)
+        if isinstance(part, condition.Cmp) and part.op in ("<", "<=", ">", ">="):
+            operands = part.left.render() + " " + part.right.render()
+            return bool(re.search(r'\bcursor_[xy]\b', operands, re.I))
+        return 0
+
+    return comparisons(node)
+
+
+def _static_false(text, defaults):
+    if text is None:
+        return False
+    try:
+        node = condition.parse(text)
+    except condition.ConditionError:
+        return False
+    bindings = {name: defaults[name.casefold()] for name in node.variables()
+                if name.casefold() in defaults}
+    return condition.reduce(node, bindings) == condition.FALSE
+
+
+def _mouse_gate(text, pressed):
+    if text is None:
+        return False
+    try:
+        node = condition.parse(text)
+    except condition.ConditionError:
+        return False
+    for name in node.variables():
+        value = pressed.get(name.casefold())
+        if value is None:
+            continue
+        if (condition.reduce(node, {name: "0"}) == condition.FALSE
+                and condition.reduce(node, {name: value}) != condition.FALSE):
+            return True
+    return False
+
+
+def _mouse_button_items(sections):
+    """Find finite click actions inside bounded cursor hit regions."""
+    defaults = _static_numeric_defaults(sections)
+    pressed = _mouse_press_vars(sections)
+    if not pressed:
+        return []
     found = []
-    effect_re = re.compile(r'^run\s*=\s*CommandListDrawButtonEffect_(\d+)$', re.I)
-    cycle_re = re.compile(
-        r'^if\s+\$(\w+)\s*<\s*(\$\w+|\d+)\s*\n'
-        r'\s*\$\1\s*=\s*\$\1\s*\+\s*1\s*\n'
-        r'\s*else\s*\n\s*\$\1\s*=\s*(\d+)\s*\n\s*endif$', re.I)
     for section, lines in sections.items():
         if not str(section).casefold().startswith("commandlist"):
             continue
@@ -324,54 +427,26 @@ def _mouse_button_items(sections, canon):
             low = line.casefold()
             if low.startswith("if "):
                 stack.append((line[3:].strip(), index))
+            elif _ELSE_RE.fullmatch(line) or low == "else":
+                if stack:
+                    stack[-1] = (None, stack[-1][1])
             elif low == "endif" and stack:
-                condition, start = stack.pop()
-                if not ("cursor_x" in condition.casefold()
-                        and ">" in condition and "<" in condition):
+                gate, start = stack.pop()
+                if not _mouse_gate(gate, pressed):
                     continue
-                body = cleaned[start + 1:index]
-                effects = [effect_re.fullmatch(item) for item in body]
-                slots = {int(match.group(1)) for match in effects if match}
-                if len(slots) != 1:
+                if sum(_cursor_comparisons(parent) for parent, _start in stack
+                       if parent is not None) < 2:
                     continue
-                slot = next(iter(slots))
-                if button_count is not None and slot >= button_count:
+                if any(_static_false(parent, defaults)
+                       for parent, _start in stack):
                     continue
-                for offset, item in enumerate(body):
-                    if item.casefold() != "if $mouse_clicked":
-                        continue
-                    depth = 1
-                    end = offset + 1
-                    while end < len(body) and depth:
-                        later = body[end].casefold()
-                        if later.startswith("if "):
-                            depth += 1
-                        elif later == "endif":
-                            depth -= 1
-                        end += 1
-                    if depth:
-                        continue
-                    match = cycle_re.fullmatch("\n".join(body[offset + 1:end - 1]))
-                    if not match:
-                        continue
-                    variable, limit, lower = match.groups()
-                    upper = (numbers.get(limit[1:].casefold())
-                             if limit.startswith("$") else limit)
-                    try:
-                        lo, hi = int(lower), int(upper)
-                    except (TypeError, ValueError):
-                        continue
-                    if hi < lo:
-                        continue
-                    draw = sections_ci.get(f"commandlistdrawbutton_{slot}", ())
-                    resource_name = f"ResourceButton_{slot}"
-                    image_resource = resource_name if any(re.fullmatch(
-                        rf'ps-t100\s*=\s*{re.escape(resource_name)}',
-                        str(raw).split(";", 1)[0].strip(), re.I)
-                        for raw in draw) else None
-                    found.append((section, slot, variable, _cycle_values(lo, hi),
-                                  line_source(lines[start]) or first_source(lines) or {},
-                                  image_resource))
+                parsed = _parse_branch(cleaned[start + 1:index],
+                                       numeric_defaults=defaults,
+                                       require_finite=True)
+                if parsed:
+                    variable, values, effects = parsed
+                    found.append((section, variable, values, effects,
+                                  line_source(lines[start]) or first_source(lines) or {}))
     return found if len(found) >= _MIN_SLOTS else []
 
 
@@ -527,7 +602,7 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         return canon.get(name.lower(), name)
 
     def add_entry(section, slot, variable, values, effects=(), *,
-                  src=None, key_section=None, image_resource=None):
+                  src=None, key_section=None, kind=None):
         variable = declared(variable)
         base_key = _prefixed(f"{key_section or section}#{slot}", var_prefix)
         key = base_key
@@ -554,8 +629,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
             "ini_path": (src or {}).get("ini_path"),
             "section": section,
         }
-        if image_resource is not None:
-            entry["image_resource"] = image_resource
+        if kind is not None:
+            entry["kind"] = kind
         menu[key] = entry
 
     for name, lines in sections.items():
@@ -610,10 +685,10 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                                     flags=re.I)
             add_entry(section, slot, variable, values, src=src,
                       key_section=button_section)
-    for section, slot, variable, values, src, image_resource in _mouse_button_items(
-            sections, canon):
-        add_entry(section, slot, variable, values, src=src,
-                  image_resource=image_resource)
+    for slot, (section, variable, values, effects, src) in enumerate(
+            _mouse_button_items(sections)):
+        add_entry(section, slot, variable, values, effects, src=src,
+                  kind="mouse_region")
     return menu
 
 
@@ -712,6 +787,22 @@ def attach_menu_images(menu, sections, resources):
                 slot_images.setdefault(slot, info["filename"])
                 break
 
+    # Mouse-region menus may draw each item through a numbered button list.
+    # The final authored binding is its item artwork; an earlier binding can
+    # be a shared outline or frame. Artwork is optional for control discovery.
+    mouse_images = {}
+    for name, lines in sections.items():
+        match = re.fullmatch(r"CommandListDrawButton_(\d+)", name, re.I)
+        if not match:
+            continue
+        for raw in lines:
+            binding = re.fullmatch(r"ps-t100\s*=\s*(\S+)",
+                                   str(raw).split(";", 1)[0].strip(), re.I)
+            if binding:
+                image = resource(binding.group(1)).get("filename")
+                if image:
+                    mouse_images[int(match.group(1))] = image
+
     for name, lines in sections.items():
         if "slotitemimage" not in name.lower():
             continue
@@ -772,8 +863,8 @@ def attach_menu_images(menu, sections, resources):
         "pussy": ("itempussy", "pussy"),
     }
     for info in menu.values():
-        if info.get("image_resource"):
-            image = resource(info["image_resource"]).get("filename")
+        if info.get("kind") == "mouse_region":
+            image = mouse_images.get(info["slot"])
             if image:
                 info["image_file"] = image
             continue

@@ -600,71 +600,132 @@ filename = ui/hair.dds
           by_slot[8].get("image_file") == "ui/hair.dds"), (f"IconN artwork maps to ButtonN (got {by_slot})")
 
 
-def test_mouse_hit_region_menu_uses_click_wrap_and_numbered_artwork():
+def test_mouse_hit_region_menu_uses_mouse_key_and_finite_actions():
     text = r"""
 [Constants]
-global $Button_amount = 2
-global $ToggleMax1 = 3
-global $ToggleMax2 = 1
-global persist $Jacket = 0
-global persist $Sleeves = 1
+global $visible = 2
+global $limit = 3
+global persist $style = 0
+global persist $trim = 1
 
-[CommandListCheckMouse]
-if cursor_y > $top && cursor_y < $bottom
+[KeyPointer]
+key = VK_LBUTTON
+type = hold
+$pressed = 1
+
+[CommandListPointerActions]
+if $visible >= 1
     if cursor_x > $left0 && cursor_x < $right0
-        if $mouse_clicked
-            if $Jacket < $ToggleMax1
-                $Jacket = $Jacket + 1
+        if $pressed
+            if $style < $limit
+                $style = $style + 1
             else
-                $Jacket = 0
+                $style = 0
             endif
         endif
-        run = CommandListDrawButtonEffect_0
     endif
-    if cursor_x > $left1 && cursor_x < $right1
-        if $mouse_clicked
-            if $Sleeves < $ToggleMax2
-                $Sleeves = $Sleeves + 1
-            else
-                $Sleeves = 0
+    if cursor_x > $left1
+        if cursor_x < $right1
+            if $pressed
+                if $trim < 2
+                    $trim = $trim + 1
+                else
+                    $trim = 0
+                endif
             endif
         endif
-        run = CommandListDrawButtonEffect_1
     endif
+endif
+if $visible >= 3
     if cursor_x > $left2 && cursor_x < $right2
-        if $mouse_clicked
-            if $Unused < 2
-                $Unused = $Unused + 1
+        if $pressed
+            if $inactive < 2
+                $inactive = $inactive + 1
             else
-                $Unused = 0
+                $inactive = 0
             endif
         endif
-        run = CommandListDrawButtonEffect_2
+    endif
+endif
+if cursor_x > $left3 && cursor_x < $right3
+    if $hovered
+        $hovered_style = 1 - $hovered_style
     endif
 endif
 
 [CommandListDrawButton_0]
-ps-t100 = ResourceButton_0
-[CommandListDrawButton_1]
-ps-t100 = ResourceButton_1
-[ResourceButton_0]
-filename = icons/jacket.png
-[ResourceButton_1]
-filename = icons/sleeves.png
+ps-t100 = ResourceSharedFrame
+ps-t100 = ResourceStyleIcon
+[ResourceSharedFrame]
+filename = icons/frame.png
+[ResourceStyleIcon]
+filename = icons/style.png
 """
     secs = sections(text)
     menu = extract_menu_toggles(secs)
     attach_menu_images(menu, secs, extract_resources(secs))
     by_slot = _by_slot(menu)
     assert sorted(by_slot) == [0, 1]
-    assert by_slot[0]["var"] == "Jacket"
+    assert by_slot[0]["var"] == "style"
     assert by_slot[0]["values"] == ["0", "1", "2", "3"]
-    assert by_slot[1]["values"] == ["0", "1"]
-    assert by_slot[0]["image_file"] == "icons/jacket.png"
-    assert by_slot[1]["image_file"] == "icons/sleeves.png"
+    assert by_slot[1]["var"] == "trim"
+    assert by_slot[1]["values"] == ["0", "1", "2"]
+    assert by_slot[0]["image_file"] == "icons/style.png"
+    assert "image_file" not in by_slot[1]
 
-    no_click = text.replace("if $mouse_clicked", "if $hovered")
-    assert extract_menu_toggles(sections(no_click)) == {}
+    no_mouse_key = text.replace("key = VK_LBUTTON", "key = k")
+    assert extract_menu_toggles(sections(no_mouse_key)) == {}
+
+    mutable_limit = text + "\n[Present]\n$limit = 4\n"
+    assert extract_menu_toggles(sections(mutable_limit)) == {}
+
+
+def test_numbered_mouse_menu_keeps_active_controls_without_effect_names():
+    text = r"""
+[Constants]
+global $Button_amount = 2
+global $ToggleMax1 = 3
+global persist $swapvar_0 = 0
+global persist $swapvar_1 = 0
+
+[KeyMouse]
+key = VK_LBUTTON
+type = hold
+$mouse_clicked = 1
+
+[CommandListCheckMouse]
+if $Button_amount >= 1
+    if cursor_x > $left0 && cursor_x < $right0
+        if $mouse_clicked
+            if $swapvar_0 < $ToggleMax1
+                $swapvar_0 = $swapvar_0 + 1
+            else
+                $swapvar_0 = 0
+            endif
+        endif
+    endif
+endif
+if $Button_amount >= 2
+    if cursor_x > $left1 && cursor_x < $right1
+        if $mouse_clicked
+            $swapvar_1 = 1 - $swapvar_1
+        endif
+    endif
+endif
+if $Button_amount >= 3
+    if cursor_x > $left2 && cursor_x < $right2
+        if $mouse_clicked
+            $inactive = 1 - $inactive
+        endif
+    endif
+endif
+"""
+    by_slot = _by_slot(extract_menu_toggles(sections(text)))
+    assert sorted(by_slot) == [0, 1]
+    assert by_slot[0]["var"] == "swapvar_0"
+    assert by_slot[0]["values"] == ["0", "1", "2", "3"]
+    assert by_slot[1]["var"] == "swapvar_1"
+    assert by_slot[1]["values"] == ["0", "1"]
 
 
 def test_menu_panel_preserves_authored_transparency():
