@@ -590,6 +590,7 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
                 struct.pack_into("<3f", deltas, output * 12, *values)
             shape_entries.append({
                 "deltas": _geometry_ref(deltas, geometry),
+                "weight_operation": item.get("weight_operation"),
             })
         result = {
             "kind": "gimi_compute",
@@ -638,12 +639,14 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
                   for index in range(6)))
         shape_entries.append({
             "deltas": _geometry_ref(deltas, geometry),
+            "weight_operation": item.get("weight_operation"),
         })
 
     result = {
         "kind": "gimi_compute",
         "track_id": animation["track_id"],
-        "coordinate_variant": animation.get("coordinate_variant", "standard"),
+        "coordinate_transform": animation.get(
+            "coordinate_transform", "identity"),
         "program_id": animation.get("program_id"),
         "program": animation.get("program"),
         "base_normals": _geometry_ref(base_normals, geometry),

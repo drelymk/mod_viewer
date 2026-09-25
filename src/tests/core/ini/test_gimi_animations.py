@@ -5,6 +5,7 @@ import struct
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
 from core.ini.animations import (_identify_compute_shader,
+                                 _identify_shape_weight_operation,
                                  _compute_condition_is_supported,
                                  compute_animation_control_vars,
                                  discover_animation_clocks,
@@ -79,7 +80,7 @@ void main(uint3 threadID : SV_DispatchThreadID) {
 }
 """
 
-COLUMBINA_SHADER = """
+SWAP_YZ_SHADER = """
 [numthreads(64, 1, 1)]
 void main(uint3 threadID : SV_DispatchThreadID) {
   float4 pos = float4(v.position.x, -v.position.z, v.position.y, 1.0f);
@@ -325,7 +326,7 @@ RWBuffer<float4> CustomShapeKeyValuesRW : register(u5);
 [numthreads(1, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
   float shape_key_value = float(ShapeKeyValue);
-  float shape_key_anim = 0.5 * (sin(shape_key_value * 30) + 1);
+  float shape_key_anim = (0.5*(sin(shape_key_value*30)+1));
 }
 """
 
@@ -427,6 +428,10 @@ def test_wwmi_sparse_animation_discovers_one_two_pass_track(tmp_path):
             for item in animation["shape_passes"]] == [165, 166]
     assert [item["sparse_shape"]["buffer_shape_id"]
             for item in animation["shape_passes"]] == [166, 167]
+    assert all(item["weight_operation"] == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    } for item in animation["shape_passes"])
     assert animation["program"]["external_variables"] == [
         "ChouChaAnim", "ChouChaAnimSpeed", "gangChaAnim",
         "gangChaAnimSpeed"]
@@ -667,9 +672,10 @@ def test_compute_animation_discovers_bindings_and_dimensions(tmp_path):
     assert len(discovered) == 1
     animation = discovered[0]
     assert [item["dispatch_vertices"] for item in animation["shape_passes"]] == [64, 64]
-    assert "amplitude" not in animation["shape_passes"][0]
-    assert "angular_scale" not in animation["shape_passes"][0]
-    assert "bias" not in animation["shape_passes"][0]
+    assert all(item["weight_operation"] == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    } for item in animation["shape_passes"])
     assert animation["pose"]["bone_count"] == 2
     assert animation["pose"]["frame_count"] == 2
     assert "base_resource" not in animation
@@ -696,6 +702,12 @@ def test_compute_animation_discovers_bindings_and_dimensions(tmp_path):
     bad_sections = _sections(bad_shader, shader=False)
     (bad_shader / "pose.hlsl").write_text("void main() {}")
     assert not _discover(bad_shader, bad_sections)
+
+    unsupported_weight = tmp_path / "unsupported-weight"
+    unsupported_sections = _sections(unsupported_weight)
+    (unsupported_weight / "shape.hlsl").write_text(
+        SHAPE_SHADER.replace("* 30", "* 31"))
+    assert not _discover(unsupported_weight, unsupported_sections)
 
     bad_stride = tmp_path / "bad-stride"
     bad_stride_sections = _sections(bad_stride, stride=32)
@@ -760,12 +772,27 @@ def test_key_self_clearing_animation_input_stays_external(tmp_path):
 def test_compute_animation_reads_shader_metadata():
     adapter = _identify_compute_shader(POSE_SHADER)
     assert adapter["threads"] == 64
-    assert adapter["coordinate_variant"] == "standard"
+    assert adapter["coordinate_transform"] == "identity"
+    assert adapter["weight_operation"] is None
 
 
-def test_compute_animation_identifies_columbina_basis():
-    adapter = _identify_compute_shader(COLUMBINA_SHADER)
-    assert adapter["coordinate_variant"] == "columbina_basis"
+def test_compute_animation_identifies_coordinate_transform():
+    adapter = _identify_compute_shader(SWAP_YZ_SHADER)
+    assert adapter["coordinate_transform"] == "swap_yz_negate"
+
+
+def test_shape_weight_operation_describes_supported_hlsl_semantics():
+    assert _identify_shape_weight_operation(WWMI_ANIMATION_SHADER) == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    }
+    assert _identify_shape_weight_operation(
+        "[numthreads(1,1,1)] void main() { float3 value = 1; }") is None
+    assert _identify_shape_weight_operation(
+        WWMI_ANIMATION_SHADER.replace("*30", "*31")) is None
+    assert _identify_shape_weight_operation(LINEAR_SHAPE_SHADER) == {
+        "kind": "linear",
+    }
 
 
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
@@ -791,6 +818,10 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     assert payload["pose"]["frames"]["length"] == 2 * 2 * 56
     assert payload["program_id"] == animation[0]["program_id"]
     assert payload["track_id"] == animation[0]["track_id"]
+    assert all(item["weight_operation"] == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    } for item in payload["shape_passes"])
     assert "operation_id" not in payload
     assert "operation" not in payload
     assert all("phase_expr" not in item for item in payload["shape_passes"])

@@ -195,11 +195,11 @@ function applyGimiPose(mesh, meshState, output) {
   const shapeWeights = meshState.shapePasses.map((pass, index) => {
     const phase = output.shapePhases[index];
     if (!Number.isFinite(phase)) return 0;
-    return 0.5 * (Math.sin(phase * 30) + 1);
+    return evaluateShapeWeight(pass.weightOperation, phase);
   });
 
   const hasPose = meshState.poseFrames != null;
-  const columbinaBasis = output.coordinateVariant === 'columbina_basis';
+  const swapYZNegate = output.coordinateTransform === 'swap_yz_negate';
   const frameValue = hasPose ? Math.max(0, output.poseTime) : 0;
   const frame = hasPose ? Math.min(
     meshState.poseFrameCount - 1, Math.floor(frameValue)) : 0;
@@ -236,7 +236,7 @@ function applyGimiPose(mesh, meshState, output) {
       nz += pass.deltas[source + 5] * weight;
     }
 
-    if (hasPose && columbinaBasis) {
+    if (hasPose && swapYZNegate) {
       const oldPy = py;
       const oldNy = ny;
       py = -pz;
@@ -356,17 +356,17 @@ function applyGimiPose(mesh, meshState, output) {
     const transformedY = m10 * posedX + m11 * posedY + m12 * posedZ + t1;
     const transformedZ = m20 * posedX + m21 * posedY + m22 * posedZ + t2;
     positions[positionOffset] = transformedX;
-    positions[positionOffset + 1] = columbinaBasis
+    positions[positionOffset + 1] = swapYZNegate
       ? transformedZ : transformedY;
-    positions[positionOffset + 2] = columbinaBasis
+    positions[positionOffset + 2] = swapYZNegate
       ? -transformedY : transformedZ;
     const transformedNormalX = m00 * nx + m01 * ny + m02 * nz;
     const transformedNormalY = m10 * nx + m11 * ny + m12 * nz;
     const transformedNormalZ = m20 * nx + m21 * ny + m22 * nz;
     const outputNormalX = transformedNormalX;
-    const outputNormalY = columbinaBasis
+    const outputNormalY = swapYZNegate
       ? transformedNormalZ : transformedNormalY;
-    const outputNormalZ = columbinaBasis
+    const outputNormalZ = swapYZNegate
       ? -transformedNormalY : transformedNormalZ;
     const normalLength = Math.hypot(
       outputNormalX, outputNormalY, outputNormalZ);
@@ -380,6 +380,15 @@ function applyGimiPose(mesh, meshState, output) {
   position.needsUpdate = true;
   if (!positionOnly) normal.needsUpdate = true;
   return true;
+}
+
+function evaluateShapeWeight(operation, phase) {
+  if (operation?.kind === 'linear') return phase;
+  if (operation?.kind !== 'sine') return 0;
+  const {scale, amplitude, offset} = operation;
+  if (![scale, amplitude, offset].every(Number.isFinite)) return 0;
+  const weight = amplitude * Math.sin(phase * scale) + offset;
+  return Number.isFinite(weight) ? weight : 0;
 }
 
 function applyGimiTrack(track) {
@@ -591,7 +600,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
   const program = geometry.program;
   const programId = geometry.program_id;
   const trackId = geometry.track_id || animationId;
-  const coordinateVariant = geometry.coordinate_variant || 'standard';
+  const coordinateTransform = geometry.coordinate_transform || 'identity';
   if (!program || !programId || !trackId) return false;
   const vertexCount = Number(geometry.vertex_count);
   const poseInfo = geometry.pose || null;
@@ -628,6 +637,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     }
     const shapePasses = (geometry.shape_passes || []).map(pass => ({
       deltas: decodeF32(pass.deltas),
+      weightOperation: pass.weight_operation,
     }));
     const meshState = {
       vertexCount, baseNormals, weights, indices, shapePasses,
@@ -641,7 +651,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     if (!state.outputs.has(trackId)) {
       state.outputs.set(trackId, {
         shapePhases: [], poseTime: 0,
-        coordinateVariant,
+        coordinateTransform,
       });
     }
     state.meshes.add(mesh);

@@ -158,9 +158,13 @@ def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
              "pass": 1, "phase": {"kind": "literal", "value": 0}},
         ]},
         "shape_passes": [
-            {"sparse_shape": {
+            {"weight_operation": {
+                "kind": "sine", "scale": 30.0,
+                "amplitude": 0.5, "offset": 0.5}, "sparse_shape": {
                 **static, "shape_id": 165, "buffer_shape_id": 166}},
-            {"sparse_shape": {
+            {"weight_operation": {
+                "kind": "sine", "scale": 30.0,
+                "amplitude": 0.5, "offset": 0.5}, "sparse_shape": {
                 **static, "shape_id": 166, "buffer_shape_id": 167}},
         ],
     }
