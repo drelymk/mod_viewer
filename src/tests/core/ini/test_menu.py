@@ -600,6 +600,144 @@ filename = ui/hair.dds
           by_slot[8].get("image_file") == "ui/hair.dds"), (f"IconN artwork maps to ButtonN (got {by_slot})")
 
 
+def test_mouse_hit_region_menu_uses_mouse_key_and_finite_actions():
+    text = r"""
+[Constants]
+global $visible = 2
+global $limit = 3
+global persist $style = 0
+global persist $trim = 1
+
+[KeyPointer]
+key = VK_LBUTTON
+type = hold
+$pressed = 1
+
+[CommandListPointerActions]
+if $visible >= 1
+    if cursor_x > $left0 && cursor_x < $right0
+        if $pressed
+            if $style < $limit
+                $style = $style + 1
+            else
+                $style = 0
+            endif
+        endif
+    endif
+endif
+if $visible >= 3
+    if cursor_x > $left1 && cursor_x < $right1
+        if $pressed
+            if $inactive < 2
+                $inactive = $inactive + 1
+            else
+                $inactive = 0
+            endif
+        endif
+    endif
+endif
+if $pressed && cursor_x > $left2 && cursor_x < $right2
+    if $trim < 2
+        $trim = $trim + 1
+    else
+        $trim = 0
+    endif
+endif
+if cursor_x > $left3 && cursor_x < $right3
+    if $hovered
+        $hovered_style = 1 - $hovered_style
+    endif
+endif
+
+[CommandListDrawButton_0]
+ps-t100 = ResourceSharedFrame
+ps-t100 = ResourceStyleIcon
+[ResourceSharedFrame]
+filename = icons/frame.png
+[ResourceStyleIcon]
+filename = icons/style.png
+[CommandListDrawButton_2]
+ps-t100 = ResourceTrimIcon
+[ResourceTrimIcon]
+filename = icons/trim.png
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    by_slot = _by_slot(menu)
+    assert sorted(by_slot) == [0, 2]
+    assert by_slot[0]["var"] == "style"
+    assert by_slot[0]["values"] == ["0", "1", "2", "3"]
+    assert by_slot[2]["var"] == "trim"
+    assert by_slot[2]["values"] == ["0", "1", "2"]
+    assert by_slot[0]["ini_path"].endswith("mod.ini")
+    assert by_slot[0]["image_file"] == "icons/style.png"
+    assert by_slot[2]["image_file"] == "icons/trim.png"
+
+    no_artwork = sections(text.replace("ps-t100 = ResourceTrimIcon", ""))
+    plain = _by_slot(extract_menu_toggles(no_artwork))
+    attach_menu_images(plain, no_artwork, extract_resources(no_artwork))
+    assert 2 in plain and "image_file" not in plain[2]
+
+    no_mouse_key = text.replace("key = VK_LBUTTON", "key = k")
+    assert extract_menu_toggles(sections(no_mouse_key)) == {}
+
+    mutable_limit = text + "\n[Present]\n$limit = 4\n"
+    assert extract_menu_toggles(sections(mutable_limit)) == {}
+
+    malformed = text.replace("$trim = 0\n    endif\nendif",
+                             "$trim = 0\n    endif")
+    assert extract_menu_toggles(sections(malformed)) == {}
+
+
+def test_numbered_mouse_menu_keeps_active_controls_without_effect_names():
+    text = r"""
+[Constants]
+global $Button_amount = 2
+global $ToggleMax1 = 3
+global persist $swapvar_0 = 0
+global persist $swapvar_1 = 0
+
+[KeyMouse]
+key = VK_LBUTTON
+type = hold
+$mouse_clicked = 1
+
+[CommandListCheckMouse]
+if $Button_amount >= 1
+    if cursor_x > $left0 && cursor_x < $right0
+        if $mouse_clicked
+            if $swapvar_0 < $ToggleMax1
+                $swapvar_0 = $swapvar_0 + 1
+            else
+                $swapvar_0 = 0
+            endif
+        endif
+    endif
+endif
+if $Button_amount >= 2
+    if cursor_x > $left1 && cursor_x < $right1
+        if $mouse_clicked
+            $swapvar_1 = 1 - $swapvar_1
+        endif
+    endif
+endif
+if $Button_amount >= 3
+    if cursor_x > $left2 && cursor_x < $right2
+        if $mouse_clicked
+            $inactive = 1 - $inactive
+        endif
+    endif
+endif
+"""
+    by_slot = _by_slot(extract_menu_toggles(sections(text)))
+    assert sorted(by_slot) == [0, 1]
+    assert by_slot[0]["var"] == "swapvar_0"
+    assert by_slot[0]["values"] == ["0", "1", "2", "3"]
+    assert by_slot[1]["var"] == "swapvar_1"
+    assert by_slot[1]["values"] == ["0", "1"]
+
+
 def test_menu_panel_preserves_authored_transparency():
     with tempfile.TemporaryDirectory() as tmp:
         icon = Image.new("RGBA", (52, 52), (200, 100, 50, 0))
