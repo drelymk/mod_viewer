@@ -653,34 +653,58 @@ _NUMTHREADS_RE = re.compile(
     re.I)
 
 
-def _identify_wwmi_animation_shader(text):
-    """Recognize Yangyang's direct WWMI phase-to-shape formula."""
+def _identify_shape_weight_operation(
+        text, expected_ini_input, *, require_delta_application):
+    """Recognize supported weights only when they use the supplied input."""
     if not text:
         return None
     source = _strip_hlsl_comments(text)
-    threads = _NUMTHREADS_RE.search(source)
-    if threads is None or tuple(map(int, threads.groups())) != (1, 1, 1):
-        return None
     compact = re.sub(r"\s+", "", source).lower()
-    macro = re.search(
-        r"#define(?P<phase>[a-z_]\w*)iniParams\[0\]\.z", compact, re.I)
-    if macro is None:
-        return None
-    phase_name = macro.group("phase")
-    value_assignment = re.search(
-        rf"(?:float|half)(?P<value>[a-z_]\w*)=float\({re.escape(phase_name)}\)",
-        compact, re.I)
-    if value_assignment is None:
-        return None
-    value_name = value_assignment.group("value")
-    number = r"(?:\.\d*)?f?"
-    formula = re.compile(
-        rf"0\.5f?\*\(sin\(({re.escape(value_name)}|"
-        rf"{re.escape(phase_name)})\*30{number}\)\+1{number}\)",
-        re.I)
-    if formula.search(compact) is None:
-        return None
-    return True
+    slot, component = expected_ini_input
+    aliases = {name.lower() for name in re.findall(
+        rf"^\s*#define\s+([a-z_]\w*)\s+IniParams\s*\[\s*"
+        rf"{int(slot)}\s*\]\s*\.\s*{re.escape(component)}\b",
+        source, re.I | re.M)}
+    phase_names = set(aliases)
+    for value, source_name in re.findall(
+            r"(?:float|half)([a-z_]\w*)=float\(([a-z_]\w*)\)",
+            compact, re.I):
+        if source_name in aliases:
+            phase_names.add(value)
+
+    sine_formula = re.compile(
+        r"0\.5f?\*\(sin\((?P<phase>[a-z_]\w*)\*30(?:\.0*)?f?\)"
+        r"\+1(?:\.0*)?f?\)", re.I)
+    for match in sine_formula.finditer(compact):
+        if match.group("phase") not in phase_names:
+            continue
+        formula = match.group(0)
+        weight_names = set(re.findall(
+            rf"(?:float|half)([a-z_]\w*)=\(*{re.escape(formula)}\)*",
+            compact))
+        if not require_delta_application and weight_names:
+            return {
+                "kind": "sine", "scale": 30.0,
+                "amplitude": 0.5, "offset": 0.5,
+            }
+        expressions = [re.escape(name) for name in weight_names]
+        expressions.append(rf"\(?{re.escape(formula)}\)?")
+        if all(any(re.search(
+                rf"diff\.{axis}\*{expression}(?:\W|$)", compact)
+                for expression in expressions)
+               for axis in ("position", "normal")):
+            return {
+                "kind": "sine", "scale": 30.0,
+                "amplitude": 0.5, "offset": 0.5,
+            }
+
+    if require_delta_application:
+        for alias in phase_names:
+            if all(re.search(
+                    rf"diff\.{axis}\*{re.escape(alias)}(?:\W|$)", compact)
+                   for axis in ("position", "normal")):
+                return {"kind": "linear"}
+    return None
 
 
 def _identify_compute_shader(text):
@@ -695,16 +719,23 @@ def _identify_compute_shader(text):
     if threads <= 0:
         return None
     compact = re.sub(r"\s+", "", source).lower()
-    columbina_markers = (
+    swap_yz_negate_markers = (
         "float4pos=float4(v.position.x,-v.position.z,v.position.y,1.0f)",
         "float4normal=float4(v.normal.x,-v.normal.z,v.normal.y,0.0f)",
         "rw_buffer[i].position=float3(pos_result.x,pos_result.z,-pos_result.y)",
         "rw_buffer[i].normal=normalize(float3(normal_result.x,normal_result.z,-normal_result.y)",
     )
-    coordinate_variant = (
-        "columbina_basis" if all(marker in compact for marker in columbina_markers)
-        else "standard")
-    return {"threads": threads, "coordinate_variant": coordinate_variant}
+    coordinate_transform = (
+        "swap_yz_negate" if all(
+            marker in compact for marker in swap_yz_negate_markers)
+        else "identity")
+    weight_operation = _identify_shape_weight_operation(
+        source, (88, "x"), require_delta_application=True)
+    return {
+        "threads": threads,
+        "coordinate_transform": coordinate_transform,
+        "weight_operation": weight_operation,
+    }
 
 
 def _resolved_resource(resources, copy_sources, name, visiting=None):
@@ -882,12 +913,29 @@ def _wwmi_animation_shader(sections, child_section, *, mod_dir, ini_path,
         return None
     shader_path = _shader_path(mod_dir, ini_path, shader_value, source)
     shader_text = _read_resource_bytes(shader_path, source)
-    if (not shader_text
-            or _identify_wwmi_animation_shader(
-                shader_text.decode("utf-8", errors="ignore")) is None):
+    if not shader_text:
+        return None
+    shader_source = shader_text.decode("utf-8", errors="ignore")
+    stripped_shader = _strip_hlsl_comments(shader_source)
+    threads = _NUMTHREADS_RE.search(stripped_shader)
+    compact = re.sub(r"\s+", "", stripped_shader).lower()
+    phase_macro = re.search(
+        r"#define(?P<phase>[a-z_]\w*)iniparams\[0\]\.z", compact, re.I)
+    if (threads is None or tuple(map(int, threads.groups())) != (1, 1, 1)
+            or phase_macro is None):
+        return None
+    phase_name = phase_macro.group("phase")
+    if not re.search(
+            rf"(?:float|half)[a-z_]\w*=float\({re.escape(phase_name)}\)",
+            compact, re.I):
+        return None
+    weight_operation = _identify_shape_weight_operation(
+        shader_source, (0, "z"), require_delta_application=False)
+    if weight_operation is None:
         return None
     return {
         "phase_var": phase_expr["variable"],
+        "weight_operation": weight_operation,
     }
 
 
@@ -1075,6 +1123,7 @@ def discover_wwmi_sparse_animations(sections, shape_sliders, *, mod_dir=None,
             animated_shape["buffer_shape_id"] = item["container_shape_id"]
             passes.append({
                 "sparse_shape": animated_shape,
+                "weight_operation": item["weight_operation"],
             })
         result.append({
             "kind": "wwmi_sparse",
@@ -1173,6 +1222,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "target_resource": target,
                 "dispatch_vertices": int(match.group(1)) * active["threads"],
                 "phase_expr": phase_expr,
+                "weight_operation": active["weight_operation"],
             })
         return passes
 
@@ -1298,9 +1348,12 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 }
                 if kind == "shape":
                     snapshot["target_resource"] = blend
+                    snapshot["weight_operation"] = active[
+                        "weight_operation"]
                 else:
                     snapshot.update({
-                        "coordinate_variant": active["coordinate_variant"],
+                        "coordinate_transform": active[
+                            "coordinate_transform"],
                         "blend_resource": blend,
                         "pose_resource": pose,
                         "bone_count_expr": bone_count_expr,
@@ -1335,6 +1388,8 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
     def parse_shape_passes(items):
         parsed = []
         for item in items:
+            if item.get("weight_operation") is None:
+                return []
             expression = phase_expression(item.get("phase_expr", ""))
             if expression is None:
                 return []
@@ -1382,6 +1437,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             "dispatch_vertices": item["dispatch_vertices"],
                             "phase_expr": expression,
                             "dispatch_key": item["dispatch_key"],
+                            "weight_operation": item["weight_operation"],
                         } for (item, expression) in parsed_shape_passes],
                         "pose": None,
                     }
@@ -1424,8 +1480,8 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                         "position_resource": output_resource,
                         "base_file": validated["base_file"],
                         "vertex_count": validated["vertex_count"],
-                        "coordinate_variant": pose_pass.get(
-                            "coordinate_variant", "standard"),
+                        "coordinate_transform": pose_pass.get(
+                            "coordinate_transform", "identity"),
                         "shape_passes": [{
                             "target_file": _resolved_resource(
                                 resources, copy_sources,
@@ -1433,6 +1489,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                             "dispatch_vertices": item["dispatch_vertices"],
                             "phase_expr": expression,
                             "dispatch_key": item["dispatch_key"],
+                            "weight_operation": item["weight_operation"],
                         } for (item, expression) in parsed_shape_passes],
                         "pose": {
                             "blend_file": validated["blend_file"],
@@ -1479,6 +1536,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "dispatch_vertices": item["dispatch_vertices"],
                 "phase_expr": expression,
                 "dispatch_key": item["dispatch_key"],
+                "weight_operation": item["weight_operation"],
             } for (item, expression) in parsed_shape_passes],
             "pose": None,
             "overlay": True,

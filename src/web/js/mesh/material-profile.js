@@ -733,11 +733,11 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
       .mul(shapeGate)
       .mul(float(1).sub(packedA).clamp(0, 1));
     // A low B value means that this packed texture has no authored toon
-    // highlight at the pixel.  It must not erase the ordinary physical key
-    // light: some RabbitFX body textures (including BellyDancer Component4)
-    // keep B at zero across nearly the whole mesh.  In that case the packed
-    // path should match diffuse-only mode for direct specular.  When B is
-    // authored, it still selects the toon response above.
+    // highlight at the pixel. It must not erase the ordinary physical key
+    // light: some RabbitFX body textures keep B at zero across nearly the
+    // whole mesh. In that case the packed path should match diffuse-only mode
+    // for direct specular. When B is authored, it still selects the toon
+    // response above.
     const authoredSpecular = mix(physicalSpecular, toonSpecular, maskGate);
     const replacement = mix(authoredSpecular, physicalSpecular,
       wuwaMetalRouteNode(packedA));

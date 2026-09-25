@@ -156,34 +156,35 @@ def _extract_hash(name):
 
 
 def _collect_resource_copy_sources(sections, resources):
-    """Resolve explicit/rest-pose resource copy edges before group building."""
+    """Resolve explicit resource copy and reference edges."""
     resource_copy_sources = {}
-    copy_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*copy(?:\s+ref)?\s+(Resource\S+)\s*$",
-        re.I)
+    resource_assignment_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*(?:copy(?:\s+(?:ref|reference))?|"
+        r"ref(?:erence)?)\s+"
+        r"(Resource\S+)\s*$", re.I)
     for lines in sections.values():
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
-            match = copy_re.match(line)
+            match = resource_assignment_re.match(line)
             if not match:
                 continue
-            destination, copy_source = match.groups()
-            if destination.lower() == copy_source.lower():
+            destination, source_resource = match.groups()
+            if destination.lower() == source_resource.lower():
                 continue
             sources = resource_copy_sources.setdefault(destination.lower(), [])
-            if all(existing.lower() != copy_source.lower()
+            if all(existing.lower() != source_resource.lower()
                    for existing in sources):
-                sources.append(copy_source)
+                sources.append(source_resource)
 
     cs_read_re = re.compile(
-        r"^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+        r"^\s*cs-t([12])\s*=\s*(?:ref(?:erence)?\s+)?(\S+)\s*$", re.I)
     cs_write_re = re.compile(
-        r"^\s*cs-u0\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+        r"^\s*cs-u0\s*=\s*(?:ref(?:erence)?\s+)?(\S+)\s*$", re.I)
     cs_u_copy_re = re.compile(
         r"^\s*cs-u(\d+)\s*=\s*copy\s+(Resource\S+)\s*$", re.I)
     cs_u_null_re = re.compile(r"^\s*cs-u(\d+)\s*=\s*null\s*$", re.I)
     resource_u_ref_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*ref\s+cs-u(\d+)\s*$", re.I)
+        r"^\s*(Resource\S+)\s*=\s*ref(?:erence)?\s+cs-u(\d+)\s*$", re.I)
     for lines in sections.values():
         cs_inputs = {}
         cs_u_sources = {}
@@ -231,6 +232,27 @@ def _collect_resource_copy_sources(sections, resources):
                        for existing in sources):
                     sources.append(position)
     return resource_copy_sources
+
+
+def _collect_resource_descriptor_sources(sections):
+    """Collect descriptor-only copies without making them data edges."""
+    descriptor_sources = {}
+    assignment_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*copy_desc(?:ription)?\s+"
+        r"(Resource\S+)\s*$",
+        re.I)
+    for lines in sections.values():
+        for raw in lines:
+            match = assignment_re.match(raw.split(";", 1)[0].strip())
+            if not match:
+                continue
+            destination, source = match.groups()
+            if destination.lower() == source.lower():
+                continue
+            sources = descriptor_sources.setdefault(destination.lower(), [])
+            if all(existing.lower() != source.lower() for existing in sources):
+                sources.append(source)
+    return descriptor_sources
 
 
 def _resolve_normal_source(effective_vertex_resources, resources,
@@ -381,6 +403,31 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
                                sections=None):
     """Resolve component, hash, and WWMI global buffer bindings."""
     vertex_info_cache = {}
+    descriptor_sources = _collect_resource_descriptor_sources(sections or {})
+    descriptor_cache = {}
+
+    def resolve_descriptor_info(resource_name, visiting=None):
+        if not resource_name:
+            return {}
+        cache_key = resource_name.lower()
+        if cache_key in descriptor_cache:
+            return descriptor_cache[cache_key]
+
+        visiting = set(visiting or ())
+        if cache_key in visiting:
+            return {}
+        visiting.add(cache_key)
+
+        descriptor = {}
+        for candidate in descriptor_sources.get(cache_key, ()):
+            descriptor.update(resolve_descriptor_info(candidate, visiting))
+        resource_info = _res_get(resources, resource_name)
+        descriptor.update({
+            key: resource_info[key]
+            for key in ("format", "stride") if resource_info.get(key) is not None
+        })
+        descriptor_cache[cache_key] = descriptor
+        return descriptor
 
     def resolve_vertex_info(resource_name, visiting=None):
         if not resource_name:
@@ -389,35 +436,24 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         if cache_key in vertex_info_cache:
             return vertex_info_cache[cache_key]
 
-        resource_info = _res_get(resources, resource_name)
-        if resource_info.get("filename"):
-            vertex_info_cache[cache_key] = resource_info
-            return resource_info
-
         visiting = set(visiting or ())
         if cache_key in visiting:
             return {}
         visiting.add(cache_key)
-        candidates = list(resource_copy_sources.get(cache_key, ()))
-        # WWMI binds the remapped blend buffer through a reusable runtime
-        # resource named ``ResourceBlendBufferOverride``.  The resource is
-        # intentionally empty in the INI because the command list fills it
-        # with a runtime copy, while the source descriptor remains the
-        # authored ``ResourceBlendBuffer``.  Keep this fallback limited to
-        # blend resources so unrelated override resources are not guessed.
-        if (cache_key.endswith("blendbufferoverride")
-                and not candidates):
-            candidates.append(resource_name[:-len("Override")])
-        if not cache_key.endswith(".b"):
-            candidates.append(resource_name + ".B")
-        for candidate in candidates:
-            resolved = resolve_vertex_info(candidate, visiting)
-            if resolved.get("filename"):
-                vertex_info_cache[cache_key] = resolved
-                return resolved
-
-        vertex_info_cache[cache_key] = {}
-        return {}
+        resource_info = _res_get(resources, resource_name)
+        resolved = dict(resource_info)
+        if not resource_info.get("filename"):
+            resolved = {}
+            for candidate in resource_copy_sources.get(cache_key, ()):
+                resolved = resolve_vertex_info(candidate, visiting)
+                if resolved.get("filename"):
+                    resolved = dict(resolved)
+                    break
+        if resolved.get("filename"):
+            for descriptor_source in descriptor_sources.get(cache_key, ()):
+                resolved.update(resolve_descriptor_info(descriptor_source))
+        vertex_info_cache[cache_key] = resolved
+        return resolved
 
     component_positions, component_texcoords = {}, {}
     component_vertex_resources = {}

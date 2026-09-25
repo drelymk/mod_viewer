@@ -4,24 +4,79 @@ import pytest
 
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_resources import (
-    _collect_resource_copy_sources, _ib_index_size,
+    _collect_resource_copy_sources, _collect_resource_descriptor_sources,
+    _ib_index_size,
     _resolve_component_buffers,
 )
 from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import ResourceTable, extract_resources, parse_sections
 
 
-def test_runtime_vertex_resource_uses_one_b_rest_pose_fallback():
+def test_declaring_b_suffixed_resource_does_not_resolve_base_resource():
     resources = ResourceTable({
         "ResourcePosition.B": {
             "filename": "position-rest.buf", "stride": 12},
     })
     resolved = _resolve_component_buffers({}, resources, {})
 
-    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
-        "filename": "position-rest.buf", "stride": 12}
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {}
     assert _ib_index_size("DXGI_FORMAT_R16_UINT") == 2
     assert _ib_index_size("DXGI_FORMAT_R32_UINT") == 4
+
+
+def test_b_suffixed_resource_resolves_through_authored_copy():
+    sections = parse_sections("sample.ini", text="""
+[Present]
+ResourcePosition = copy ResourcePosition.B
+
+[ResourcePosition]
+[ResourcePosition.B]
+filename = position-rest.buf
+stride = 12
+""")
+    resources = extract_resources(sections)
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers({}, resources, copy_sources)
+
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
+        "filename": "position-rest.buf", "stride": 12,
+    }
+
+
+@pytest.mark.parametrize("reference", ("reference", "copy reference"))
+def test_resource_reference_alias_resolves_file_backed_source(reference):
+    sections = parse_sections("sample.ini", text=f"""
+[Present]
+ResourcePosition = {reference} ResourcePosition.B
+
+[ResourcePosition]
+[ResourcePosition.B]
+filename = position-rest.buf
+stride = 12
+""")
+    resources = extract_resources(sections)
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers({}, resources, copy_sources)
+
+    assert copy_sources["resourceposition"] == ["ResourcePosition.B"]
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
+        "filename": "position-rest.buf", "stride": 12,
+    }
+
+
+def test_copy_description_alias_is_collected_as_descriptor_only():
+    sections = parse_sections("sample.ini", text="""
+[CommandListRemap]
+ResourceBlendOverride = copy_description ResourceBlendSource
+
+[ResourceBlendSource]
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+""")
+
+    assert _collect_resource_descriptor_sources(sections) == {
+        "resourceblendoverride": ["ResourceBlendSource"],
+    }
 
 
 def test_uav_resource_copy_chain_resolves_file_backed_source():
@@ -85,6 +140,22 @@ filename = a.buf
     assert "resourceb" not in copy_sources
 
 
+def test_uav_resource_reference_alias_tracks_copy_source():
+    sections = parse_sections("sample.ini", text="""
+[CustomShader]
+cs-u5 = copy ResourceA
+ResourceB = reference cs-u5
+
+[ResourceA]
+filename = a.buf
+""")
+
+    copy_sources = _collect_resource_copy_sources(
+        sections, extract_resources(sections))
+
+    assert copy_sources["resourceb"] == ["ResourceA"]
+
+
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
     sections = parse_sections("sample.ini", text="""
 [TextureOverrideBody]
@@ -96,6 +167,10 @@ drawindexed = 3, 0, 0
 
 [CommandListRemap]
 cs-t35 = ref ResourceBlendRemapVertexVGBuffer
+ResourceRemappedBlendBufferRW = copy ResourceBlendBufferNoStride
+ResourceRemappedBlendBufferComponent = copy ResourceRemappedBlendBufferRW
+ResourceRemappedBlendBufferComponent = copy_desc ResourceBlendBuffer
+ResourceBlendBufferOverride = ref ResourceRemappedBlendBufferComponent
 
 [ResourceBodyIB]
 filename = Meshes/Index.buf
@@ -111,8 +186,15 @@ stride = 20
 
 [ResourceBlendBufferOverride]
 
+[ResourceRemappedBlendBufferComponent]
+
+[ResourceRemappedBlendBufferRW]
+
+[ResourceBlendBufferNoStride]
+filename = Meshes/BlendContent.buf
+
 [ResourceBlendBuffer]
-filename = Meshes/Blend.buf
+filename = Meshes/BlendDescriptor.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
 
@@ -123,17 +205,25 @@ stride = 16
 """)
     resources = extract_resources(sections)
     scanned = _scan_sections_for_draws(sections)
-    resolved = _resolve_component_buffers(scanned, resources, {})
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers(
+        scanned, resources, copy_sources, sections=sections)
 
+    assert copy_sources["resourceremappedblendbuffercomponent"] == [
+        "ResourceRemappedBlendBufferRW",
+    ]
     assert resolved["resolve_vertex_info"](
         "ResourceBlendBufferOverride") == {
-            "filename": "Meshes/Blend.buf",
+            "filename": "Meshes/BlendContent.buf",
             "format": "DXGI_FORMAT_R8_UINT",
             "stride": 16,
         }
+    assert not resolved["vertex_binding_index"]._resource_connected(
+        "ResourceRemappedBlendBufferComponent", "ResourceBlendBuffer")
 
     group = build_draw_groups(sections, resources)[0]
-    assert group["draws"][0].skinning_source.file == "Meshes/Blend.buf"
+    assert group["draws"][0].skinning_source.file == \
+        "Meshes/BlendContent.buf"
     assert group["draws"][0].skinning_source.encoding == "wwmi_u8_8"
     assert group["draws"][0].skinning_source.vertex_vg_file == \
         "Meshes/BlendRemapVertexVG.buf"

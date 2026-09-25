@@ -393,6 +393,8 @@ def _record_name(record):
         f"{record.component_name or ''}{_record_prefix(record)}")
 
 
+# These labels and prefixes are GIMI hash Asset component naming conventions.
+# They only guide optional GIMI face alignment and do not describe INI data.
 def _component_face_kind(value):
     component = _compact_name(value)
     exact = {
@@ -505,6 +507,7 @@ def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices,
 
 
 def _solve_face_alignment(records, vertex_cache, ib_cache):
+    """Align GIMI face geometry using its Asset naming conventions."""
     references = sorted(
         (record for record in records if _is_native_eyes_record(record)),
         key=_reference_score)

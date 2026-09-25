@@ -1,9 +1,9 @@
-"""Discover simple compute-shader shape sliders.
+"""Discover supported shape controls from explicit 3DMigoto INI patterns.
 
-Supported pattern: a shader receives a scalar ini variable, a file-backed base
-position buffer and a same-layout target buffer.  This is the common 3DMigoto
-``base + (target - base) * value`` shape-key convention.  The viewer does not
-attempt to execute arbitrary HLSL.
+GIMI commonly uses the full-buffer ``cs-t50``/``cs-t51`` and ``x88`` path,
+with ``x87`` slider controls. WWMI sparse keys and ZZMI multi-target controls
+use their own framework conventions below. These narrow detectors do not
+execute HLSL or infer a general shape-key engine.
 """
 
 import re
@@ -243,9 +243,8 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 "ini_path": src.get("ini_path"), "section": section,
             })
 
-    # WWMI shape keys are sparse rather than full target buffers.  The menu
-    # still advertises them with the same `$value * x87` slider idiom, while
-    # SetShapeKey command lists map each value variable to an integer key ID.
+    # WWMI's sparse-key convention shares the x87 menu idiom; its SetShapeKey
+    # command lists map each value variable to an integer key ID.
     sliders = []
     shape_ids = {}
     bindings = {}

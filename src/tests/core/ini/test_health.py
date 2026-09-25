@@ -89,7 +89,7 @@ def test_reference_graph_case_exactness_and_comments():
     assert ("ResourceCommented" in unused), ("commented references do not make a resource used")
 
 
-def test_implicit_rest_pose_and_unrooted_cycles():
+def test_resource_reachability_follows_authored_edges_only():
     with tempfile.TemporaryDirectory() as tmp:
         _write(os.path.join(tmp, "mod.ini"), (
             "[TextureOverrideBody]\n"
@@ -97,6 +97,11 @@ def test_implicit_rest_pose_and_unrooted_cycles():
             "[ResourcePosition]\n"
             "[ResourcePosition.B]\n"
             "filename = pose.buf\n"
+            "[Present]\n"
+            "ResourceCopied = copy ResourceCopied.B\n"
+            "[ResourceCopied]\n"
+            "[ResourceCopied.B]\n"
+            "filename = copied-pose.buf\n"
             "[ResourceCycleA]\n"
             "source = ResourceCycleB\n"
             "[ResourceCycleB]\n"
@@ -104,12 +109,43 @@ def test_implicit_rest_pose_and_unrooted_cycles():
             "[ResourceSelf]\n"
             "source = ResourceSelf\n"))
         _write(os.path.join(tmp, "pose.buf"), b"x", binary=True)
+        _write(os.path.join(tmp, "copied-pose.buf"), b"x", binary=True)
         report = analyze_mod(tmp)
         unused = {item["resource"] for item in report["issues"]
                   if item["code"] == "unused_resource_section"}
 
-    assert ("ResourcePosition" not in unused and "ResourcePosition.B" not in unused), ("implicit .B rest-pose resources follow the loader's convention")
+    assert ("ResourcePosition" not in unused
+          and "ResourcePosition.B" in unused), ("only authored edges make a B-suffixed resource reachable")
+    assert ("ResourceCopied" not in unused
+          and "ResourceCopied.B" not in unused), ("resource copies keep their authored targets reachable")
     assert ({"ResourceCycleA", "ResourceCycleB", "ResourceSelf"} <= unused), ("self references and unrooted cycles do not make resources used")
+
+
+def test_reference_prefix_is_valid_and_target_is_checked():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(os.path.join(tmp, "mod.ini"), (
+            "[TextureOverrideBody]\n"
+            "vb0 = reference ResourceBodyPosition\n"
+            "vb1 = reference ResourceMissing\n"
+            "vb2 = copy reference ResourceMissingCopy\n"
+            "[ResourceBodyPosition]\n"
+            "filename = body.buf\n"
+            "stride = 12\n"))
+        _write(os.path.join(tmp, "body.buf"), b"x", binary=True)
+        report = analyze_mod(tmp)
+
+    malformed = [item for item in report["issues"]
+                 if item["code"] == "malformed_resource_reference"]
+    missing = [item for item in report["issues"]
+               if item["code"] == "missing_resource_section"]
+    unused = {item["resource"] for item in report["issues"]
+              if item["code"] == "unused_resource_section"}
+    assert malformed == []
+    assert [(item["resource"], item["line"]) for item in missing] == [
+        ("ResourceMissing", 3),
+        ("ResourceMissingCopy", 4),
+    ]
+    assert "ResourceBodyPosition" not in unused
 
 
 def test_file_classification_and_overrides():

@@ -563,7 +563,8 @@ def test_gimi_compute_animation_reuses_attributes_and_honours_pause(module_page)
           kind: 'gimi_compute', vertex_count: 2,
           base_normals: encode(normals),
           program_id: 'gimi-program-test', track_id: 'gimi-test', program,
-          shape_passes: [{deltas: encode(deltas)}],
+          shape_passes: [{deltas: encode(deltas), weight_operation: {
+            kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}}],
           pose: {blend: {weights: encode(weights), indices: encode(indices),
             }, frames: encode(pose), bone_count: 2,
             frame_count: 2},
@@ -687,8 +688,10 @@ def test_wwmi_sparse_animation_composes_overlay_and_freezes_disabled_passes(
               overlay: true,
               position_only: true,
               shape_passes: [
-            {deltas: encode(new Float32Array([1, 0, 0]))},
-            {deltas: encode(new Float32Array([0, 2, 0]))},
+            {deltas: encode(new Float32Array([1, 0, 0])), weight_operation: {
+              kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}},
+            {deltas: encode(new Float32Array([0, 2, 0])), weight_operation: {
+              kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}},
           ],
           pose: null,
         });
@@ -790,7 +793,9 @@ def test_gimi_compute_animation_shares_program_state_across_outputs(module_page)
           program_id: 'shared-program', track_id: trackId, program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [{deltas: encode(new Float32Array([
-            1, 0, 0, 0, 0, 0]))}], pose: null,
+            1, 0, 0, 0, 0, 0])), weight_operation: {
+            kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}}],
+          pose: null,
         });
         const first = mesh();
         const second = mesh();
@@ -843,7 +848,9 @@ def test_animation_scheduler_keeps_active_programs_playing(module_page):
         track_id: trackId, program,
         base_normals: encode(new Float32Array([0, 1, 0])),
         shape_passes: [{deltas: encode(new Float32Array([
-          1, 0, 0, 0, 0, 0]))}], pose: null,
+          1, 0, 0, 0, 0, 0])), weight_operation: {
+          kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}}],
+        pose: null,
       });
       const mesh = () => ({visible: true,
         userData: {basePositions: new Float32Array([0, 0, 0])},
@@ -939,7 +946,8 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
           program_id: 'shape-program', track_id: 'shape-only-test', program,
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [{deltas: encode(new Float32Array([
-            1, 0, 0, 0, 0, 0]))}],
+            1, 0, 0, 0, 0, 0])), weight_operation: {
+            kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}}],
           pose: null,
         });
         pending.get(Math.min(...pending.keys()))(0);
@@ -958,6 +966,69 @@ def test_gimi_shape_only_animation_runs_without_pose_stream(module_page):
     expected = 0.5 * (math.sin(0.0034 * 30) + 1)
     assert result["second"] == pytest.approx([expected, 0, 0], abs=1e-5)
     assert result["secondNormal"] == [0, 1, 0]
+
+
+def test_gimi_shape_passes_use_their_recognized_weight_operations(module_page):
+    result = module_page.evaluate("""async () => {
+      const pending = new Map();
+      let nextRequest = 1;
+      const oldRequest = window.requestAnimationFrame;
+      const oldCancel = window.cancelAnimationFrame;
+      window.requestAnimationFrame = callback => {
+        const id = nextRequest++;
+        pending.set(id, callback);
+        return id;
+      };
+      window.cancelAnimationFrame = id => pending.delete(id);
+      const encode = values => {
+        const bytes = new Uint8Array(values.buffer, values.byteOffset,
+          values.byteLength);
+        let text = '';
+        for (const value of bytes) text += String.fromCharCode(value);
+        return btoa(text);
+      };
+      try {
+        const runtime = await import('./js/mesh/animation-runtime.js');
+        const position = {array: new Float32Array([0, 0, 0])};
+        const normal = {array: new Float32Array([0, 1, 0])};
+        const mesh = {
+          visible: true,
+          userData: {basePositions: new Float32Array([0, 0, 0])},
+          geometry: {attributes: {position, normal}},
+        };
+        const program = {
+          external_variables: [], initials: {},
+          commands: [
+            {op: 'dispatch', track_id: 'weight-operations', kind: 'shape',
+              pass: 0, phase: {kind: 'literal', value: 0.25}},
+            {op: 'dispatch', track_id: 'weight-operations', kind: 'shape',
+              pass: 1, phase: {kind: 'literal', value: 0}},
+          ],
+        };
+        runtime.registerAnimatedMesh(mesh, 'weight-operations', {
+          kind: 'gimi_compute', vertex_count: 1,
+          program_id: 'weight-operations-program',
+          track_id: 'weight-operations', program,
+          base_normals: encode(new Float32Array([0, 1, 0])),
+          shape_passes: [
+            {deltas: encode(new Float32Array([2, 0, 0, 0, 0, 0])),
+              weight_operation: {kind: 'linear'}},
+            {deltas: encode(new Float32Array([4, 0, 0, 0, 0, 0])),
+              weight_operation: {
+                kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}},
+          ],
+          pose: null,
+        });
+        pending.get(Math.min(...pending.keys()))(0);
+        const output = Array.from(position.array);
+        runtime.resetAnimationRuntime();
+        return {output};
+      } finally {
+        window.requestAnimationFrame = oldRequest;
+        window.cancelAnimationFrame = oldCancel;
+      }
+    }""")
+    assert result["output"] == pytest.approx([2.5, 0, 0])
 
 
 def test_gimi_compute_animation_executes_reset_assignments_in_order(module_page):
@@ -1153,7 +1224,7 @@ def test_gimi_compute_animation_uses_slot_zero_dq_reference(module_page):
     assert result["outputNormal"] == pytest.approx([0, 1, 0], abs=1e-5)
 
 
-def test_gimi_compute_animation_applies_columbina_basis(module_page):
+def test_gimi_compute_animation_applies_swap_yz_negate_transform(module_page):
     result = module_page.evaluate("""async () => {
       const pending = new Map();
       let nextRequest = 1;
@@ -1190,13 +1261,14 @@ def test_gimi_compute_animation_applies_columbina_basis(module_page):
         };
         const program = {
           external_variables: [], initials: {},
-          commands: [{op: 'dispatch', track_id: 'columbina', kind: 'pose',
-            phase: {kind: 'literal', value: 0}}],
+          commands: [{op: 'dispatch', track_id: 'coordinate-transform',
+            kind: 'pose', phase: {kind: 'literal', value: 0}}],
         };
-        runtime.registerAnimatedMesh(mesh, 'columbina', {
+        runtime.registerAnimatedMesh(mesh, 'coordinate-transform', {
           kind: 'gimi_compute', vertex_count: 1,
-          program_id: 'columbina-program', track_id: 'columbina', program,
-          coordinate_variant: 'columbina_basis',
+          program_id: 'coordinate-transform-program',
+          track_id: 'coordinate-transform', program,
+          coordinate_transform: 'swap_yz_negate',
           base_normals: encode(new Float32Array([0, 1, 0])),
           shape_passes: [],
           pose: {
@@ -7515,7 +7587,9 @@ def test_gimi_overlay_uses_shaped_rest_and_nested_conditions(module_page):
           program_id: 'nested-overlay-program', track_id: 'nested-overlay',
           program, overlay: true,
           conditions: [[{var: 'nested_mode', value: '2', negate: false}]],
-          shape_passes: [{deltas: encode(new Float32Array([2, 0, 0, 0, 0, 0]))}],
+          shape_passes: [{deltas: encode(new Float32Array([2, 0, 0, 0, 0, 0])),
+            weight_operation: {
+              kind: 'sine', scale: 30, amplitude: 0.5, offset: 0.5}}],
           pose: null,
         });
         runNext(0);

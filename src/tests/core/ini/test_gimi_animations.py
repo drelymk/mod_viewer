@@ -1,10 +1,12 @@
 """Focused coverage for the conservative fixed-layout compute path."""
 
 import struct
+import pytest
 
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
 from core.ini.animations import (_identify_compute_shader,
+                                 _identify_shape_weight_operation,
                                  _compute_condition_is_supported,
                                  compute_animation_control_vars,
                                  discover_animation_clocks,
@@ -79,7 +81,7 @@ void main(uint3 threadID : SV_DispatchThreadID) {
 }
 """
 
-COLUMBINA_SHADER = """
+SWAP_YZ_SHADER = """
 [numthreads(64, 1, 1)]
 void main(uint3 threadID : SV_DispatchThreadID) {
   float4 pos = float4(v.position.x, -v.position.z, v.position.y, 1.0f);
@@ -325,7 +327,7 @@ RWBuffer<float4> CustomShapeKeyValuesRW : register(u5);
 [numthreads(1, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
   float shape_key_value = float(ShapeKeyValue);
-  float shape_key_anim = 0.5 * (sin(shape_key_value * 30) + 1);
+  float shape_key_anim = (0.5*(sin(shape_key_value*30)+1));
 }
 """
 
@@ -427,6 +429,10 @@ def test_wwmi_sparse_animation_discovers_one_two_pass_track(tmp_path):
             for item in animation["shape_passes"]] == [165, 166]
     assert [item["sparse_shape"]["buffer_shape_id"]
             for item in animation["shape_passes"]] == [166, 167]
+    assert all(item["weight_operation"] == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    } for item in animation["shape_passes"])
     assert animation["program"]["external_variables"] == [
         "ChouChaAnim", "ChouChaAnimSpeed", "gangChaAnim",
         "gangChaAnimSpeed"]
@@ -460,6 +466,20 @@ def test_wwmi_sparse_animation_rejects_missing_slots_or_shader(tmp_path):
     assert discover_wwmi_sparse_animations(
         _wwmi_sparse_sections(), _wwmi_static_shapes(),
         mod_dir=str(unsupported), ini_path=str(unsupported / "fixture.ini")) == []
+
+    wrong_input = tmp_path / "wrong-input"
+    (wrong_input / "res").mkdir(parents=True)
+    wrong_channel_shader = WWMI_ANIMATION_SHADER.replace(
+        "#define ShapeKeyValue IniParams[0].z",
+        "#define ShapeKeyValue IniParams[0].z\n"
+        "#define Other IniParams[5].x").replace(
+            "sin(shape_key_value*30)", "sin(Other*30)")
+    (wrong_input / "res" / "anim.hlsl").write_text(wrong_channel_shader)
+    _write_wwmi_offset_table(wrong_input, range(162, 168))
+    assert discover_wwmi_sparse_animations(
+        _wwmi_sparse_sections(), _wwmi_static_shapes(),
+        mod_dir=str(wrong_input),
+        ini_path=str(wrong_input / "fixture.ini")) == []
 
     missing = tmp_path / "missing-shader"
     missing.mkdir()
@@ -667,9 +687,10 @@ def test_compute_animation_discovers_bindings_and_dimensions(tmp_path):
     assert len(discovered) == 1
     animation = discovered[0]
     assert [item["dispatch_vertices"] for item in animation["shape_passes"]] == [64, 64]
-    assert "amplitude" not in animation["shape_passes"][0]
-    assert "angular_scale" not in animation["shape_passes"][0]
-    assert "bias" not in animation["shape_passes"][0]
+    assert all(item["weight_operation"] == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    } for item in animation["shape_passes"])
     assert animation["pose"]["bone_count"] == 2
     assert animation["pose"]["frame_count"] == 2
     assert "base_resource" not in animation
@@ -696,6 +717,12 @@ def test_compute_animation_discovers_bindings_and_dimensions(tmp_path):
     bad_sections = _sections(bad_shader, shader=False)
     (bad_shader / "pose.hlsl").write_text("void main() {}")
     assert not _discover(bad_shader, bad_sections)
+
+    unsupported_weight = tmp_path / "unsupported-weight"
+    unsupported_sections = _sections(unsupported_weight)
+    (unsupported_weight / "shape.hlsl").write_text(
+        SHAPE_SHADER.replace("* 30", "* 31"))
+    assert not _discover(unsupported_weight, unsupported_sections)
 
     bad_stride = tmp_path / "bad-stride"
     bad_stride_sections = _sections(bad_stride, stride=32)
@@ -760,12 +787,55 @@ def test_key_self_clearing_animation_input_stays_external(tmp_path):
 def test_compute_animation_reads_shader_metadata():
     adapter = _identify_compute_shader(POSE_SHADER)
     assert adapter["threads"] == 64
-    assert adapter["coordinate_variant"] == "standard"
+    assert adapter["coordinate_transform"] == "identity"
+    assert adapter["weight_operation"] is None
 
 
-def test_compute_animation_identifies_columbina_basis():
-    adapter = _identify_compute_shader(COLUMBINA_SHADER)
-    assert adapter["coordinate_variant"] == "columbina_basis"
+def test_compute_animation_identifies_coordinate_transform():
+    adapter = _identify_compute_shader(SWAP_YZ_SHADER)
+    assert adapter["coordinate_transform"] == "swap_yz_negate"
+
+
+def test_shape_weight_operation_describes_supported_hlsl_semantics():
+    assert _identify_shape_weight_operation(
+        WWMI_ANIMATION_SHADER, (0, "z"),
+        require_delta_application=False) == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    }
+    assert _identify_shape_weight_operation(
+        "[numthreads(1,1,1)] void main() { float3 value = 1; }",
+        (88, "x"), require_delta_application=True) is None
+    assert _identify_shape_weight_operation(
+        WWMI_ANIMATION_SHADER.replace("*30", "*31"), (0, "z"),
+        require_delta_application=False) is None
+    assert _identify_shape_weight_operation(
+        LINEAR_SHAPE_SHADER, (88, "x"),
+        require_delta_application=True) == {
+        "kind": "linear",
+    }
+
+
+@pytest.mark.parametrize(("name", "shader"), [
+    ("sine", SHAPE_SHADER), ("linear", LINEAR_SHAPE_SHADER),
+])
+def test_compute_animation_rejects_shape_weight_from_wrong_ini_channel(
+        tmp_path, name, shader):
+    root = tmp_path / name
+    sections = _sections(root)
+    expected_alias = "FREQ" if name == "sine" else "VALUE"
+    wrong_channel = shader.replace(
+        f"#define {expected_alias} IniParams[88].x",
+        f"#define {expected_alias} IniParams[88].x\n"
+        "#define OTHER IniParams[87].x")
+    if name == "sine":
+        wrong_channel = wrong_channel.replace(
+            "sin(FREQ * 30)", "sin(OTHER * 30)")
+    else:
+        wrong_channel = wrong_channel.replace("* VALUE", "* OTHER")
+    (root / "shape.hlsl").write_text(wrong_channel)
+
+    assert not _discover(root, sections)
 
 
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
@@ -791,6 +861,10 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     assert payload["pose"]["frames"]["length"] == 2 * 2 * 56
     assert payload["program_id"] == animation[0]["program_id"]
     assert payload["track_id"] == animation[0]["track_id"]
+    assert all(item["weight_operation"] == {
+        "kind": "sine", "scale": 30.0,
+        "amplitude": 0.5, "offset": 0.5,
+    } for item in payload["shape_passes"])
     assert "operation_id" not in payload
     assert "operation" not in payload
     assert all("phase_expr" not in item for item in payload["shape_passes"])
