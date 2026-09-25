@@ -11,17 +11,35 @@ from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import ResourceTable, extract_resources, parse_sections
 
 
-def test_runtime_vertex_resource_uses_one_b_rest_pose_fallback():
+def test_declaring_b_suffixed_resource_does_not_resolve_base_resource():
     resources = ResourceTable({
         "ResourcePosition.B": {
             "filename": "position-rest.buf", "stride": 12},
     })
     resolved = _resolve_component_buffers({}, resources, {})
 
-    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
-        "filename": "position-rest.buf", "stride": 12}
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {}
     assert _ib_index_size("DXGI_FORMAT_R16_UINT") == 2
     assert _ib_index_size("DXGI_FORMAT_R32_UINT") == 4
+
+
+def test_b_suffixed_resource_resolves_through_authored_copy():
+    sections = parse_sections("sample.ini", text="""
+[Present]
+ResourcePosition = copy ResourcePosition.B
+
+[ResourcePosition]
+[ResourcePosition.B]
+filename = position-rest.buf
+stride = 12
+""")
+    resources = extract_resources(sections)
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers({}, resources, copy_sources)
+
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
+        "filename": "position-rest.buf", "stride": 12,
+    }
 
 
 def test_uav_resource_copy_chain_resolves_file_backed_source():
@@ -96,6 +114,10 @@ drawindexed = 3, 0, 0
 
 [CommandListRemap]
 cs-t35 = ref ResourceBlendRemapVertexVGBuffer
+ResourceRemappedBlendBufferRW = copy ResourceBlendBufferNoStride
+ResourceRemappedBlendBufferComponent = copy ResourceRemappedBlendBufferRW
+ResourceRemappedBlendBufferComponent = copy_desc ResourceBlendBuffer
+ResourceBlendBufferOverride = ref ResourceRemappedBlendBufferComponent
 
 [ResourceBodyIB]
 filename = Meshes/Index.buf
@@ -111,6 +133,13 @@ stride = 20
 
 [ResourceBlendBufferOverride]
 
+[ResourceRemappedBlendBufferComponent]
+
+[ResourceRemappedBlendBufferRW]
+
+[ResourceBlendBufferNoStride]
+filename = Meshes/Blend.buf
+
 [ResourceBlendBuffer]
 filename = Meshes/Blend.buf
 format = DXGI_FORMAT_R8_UINT
@@ -123,7 +152,8 @@ stride = 16
 """)
     resources = extract_resources(sections)
     scanned = _scan_sections_for_draws(sections)
-    resolved = _resolve_component_buffers(scanned, resources, {})
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers(scanned, resources, copy_sources)
 
     assert resolved["resolve_vertex_info"](
         "ResourceBlendBufferOverride") == {

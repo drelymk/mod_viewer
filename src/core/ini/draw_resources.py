@@ -156,24 +156,29 @@ def _extract_hash(name):
 
 
 def _collect_resource_copy_sources(sections, resources):
-    """Resolve explicit/rest-pose resource copy edges before group building."""
+    """Resolve explicit resource copy, reference, and descriptor edges."""
     resource_copy_sources = {}
-    copy_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*copy(?:\s+ref)?\s+(Resource\S+)\s*$",
-        re.I)
+    resource_assignment_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*(?P<operation>"
+        r"copy(?:\s+ref)?|copy_desc|ref)\s+(Resource\S+)\s*$", re.I)
     for lines in sections.values():
         for raw in lines:
             line = raw.split(";", 1)[0].strip()
-            match = copy_re.match(line)
+            match = resource_assignment_re.match(line)
             if not match:
                 continue
-            destination, copy_source = match.groups()
-            if destination.lower() == copy_source.lower():
+            destination, operation, source_resource = match.groups()
+            if destination.lower() == source_resource.lower():
                 continue
             sources = resource_copy_sources.setdefault(destination.lower(), [])
-            if all(existing.lower() != copy_source.lower()
+            if all(existing.lower() != source_resource.lower()
                    for existing in sources):
-                sources.append(copy_source)
+                if operation.lower() == "copy_desc":
+                    # Descriptor copies provide the authoritative file layout
+                    # for buffers whose runtime contents come from a copy.
+                    sources.insert(0, source_resource)
+                else:
+                    sources.append(source_resource)
 
     cs_read_re = re.compile(
         r"^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
@@ -399,17 +404,6 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
             return {}
         visiting.add(cache_key)
         candidates = list(resource_copy_sources.get(cache_key, ()))
-        # WWMI binds the remapped blend buffer through a reusable runtime
-        # resource named ``ResourceBlendBufferOverride``.  The resource is
-        # intentionally empty in the INI because the command list fills it
-        # with a runtime copy, while the source descriptor remains the
-        # authored ``ResourceBlendBuffer``.  Keep this fallback limited to
-        # blend resources so unrelated override resources are not guessed.
-        if (cache_key.endswith("blendbufferoverride")
-                and not candidates):
-            candidates.append(resource_name[:-len("Override")])
-        if not cache_key.endswith(".b"):
-            candidates.append(resource_name + ".B")
         for candidate in candidates:
             resolved = resolve_vertex_info(candidate, visiting)
             if resolved.get("filename"):

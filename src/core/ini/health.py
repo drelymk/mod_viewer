@@ -395,14 +395,6 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
                             resource=rhs,
                         ))
 
-    # Match build_draw_groups' established implicit rest-pose convention: a
-    # computed ResourceX with no file may resolve through ResourceX.B even
-    # though the INI contains no textual copy edge.
-    for name, resource in resources.items():
-        rest_pose = name + ".b"
-        if not resource["filenames"] and rest_pose in declared:
-            edges[name].add(rest_pose)
-
     reachable, pending = set(), list(roots)
     while pending:
         name = pending.pop()
