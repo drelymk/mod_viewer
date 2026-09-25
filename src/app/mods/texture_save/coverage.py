@@ -140,7 +140,7 @@ def texture_save_conflict(target_key, other_key):
         })
 
 
-def prepare_texture_save(context, overrides, active_mesh_keys,
+def prepare_texture_save(context, active_mesh_keys,
                          selected_texture_key, targets, texture_usage):
     """Resolve changed targets and mip-0 Color intent for one DDS."""
     if not isinstance(targets, list) or not targets:
@@ -151,7 +151,7 @@ def prepare_texture_save(context, overrides, active_mesh_keys,
             "stale_mesh_state",
             "The model changed before the texture save started.")
     entries, selected_path, info, parsed, draws = resolve_save_request(
-        context, overrides, active_mesh_keys, selected_texture_key,
+        context, active_mesh_keys, selected_texture_key,
         texture_usage)
     from core.textures.dds import inspect_dds_layout
     layout = inspect_dds_layout(selected_path)

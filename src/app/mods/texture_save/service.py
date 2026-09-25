@@ -124,7 +124,7 @@ def _clear_committed_color_adjustments(folder_path, targets, saved_meshes):
 
 
 def save_texture_color(
-        context, overrides, active_mesh_keys, selected_texture_key, targets,
+        context, active_mesh_keys, selected_texture_key, targets,
         texture_usage, progress_callback=None):
     """Save captured Color changes by editing authorized BC7 blocks."""
     if getattr(getattr(context, "source", None), "read_only", False):
@@ -142,7 +142,7 @@ def save_texture_color(
         progress.stage("preparing")
     try:
         prepared = prepare_texture_save(
-            context, overrides, active_mesh_keys, selected_texture_key, targets,
+            context, active_mesh_keys, selected_texture_key, targets,
             texture_usage)
 
         stage = "read"

@@ -5,14 +5,62 @@ import struct
 
 import pytest
 
-from app.mods.analysis import ParsedModAnalysis
+from app.mods.analysis import ParsedModAnalysis, build_mod_ini_snapshot
 from app.mods.controls import (
     _gating_vars, _gating_vars_from_groups, load_control_state,
-    load_present_state,
+    load_present_state, unwired_pending_sections,
 )
-from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
+from app.mods.loader import load_mod, load_semantic_state
+from core.ini.document import IniDocument
+from tests.support_snapshot import snapshot_context
 
 from app.mods.controls import build_toggle_panel
+
+
+def test_unwired_pending_sections_uses_full_staged_snapshot(tmp_path,
+                                                          monkeypatch):
+    menu_path = tmp_path / "nested" / "Menu.ini"
+    draw_path = tmp_path / "Body.ini"
+    menu = IniDocument.from_string(
+        "namespace = Controls\n"
+        "[Constants]\nglobal persist $style = 0\n"
+        "[KeyStyle]\ntype = cycle\n$style = 0,1\n",
+        path=str(menu_path))
+    draw = IniDocument.from_string(
+        "[TextureOverrideBody]\n"
+        "ib = ResourceIB\nvb0 = ResourcePosition\n"
+        "vb1 = ResourceTexcoord\n"
+        "if $\\Controls\\style == 1\ndrawindexed = 3,0,0\nendif\n"
+        "[ResourceIB]\nfilename = body.ib\nformat = R32_UINT\n"
+        "[ResourcePosition]\nfilename = position.buf\nstride = 12\n"
+        "[ResourceTexcoord]\nfilename = texcoord.buf\nstride = 8\n",
+        path=str(draw_path))
+    paths = [str(menu_path), str(draw_path)]
+    snapshot = build_mod_ini_snapshot(
+        paths, str(tmp_path), {paths[0]: menu, paths[1]: draw},
+        require_documents=True)
+    from app.mods import controls
+    real_analyze = controls.analyze_mod_inis
+    analyzed = []
+
+    def analyze(current):
+        analyzed.append(current)
+        return real_analyze(current)
+
+    monkeypatch.setattr(controls, "analyze_mod_inis", analyze)
+    assert unwired_pending_sections(snapshot, {
+        "nested/Menu.ini": ["KeyStyle"]}) == {}
+    assert analyzed == [snapshot]
+
+    unwired_draw = IniDocument.from_string(
+        draw.to_string().replace("$\\Controls\\style", "$other"),
+        path=str(draw_path))
+    changed = build_mod_ini_snapshot(
+        paths, str(tmp_path), {paths[0]: menu, paths[1]: unwired_draw},
+        require_documents=True)
+    assert unwired_pending_sections(changed, {
+        "nested/Menu.ini": ["KeyStyle"]}) == {
+            "nested/Menu.ini": ["KeyStyle"]}
 
 
 def test_indirect_controls_survive_load_staged_reload_and_dependency_cycles(tmp_path):
@@ -64,7 +112,7 @@ format = R32_UINT
     (tmp_path / "position.buf").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
     (tmp_path / "texcoord.buf").write_bytes(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
     (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
-    context = ModLoadContext(str(tmp_path), [str(path)])
+    context = snapshot_context(str(tmp_path), [str(path)])
     full = load_mod(context=context)
     assert not full.get("error")
     assert set(full["controls"]["toggles"]) == {"KeyStyle"}
@@ -75,7 +123,10 @@ format = R32_UINT
                   load_semantic_state(context, active_mesh_keys=active)):
         assert state["controls"] == full["controls"]
     staged = text.replace("if $stage == 1", "if $Unused == 1")
-    updated = load_control_state(context, overrides={str(path): staged}, active_mesh_keys=active)
+    staged_context = snapshot_context(
+        str(tmp_path), [str(path)],
+        {str(path): IniDocument.from_string(staged, path=str(path))})
+    updated = load_control_state(staged_context, active_mesh_keys=active)
     assert set(updated["controls"]["toggles"]) == {"KeyUnused"}
     restored = load_control_state(context, active_mesh_keys=active)
     assert restored["controls"] == full["controls"]
@@ -170,7 +221,7 @@ def test_present_state_does_not_build_geometry(
         "$Outfit = 0,1\n",
         encoding="utf-8",
     )
-    context = ModLoadContext(str(tmp_path), [str(ini_path)])
+    context = snapshot_context(str(tmp_path), [str(ini_path)])
 
     monkeypatch.setattr(
         "app.mods.controls.build_mesh_semantics",
@@ -197,7 +248,7 @@ def test_control_state_does_not_build_geometry(
         menu={}, defaults={"Outfit": "0"}, state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
     )
-    context = ModLoadContext(str(tmp_path), [str(tmp_path / "mod.ini")])
+    context = snapshot_context(str(tmp_path), [str(tmp_path / "mod.ini")])
     monkeypatch.setattr(
         "app.mods.controls.analyze_mod_inis", lambda *args, **kwargs: parsed)
 

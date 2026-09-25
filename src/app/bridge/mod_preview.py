@@ -20,7 +20,7 @@ from core.textures import encode_texture_file, texture_cache_stats
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import ModSourceError, mod_source_for_path
 from core.ini.health import analyze_mod
-from app.mods.analysis import resolved_draws
+from app.mods.analysis import build_mod_ini_snapshot, resolved_draws
 from app.mods.texture_save.service import save_texture_color
 from core.textures.profiles import texture_profile_for
 
@@ -65,26 +65,21 @@ class ModPreview:
         publication = server.active_texture_publication(folder_path)
         return publication.register_menu_image if publication else None
 
-    def authoritative_context(self, folder_path, disabled_ini=False,
-                              serialize_overrides=False):
+    def authoritative_context(self, folder_path, disabled_ini=False):
         """Load selected INI documents while preserving the current session."""
         folder_path = self._access.mod_folder(folder_path)
         source = edit_session.source_for(folder_path) or \
             mod_source_for_path(folder_path)
-        discovery_kwargs = {"disabled": disabled_ini}
-        if getattr(source, "virtual", False):
-            discovery_kwargs["source"] = source
-        ini_paths = (edit_session.document_paths(folder_path)
-                     or discover_ini_paths(folder_path, **discovery_kwargs))
-        if getattr(source, "virtual", False):
-            edit_session.load_documents(folder_path, ini_paths, source=source)
-        else:
-            edit_session.load_documents(folder_path, ini_paths)
-        # Analysis consumers read the authoritative IniDocuments directly.
-        # Keep the text snapshot available for callers that explicitly need a
-        # serialized override, but do not allocate one on normal read paths.
-        overrides = (edit_session.overrides_for(folder_path)
-                     if serialize_overrides else {})
+        ini_paths = edit_session.document_paths(folder_path)
+        discovered_docs = {}
+        if not ini_paths:
+            discovery_kwargs = {"disabled": disabled_ini,
+                                "documents": discovered_docs}
+            if getattr(source, "virtual", False):
+                discovery_kwargs["source"] = source
+            ini_paths = discover_ini_paths(folder_path, **discovery_kwargs)
+        edit_session.load_documents(
+            folder_path, ini_paths, source=source, documents=discovered_docs)
         pending_new_sections = edit_session.new_sections_for(folder_path)
         saved_metadata = (metadata.load(folder_path, source=source)
                           if getattr(source, "virtual", False)
@@ -96,10 +91,11 @@ class ModPreview:
                 saved_metadata["present_names"] = staged_names
             else:
                 saved_metadata.pop("present_names", None)
+        snapshot = build_mod_ini_snapshot(
+            ini_paths, folder_path, edit_session.documents_for(folder_path),
+            source=source, require_documents=True)
         context = mod_loader.ModLoadContext(
-            folder_path, ini_paths, edit_session.documents_for(folder_path),
-            saved_metadata,
-            source=source)
+            folder_path, metadata=saved_metadata, ini=snapshot)
         context.buffer_overrides = edit_session.ib_overrides_for(folder_path)
         cache_key = os.path.normcase(os.path.abspath(folder_path))
         with self._model_state_lock:
@@ -117,7 +113,7 @@ class ModPreview:
             # Optional asset configuration must not make an otherwise valid
             # mod unloadable; the asset UI reports the config error directly.
             context.asset_folders = []
-        return folder_path, overrides, pending_new_sections, context
+        return folder_path, pending_new_sections, context
 
     @staticmethod
     def _semantic_read_error():
@@ -167,7 +163,7 @@ class ModPreview:
     def load_mod(self, folder_path, disabled_ini=False):
         self.clear_loaded_model()
         try:
-            folder_path, overrides, pending_new_sections, context = \
+            folder_path, pending_new_sections, context = \
                 self.authoritative_context(folder_path, disabled_ini=disabled_ini)
         except ModSourceError as error:
             return {"error": str(error)}
@@ -180,7 +176,7 @@ class ModPreview:
             publication = server.begin_texture_publication(folder_path)
         try:
             result = mod_loader.load_mod(
-                context=context, overrides=overrides,
+                context=context,
                 pending_new_sections=pending_new_sections, geometry=geometry,
                 texture_source=publication.register,
                 menu_image_source=publication.register_menu_image)
@@ -240,9 +236,9 @@ class ModPreview:
     def get_present_state(self, folder_path):
         """Return staged PRESENT state without loading geometry or textures."""
         try:
-            folder_path, overrides, _pending, context = \
+            folder_path, _pending, context = \
                 self.authoritative_context(folder_path)
-            present = mod_loader.load_present_state(context, overrides)
+            present = mod_loader.load_present_state(context)
             metadata.hydrate_present(folder_path, present, context.metadata)
             return {"present": present}
         except Exception:
@@ -251,20 +247,20 @@ class ModPreview:
     def apply_component_mesh_changes(self, folder_path, request):
         """Validate and stage one viewer component's mesh changes."""
         try:
-            folder_path, overrides, _pending, context = \
+            folder_path, _pending, context = \
                 self.authoritative_context(folder_path)
             return mesh_edit.apply_component_mesh_changes(
-                context, overrides, request)
+                context, request)
         except Exception:
             return self._semantic_read_error()
 
     def get_control_state(self, folder_path):
         """Return staged control semantics without rebuilding the model."""
         try:
-            folder_path, overrides, pending, context = \
+            folder_path, pending, context = \
                 self.authoritative_context(folder_path)
             result = mod_loader.load_control_state(
-                context, overrides, pending,
+                context, pending,
                 active_mesh_keys=self._active_mesh_keys.get(folder_path),
                 menu_image_source=self._active_menu_image_source(folder_path))
             metadata.hydrate_present(
@@ -276,20 +272,20 @@ class ModPreview:
     def get_mesh_semantics(self, folder_path):
         """Return staged draw visibility semantics without rebuilding meshes."""
         try:
-            folder_path, overrides, _pending, context = \
+            folder_path, _pending, context = \
                 self.authoritative_context(folder_path)
             return mod_loader.load_mesh_semantics(
-                context, overrides, self._active_mesh_keys.get(folder_path))
+                context, self._active_mesh_keys.get(folder_path))
         except Exception:
             return self._semantic_read_error()
 
     def get_semantic_state(self, folder_path):
         """Return mesh and control semantics from one analysis pass."""
         try:
-            folder_path, overrides, pending, context = \
+            folder_path, pending, context = \
                 self.authoritative_context(folder_path)
             result = mod_loader.load_semantic_state(
-                context, overrides, pending,
+                context, pending,
                 active_mesh_keys=self._active_mesh_keys.get(folder_path),
                 menu_image_source=self._active_menu_image_source(folder_path))
             metadata.hydrate_present(
@@ -303,22 +299,22 @@ class ModPreview:
             progress_callback=None):
         """Save all captured Color changes that target one physical DDS."""
         try:
-            folder_path, overrides, _pending, context = \
+            folder_path, _pending, context = \
                 self.authoritative_context(folder_path)
             save_kwargs = {} if progress_callback is None else {
                 "progress_callback": progress_callback,
             }
             result = save_texture_color(
-                context, overrides, self._active_mesh_keys.get(folder_path),
+                context, self._active_mesh_keys.get(folder_path),
                 tex_key, targets, texture_usage, **save_kwargs)
             return result
         except Exception:
             return self._semantic_read_error()
 
     @staticmethod
-    def _skinning_draws(context, overrides):
+    def _skinning_draws(context):
         """Resolve every rendered draw once for the model preview."""
-        return resolved_draws(context, overrides)
+        return resolved_draws(context)
 
     @staticmethod
     def _decode_skinning_draw(draw, group, mod_dir, buffers,
@@ -399,7 +395,7 @@ class ModPreview:
             "weight_blob_bytes": 0,
         }
         try:
-            folder_path, overrides, _pending, context = \
+            folder_path, _pending, context = \
                 self.authoritative_context(folder_path)
             saved_bones = metadata.weight_selected_bones(
                 data=context.metadata)
@@ -418,7 +414,7 @@ class ModPreview:
                 parsed = None
             else:
                 resolve_started = time.perf_counter()
-                parsed, draws = self._skinning_draws(context, overrides)
+                parsed, draws = self._skinning_draws(context)
                 timing["resolve_draws_seconds"] = (
                     time.perf_counter() - resolve_started)
                 timing["resolve_draw_count"] = len(draws)
@@ -586,9 +582,11 @@ class ModPreview:
         if source is None:
             source = mod_source_for_path(folder_path)
         if not ini_paths:
+            discovered_docs = {}
             ini_paths = discover_ini_paths(
-                folder_path, source=source)
-            edit_session.load_documents(folder_path, ini_paths, source=source)
+                folder_path, source=source, documents=discovered_docs)
+            edit_session.load_documents(
+                folder_path, ini_paths, source=source, documents=discovered_docs)
         try:
             report = analyze_mod(
                 folder_path, ini_paths=ini_paths,

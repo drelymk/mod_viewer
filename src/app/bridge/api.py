@@ -146,10 +146,10 @@ class ModViewerAPI:
     def load_missing_asset_parts(self, folder_path):
         """Append original Asset parts not covered by the current mod INIs."""
         try:
-            folder_path, overrides, _pending, context = \
+            folder_path, _pending, context = \
                 self._mod_preview.authoritative_context(folder_path)
             return self._asset_preview.load_missing_asset_parts(
-                folder_path, context, overrides)
+                folder_path, context)
         except PermissionError as error:
             return {"status": "error", "error": str(error)}
         except Exception:

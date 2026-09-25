@@ -134,7 +134,7 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     preview._skinning_manifests[str(tmp_path)] = rendered.skinning_manifest
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _path: (str(tmp_path), {}, {}, context))
+        lambda _path: (str(tmp_path), {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
     monkeypatch.setattr(
@@ -202,7 +202,7 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
     preview._skinning_manifests[str(tmp_path)] = rendered.skinning_manifest
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _path: (str(tmp_path), {}, {}, context))
+        lambda _path: (str(tmp_path), {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
     monkeypatch.setattr(
@@ -256,7 +256,7 @@ def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
     preview = ModPreview(_Access())
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _path: (str(tmp_path), {}, {}, context))
+        lambda _path: (str(tmp_path), {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
     parsed = SimpleNamespace(game=SimpleNamespace(game="gimi"), groups=groups)

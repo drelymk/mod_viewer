@@ -5,6 +5,7 @@ import os
 import pytest
 
 from core.mod_discovery import discover_ini_paths
+from core.ini.document import IniDocument
 
 
 _GEOMETRY_INI = "[TextureOverrideRoot]\ndrawindexed = 3, 0, 0\n"
@@ -66,3 +67,35 @@ def test_discovery_applies_ini_count_cap_to_selected_nested_files(
     assert all(
         ("DISABLED" in os.path.basename(path).upper()) == disabled
         for path in paths)
+
+
+@pytest.mark.parametrize("root_text", [
+    "[TextureOverrideBody]\ndrawindexed = 3,0,0\n",
+    "[TextureOverrideBody]\nib = ResourceIB\n",
+    "[CommandListBody]\nib = ResourceIB\n",
+    "[TextureOverrideBody] ; note\ndrawindexed = 3,0,0\n",
+])
+def test_discovery_retains_only_documents_loaded_for_root_check(
+        tmp_path, root_text):
+    _write(tmp_path, "Root.ini", root_text)
+    _write(tmp_path, "nested/Child.ini")
+    documents = {}
+
+    paths = discover_ini_paths(tmp_path, documents=documents)
+
+    assert _relative_paths(tmp_path, paths) == ["Root.ini", "nested/Child.ini"]
+    assert list(documents) == [str(tmp_path / "Root.ini")]
+    assert isinstance(documents[str(tmp_path / "Root.ini")], IniDocument)
+
+
+def test_discovery_without_root_geometry_skips_nested_and_tolerates_bad_ini(
+        tmp_path):
+    _write(tmp_path, "Plain.ini")
+    (tmp_path / "Unreadable.ini").write_bytes(b"\xff")
+    _write(tmp_path, "nested/Child.ini", _GEOMETRY_INI)
+    documents = {}
+
+    paths = discover_ini_paths(tmp_path, documents=documents)
+
+    assert _relative_paths(tmp_path, paths) == ["Plain.ini", "Unreadable.ini"]
+    assert list(documents) == [str(tmp_path / "Plain.ini")]

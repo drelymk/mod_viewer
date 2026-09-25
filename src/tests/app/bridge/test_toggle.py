@@ -247,11 +247,15 @@ def test_record_staged_edit_lifecycle(toggle_mod):
 
 
 
-def test_new_toggle_blocks_export_until_recorded(wirable_mod):
+def test_new_toggle_blocks_export_until_recorded(wirable_mod, monkeypatch):
     tmp, ini_path = wirable_mod
     ini_rel = "mod.ini"
     add_result = toggle_api.add_toggle(tmp, ini_rel, "Extra", "9", "Extra", ["0", "1"])
     assert add_result["ok"] is True
+
+    monkeypatch.setattr(edit_session, "overrides_for", lambda _mod_dir:
+                        (_ for _ in ()).throw(AssertionError(
+                            "Export serialized staged INI documents")))
 
     blocked = toggle_api.export_changes(tmp)
     assert blocked["unwired"] == {"mod.ini": ["KeyExtra"]}

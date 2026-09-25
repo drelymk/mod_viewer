@@ -5,7 +5,6 @@ import os
 from core.geometry.mesh_builder import build_mesh_semantics
 from core.ini.condition import is_namespaced
 from core.ini.state import control_dependencies
-from core.mod_discovery import discover_ini_paths
 from core.resource_paths import safe_resource_path
 from core.textures import encode_texture_data_uri
 
@@ -213,19 +212,15 @@ def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
         draw for group in groups for draw in group.get("draws", []))
 
 
-def load_present_state(context, overrides=None):
+def load_present_state(context):
     """Read only the logical PRESENT projection from authoritative INIs."""
-    return analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source).present
+    return analyze_mod_inis(context.ini).present
 
 
-def load_control_state(context, overrides=None, pending_new_sections=None,
+def load_control_state(context, pending_new_sections=None,
                        active_mesh_keys=None, *, menu_image_source=None):
     """Read control semantics without constructing mesh geometry."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_mod_inis(context.ini)
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
                 source=context.source)
@@ -234,30 +229,25 @@ def load_control_state(context, overrides=None, pending_new_sections=None,
         menu_image_source=menu_image_source)
 
 
-def unwired_pending_sections(folder_path, overrides, pending_new_sections,
-                             ini_paths=None, documents=None, source=None):
+def unwired_pending_sections(snapshot, pending_new_sections):
     """Find newly-added toggle sections that still gate no mesh."""
     if not pending_new_sections:
         return {}
-    source = source or (getattr(ini_paths[0], "source", None)
-                        if ini_paths else None)
-    ini_paths = (list(ini_paths) if ini_paths is not None
-                 else discover_ini_paths(folder_path, source=source))
-    by_name = {_ini_rel(p, folder_path): p for p in ini_paths}
-
+    parsed = analyze_mod_inis(snapshot)
+    gating = _gating_vars_from_groups(parsed.groups)
+    by_name = {record.relative_path: record for record in snapshot.records}
     result = {}
     for ini_name, sections in pending_new_sections.items():
         if not sections:
             continue
-        ini_path = by_name.get(ini_name)
-        if ini_path is None:
+        record = by_name.get(ini_name)
+        if record is None:
             continue
-        parsed = analyze_mod_inis(
-            [ini_path], folder_path, overrides, documents, source=source)
-        gating = _gating_vars_from_groups(parsed.groups)
         still_unwired = [
             section for section in sections
-            if not any(v in gating for v in parsed.toggles.get(section, {}).get("vars", {}))
+            if not any(
+                var in gating for var in parsed.toggles.get(
+                    f"{record.var_prefix or ''}{section}", {}).get("vars", {}))
         ]
         if still_unwired:
             result[ini_name] = still_unwired

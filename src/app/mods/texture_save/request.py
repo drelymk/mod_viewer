@@ -153,7 +153,7 @@ def validate_usage(active_mesh_keys, texture_usage):
     return tuple(entries)
 
 
-def resolve_save_request(context, overrides, active_mesh_keys,
+def resolve_save_request(context, active_mesh_keys,
                          selected_texture_key, texture_usage):
     entries = validate_usage(active_mesh_keys, texture_usage)
     if not isinstance(selected_texture_key, str):
@@ -163,7 +163,7 @@ def resolve_save_request(context, overrides, active_mesh_keys,
     selected_path = texture_path(
         context.mod_dir, selected_texture_key, selected=True)
     info = inspect_save_texture(selected_path)
-    parsed, draws = resolved_draws(context, overrides)
+    parsed, draws = resolved_draws(context)
     selected_identity = physical_identity(selected_path)
     has_active_selected_diffuse = False
     for entry in entries:

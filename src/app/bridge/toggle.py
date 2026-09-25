@@ -20,6 +20,7 @@ from core.mod_discovery import discover_ini_paths
 from core.mod_source import mod_source_for_path
 from core.editing import record as record_editor
 from core.editing import toggle as te
+from app.mods.analysis import build_mod_ini_snapshot
 from app.mods import loader as mod_loader
 from app.session import edit as edit_session
 
@@ -183,10 +184,12 @@ def export_changes(mod_dir):
         return {"error": "Export is unavailable for compressed mods."}
     pending_new = edit_session.new_sections_for(mod_dir)
     if pending_new:
+        snapshot = build_mod_ini_snapshot(
+            edit_session.document_paths(mod_dir), mod_dir,
+            edit_session.documents_for(mod_dir), source=source,
+            require_documents=True)
         unwired = mod_loader.unwired_pending_sections(
-            mod_dir, edit_session.overrides_for(mod_dir), pending_new,
-            ini_paths=edit_session.document_paths(mod_dir),
-            documents=edit_session.documents_for(mod_dir), source=source)
+            snapshot, pending_new)
         if unwired:
             names = ", ".join(f"{sec} ({ini})" for ini, secs in unwired.items() for sec in secs)
             return {"error": "Can't export yet: newly-added toggle(s) aren't wired to any "

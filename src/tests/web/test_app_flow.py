@@ -823,8 +823,10 @@ def test_present_delete_refreshes_mesh_provenance_without_reload(
             "PresentDelete"]
         assert page.evaluate("window.__fakeApi.calls.loadMod") == [
             "PresentDelete"]
-        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == [
+        assert page.evaluate("window.__fakeApi.calls.semanticState") == [
             "PresentDelete"]
+        assert page.evaluate("window.__fakeApi.calls.presentState") == []
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
     finally:
         context.close()
 
@@ -960,6 +962,39 @@ def test_present_refresh_keeps_model_identity_and_selection(
         assert page.evaluate("window.modViewer.activeMeshes[0] && "
                             "window.__fakeApi.calls.loadMod.length") == 1
         assert page.locator("#present-list .toggle-value").inner_text() == "Zero"
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("change_type", [
+    "add-key", "complete-key", "edit-key", "delete-key",
+    "new-position", "update-position", "delete-position",
+])
+def test_present_authoring_uses_one_combined_refresh_and_applies_selection(
+        edge_browser, frontend_url, change_type):
+    payload = _present_payload()
+    context, page = _page(edge_browser, frontend_url, {"Present": payload})
+    try:
+        _open(page, "Present")
+        page.locator(".draw-item").wait_for()
+        page.evaluate("""() => {
+          const item = window.__fakeApi.responses.Present.controls.present.item;
+          item.vars[0].values.push('2');
+          item.names.push('Third');
+          item.count = 3;
+          window.__presentMesh = window.modViewer.activeMeshes[0];
+        }""")
+
+        assert page.evaluate("""type => window.modViewer.refreshPresentState({
+            type, selectedPosition: 2, applySelection: true,
+        })""", change_type) is True
+        assert page.evaluate("window.__fakeApi.calls.semanticState") == ["Present"]
+        assert page.evaluate("window.__fakeApi.calls.presentState") == []
+        assert page.evaluate("window.__fakeApi.calls.meshSemantics") == []
+        assert page.evaluate("window.__fakeApi.calls.loadMod") == ["Present"]
+        assert page.evaluate(
+            "window.modViewer.activeMeshes[0] === window.__presentMesh")
+        assert page.locator("#present-list .toggle-value").inner_text() == "Third"
     finally:
         context.close()
 

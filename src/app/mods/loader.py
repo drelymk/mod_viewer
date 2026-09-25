@@ -14,10 +14,12 @@ from core.ini.health import analyze_mod
 from core.materials.profiles import material_profile_for
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import (
-    ModSource, ModSourceError, mod_source_for_path,
+    ModSourceError, mod_source_for_path,
 )
 
-from app.mods.analysis import ParsedModAnalysis, analyze_mod_inis
+from app.mods.analysis import (ParsedModAnalysis, analyze_mod_inis,
+                               build_mod_ini_snapshot)
+from core.ini.snapshot import ModIniSnapshot
 from app.mods.controls import (
     _control_semantic_projection,
     _gating_vars,
@@ -51,22 +53,36 @@ class ModLoadContext:
     """Inputs shared by one open/reload of a mod."""
 
     mod_dir: str
-    ini_paths: list[str]
-    docs: dict = field(default_factory=dict)
+    ini: ModIniSnapshot
     metadata: dict = field(default_factory=dict)
     asset_folders: list = field(default_factory=list)
     dds_classification_cache: dict = field(default_factory=dict)
-    # Private state retained by the bridge for the exact loaded model.
     skinning_manifest: dict = field(default_factory=dict)
-    source: ModSource | None = None
     buffer_overrides: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        if not isinstance(self.ini, ModIniSnapshot):
+            raise TypeError("ModLoadContext requires a ModIniSnapshot")
 
-def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
+    @property
+    def source(self):
+        return self.ini.source
+
+    @property
+    def ini_paths(self):
+        return [record.path for record in self.ini.records]
+
+    @property
+    def docs(self):
+        return {record.path: record.document for record in self.ini.records}
+
+
+def _resolve_context(folder_path, ini_paths=None, documents=None, context=None,
+                     overrides=None):
     if context is not None:
-        if getattr(context, "source", None) is None:
-            context.source = mod_source_for_path(context.mod_dir)
-        _normalize_virtual_context(context)
+        if overrides:
+            raise ValueError(
+                "overrides cannot be used with an authoritative context")
         return context
     if folder_path is None:
         raise ValueError("folder_path is required")
@@ -79,45 +95,22 @@ def _resolve_context(folder_path, ini_paths=None, documents=None, context=None):
         source = (getattr(ini_paths[0], "source", None)
                   if ini_paths else None) or mod_source_for_path(folder_path)
     if getattr(source, "virtual", False):
-        normalized_paths = []
-        for path in ini_paths:
-            normalized_paths.append(source.document_path(source.logical_path(path)))
-        ini_paths = normalized_paths
-    return ModLoadContext(
-        folder_path, list(ini_paths), documents or {}, {}, source=source)
+        ini_paths = [source.document_path(source.logical_path(path))
+                     for path in ini_paths]
+        documents = {source.document_path(source.logical_path(path)): document
+                     for path, document in (documents or {}).items()}
+        overrides = {source.document_path(source.logical_path(path)): text
+                     for path, text in (overrides or {}).items()}
+    snapshot = build_mod_ini_snapshot(
+        ini_paths, folder_path, documents, overrides, source)
+    return ModLoadContext(folder_path, snapshot)
 
 
-def _normalize_virtual_context(context):
-    """Keep direct ModLoadContext callers on logical source identities."""
-    source = getattr(context, "source", None)
-    if not getattr(source, "virtual", False):
-        return context
-    normalized_paths = []
-    for path in context.ini_paths:
-        if source.is_resource_reference(path):
-            normalized_paths.append(path)
-            continue
-        normalized_paths.append(source.document_path(source.logical_path(path)))
-    context.ini_paths = normalized_paths
-
-    documents = dict(getattr(context, "docs", None) or {})
-    for path, document in list(documents.items()):
-        if source.is_resource_reference(path):
-            continue
-        try:
-            logical = source.logical_path(path)
-            documents[source.document_path(logical)] = document
-        except ModSourceError:
-            continue
-    context.docs = documents
-    return context
-
-
-def _failure_health(context, overrides):
+def _failure_health(context):
     """Best-effort diagnostics reserved for a failed model load."""
     try:
         return analyze_mod(
-            context.mod_dir, ini_paths=context.ini_paths, overrides=overrides,
+            context.mod_dir, ini_paths=context.ini_paths,
             documents=context.docs, source=context.source)
     except Exception:
         traceback.print_exc()
@@ -194,11 +187,9 @@ def _mesh_semantic_projection(parsed, context, active_mesh_keys=None):
     return mesh_payload, material_profiles, asset_resolution
 
 
-def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
+def load_mesh_semantics(context, active_mesh_keys=None):
     """Read draw and material semantics without building geometry."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_mod_inis(context.ini)
     mesh_payload, material_profiles, asset_resolution = \
         _mesh_semantic_projection(parsed, context, active_mesh_keys)
     return {
@@ -208,12 +199,10 @@ def load_mesh_semantics(context, overrides=None, active_mesh_keys=None):
     }
 
 
-def load_semantic_state(context, overrides=None, pending_new_sections=None,
+def load_semantic_state(context, pending_new_sections=None,
                         active_mesh_keys=None, *, menu_image_source=None):
     """Read mesh and control projections from one authoritative analysis."""
-    parsed = analyze_mod_inis(
-        context.ini_paths, context.mod_dir, overrides, context.docs,
-        source=context.source)
+    parsed = analyze_mod_inis(context.ini)
     mesh_payload, material_profiles, asset_resolution = \
         _mesh_semantic_projection(parsed, context, active_mesh_keys)
     gating_vars = _gating_vars_from_mesh_semantics(
@@ -239,24 +228,21 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     try:
         context = _resolve_context(
             folder_path, ini_paths=ini_paths, documents=documents,
-            context=context)
-    except ModSourceError as error:
+            context=context, overrides=overrides)
+    except (ModSourceError, ValueError) as error:
         return _structured_payload(error=str(error))
     context.skinning_manifest = {}
-    overrides = overrides or {}
     if not context.ini_paths:
-        health = _failure_health(context, overrides)
+        health = _failure_health(context)
         return _structured_payload(
             health=health,
             error="No active .ini files found in this folder.",
             source=context.source)
 
     try:
-        parsed = analyze_mod_inis(
-            context.ini_paths, context.mod_dir, overrides, context.docs,
-            source=context.source)
+        parsed = analyze_mod_inis(context.ini)
         if not parsed.groups:
-            health = _failure_health(context, overrides)
+            health = _failure_health(context)
             return _structured_payload(
                 health=health,
                 error=(f"No mesh geometry found across "
@@ -273,7 +259,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}
-            health = _failure_health(context, overrides)
+            health = _failure_health(context)
             return _structured_payload(
                 health=health,
                 error="No mesh data could be extracted (buffer files missing?).",
@@ -306,12 +292,12 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
     except ModSourceError as error:
         context.skinning_manifest = {}
         return _structured_payload(
-            health=_failure_health(context, overrides),
+            health=_failure_health(context),
             error=str(error), source=context.source)
     except Exception:
         context.skinning_manifest = {}
         traceback.print_exc()
-        health = _failure_health(context, overrides)
+        health = _failure_health(context)
         return _structured_payload(
             health=health,
             error="Unexpected backend error. See the application log for details.",

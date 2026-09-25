@@ -30,6 +30,7 @@ from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_payload, build_mesh_result,
                                build_mesh_semantics)
 from core.textures import encode_texture_file
+from tests.support_snapshot import snapshot_context
 
 
 def test_nested_ini_resources_are_relative_to_their_ini():
@@ -79,7 +80,7 @@ format = R32_UINT
         assert "nested/nested.ini" in source_inis
 
         semantic = mod_loader.load_mesh_semantics(
-            mod_loader.ModLoadContext(
+            snapshot_context(
                 root, mod_loader.find_inis(root), {}, {}))
         assert {
             name: entry["identity"]
@@ -253,7 +254,7 @@ def test_geometry_blob_bypasses_base64_intermediate():
         legacy = build_mesh_payload(groups, root)
         assert (isinstance(legacy["Body-1"]["pos"], str)), ("direct callers retain the legacy base64 geometry contract")
 
-        context = mod_loader.ModLoadContext(
+        context = snapshot_context(
             root, [ini_path], {ini_path: IniDocument.load(ini_path)}, {})
         loaded_geometry = GeometryBlob()
         loaded = mod_loader.load_mod(context=context, geometry=loaded_geometry)
@@ -278,7 +279,7 @@ def test_full_and_semantic_material_resolution_are_in_parity(tmp_path):
             game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
             confidence="high", scores={}),
     )
-    context = mod_loader.ModLoadContext(
+    context = snapshot_context(
         str(tmp_path), [str(tmp_path / "Root.ini")], {}, {
             "component_material_kinds": {"Root.ini": {"Body": "body"}},
         })
@@ -346,7 +347,7 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         groups=[group], toggles={}, menu={}, defaults={}, state_rules=[],
         present={}, game=SimpleNamespace(game="wuwa"),
         resource_files=[replacement.file])
-    context = mod_loader.ModLoadContext(str(tmp_path), [], {}, {})
+    context = snapshot_context(str(tmp_path), [], {}, {})
 
     mod_enrichment._apply_texture_enrichment(
         parsed, context, [[]], complete_index=False)
@@ -553,7 +554,7 @@ def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
         })
         return [[binding]]
 
-    context = mod_loader.ModLoadContext(
+    context = snapshot_context(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
     with patch.object(mod_loader, "analyze_mod_inis", return_value=parsed), \
             patch.object(mod_enrichment.asset_resolver, "resolve_groups",
@@ -590,7 +591,7 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
         state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
     )
-    context = mod_loader.ModLoadContext(
+    context = snapshot_context(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
     with patch.object(mod_controls, "analyze_mod_inis", return_value=parsed), \
             patch.object(mod_controls, "build_mesh_semantics", return_value={
@@ -624,7 +625,7 @@ def test_combined_semantic_state_analyzes_and_builds_meshes_once(tmp_path):
             "var": "visible", "value": "1", "negate": False,
         }]]},
     }
-    context = mod_loader.ModLoadContext(
+    context = snapshot_context(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
     calls = {"analysis": 0, "mesh": 0}
 

@@ -37,7 +37,7 @@ import tempfile
 from datetime import datetime, timedelta
 from copy import deepcopy
 
-from core.ini.document import IniDocument
+from core.ini.document import IniDocument, load_ini_document
 from core.mod_source import mod_source_for_path
 
 
@@ -271,7 +271,7 @@ def _clone_ib_edits(records):
     }
 
 
-def load_documents(mod_dir, ini_paths, *, source=None):
+def load_documents(mod_dir, ini_paths, *, source=None, documents=None):
     """Load every active INI into the authoritative in-memory session.
 
     Re-loading the same mod never re-reads disk: text edits and toggle edits
@@ -285,11 +285,9 @@ def load_documents(mod_dir, ini_paths, *, source=None):
         key = _key(mod_dir, path, source=sess.source)
         if key in sess.docs:
             continue
-        if not sess.source.virtual:
-            doc = IniDocument.load(path)
-        else:
-            doc = IniDocument.from_string(
-                sess.source.read_text(path), path=path)
+        doc = documents.get(path) if documents is not None else None
+        if doc is None:
+            doc = load_ini_document(path, sess.source)
         sess.docs[key] = doc
         sess.baselines[key] = doc.to_string()
         added = True

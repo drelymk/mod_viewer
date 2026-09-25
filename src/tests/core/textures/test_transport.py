@@ -16,6 +16,7 @@ from PIL import Image
 
 from app.mods import metadata as metadata
 from app.mods import loader as mod_loader
+from tests.support_snapshot import snapshot_context
 from app.runtime import server as server
 from app.bridge.api import ModViewerAPI
 from core.ini.document import IniDocument
@@ -127,7 +128,7 @@ def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
         "filename = shared.png\n",
         encoding="utf-8",
     )
-    context = mod_loader.ModLoadContext(
+    context = snapshot_context(
         str(tmp_path), [str(ini_path)],
         {str(ini_path): IniDocument.load(str(ini_path))}, {})
     registered = []

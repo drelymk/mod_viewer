@@ -87,7 +87,7 @@ def test_asset_fill_uses_non_replacing_publication(monkeypatch):
         lambda *_args, **kwargs: published.append(kwargs),
     )
 
-    result = preview.load_missing_asset_parts("mod", SimpleNamespace(), {})
+    result = preview.load_missing_asset_parts("mod", SimpleNamespace())
 
     assert result["status"] == "loaded"
     assert published == [{"replace": False}]

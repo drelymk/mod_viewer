@@ -6,6 +6,7 @@ from app.assets import composition as asset_composition
 from app.assets import index as asset_index
 from core.geometry.component_coverage import collect_component_overrides
 from core.ini.document import IniDocument
+from tests.support_snapshot import snapshot_context
 
 
 def _index(*geometries, asset_path="Character"):
@@ -38,11 +39,10 @@ def _context(tmp_path, texts, roots=("asset-root",)):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         paths.append(str(path))
-    return SimpleNamespace(
-        mod_dir=str(tmp_path), ini_paths=paths, docs={},
-        asset_folders=[{"type": "ZZMI", "path": root, "enabled": True}
-                       for root in roots],
-    )
+    context = snapshot_context(str(tmp_path), paths)
+    context.asset_folders = [
+        {"type": "ZZMI", "path": root, "enabled": True} for root in roots]
+    return context
 
 
 def _zzmi(hash_value, extra=""):
@@ -335,11 +335,9 @@ def test_plan_reads_staged_document_projection(tmp_path, monkeypatch):
     path = str(tmp_path / "mod.ini")
     document = IniDocument.from_string(
         _zzmi("aaaaaaaa"), path=path)
-    context = SimpleNamespace(
-        mod_dir=str(tmp_path), ini_paths=[path], docs={path: document},
-        asset_folders=[{"type": "ZZMI", "path": "asset-root",
-                        "enabled": True}],
-    )
+    context = snapshot_context(str(tmp_path), [path], {path: document})
+    context.asset_folders = [
+        {"type": "ZZMI", "path": "asset-root", "enabled": True}]
 
     plan = asset_composition.plan_missing_asset_parts(context)
 
