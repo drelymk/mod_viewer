@@ -138,7 +138,7 @@ def _payload_entries(request):
     return entries
 
 
-def apply_component_mesh_changes(context, overrides, request):
+def apply_component_mesh_changes(context, request):
     """Validate and stage one component's INI and index-buffer changes."""
     source = getattr(context, "source", None)
     if source is None or source.read_only:
@@ -146,7 +146,7 @@ def apply_component_mesh_changes(context, overrides, request):
 
     try:
         entries = _payload_entries(request)
-        _parsed, authoritative = resolved_draws(context, overrides)
+        _parsed, authoritative = resolved_draws(context)
         component = request.get("component")
         selected = []
         ib_candidates = {}

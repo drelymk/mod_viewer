@@ -35,7 +35,7 @@ class AssetPreview:
             server.release_texture_publication(state.get("publication"))
             server.release_geometry(state.get("geometry_url"))
 
-    def _asset_fill_plan(self, folder_path, context, overrides):
+    def _asset_fill_plan(self, folder_path, context):
         revision = edit_session.current_revision(folder_path)
         entries = tuple(sorted(
             (item.get("type"), item.get("path"),
@@ -55,7 +55,7 @@ class AssetPreview:
         cached = self._asset_fill_plan_cache.get(key)
         if cached is not None:
             return cached
-        plan = plan_missing_asset_parts(context, overrides)
+        plan = plan_missing_asset_parts(context)
         self._asset_fill_plan_cache[key] = plan
         return plan
 
@@ -148,7 +148,7 @@ class AssetPreview:
                 asset_index.AssetIndexError, asset_loader.AssetLoadError) as error:
             return {"error": str(error)}
 
-    def load_missing_asset_parts(self, folder_path, context, overrides):
+    def load_missing_asset_parts(self, folder_path, context):
         """Append original Asset parts not covered by the current mod INIs."""
         try:
             key = os.path.normcase(os.path.abspath(folder_path))
@@ -157,7 +157,7 @@ class AssetPreview:
                 return {**existing["summary"], "status": "loaded",
                         "already_loaded": True,
                         "fill_id": existing.get("fill_id")}
-            plan = self._asset_fill_plan(folder_path, context, overrides)
+            plan = self._asset_fill_plan(folder_path, context)
             summary = plan.to_dict()
             if plan.status != "ready":
                 return summary

@@ -8,7 +8,7 @@ from core.geometry.component_coverage import (
     collect_component_overrides,
 )
 from core.materials.game_profile import collect_game_evidence, resolve_game_detection
-from core.ini.sections import extract_resources, merge_sections
+from core.ini.sections import extract_resources
 
 from . import folders as asset_folders
 from . import index as asset_index
@@ -225,19 +225,13 @@ def _candidate_assets(asset_type, evidence, asset_entries):
         value[1].casefold(), value[1], value[2].casefold(), value[2]))), candidates
 
 
-def _mod_sections(context, overrides):
-    result = []
-    for ini_path in context.ini_paths:
-        sections = merge_sections(
-            [ini_path], overrides=overrides, documents=context.docs)
-        result.append((ini_path, sections))
-    return result
+def _mod_sections(context):
+    return [(record.path, record.sections) for record in context.ini.records]
 
 
-def plan_missing_asset_parts(context, overrides=None):
+def plan_missing_asset_parts(context):
     """Resolve one Asset and subtract all authored component coverage."""
-    overrides = overrides or {}
-    sections_by_ini = _mod_sections(context, overrides)
+    sections_by_ini = _mod_sections(context)
     game_evidence = []
     runtime_evidence = []
     texture_api_evidence = []

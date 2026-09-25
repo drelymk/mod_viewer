@@ -6,6 +6,7 @@ from unittest.mock import patch
 from app.mods.enrichment import enrich_mod_analysis
 from app.mods import loader
 from core.materials.game_profile import GameDetection
+from tests.support_snapshot import snapshot_context
 
 
 def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
@@ -60,7 +61,7 @@ def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):
             game="unknown", runtime="unknown", texture_api="unknown",
             confidence="low", scores={}),
     )
-    context = loader.ModLoadContext(
+    context = snapshot_context(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
     enriched = ([], {"index_status": "unavailable"})
 

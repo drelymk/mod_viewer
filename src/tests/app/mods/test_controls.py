@@ -10,7 +10,9 @@ from app.mods.controls import (
     _gating_vars, _gating_vars_from_groups, load_control_state,
     load_present_state,
 )
-from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
+from app.mods.loader import load_mod, load_semantic_state
+from core.ini.document import IniDocument
+from tests.support_snapshot import snapshot_context
 
 from app.mods.controls import build_toggle_panel
 
@@ -64,7 +66,7 @@ format = R32_UINT
     (tmp_path / "position.buf").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
     (tmp_path / "texcoord.buf").write_bytes(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
     (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
-    context = ModLoadContext(str(tmp_path), [str(path)])
+    context = snapshot_context(str(tmp_path), [str(path)])
     full = load_mod(context=context)
     assert not full.get("error")
     assert set(full["controls"]["toggles"]) == {"KeyStyle"}
@@ -75,7 +77,10 @@ format = R32_UINT
                   load_semantic_state(context, active_mesh_keys=active)):
         assert state["controls"] == full["controls"]
     staged = text.replace("if $stage == 1", "if $Unused == 1")
-    updated = load_control_state(context, overrides={str(path): staged}, active_mesh_keys=active)
+    staged_context = snapshot_context(
+        str(tmp_path), [str(path)],
+        {str(path): IniDocument.from_string(staged, path=str(path))})
+    updated = load_control_state(staged_context, active_mesh_keys=active)
     assert set(updated["controls"]["toggles"]) == {"KeyUnused"}
     restored = load_control_state(context, active_mesh_keys=active)
     assert restored["controls"] == full["controls"]
@@ -170,7 +175,7 @@ def test_present_state_does_not_build_geometry(
         "$Outfit = 0,1\n",
         encoding="utf-8",
     )
-    context = ModLoadContext(str(tmp_path), [str(ini_path)])
+    context = snapshot_context(str(tmp_path), [str(ini_path)])
 
     monkeypatch.setattr(
         "app.mods.controls.build_mesh_semantics",
@@ -197,7 +202,7 @@ def test_control_state_does_not_build_geometry(
         menu={}, defaults={"Outfit": "0"}, state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
     )
-    context = ModLoadContext(str(tmp_path), [str(tmp_path / "mod.ini")])
+    context = snapshot_context(str(tmp_path), [str(tmp_path / "mod.ini")])
     monkeypatch.setattr(
         "app.mods.controls.analyze_mod_inis", lambda *args, **kwargs: parsed)
 

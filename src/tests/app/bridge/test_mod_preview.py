@@ -5,6 +5,7 @@ import pytest
 from app.bridge.mod_preview import ModPreview
 from core.geometry.skinning import SkinningSource
 from core.ini.document import IniDocument
+from tests.support_snapshot import snapshot_context
 
 
 class _Access:
@@ -34,8 +35,8 @@ class _Publication:
         self.events.append(("discard",))
 
 
-def _context():
-    return SimpleNamespace(metadata={}, asset_folders=[])
+def _context(paths=()):
+    return snapshot_context("mod", paths)
 
 
 @pytest.mark.parametrize(
@@ -83,12 +84,11 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
         lambda: [],
     )
 
-    _folder, overrides, _pending, context = preview.authoritative_context(
+    _folder, _pending, context = preview.authoritative_context(
         "mod", disabled_ini=disabled_ini)
 
     assert discovered == [disabled_ini]
     assert context.ini_paths == [ini_path]
-    assert overrides == {}
     assert serialized == []
 
 
@@ -140,7 +140,7 @@ def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
     }
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder: ("mod", {}, {}, context))
+        lambda _folder: ("mod", {}, context))
     monkeypatch.setattr(
         preview, "_skinning_draws",
         lambda *_args: (
@@ -183,7 +183,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     manifest = {"Body-1": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder, **_kwargs: ("mod", {}, {}, context))
+        lambda _folder, **_kwargs: ("mod", {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)
@@ -219,13 +219,12 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
 def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
     publication = _Publication([])
     preview = ModPreview(_Access())
-    context = _context()
-    context.ini_paths = ["mod/DISABLEDActive.ini"]
+    context = _context(["mod/DISABLEDActive.ini"])
     captured = {}
 
     def authoritative_context(_folder, *, disabled_ini=False):
         captured["disabled_ini"] = disabled_ini
-        return "mod", {}, {}, context
+        return "mod", {}, context
 
     monkeypatch.setattr(preview, "authoritative_context", authoritative_context)
     monkeypatch.setattr(
@@ -263,10 +262,9 @@ def test_load_reports_disabled_ini_error_when_discovery_is_empty(monkeypatch):
     publication = _Publication([])
     preview = ModPreview(_Access())
     context = _context()
-    context.ini_paths = []
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder, **_kwargs: ("mod", {}, {}, context))
+        lambda _folder, **_kwargs: ("mod", {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)
@@ -290,7 +288,7 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
     preview._skinning_manifests["mod"] = {"old": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder, **_kwargs: ("mod", {}, {}, _context()))
+        lambda _folder, **_kwargs: ("mod", {}, _context()))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.begin_texture_publication",
         lambda _folder: publication)
@@ -435,7 +433,7 @@ def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):
     captured = []
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder: ("mod", {}, {"KeyNew"}, _context()))
+        lambda _folder: ("mod", {"KeyNew"}, _context()))
     monkeypatch.setattr(
         "app.bridge.mod_preview.mod_loader.load_control_state",
         lambda *args, **kwargs: captured.append((args, kwargs)) or {
@@ -458,7 +456,7 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
     captured = []
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder: ("mod", {"override": 1}, {}, context))
+        lambda _folder: ("mod", {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.save_texture_color",
         lambda *args, **kwargs: captured.append((args, kwargs)) or {
@@ -484,7 +482,7 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
 
     assert result["status"] == "ok"
     assert captured[0][0] == (
-        context, {"override": 1}, {"Body-1", "Body-2"},
+        context, {"Body-1", "Body-2"},
         "diffuse::body.dds", targets, usage)
     assert captured[0][1] == {}
 
@@ -497,7 +495,7 @@ def test_save_texture_color_forwards_progress_callback(monkeypatch):
     captured = []
     monkeypatch.setattr(
         preview, "authoritative_context",
-        lambda _folder: ("mod", {}, {}, context))
+        lambda _folder: ("mod", {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.save_texture_color",
         lambda *args, **kwargs: captured.append((args, kwargs)) or {

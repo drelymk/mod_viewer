@@ -289,14 +289,13 @@ def build_mod_ini_snapshot(ini_paths, folder_path, documents=None,
         source = getattr(paths[0], "source", None)
     records = []
     for path in paths:
-        document = _mapped_value(documents, path)
+        text = _mapped_value(overrides, path)
+        document = (IniDocument.from_string(text, path=path)
+                    if text is not None else _mapped_value(documents, path))
         if document is None:
             if require_documents:
                 raise ValueError(f"Missing authoritative INI document: {path}")
-            text = _mapped_value(overrides, path)
-            if text is not None:
-                document = IniDocument.from_string(text, path=path)
-            elif source is not None and getattr(source, "virtual", False):
+            if source is not None and getattr(source, "virtual", False):
                 document = IniDocument.from_string(source.read_text(path), path=path)
             else:
                 document = IniDocument.load(path)
@@ -618,17 +617,9 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
     )
 
 
-def analyze_context(context, overrides, analyzer=analyze_mod_inis):
-    """Use the authoritative snapshot, retaining direct-call compatibility."""
-    if context.ini is not None and not overrides:
-        return analyzer(context.ini)
-    return analyzer(context.ini_paths, context.mod_dir, overrides,
-                    context.docs, source=context.source)
-
-
-def resolved_draws(context, overrides=None):
+def resolved_draws(context):
     """Resolve the current staged draw map once for analysis consumers."""
-    parsed = analyze_context(context, overrides)
+    parsed = analyze_mod_inis(context.ini)
     draws = {}
     for group in parsed.groups:
         for draw in deduplicate_draws(group):

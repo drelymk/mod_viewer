@@ -36,7 +36,7 @@ def test_apply_component_mesh_changes_stages_lossless_ini_and_ib(tmp_path,
                                                                   monkeypatch):
     ini, ib, original, draw, group, context = _fixture(tmp_path)
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             draw.label: (draw, group)}))
     identity = mesh_identity_for_draw(draw, group).key
     request = {
@@ -51,7 +51,7 @@ def test_apply_component_mesh_changes_stages_lossless_ini_and_ib(tmp_path,
         }],
     }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+    result = mesh_edit.apply_component_mesh_changes(context, request)
 
     assert result == {"ok": True, "component": "Body", "meshes": 1}
     assert ib.read_bytes() == original
@@ -70,7 +70,7 @@ def test_apply_component_mesh_changes_stages_lossless_ini_and_ib(tmp_path,
 def test_apply_rejects_incomplete_partition_without_staging(tmp_path, monkeypatch):
     _ini, ib, original, draw, group, context = _fixture(tmp_path)
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             draw.label: (draw, group)}))
     request = {
         "component": "Body",
@@ -84,7 +84,7 @@ def test_apply_rejects_incomplete_partition_without_staging(tmp_path, monkeypatc
         }],
     }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+    result = mesh_edit.apply_component_mesh_changes(context, request)
 
     assert "overlap" in result["error"]
     assert ib.read_bytes() == original
@@ -127,7 +127,7 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
         mod_dir=str(tmp_path), source=source, ini_paths=[str(ini)],
         docs=edit_session.documents_for(str(tmp_path)))
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             body.label: (body, body_group),
                             hair.label: (hair, hair_group),
                         }))
@@ -153,9 +153,9 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
         "occurrence": {"section": "Hair", "ordinal": 0, "path": []},
     }
     first = mesh_edit.apply_component_mesh_changes(
-        context, {}, request("Body", body_source, body))
+        context, request("Body", body_source, body))
     second = mesh_edit.apply_component_mesh_changes(
-        context, {}, request("Hair", hair_source, hair))
+        context, request("Hair", hair_source, hair))
 
     assert first == {"ok": True, "component": "Body", "meshes": 1}
     assert second == {"ok": True, "component": "Hair", "meshes": 1}
@@ -209,7 +209,7 @@ def test_apply_rejects_partial_overlap_with_another_draw(tmp_path, monkeypatch):
     ini, ib, original, body, overlay, body_group, overlay_group, context = (
         _overlap_fixture(tmp_path, 6, 6))
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             body.label: (body, body_group),
                             overlay.label: (overlay, overlay_group),
                         }))
@@ -225,7 +225,7 @@ def test_apply_rejects_partial_overlap_with_another_draw(tmp_path, monkeypatch):
         }],
     }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+    result = mesh_edit.apply_component_mesh_changes(context, request)
 
     assert "overlaps another draw" in result["error"]
     assert ib.read_bytes() == original
@@ -241,7 +241,7 @@ def test_apply_allows_identical_complete_overlap_with_another_draw(
     ini, ib, _original, body, overlay, body_group, overlay_group, context = (
         _overlap_fixture(tmp_path, 0, 12))
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             body.label: (body, body_group),
                             overlay.label: (overlay, overlay_group),
                         }))
@@ -257,7 +257,7 @@ def test_apply_allows_identical_complete_overlap_with_another_draw(
         }],
     }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+    result = mesh_edit.apply_component_mesh_changes(context, request)
 
     assert result == {"ok": True, "component": "Body", "meshes": 1}
     assert edit_session.has_pending(str(context.mod_dir))
@@ -268,7 +268,7 @@ def test_apply_ignores_unrelated_missing_index_buffer(tmp_path, monkeypatch):
     ini, ib, _original, body, overlay, body_group, overlay_group, context = (
         _overlap_fixture(tmp_path, 6, 6, other_ib_file="Missing.ib"))
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             body.label: (body, body_group),
                             overlay.label: (overlay, overlay_group),
                         }))
@@ -284,7 +284,7 @@ def test_apply_ignores_unrelated_missing_index_buffer(tmp_path, monkeypatch):
         }],
     }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {}, request)
+    result = mesh_edit.apply_component_mesh_changes(context, request)
 
     assert result == {"ok": True, "component": "Body", "meshes": 1}
     assert edit_session.has_pending(str(context.mod_dir))
@@ -327,7 +327,7 @@ def test_apply_tracks_each_index_buffer_dependency_to_its_sources(
         ini_paths=[str(a_ini), str(b_ini)],
         docs=edit_session.documents_for(str(tmp_path)))
     monkeypatch.setattr(mesh_edit, "resolved_draws",
-                        lambda _context, _overrides: (None, {
+                        lambda _context: (None, {
                             draw_a.label: (draw_a, group_a),
                             draw_b.label: (draw_b, group_b),
                         }))
@@ -342,7 +342,7 @@ def test_apply_tracks_each_index_buffer_dependency_to_its_sources(
             "parts": [[1], [0]],
         }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {}, {
+    result = mesh_edit.apply_component_mesh_changes(context, {
         "component": "Body",
         "meshes": [entry(draw_a, "a.ini", group_a),
                    entry(draw_b, "b.ini", group_b)],

@@ -3,7 +3,7 @@
 import zipfile
 
 from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
-from app.mods.loader import ModLoadContext
+from app.mods.loader import ModLoadContext, _resolve_context
 from core.ini.document import IniDocument
 from core.mod_source import ZipModSource
 
@@ -102,3 +102,25 @@ def test_new_staged_document_gives_new_snapshot_view(tmp_path):
     assert first.records[0].document is before
     assert second.records[0].document is after
     assert first.records[0].sections != second.records[0].sections
+
+
+def test_direct_override_is_consumed_at_context_boundary(tmp_path):
+    path = str(tmp_path / "mod.ini")
+    original = IniDocument.from_string(
+        "[Constants]\nglobal $value = 0\n", path=path)
+    override = "[Constants]\nglobal $value = 1\n"
+    context = _resolve_context(
+        str(tmp_path), [path], {path: original}, overrides={path: override})
+    assert context.ini.records[0].document is not original
+    assert context.ini.records[0].sections["Constants"] == [
+        "global $value = 1"]
+    assert context.source is context.ini.source
+    assert context.docs[path] is context.ini.records[0].document
+
+    updated = _resolve_context(
+        None, context=context,
+        overrides={path: "[Constants]\nglobal $value = 2\n"})
+    assert updated.ini.records[0].sections["Constants"] == [
+        "global $value = 2"]
+    assert context.ini.records[0].sections["Constants"] == [
+        "global $value = 1"]

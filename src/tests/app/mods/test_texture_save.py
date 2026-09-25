@@ -19,7 +19,7 @@ from core.textures.uv_coverage import UVCoverage
 
 def test_save_texture_color_rejects_read_only_zip_source_before_io():
     result = service.save_texture_color(
-        SimpleNamespace(source=SimpleNamespace(read_only=True)), {}, None,
+        SimpleNamespace(source=SimpleNamespace(read_only=True)), None,
         "diffuse::body.dds", [], [],)
 
     assert result == {
@@ -102,7 +102,7 @@ def test_texture_coverage_uses_staged_buffer_overrides(tmp_path, monkeypatch):
                         lambda *_args: SimpleNamespace(mask=(1,)))
 
     prepared = save_coverage.prepare_texture_save(
-        context, {}, ["Body-1"], "diffuse::body.dds", [{
+        context, ["Body-1"], "diffuse::body.dds", [{
             "semantic_key": "Body-1", "metadata_key": "Body::one",
             "adjustment": {"hue": 30},
         }], [{"semantic_key": "Body-1", "texture_keys": _role_keys()}])
@@ -182,7 +182,7 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
         })
 
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Body-1"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Body-1"},
         "diffuse::body.dds", [{
             "semantic_key": "Body-1", "metadata_key": "Body::one",
             "adjustment": {"hue": 30},
@@ -221,7 +221,7 @@ def test_save_progress_reports_stages_and_ignores_callback_errors(
         raise RuntimeError("synthetic progress listener failure")
 
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
         "diffuse::body.dds", [], [], progress_callback=callback)
 
     assert result["status"] == "ok"
@@ -366,7 +366,7 @@ def test_save_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatc
 
     monkeypatch.setattr(transaction, "_read_source", read_source)
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
         "diffuse::body.dds", [], [])
 
     assert result["code"] == "texture_changed_during_save"
@@ -388,7 +388,7 @@ def test_save_rejects_changed_candidate_layout_before_backup(tmp_path, monkeypat
         lambda *args, **kwargs: candidate)
 
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
         "diffuse::body.dds", [], [])
 
     assert result["code"] == "texture_validation_failed"
@@ -418,7 +418,7 @@ def test_save_reports_commit_when_replace_raises_after_replacement(
 
     monkeypatch.setattr(transaction.os, "replace", replace_then_raise)
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
         "diffuse::body.dds", [], [])
 
     assert result["status"] == "ok"
@@ -446,7 +446,7 @@ def test_save_marks_cleanup_uncertain_after_committed_cleanup_raises(
     monkeypatch.setattr(
         service, "_clear_committed_color_adjustments", fail_after_commit)
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
         "diffuse::body.dds", [{
             "semantic_key": "Target", "metadata_key": "Target::one",
             "adjustment": {"hue": 30},
@@ -520,7 +520,7 @@ def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
         save_coverage, "rasterize_geometry", lambda *_args: coverage)
 
     prepared = save_coverage.prepare_texture_save(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor", "Body-1"},
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor", "Body-1"},
         "diffuse::body.dds", [{
             "semantic_key": "Body-1", "metadata_key": "Body::one",
             "adjustment": {"hue": 30},
@@ -718,7 +718,7 @@ def test_save_rejects_target_on_different_physical_dds(tmp_path, monkeypatch):
 
     with pytest.raises(errors.TextureSaveError) as raised:
         save_coverage.prepare_texture_save(
-            SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor", "Target"},
+            SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor", "Target"},
             "diffuse::body.dds", [{
                 "semantic_key": "Target", "metadata_key": "Target::one",
                 "adjustment": {"hue": 30},
@@ -742,7 +742,7 @@ def test_save_rejects_target_on_different_physical_dds(tmp_path, monkeypatch):
 def test_save_rejects_asset_and_mod_root_escape_paths(
         tmp_path, texture_key, expected_code):
     result = service.save_texture_color(
-        SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"}, texture_key,
+        SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"}, texture_key,
         [{
             "semantic_key": "Anchor", "metadata_key": "Anchor::one",
             "adjustment": {"hue": 30},
@@ -771,7 +771,7 @@ def test_save_rejects_live_cross_role_physical_usage(
 
     with pytest.raises(errors.TextureSaveError) as raised:
         request.resolve_save_request(
-            SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor", "Other"},
+            SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor", "Other"},
             "diffuse::body.dds", [{
                 "semantic_key": "Anchor", "texture_keys": _role_keys(),
             }, {
@@ -806,7 +806,7 @@ def test_save_rejects_authored_inactive_cross_role_variant(tmp_path, monkeypatch
 
     with pytest.raises(errors.TextureSaveError) as raised:
         request.resolve_save_request(
-            SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+            SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
             "diffuse::body.dds", [{
                 "semantic_key": "Anchor", "texture_keys": _role_keys(),
             }])
@@ -828,7 +828,7 @@ def test_save_rejects_stale_canonical_metadata_key(tmp_path, monkeypatch):
 
     with pytest.raises(errors.TextureSaveError) as raised:
         save_coverage.prepare_texture_save(
-            SimpleNamespace(mod_dir=str(tmp_path)), {}, {"Anchor"},
+            SimpleNamespace(mod_dir=str(tmp_path)), {"Anchor"},
             "diffuse::body.dds", [{
                 "semantic_key": "Anchor", "metadata_key": "Anchor::stale",
                 "adjustment": {"hue": 30},
