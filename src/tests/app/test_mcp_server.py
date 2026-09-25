@@ -40,13 +40,15 @@ def test_mcp_allows_registered_root_descendant_before_loading(tmp_path,
     seen = []
 
     def fake_load(folder_path, **kwargs):
-        seen.append((folder_path, kwargs["ini_paths"], kwargs["documents"]))
+        seen.append((folder_path, kwargs))
         return {"ok": True}
 
     monkeypatch.setattr(mcp_server.mod_loader, "load_mod", fake_load)
 
     assert mcp_server.inspect_mod(str(child)) == {"ok": True}
-    assert seen == [(mod_folders.normalize_path(child), None, None)]
+    assert seen == [(mod_folders.normalize_path(child), {
+        "documents": None, "pending_new_sections": {},
+    })]
 
 
 def test_inspect_mod_passes_staged_documents_without_serializing(tmp_path,
@@ -54,7 +56,12 @@ def test_inspect_mod_passes_staged_documents_without_serializing(tmp_path,
     root = tmp_path / "library"
     child = root / "mod"
     child.mkdir(parents=True)
-    path = str(child / "mod.ini")
+    path = str(child / "A.ini")
+    sibling = str(child / "B.ini")
+    (child / "A.ini").write_text(
+        "[Constants]\nglobal $mode = 0\n", encoding="utf-8")
+    (child / "B.ini").write_text(
+        "[Constants]\nglobal $other = 0\n", encoding="utf-8")
     folder = mod_folders.normalize_path(child)
     document = IniDocument.from_string(
         "[Constants]\nglobal $mode = 1\n", path=path)
@@ -65,15 +72,22 @@ def test_inspect_mod_passes_staged_documents_without_serializing(tmp_path,
         _ for _ in ()).throw(AssertionError("staged text was serialized")))
     captured = {}
 
-    def load(_folder, **kwargs):
+    def load(loaded_folder, **kwargs):
         captured.update(kwargs)
-        return {"ok": True}
+        context = mcp_server.mod_loader._resolve_context(
+            loaded_folder, documents=kwargs["documents"])
+        return {"paths": context.ini_paths, "documents": context.docs}
 
     monkeypatch.setattr(mcp_server.mod_loader, "load_mod", load)
     try:
-        assert mcp_server.inspect_mod(folder) == {"ok": True}
-        assert captured["ini_paths"] == [path]
+        result = mcp_server.inspect_mod(folder)
+        assert "ini_paths" not in captured
+        assert {item.casefold() for item in result["paths"]} == {
+            path.casefold(), sibling.casefold()}
         assert captured["documents"][path] is document
+        assert any(item is document for item in result["documents"].values())
+        assert any(item.casefold() == sibling.casefold()
+                   for item in result["documents"])
     finally:
         edit_session.discard(folder)
 
