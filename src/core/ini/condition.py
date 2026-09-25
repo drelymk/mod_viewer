@@ -466,7 +466,9 @@ def find_comparisons(node, var):
 
 
 def is_namespaced(var):
-    """`$\\Remielle\\Master\\swapvar` is a cross-ini global owned by another
-    file. Those are read-only here: rewriting one would change a mod the user
-    isn't editing."""
+    """A namespaced `$\\Namespace\\Master\\swapvar` is owned by another file.
+
+    Those cross-INI globals are read-only here because rewriting one would
+    change a mod the user isn't editing.
+    """
     return "\\" in (var or "")
