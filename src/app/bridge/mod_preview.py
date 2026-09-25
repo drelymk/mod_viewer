@@ -70,15 +70,16 @@ class ModPreview:
         folder_path = self._access.mod_folder(folder_path)
         source = edit_session.source_for(folder_path) or \
             mod_source_for_path(folder_path)
-        discovery_kwargs = {"disabled": disabled_ini}
-        if getattr(source, "virtual", False):
-            discovery_kwargs["source"] = source
-        ini_paths = (edit_session.document_paths(folder_path)
-                     or discover_ini_paths(folder_path, **discovery_kwargs))
-        if getattr(source, "virtual", False):
-            edit_session.load_documents(folder_path, ini_paths, source=source)
-        else:
-            edit_session.load_documents(folder_path, ini_paths)
+        ini_paths = edit_session.document_paths(folder_path)
+        discovered_docs = {}
+        if not ini_paths:
+            discovery_kwargs = {"disabled": disabled_ini,
+                                "documents": discovered_docs}
+            if getattr(source, "virtual", False):
+                discovery_kwargs["source"] = source
+            ini_paths = discover_ini_paths(folder_path, **discovery_kwargs)
+        edit_session.load_documents(
+            folder_path, ini_paths, source=source, documents=discovered_docs)
         pending_new_sections = edit_session.new_sections_for(folder_path)
         saved_metadata = (metadata.load(folder_path, source=source)
                           if getattr(source, "virtual", False)

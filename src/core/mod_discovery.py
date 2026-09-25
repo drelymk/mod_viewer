@@ -3,7 +3,7 @@
 import os
 import re
 
-from .ini.sections import parse_sections
+from .ini.document import load_ini_document
 from .mod_source import (DirectoryModSource, ModSourceError,
                          mod_source_for_path)
 
@@ -42,7 +42,7 @@ def _ini_names(folder, source, *, disabled=False):
     return selected
 
 
-def _has_geometry_sections(path, source):
+def _has_geometry_sections(document):
     """Return whether an INI looks like a mod root without resolving geometry.
 
     Discovery must not call the full draw/mesh analyzer.  The root anchor only
@@ -51,28 +51,25 @@ def _has_geometry_sections(path, source):
     ``core.ini.sections -> core.ini.parser`` dependency.  Missing buffers are allowed;
     geometry loading reports those later.
     """
-    try:
-        sections = parse_sections(path, text=source.read_text(path))
-    except (OSError, UnicodeError, ValueError, ModSourceError):
-        return False
     has_draw = False
     has_index = False
-    for name, lines in sections.items():
-        if name.lower().startswith("textureoverride"):
-            for raw in lines:
-                line = str(raw).strip()
+    for section in document.sections:
+        if section.name.lower().startswith("textureoverride"):
+            for raw in section.lines:
+                line = raw.text
                 if _DRAW_RE.match(line):
                     has_draw = True
                 elif _IB_RE.match(line):
                     has_index = True
-        elif name.lower().startswith("commandlist"):
-            for raw in lines:
-                if _IB_RE.match(str(raw).strip()):
+        elif section.name.lower().startswith("commandlist"):
+            for raw in section.lines:
+                if _IB_RE.match(raw.text):
                     has_index = True
     return has_draw or has_index
 
 
-def discover_ini_paths(mod_dir, *, disabled=False, source=None):
+def discover_ini_paths(mod_dir, *, disabled=False, source=None,
+                       documents=None):
     """Return selected INIs from a directory or virtual archive.
 
     Directory discovery retains its historical bounded nested search. Virtual
@@ -91,7 +88,18 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None):
 
     direct = _ini_names(mod_dir if not source.virtual else "",
                         source, disabled=disabled)
-    if not any(_has_geometry_sections(path, source) for path in direct):
+    def has_geometry(path):
+        try:
+            document = documents.get(path) if documents is not None else None
+            if document is None:
+                document = load_ini_document(path, source)
+                if documents is not None:
+                    documents[path] = document
+            return _has_geometry_sections(document)
+        except (OSError, UnicodeError, ValueError, ModSourceError):
+            return False
+
+    if not any(has_geometry(path) for path in direct):
         return direct
 
     found = list(direct)
