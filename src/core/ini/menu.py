@@ -8,6 +8,7 @@ layout is a convention — `$clickedSlot` is not.
 import re
 
 from .sections import canonical_var_names, first_source, line_source
+from .toggles import extract_variable_defaults
 
 # A branch head that dispatches on an integer slot: `$clickedSlot == 3`.
 _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
@@ -299,6 +300,81 @@ def _parse_arrow_button(lines):
     return variable, _cycle_values(lo, hi)
 
 
+def _mouse_button_items(sections, canon):
+    """Find numbered cursor hit regions with a click-gated increment/wrap."""
+    defaults = extract_variable_defaults(sections, canonical_vars=canon)
+    numbers = {name.casefold(): value for name, value in defaults.items()}
+    sections_ci = {str(name).casefold(): lines for name, lines in sections.items()}
+    try:
+        button_count = int(numbers.get("button_amount", ""))
+    except ValueError:
+        button_count = None
+    found = []
+    effect_re = re.compile(r'^run\s*=\s*CommandListDrawButtonEffect_(\d+)$', re.I)
+    cycle_re = re.compile(
+        r'^if\s+\$(\w+)\s*<\s*(\$\w+|\d+)\s*\n'
+        r'\s*\$\1\s*=\s*\$\1\s*\+\s*1\s*\n'
+        r'\s*else\s*\n\s*\$\1\s*=\s*(\d+)\s*\n\s*endif$', re.I)
+    for section, lines in sections.items():
+        if not str(section).casefold().startswith("commandlist"):
+            continue
+        cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
+        stack = []
+        for index, line in enumerate(cleaned):
+            low = line.casefold()
+            if low.startswith("if "):
+                stack.append((line[3:].strip(), index))
+            elif low == "endif" and stack:
+                condition, start = stack.pop()
+                if not ("cursor_x" in condition.casefold()
+                        and ">" in condition and "<" in condition):
+                    continue
+                body = cleaned[start + 1:index]
+                effects = [effect_re.fullmatch(item) for item in body]
+                slots = {int(match.group(1)) for match in effects if match}
+                if len(slots) != 1:
+                    continue
+                slot = next(iter(slots))
+                if button_count is not None and slot >= button_count:
+                    continue
+                for offset, item in enumerate(body):
+                    if item.casefold() != "if $mouse_clicked":
+                        continue
+                    depth = 1
+                    end = offset + 1
+                    while end < len(body) and depth:
+                        later = body[end].casefold()
+                        if later.startswith("if "):
+                            depth += 1
+                        elif later == "endif":
+                            depth -= 1
+                        end += 1
+                    if depth:
+                        continue
+                    match = cycle_re.fullmatch("\n".join(body[offset + 1:end - 1]))
+                    if not match:
+                        continue
+                    variable, limit, lower = match.groups()
+                    upper = (numbers.get(limit[1:].casefold())
+                             if limit.startswith("$") else limit)
+                    try:
+                        lo, hi = int(lower), int(upper)
+                    except (TypeError, ValueError):
+                        continue
+                    if hi < lo:
+                        continue
+                    draw = sections_ci.get(f"commandlistdrawbutton_{slot}", ())
+                    resource_name = f"ResourceButton_{slot}"
+                    image_resource = resource_name if any(re.fullmatch(
+                        rf'ps-t100\s*=\s*{re.escape(resource_name)}',
+                        str(raw).split(";", 1)[0].strip(), re.I)
+                        for raw in draw) else None
+                    found.append((section, slot, variable, _cycle_values(lo, hi),
+                                  line_source(lines[start]) or first_source(lines) or {},
+                                  image_resource))
+    return found if len(found) >= _MIN_SLOTS else []
+
+
 def _controller_records(sections, section_filter=None):
     """Return cleaned lines from selected sections with source provenance."""
     records = []
@@ -450,6 +526,38 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     def declared(name):
         return canon.get(name.lower(), name)
 
+    def add_entry(section, slot, variable, values, effects=(), *,
+                  src=None, key_section=None, image_resource=None):
+        variable = declared(variable)
+        base_key = _prefixed(f"{key_section or section}#{slot}", var_prefix)
+        key = base_key
+        suffix = 2
+        while key in menu:
+            key = f"{base_key}_{suffix}"
+            suffix += 1
+        entry = {
+            "name": variable,
+            "slot": int(slot),
+            "var": _prefixed(variable, var_prefix),
+            "values": values,
+            "effects": [
+                {
+                    "when": (None if effect["when"] is None else
+                             {**effect["when"], "var": _prefixed(
+                                 declared(effect["when"]["var"]), var_prefix)}),
+                    "var": _prefixed(declared(effect["var"]), var_prefix),
+                    "value": effect["value"],
+                }
+                for effect in effects
+            ],
+            "source": source,
+            "ini_path": (src or {}).get("ini_path"),
+            "section": section,
+        }
+        if image_resource is not None:
+            entry["image_resource"] = image_resource
+        menu[key] = entry
+
     for name, lines in sections.items():
         # 3DMigoto section names are case-insensitive. Preserve the original
         # spelling in the payload, but never skip a lowercase/mixed-case
@@ -466,32 +574,7 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
 
         src = first_source(lines) or {}
         for slot_value, (var, values, effects) in parsed:
-            var = declared(var)
-            base_key = _prefixed(f"{name}#{slot_value}", var_prefix)
-            key = base_key
-            suffix = 2
-            while key in menu:
-                key = f"{base_key}_{suffix}"
-                suffix += 1
-            menu[key] = {
-                "name": var,
-                "slot": int(slot_value),
-                "var": _prefixed(var, var_prefix),
-                "values": values,
-                "effects": [
-                    {
-                        "when": (None if e["when"] is None else
-                                 {**e["when"],
-                                  "var": _prefixed(declared(e["when"]["var"]), var_prefix)}),
-                        "var": _prefixed(declared(e["var"]), var_prefix),
-                        "value": e["value"],
-                    }
-                    for e in effects
-                ],
-                "source": source,
-                "ini_path": src.get("ini_path"),
-                "section": name,
-            }
+            add_entry(name, slot_value, var, values, effects, src=src)
 
     # Arrow-pair image menus have no clicked-slot dispatch chain.  Their
     # numeric ButtonNLeft/ButtonNRight sections each mutate one variable and
@@ -523,25 +606,14 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                 ranges = {tuple(item[1]) for item in same_var}
                 if len(ranges) == 1:
                     values = same_var[0][1]
-            variable = declared(variable)
             button_section = re.sub(r"(?:Left|Right)$", "", section,
                                     flags=re.I)
-            base_key = _prefixed(f"{button_section}#{slot}", var_prefix)
-            key = base_key
-            suffix = 2
-            while key in menu:
-                key = f"{base_key}_{suffix}"
-                suffix += 1
-            menu[key] = {
-                "name": variable,
-                "slot": slot,
-                "var": _prefixed(variable, var_prefix),
-                "values": values,
-                "effects": [],
-                "source": source,
-                "ini_path": src.get("ini_path"),
-                "section": section,
-            }
+            add_entry(section, slot, variable, values, src=src,
+                      key_section=button_section)
+    for section, slot, variable, values, src, image_resource in _mouse_button_items(
+            sections, canon):
+        add_entry(section, slot, variable, values, src=src,
+                  image_resource=image_resource)
     return menu
 
 
@@ -700,6 +772,11 @@ def attach_menu_images(menu, sections, resources):
         "pussy": ("itempussy", "pussy"),
     }
     for info in menu.values():
+        if info.get("image_resource"):
+            image = resource(info["image_resource"]).get("filename")
+            if image:
+                info["image_file"] = image
+            continue
         source_var = info.get("_image_source_var")
         if source_var is not None:
             pulse_var = info.get("_pulse_var")

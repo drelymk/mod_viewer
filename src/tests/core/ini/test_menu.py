@@ -600,6 +600,73 @@ filename = ui/hair.dds
           by_slot[8].get("image_file") == "ui/hair.dds"), (f"IconN artwork maps to ButtonN (got {by_slot})")
 
 
+def test_mouse_hit_region_menu_uses_click_wrap_and_numbered_artwork():
+    text = r"""
+[Constants]
+global $Button_amount = 2
+global $ToggleMax1 = 3
+global $ToggleMax2 = 1
+global persist $Jacket = 0
+global persist $Sleeves = 1
+
+[CommandListCheckMouse]
+if cursor_y > $top && cursor_y < $bottom
+    if cursor_x > $left0 && cursor_x < $right0
+        if $mouse_clicked
+            if $Jacket < $ToggleMax1
+                $Jacket = $Jacket + 1
+            else
+                $Jacket = 0
+            endif
+        endif
+        run = CommandListDrawButtonEffect_0
+    endif
+    if cursor_x > $left1 && cursor_x < $right1
+        if $mouse_clicked
+            if $Sleeves < $ToggleMax2
+                $Sleeves = $Sleeves + 1
+            else
+                $Sleeves = 0
+            endif
+        endif
+        run = CommandListDrawButtonEffect_1
+    endif
+    if cursor_x > $left2 && cursor_x < $right2
+        if $mouse_clicked
+            if $Unused < 2
+                $Unused = $Unused + 1
+            else
+                $Unused = 0
+            endif
+        endif
+        run = CommandListDrawButtonEffect_2
+    endif
+endif
+
+[CommandListDrawButton_0]
+ps-t100 = ResourceButton_0
+[CommandListDrawButton_1]
+ps-t100 = ResourceButton_1
+[ResourceButton_0]
+filename = icons/jacket.png
+[ResourceButton_1]
+filename = icons/sleeves.png
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs)
+    attach_menu_images(menu, secs, extract_resources(secs))
+    by_slot = _by_slot(menu)
+    assert sorted(by_slot) == [0, 1]
+    assert by_slot[0]["var"] == "Jacket"
+    assert by_slot[0]["values"] == ["0", "1", "2", "3"]
+    assert by_slot[1]["values"] == ["0", "1"]
+    assert by_slot[0]["image_file"] == "icons/jacket.png"
+    assert by_slot[1]["image_file"] == "icons/sleeves.png"
+
+    no_click = text.replace("if $mouse_clicked", "if $hovered")
+    assert extract_menu_toggles(sections(no_click)) == {}
+
+
 def test_menu_panel_preserves_authored_transparency():
     with tempfile.TemporaryDirectory() as tmp:
         icon = Image.new("RGBA", (52, 52), (200, 100, 50, 0))
