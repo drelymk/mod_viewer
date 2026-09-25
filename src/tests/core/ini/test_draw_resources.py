@@ -138,10 +138,10 @@ stride = 20
 [ResourceRemappedBlendBufferRW]
 
 [ResourceBlendBufferNoStride]
-filename = Meshes/Blend.buf
+filename = Meshes/BlendContent.buf
 
 [ResourceBlendBuffer]
-filename = Meshes/Blend.buf
+filename = Meshes/BlendDescriptor.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
 
@@ -153,17 +153,24 @@ stride = 16
     resources = extract_resources(sections)
     scanned = _scan_sections_for_draws(sections)
     copy_sources = _collect_resource_copy_sources(sections, resources)
-    resolved = _resolve_component_buffers(scanned, resources, copy_sources)
+    resolved = _resolve_component_buffers(
+        scanned, resources, copy_sources, sections=sections)
 
+    assert copy_sources["resourceremappedblendbuffercomponent"] == [
+        "ResourceRemappedBlendBufferRW",
+    ]
     assert resolved["resolve_vertex_info"](
         "ResourceBlendBufferOverride") == {
-            "filename": "Meshes/Blend.buf",
+            "filename": "Meshes/BlendContent.buf",
             "format": "DXGI_FORMAT_R8_UINT",
             "stride": 16,
         }
+    assert not resolved["vertex_binding_index"]._resource_connected(
+        "ResourceRemappedBlendBufferComponent", "ResourceBlendBuffer")
 
     group = build_draw_groups(sections, resources)[0]
-    assert group["draws"][0].skinning_source.file == "Meshes/Blend.buf"
+    assert group["draws"][0].skinning_source.file == \
+        "Meshes/BlendContent.buf"
     assert group["draws"][0].skinning_source.encoding == "wwmi_u8_8"
     assert group["draws"][0].skinning_source.vertex_vg_file == \
         "Meshes/BlendRemapVertexVG.buf"

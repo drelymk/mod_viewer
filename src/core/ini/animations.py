@@ -653,14 +653,18 @@ _NUMTHREADS_RE = re.compile(
     re.I)
 
 
-def _identify_shape_weight_operation(text):
-    """Describe the small set of HLSL shape-weight operations we evaluate."""
+def _identify_shape_weight_operation(
+        text, expected_ini_input, *, require_delta_application):
+    """Recognize supported weights only when they use the supplied input."""
     if not text:
         return None
     source = _strip_hlsl_comments(text)
     compact = re.sub(r"\s+", "", source).lower()
-    aliases = set(re.findall(
-        r"#define([a-z_]\w*)iniparams\[\d+\]\.[xyzw]", compact, re.I))
+    slot, component = expected_ini_input
+    aliases = {name.lower() for name in re.findall(
+        rf"^\s*#define\s+([a-z_]\w*)\s+IniParams\s*\[\s*"
+        rf"{int(slot)}\s*\]\s*\.\s*{re.escape(component)}\b",
+        source, re.I | re.M)}
     phase_names = set(aliases)
     for value, source_name in re.findall(
             r"(?:float|half)([a-z_]\w*)=float\(([a-z_]\w*)\)",
@@ -675,63 +679,32 @@ def _identify_shape_weight_operation(text):
         if match.group("phase") not in phase_names:
             continue
         formula = match.group(0)
-        weight_name = re.search(
+        weight_names = set(re.findall(
             rf"(?:float|half)([a-z_]\w*)=\(*{re.escape(formula)}\)*",
-            compact)
-        direct_weight = any(re.search(
-            rf"diff\.{axis}\*\(?{re.escape(formula)}", compact)
-            for axis in ("position", "normal"))
-        if weight_name or direct_weight:
+            compact))
+        if not require_delta_application and weight_names:
+            return {
+                "kind": "sine", "scale": 30.0,
+                "amplitude": 0.5, "offset": 0.5,
+            }
+        expressions = [re.escape(name) for name in weight_names]
+        expressions.append(rf"\(?{re.escape(formula)}\)?")
+        if all(any(re.search(
+                rf"diff\.{axis}\*{expression}(?:\W|$)", compact)
+                for expression in expressions)
+               for axis in ("position", "normal")):
             return {
                 "kind": "sine", "scale": 30.0,
                 "amplitude": 0.5, "offset": 0.5,
             }
 
-    for alias in aliases:
-        if (re.search(rf"diff\.position\*{re.escape(alias)}(?:\W|$)", compact)
-                and re.search(
-                    rf"diff\.normal\*{re.escape(alias)}(?:\W|$)", compact)):
-            return {"kind": "linear"}
+    if require_delta_application:
+        for alias in phase_names:
+            if all(re.search(
+                    rf"diff\.{axis}\*{re.escape(alias)}(?:\W|$)", compact)
+                   for axis in ("position", "normal")):
+                return {"kind": "linear"}
     return None
-
-
-def _shape_weight_applies_to_deltas(text, operation):
-    """Require GIMI weight formulas to cover both position and normal deltas."""
-    if operation is None:
-        return False
-    if operation.get("kind") == "linear":
-        return True
-    if operation.get("kind") != "sine" or not text:
-        return False
-    compact = re.sub(r"\s+", "", _strip_hlsl_comments(text)).lower()
-    aliases = set(re.findall(
-        r"#define([a-z_]\w*)iniparams\[\d+\]\.[xyzw]", compact, re.I))
-    phase_names = set(aliases)
-    for value, source_name in re.findall(
-            r"(?:float|half)([a-z_]\w*)=float\(([a-z_]\w*)\)",
-            compact, re.I):
-        if source_name in aliases:
-            phase_names.add(value)
-    formula = re.compile(
-        r"0\.5f?\*\(sin\((?P<phase>[a-z_]\w*)\*30(?:\.0*)?f?\)"
-        r"\+1(?:\.0*)?f?\)", re.I)
-    for match in formula.finditer(compact):
-        if match.group("phase") not in phase_names:
-            continue
-        weight = re.search(
-            rf"(?:float|half)([a-z_]\w*)=\(*{re.escape(match.group(0))}\)*",
-            compact)
-        if weight:
-            name = re.escape(weight.group(1))
-            if (re.search(rf"diff\.position\*{name}(?:\W|$)", compact)
-                    and re.search(
-                        rf"diff\.normal\*{name}(?:\W|$)", compact)):
-                return True
-        elif all(re.search(
-                rf"diff\.{axis}\*\(?{re.escape(match.group(0))}", compact)
-                for axis in ("position", "normal")):
-            return True
-    return False
 
 
 def _identify_compute_shader(text):
@@ -756,9 +729,8 @@ def _identify_compute_shader(text):
         "swap_yz_negate" if all(
             marker in compact for marker in swap_yz_negate_markers)
         else "identity")
-    weight_operation = _identify_shape_weight_operation(source)
-    if not _shape_weight_applies_to_deltas(source, weight_operation):
-        weight_operation = None
+    weight_operation = _identify_shape_weight_operation(
+        source, (88, "x"), require_delta_application=True)
     return {
         "threads": threads,
         "coordinate_transform": coordinate_transform,
@@ -957,7 +929,8 @@ def _wwmi_animation_shader(sections, child_section, *, mod_dir, ini_path,
             rf"(?:float|half)[a-z_]\w*=float\({re.escape(phase_name)}\)",
             compact, re.I):
         return None
-    weight_operation = _identify_shape_weight_operation(shader_source)
+    weight_operation = _identify_shape_weight_operation(
+        shader_source, (0, "z"), require_delta_application=False)
     if weight_operation is None:
         return None
     return {

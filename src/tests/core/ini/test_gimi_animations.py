@@ -1,6 +1,7 @@
 """Focused coverage for the conservative fixed-layout compute path."""
 
 import struct
+import pytest
 
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
@@ -466,6 +467,20 @@ def test_wwmi_sparse_animation_rejects_missing_slots_or_shader(tmp_path):
         _wwmi_sparse_sections(), _wwmi_static_shapes(),
         mod_dir=str(unsupported), ini_path=str(unsupported / "fixture.ini")) == []
 
+    wrong_input = tmp_path / "wrong-input"
+    (wrong_input / "res").mkdir(parents=True)
+    wrong_channel_shader = WWMI_ANIMATION_SHADER.replace(
+        "#define ShapeKeyValue IniParams[0].z",
+        "#define ShapeKeyValue IniParams[0].z\n"
+        "#define Other IniParams[5].x").replace(
+            "sin(shape_key_value*30)", "sin(Other*30)")
+    (wrong_input / "res" / "anim.hlsl").write_text(wrong_channel_shader)
+    _write_wwmi_offset_table(wrong_input, range(162, 168))
+    assert discover_wwmi_sparse_animations(
+        _wwmi_sparse_sections(), _wwmi_static_shapes(),
+        mod_dir=str(wrong_input),
+        ini_path=str(wrong_input / "fixture.ini")) == []
+
     missing = tmp_path / "missing-shader"
     missing.mkdir()
     assert discover_wwmi_sparse_animations(
@@ -782,17 +797,45 @@ def test_compute_animation_identifies_coordinate_transform():
 
 
 def test_shape_weight_operation_describes_supported_hlsl_semantics():
-    assert _identify_shape_weight_operation(WWMI_ANIMATION_SHADER) == {
+    assert _identify_shape_weight_operation(
+        WWMI_ANIMATION_SHADER, (0, "z"),
+        require_delta_application=False) == {
         "kind": "sine", "scale": 30.0,
         "amplitude": 0.5, "offset": 0.5,
     }
     assert _identify_shape_weight_operation(
-        "[numthreads(1,1,1)] void main() { float3 value = 1; }") is None
+        "[numthreads(1,1,1)] void main() { float3 value = 1; }",
+        (88, "x"), require_delta_application=True) is None
     assert _identify_shape_weight_operation(
-        WWMI_ANIMATION_SHADER.replace("*30", "*31")) is None
-    assert _identify_shape_weight_operation(LINEAR_SHAPE_SHADER) == {
+        WWMI_ANIMATION_SHADER.replace("*30", "*31"), (0, "z"),
+        require_delta_application=False) is None
+    assert _identify_shape_weight_operation(
+        LINEAR_SHAPE_SHADER, (88, "x"),
+        require_delta_application=True) == {
         "kind": "linear",
     }
+
+
+@pytest.mark.parametrize(("name", "shader"), [
+    ("sine", SHAPE_SHADER), ("linear", LINEAR_SHAPE_SHADER),
+])
+def test_compute_animation_rejects_shape_weight_from_wrong_ini_channel(
+        tmp_path, name, shader):
+    root = tmp_path / name
+    sections = _sections(root)
+    expected_alias = "FREQ" if name == "sine" else "VALUE"
+    wrong_channel = shader.replace(
+        f"#define {expected_alias} IniParams[88].x",
+        f"#define {expected_alias} IniParams[88].x\n"
+        "#define OTHER IniParams[87].x")
+    if name == "sine":
+        wrong_channel = wrong_channel.replace(
+            "sin(FREQ * 30)", "sin(OTHER * 30)")
+    else:
+        wrong_channel = wrong_channel.replace("* VALUE", "* OTHER")
+    (root / "shape.hlsl").write_text(wrong_channel)
+
+    assert not _discover(root, sections)
 
 
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
