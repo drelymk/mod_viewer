@@ -10,7 +10,7 @@ from core.ini.analysis import analyze_ini
 from core.ini.document import IniDocument
 from core.ini.snapshot import IniRecord, ModIniSnapshot
 from core.ini.draw_scan import gating_var_names
-from core.ini.menu import attach_menu_images, extract_controller_toggles
+from core.ini.menu import extract_controller_toggles
 from core.ini.sections import (canonical_var_names, extract_ini_namespace,
                                extract_resources, sections_from_document)
 from core.ini.animations import (
@@ -347,13 +347,17 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
     }
     records_by_path = {record["ini_path"]: record for record in ini_records}
     for record in ini_records:
+        record["resources"] = _rebase_resources(
+            extract_resources(record["sections"]), record["ini_path"],
+            folder_path, source=source)
         record["forwardings"] = _extract_namespace_forwarding(
             record, namespace_targets)
         record["controllers"] = extract_controller_toggles(
             record["sections"],
             {item["source_local"] for item in record["forwardings"]},
             var_prefix=record["var_prefix"], source=record["source"],
-            canonical_vars=record["canonical_vars"])
+            canonical_vars=record["canonical_vars"],
+            resources=record["resources"])
 
         # Do not make a forwarded target a tracked draw gate until its source
         # has a controller shape that the viewer can actually expose. A
@@ -388,8 +392,7 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
         var_prefix = record["var_prefix"]
         source_name = record["source"]
 
-        resources = _rebase_resources(
-            extract_resources(secs), ini_path, folder_path, source=source)
+        resources = record["resources"]
         analysis = analyze_ini(
             secs, resources=resources, var_prefix=var_prefix, source=source_name,
             seen=seen_labels,
@@ -528,7 +531,6 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
                 "slot": next_controller_slot,
                 "source": record["source"],
                 "ini_path": record["ini_path"],
-                "_image_source_var": local,
             })
             next_controller_slot += 1
             base_key = (
@@ -545,11 +547,6 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
             source_default = record["analysis"].defaults.get(info["var"])
             if source_default is not None:
                 toggle_defaults[destination] = source_default
-
-    for record in ini_records:
-        attach_menu_images(
-            record["own_menu"], record["sections"],
-            record["analysis"].resources)
 
     present_items = []
     for present_info in present_infos:

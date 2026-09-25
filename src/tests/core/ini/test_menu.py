@@ -9,8 +9,8 @@ always satisfied) and the viewer shows every variant at once.
 import base64, io, os, tempfile
 
 
-from core.ini.menu import (attach_menu_images, extract_menu_toggles,
-                           extract_menu_var_names)
+from core.ini.menu import extract_menu_toggles, extract_menu_var_names
+from core.ini.shapes import extract_shape_sliders
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, find_inis, gating_var_names,
                              merge_sections, parse_sections)
@@ -589,8 +589,7 @@ filename = ui/top.dds
 filename = ui/hair.dds
 """
     secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
     by_slot = _by_slot(menu)
     assert (sorted(by_slot) == [2, 8]), (f"both numbered arrow-pair items are found (got {sorted(by_slot)})")
     assert (by_slot[2]["var"] == "Top" and
@@ -662,8 +661,7 @@ ps-t100 = ResourceTrimIcon
 filename = icons/trim.png
 """
     secs = sections(text)
-    menu = extract_menu_toggles(secs)
-    attach_menu_images(menu, secs, extract_resources(secs))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
     by_slot = _by_slot(menu)
     assert sorted(by_slot) == [0, 2]
     assert by_slot[0]["var"] == "style"
@@ -675,8 +673,8 @@ filename = icons/trim.png
     assert by_slot[2]["image_file"] == "icons/trim.png"
 
     no_artwork = sections(text.replace("ps-t100 = ResourceTrimIcon", ""))
-    plain = _by_slot(extract_menu_toggles(no_artwork))
-    attach_menu_images(plain, no_artwork, extract_resources(no_artwork))
+    plain = _by_slot(extract_menu_toggles(
+        no_artwork, resources=extract_resources(no_artwork)))
     assert 2 in plain and "image_file" not in plain[2]
 
     no_mouse_key = text.replace("key = VK_LBUTTON", "key = k")
@@ -736,6 +734,108 @@ endif
     assert by_slot[0]["values"] == ["0", "1", "2", "3"]
     assert by_slot[1]["var"] == "swapvar_1"
     assert by_slot[1]["values"] == ["0", "1"]
+
+
+def test_shape_slider_artwork_follows_authored_run_section():
+    text = """
+[CommandListDrawSlider.Gauge]
+x87 = $blend * x87
+[CommandListPaint]
+ps-t100 = ResourceOddArtwork
+run = CustomShaderElement
+run = CommandListDrawSlider.Gauge
+[CustomShaderMorph]
+x88 = $blend
+cs-t50 = copy ResourceBase
+cs-t51 = copy ResourceTarget
+[ResourceBase]
+filename = base.buf
+stride = 40
+[ResourceTarget]
+filename = target.buf
+stride = 40
+[ResourceOddArtwork]
+filename = item.dds
+[ResourceOtherArtwork]
+filename = other.dds
+"""
+    secs = sections(text)
+    slider = extract_shape_sliders(secs, extract_resources(secs))[0]
+    assert slider["ui_section"] == "CommandListDrawSlider.Gauge"
+    assert slider["section"] == "CustomShaderMorph"
+    assert slider["image_file"] == "item.dds"
+
+    stale = sections(text.replace("run = CustomShaderElement", ""))
+    assert "image_file" not in extract_shape_sliders(
+        stale, extract_resources(stale))[0]
+
+    ambiguous = sections(text + """
+[CommandListSecondPaint]
+ps-t100 = ResourceOtherArtwork
+run = CustomShaderElement
+run = CommandListDrawSlider.Gauge
+""")
+    slider = extract_shape_sliders(ambiguous, extract_resources(ambiguous))[0]
+    assert "image_file" not in slider
+
+
+def test_integer_slot_artwork_uses_known_slots_and_rejects_conflicts():
+    text = """
+[CommandListActions]
+if $clicked == 1
+    $first = 1 - $first
+elif $clicked == 2
+    $second = 1 - $second
+endif
+[CommandListArtwork]
+if $index == 1
+    ps-t100 = ResourceOne
+elif $index == 2
+    ps-t100 = ResourceTwo
+endif
+[ResourceOne]
+filename = one.dds
+[ResourceTwo]
+filename = two.dds
+[ResourceConflict]
+filename = conflict.dds
+"""
+    secs = sections(text)
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
+    assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
+        1: "one.dds", 2: "two.dds"}
+
+    conflicting = sections(text + """
+[CommandListOtherArtwork]
+if $other == 1
+    ps-t100 = ResourceConflict
+elif $other == 2
+    ps-t100 = ResourceTwo
+endif
+""")
+    menu = extract_menu_toggles(
+        conflicting, resources=extract_resources(conflicting))
+    assert "image_file" not in _by_slot(menu)[1]
+    assert _by_slot(menu)[2]["image_file"] == "two.dds"
+
+
+def test_fifteen_slot_dispatch_uses_authored_resources():
+    actions = ["[CommandListActions]"]
+    artwork = ["[CommandListArtwork]"]
+    resources = []
+    for slot in range(1, 16):
+        branch = "if" if slot == 1 else "elif"
+        actions.extend((f"{branch} $chosen == {slot}",
+                        f"    $state{slot} = 1 - $state{slot}"))
+        artwork.extend((f"{branch} $imageIndex == {slot}",
+                        f"    ps-t100 = ResourceArt{slot}"))
+        resources.extend((f"[ResourceArt{slot}]", f"filename = art{slot}.dds"))
+    actions.append("endif")
+    artwork.append("endif")
+    secs = sections("\n".join(actions + artwork + resources))
+    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
+    assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
+        slot: f"art{slot}.dds" for slot in range(1, 16)}
 
 
 def test_menu_panel_preserves_authored_transparency():

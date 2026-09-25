@@ -70,7 +70,7 @@ def _conditional_blocks(lines):
     return (cleaned, root) if not stack else None
 
 
-def _split_slot_branches(parsed):
+def _split_slot_branches(parsed, image_chains=None):
     """Find slot dispatch chains, including nested page menus."""
     if parsed is None:
         return []
@@ -91,9 +91,12 @@ def _split_slot_branches(parsed):
                     if match and match.group(1).casefold() == first.group(1).casefold():
                         body = [line for line in cleaned[branch["start"]:branch["end"]]
                                 if line]
-                        parts.append((match.group(1), match.group(2), body))
+                        parts.append((match.group(1), match.group(2), body,
+                                      branch["body"]))
+            if len(parts) >= _MIN_SLOTS and image_chains is not None:
+                image_chains.append(parts)
             if len(parts) >= _MIN_SLOTS and not nested:
-                found.extend(parts)
+                found.extend(part[:3] for part in parts)
             found.extend(nested)
         return found
 
@@ -102,6 +105,23 @@ def _split_slot_branches(parsed):
 
 def _cycle_values(lo, hi):
     return [str(i) for i in range(lo, hi + 1)]
+
+
+def _resource_file(resources, name):
+    if not resources or not name:
+        return None
+    lookup = getattr(resources, "get_ci", None)
+    if lookup is not None:
+        return (lookup(name) or {}).get("filename")
+    return next((info.get("filename") for key, info in resources.items()
+                 if key.casefold() == name.casefold()), None)
+
+
+def _branch_image(nodes, resources):
+    bindings = [re.fullmatch(r"ps-t100\s*=\s*(\S+)", line, re.I)
+                for line in nodes if isinstance(line, str)]
+    names = [match.group(1) for match in bindings if match]
+    return _resource_file(resources, names[0]) if len(names) == 1 else None
 
 
 def _guard(text, numeric_defaults=None):
@@ -480,7 +500,7 @@ def _controller_wrap_values(records, variable):
 
 
 def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
-                               source=None, canonical_vars=None):
+                               source=None, canonical_vars=None, resources=None):
     """Find the small pulse/state controller pattern used by namespace menus.
 
     ``forwarded_vars`` is the set of local variables that have already been
@@ -506,17 +526,46 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
 
     present_records = _controller_records(
         sections, lambda name: name.casefold() == "present")
-    command_records = _controller_records(
-        sections, lambda name: name.casefold().startswith("commandlist"))
-    flips = {}
-    for section, line, raw in command_records:
-        assignment = _ASSIGN_RE.fullmatch(line)
-        if not assignment:
+    flips, image_candidates = {}, {}
+    for section, lines in sections.items():
+        if not section.casefold().startswith("commandlist"):
             continue
-        lhs, rhs = assignment.group(1), assignment.group(2).strip()
-        flip = _FLIP_RE.fullmatch(rhs)
-        if flip and flip.group(1).casefold() == lhs.casefold():
-            flips.setdefault(lhs.casefold(), (lhs, section, raw))
+        for raw in lines:
+            line = str(raw).split(";", 1)[0].strip()
+            assignment = _ASSIGN_RE.fullmatch(line)
+            if assignment:
+                lhs, rhs = assignment.group(1), assignment.group(2).strip()
+                flip = _FLIP_RE.fullmatch(rhs)
+                if flip and flip.group(1).casefold() == lhs.casefold():
+                    flips.setdefault(lhs.casefold(), (lhs, section, raw))
+        if resources is None:
+            continue
+        parsed = _conditional_blocks(lines)
+        if parsed is None:
+            continue
+
+        def collect(nodes):
+            for block in nodes:
+                if not isinstance(block, dict):
+                    continue
+                branches = block["branches"]
+                first = _SLOT_RE.fullmatch(branches[0]["condition"] or "")
+                if (first and first.group(2) == "0" and len(branches) == 2
+                        and branches[1]["condition"] is None):
+                    images = [_branch_image(branch["body"], resources)
+                              for branch in branches]
+                    image = (images[0] if all(images) and
+                             images[0].casefold() == images[1].casefold()
+                             else None)
+                    image_candidates.setdefault(first.group(1).casefold(), []).append(image)
+                for branch in branches:
+                    collect(branch["body"])
+
+        collect(parsed[1])
+    pulse_images = {
+        pulse: images[0] for pulse, images in image_candidates.items()
+        if all(images) and len({image.casefold() for image in images}) == 1
+    }
 
     found = {}
 
@@ -536,6 +585,9 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
         }
         if pulse_var is not None:
             controller["_pulse_var"] = declared(pulse_var)
+            image = pulse_images.get(pulse_var.casefold())
+            if image:
+                controller["image_file"] = image
         found[local] = controller
 
     for local_key in allowed:
@@ -559,7 +611,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
 
 
 def extract_menu_toggles(sections, var_prefix=None, source=None,
-                         canonical_vars=None):
+                         canonical_vars=None, resources=None):
     """Return {entry key: {name, slot, var, values, effects, source, ini_path,
     section}} for every clickable menu slot found in the mod's CommandLists.
 
@@ -571,12 +623,23 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
              else canonical_var_names(sections))
     blocks = {name: _conditional_blocks(lines) for name, lines in sections.items()
               if name.casefold().startswith("commandlist")}
+    section_lookup = {name.casefold(): lines for name, lines in sections.items()}
+    image_chains = []
 
     def declared(name):
         return canon.get(name.lower(), name)
 
     def add_entry(section, slot, variable, values, effects=(), *,
-                  src=None, key_section=None, kind=None):
+                  src=None, key_section=None, kind=None, image=None):
+        if image is None and kind != "mouse_region":
+            for raw in section_lookup.get(f"commandlisticon{slot}", ()):
+                binding = re.fullmatch(
+                    r"ps-t100\s*=\s*(\S+)",
+                    str(raw).split(";", 1)[0].strip(), re.I)
+                if binding:
+                    image = _resource_file(resources, binding.group(1))
+                    if image:
+                        break
         variable = declared(variable)
         base_key = _prefixed(f"{key_section or section}#{slot}", var_prefix)
         key = base_key
@@ -605,12 +668,14 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         }
         if kind is not None:
             entry["kind"] = kind
+        if image:
+            entry["image_file"] = image
         menu[key] = entry
 
     for name, parsed_blocks in blocks.items():
         parsed = []
         for _slot_var, slot_value, body in _split_slot_branches(
-                parsed_blocks):
+                parsed_blocks, image_chains if resources is not None else None):
             info = _parse_branch(body)
             if info:
                 parsed.append((slot_value, info))
@@ -658,8 +723,29 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                       key_section=button_section)
     for slot, section, variable, values, effects, src in _mouse_button_items(
             sections, blocks):
+        image = None
+        for raw in section_lookup.get(f"commandlistdrawbutton_{slot}", ()):
+            binding = re.fullmatch(
+                r"ps-t100\s*=\s*(\S+)",
+                str(raw).split(";", 1)[0].strip(), re.I)
+            if binding:
+                image = _resource_file(resources, binding.group(1)) or image
         add_entry(section, slot, variable, values, effects, src=src,
-                  kind="mouse_region")
+                  kind="mouse_region", image=image)
+    known_slots = {info["slot"] for info in menu.values()}
+    candidates = {}
+    for chain in image_chains:
+        mapped = [(int(slot), _branch_image(nodes, resources))
+                  for _var, slot, _body, nodes in chain
+                  if int(slot) in known_slots]
+        if sum(bool(image) for _slot, image in mapped) >= _MIN_SLOTS:
+            for slot, image in mapped:
+                candidates.setdefault(slot, set()).add(image)
+    for info in menu.values():
+        images = candidates.get(info["slot"], ())
+        if (info.get("kind") != "mouse_region" and len(images) == 1
+                and None not in images):
+            info["image_file"] = next(iter(images))
     return menu
 
 
@@ -675,187 +761,3 @@ def extract_menu_var_names(sections, var_prefix=None, menu=None,
         found.add(info["var"])
         found.update(e["var"] for e in info["effects"])
     return found
-
-
-def attach_menu_images(menu, sections, resources):
-    """Attach authored menu-item filenames to recognized slots/sliders."""
-    slot_images = {}
-
-    def resource(name):
-        if not name:
-            return {}
-        lookup = getattr(resources, "get_ci", None)
-        if lookup is not None:
-            return lookup(name)
-        lowered = name.lower()
-        return next((info for key, info in resources.items()
-                     if key.lower() == lowered), {})
-
-    # Some namespace menus draw numbered buttons through a custom shader.
-    # Associate the draw's pulse variable with the controller parser's
-    # recognized state/pulse relationship. Accept a static image only when
-    # both authored states resolve to the same resource.
-    controller_images = {}
-    button_choices = {}
-    for name, lines in sections.items():
-        if not re.fullmatch(r"CommandListDrawSliderButtonPage\d+", name, re.I):
-            continue
-        current = None
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = re.fullmatch(r"if\s+\$(\w+)\s*==\s*0", line, re.I)
-            if match:
-                current = (match.group(1).casefold(), "1")
-                continue
-            if line.lower() == "else" and current:
-                current = (current[0], "2")
-                continue
-            if line.lower() == "endif" or line.lower().startswith(
-                    ("if ", "else if ", "elif ")):
-                current = None
-                continue
-            if not current:
-                continue
-            match = re.fullmatch(
-                r"ps-t100\s*=\s*(ResourceSliderButton(\d+)_([12]))",
-                line, re.I)
-            if not match or match.group(3) != current[1]:
-                continue
-            filename = resource(match.group(1)).get("filename")
-            if filename:
-                button_choices.setdefault(current[0], {}).setdefault(
-                    match.group(2), {}).setdefault(current[1], set()).add(
-                        filename)
-    for pulse_var, buttons in button_choices.items():
-        images = []
-        safe = True
-        for states in buttons.values():
-            first, second = states.get("1", set()), states.get("2", set())
-            if len(first) != 1 or len(second) != 1:
-                safe = False
-                break
-            first_file, second_file = next(iter(first)), next(iter(second))
-            if first_file.casefold() != second_file.casefold():
-                safe = False
-                break
-            images.append(first_file)
-        if safe and images and len({image.casefold() for image in images}) == 1:
-            controller_images[pulse_var] = images[0]
-
-    # Arrow-pair menus render item N in its own CommandListIconN section.
-    for name, lines in sections.items():
-        match = re.fullmatch(r"CommandListIcon(\d+)", name, re.I)
-        if not match:
-            continue
-        slot = int(match.group(1))
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            icon = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
-            if not icon:
-                continue
-            info = resource(icon.group(1))
-            if info.get("filename"):
-                slot_images.setdefault(slot, info["filename"])
-                break
-
-    # Mouse-region menus may draw each item through a numbered button list.
-    # The final authored binding is its item artwork; an earlier binding can
-    # be a shared outline or frame. Artwork is optional for control discovery.
-    mouse_images = {}
-    for name, lines in sections.items():
-        match = re.fullmatch(r"CommandListDrawButton_(\d+)", name, re.I)
-        if not match:
-            continue
-        for raw in lines:
-            binding = re.fullmatch(r"ps-t100\s*=\s*(\S+)",
-                                   str(raw).split(";", 1)[0].strip(), re.I)
-            if binding:
-                image = resource(binding.group(1)).get("filename")
-                if image:
-                    mouse_images[int(match.group(1))] = image
-
-    for name, lines in sections.items():
-        if "slotitemimage" not in name.lower():
-            continue
-        current_slot = None
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = re.match(r"(?:if|elif|else\s+if)\s+\$slot\s*==\s*(\d+)", line, re.I)
-            if match:
-                current_slot = int(match.group(1))
-                continue
-            match = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
-            if match and current_slot is not None:
-                info = resource(match.group(1))
-                if info.get("filename") and current_slot not in slot_images:
-                    slot_images[current_slot] = info["filename"]
-
-    # Responsive/MCMI grids draw their buttons by incrementing a counter and
-    # dispatching the icon in a separate CommandList.  Unlike the older
-    # `$slot` convention, the counter name is author-defined (commonly
-    # `$Button_number`) and many slots may intentionally share one frame/icon.
-    # Only accept integer-dispatch CommandLists that actually bind ps-t100;
-    # this keeps ordinary state chains out of image recognition.
-    for name, lines in sections.items():
-        if not name.lower().startswith("commandlist"):
-            continue
-        current_slot = None
-        saw_icon = False
-        candidates = {}
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = re.match(
-                r"(?:if|elif|else\s+if)\s+\$\w+\s*==\s*(\d+)", line, re.I)
-            if match:
-                current_slot = int(match.group(1))
-                continue
-            match = re.match(r"ps-t100\s*=\s*(\S+)", line, re.I)
-            if match and current_slot is not None:
-                info = resource(match.group(1))
-                if info.get("filename"):
-                    candidates.setdefault(current_slot, info["filename"])
-                    saw_icon = True
-        if saw_icon and len(candidates) >= _MIN_SLOTS:
-            for slot, filename in candidates.items():
-                slot_images.setdefault(slot, filename)
-
-    def compact(text):
-        return re.sub(r"[^a-z0-9]", "", text.lower())
-
-    image_resources = [(compact(name.replace("Resource", "")), info["filename"])
-                       for name, info in resources.items()
-                       if info.get("filename") and
-                       ("menuitem" in name.lower() or "resourceitem" in name.lower())]
-    aliases = {
-        "currflat": ("menuflat", "itemflat", "flat"),
-        "boobssize": ("itemboobs", "boobs"),
-        "nipplesize": ("itemnipple", "nipple"),
-        "shortclo": ("itemshort", "short"),
-        "pussy": ("itempussy", "pussy"),
-    }
-    for info in menu.values():
-        if info.get("kind") == "mouse_region":
-            image = mouse_images.get(info["slot"])
-            if image:
-                info["image_file"] = image
-            continue
-        source_var = info.get("_image_source_var")
-        if source_var is not None:
-            pulse_var = info.get("_pulse_var")
-            image = (controller_images.get(pulse_var.casefold())
-                     if pulse_var else None)
-            if image:
-                info["image_file"] = image
-            continue
-        if info.get("slot") in slot_images:
-            info["image_file"] = slot_images[info["slot"]]
-            continue
-        if info.get("kind") != "shape_slider":
-            continue
-        var = compact(info["name"])
-        needles = list(aliases.get(var, ()))
-        needles += [var, var.replace("swapvarslider", ""), var.replace("size", "")]
-        for resource_name, filename in image_resources:
-            if any(needle and needle in resource_name for needle in needles):
-                info["image_file"] = filename
-                break
