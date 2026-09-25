@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from collections import Counter
 
 import pytest
 
@@ -6,6 +7,7 @@ from app.bridge.mod_preview import ModPreview
 from core.geometry.skinning import SkinningSource
 from core.ini.document import IniDocument
 from tests.support_snapshot import snapshot_context
+from app.session import edit as edit_session
 
 
 class _Access:
@@ -49,10 +51,16 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
     discovered = []
     serialized = []
     ini_path = f"mod/{expected_name}"
+    document = IniDocument.from_string("[Constants]\n", path=ini_path)
+
+    def discover(folder, *, disabled=False, documents=None):
+        discovered.append(disabled)
+        documents[ini_path] = document
+        return [ini_path]
+
     monkeypatch.setattr(
         "app.bridge.mod_preview.discover_ini_paths",
-        lambda folder, *, disabled=False: discovered.append(disabled)
-        or [ini_path],
+        discover,
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.document_paths",
@@ -60,7 +68,7 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.load_documents",
-        lambda *_args: None,
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.overrides_for",
@@ -72,8 +80,7 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.edit_session.documents_for",
-        lambda _folder: {ini_path: IniDocument.from_string(
-            "[Constants]\n", path=ini_path)},
+        lambda _folder: {ini_path: document},
     )
     monkeypatch.setattr(
         "app.bridge.mod_preview.metadata.load",
@@ -90,6 +97,56 @@ def test_authoritative_context_discovers_only_selected_ini_mode(
     assert discovered == [disabled_ini]
     assert context.ini_paths == [ini_path]
     assert serialized == []
+
+
+def test_authoritative_context_reuses_discovery_document_on_reopen(
+        tmp_path, monkeypatch):
+    root = tmp_path / "Root.ini"
+    nested = tmp_path / "nested" / "Child.ini"
+    nested.parent.mkdir()
+    root.write_text(
+        "[TextureOverrideBody]\ndrawindexed = 3,0,0\n",
+        encoding="utf-8")
+    nested.write_text("[Constants]\nglobal $style = 0\n",
+                      encoding="utf-8")
+    original_load = IniDocument.load
+    loads = []
+
+    def load(path):
+        loads.append(str(path))
+        return original_load(path)
+
+    monkeypatch.setattr(IniDocument, "load", load)
+    from app.bridge import mod_preview
+    original_discover = mod_preview.discover_ini_paths
+    discovered = {}
+
+    def discover(*args, **kwargs):
+        paths = original_discover(*args, **kwargs)
+        discovered.update(kwargs["documents"])
+        return paths
+
+    monkeypatch.setattr(mod_preview, "discover_ini_paths", discover)
+    preview = ModPreview(_Access())
+    folder = str(tmp_path)
+    try:
+        _folder, _pending, context = preview.authoritative_context(folder)
+        assert Counter(loads) == {str(root): 1, str(nested): 1}
+        assert context.ini.records[0].document is discovered[str(root)]
+        assert edit_session.documents_for(folder)[str(root)] is discovered[str(root)]
+        assert str(nested) not in discovered
+
+        staged = context.ini.records[0].document
+        with edit_session.transaction(folder, [str(root)]) as transaction:
+            transaction.document(str(root)).replace_lines(
+                1, 2, ["drawindexed = 6,0,0"])
+        _folder, _pending, reopened = preview.authoritative_context(folder)
+        assert Counter(loads) == {str(root): 1, str(nested): 1}
+        assert reopened.ini.records[0].document is staged
+        assert reopened.ini.records[0].sections[
+            "TextureOverrideBody"] == ["drawindexed = 6,0,0"]
+    finally:
+        edit_session.discard(folder)
 
 
 def test_diagnostics_reads_staged_documents_without_serializing(monkeypatch):

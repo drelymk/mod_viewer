@@ -31,7 +31,16 @@ def test_roundtrip_string():
     }
     for name, text in cases.items():
         doc = IniDocument.from_string(text)
-    assert (doc.to_string()) == (text), (f"roundtrip {name}")
+        assert (doc.to_string()) == (text), (f"roundtrip {name}")
+
+
+def test_section_header_with_trailing_comment_is_indexed():
+    doc = IniDocument.from_string(
+        "[TextureOverrideBody] ; note\n"
+        "drawindexed = 3,0,0\n")
+
+    assert doc.sections[0].name == "TextureOverrideBody"
+    assert doc.sections[0].lines[0].text == "drawindexed = 3,0,0"
 
 
 def test_line_kinds():

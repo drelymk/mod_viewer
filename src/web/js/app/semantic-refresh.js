@@ -42,7 +42,7 @@ function handlersOrDefault(handlers = {}) {
   };
 }
 
-function applyControlSemanticResult(result, path, callbacks) {
+function applyControlSemanticResult(result, path, callbacks, change = {}) {
   const controls = result.controls || {};
   const state = result.state || {};
   viewerState.lastToggles = controls.toggles || {};
@@ -53,9 +53,14 @@ function applyControlSemanticResult(result, path, callbacks) {
     modPath: path, onChange: callbacks.onToggleChange,
   });
   buildMenuPanel(controls.menu);
-  buildPresentPanel(controls.present, {
+  const presentContext = {
     modPath: path, onChange: callbacks.onPresentChange,
-  });
+  };
+  if (Object.hasOwn(change, 'selectedPosition')) {
+    presentContext.selectedPosition = change.selectedPosition;
+    presentContext.applySelection = change.applySelection === true;
+  }
+  buildPresentPanel(controls.present, presentContext);
 }
 
 function applyMeshSemanticResult(result) {
@@ -154,7 +159,7 @@ export async function refreshMeshSemantics(handlers = {}) {
   }
 }
 
-export async function refreshSemanticState(handlers = {}) {
+export async function refreshSemanticState(handlers = {}, change = {}) {
   const callbacks = handlersOrDefault(handlers);
   const { path, epoch } = beginSemanticRefresh();
   try {
@@ -170,7 +175,7 @@ export async function refreshSemanticState(handlers = {}) {
       }));
       return false;
     }
-    applyControlSemanticResult(result, path, callbacks);
+    applyControlSemanticResult(result, path, callbacks, change);
     callbacks.syncViewportControlPlacement();
     refreshAll({
       force: {visibility: true, textures: true},

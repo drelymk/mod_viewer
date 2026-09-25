@@ -177,12 +177,13 @@ class IniDocument:
             line.no = no
             stripped = line.raw.strip()
             text = line.text
+            section_match = _RE_SECTION.match(text)
 
             if not stripped:
                 line.kind = BLANK
             elif stripped.startswith(";"):
                 line.kind = COMMENT
-            elif _RE_SECTION.match(stripped):
+            elif section_match:
                 line.kind = SECTION
             elif not text:
                 # Was only an inline comment once stripped.
@@ -215,7 +216,7 @@ class IniDocument:
                     depth += 1
 
             if line.kind == SECTION:
-                name = _RE_SECTION.match(stripped).group(1).strip()
+                name = section_match.group(1).strip()
                 current = Section(name, no)
                 self.sections.append(current)
                 line.section = current
@@ -517,3 +518,10 @@ class IniDocument:
     def __repr__(self):
         return f"<IniDocument {os.path.basename(self.path)} " \
                f"{len(self.lines)} lines, {len(self.sections)} sections>"
+
+
+def load_ini_document(path, source=None):
+    """Load one physical or virtual INI as an editable document."""
+    if source is not None and source.virtual:
+        return IniDocument.from_string(source.read_text(path), path=path)
+    return IniDocument.load(path)
