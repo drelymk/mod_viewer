@@ -121,6 +121,33 @@ def test_resource_reachability_follows_authored_edges_only():
     assert ({"ResourceCycleA", "ResourceCycleB", "ResourceSelf"} <= unused), ("self references and unrooted cycles do not make resources used")
 
 
+def test_reference_prefix_is_valid_and_target_is_checked():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(os.path.join(tmp, "mod.ini"), (
+            "[TextureOverrideBody]\n"
+            "vb0 = reference ResourceBodyPosition\n"
+            "vb1 = reference ResourceMissing\n"
+            "vb2 = copy reference ResourceMissingCopy\n"
+            "[ResourceBodyPosition]\n"
+            "filename = body.buf\n"
+            "stride = 12\n"))
+        _write(os.path.join(tmp, "body.buf"), b"x", binary=True)
+        report = analyze_mod(tmp)
+
+    malformed = [item for item in report["issues"]
+                 if item["code"] == "malformed_resource_reference"]
+    missing = [item for item in report["issues"]
+               if item["code"] == "missing_resource_section"]
+    unused = {item["resource"] for item in report["issues"]
+              if item["code"] == "unused_resource_section"}
+    assert malformed == []
+    assert [(item["resource"], item["line"]) for item in missing] == [
+        ("ResourceMissing", 3),
+        ("ResourceMissingCopy", 4),
+    ]
+    assert "ResourceBodyPosition" not in unused
+
+
 def test_file_classification_and_overrides():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")

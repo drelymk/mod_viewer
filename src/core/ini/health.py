@@ -23,7 +23,8 @@ _RESOURCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_.])Resource[A-Za-z0-9_.\\-]*(?!
 _LOCAL_RESOURCE_RE = re.compile(r"^Resource[A-Za-z0-9_.-]+$", re.I)
 _REFERENCE_LHS_RE = re.compile(r"^(?:ib|vb\d+|ps-t\d+|cs-t\d+)$", re.I)
 _RESOURCE_REFERENCE_RE = re.compile(
-    r"^(?P<prefix>\S+)\s+(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
+    r"^(?P<prefix>copy(?:\s+(?:ref|reference))?|ref(?:erence)?|\S+)\s+"
+    r"(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
 _ASSET_EXTENSIONS = {
     ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".tga", ".bmp",
 }
@@ -257,7 +258,8 @@ def _analyze_statements(doc, ini_rel, issues, global_variables,
             if _REFERENCE_LHS_RE.match(lhs):
                 malformed = _RESOURCE_REFERENCE_RE.match(rhs)
                 if malformed and malformed.group("prefix").lower() not in {
-                        "copy", "ref"}:
+                        "copy", "copy ref", "copy reference", "ref",
+                        "reference"}:
                     issues.append(_issue(
                         "malformed_resource_reference", "error", "resources",
                         f"{lhs} uses an invalid resource reference prefix: "
@@ -386,7 +388,10 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
             if line.kind == "assign" and "=" in line.text:
                 lhs, rhs = (part.strip() for part in line.text.split("=", 1))
                 if _REFERENCE_LHS_RE.match(lhs):
-                    rhs = re.sub(r"^(?:copy|ref)\s+", "", rhs, flags=re.I).split()[0] if rhs else ""
+                    rhs = re.sub(
+                        r"^(?:copy(?:\s+(?:ref|reference))?|ref(?:erence)?)\s+",
+                        "", rhs, flags=re.I
+                    ).split()[0] if rhs else ""
                     if (_LOCAL_RESOURCE_RE.match(rhs) and rhs.lower() not in declared):
                         issues.append(_issue(
                             "missing_resource_section", "warning", "resources",

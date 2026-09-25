@@ -159,7 +159,8 @@ def _collect_resource_copy_sources(sections, resources):
     """Resolve explicit resource copy and reference edges."""
     resource_copy_sources = {}
     resource_assignment_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*(?:copy(?:\s+ref)?|ref)\s+"
+        r"^\s*(Resource\S+)\s*=\s*(?:copy(?:\s+(?:ref|reference))?|"
+        r"ref(?:erence)?)\s+"
         r"(Resource\S+)\s*$", re.I)
     for lines in sections.values():
         for raw in lines:
@@ -176,14 +177,14 @@ def _collect_resource_copy_sources(sections, resources):
                 sources.append(source_resource)
 
     cs_read_re = re.compile(
-        r"^\s*cs-t([12])\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+        r"^\s*cs-t([12])\s*=\s*(?:ref(?:erence)?\s+)?(\S+)\s*$", re.I)
     cs_write_re = re.compile(
-        r"^\s*cs-u0\s*=\s*(?:ref\s+)?(\S+)\s*$", re.I)
+        r"^\s*cs-u0\s*=\s*(?:ref(?:erence)?\s+)?(\S+)\s*$", re.I)
     cs_u_copy_re = re.compile(
         r"^\s*cs-u(\d+)\s*=\s*copy\s+(Resource\S+)\s*$", re.I)
     cs_u_null_re = re.compile(r"^\s*cs-u(\d+)\s*=\s*null\s*$", re.I)
     resource_u_ref_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*ref\s+cs-u(\d+)\s*$", re.I)
+        r"^\s*(Resource\S+)\s*=\s*ref(?:erence)?\s+cs-u(\d+)\s*$", re.I)
     for lines in sections.values():
         cs_inputs = {}
         cs_u_sources = {}
@@ -237,7 +238,8 @@ def _collect_resource_descriptor_sources(sections):
     """Collect descriptor-only copies without making them data edges."""
     descriptor_sources = {}
     assignment_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*copy_desc\s+(Resource\S+)\s*$",
+        r"^\s*(Resource\S+)\s*=\s*copy_desc(?:ription)?\s+"
+        r"(Resource\S+)\s*$",
         re.I)
     for lines in sections.values():
         for raw in lines:

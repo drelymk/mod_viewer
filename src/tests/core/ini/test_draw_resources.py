@@ -4,7 +4,8 @@ import pytest
 
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_resources import (
-    _collect_resource_copy_sources, _ib_index_size,
+    _collect_resource_copy_sources, _collect_resource_descriptor_sources,
+    _ib_index_size,
     _resolve_component_buffers,
 )
 from core.ini.draw_scan import _scan_sections_for_draws
@@ -39,6 +40,42 @@ stride = 12
 
     assert resolved["resolve_vertex_info"]("ResourcePosition") == {
         "filename": "position-rest.buf", "stride": 12,
+    }
+
+
+@pytest.mark.parametrize("reference", ("reference", "copy reference"))
+def test_resource_reference_alias_resolves_file_backed_source(reference):
+    sections = parse_sections("sample.ini", text=f"""
+[Present]
+ResourcePosition = {reference} ResourcePosition.B
+
+[ResourcePosition]
+[ResourcePosition.B]
+filename = position-rest.buf
+stride = 12
+""")
+    resources = extract_resources(sections)
+    copy_sources = _collect_resource_copy_sources(sections, resources)
+    resolved = _resolve_component_buffers({}, resources, copy_sources)
+
+    assert copy_sources["resourceposition"] == ["ResourcePosition.B"]
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
+        "filename": "position-rest.buf", "stride": 12,
+    }
+
+
+def test_copy_description_alias_is_collected_as_descriptor_only():
+    sections = parse_sections("sample.ini", text="""
+[CommandListRemap]
+ResourceBlendOverride = copy_description ResourceBlendSource
+
+[ResourceBlendSource]
+format = DXGI_FORMAT_R8_UINT
+stride = 16
+""")
+
+    assert _collect_resource_descriptor_sources(sections) == {
+        "resourceblendoverride": ["ResourceBlendSource"],
     }
 
 
@@ -101,6 +138,22 @@ filename = a.buf
         sections, extract_resources(sections))
 
     assert "resourceb" not in copy_sources
+
+
+def test_uav_resource_reference_alias_tracks_copy_source():
+    sections = parse_sections("sample.ini", text="""
+[CustomShader]
+cs-u5 = copy ResourceA
+ResourceB = reference cs-u5
+
+[ResourceA]
+filename = a.buf
+""")
+
+    copy_sources = _collect_resource_copy_sources(
+        sections, extract_resources(sections))
+
+    assert copy_sources["resourceb"] == ["ResourceA"]
 
 
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
