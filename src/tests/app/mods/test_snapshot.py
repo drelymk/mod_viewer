@@ -94,11 +94,9 @@ def test_new_staged_document_gives_new_snapshot_view(tmp_path):
     after = IniDocument.from_string("[Constants]\nglobal $value = 1\n",
                                     path=path)
     first = build_mod_ini_snapshot(
-        [path], str(tmp_path), {path: before}, revision=1)
+        [path], str(tmp_path), {path: before})
     second = build_mod_ini_snapshot(
-        [path], str(tmp_path), {path: after}, revision=2)
-    assert first.revision == 1
-    assert second.revision == 2
+        [path], str(tmp_path), {path: after})
     assert first.records[0].document is before
     assert second.records[0].document is after
     assert first.records[0].sections != second.records[0].sections

@@ -36,9 +36,11 @@ def _authorized_mod_folder(folder_path):
 def inspect_mod(folder_path: str) -> dict:
     """Load a mod and return its meshes, toggles, menus, and textures."""
     folder_path = _authorized_mod_folder(folder_path)
+    paths = edit_session.document_paths(folder_path)
     return mod_loader.load_mod(
         folder_path,
-        overrides=edit_session.overrides_for(folder_path),
+        ini_paths=paths or None,
+        documents=edit_session.documents_for(folder_path) if paths else None,
         pending_new_sections=edit_session.new_sections_for(folder_path),
     )
 

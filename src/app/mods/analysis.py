@@ -281,8 +281,7 @@ def _qualified_vars_from_targets(namespace_targets):
 
 
 def build_mod_ini_snapshot(ini_paths, folder_path, documents=None,
-                           overrides=None, source=None, *, require_documents=False,
-                           revision=None):
+                           overrides=None, source=None, *, require_documents=False):
     """Project each current document once, retaining its file identity."""
     paths = list(ini_paths)
     if source is None and paths:
@@ -308,7 +307,7 @@ def build_mod_ini_snapshot(ini_paths, folder_path, documents=None,
             namespace=extract_ini_namespace(document=document),
             var_prefix=var_prefix, source_name=source_name,
             canonical_vars=canonical_var_names(sections)))
-    return ModIniSnapshot(folder_path, source, tuple(records), revision)
+    return ModIniSnapshot(folder_path, source, tuple(records))
 
 
 def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,

@@ -149,6 +149,37 @@ def test_authoritative_context_reuses_discovery_document_on_reopen(
         edit_session.discard(folder)
 
 
+def test_diagnostics_first_reuses_discovery_document_on_open(tmp_path,
+                                                            monkeypatch):
+    root = tmp_path / "Root.ini"
+    nested = tmp_path / "nested" / "Child.ini"
+    nested.parent.mkdir()
+    root.write_text(
+        "[TextureOverrideBody]\ndrawindexed = 3,0,0\n",
+        encoding="utf-8")
+    nested.write_text("[Constants]\nglobal $style = 0\n",
+                      encoding="utf-8")
+    original_load = IniDocument.load
+    loads = []
+
+    def load(path):
+        loads.append(str(path))
+        return original_load(path)
+
+    monkeypatch.setattr(IniDocument, "load", load)
+    preview = ModPreview(_Access())
+    folder = str(tmp_path)
+    try:
+        assert "summary" in preview.get_diagnostics(folder)
+        assert Counter(loads) == {str(root): 1, str(nested): 1}
+        discovered = edit_session.documents_for(folder)[str(root)]
+        _folder, _pending, context = preview.authoritative_context(folder)
+        assert context.ini.records[0].document is discovered
+        assert Counter(loads) == {str(root): 1, str(nested): 1}
+    finally:
+        edit_session.discard(folder)
+
+
 def test_diagnostics_reads_staged_documents_without_serializing(monkeypatch):
     preview = ModPreview(_Access())
     document = object()

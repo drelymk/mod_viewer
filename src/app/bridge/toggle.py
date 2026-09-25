@@ -187,8 +187,7 @@ def export_changes(mod_dir):
         snapshot = build_mod_ini_snapshot(
             edit_session.document_paths(mod_dir), mod_dir,
             edit_session.documents_for(mod_dir), source=source,
-            require_documents=True,
-            revision=edit_session.current_revision(mod_dir))
+            require_documents=True)
         unwired = mod_loader.unwired_pending_sections(
             snapshot, pending_new)
         if unwired:

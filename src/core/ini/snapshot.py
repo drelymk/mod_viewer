@@ -22,4 +22,3 @@ class ModIniSnapshot:
     mod_dir: str
     source: object
     records: tuple[IniRecord, ...]
-    revision: int | None = None

@@ -93,8 +93,7 @@ class ModPreview:
                 saved_metadata.pop("present_names", None)
         snapshot = build_mod_ini_snapshot(
             ini_paths, folder_path, edit_session.documents_for(folder_path),
-            source=source, require_documents=True,
-            revision=edit_session.current_revision(folder_path))
+            source=source, require_documents=True)
         context = mod_loader.ModLoadContext(
             folder_path, metadata=saved_metadata, ini=snapshot)
         context.buffer_overrides = edit_session.ib_overrides_for(folder_path)
@@ -583,9 +582,11 @@ class ModPreview:
         if source is None:
             source = mod_source_for_path(folder_path)
         if not ini_paths:
+            discovered_docs = {}
             ini_paths = discover_ini_paths(
-                folder_path, source=source)
-            edit_session.load_documents(folder_path, ini_paths, source=source)
+                folder_path, source=source, documents=discovered_docs)
+            edit_session.load_documents(
+                folder_path, ini_paths, source=source, documents=discovered_docs)
         try:
             report = analyze_mod(
                 folder_path, ini_paths=ini_paths,
