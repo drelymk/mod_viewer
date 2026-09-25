@@ -3,7 +3,7 @@
 import zipfile
 
 from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
-from app.mods.loader import ModLoadContext, _resolve_context
+from app.mods.loader import ModLoadContext, _resolve_context, load_mod
 from core.ini.document import IniDocument
 from core.mod_source import ZipModSource
 
@@ -116,3 +116,18 @@ def test_direct_override_is_consumed_at_context_boundary(tmp_path):
         "global $value = 1"]
     assert context.source is context.ini.source
     assert context.docs[path] is context.ini.records[0].document
+
+
+def test_existing_context_rejects_separate_overrides_as_structured_error(
+        tmp_path):
+    path = str(tmp_path / "mod.ini")
+    document = IniDocument.from_string("[Constants]\n", path=path)
+    snapshot = build_mod_ini_snapshot(
+        [path], str(tmp_path), {path: document}, require_documents=True)
+    context = ModLoadContext(str(tmp_path), snapshot)
+
+    result = load_mod(context=context, overrides={path: "[Constants]\n"})
+
+    assert result["error"] == (
+        "overrides cannot be used with an authoritative context")
+    assert context.ini.records[0].document is document

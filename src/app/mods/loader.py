@@ -80,6 +80,9 @@ class ModLoadContext:
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None,
                      overrides=None):
     if context is not None:
+        if overrides:
+            raise ValueError(
+                "overrides cannot be used with an authoritative context")
         return context
     if folder_path is None:
         raise ValueError("folder_path is required")
@@ -226,7 +229,7 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         context = _resolve_context(
             folder_path, ini_paths=ini_paths, documents=documents,
             context=context, overrides=overrides)
-    except ModSourceError as error:
+    except (ModSourceError, ValueError) as error:
         return _structured_payload(error=str(error))
     context.skinning_manifest = {}
     if not context.ini_paths:
