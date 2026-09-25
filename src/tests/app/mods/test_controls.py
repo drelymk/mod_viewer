@@ -5,16 +5,62 @@ import struct
 
 import pytest
 
-from app.mods.analysis import ParsedModAnalysis
+from app.mods.analysis import ParsedModAnalysis, build_mod_ini_snapshot
 from app.mods.controls import (
     _gating_vars, _gating_vars_from_groups, load_control_state,
-    load_present_state,
+    load_present_state, unwired_pending_sections,
 )
 from app.mods.loader import load_mod, load_semantic_state
 from core.ini.document import IniDocument
 from tests.support_snapshot import snapshot_context
 
 from app.mods.controls import build_toggle_panel
+
+
+def test_unwired_pending_sections_uses_full_staged_snapshot(tmp_path,
+                                                          monkeypatch):
+    menu_path = tmp_path / "nested" / "Menu.ini"
+    draw_path = tmp_path / "Body.ini"
+    menu = IniDocument.from_string(
+        "namespace = Controls\n"
+        "[Constants]\nglobal persist $style = 0\n"
+        "[KeyStyle]\ntype = cycle\n$style = 0,1\n",
+        path=str(menu_path))
+    draw = IniDocument.from_string(
+        "[TextureOverrideBody]\n"
+        "ib = ResourceIB\nvb0 = ResourcePosition\n"
+        "vb1 = ResourceTexcoord\n"
+        "if $\\Controls\\style == 1\ndrawindexed = 3,0,0\nendif\n"
+        "[ResourceIB]\nfilename = body.ib\nformat = R32_UINT\n"
+        "[ResourcePosition]\nfilename = position.buf\nstride = 12\n"
+        "[ResourceTexcoord]\nfilename = texcoord.buf\nstride = 8\n",
+        path=str(draw_path))
+    paths = [str(menu_path), str(draw_path)]
+    snapshot = build_mod_ini_snapshot(
+        paths, str(tmp_path), {paths[0]: menu, paths[1]: draw},
+        require_documents=True)
+    from app.mods import controls
+    real_analyze = controls.analyze_mod_inis
+    analyzed = []
+
+    def analyze(current):
+        analyzed.append(current)
+        return real_analyze(current)
+
+    monkeypatch.setattr(controls, "analyze_mod_inis", analyze)
+    assert unwired_pending_sections(snapshot, {
+        "nested/Menu.ini": ["KeyStyle"]}) == {}
+    assert analyzed == [snapshot]
+
+    unwired_draw = IniDocument.from_string(
+        draw.to_string().replace("$\\Controls\\style", "$other"),
+        path=str(draw_path))
+    changed = build_mod_ini_snapshot(
+        paths, str(tmp_path), {paths[0]: menu, paths[1]: unwired_draw},
+        require_documents=True)
+    assert unwired_pending_sections(changed, {
+        "nested/Menu.ini": ["KeyStyle"]}) == {
+            "nested/Menu.ini": ["KeyStyle"]}
 
 
 def test_indirect_controls_survive_load_staged_reload_and_dependency_cycles(tmp_path):

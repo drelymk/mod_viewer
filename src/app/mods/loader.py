@@ -7,7 +7,7 @@ implementation details.
 """
 
 import traceback
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from core.geometry.mesh_builder import build_mesh_result, build_mesh_semantics
 from core.ini.health import analyze_mod
@@ -80,11 +80,6 @@ class ModLoadContext:
 def _resolve_context(folder_path, ini_paths=None, documents=None, context=None,
                      overrides=None):
     if context is not None:
-        if overrides:
-            snapshot = build_mod_ini_snapshot(
-                context.ini_paths, context.mod_dir, context.docs,
-                overrides, context.source)
-            return replace(context, ini=snapshot)
         return context
     if folder_path is None:
         raise ValueError("folder_path is required")

@@ -116,11 +116,3 @@ def test_direct_override_is_consumed_at_context_boundary(tmp_path):
         "global $value = 1"]
     assert context.source is context.ini.source
     assert context.docs[path] is context.ini.records[0].document
-
-    updated = _resolve_context(
-        None, context=context,
-        overrides={path: "[Constants]\nglobal $value = 2\n"})
-    assert updated.ini.records[0].sections["Constants"] == [
-        "global $value = 2"]
-    assert context.ini.records[0].sections["Constants"] == [
-        "global $value = 1"]
