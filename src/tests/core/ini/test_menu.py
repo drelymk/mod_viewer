@@ -624,20 +624,9 @@ if $visible >= 1
             endif
         endif
     endif
-    if cursor_x > $left1
-        if cursor_x < $right1
-            if $pressed
-                if $trim < 2
-                    $trim = $trim + 1
-                else
-                    $trim = 0
-                endif
-            endif
-        endif
-    endif
 endif
 if $visible >= 3
-    if cursor_x > $left2 && cursor_x < $right2
+    if cursor_x > $left1 && cursor_x < $right1
         if $pressed
             if $inactive < 2
                 $inactive = $inactive + 1
@@ -645,6 +634,13 @@ if $visible >= 3
                 $inactive = 0
             endif
         endif
+    endif
+endif
+if $pressed && cursor_x > $left2 && cursor_x < $right2
+    if $trim < 2
+        $trim = $trim + 1
+    else
+        $trim = 0
     endif
 endif
 if cursor_x > $left3 && cursor_x < $right3
@@ -660,24 +656,38 @@ ps-t100 = ResourceStyleIcon
 filename = icons/frame.png
 [ResourceStyleIcon]
 filename = icons/style.png
+[CommandListDrawButton_2]
+ps-t100 = ResourceTrimIcon
+[ResourceTrimIcon]
+filename = icons/trim.png
 """
     secs = sections(text)
     menu = extract_menu_toggles(secs)
     attach_menu_images(menu, secs, extract_resources(secs))
     by_slot = _by_slot(menu)
-    assert sorted(by_slot) == [0, 1]
+    assert sorted(by_slot) == [0, 2]
     assert by_slot[0]["var"] == "style"
     assert by_slot[0]["values"] == ["0", "1", "2", "3"]
-    assert by_slot[1]["var"] == "trim"
-    assert by_slot[1]["values"] == ["0", "1", "2"]
+    assert by_slot[2]["var"] == "trim"
+    assert by_slot[2]["values"] == ["0", "1", "2"]
+    assert by_slot[0]["ini_path"].endswith("mod.ini")
     assert by_slot[0]["image_file"] == "icons/style.png"
-    assert "image_file" not in by_slot[1]
+    assert by_slot[2]["image_file"] == "icons/trim.png"
+
+    no_artwork = sections(text.replace("ps-t100 = ResourceTrimIcon", ""))
+    plain = _by_slot(extract_menu_toggles(no_artwork))
+    attach_menu_images(plain, no_artwork, extract_resources(no_artwork))
+    assert 2 in plain and "image_file" not in plain[2]
 
     no_mouse_key = text.replace("key = VK_LBUTTON", "key = k")
     assert extract_menu_toggles(sections(no_mouse_key)) == {}
 
     mutable_limit = text + "\n[Present]\n$limit = 4\n"
     assert extract_menu_toggles(sections(mutable_limit)) == {}
+
+    malformed = text.replace("$trim = 0\n    endif\nendif",
+                             "$trim = 0\n    endif")
+    assert extract_menu_toggles(sections(malformed)) == {}
 
 
 def test_numbered_mouse_menu_keeps_active_controls_without_effect_names():

@@ -35,77 +35,69 @@ _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">
 _MIN_SLOTS = 2
 
 
-def _split_slot_branches(lines):
-    """[(slot_var, slot_value, body)] for an `if $X == N / elif ...` chain.
+def _conditional_blocks(lines):
+    """Return cleaned lines and ordered if/elif/else blocks, or None if malformed."""
+    cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
+    root, stack = [], []
+    body = root
+    for index, line in enumerate(cleaned):
+        low = line.casefold()
+        alternative = _ELSE_RE.fullmatch(line)
+        if low.startswith("if "):
+            branch = {"condition": line[3:].strip(), "start": index + 1,
+                      "body": []}
+            block = {"start": index, "branches": [branch]}
+            body.append(block)
+            stack.append((block, body))
+            body = branch["body"]
+        elif alternative or low == "else":
+            if (not stack or stack[-1][0]["branches"][-1]["condition"] is None
+                    or alternative and not alternative.group(1).strip()):
+                return None
+            block = stack[-1][0]
+            block["branches"][-1]["end"] = index
+            branch = {"condition": alternative.group(1).strip() if alternative else None,
+                      "start": index + 1, "body": []}
+            block["branches"].append(branch)
+            body = branch["body"]
+        elif low == "endif":
+            if not stack:
+                return None
+            block, body = stack.pop()
+            block["branches"][-1]["end"] = index
+        else:
+            body.append(line)
+    return (cleaned, root) if not stack else None
 
-    Every chain is matched, including chains nested inside a branch of another
-    slot/navigation chain. Body lines keep their nested if/endif so
-    _parse_branch can read the guards inside.
-    """
-    cleaned = [raw.split(";")[0].strip() for raw in lines]
 
-    def scan(block):
-        found, i = [], 0
-        while i < len(block):
-            line = block[i]
-            if not line.lower().startswith("if "):
-                i += 1
+def _split_slot_branches(parsed):
+    """Find slot dispatch chains, including nested page menus."""
+    if parsed is None:
+        return []
+    cleaned, root = parsed
+
+    def scan(nodes):
+        found = []
+        for block in nodes:
+            if not isinstance(block, dict):
                 continue
-
-            depth, j = 1, i + 1
-            parts = [(line[3:].strip(), i + 1, None)]
-            end = None
-            while j < len(block):
-                cur = block[j]
-                low = cur.lower()
-                if low.startswith("if "):
-                    depth += 1
-                elif low == "endif":
-                    depth -= 1
-                    if depth == 0:
-                        cond, start, _ = parts[-1]
-                        parts[-1] = (cond, start, j)
-                        end = j
-                        break
-                elif depth == 1:
-                    m_elif = _ELSE_RE.match(cur)
-                    if m_elif or low == "else":
-                        cond, start, _ = parts[-1]
-                        parts[-1] = (cond, start, j)
-                        parts.append((m_elif.group(1).strip() if m_elif else None,
-                                      j + 1, None))
-                j += 1
-
-            if end is None:
-                # Tolerate malformed nesting the same way the broader reader
-                # does: keep looking inside instead of claiming a partial chain.
-                i += 1
-                continue
-
-            # Page/mode menus commonly put another clicked-slot chain inside
-            # an outer navigation chain. Search each branch recursively first;
-            # if it contains a real multi-slot chain, the outer integer chain
-            # is navigation/page dispatch rather than a clickable menu itself.
-            nested = []
-            for _cond, start, stop in parts:
-                nested.extend(scan(block[start:stop]))
-
-            first = _SLOT_RE.fullmatch(parts[0][0] or "")
-            slot_parts = []
+            branches = block["branches"]
+            nested = [item for branch in branches for item in scan(branch["body"])]
+            first = _SLOT_RE.fullmatch(branches[0]["condition"] or "")
+            parts = []
             if first:
-                slot_var = first.group(1)
-                for cond, start, stop in parts:
-                    match = _SLOT_RE.fullmatch(cond or "")
-                    if match and match.group(1).lower() == slot_var.lower():
-                        body = [text for text in block[start:stop] if text]
-                        slot_parts.append((match.group(1), match.group(2), body))
-            if len(slot_parts) >= _MIN_SLOTS and not nested:
-                found.extend(slot_parts)
+                for branch in branches:
+                    match = _SLOT_RE.fullmatch(branch["condition"] or "")
+                    if match and match.group(1).casefold() == first.group(1).casefold():
+                        body = [line for line in cleaned[branch["start"]:branch["end"]]
+                                if line]
+                        parts.append((match.group(1), match.group(2), body))
+            if len(parts) >= _MIN_SLOTS and not nested:
+                found.extend(parts)
             found.extend(nested)
-            i = end + 1
         return found
 
-    return scan(cleaned)
+    return scan(root)
 
 
 def _cycle_values(lo, hi):
@@ -360,93 +352,73 @@ def _mouse_press_vars(sections):
     return pressed
 
 
-def _cursor_comparisons(text):
-    """Count cursor bounds in a parsed condition."""
+def _condition_facts(text, defaults, pressed):
+    """Cursor bounds, static impossibility, and mouse activation for a guard."""
+    if text is None:
+        return 0, False, False
     try:
         node = condition.parse(text)
     except condition.ConditionError:
-        return 0
+        return 0, False, False
 
-    def comparisons(part):
+    def cursor_bounds(part):
         if isinstance(part, condition.Paren):
-            return comparisons(part.inner)
-        if isinstance(part, condition.And):
-            return sum(comparisons(child) for child in part.parts)
-        if isinstance(part, condition.Or):
-            return max(comparisons(child) for child in part.parts)
+            return cursor_bounds(part.inner)
+        if isinstance(part, (condition.And, condition.Or)):
+            counts = [cursor_bounds(child) for child in part.parts]
+            return sum(counts) if isinstance(part, condition.And) else max(counts)
         if isinstance(part, condition.Cmp) and part.op in ("<", "<=", ">", ">="):
-            operands = part.left.render() + " " + part.right.render()
-            return bool(re.search(r'\bcursor_[xy]\b', operands, re.I))
+            return bool(re.search(r'\bcursor_[xy]\b', part.render(), re.I))
         return 0
 
-    return comparisons(node)
-
-
-def _static_false(text, defaults):
-    if text is None:
-        return False
-    try:
-        node = condition.parse(text)
-    except condition.ConditionError:
-        return False
-    bindings = {name: defaults[name.casefold()] for name in node.variables()
+    names = node.variables()
+    bindings = {name: defaults[name.casefold()] for name in names
                 if name.casefold() in defaults}
-    return condition.reduce(node, bindings) == condition.FALSE
+    inactive = condition.reduce(node, bindings) == condition.FALSE
+    mouse = any(
+        condition.reduce(node, {name: "0"}) == condition.FALSE
+        and condition.reduce(node, {name: pressed[name.casefold()]}) != condition.FALSE
+        for name in names if name.casefold() in pressed)
+    return cursor_bounds(node), inactive, mouse
 
 
-def _mouse_gate(text, pressed):
-    if text is None:
-        return False
-    try:
-        node = condition.parse(text)
-    except condition.ConditionError:
-        return False
-    for name in node.variables():
-        value = pressed.get(name.casefold())
-        if value is None:
-            continue
-        if (condition.reduce(node, {name: "0"}) == condition.FALSE
-                and condition.reduce(node, {name: value}) != condition.FALSE):
-            return True
-    return False
-
-
-def _mouse_button_items(sections):
+def _mouse_button_items(sections, blocks):
     """Find finite click actions inside bounded cursor hit regions."""
     defaults = _static_numeric_defaults(sections)
     pressed = _mouse_press_vars(sections)
     if not pressed:
         return []
-    found = []
-    for section, lines in sections.items():
-        if not str(section).casefold().startswith("commandlist"):
+    found, ordinal = [], 0
+    for section, parsed in blocks.items():
+        if parsed is None:
             continue
-        cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
-        stack = []
-        for index, line in enumerate(cleaned):
-            low = line.casefold()
-            if low.startswith("if "):
-                stack.append((line[3:].strip(), index))
-            elif _ELSE_RE.fullmatch(line) or low == "else":
-                if stack:
-                    stack[-1] = (None, stack[-1][1])
-            elif low == "endif" and stack:
-                gate, start = stack.pop()
-                if not _mouse_gate(gate, pressed):
+        cleaned, root = parsed
+        lines = sections[section]
+
+        def walk(nodes, cursor_bounds=0, inactive=False):
+            nonlocal ordinal
+            for block in nodes:
+                if not isinstance(block, dict):
                     continue
-                if sum(_cursor_comparisons(parent) for parent, _start in stack
-                       if parent is not None) < 2:
-                    continue
-                if any(_static_false(parent, defaults)
-                       for parent, _start in stack):
-                    continue
-                parsed = _parse_branch(cleaned[start + 1:index],
-                                       numeric_defaults=defaults,
-                                       require_finite=True)
-                if parsed:
-                    variable, values, effects = parsed
-                    found.append((section, variable, values, effects,
-                                  line_source(lines[start]) or first_source(lines) or {}))
+                for branch in block["branches"]:
+                    bounds, impossible, mouse = _condition_facts(
+                        branch["condition"], defaults, pressed)
+                    total_bounds = cursor_bounds + bounds
+                    if mouse and total_bounds >= 2:
+                        action = _parse_branch(
+                            cleaned[branch["start"]:branch["end"]],
+                            numeric_defaults=defaults, require_finite=True)
+                        if action:
+                            slot = ordinal
+                            ordinal += 1
+                            if not (inactive or impossible):
+                                found.append((slot, section, *action,
+                                              line_source(lines[block["start"]])
+                                              or first_source(lines) or {}))
+                            continue
+                    walk(branch["body"], total_bounds, inactive or impossible)
+
+        walk(root)
     return found if len(found) >= _MIN_SLOTS else []
 
 
@@ -597,6 +569,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     menu = {}
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
+    blocks = {name: _conditional_blocks(lines) for name, lines in sections.items()
+              if name.casefold().startswith("commandlist")}
 
     def declared(name):
         return canon.get(name.lower(), name)
@@ -633,20 +607,17 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
             entry["kind"] = kind
         menu[key] = entry
 
-    for name, lines in sections.items():
-        # 3DMigoto section names are case-insensitive. Preserve the original
-        # spelling in the payload, but never skip a lowercase/mixed-case
-        # CommandList section during discovery.
-        if not name.lower().startswith("commandlist"):
-            continue
+    for name, parsed_blocks in blocks.items():
         parsed = []
-        for _slot_var, slot_value, body in _split_slot_branches(lines):
+        for _slot_var, slot_value, body in _split_slot_branches(
+                parsed_blocks):
             info = _parse_branch(body)
             if info:
                 parsed.append((slot_value, info))
         if len(parsed) < _MIN_SLOTS:
             continue
 
+        lines = sections[name]
         src = first_source(lines) or {}
         for slot_value, (var, values, effects) in parsed:
             add_entry(name, slot_value, var, values, effects, src=src)
@@ -685,8 +656,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                                     flags=re.I)
             add_entry(section, slot, variable, values, src=src,
                       key_section=button_section)
-    for slot, (section, variable, values, effects, src) in enumerate(
-            _mouse_button_items(sections)):
+    for slot, section, variable, values, effects, src in _mouse_button_items(
+            sections, blocks):
         add_entry(section, slot, variable, values, effects, src=src,
                   kind="mouse_region")
     return menu
