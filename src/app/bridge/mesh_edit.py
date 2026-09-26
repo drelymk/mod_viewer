@@ -127,15 +127,13 @@ def _rewrite_draw_line(doc, line_no, ranges):
     doc.replace_lines(line_no, line_no + 1, lines)
 
 
-def _payload_entries(request):
+def _payload_entry(request):
     if not isinstance(request, dict):
         raise ValueError("Mesh changes must be an object.")
-    entries = request.get("meshes")
-    if not isinstance(entries, list) or not entries:
-        raise ValueError("Mesh changes must include at least one mesh.")
-    if any(not isinstance(entry, dict) for entry in entries):
-        raise ValueError("Each mesh change must be an object.")
-    return entries
+    entry = request.get("mesh")
+    if not isinstance(entry, dict):
+        raise ValueError("Mesh changes must include one mesh.")
+    return entry
 
 
 def apply_component_mesh_changes(context, request):
@@ -145,110 +143,87 @@ def apply_component_mesh_changes(context, request):
         return {"error": "Mesh changes require a writable mod folder."}
 
     try:
-        entries = _payload_entries(request)
+        entry = _payload_entry(request)
         _parsed, authoritative = resolved_draws(context)
         component = request.get("component")
-        selected = []
-        ib_candidates = {}
-        ib_ranges = {}
-        seen_identities = set()
-        for entry in entries:
-            key = entry.get("key") if isinstance(entry, dict) else None
-            if not isinstance(key, str) or not key:
-                raise ValueError("Mesh changes require a canonical mesh identity.")
-            if key in seen_identities:
-                raise ValueError("A mesh was submitted more than once.")
-            seen_identities.add(key)
-            match = [(draw, group) for draw, group in authoritative.values()
-                     if mesh_identity_for_draw(draw, group).key == key]
-            if len(match) != 1:
-                raise ValueError("The mesh identity is stale or synthetic.")
-            draw, group = match[0]
-            if component is not None and (
-                    group.get("display_name") or group.get("name")) != component:
-                raise ValueError("The mesh does not belong to this component.")
-            if draw.count is None:
-                raise ValueError("Synthetic draws cannot receive mesh changes.")
-            sources = entry.get("sources")
-            if not isinstance(sources, list) or not sources:
-                raise ValueError("Mesh changes require authored source provenance.")
-            expected = {
-                _authoritative_source_key(context.mod_dir, item, source)
-                for item in draw.sources
-            }
-            submitted = {_source_key(item) for item in sources}
-            if submitted != expected:
-                raise ValueError("Mesh source provenance is stale.")
-            parts = entry.get("parts")
-            path = _resolve_ib_path(context, draw)
-            data = ib_candidates.get(path)
-            if data is None:
-                data = edit_session.ib_overrides_for(context.mod_dir).get(path)
-            if data is None:
-                with open(path, "rb") as stream:
-                    data = stream.read()
-            candidate, normalized = repack_index_bytes(
-                data, draw.start, draw.count, draw.index_size, parts)
-            byte_range = (draw.start * draw.index_size,
-                          (draw.start + draw.count) * draw.index_size)
-            _validate_draw_overlap(
-                context, authoritative, draw, path, byte_range, len(data))
-            existing = edit_session.ib_edits_for(context.mod_dir).get(
-                _ib_path_key(path))
-            previous = ib_ranges.setdefault(path, [])
-            if existing is not None:
-                previous.extend(existing["ranges"])
-            if any(byte_range[0] < end and start < byte_range[1]
-                   for start, end in previous):
-                raise ValueError("Mesh edits overlap in the same index buffer.")
-            previous.append(byte_range)
-            ib_candidates[path] = candidate
-            selected.append((entry, draw, normalized, candidate, path,
-                             byte_range))
+        key = entry.get("key")
+        if not isinstance(key, str) or not key:
+            raise ValueError("Mesh changes require a canonical mesh identity.")
+        match = [(draw, group) for draw, group in authoritative.values()
+                 if mesh_identity_for_draw(draw, group).key == key]
+        if len(match) != 1:
+            raise ValueError("The mesh identity is stale or synthetic.")
+        draw, group = match[0]
+        if component is not None and (
+                group.get("display_name") or group.get("name")) != component:
+            raise ValueError("The mesh does not belong to this component.")
+        if draw.count is None:
+            raise ValueError("Synthetic draws cannot receive mesh changes.")
+        sources = entry.get("sources")
+        if not isinstance(sources, list) or not sources:
+            raise ValueError("Mesh changes require authored source provenance.")
+        expected = {
+            _authoritative_source_key(context.mod_dir, item, source)
+            for item in draw.sources
+        }
+        submitted = {_source_key(item) for item in sources}
+        if submitted != expected:
+            raise ValueError("Mesh source provenance is stale.")
+        parts = entry.get("parts")
+        path = _resolve_ib_path(context, draw)
+        data = edit_session.ib_overrides_for(context.mod_dir).get(path)
+        if data is None:
+            with open(path, "rb") as stream:
+                data = stream.read()
+        existing = edit_session.ib_edits_for(context.mod_dir).get(
+            _ib_path_key(path))
+        if existing is not None:
+            original = existing["original_hash"]
+        else:
+            original = _sha256(data)
+        candidate, normalized = repack_index_bytes(
+            data, draw.start, draw.count, draw.index_size, parts)
+        byte_range = _draw_byte_range(draw, len(data))
+        _validate_draw_overlap(
+            context, authoritative, draw, path, byte_range, len(data))
+        if existing is not None and any(
+                byte_range[0] < end and start < byte_range[1]
+                for start, end in existing["ranges"]):
+            raise ValueError("Mesh edits overlap in the same index buffer.")
 
         ini_paths = []
         resolved_lines = []
-        for entry, draw, normalized, candidate, path, byte_range in selected:
-            ranges = drawindexed_ranges(draw.start, draw.base, normalized)
-            for source_ref in entry["sources"]:
-                ini_key, doc = edit_session.document(
-                    context.mod_dir, source_ref.get("ini"))
-                if doc.path not in ini_paths:
-                    ini_paths.append(doc.path)
-                target = dict(source_ref)
-                target["drawindexed"] = [draw.count, draw.start, draw.base]
-                resolved = resolve_draw_references(
-                    doc, [target], target_ini=source_ref.get("ini"))
-                line_no = resolved[int(source_ref["line"])]
-                resolved_lines.append((doc.path, line_no, ranges))
-
+        ranges = drawindexed_ranges(draw.start, draw.base, normalized)
+        for source_ref in entry["sources"]:
+            _ini_key, doc = edit_session.document(
+                context.mod_dir, source_ref.get("ini"))
+            if doc.path not in ini_paths:
+                ini_paths.append(doc.path)
+            target = dict(source_ref)
+            target["drawindexed"] = [draw.count, draw.start, draw.base]
+            resolved = resolve_draw_references(
+                doc, [target], target_ini=source_ref.get("ini"))
+            line_no = resolved[int(source_ref["line"])]
+            resolved_lines.append((doc.path, line_no, ranges))
+        ib_path = path
         with edit_session.transaction(context.mod_dir, ini_paths) as edit:
             patches = {}
-            for path, line_no, ranges in resolved_lines:
-                by_line = patches.setdefault(path, {})
+            for ini_path, line_no, ranges in resolved_lines:
+                by_line = patches.setdefault(ini_path, {})
                 if line_no in by_line:
                     raise ValueError("A source draw was submitted more than once.")
                 by_line[line_no] = ranges
-            for path, by_line in patches.items():
-                doc = edit.document(path)
+            for ini_path, by_line in patches.items():
+                doc = edit.document(ini_path)
                 for line_no in sorted(by_line, reverse=True):
                     _rewrite_draw_line(doc, line_no, by_line[line_no])
 
-            for entry, draw, normalized, candidate, path, byte_range in selected:
-                record = edit_session.ib_edits_for(context.mod_dir).get(
-                    os.path.normcase(os.path.abspath(path)))
-                if record is not None:
-                    original = record["original_hash"]
-                else:
-                    with open(path, "rb") as stream:
-                        original = _sha256(stream.read())
-                edit.stage_ib_edit(
-                    path, candidate, original, [byte_range],
-                    dependent_inis={edit_session.document(
-                        context.mod_dir, source_ref.get("ini"))[0]
-                        for source_ref in entry.get("sources", [])})
-        return {"ok": True, "component": component,
-                "meshes": len(selected)}
+            edit.stage_ib_edit(
+                ib_path, candidate, original, [byte_range],
+                dependent_inis={edit_session.document(
+                    context.mod_dir, source_ref.get("ini"))[0]
+                    for source_ref in entry.get("sources", [])})
+        return {"ok": True, "component": component}
     except (KeyError, TypeError, ValueError, ModSourceError,
             MeshLayoutError) as error:
         return {"error": str(error)}

@@ -38,7 +38,7 @@ def validate_triangle_partition(draw_count, index_size, parts):
             values.append(ordinal)
         normalized.append(tuple(values))
 
-    if seen != set(range(triangle_count)):
+    if len(seen) != triangle_count:
         raise MeshLayoutError("Loose parts must cover every authored triangle exactly once.")
     return tuple(normalized)
 

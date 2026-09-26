@@ -41,19 +41,19 @@ def test_apply_component_mesh_changes_stages_lossless_ini_and_ib(tmp_path,
     identity = mesh_identity_for_draw(draw, group).key
     request = {
         "component": "Body",
-        "meshes": [{
+        "mesh": {
             "key": identity,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
             }],
             "parts": [[1], [0]],
-        }],
+        },
     }
 
     result = mesh_edit.apply_component_mesh_changes(context, request)
 
-    assert result == {"ok": True, "component": "Body", "meshes": 1}
+    assert result == {"ok": True, "component": "Body"}
     assert ib.read_bytes() == original
     staged_text = edit_session.peek(str(tmp_path), str(ini)).to_string()
     staged_text = staged_text.replace("\r\n", "\n")
@@ -74,14 +74,14 @@ def test_apply_rejects_incomplete_partition_without_staging(tmp_path, monkeypatc
                             draw.label: (draw, group)}))
     request = {
         "component": "Body",
-        "meshes": [{
+        "mesh": {
             "key": mesh_identity_for_draw(draw, group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
             }],
             "parts": [[0], [0]],
-        }],
+        },
     }
 
     result = mesh_edit.apply_component_mesh_changes(context, request)
@@ -135,13 +135,13 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
     def request(component, source_ref, draw):
         return {
             "component": component,
-            "meshes": [{
+            "mesh": {
                 "key": mesh_identity_for_draw(
                     draw, body_group if component == "Body" else hair_group
                 ).key,
                 "sources": [source_ref],
                 "parts": [[1], [0]],
-            }],
+            },
         }
 
     body_source = {
@@ -157,8 +157,8 @@ def test_apply_resolves_stale_line_after_another_draw_shifts(tmp_path, monkeypat
     second = mesh_edit.apply_component_mesh_changes(
         context, request("Hair", hair_source, hair))
 
-    assert first == {"ok": True, "component": "Body", "meshes": 1}
-    assert second == {"ok": True, "component": "Hair", "meshes": 1}
+    assert first == {"ok": True, "component": "Body"}
+    assert second == {"ok": True, "component": "Hair"}
     staged = edit_session.peek(str(tmp_path), str(ini)).to_string()
     staged = staged.replace("\r\n", "\n")
     assert "drawindexed = 3, 1, 7\n" in staged
@@ -215,14 +215,14 @@ def test_apply_rejects_partial_overlap_with_another_draw(tmp_path, monkeypatch):
                         }))
     request = {
         "component": "Body",
-        "meshes": [{
+        "mesh": {
             "key": mesh_identity_for_draw(body, body_group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
             }],
             "parts": [[0, 2], [1, 3]],
-        }],
+        },
     }
 
     result = mesh_edit.apply_component_mesh_changes(context, request)
@@ -247,19 +247,19 @@ def test_apply_allows_identical_complete_overlap_with_another_draw(
                         }))
     request = {
         "component": "Body",
-        "meshes": [{
+        "mesh": {
             "key": mesh_identity_for_draw(body, body_group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
             }],
             "parts": [[0, 2], [1, 3]],
-        }],
+        },
     }
 
     result = mesh_edit.apply_component_mesh_changes(context, request)
 
-    assert result == {"ok": True, "component": "Body", "meshes": 1}
+    assert result == {"ok": True, "component": "Body"}
     assert edit_session.has_pending(str(context.mod_dir))
     assert str(ib) in edit_session.ib_overrides_for(str(context.mod_dir))
 
@@ -274,19 +274,19 @@ def test_apply_ignores_unrelated_missing_index_buffer(tmp_path, monkeypatch):
                         }))
     request = {
         "component": "Body",
-        "meshes": [{
+        "mesh": {
             "key": mesh_identity_for_draw(body, body_group).key,
             "sources": [{
                 "ini": "body.ini", "line": 2, "section": "Body",
                 "occurrence": {"section": "Body", "ordinal": 0, "path": []},
             }],
             "parts": [[0, 2], [1, 3]],
-        }],
+        },
     }
 
     result = mesh_edit.apply_component_mesh_changes(context, request)
 
-    assert result == {"ok": True, "component": "Body", "meshes": 1}
+    assert result == {"ok": True, "component": "Body"}
     assert edit_session.has_pending(str(context.mod_dir))
     assert str(ib) in edit_session.ib_overrides_for(str(context.mod_dir))
 
@@ -342,13 +342,17 @@ def test_apply_tracks_each_index_buffer_dependency_to_its_sources(
             "parts": [[1], [0]],
         }
 
-    result = mesh_edit.apply_component_mesh_changes(context, {
+    first = mesh_edit.apply_component_mesh_changes(context, {
         "component": "Body",
-        "meshes": [entry(draw_a, "a.ini", group_a),
-                   entry(draw_b, "b.ini", group_b)],
+        "mesh": entry(draw_a, "a.ini", group_a),
+    })
+    second = mesh_edit.apply_component_mesh_changes(context, {
+        "component": "Body",
+        "mesh": entry(draw_b, "b.ini", group_b),
     })
 
-    assert result == {"ok": True, "component": "Body", "meshes": 2}
+    assert first == {"ok": True, "component": "Body"}
+    assert second == {"ok": True, "component": "Body"}
     a_ib.write_bytes(b"external")
     exported = edit_session.export(str(tmp_path))
 

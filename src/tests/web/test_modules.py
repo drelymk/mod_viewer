@@ -23,7 +23,7 @@ def _call_module(page, module_path, export_name, *args):
 def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {findLooseParts, separateLooseParts, clearLooseParts,
+      const {separateLooseParts, clearLooseParts,
         syncLoosePartMaterial} =
         await import('./js/mesh/loose-parts.js');
       const makeMesh = (positions, indices) => {
@@ -34,7 +34,12 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
           new Uint32Array(indices), 1));
         return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
       };
-      const parts = mesh => findLooseParts(mesh).map(index => Array.from(index));
+      const parts = mesh => {
+        const created = separateLooseParts(mesh);
+        const triangles = created.map(part => part.userData.loosePartTriangles);
+        clearLooseParts(mesh);
+        return triangles;
+      };
       const disconnected = makeMesh([
         0, 0, 0, 1, 0, 0, 0, 1, 0,
         10, 0, 0, 11, 0, 0, 10, 1, 0,
@@ -125,11 +130,11 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         },
       };
     }""")
-    assert result["disconnected"] == [[0, 1, 2], [3, 4, 5]]
+    assert result["disconnected"] == [[0], [1]]
     assert result["connected"] == []
     assert result["duplicatedSeam"] == []
-    assert result["nearlyIdentical"] == [[0, 1, 2], [3, 4, 5]]
-    assert result["ordered"] == [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    assert result["nearlyIdentical"] == [[0], [1]]
+    assert result["ordered"] == [[0], [1], [2]]
     assert result["oneIsland"] == []
     assert result["beforeCleanup"] == {
         "labels": ["Fixture - Part 1", "Fixture - Part 2"],
@@ -154,7 +159,8 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
 def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {findLooseParts} = await import('./js/mesh/loose-parts.js');
+       const {clearLooseParts, separateLooseParts} =
+         await import('./js/mesh/loose-parts.js');
       const makeMesh = positions => {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(
@@ -174,8 +180,12 @@ def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module
         0.00199, 0, 0, 1, 0, 0, 0, 1, 0,
         0.00201, 0, 0, 2, 0, 0, 1, 1, 0,
       ]);
-      const count = (mesh, tolerance) =>
-        findLooseParts(mesh, {tolerance}).length;
+       const count = (mesh, tolerance) => {
+         const parts = separateLooseParts(mesh, {tolerance});
+         const count = parts.length;
+         clearLooseParts(mesh);
+         return count;
+       };
       return {
         largerGap: count(gapped, 0.0001),
         insideGap: count(gapped, 0.002),
@@ -258,6 +268,7 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
         visible: parts[0].visible,
         manualVisible: parts[0].userData.manualVisible,
         triangles: parts[0].userData.loosePartTriangles,
+        labels: remaining.map(part => part.userData.loosePartLabel),
       };
       const full = mergeLooseParts([remaining[1], remaining[0]]);
       const fullState = {
@@ -292,8 +303,9 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
             "uvShared": True,
             "colorShared": True,
             "visible": True,
-        "manualVisible": True,
-        "triangles": [0, 2],
+            "manualVisible": True,
+            "triangles": [0, 2],
+            "labels": ["Merge - Part 1", "Merge - Part 2"],
         },
         "fullState": {
             "sourceMesh": True,
@@ -305,6 +317,70 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
             "sourceManualVisible": False,
             "sourceManuallyToggled": True,
         },
+    }
+
+
+def test_selected_triangle_split_preserves_authored_partition_and_part_order(
+        module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {clearLooseParts, separateLooseParts,
+        separateSelectedTriangles} = await import('./js/mesh/loose-parts.js');
+      const makeSource = () => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(
+          new Float32Array([
+            0, 0, 0, 1, 0, 0, 0, 1, 0,
+            10, 0, 0, 11, 0, 0, 10, 1, 0,
+            11, 1, 0, 12, 1, 0,
+            20, 0, 0, 21, 0, 0, 20, 1, 0,
+          ]), 3));
+        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array([
+          0, 1, 2,
+          3, 4, 5,
+          5, 4, 6,
+          6, 4, 7,
+          8, 9, 10,
+        ]), 1));
+        return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
+      };
+      const clean = makeSource();
+       const cleanResult = separateSelectedTriangles(clean, [4, 2]);
+      const loose = makeSource();
+      const parts = separateLooseParts(loose, {label: 'Split'});
+      const existingResult = separateSelectedTriangles(parts[1], [2]);
+      const partition = loose.userData.looseParts.map(part => ({
+        triangles: part.userData.loosePartTriangles,
+        index: Array.from(part.geometry.index.array),
+        label: part.userData.loosePartLabel,
+      }));
+      const cleanPartition = clean.userData.looseParts.map(part =>
+        part.userData.loosePartTriangles);
+      clearLooseParts(clean);
+      clearLooseParts(loose);
+      return {
+        cleanPartition,
+        cleanSelected: cleanResult.selected.userData.loosePartTriangles,
+        existingRemainder: existingResult.remainder.userData.loosePartTriangles,
+        existingSelected: existingResult.selected.userData.loosePartTriangles,
+        partition,
+      };
+    }""")
+    assert result == {
+        "cleanPartition": [[0, 1, 3], [2, 4]],
+        "cleanSelected": [2, 4],
+        "existingRemainder": [1, 3],
+        "existingSelected": [2],
+        "partition": [
+             {"triangles": [0], "index": [0, 1, 2],
+             "label": "Split - Part 1"},
+            {"triangles": [1, 3], "index": [3, 4, 5, 6, 4, 7],
+             "label": "Split - Part 2"},
+            {"triangles": [2], "index": [5, 4, 6],
+             "label": "Split - Part 3"},
+            {"triangles": [4], "index": [8, 9, 10],
+             "label": "Split - Part 4"},
+        ],
     }
 
 
@@ -393,6 +469,44 @@ def test_model_box_picking_uses_visible_loose_part_geometry(module_page):
       };
     }""")
     assert result == {"selectedRightPart": True, "hiddenExcluded": True}
+
+
+def test_face_picking_resolves_loose_part_faces_to_authored_ordinals(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {separateLooseParts} = await import('./js/mesh/loose-parts.js');
+      const {authoredTriangleOrdinal, trianglesInClientRect} = await import(
+        './js/scene/model-picking.js');
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([
+          -1, 0, 0, -0.5, 0, 0, -1, 0.5, 0,
+          0.5, 0, 0, 1, 0, 0, 0.5, 0.5, 0,
+        ]), 3));
+      geometry.setIndex([0, 1, 2, 3, 4, 5]);
+      const source = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+      const parts = separateLooseParts(source);
+      source.updateMatrixWorld(true);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+      camera.position.set(0, 0, 5);
+      camera.lookAt(0, 0, 0);
+      camera.updateMatrixWorld(true);
+      const canvas = {getBoundingClientRect: () => ({
+        left: 0, top: 0, width: 100, height: 100,
+      })};
+      const point = new THREE.Vector3(0.65, 0.1, 0)
+        .applyMatrix4(parts[1].matrixWorld).project(camera);
+      const x = 50 + point.x * 50;
+      const y = 50 - point.y * 50;
+      return {
+        ordinal: authoredTriangleOrdinal(parts[1], 0),
+        selected: trianglesInClientRect({
+          mesh: parts[1], camera, canvas,
+          selectionRect: {left: x - 4, top: y - 4, right: x + 4, bottom: y + 4},
+        }),
+      };
+    }""")
+    assert result == {"ordinal": 1, "selected": [1]}
 
 
 def test_baked_animation_updates_existing_attributes_and_wraps_frames(module_page):
