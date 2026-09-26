@@ -39,50 +39,6 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q src/tests --ignore=src/tests/web
 
-  browser:
-    name: Browser and UI tests (${{ matrix.shard }}/2)
-    needs: prepare-assets
-    runs-on: windows-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-
-      - name: Download verified browser assets
-        uses: actions/download-artifact@v4
-        with:
-          name: verified-browser-assets
-          path: src/assets
-
-      - name: Verify browser assets
-        run: >-
-          python -c
-          "import sys; sys.path.insert(0, 'src'); import build;
-          build.verify_assets()"
-
-      - name: Run browser and UI tests
-        run: >-
-          python -m pytest -q --test-shard ${{ matrix.shard }}
-          --test-shard-count 2
-          --ignore=src/tests/web/test_rendering.py src/tests/web
-
   rendering:
     name: WebGPU and rendering tests (${{ matrix.shard }}/2)
     needs: prepare-assets

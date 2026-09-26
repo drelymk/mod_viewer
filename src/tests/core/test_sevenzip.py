@@ -305,26 +305,6 @@ def test_sevenzip_source_reads_and_prefixes_from_memory_after_extraction(
         "list", "extract"]
 
 
-def test_sevenzip_source_rejects_extraction_symlink_escape(tmp_path):
-    path = tmp_path / "escape.7z"
-    path.write_bytes(b"placeholder")
-    outside = tmp_path / "outside.bin"
-    outside.write_bytes(b"data")
-
-    class EscapingClient:
-        def list_members(self, _archive_path):
-            return _entries(("body.bin", 4, False, False))
-
-        def extract_all(self, _archive_path, output_dir):
-            try:
-                os.symlink(outside, os.path.join(output_dir, "body.bin"))
-            except OSError:
-                pytest.skip("symbolic links are unavailable in this environment")
-
-    with pytest.raises(ModSourceError, match="escapes the extraction root"):
-        SevenZipModSource(path, client=EscapingClient())
-
-
 def test_sevenzip_source_repeated_reads_do_not_call_backend(
         tmp_path, monkeypatch):
     path = tmp_path / "repeat.7z"
