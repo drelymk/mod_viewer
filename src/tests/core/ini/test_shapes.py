@@ -15,32 +15,32 @@ from app.mods.controls import build_menu_panel
 def test_repeated_full_buffer_shape_blocks_are_discovered():
     text = r"""
 [CustomShaderComputeShapes]
-x88 = $BoobsSize
-cs-t50 = copy ResourceBodyPosition.1
-cs-t51 = copy ResourceBodyPosition.2
-ResourceBodyPosition = ref cs-u5
+x88 = $shape01
+cs-t50 = copy ResourceComponent01Position.1
+cs-t51 = copy ResourceComponent01Position.2
+ResourceComponent01Position = ref cs-u5
 Dispatch = 3, 1, 1
-x88 = $NippleLength
-cs-t50 = copy ResourceBodyPosition.1
-cs-t51 = copy ResourceBodyPosition.3
-ResourceBodyPosition = ref cs-u5
+x88 = $shape03
+cs-t50 = copy ResourceComponent01Position.1
+cs-t51 = copy ResourceComponent01Position.3
+ResourceComponent01Position = ref cs-u5
 Dispatch = 3, 1, 1
-[ResourceBodyPosition.1]
+[ResourceComponent01Position.1]
 stride = 40
-filename = BodyPosition.buf
-[ResourceBodyPosition.2]
+filename = Component01Position.buf
+[ResourceComponent01Position.2]
 stride = 40
-filename = BodyPosition.boobs.buf
-[ResourceBodyPosition.3]
+filename = Component01Position.shape01.buf
+[ResourceComponent01Position.3]
 stride = 40
-filename = BodyPosition.nipple.buf
+filename = Component01Position.shape02.buf
 """
     sliders = extract_shape_sliders(sections(text), extract_resources(sections(text)))
     by_var = {slider["var"]: slider for slider in sliders}
-    assert (sorted(by_var) == ["BoobsSize", "NippleLength"] and
-          by_var["BoobsSize"]["base_file"] == "BodyPosition.buf" and
-          by_var["BoobsSize"]["shader_base_file"] == "BodyPosition.buf" and
-          by_var["NippleLength"]["target_file"] == "BodyPosition.nipple.buf"), (f"repeated t50/t51 morph blocks share their authored base (got {sliders})")
+    assert (sorted(by_var) == ["shape01", "shape03"] and
+          by_var["shape01"]["base_file"] == "Component01Position.buf" and
+          by_var["shape01"]["shader_base_file"] == "Component01Position.buf" and
+          by_var["shape03"]["target_file"] == "Component01Position.shape02.buf"), (f"repeated t50/t51 morph blocks share their authored base (got {sliders})")
 
 
 
@@ -120,15 +120,15 @@ filename = SecondTarget.buf
 def test_wwmi_sparse_shape_slider_is_discovered():
     text = r"""
 [Constants]
-global persist $BoobsSize = 0
+global persist $shape01 = 0
 global $shapekey_vertex_offset_batch1 = 43085
 
-[CommandListDrawSlider.Boobs]
-x87 = $BoobsSize * x87
+[CommandListDrawSlider.Shape01]
+x87 = $shape01 * x87
 
-[CommandListSetBoobsSize]
+[CommandListSetshape01]
 $\WWMIv1\shapekey_id = 161
-$\WWMIv1\shapekey_value = $BoobsSize
+$\WWMIv1\shapekey_value = $shape01
 
 [CommandListSetupShapeKeysBatch]
 cs-t33 = ResourceShapeKeyOffsetBuffer
@@ -161,43 +161,43 @@ filename = Meshes/ShapeKeyVertexOffset.buf
 def test_zzmi_midpoint_pair_sliders_are_discovered():
     text = r"""
 [Constants]
-global persist $Bottom = 0
-global persist $Breast = 0
-[CommandListDrawSlider.Bottom]
-x87 = 202 / $ww * $Bottom
-[CommandListDrawSlider.Breast]
-x87 = 202 / $ww * $Breast
+global persist $shape05 = 0
+global persist $shape06 = 0
+[CommandListDrawSlider.shape05]
+x87 = 202 / $ww * $shape05
+[CommandListDrawSlider.shape06]
+x87 = 202 / $ww * $shape06
 [CommandListKeys]
-cs-t50 = copy ResourceBodyBase
-cs-t51 = copy ResourceBodyBigBottom
-cs-t52 = copy ResourceBodySmallBottom
-cs-t53 = copy ResourceBodyBigBreast
-cs-t54 = copy ResourceBodySmallBreast
-x88 = $Bottom
-x89 = $Breast
-[ResourceBodyBase]
+cs-t50 = copy ResourceComponent01Base
+cs-t51 = copy ResourceComponent01Bigshape05
+cs-t52 = copy ResourceComponent01Smallshape05
+cs-t53 = copy ResourceComponent01Bigshape06
+cs-t54 = copy ResourceComponent01Smallshape06
+x88 = $shape05
+x89 = $shape06
+[ResourceComponent01Base]
 stride = 40
-filename = Body.buf
-[ResourceBodyBigBottom]
+filename = Component01.buf
+[ResourceComponent01Bigshape05]
 stride = 40
-filename = BodyBigBottom.buf
-[ResourceBodySmallBottom]
+filename = Component01Bigshape05.buf
+[ResourceComponent01Smallshape05]
 stride = 40
-filename = BodySmallBottom.buf
-[ResourceBodyBigBreast]
+filename = Component01Smallshape05.buf
+[ResourceComponent01Bigshape06]
 stride = 40
-filename = BodyBigBreast.buf
-[ResourceBodySmallBreast]
+filename = Component01Bigshape06.buf
+[ResourceComponent01Smallshape06]
 stride = 40
-filename = BodySmallBreast.buf
+filename = Component01Smallshape06.buf
 """
     secs = sections(text)
     sliders = extract_shape_sliders(secs, extract_resources(secs))
     by_var = {slider["var"]: slider for slider in sliders}
-    assert (sorted(by_var) == ["Bottom", "Breast"]), (f"both multi-target sliders are found (got {sorted(by_var)})")
-    assert (by_var["Bottom"].get("mode") == "midpoint_pair" and
-          by_var["Bottom"].get("low_file") == "BodySmallBottom.buf" and
-          by_var["Bottom"].get("target_file") == "BodyBigBottom.buf"), (f"bottom slider links its smaller and bigger buffers (got {by_var['Bottom']})")
+    assert (sorted(by_var) == ["shape05", "shape06"]), (f"both multi-target sliders are found (got {sorted(by_var)})")
+    assert (by_var["shape05"].get("mode") == "midpoint_pair" and
+          by_var["shape05"].get("low_file") == "Component01Smallshape05.buf" and
+          by_var["shape05"].get("target_file") == "Component01Bigshape05.buf"), (f"bottom slider links its smaller and bigger buffers (got {by_var['shape05']})")
     assert all("shader_base_file" not in slider
                for slider in by_var.values())
 
@@ -207,34 +207,34 @@ def test_zzmi_midpoint_bindings_do_not_cross_commandlists():
     A scalar from another CommandList must never claim a five-buffer shape set."""
     text = r"""
 [Constants]
-global persist $ActualBottom = 0
+global persist $shape04 = 0
 global persist $UIAnim = 0
-[CommandListDrawSlider.Bottom]
-x87 = 202 / $ww * $ActualBottom
+[CommandListDrawSlider.shape05]
+x87 = 202 / $ww * $shape04
 [CommandListShapeBuffers]
-cs-t50 = copy ResourceBodyBase
-cs-t51 = copy ResourceBodyBigBottom
-cs-t52 = copy ResourceBodySmallBottom
-cs-t53 = copy ResourceBodyBigBreast
-cs-t54 = copy ResourceBodySmallBreast
+cs-t50 = copy ResourceComponent01Base
+cs-t51 = copy ResourceComponent01Bigshape05
+cs-t52 = copy ResourceComponent01Smallshape05
+cs-t53 = copy ResourceComponent01Bigshape06
+cs-t54 = copy ResourceComponent01Smallshape06
 [CommandListUnrelatedUI]
 x88 = $UIAnim
 x89 = $UIAnim
-[ResourceBodyBase]
+[ResourceComponent01Base]
 stride = 40
-filename = Body.buf
-[ResourceBodyBigBottom]
+filename = Component01.buf
+[ResourceComponent01Bigshape05]
 stride = 40
-filename = BodyBigBottom.buf
-[ResourceBodySmallBottom]
+filename = Component01Bigshape05.buf
+[ResourceComponent01Smallshape05]
 stride = 40
-filename = BodySmallBottom.buf
-[ResourceBodyBigBreast]
+filename = Component01Smallshape05.buf
+[ResourceComponent01Bigshape06]
 stride = 40
-filename = BodyBigBreast.buf
-[ResourceBodySmallBreast]
+filename = Component01Bigshape06.buf
+[ResourceComponent01Smallshape06]
 stride = 40
-filename = BodySmallBreast.buf
+filename = Component01Smallshape06.buf
 """
     secs = sections(text)
     sliders = extract_shape_sliders(secs, extract_resources(secs))

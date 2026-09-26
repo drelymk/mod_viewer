@@ -36,17 +36,17 @@ def test_roundtrip_string():
 
 def test_section_header_with_trailing_comment_is_indexed():
     doc = IniDocument.from_string(
-        "[TextureOverrideBody] ; note\n"
+        "[TextureOverrideComponent01] ; note\n"
         "drawindexed = 3,0,0\n")
 
-    assert doc.sections[0].name == "TextureOverrideBody"
+    assert doc.sections[0].name == "TextureOverrideComponent01"
     assert doc.sections[0].lines[0].text == "drawindexed = 3,0,0"
 
 
 def test_line_kinds():
     text = ("; comment\r\n"
             "\r\n"
-            "[TextureOverrideBody]\r\n"
+            "[TextureOverrideComponent01]\r\n"
             "hash = aabb\r\n"
             "if $x == 0\r\n"
             "drawindexed = 1,0,0\r\n"
@@ -141,16 +141,16 @@ def test_find_inis_bounded_recursion():
     from core.ini.parser import find_inis
 
     geometry = (
-        "[TextureOverrideBodyPosition]\n"
-        "vb0 = ResourceBodyPosition\n"
-        "[TextureOverrideBodyTexcoord]\n"
-        "vb1 = ResourceBodyTexcoord\n"
-        "[TextureOverrideBody]\n"
-        "ib = ResourceBodyIB\n"
+        "[TextureOverrideComponent01Position]\n"
+        "vb0 = ResourceComponent01Position\n"
+        "[TextureOverrideComponent01Texcoord]\n"
+        "vb1 = ResourceComponent01Texcoord\n"
+        "[TextureOverrideComponent01]\n"
+        "ib = ResourceComponent01IB\n"
         "drawindexed = 3,0,0\n"
-        "[ResourceBodyPosition]\nfilename = p.buf\nstride = 12\n"
-        "[ResourceBodyTexcoord]\nfilename = t.buf\nstride = 8\n"
-        "[ResourceBodyIB]\nfilename = i.buf\nformat = R32_UINT\n"
+        "[ResourceComponent01Position]\nfilename = p.buf\nstride = 12\n"
+        "[ResourceComponent01Texcoord]\nfilename = t.buf\nstride = 8\n"
+        "[ResourceComponent01IB]\nfilename = i.buf\nformat = R32_UINT\n"
     )
 
     d = tempfile.mkdtemp()

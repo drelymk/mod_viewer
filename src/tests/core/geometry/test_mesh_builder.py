@@ -10,19 +10,19 @@ from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
 
-IB_REASSIGN_INI = """[TextureOverrideBodyBlend]
-ib = ResourceBodyHeadIB
+IB_REASSIGN_INI = """[TextureOverrideComponent01Blend]
+ib = ResourceComponent01HeadIB
 vb0 = ResourcePos
 vb1 = ResourceTc
 drawindexed = 100, 0, 0
-ib = ResourceBodyDressIB
+ib = ResourceComponent01DressIB
 drawindexed = 100, 0, 0
 
-[ResourceBodyHeadIB]
+[ResourceComponent01HeadIB]
 filename = head.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyDressIB]
+[ResourceComponent01DressIB]
 filename = dress.ib
 format = DXGI_FORMAT_R32_UINT
 
@@ -75,7 +75,7 @@ def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
     (tmp_path / "position.buf").write_bytes(struct.pack(
         "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
     (tmp_path / "texcoord.buf").write_bytes(b"\0" * 24)
-    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+    (tmp_path / "component01.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
 
     offsets = bytearray(130 * 4)
     struct.pack_into("<II", offsets, 127 * 4, 0, 0)
@@ -86,7 +86,7 @@ def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
         struct.pack("<eee", 1., 2., 3.) + b"\0" * 6)
 
     draw = DrawCall(
-        label="Body-1", count=3, ib_file="body.ib",
+        label="Component01-1", count=3, ib_file="component01.ib",
         index_size=4, position_file="position.buf",
         position_stride=12, texcoord_file="texcoord.buf",
         texcoord_stride=8)
@@ -95,11 +95,11 @@ def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
         "position_stride": 12,
         "texcoord_file": "texcoord.buf",
         "texcoord_stride": 8,
-        "ib_file": "body.ib",
+        "ib_file": "component01.ib",
         "index_size": 4,
         "draws": [draw],
         "shape_sliders": [{
-            "var": "BodyShape",
+            "var": "Component01Shape",
             "base_file": "position.buf",
             "shape_id": 127,
             "offset_file": "shape-offsets.buf",
@@ -110,7 +110,7 @@ def test_sparse_shape_boundary_packs_buffer_key_128(tmp_path):
 
     geometry = GeometryBlob()
     result = build_mesh_result(groups, str(tmp_path), geometry=geometry)
-    entry = result.meshes["Body-1"]
+    entry = result.meshes["Component01-1"]
     target = entry["shape_targets"][0]["pos"]
     raw = geometry.data[target["offset"]:
                        target["offset"] + target["length"]]
@@ -123,7 +123,7 @@ def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
     (tmp_path / "position.buf").write_bytes(struct.pack(
         "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
     (tmp_path / "texcoord.buf").write_bytes(b"\0" * 24)
-    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+    (tmp_path / "component01.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
 
     offsets = bytearray(170 * 4)
     struct.pack_into("<II", offsets, 162 * 4, 0, 1)
@@ -137,11 +137,11 @@ def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
         for delta in ((1., 0., 0.), (0., 2., 0.), (0., 0., 3.))))
 
     draw = DrawCall(
-        label="Body-1", count=3, ib_file="body.ib", index_size=4,
+        label="Component01-1", count=3, ib_file="component01.ib", index_size=4,
         position_file="position.buf", position_stride=12,
         texcoord_file="texcoord.buf", texcoord_stride=8)
     static = {
-        "var": "BodyShape", "base_file": "position.buf", "shape_id": 161,
+        "var": "Component01Shape", "base_file": "position.buf", "shape_id": 161,
         "buffer_shape_id": 162, "sparse_entry_offset": 0,
         "offset_file": "shape-offsets.buf",
         "vertex_id_file": "shape-vertex-ids.buf",
@@ -171,13 +171,13 @@ def test_wwmi_sparse_animation_packs_position_only_deltas(tmp_path):
     groups = [{
         "position_file": "position.buf", "position_stride": 12,
         "texcoord_file": "texcoord.buf", "texcoord_stride": 8,
-        "ib_file": "body.ib", "index_size": 4, "draws": [draw],
+        "ib_file": "component01.ib", "index_size": 4, "draws": [draw],
         "shape_sliders": [static], "_compute_animation": animation,
     }]
 
     geometry = GeometryBlob()
     result = build_mesh_result(groups, str(tmp_path), geometry=geometry)
-    entry = result.meshes["Body-1"]
+    entry = result.meshes["Component01-1"]
     assert len(entry["shape_targets"]) == 1
     animation_geometry = entry["animation_geometry"]
     assert animation_geometry["position_only"] is True
@@ -271,30 +271,30 @@ def test_cross_ib_vb_reassignment_mesh_builder():
               f"not a collapsed/garbage read of the SBS one (got {vert_sets})")
 
 
-HANDLING_SKIP_INI = """[TextureOverrideBodyBlend]
+HANDLING_SKIP_INI = """[TextureOverrideComponent01Blend]
 vb0 = ResourcePos
 vb1 = ResourceTc
 
-[TextureOverrideBodyA]
-ib = ResourceBodyAIB
+[TextureOverrideComponent01A]
+ib = ResourceComponent01AIB
 drawindexed = 100, 0, 0
 
-[TextureOverrideBodyB]
+[TextureOverrideComponent01B]
 handling = skip
-ib = ResourceBodyBIB
+ib = ResourceComponent01BIB
 
-[TextureOverrideBodyC]
-ib = ResourceBodyCIB
+[TextureOverrideComponent01C]
+ib = ResourceComponent01CIB
 
-[ResourceBodyAIB]
+[ResourceComponent01AIB]
 filename = bodyA.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyBIB]
+[ResourceComponent01BIB]
 filename = bodyB.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyCIB]
+[ResourceComponent01CIB]
 filename = bodyC.ib
 format = DXGI_FORMAT_R32_UINT
 
@@ -314,10 +314,10 @@ def test_handling_skip_with_no_drawindexed_draws_nothing():
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         names = {g["display_name"] for g in groups}
-        assert ("BodyA" in names), ("the section with an explicit drawindexed still draws")
-        assert ("BodyB" not in names), (f"a handling=skip section with NO drawindexed draws nothing at all "
+        assert ("Component01A" in names), ("the section with an explicit drawindexed still draws")
+        assert ("Component01B" not in names), (f"a handling=skip section with NO drawindexed draws nothing at all "
               f"(got groups: {sorted(names)})")
-        assert ("BodyC" in names), ("a section with no handling=skip still gets the implicit whole-ib draw")
+        assert ("Component01C" in names), ("a section with no handling=skip still gets the implicit whole-ib draw")
 
 
 COMPONENT_ABBREV_SUFFIX_INI = """[TextureOverrideXCNPosition]
@@ -423,14 +423,14 @@ def test_r16_index_buffer():
         assert (verts == [5, 6, 7]), (f"16-bit indices are decoded as 16-bit, not 32-bit (got {verts})")
 
 
-SIGNED_BASE_INI = """[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+SIGNED_BASE_INI = """[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 drawindexed = 3, 0, -3
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -446,7 +446,7 @@ stride = 20
 def test_negative_base_vertex_is_parsed_and_applied():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", SIGNED_BASE_INI)
-        open(os.path.join(tmp, "body.ib"), "wb").write(
+        open(os.path.join(tmp, "component01.ib"), "wb").write(
             struct.pack("<3I", 3, 4, 5))
         with open(os.path.join(tmp, "pos.buf"), "wb") as file:
             for i in range(6):
@@ -470,7 +470,7 @@ def test_negative_effective_vertex_index_skips_invalid_draw():
         ini = SIGNED_BASE_INI.replace(
             "drawindexed = 3, 0, -3", "drawindexed = 3, 0, -1")
         path = write(tmp, "mod.ini", ini)
-        open(os.path.join(tmp, "body.ib"), "wb").write(
+        open(os.path.join(tmp, "component01.ib"), "wb").write(
             struct.pack("<3I", 0, 1, 2))
         with open(os.path.join(tmp, "pos.buf"), "wb") as file:
             for i in range(3):
@@ -485,33 +485,33 @@ def test_negative_effective_vertex_index_skips_invalid_draw():
 
 
 def test_nonfinite_geometry_drops_only_invalid_triangles():
-    ini = """[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    ini = """[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 drawindexed = 6, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body.buf
+[ResourceComponent01Position]
+filename = component01.buf
 stride = 40
 
-[ResourceBodyTexcoord]
-filename = body.texcoord
+[ResourceComponent01Texcoord]
+filename = component01.texcoord
 stride = 20
 """
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", ini)
-        open(os.path.join(tmp, "body.ib"), "wb").write(
+        open(os.path.join(tmp, "component01.ib"), "wb").write(
             struct.pack("<6I", 0, 1, 2, 0, 3, 4))
-        with open(os.path.join(tmp, "body.buf"), "wb") as file:
+        with open(os.path.join(tmp, "component01.buf"), "wb") as file:
             for vertex in ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.),
                            (float("nan"), 0., 0.), (1., 1., 0.)):
                 file.write(struct.pack("<3f", *vertex) + b"\0" * 28)
-        open(os.path.join(tmp, "body.texcoord"), "wb").write(
+        open(os.path.join(tmp, "component01.texcoord"), "wb").write(
             b"\0" * (20 * 5))
 
         secs = merge_sections([path])
@@ -544,7 +544,7 @@ vb1 = resourcetc
 drawindexed = 3, 0, 0
 
 [resourcebodyib]
-filename = body.ib
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [resourcepos]

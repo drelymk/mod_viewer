@@ -8,9 +8,9 @@ from core.ini.sections import extract_resources, parse_sections
 
 
 def test_draw_scanner_keeps_geometry_and_texture_hash_evidence_separate():
-    sections = parse_sections("fixture.ini", text="""[TextureOverrideBody]
-hash = 0x73c8cae2
-match_first_index = 43845
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+hash = 0x10101010
+match_first_index = 12
 match_index_count = 24
 Resource\\GIMI\\Diffuse = ResourceDiffuseOpaque
 ps-t1 = ResourceMystery
@@ -25,12 +25,12 @@ hash = 22222222
 this = ResourceMystery
 """)
 
-    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
+    draw = _scan_sections_for_draws(sections)["TextureOverrideComponent01"][
         "draws"][0]
 
     assert (draw.geometry_match.hash,
             draw.geometry_match.first_index,
-            draw.geometry_match.index_count) == ("73c8cae2", 43845, 24)
+            draw.geometry_match.index_count) == ("10101010", 12, 24)
     assert [(item.slot, item.resource, item.texture_hashes)
             for item in draw.slot_textures] == [
                 (1, "ResourceMystery", ("22222222",))]
@@ -38,13 +38,13 @@ this = ResourceMystery
 
 
 def test_draw_scanner_does_not_infer_texture_hash_from_resource_name():
-    sections = parse_sections("fixture.ini", text="""[TextureOverrideBody]
-hash = 73c8cae2
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+hash = 10101010
 Resource\\GIMI\\Diffuse = ResourceFoo_11111111
 drawindexed = 3, 0, 0
 """)
 
-    draw = _scan_sections_for_draws(sections)["TextureOverrideBody"][
+    draw = _scan_sections_for_draws(sections)["TextureOverrideComponent01"][
         "draws"][0]
 
     assert draw.slot_textures == []
@@ -52,14 +52,14 @@ drawindexed = 3, 0, 0
 
 
 def test_texture_override_index_preserves_conditions_and_resolves_files():
-    sections = parse_sections("fixture.ini", text="""[KeyStyle]
+    sections = parse_sections("source-01.ini", text="""[KeyStyle]
 type = cycle
 $Style = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
-ib = ResourceBodyIB
+ib = ResourceComponent01IB
 drawindexed = 3, 0, 0
 
 [TextureOverrideOriginal]
@@ -78,8 +78,8 @@ stride = 40
 filename = texcoord.buf
 stride = 20
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourceA]
@@ -106,7 +106,7 @@ filename = textures/b.dds
 
 
 def test_animation_binding_keeps_already_resolved_qualified_reads():
-    sections = parse_sections("fixture.ini", text="""[TextureOverrideBody]
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
 if $swapvar == 1 && $\\JaneDoe_AIO\\Master\\swapvar == 1
 vb0 = ResourcePosition
 endif
@@ -120,7 +120,7 @@ drawindexed = 3, 0, 0
             r"\janedoe_aio\master\swapvar": "Master::swapvar",
         })
 
-    binding = scanned["TextureOverrideBody"][
+    binding = scanned["TextureOverrideComponent01"][
         "animation_vertex_bindings"][0]
     assert binding["conditions"] == [[{
         "var": "Master::swapvar", "value": "1", "negate": False,
@@ -131,7 +131,7 @@ drawindexed = 3, 0, 0
 
 
 def test_texture_override_index_resolves_qualified_conditions():
-    sections = parse_sections("fixture.ini", text="""[TextureOverrideOriginal]
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideOriginal]
 hash = 11111111
 if $\\JaneDoe_AIO\\Master\\swapvar == 1
 this = ResourceA
@@ -153,22 +153,22 @@ filename = textures/a.dds
 
 
 def test_draw_groups_keep_clean_display_names_with_shared_seen_labels():
-    sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """)
     resources = extract_resources(sections)
@@ -179,11 +179,11 @@ stride = 8
 
     assert (first["name"], first["display_name"],
             second["name"], second["display_name"]) == (
-        "Body", "Body", "Body_2", "Body")
+        "Component01", "Component01", "Component01_2", "Component01")
 
 
 def test_per_draw_ib_switch_uses_hash_geometry_when_component_is_unknown():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverride_98ece166_Position]
 vb0 = Resource98ece166Position
 
@@ -200,7 +200,7 @@ vb1 = Resourced942b3a7Texcoord
 ib = Resource_LOD0.98ece166_26946_0_Index
 drawindexed = 3, 0, 0
 ib = Resource_LOD0.d942b3a7_39828_0_Index
-vb0 = ResourceBodyVB_d942b3a7_0
+vb0 = ResourceComponent01VB_d942b3a7_0
 vb1 = Resourced942b3a7Texcoord
 vb2 = Resourced942b3a7Blend
 drawindexed = 3, 0, 0
@@ -229,7 +229,7 @@ stride = 40
 filename = d942b3a7-texcoord.buf
 stride = 20
 
-[ResourceBodyVB_d942b3a7_0]
+[ResourceComponent01VB_d942b3a7_0]
 stride = 40
 
 [Resourced942b3a7Blend]
@@ -249,81 +249,81 @@ stride = 32
 
 
 def test_per_draw_ib_switch_prefers_component_geometry_over_hash_fallback():
-    sections = parse_sections("sample.ini", text="""
-[TextureOverrideBody]
-ib = ResourceBodyIB
+    sections = parse_sections("source-01.ini", text="""
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
 drawindexed = 3, 0, 0
-ib = ResourceAltBodyIB
+ib = ResourceAltComponent01IB
 drawindexed = 3, 0, 0
 drawindexed = 3, 3, 0
 
-[TextureOverrideBodyPosition]
-vb0 = ResourceBodyPosition
+[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
 
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideAltBodyPosition]
-vb0 = ResourceAltBodyPosition
+[TextureOverrideAltComponent01Position]
+vb0 = ResourceAltComponent01Position
 
-[TextureOverrideAltBodyTexcoord]
-vb1 = ResourceAltBodyTexcoord
+[TextureOverrideAltComponent01Texcoord]
+vb1 = ResourceAltComponent01Texcoord
 
-[TextureOverrideBodyBlend]
-run = CommandListBodyBlend
+[TextureOverrideComponent01Blend]
+run = CommandListComponent01Blend
 
-[CommandListBodyBlend]
+[CommandListComponent01Blend]
 if $frame == 0
-vb0 = ResourceBodyFrame0
+vb0 = ResourceComponent01Frame0
 elif $frame == 1
-vb0 = ResourceBodyFrame1
+vb0 = ResourceComponent01Frame1
 endif
 
-[TextureOverrideAltBodyBlend]
-run = CommandListAltBodyBlend
+[TextureOverrideAltComponent01Blend]
+run = CommandListAltComponent01Blend
 
-[CommandListAltBodyBlend]
+[CommandListAltComponent01Blend]
 if $frame == 0
-vb0 = ResourceAltBodyFrame0
+vb0 = ResourceAltComponent01Frame0
 elif $frame == 1
-vb0 = ResourceAltBodyFrame1
+vb0 = ResourceAltComponent01Frame1
 endif
 
-[ResourceBodyIB]
-filename = body-index.buf
+[ResourceComponent01IB]
+filename = component01-index.buf
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceAltBodyIB]
-filename = alt-body-index.buf
+[ResourceAltComponent01IB]
+filename = alt-component01-index.buf
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 
-[ResourceAltBodyPosition]
-filename = body-position.buf
+[ResourceAltComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceAltBodyTexcoord]
-filename = alt-body-texcoord.buf
+[ResourceAltComponent01Texcoord]
+filename = alt-component01-texcoord.buf
 stride = 20
 
-[ResourceBodyFrame0]
-filename = body-frame-0.buf
+[ResourceComponent01Frame0]
+filename = component01-frame-0.buf
 stride = 40
-[ResourceBodyFrame1]
-filename = body-frame-1.buf
+[ResourceComponent01Frame1]
+filename = component01-frame-1.buf
 stride = 40
-[ResourceAltBodyFrame0]
-filename = alt-body-frame-0.buf
+[ResourceAltComponent01Frame0]
+filename = alt-component01-frame-0.buf
 stride = 40
-[ResourceAltBodyFrame1]
-filename = alt-body-frame-1.buf
+[ResourceAltComponent01Frame1]
+filename = alt-component01-frame-1.buf
 stride = 40
 """)
     groups = build_draw_groups(
@@ -332,200 +332,168 @@ stride = 40
 
     assert [(draw.ib_file, draw.position_file, draw.texcoord_file)
             for draw in draws] == [
-                ("body-index.buf", "body-position.buf", "body-texcoord.buf"),
-                ("alt-body-index.buf", "body-position.buf",
-                 "alt-body-texcoord.buf"),
-                ("alt-body-index.buf", "body-position.buf",
-                 "alt-body-texcoord.buf"),
+                ("component01-index.buf", "component01-position.buf", "component01-texcoord.buf"),
+                ("alt-component01-index.buf", "component01-position.buf",
+                 "alt-component01-texcoord.buf"),
+                ("alt-component01-index.buf", "component01-position.buf",
+                 "alt-component01-texcoord.buf"),
             ]
     assert [(item["ib_file"], item["position_file"], item["file"])
             for item in groups[0]["animation_vertex_bindings"]] == [
-                ("body-index.buf", "body-position.buf", "body-frame-0.buf"),
-                ("body-index.buf", "body-position.buf", "body-frame-1.buf"),
-                ("alt-body-index.buf", "body-position.buf",
-                 "alt-body-frame-0.buf"),
-                ("alt-body-index.buf", "body-position.buf",
-                 "alt-body-frame-1.buf"),
+                ("component01-index.buf", "component01-position.buf", "component01-frame-0.buf"),
+                ("component01-index.buf", "component01-position.buf", "component01-frame-1.buf"),
+                ("alt-component01-index.buf", "component01-position.buf",
+                 "alt-component01-frame-0.buf"),
+                ("alt-component01-index.buf", "component01-position.buf",
+                 "alt-component01-frame-1.buf"),
             ]
 
 
 def test_draw_groups_resolve_the_scanner_snapshot_for_inline_execution():
-    sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 hash = 0123abcd
 match_first_index = 9
 match_index_count = 3
 if $mode == 1
-run = CommandListBody
+run = CommandListComponent01
 endif
 drawindexed = 3, 3, 0
 
-[CommandListBody]
-vb0 = ResourceBodyPositionAlt
-Resource\\GIMI\\Diffuse = ResourceBodyDiffuse
-Resource\\GIMI\\LightMap = ResourceBodyLightMap
+[CommandListComponent01]
+vb0 = ResourceComponent01PositionAlt
+Resource\\GIMI\\Diffuse = ResourceComponent01Diffuse
+Resource\\GIMI\\LightMap = ResourceComponent01LightMap
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyPositionAlt]
-filename = body-position-alt.buf
+[ResourceComponent01PositionAlt]
+filename = component01-position-alt.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 
-[ResourceBodyDiffuse]
-filename = body-diffuse.dds
+[ResourceComponent01Diffuse]
+filename = component01-diffuse.dds
 
-[ResourceBodyLightMap]
-filename = body-light-map.dds
+[ResourceComponent01LightMap]
+filename = component01-light-map.dds
 """)
     scanned = _scan_sections_for_draws(sections, gating_vars={"mode"})
-    authored = scanned["TextureOverrideBody"]["draws"]
+    authored = scanned["TextureOverrideComponent01"]["draws"]
     groups = build_draw_groups(
         sections, extract_resources(sections), gating_vars={"mode"})
     draws = groups[0]["draws"]
 
     assert [(item.start, item.vertex_resources[0]) for item in authored] == [
-        (0, "ResourceBodyPositionAlt"),
-        (3, "ResourceBodyPositionAlt")]
+        (0, "ResourceComponent01PositionAlt"),
+        (3, "ResourceComponent01PositionAlt")]
     assert [(item.start, item.position_file) for item in draws] == [
-        (0, "body-position-alt.buf"),
-        (3, "body-position-alt.buf")]
-    assert draws[0].texture_default("diffuse") == "body-diffuse.dds"
+        (0, "component01-position-alt.buf"),
+        (3, "component01-position-alt.buf")]
+    assert draws[0].texture_default("diffuse") == "component01-diffuse.dds"
     assert draws[0].texture_default("light_map") is None
     assert draws[0].texture_rules("light_map") == [{
         "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
-        "file": "body-light-map.dds",
+        "file": "component01-light-map.dds",
     }]
     assert (draws[0].geometry_match.hash,
             draws[0].geometry_match.first_index,
             draws[0].geometry_match.index_count) == ("0123abcd", 9, 3)
 
 
-def test_rabbitfx_glow_map_flows_through_the_draw_scanner():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
-Resource\RabbitFX\Diffuse = ref ResourceBodyDiffuse
-Resource\RabbitFX\GlowMap = ref ResourceBodyGlow
+@pytest.mark.parametrize("namespace, expected", [("RabbitFX", "component01-glow.dds"), ("GIMI", None)])
+def test_glow_map_emission_requires_supported_namespace(namespace, expected):
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+Resource\RabbitFX\Diffuse = ref ResourceComponent01Diffuse
+Resource\RabbitFX\GlowMap = ref ResourceComponent01Glow
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 
-[ResourceBodyDiffuse]
-filename = body-diffuse.dds
+[ResourceComponent01Diffuse]
+filename = component01-diffuse.dds
 
-[ResourceBodyGlow]
-filename = body-glow.dds
-""")
+[ResourceComponent01Glow]
+filename = component01-glow.dds
+""".replace("RabbitFX", namespace))
     groups = build_draw_groups(sections, extract_resources(sections))
 
-    assert groups[0]["draws"][0].texture_default("emission_map") == (
-        "body-glow.dds")
-
-
-def test_non_rabbitfx_glow_map_is_not_recorded_as_emission():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
-Resource\GIMI\Diffuse = ref ResourceBodyDiffuse
-Resource\GIMI\GlowMap = ref ResourceBodyGlow
-drawindexed = 3, 0, 0
-
-[ResourceBodyIB]
-filename = body.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceBodyPosition]
-filename = body-position.buf
-stride = 12
-
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
-stride = 8
-
-[ResourceBodyDiffuse]
-filename = body-diffuse.dds
-
-[ResourceBodyGlow]
-filename = body-glow.dds
-""")
-    groups = build_draw_groups(sections, extract_resources(sections))
-
-    assert groups[0]["draws"][0].texture_default("emission_map") is None
+    assert groups[0]["draws"][0].texture_default("emission_map") == expected
 
 
 def test_draw_groups_preserve_inline_run_snapshots_without_buffer_files():
-    sections = parse_sections("sample.ini", text="""[TextureOverrideBody]
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
 ib = ResourceMissingIB
 vb0 = ResourceMissingPosition
-run = CommandListBody
+run = CommandListComponent01
 drawindexed = 3, 3, 0
 
-[CommandListBody]
+[CommandListComponent01]
 vb1 = ResourceMissingTexcoord
 drawindexed = 3, 0, 0
 """)
 
-    body = _scan_sections_for_draws(sections)["TextureOverrideBody"]
-    assert [(draw.start, draw.index_resource) for draw in body["draws"]] == [
+    phase01 = _scan_sections_for_draws(sections)["TextureOverrideComponent01"]
+    assert [(draw.start, draw.index_resource) for draw in phase01["draws"]] == [
         (0, "ResourceMissingIB"), (3, "ResourceMissingIB")]
-    assert body["draws"][0].vertex_resources == {
+    assert phase01["draws"][0].vertex_resources == {
         0: "ResourceMissingPosition", 1: "ResourceMissingTexcoord"}
 
 
 def test_draw_groups_resolve_blend_from_sibling_component_snapshot():
-    sections = parse_sections("sample.ini", text="""[TextureOverrideBodyPosition]
-vb0 = ResourceBodyPosition
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
 
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideBodyBlend]
+[TextureOverrideComponent01Blend]
 handling = skip
-vb1 = ResourceBodyBlend
+vb1 = ResourceComponent01Blend
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyBlend]
-filename = body-blend.buf
+[ResourceComponent01Blend]
+filename = component01-blend.buf
 stride = 32
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 """)
 
@@ -533,39 +501,39 @@ stride = 20
 
     draw = groups[0]["draws"][0]
     assert draw.skinning_error is None
-    assert draw.skinning_source.file == "body-blend.buf"
+    assert draw.skinning_source.file == "component01-blend.buf"
     assert draw.skinning_source.encoding == "gimi_f32_u32_4"
 
 
 def test_draw_groups_resolve_wwmi_component_bone_offset():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideComponent3]
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent3]
 $\WWMIv1\vg_offset = 24
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Blend
+vb2 = ResourceComponent01Texcoord
 cs-t35 = ref ResourceVertexVG
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyBlend]
-filename = body-blend.buf
+[ResourceComponent01Blend]
+filename = component01-blend.buf
 stride = 8
 format = DXGI_FORMAT_R8_UINT
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 
 [ResourceVertexVG]
-filename = body-vertex-vg.buf
+filename = component01-vertex-vg.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 8
 """)
@@ -575,32 +543,32 @@ stride = 8
 
     assert draw.skinning_bone_offset == 24
     assert draw.skinning_source.bone_id_offset == 24
-    assert draw.skinning_source.vertex_vg_file == "body-vertex-vg.buf"
+    assert draw.skinning_source.vertex_vg_file == "component01-vertex-vg.buf"
 
 
 def test_draw_groups_treat_r16_wwmi_ids_as_model_wide_without_remap():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideComponent3]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent3]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Blend
+vb2 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyBlend]
+[ResourceComponent01Blend]
 filename = Meshes/Blend_R16.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 32
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 
 [ResourceBlendRemapVertexVGBuffer]
@@ -619,61 +587,61 @@ stride = 16
 
 
 def test_draw_groups_associate_unbound_vertex_vg_with_each_blend_family():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Blend
+vb2 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[TextureOverrideHair]
-ib = ResourceHairIB
-vb0 = ResourceHairPosition
-vb1 = ResourceHairBlend
-vb2 = ResourceHairTexcoord
+[TextureOverrideComponent02]
+ib = ResourceComponent02IB
+vb0 = ResourceComponent02Position
+vb1 = ResourceComponent02Blend
+vb2 = ResourceComponent02Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceHairIB]
-filename = hair.ib
+[ResourceComponent02IB]
+filename = component02.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 
-[ResourceHairPosition]
-filename = hair-position.buf
+[ResourceComponent02Position]
+filename = component02-position.buf
 stride = 40
 
-[ResourceHairTexcoord]
-filename = hair-texcoord.buf
+[ResourceComponent02Texcoord]
+filename = component02-texcoord.buf
 stride = 20
 
-[ResourceBodyBlend]
-filename = Meshes/BodyBlend.buf
+[ResourceComponent01Blend]
+filename = Meshes/Component01Blend.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
 
-[ResourceHairBlend]
-filename = Meshes/HairBlend.buf
+[ResourceComponent02Blend]
+filename = Meshes/Component02Blend.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
 
-[ResourceBodyBlendRemapVertexVG]
-filename = Meshes/BodyBlendRemapVertexVG.buf
+[ResourceComponent01BlendRemapVertexVG]
+filename = Meshes/Component01BlendRemapVertexVG.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 16
 
-[ResourceHairBlendRemapVertexVG]
-filename = Meshes/HairBlendRemapVertexVG.buf
+[ResourceComponent02BlendRemapVertexVG]
+filename = Meshes/Component02BlendRemapVertexVG.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 16
 """)
@@ -684,44 +652,44 @@ stride = 16
         for group in groups
     }
 
-    assert sources["Body"].vertex_vg_file == \
-        "Meshes/BodyBlendRemapVertexVG.buf"
-    assert sources["Hair"].vertex_vg_file == \
-        "Meshes/HairBlendRemapVertexVG.buf"
+    assert sources["Component01"].vertex_vg_file == \
+        "Meshes/Component01BlendRemapVertexVG.buf"
+    assert sources["Component02"].vertex_vg_file == \
+        "Meshes/Component02BlendRemapVertexVG.buf"
 
 
 def test_draw_groups_reject_multiple_associated_vertex_vg_candidates():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Blend
+vb2 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 
-[ResourceBodyBlend]
-filename = Meshes/BodyBlend.buf
+[ResourceComponent01Blend]
+filename = Meshes/Component01Blend.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
 
-[ResourceBodyBlendRemapVertexVG]
-filename = Meshes/BodyBlendRemapVertexVG.buf
+[ResourceComponent01BlendRemapVertexVG]
+filename = Meshes/Component01BlendRemapVertexVG.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 16
 
-[ResourceBodyBlendRemapVertexVGAlt]
-filename = Meshes/BodyBlendRemapVertexVGAlt.buf
+[ResourceComponent01BlendRemapVertexVGAlt]
+filename = Meshes/Component01BlendRemapVertexVGAlt.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 16
 """)
@@ -735,32 +703,32 @@ stride = 16
 
 
 def test_draw_groups_do_not_attach_unrelated_single_vertex_vg_resource():
-    sections = parse_sections("sample.ini", text=r"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Blend
+vb2 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 
-[ResourceBodyBlend]
-filename = Meshes/BodyBlend.buf
+[ResourceComponent01Blend]
+filename = Meshes/Component01Blend.buf
 format = DXGI_FORMAT_R8_UINT
 stride = 16
 
-[ResourceAccessoryBlendRemapVertexVG]
-filename = Meshes/AccessoryBlendRemapVertexVG.buf
+[ResourceComponent03BlendRemapVertexVG]
+filename = Meshes/Component03BlendRemapVertexVG.buf
 format = DXGI_FORMAT_R16_UINT
 stride = 16
 """)
@@ -779,32 +747,32 @@ stride = 16
 )
 def test_draw_groups_sibling_blend_fallback_respects_authored_slots(
         blend_slot, expect_source):
-    sections = parse_sections("sample.ini", text=f"""[TextureOverrideBodyPosition]
-vb0 = ResourceBodyPosition
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
 
-[TextureOverrideBodyBlend]
+[TextureOverrideComponent01Blend]
 handling = skip
-vb{blend_slot} = ResourceBodyBlend
+vb{blend_slot} = ResourceComponent01Blend
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb1 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 40
 
-[ResourceBodyBlend]
-filename = body-blend.buf
+[ResourceComponent01Blend]
+filename = component01-blend.buf
 stride = 32
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 20
 """)
 
@@ -813,13 +781,13 @@ stride = 20
 
     assert draw.skinning_error is None
     if expect_source:
-        assert draw.skinning_source.file == "body-blend.buf"
+        assert draw.skinning_source.file == "component01-blend.buf"
     else:
         assert draw.skinning_source is None
 
 
 def test_draw_groups_resolve_blend_from_position_provenance_without_hashes():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePotato]
 hash = 11111111
 vb0 = ResourceAlpha
@@ -859,7 +827,7 @@ stride = 32
 
 
 def test_draw_groups_position_provenance_does_not_merge_draw_snapshots():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverrideSource]
 ib = ResourceSourceIndex
 vb0 = ResourcePosition
@@ -869,8 +837,8 @@ drawindexed = 3, 0, 0
 vb4 = ResourceOtherBlend
 drawindexed = 3, 3, 0
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
@@ -879,8 +847,8 @@ drawindexed = 3, 0, 0
 filename = source.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -902,28 +870,28 @@ stride = 32
 
     groups = build_draw_groups(
         sections, extract_resources(sections))
-    body_draw = next(
-        draw for group in groups if group["name"] == "Body"
+    component01_draw = next(
+        draw for group in groups if group["name"] == "Component01"
         for draw in group["draws"])
 
-    assert body_draw.skinning_source is None
-    assert body_draw.skinning_error is None
+    assert component01_draw.skinning_source is None
+    assert component01_draw.skinning_error is None
 
 
 def test_draw_groups_rejects_unlabeled_authored_weight_provenance():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 vb7 = ResourceColorData
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -948,20 +916,20 @@ stride = 32
 
 
 def test_draw_groups_position_provenance_respects_actual_draw_slots():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 vb2 = ResourceFallbackBlend
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 vb2 = ResourceOtherStream
 drawindexed = 3, 0, 0
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -989,7 +957,7 @@ stride = 32
 
 
 def test_draw_groups_position_provenance_rejects_unrelated_draw_scope():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverrideOtherDraw]
 ib = ResourceOtherIndex
 vb0 = ResourcePosition
@@ -999,8 +967,8 @@ drawindexed = 3, 0, 0
 [CommandListOther]
 vb4 = ResourceOtherBlend
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
@@ -1009,8 +977,8 @@ drawindexed = 3, 0, 0
 filename = other.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -1028,16 +996,16 @@ stride = 32
 
     groups = build_draw_groups(
         sections, extract_resources(sections))
-    body_draw = next(
-        draw for group in groups if group["name"] == "Body"
+    component01_draw = next(
+        draw for group in groups if group["name"] == "Component01"
         for draw in group["draws"])
 
-    assert body_draw.skinning_source is None
-    assert body_draw.skinning_error is None
+    assert component01_draw.skinning_source is None
+    assert component01_draw.skinning_error is None
 
 
 def test_draw_groups_position_provenance_rejects_conditional_bindings():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 if $mode
@@ -1046,14 +1014,14 @@ else
     vb2 = ResourceBlendB
 endif
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -1081,7 +1049,7 @@ stride = 32
 
 
 def test_draw_groups_position_provenance_rejects_conditional_commandlist_root():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 if $mode
@@ -1092,14 +1060,14 @@ endif
 vb0 = ResourcePosition
 vb4 = ResourceConditionalBlend
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -1123,13 +1091,13 @@ stride = 32
 
 
 def test_draw_groups_position_provenance_follows_reverse_explicit_copy():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 vb4 = ResourceAuthoredBlend
 
-[TextureOverrideBody]
-ib = ResourceBodyIndex
+[TextureOverrideComponent01]
+ib = ResourceComponent01Index
 vb0 = ResourcePositionAlias
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
@@ -1137,8 +1105,8 @@ drawindexed = 3, 0, 0
 [Present]
 ResourcePositionAlias = copy ResourcePosition
 
-[ResourceBodyIndex]
-filename = body.ib
+[ResourceComponent01Index]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -1166,7 +1134,7 @@ stride = 32
 
 
 def test_draw_groups_position_provenance_reports_ambiguity():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePositionA]
 vb0 = ResourcePosition
 vb2 = ResourceBlendA
@@ -1175,7 +1143,7 @@ vb2 = ResourceBlendA
 vb0 = ResourcePosition
 vb2 = ResourceBlendB
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 ib = ResourceIndex
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
@@ -1210,12 +1178,12 @@ stride = 32
 
 
 def test_draw_groups_direct_binding_beats_position_provenance():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 vb4 = ResourceFallbackBlend
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 ib = ResourceIndex
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
@@ -1252,12 +1220,12 @@ stride = 32
 
 
 def test_draw_groups_keep_draw_time_vertex_state_ordered():
-    sections = parse_sections("sample.ini", text="""
+    sections = parse_sections("source-01.ini", text="""
 [TextureOverridePosition]
 vb0 = ResourcePosition
 vb4 = ResourceFallbackBlend
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 ib = ResourceIndex
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
@@ -1297,8 +1265,8 @@ stride = 32
 
 
 def test_draw_groups_command_list_bindings_are_direct_draw_state():
-    sections = parse_sections("sample.ini", text="""
-[TextureOverrideBody]
+    sections = parse_sections("source-01.ini", text="""
+[TextureOverrideComponent01]
 ib = ResourceIndex
 run = CommandListShared
 drawindexed = 3, 0, 0

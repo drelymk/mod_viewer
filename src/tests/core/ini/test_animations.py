@@ -15,7 +15,7 @@ from core.geometry.draw_call import DrawCall
 
 
 def _sections(text):
-    return parse_sections("fixture.ini", text=text)
+    return parse_sections("source-01.ini", text=text)
 
 
 def test_commandlist_families_match_each_draws_resolved_geometry():
@@ -25,7 +25,7 @@ def test_commandlist_families_match_each_draws_resolved_geometry():
         label=name, count=3, ib_file=f"{name}.ib",
         position_file="shared-position.buf",
         texcoord_file=f"{name}-texcoord.buf", conditions=active,
-    ) for name in ("leg", "body")]
+    ) for name in ("leg", "phase01")]
     bindings = [{
         "position_file": "shared-position.buf",
         "ib_file": f"{name}.ib",
@@ -34,7 +34,7 @@ def test_commandlist_families_match_each_draws_resolved_geometry():
             "var": "frame", "value": str(frame), "negate": False,
         }]],
         "conditions": active,
-    } for name in ("leg", "body") for frame in (0, 1)]
+    } for name in ("leg", "phase01") for frame in (0, 1)]
     bindings.append({**bindings[0], "file": "inactive.buf",
                      "conditions": inactive})
     clocks = [
@@ -77,7 +77,7 @@ if $anim == 1
 $frame = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
 endif
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $anim == 1
 if $frame == 0
 vb0 = ResourcePosition0
@@ -118,7 +118,7 @@ format = DXGI_FORMAT_R32_UINT
 
     scanned = _scan_sections_for_draws(
         sections, gating_vars={"anim"}, animation_vars=discovered.frame_vars)
-    draws = scanned["TextureOverrideBody"]["draws"]
+    draws = scanned["TextureOverrideComponent01"]["draws"]
     assert [draw.conditions for draw in draws] == [
         [[{"var": "anim", "value": "1", "negate": False}]],
         [[{"var": "anim", "value": "1", "negate": False}]],
@@ -136,8 +136,8 @@ format = DXGI_FORMAT_R32_UINT
 def test_animation_clock_supports_literal_fps_and_independent_ranges():
     sections = _sections(r"""
 [Present]
-$body = (time * 24 % ($bodyEnd - $bodyStart + 1) + $bodyStart) // 1
-$face = (time * 12.5 % 4 + 1) // 1
+$phase01 = (time * 24 % ($bodyEnd - $bodyStart + 1) + $bodyStart) // 1
+$phase02 = (time * 12.5 % 4 + 1) // 1
 
 [Constants]
 $bodyStart = 1
@@ -146,12 +146,12 @@ $bodyEnd = 40
 
     discovered = discover_animation_clocks(sections)
     by_frame = {clock.frame_var: clock for clock in discovered.clocks}
-    assert set(by_frame) == {"body", "face"}
-    assert (by_frame["body"].fps_var, by_frame["body"].fps_value,
-            by_frame["body"].frame_start, by_frame["body"].frame_end) == (
+    assert set(by_frame) == {"phase01", "phase02"}
+    assert (by_frame["phase01"].fps_var, by_frame["phase01"].fps_value,
+            by_frame["phase01"].frame_start, by_frame["phase01"].frame_end) == (
         None, 24, 1, 40)
-    assert (by_frame["face"].fps_var, by_frame["face"].fps_value,
-            by_frame["face"].frame_start, by_frame["face"].frame_end) == (
+    assert (by_frame["phase02"].fps_var, by_frame["phase02"].fps_value,
+            by_frame["phase02"].frame_start, by_frame["phase02"].frame_end) == (
         None, 12.5, 1, 4)
 
 
@@ -191,7 +191,7 @@ stride = 40
 def test_same_frame_variable_ranges_share_one_geometry_track():
     def branch(frame):
         return DrawCall(
-            label="Body",
+            label="Component01",
             count=3,
             animation_conditions=[[{
                 "var": "swapvar", "value": str(frame), "negate": False,
@@ -256,7 +256,7 @@ $anim = 1
 [Present]
 $frame = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $frame == 0
 vb0 = ResourcePosition0
 vb1 = ResourceTexcoord
@@ -334,24 +334,24 @@ $frameEnd = 1
 [Present]
 $frame = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb1 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[TextureOverrideBodyBlend]
-run = CommandListBodyBlend
+[TextureOverrideComponent01Blend]
+run = CommandListComponent01Blend
 
-[CommandListBodyBlend]
+[CommandListComponent01Blend]
 if $frame == 0
 if DRAW_TYPE == 2
-vb1 = ResourceBodyTexcoord
+vb1 = ResourceComponent01Texcoord
 elif DRAW_TYPE == 1
 vb0 = ResourcePosition0
 endif
 else if $frame == 1
 if DRAW_TYPE == 2
-vb1 = ResourceBodyTexcoord
+vb1 = ResourceComponent01Texcoord
 elif DRAW_TYPE == 1
 vb0 = ResourcePosition1
 endif
@@ -363,10 +363,10 @@ stride = 40
 [ResourcePosition1]
 filename = position1.buf
 stride = 40
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = texcoord.buf
 stride = 20
-[ResourceBodyIB]
+[ResourceComponent01IB]
 filename = index.buf
 format = DXGI_FORMAT_R32_UINT
 """)
@@ -421,7 +421,7 @@ $frameEnd = 1
 [Present]
 $frame = (time * 30 % ($frameEnd - $frameStart + 1) + $frameStart) // 1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 ib = ResourceIB

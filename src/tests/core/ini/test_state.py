@@ -15,22 +15,22 @@ def test_menu_numeric_conditions_share_draw_and_present_semantics(comparison):
     from .test_menu import MENU_INI
     text = MENU_INI + f"""
 [Present]
-if $glasses {comparison}
+if $input05 {comparison}
 $piece = 1
 else
 $piece = 0
 endif
-[TextureOverrideBody]
-if $glasses {comparison}
+[TextureOverrideComponent01]
+if $input05 {comparison}
 drawindexed = 3,0,0
 endif
 """
     from core.ini.draw_scan import _scan_sections_for_draws
-    secs = parse_sections("fixture.ini", text=text)
+    secs = parse_sections("source-01.ini", text=text)
     analysis = analyze_ini(secs, var_prefix="Menu::")
     scan = _scan_sections_for_draws(
-        secs, "Menu::", {"glasses"}, condition_aliases=analysis.condition_aliases)
-    conditions = scan["TextureOverrideBody"]["draws"][0].conditions
+        secs, "Menu::", {"input05"}, condition_aliases=analysis.condition_aliases)
+    conditions = scan["TextureOverrideComponent01"]["draws"][0].conditions
     assert conditions
     rules = analysis.state_rules
     assert len(rules) == 2
@@ -45,7 +45,7 @@ endif
 
 
 def test_unknown_numeric_elif_blocks_its_later_branches():
-    secs = parse_sections("fixture.ini", text="""[KeyStyle]
+    secs = parse_sections("source-01.ini", text="""[KeyStyle]
 type = cycle
 $Style = 0,1,2
 [Present]
@@ -68,7 +68,7 @@ endif
     "[KeyPreset]\ntype = cycle\n$style = 2\n",
 ])
 def test_constants_defaults_win_over_earlier_runtime_and_preset_assignments(before):
-    secs = parse_sections("fixture.ini", text=(before +
+    secs = parse_sections("source-01.ini", text=(before +
         "[cOnStAnTs]\nglobal persist $Style = 0\n"
         "[CommandListFallback]\n$legacy = 3\n"))
     assert extract_variable_defaults(secs, var_prefix="Mod::") == {
@@ -132,7 +132,7 @@ endif
 
 
 def test_state_rules_reject_unsupported_ordered_conditions_through_alias():
-    secs = parse_sections("fixture.ini", text="""[Constants]
+    secs = parse_sections("source-01.ini", text="""[Constants]
 global $piece = 0
 [CommandListAlias]
 $allowed = ($runtime_value > 2)

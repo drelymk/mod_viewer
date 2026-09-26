@@ -25,7 +25,7 @@ def _visible(conditions, **state):
 ])
 @pytest.mark.parametrize("threshold", [-3, -1, 0.5, 2, 4])
 def test_numeric_cycle_comparisons_and_negation(op, compare, threshold):
-    sections = parse_sections("fixture.ini", text="""[Constants]
+    sections = parse_sections("source-01.ini", text="""[Constants]
 global persist $Style = -2
 [KeyStyle]
 type = cycle
@@ -43,12 +43,12 @@ $Style = -1, 0.5, 2
 
 
 def test_other_writer_disables_ordered_cycle_domain():
-    sections = parse_sections("fixture.ini", text="""[KeyStyle]
+    sections = parse_sections("source-01.ini", text="""[KeyStyle]
 type = cycle
 $Style = 0,1,2
 [CommandListSetStyle]
 $Style = 3
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $Style >= 3
 drawindexed = 3, 0, 0
 endif
@@ -59,7 +59,7 @@ endif
     scan = _scan_sections_for_draws(
         sections, None, {"Style"}, condition_aliases=aliases)
 
-    draws = scan["TextureOverrideBody"]["draws"]
+    draws = scan["TextureOverrideComponent01"]["draws"]
     assert len(draws) == 1
     assert _visible(draws[0].conditions, Style=3)
 
@@ -69,7 +69,7 @@ endif
     "$Style += 1",
 ])
 def test_unknown_write_disables_numeric_cycle_domain(write):
-    sections = parse_sections("fixture.ini", text="""[KeyStyle]
+    sections = parse_sections("source-01.ini", text="""[KeyStyle]
 type = cycle
 $Style = 0,1,2
 [CommandListSetStyle]
@@ -100,7 +100,7 @@ $Style = 0,1,2
 ])
 def test_draw_argument_resolution_is_conservative(declaration, mutation,
                                                  arguments, expected):
-    sections = parse_sections("fixture.ini", text=(
+    sections = parse_sections("source-01.ini", text=(
         f"[Constants]\n{declaration}\n[Present]\n{mutation}\n"))
     assert resolve_drawindexed(arguments, immutable_draw_constants(sections)) == expected
 
@@ -117,12 +117,12 @@ $Top = 0, 1, 2
 [KeySkirt]
 type = cycle
 $Skirt = 0, 1
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
-ib = ResourceBodyIB
-run = CommandListBody
-[CommandListBody]
+ib = ResourceComponent01IB
+run = CommandListComponent01
+[CommandListComponent01]
 Resource\ZZMI\Diffuse = ref ResourceOriginal
 if $skirt == 0 && $top < 2
 drawindexed = $COUNT, 0, 0
@@ -138,8 +138,8 @@ stride = 40
 [ResourceTexcoord]
 filename = texcoord.buf
 stride = 20
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component-01.ib
 format = DXGI_FORMAT_R32_UINT
 [ResourceOriginal]
 filename = original.dds
@@ -166,7 +166,7 @@ filename = alternate.dds
         assert applied[-1] == ("alternate.dds" if top >= 2 else "original.dds")
     assert [draw.occurrence.ordinal for draw in draws] == [0, 1, 2]
     for draw in draws:
-        assert draw.sources[0]["section"] == "CommandListBody"
+        assert draw.sources[0]["section"] == "CommandListComponent01"
         assert text.splitlines()[draw.sources[0]["line_no"] - 1].startswith("drawindexed")
 
     def unsupported(overrides=None):

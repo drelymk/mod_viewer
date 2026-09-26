@@ -153,9 +153,9 @@ def test_decode_rigid_uses_one_implicit_weight():
 def test_decode_normalizes_component_offsets_into_model_namespace():
     raw = bytes([1, 0, 0, 0, 255, 0, 0, 0])
     first = decode_skinning(
-        SkinningSource("body.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
+        SkinningSource("component01.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
     second = decode_skinning(
-        SkinningSource("face.blend", 8, 4, "wwmi_u8_4", 10), raw, [0])
+        SkinningSource("phase02.blend", 8, 4, "wwmi_u8_4", 10), raw, [0])
     repeated = decode_skinning(
         SkinningSource("shared.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
 
@@ -436,13 +436,13 @@ def test_resolver_keeps_ordinary_wwmi_u8_ids_source_local_with_offset():
 @pytest.mark.parametrize(
     ("source_file", "offset", "expected"),
     [
-        ("BodyBlend.buf", 0, "bodyblend.buf|offset=0"),
-        ("BodyBlend2.buf", 0, "bodyblend2.buf|offset=0"),
-        (r"Hair\.\HairBlend.buf", 0,
-         "hair/hairblend.buf|offset=0"),
-        ("Hair/HairBlend.buf", 24, "hair/hairblend.buf|offset=24"),
-        ("Accessory/HairBlend.buf", 0,
-         "accessory/hairblend.buf|offset=0"),
+        ("Component01Blend.buf", 0, "component01blend.buf|offset=0"),
+        ("Component01Blend2.buf", 0, "component01blend2.buf|offset=0"),
+        (r"Component02\.\Component02Blend.buf", 0,
+         "component02/component02blend.buf|offset=0"),
+        ("Component02/Component02Blend.buf", 24, "component02/component02blend.buf|offset=24"),
+        ("Component03/Component02Blend.buf", 0,
+         "component03/component02blend.buf|offset=0"),
     ],
 )
 def test_skinning_source_key_uses_relative_path_and_offset(
@@ -451,13 +451,13 @@ def test_skinning_source_key_uses_relative_path_and_offset(
 
 
 def test_skinning_source_normalization_accepts_safe_relative_paths():
-    assert normalize_skinning_source_file("BodyBlend.buf") == "BodyBlend.buf"
-    assert normalize_skinning_source_file("Hair/HairBlend.buf") == \
-        "Hair/HairBlend.buf"
-    assert normalize_skinning_source_file("./Hair/HairBlend.buf") == \
-        "Hair/HairBlend.buf"
-    assert normalize_skinning_source_file(r"Hair\HairBlend.buf") == \
-        "Hair/HairBlend.buf"
+    assert normalize_skinning_source_file("Component01Blend.buf") == "Component01Blend.buf"
+    assert normalize_skinning_source_file("Component02/Component02Blend.buf") == \
+        "Component02/Component02Blend.buf"
+    assert normalize_skinning_source_file("./Component02/Component02Blend.buf") == \
+        "Component02/Component02Blend.buf"
+    assert normalize_skinning_source_file(r"Component02\Component02Blend.buf") == \
+        "Component02/Component02Blend.buf"
     assert normalize_skinning_source_file("../Shared/SharedBlend.buf") == \
         "../Shared/SharedBlend.buf"
 
@@ -465,16 +465,16 @@ def test_skinning_source_normalization_accepts_safe_relative_paths():
 def test_skinning_source_normalization_rejects_unsafe_paths():
     assert normalize_skinning_source_file("../../escape.buf") is None
     assert normalize_skinning_source_file("/absolute/path.buf") is None
-    assert normalize_skinning_source_file("C:/Hair/HairBlend.buf") is None
+    assert normalize_skinning_source_file("C:/Component02/Component02Blend.buf") is None
 
 
 def test_skinning_source_descriptor_excludes_decoder_details():
     source = SkinningSource(
-        r"Hair\HairBlend.buf", 8, 4, "wwmi_u8_4", bone_id_offset=24)
+        r"Component02\Component02Blend.buf", 8, 4, "wwmi_u8_4", bone_id_offset=24)
 
     assert skinning_source_descriptor(source) == {
-        "key": "hair/hairblend.buf|offset=24",
-        "file": "Hair/HairBlend.buf",
+        "key": "component02/component02blend.buf|offset=24",
+        "file": "Component02/Component02Blend.buf",
         "bone_id_offset": 24,
         "bone_ids_model_wide": False,
     }
