@@ -259,14 +259,7 @@ export function cancelFaceSelection() {
 export function applyFaceSelection({label = null} = {}) {
   if (!faceSelection) return null;
   const state = faceSelection;
-  const targetTriangles = Array.isArray(state.target.userData?.loosePartTriangles)
-    ? [...state.target.userData.loosePartTriangles]
-    : Array.from({length: Math.floor(
-      Number(state.source.geometry?.index?.count || 0) / 3)},
-    (_, triangle) => triangle);
-  const selectedSet = new Set(state.triangles);
-  const selectedTriangles = targetTriangles.filter(triangle =>
-    selectedSet.has(triangle));
+  const selectedTriangles = [...state.triangles];
   const targetCount = Array.isArray(state.target.userData?.loosePartTriangles)
     ? state.target.userData.loosePartTriangles.length
     : Math.floor(Number(state.source.geometry?.index?.count || 0) / 3);

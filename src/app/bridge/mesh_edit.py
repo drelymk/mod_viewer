@@ -175,13 +175,17 @@ def apply_component_mesh_changes(context, request):
         if data is None:
             with open(path, "rb") as stream:
                 data = stream.read()
+        existing = edit_session.ib_edits_for(context.mod_dir).get(
+            _ib_path_key(path))
+        if existing is not None:
+            original = existing["original_hash"]
+        else:
+            original = _sha256(data)
         candidate, normalized = repack_index_bytes(
             data, draw.start, draw.count, draw.index_size, parts)
         byte_range = _draw_byte_range(draw, len(data))
         _validate_draw_overlap(
             context, authoritative, draw, path, byte_range, len(data))
-        existing = edit_session.ib_edits_for(context.mod_dir).get(
-            _ib_path_key(path))
         if existing is not None and any(
                 byte_range[0] < end and start < byte_range[1]
                 for start, end in existing["ranges"]):
@@ -202,26 +206,18 @@ def apply_component_mesh_changes(context, request):
             line_no = resolved[int(source_ref["line"])]
             resolved_lines.append((doc.path, line_no, ranges))
         ib_path = path
-
         with edit_session.transaction(context.mod_dir, ini_paths) as edit:
             patches = {}
-            for path, line_no, ranges in resolved_lines:
-                by_line = patches.setdefault(path, {})
+            for ini_path, line_no, ranges in resolved_lines:
+                by_line = patches.setdefault(ini_path, {})
                 if line_no in by_line:
                     raise ValueError("A source draw was submitted more than once.")
                 by_line[line_no] = ranges
-            for path, by_line in patches.items():
-                doc = edit.document(path)
+            for ini_path, by_line in patches.items():
+                doc = edit.document(ini_path)
                 for line_no in sorted(by_line, reverse=True):
                     _rewrite_draw_line(doc, line_no, by_line[line_no])
 
-            record = edit_session.ib_edits_for(context.mod_dir).get(
-                os.path.normcase(os.path.abspath(ib_path)))
-            if record is not None:
-                original = record["original_hash"]
-            else:
-                with open(ib_path, "rb") as stream:
-                    original = _sha256(stream.read())
             edit.stage_ib_edit(
                 ib_path, candidate, original, [byte_range],
                 dependent_inis={edit_session.document(

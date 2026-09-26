@@ -1011,6 +1011,19 @@ def test_mesh_panel_apply_stages_only_triangle_provenance_and_reloads(
             "Apply mesh changes for this component?\n\n"
             "The new mesh layout will be staged in memory. Nothing is written "
             "to disk until Export.")
+        page.locator("#dialog-cancel").click()
+        assert page.evaluate("window.__fakeApi.calls.applyMeshChanges.length") == 0
+        assert page.locator("#mesh-list .draw-item").count() == 3
+        assert page.locator(".mesh-edit-badge").get_attribute("data-state") == (
+            "edited")
+        assert page.evaluate("""async () => {
+          const {getActiveMeshEditSource} = await import('./js/scene/selection.js');
+          return getActiveMeshEditSource() === window.modViewer.activeMeshes[0];
+        }""") is True
+        page.locator(".group-hdr").click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        menu.locator("[data-i18n='mesh.applyMeshChanges']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
         page.locator("#dialog-ok").click()
         page.wait_for_function(
             "window.__fakeApi.calls.applyMeshChanges.length === 1")

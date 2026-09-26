@@ -220,11 +220,6 @@ function createLoosePart(source, triangles, {
   return part;
 }
 
-function sourceTriangleOrdinals(source) {
-  const count = Math.floor(Number(source?.geometry?.index?.count || 0) / 3);
-  return Array.from({length: count}, (_, triangle) => triangle);
-}
-
 /** Create viewer children while retaining the source mesh as semantic owner. */
 export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
   if (!source?.geometry || source.userData?.looseParts?.length) {
@@ -277,26 +272,38 @@ export function separateSelectedTriangles(target, selectedTriangles, {
   if (!source?.geometry?.index || !target) return null;
   const sourceParts = getLooseParts(source);
   if (target !== source && !sourceParts.includes(target)) return null;
-  const targetTriangles = target === source
-    ? sourceTriangleOrdinals(source)
-    : [...(target.userData?.loosePartTriangles || [])];
   const requested = [...new Set(selectedTriangles || [])];
-  if (!requested.length || requested.some(triangle => !Number.isInteger(triangle))) {
+  if (!requested.length || requested.some(triangle =>
+    !Number.isInteger(triangle))) {
     return null;
   }
-  if (target === source && requested.some(triangle =>
-    triangle < 0 || triangle >= targetTriangles.length)) return null;
-  if (target !== source && requested.some(triangle =>
-    !targetTriangles.includes(triangle))) return null;
-  if (requested.length >= targetTriangles.length) return null;
-  const selectedSet = new Set(requested);
-  const selected = targetTriangles.filter(triangle => selectedSet.has(triangle));
-  const remainderTriangles = targetTriangles.filter(
-    triangle => !selectedSet.has(triangle));
-  if (!remainderTriangles.length) return null;
-
   const sourceWasClean = target === source && sourceParts.length === 0;
   if (!sourceWasClean && target === source) return null;
+  let selected;
+  let remainderTriangles;
+  if (sourceWasClean) {
+    const triangleCount = Math.floor(
+      Number(source.geometry.index.count || 0) / 3);
+    if (requested.length >= triangleCount || requested.some(triangle =>
+      triangle < 0 || triangle >= triangleCount)) return null;
+    const selectedSet = new Set(requested);
+    selected = [];
+    remainderTriangles = [];
+    for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+      (selectedSet.has(triangle) ? selected : remainderTriangles).push(triangle);
+    }
+  } else {
+    const targetTriangles = [...(target.userData?.loosePartTriangles || [])];
+    const available = new Set(targetTriangles);
+    if (requested.length >= targetTriangles.length
+        || requested.some(triangle => !available.has(triangle))) return null;
+    const selectedSet = new Set(requested);
+    selected = targetTriangles.filter(triangle => selectedSet.has(triangle));
+    remainderTriangles = targetTriangles.filter(
+      triangle => !selectedSet.has(triangle));
+  }
+  if (!selected.length || !remainderTriangles.length) return null;
+
   if (sourceWasClean) {
     const sourceGeometry = source.geometry;
     if (!sourceGeometry.boundingBox) sourceGeometry.computeBoundingBox();
