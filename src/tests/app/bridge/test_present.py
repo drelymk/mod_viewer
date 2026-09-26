@@ -33,20 +33,20 @@ key = c
 type = cycle
 $Coat = 0,1,2
 
-[TextureOverrideBodyPosition]
-vb0 = ResourceBodyPosition
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
-[TextureOverrideBody]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
 drawindexed = 3,0,0
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 filename = p.buf
 stride = 12
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = t.buf
 stride = 8
-[ResourceBodyIB]
+[ResourceComponent01IB]
 filename = i.buf
 format = R32_UINT
 """
@@ -56,18 +56,18 @@ global persist $currFlat = 0.5
 
 [CustomShaderComputeShapes]
 x88 = $currFlat
-cs-t50 = copy ResourceBodyPosition.Base
-cs-t51 = copy ResourceBodyPosition.Flat
+cs-t50 = copy ResourceComponent01Position.Base
+cs-t51 = copy ResourceComponent01Position.Flat
 
-[ResourceBodyPosition.Base]
+[ResourceComponent01Position.Base]
 type = Buffer
 stride = 40
-filename = BodyPosition.buf
+filename = Component01Position.buf
 
-[ResourceBodyPosition.Flat]
+[ResourceComponent01Position.Flat]
 type = Buffer
 stride = 40
-filename = BodyPositionFlat.buf
+filename = Component01PositionFlat.buf
 """
 
 

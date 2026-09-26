@@ -61,7 +61,7 @@ type = cycle
 $Upper = 0,1
 $\\Other\\Master\\Mode = 0,1,2,3
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $Upper == 0
 drawindexed = 100,0,0
 endif
@@ -85,8 +85,8 @@ key = 1
 type = cycle
 $Upper = 0,1
 
-[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 if $Upper == 0
@@ -96,8 +96,8 @@ if $Upper == 1
 drawindexed = 200,0,0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -118,7 +118,7 @@ key = 1
 type = cycle
 $Upper = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $Upper == 0
 drawindexed = 100,0,0
 endif

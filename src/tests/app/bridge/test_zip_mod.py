@@ -14,7 +14,7 @@ from core.mod_source import ZipModSource
 def test_zip_edit_session_keeps_staged_text_in_memory_and_export_is_blocked(
         tmp_path):
     archive_path = tmp_path / "packed.zip"
-    original = "[KeyBody]\r\nkey = F1\r\n"
+    original = "[KeyComponent01]\r\nkey = F1\r\n"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("Wrapper/mod.ini", original)
     source = ZipModSource(archive_path)
@@ -25,7 +25,7 @@ def test_zip_edit_session_keeps_staged_text_in_memory_and_export_is_blocked(
         assert edit_session.editable_text(edit_session.peek(
             str(archive_path), paths[0])) == original.replace("\r\n", "\n")
         edit_session.update_text(
-            str(archive_path), "mod.ini", "[KeyBody]\nkey = F2\n")
+            str(archive_path), "mod.ini", "[KeyComponent01]\nkey = F2\n")
 
         result = toggle_api.export_changes(str(archive_path))
 

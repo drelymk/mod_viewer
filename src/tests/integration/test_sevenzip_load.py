@@ -34,20 +34,20 @@ class FakeSevenZipClient:
 def test_load_mod_uses_the_normal_pipeline_for_7zip_formats(
         tmp_path, monkeypatch, extension, kind):
     ini = (
-        "[TextureOverrideBodyPosition]\n"
-        "vb0 = ResourceBodyPosition\n"
-        "[TextureOverrideBodyTexcoord]\n"
-        "vb1 = ResourceBodyTexcoord\n"
-        "[TextureOverrideBody]\n"
-        "ib = ResourceBodyIB\n"
+        "[TextureOverrideComponent01Position]\n"
+        "vb0 = ResourceComponent01Position\n"
+        "[TextureOverrideComponent01Texcoord]\n"
+        "vb1 = ResourceComponent01Texcoord\n"
+        "[TextureOverrideComponent01]\n"
+        "ib = ResourceComponent01IB\n"
         "drawindexed = 3, 0, 0\n"
-        "[ResourceBodyPosition]\n"
+        "[ResourceComponent01Position]\n"
         "filename = p.buf\n"
         "stride = 12\n"
-        "[ResourceBodyTexcoord]\n"
+        "[ResourceComponent01Texcoord]\n"
         "filename = t.buf\n"
         "stride = 8\n"
-        "[ResourceBodyIB]\n"
+        "[ResourceComponent01IB]\n"
         "filename = i.buf\n"
         "format = R32_UINT\n")
     archive_path = tmp_path / f"packed{extension}"
@@ -69,7 +69,7 @@ def test_load_mod_uses_the_normal_pipeline_for_7zip_formats(
     assert payload["metadata"]["source_kind"] == kind
     assert payload["metadata"]["source_read_only"] is True
     assert len(payload["meshes"]) == 1
-    assert payload["meshes"]["Body-1"]["identity"]["source"] == (
+    assert payload["meshes"]["Component01-1"]["identity"]["source"] == (
         "some/random/deep/mod.ini")
     assert client.calls == ["list", "extract"]
 
