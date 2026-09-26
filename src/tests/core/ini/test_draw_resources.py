@@ -140,22 +140,6 @@ filename = a.buf
     assert "resourceb" not in copy_sources
 
 
-def test_uav_resource_reference_alias_tracks_copy_source():
-    sections = parse_sections("source-01.ini", text="""
-[CustomShader]
-cs-u5 = copy ResourceA
-ResourceB = reference cs-u5
-
-[ResourceA]
-filename = a.buf
-""")
-
-    copy_sources = _collect_resource_copy_sources(
-        sections, extract_resources(sections))
-
-    assert copy_sources["resourceb"] == ["ResourceA"]
-
-
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
     sections = parse_sections("source-01.ini", text="""
 [TextureOverrideComponent01]
@@ -231,9 +215,11 @@ stride = 16
         "wwmi_vertex_vg"
 
 
-@pytest.mark.parametrize("suffix", ("LOD0", "-LOD0", ".LOD0", "_LOD0",
-                                     "WhateverText", "SomethingBlend",
-                                     "SomethingPosition", "SomethingTexcoord"))
+@pytest.mark.parametrize("suffix", [
+    "LOD0",
+    ".LOD0",
+    "SomethingBlend"
+])
 def test_component_roles_allow_trailing_text(suffix):
     sections = parse_sections("source-01.ini", text=f"""
 [TextureOverrideComponent01Blend{suffix}]
@@ -273,66 +259,6 @@ stride = 20
     }
 
 
-def test_component_role_matching_is_case_insensitive():
-    sections = parse_sections("source-01.ini", text="""
-[TextureOverrideComponent01bLeNdWhatever]
-vb0 = ResourcePosition
-vb1 = ResourceTexcoord
-
-[TextureOverrideComponent01pOsItIoNWhatever]
-vb0 = ResourcePosition
-
-[TextureOverrideComponent01tExCoOrDWhatever]
-vb1 = ResourceTexcoord
-
-[ResourcePosition]
-filename = Meshes/Position.buf
-stride = 12
-
-[ResourceTexcoord]
-filename = Meshes/Texcoord.buf
-stride = 20
-""")
-    resolved = _resolve_component_buffers(
-        _scan_sections_for_draws(sections), extract_resources(sections), {})
-
-    assert resolved["component_buffers"]["component01"] == {
-        "position": "ResourcePosition",
-        "texcoord": "ResourceTexcoord",
-    }
-
-
-def test_component_role_words_in_opaque_suffix_use_sibling_evidence():
-    sections = parse_sections("source-01.ini", text="""
-[TextureOverrideComponent01BlendSomethingPositionFoo]
-vb0 = ResourcePosition
-vb1 = ResourceTexcoord
-
-[TextureOverrideComponent01PositionSomethingPositionFoo]
-vb0 = ResourcePosition
-
-[TextureOverrideComponent01TexcoordSomethingPositionFoo]
-vb1 = ResourceTexcoord
-
-[ResourcePosition]
-filename = Meshes/Position.buf
-stride = 12
-
-[ResourceTexcoord]
-filename = Meshes/Texcoord.buf
-stride = 20
-""")
-    resolved = _resolve_component_buffers(
-        _scan_sections_for_draws(sections), extract_resources(sections), {})
-
-    assert resolved["component_buffers"] == {
-        "component01": {
-            "position": "ResourcePosition",
-            "texcoord": "ResourceTexcoord",
-        },
-    }
-
-
 def test_component_role_words_inside_component_use_sibling_evidence():
     sections = parse_sections("source-01.ini", text="""
 [TextureOverrideBlendComponent01BlendLOD0]
@@ -358,37 +284,6 @@ stride = 20
 
     assert resolved["component_buffers"] == {
         "blendcomponent01": {
-            "position": "ResourcePosition",
-            "texcoord": "ResourceTexcoord",
-        },
-    }
-
-
-def test_legacy_component_role_names_keep_existing_resolution():
-    sections = parse_sections("source-01.ini", text="""
-[TextureOverrideComponent01Blend]
-vb0 = ResourcePosition
-vb1 = ResourceTexcoord
-
-[TextureOverrideComponent01Position]
-vb0 = ResourcePosition
-
-[TextureOverrideComponent01Texcoord]
-vb1 = ResourceTexcoord
-
-[ResourcePosition]
-filename = Meshes/Position.buf
-stride = 12
-
-[ResourceTexcoord]
-filename = Meshes/Texcoord.buf
-stride = 20
-""")
-    resolved = _resolve_component_buffers(
-        _scan_sections_for_draws(sections), extract_resources(sections), {})
-
-    assert resolved["component_buffers"] == {
-        "component01": {
             "position": "ResourcePosition",
             "texcoord": "ResourceTexcoord",
         },

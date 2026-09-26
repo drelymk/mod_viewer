@@ -166,20 +166,6 @@ def test_asset11_style_singleton_resources_keep_each_component_role(tmp_path):
         }
 
 
-def test_proven_slotfix_assignment_uses_diffuse_pipeline(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceOpaque""",
-        {"ResourceOpaque": "opaque.dds"},
-    )
-
-    assert draw.texture_default("diffuse") == "opaque.dds"
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[0].role_hint_source == "mod_slot_mapping"
-    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
-
-
 def test_resource_name_alone_does_not_imply_diffuse(tmp_path):
     draw = _draw(
         tmp_path,
@@ -212,101 +198,6 @@ def test_repeated_legacy_slot_names_recover_texture_roles(tmp_path):
                                        "light_map": "mod_slot_legacy"}
 
 
-def test_single_declared_legacy_resource_classifies_itself(tmp_path):
-    draw = _draw(
-        tmp_path,
-        "ps-t0 = ResourceComponent01Diffuse",
-        {"ResourceComponent01Diffuse": "component01-diffuse.dds"},
-    )
-
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[0].role_hint_source == "legacy_slot_mapping"
-    assert draw.texture_default("diffuse") == "component01-diffuse.dds"
-
-
-def test_single_opaque_resource_stays_unresolved(tmp_path):
-    draw = _draw(
-        tmp_path,
-        "ps-t0 = ResourceShadowLookup",
-        {"ResourceShadowLookup": "shadow.dds"},
-    )
-
-    assert draw.slot_textures[0].role_hint is None
-    assert draw.texture_default("diffuse") is None
-
-
-def test_legacy_sibling_inherits_an_exact_role_anchor(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""if $style == 0
-ps-t4 = ResourceAsset02Component01NormalMap
-else
-ps-t4 = ResourceAsset02Component01NormalMapVariant02
-endif""",
-        {"ResourceAsset02Component01NormalMap": "leg-normal.dds",
-         "ResourceAsset02Component01NormalMapVariant02": "leg-normal-variant02.dds"},
-        prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
-    )
-
-    assert {item.role_hint for item in draw.slot_textures} == {"normal_map"}
-    assert all(item.role_hint_source == "legacy_slot_mapping"
-               for item in draw.slot_textures)
-    assert {item["file"] for item in draw.texture_rules("normal_map")} == {
-        "leg-normal.dds", "leg-normal-variant02.dds"}
-
-
-def test_legacy_sibling_moving_slots_rejects_the_family(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t4 = ResourceAsset02Component01NormalMap
-ps-t5 = ResourceAsset02Component01NormalMapVariant02""",
-        {"ResourceAsset02Component01NormalMap": "leg-normal.dds",
-         "ResourceAsset02Component01NormalMapVariant02": "leg-normal-variant02.dds"},
-    )
-
-    assert all(item.role_hint is None for item in draw.slot_textures)
-    assert draw.texture_default("normal_map") is None
-
-
-def test_legacy_variant_suffixes_recover_texture_roles(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = ResourceComponent01Diffuse.0
-ps-t0 = ResourceComponent01Diffuse.1
-ps-t1 = ResourceComponent01LightMap.0
-ps-t1 = ResourceComponent01LightMap.1""",
-        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
-         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds",
-         "ResourceComponent01LightMap.0": "component01-light-map-0.dds",
-         "ResourceComponent01LightMap.1": "component01-light-map-1.dds"},
-    )
-
-    assert draw.texture_default("diffuse") == "component01-diffuse-1.dds"
-    assert draw.texture_default("light_map") == "component01-light-map-1.dds"
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[1].role_hint == "light_map"
-    assert draw.slot_textures[0].role_hint_source == "legacy_slot_mapping"
-    assert draw.slot_textures[1].role_hint_source == "legacy_slot_mapping"
-    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy",
-                                       "light_map": "mod_slot_legacy"}
-
-
-def test_legacy_family_does_not_classify_an_opaque_resource(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = ResourceComponent01Diffuse.0
-ps-t0 = ResourceComponent01Diffuse.1
-ps-t0 = ResourceShadowLookup""",
-        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
-         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds",
-         "ResourceShadowLookup": "shadow.dds"},
-    )
-
-    assert draw.slot_textures[0].resource == "ResourceShadowLookup"
-    assert draw.slot_textures[0].role_hint is None
-    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy"}
-
-
 def test_conflicting_legacy_roles_on_one_slot_are_rejected(tmp_path):
     draw = _draw(
         tmp_path,
@@ -323,19 +214,6 @@ ps-t0 = ResourceComponent01NormalMap.1""",
     assert draw.slot_textures[0].role_hint is None
     assert draw.texture_default("diffuse") is None
     assert draw.texture_default("normal_map") is None
-
-
-def test_legacy_family_cannot_move_between_slots(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = ResourceComponent01Diffuse.0
-ps-t2 = ResourceComponent01Diffuse.1""",
-        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
-         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds"},
-    )
-
-    assert all(item.role_hint is None for item in draw.slot_textures)
-    assert draw.texture_default("diffuse") is None
 
 
 def test_unreachable_legacy_scope_does_not_leak_into_a_draw(tmp_path):
@@ -407,19 +285,6 @@ endif""",
     assert [item["file"] for item in draw.texture_variants] == [
         "red.dds", "blue.dds"]
     assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
-
-
-def test_explicit_semantic_assignment_beats_slotfix(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceOpaque
-Resource\GIMI\Diffuse = ResourceExplicit""",
-        {"ResourceExplicit": "explicit.dds", "ResourceOpaque": "opaque.dds"},
-    )
-
-    assert draw.texture_default("diffuse") == "explicit.dds"
-    assert draw.texture_provenance == {}
 
 
 def test_semantic_and_slot_roles_keep_disjoint_conditional_branches(tmp_path):

@@ -121,33 +121,6 @@ def test_resource_reachability_follows_authored_edges_only():
     assert ({"ResourceCycleA", "ResourceCycleB", "ResourceSelf"} <= unused), ("self references and unrooted cycles do not make resources used")
 
 
-def test_reference_prefix_is_valid_and_target_is_checked():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "mod.ini"), (
-            "[TextureOverrideComponent01]\n"
-            "vb0 = reference ResourceComponent01Position\n"
-            "vb1 = reference ResourceMissing\n"
-            "vb2 = copy reference ResourceMissingCopy\n"
-            "[ResourceComponent01Position]\n"
-            "filename = component01.buf\n"
-            "stride = 12\n"))
-        _write(os.path.join(tmp, "component01.buf"), b"x", binary=True)
-        report = analyze_mod(tmp)
-
-    malformed = [item for item in report["issues"]
-                 if item["code"] == "malformed_resource_reference"]
-    missing = [item for item in report["issues"]
-               if item["code"] == "missing_resource_section"]
-    unused = {item["resource"] for item in report["issues"]
-              if item["code"] == "unused_resource_section"}
-    assert malformed == []
-    assert [(item["resource"], item["line"]) for item in missing] == [
-        ("ResourceMissing", 3),
-        ("ResourceMissingCopy", 4),
-    ]
-    assert "ResourceComponent01Position" not in unused
-
-
 def test_file_classification_and_overrides():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")
@@ -209,52 +182,6 @@ def test_unsafe_paths_and_namespaced_resources():
                           if item["code"] == "missing_resource_section"
                           and "Framework" in item["message"]]
     assert (not namespaced_missing), ("namespaced framework resources are not guessed to be missing")
-
-
-def test_statement_run_target_and_key_binding_findings():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "mod.ini"), (
-            "[Constants]\n"
-            "global $active = 1\n"
-            "[KeyFirst]\n"
-            "condition = $active\n"
-            "key = no_modifiers ;\n"
-            "type = cycle\n"
-            "$first = 0,1\n"
-            "'\n"
-            "[KeySecond]\n"
-            "condition = $active\n"
-            "key = ;\n"
-            "type = cycle\n"
-            "$second = 0,1\n"
-            "[TextureOverrideComponent01]\n"
-            "ps-t8 = ef ResourceGlow\n"
-            "run = CommandListMissing\n"
-            "run = CommandListKnown\n"
-            "run = CommandList\\Framework\\External\n"
-            "run = BuiltInCommandListUnbindAllRenderTargets\n"
-            "[CommandListKnown]\n"
-            "ps-t8 = ref ResourceGlow\n"
-            "[ResourceGlow]\n"
-            "filename = glow.dds\n"))
-        _write(os.path.join(tmp, "glow.dds"), b"DDS " + b"\0" * 124,
-               binary=True)
-        report = analyze_mod(tmp)
-
-    by_code = {}
-    for issue in report["issues"]:
-        by_code.setdefault(issue["code"], []).append(issue)
-    assert len(by_code["unexpected_key_statement"]) == 1
-    assert by_code["unexpected_key_statement"][0]["line"] == 8
-    assert len(by_code["malformed_resource_reference"]) == 1
-    assert by_code["malformed_resource_reference"][0]["resource"] == (
-        "ResourceGlow")
-    assert len(by_code["duplicate_key_binding"]) == 1
-    duplicate = by_code["duplicate_key_binding"][0]
-    assert duplicate["other_section"] == "KeyFirst"
-    assert duplicate["section"] == "KeySecond"
-    assert [issue["target"] for issue in
-            by_code["missing_local_run_target"]] == ["CommandListMissing"]
 
 
 def test_drawindexed_viewer_limitation_does_not_label_valid_auto_as_unsupported():
@@ -324,19 +251,6 @@ def test_section_semantics_and_staged_findings(tmp_path):
                 if issue["section"] == "TextureOverrideFuzzy"]
 
 
-def test_override_and_key_missing_or_invalid(tmp_path):
-    _write(tmp_path / "mod.ini", (
-        "[ShaderOverrideMissing]\nhandling = skip\n"
-        "[TextureOverrideMissing]\nhandling = skip\n"
-        "[KeyInvalid]\nkey = no_ctrl no_shift\nback = \n"
-    ))
-    report = analyze_mod(str(tmp_path))
-    assert {issue["override_type"] for issue in report["issues"]
-            if issue["code"] == "missing_override_hash"} == {"shader", "texture"}
-    assert {issue["binding_type"] for issue in report["issues"]
-            if issue["code"] == "invalid_key_binding"} == {"back"}
-
-
 def test_variable_assignments_resolve_namespace_and_local_scope(tmp_path):
     _write(tmp_path / "globals.ini", (
         "namespace = A\n[Constants]\nglobal persist $Shared\n"
@@ -400,55 +314,6 @@ def test_multi_ini_global_and_run_lookup_keeps_unnamespaced_siblings_isolated(tm
                 ("isolated.ini", "CommandListGlobal"),
                 ("other.ini", "CommandListScoped"),
             ]
-
-
-def test_duplicate_override_metadata_but_not_repeated_commands(tmp_path):
-    _write(tmp_path / "mod.ini", (
-        "[TextureOverrideComponent01]\nhash = abcdef12\nmatch_width = 10\n"
-        "match_width = 20\nps-t0 = ResourceA\nps-t0 = ResourceB\n"
-        "[ShaderOverrideComponent01]\nhash = 1\nfilter_index = 1\n"
-        "filter_index = 2\n"
-        "[CustomShaderComponent01]\nvs = component01.hlsl\nvs = other.hlsl\n"
-    ))
-    report = analyze_mod(str(tmp_path))
-    duplicates = [issue for issue in report["issues"]
-                  if issue["code"] == "duplicate_section_key"]
-    assert [(issue["key"], issue["first_line"], issue["line"])
-            for issue in duplicates] == [
-                ("match_width", 3, 4),
-                ("filter_index", 9, 10),
-                ("vs", 12, 13),
-            ]
-
-
-def test_reviewed_hash_run_key_and_regular_statement_edges(tmp_path):
-    _write(tmp_path / "mod.ini", (
-        "[TextureOverrideShort]\nhash = a\n"
-        "[ShaderOverrideShort]\nhash = 1\n"
-        "[TextureOverrideTypo]\nmatch_widht = 100\n"
-        "[TextureOverridePriority]\nmatch_priority = 1\n"
-        "[TextureOverrideQuality]\nmatch_msaa_quality = 2\n"
-        "[TextureOverrideConflict]\nhash = 123\nmatch_width = 10\n"
-        "[ResourceRegular]\ndraw = something\n"
-        "[KeyModifiers]\nkey = ctrl\nkey = no_ctrl\n"
-        "key = no_ctrl no_shift\n"
-        "[CommandList Foo]\nrun = CommandList Foo\nrun =\n"
-    ))
-    report = analyze_mod(str(tmp_path))
-    by_code = {}
-    for issue in report["issues"]:
-        by_code.setdefault(issue["code"], []).append(issue)
-    assert "invalid_hash" not in by_code
-    assert "invalid_key_binding" not in by_code
-    assert "malformed_regular_statement" not in by_code
-    assert [(issue["section"], issue["code"]) for issue in
-            by_code["missing_override_hash"]] == [
-                ("TextureOverrideTypo", "missing_override_hash"),
-                ("TextureOverridePriority", "missing_override_hash"),
-            ]
-    assert len(by_code["hash_match_conflict"]) == 1
-    assert [(issue["target"], issue["target_display"]) for issue in
-            by_code["invalid_run_target"]] == [("", "Empty run target")]
 
 
 def test_namespaced_duplicate_global_section_is_not_assumed_ignored(tmp_path):

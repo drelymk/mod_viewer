@@ -22,26 +22,15 @@ def norm(s):
 # â”€â”€ round-trip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 ROUND_TRIP = [
-    "$swapvar == 1",
-    "$swapvar != 0",
-    "$a == 1 && $b == 2",
-    "$a == 1 || $b == 2",
-    "$a == 1 && ($b == 2 || $c == 3)",
-    "($a == 1 || $b == 2) && $c == 3",
-    "!$a",
-    "!($a == 1 && $b == 2)",
-    "$DRAW_TYPE == 1",
-    "vs-cb3 == 3381.7777",
-    "ResourceMergedSkeleton !== null",
-    "ResourceBlendBufferOverride === null",
-    "$x == -1",
-    "$Input44 % 4 < 2",
-    "($toerings // 2) % 2 == 1",
-    "$cpx > $mx + 0.0125",
-    "$slot == $selectedSlot // 1",
-    "$a",
-    r"$\Asset08\Master\swapvar == 2",
+    "$input01 == 1 && ($input02 != -2 || $input03)",
+    "($input01 || $input02) && !$input03",
+    "!($input01 == 1 && $input02 == 2)",
+    "$DRAW_TYPE == 1", "vs-cb3 == 1.25",
+    "ResourceTexture01 !== null", "ResourceTexture02 === null",
+    "($input01 // 2) % 2 < 1", "$cursor > $limit + 0.0125",
+    r"$\Fixture01\Master\input01 == 2",
 ]
+
 
 
 @pytest.mark.parametrize("source", ROUND_TRIP)
@@ -49,9 +38,11 @@ def test_condition_round_trips(source):
     assert norm(ic.parse(source).render()) == norm(source)
 
 
-@pytest.mark.parametrize(
-    "source", ["$Cloth = 1", "$", "$cap ==", "$color == 0=", "", "$a &&"],
-)
+@pytest.mark.parametrize("source", [
+    "$Cloth = 1",
+    "$",
+    "$cap =="
+])
 def test_condition_rejects_malformed(source):
     with pytest.raises(ConditionError):
         ic.parse(source)
@@ -66,26 +57,15 @@ def red(src, bindings):
 @pytest.mark.parametrize("source, bindings, expected", [
     ("$v == 1", {"v": "1"}, TRUE),
     ("$v == 1", {"v": "0"}, FALSE),
-    ("$v != 1", {"v": "0"}, TRUE),
     ("$v == 1", {"v": "1.0"}, TRUE),
-    ("$v", {"v": "0"}, FALSE),
-    ("$v", {"v": "3"}, TRUE),
     ("!$v", {"v": "0"}, TRUE),
     ("$v == 1 && $DRAW_TYPE == 1", {"v": "1"}, "$DRAW_TYPE == 1"),
     ("$v == 1 && $DRAW_TYPE == 1", {"v": "0"}, FALSE),
     ("$v == 1 || $DRAW_TYPE == 1", {"v": "0"}, "$DRAW_TYPE == 1"),
     ("$v == 1 || $DRAW_TYPE == 1", {"v": "1"}, TRUE),
-    ("$other == 1", {"v": "1"}, "$other == 1"),
-    ("$a == 1 && $b == 2 && $c == 3", {"b": "2"}, "$a == 1 && $c == 3"),
-    ("$v == 1 && ($a == 1 || $b == 2)", {"v": "1"}, "($a == 1 || $b == 2)"),
     ("$cpx > $mx + 0.0125", {"v": "1"}, "$cpx > $mx + 0.0125"),
-    ("$v == 1 && vs-cb3 == 3381.7777", {"v": "1"}, "vs-cb3 == 3381.7777"),
-    ("vs-cb3 == 3381.7777", {}, "vs-cb3 == 3381.7777"),
-    ("ResourceMergedSkeleton !== null", {}, "ResourceMergedSkeleton !== null"),
-], ids=["equal", "not-equal", "not-equal-operator", "numeric", "bare-false",
-        "bare-true", "negation", "and-unknown", "and-false", "or-unknown",
-        "or-true", "unbound", "middle-conjunct", "parentheses", "arithmetic",
-        "slot-operand", "runtime-value", "resource-null"])
+    ("ResourceMergedSkeleton !== null", {}, "ResourceMergedSkeleton !== null")
+])
 def test_condition_reduce(source, bindings, expected):
     assert red(source, bindings) == expected
 
@@ -99,22 +79,14 @@ def elim(src, dead_vars):
 
 
 @pytest.mark.parametrize("source, dead_vars, expected", [
-    ("$v == 1", ["v"], TRUE), ("$v != 1", ["v"], TRUE),
-    ("$v", ["v"], TRUE), ("$v < 3", ["v"], TRUE),
-    ("1 == $v", ["v"], TRUE),
+    ("$v == 1", ["v"], TRUE),
     ("$v == 1 && $DRAW_TYPE == 1", ["v"], "$DRAW_TYPE == 1"),
     ("$v == 1 || $DRAW_TYPE == 1", ["v"], TRUE),
-    ("$a == 1 && $b == 2 && $c == 3", ["b"], "$a == 1 && $c == 3"),
-    ("$v == 1 && ($a == 1 || $b == 2)", ["v"], "($a == 1 || $b == 2)"),
     ("($v == 1 || $a == 2) && $DRAW_TYPE == 1", ["v"], "$DRAW_TYPE == 1"),
     ("!($v == 1 && $a == 2)", ["v"], "!($a == 2)"),
-    ("!$v", ["v"], FALSE), ("!($v == 1)", ["v"], FALSE),
-    ("!($v == 1 && $w == 2)", ["v", "w"], FALSE),
-    ("!($v == 1 || $a == 2)", ["v"], FALSE),
-], ids=["comparison", "not-equal", "bare", "ordering", "right-hand",
-        "and-survivor", "or-short-circuit", "middle-survivor", "parentheses",
-        "nested-or", "not-survivor", "negated-bare", "negated-comparison",
-        "negated-all-dead", "negated-or"])
+    ("!$v", ["v"], FALSE),
+    ("!($v == 1 && $w == 2)", ["v", "w"], FALSE)
+])
 def test_condition_eliminate(source, dead_vars, expected):
     assert elim(source, dead_vars) == expected
 

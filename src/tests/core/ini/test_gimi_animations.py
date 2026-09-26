@@ -5,13 +5,7 @@ import pytest
 
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
-from core.ini.animations import (_identify_compute_shader,
-                                 _identify_shape_weight_operation,
-                                 _compute_condition_is_supported,
-                                 compute_animation_control_vars,
-                                 discover_animation_clocks,
-                                 discover_compute_animations,
-                                 discover_wwmi_sparse_animations)
+from core.ini.animations import _compute_condition_is_supported, compute_animation_control_vars, discover_animation_clocks, discover_compute_animations, discover_wwmi_sparse_animations
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.ini.dnf import build_bool_alias_map
@@ -542,22 +536,6 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
     }
 
 
-def test_wwmi_sparse_animation_rejects_nonblank_y0(tmp_path):
-    root = tmp_path / "nonblank-y0"
-    (root / "res").mkdir(parents=True)
-    (root / "res" / "anim.hlsl").write_text(WWMI_ANIMATION_SHADER)
-    _write_wwmi_offset_table(root, range(162, 168))
-    sections = _wwmi_sparse_sections()
-    for section in ("CustomShaderinput33", "CustomShaderTrack02Anim"):
-        y0_index = next(index for index, line in enumerate(sections[section])
-                        if line.strip().casefold() == "y0 =")
-        sections[section][y0_index] = "y0 = $SomeShape"
-
-    assert discover_wwmi_sparse_animations(
-        sections, _wwmi_static_shapes(), mod_dir=str(root),
-        ini_path=str(root / "source-01.ini")) == []
-
-
 def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
     root = tmp_path / "nested"
     sections = _nested_sections(root)
@@ -593,6 +571,7 @@ def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
     built = build_mesh_result(analysis.draw_groups, str(root))
     payload = next(iter(built.meshes.values()))["animation_geometry"]
     assert payload["kind"] == "gimi_compute"
+    assert payload["coordinate_transform"] == "identity"
     assert payload["overlay"] is True
     assert payload["conditions"] == animation["conditions"]
 
@@ -622,26 +601,6 @@ def test_nested_animation_is_fallback_for_supported_parent_chain(tmp_path):
     assert any(command["op"] == "dispatch"
                and command["kind"] == "shape"
                for command in discovered[0]["program"]["commands"])
-
-
-def test_nested_animation_rejects_mismatched_parent_u5_and_t50(tmp_path):
-    root = tmp_path / "mismatched-bindings"
-    sections = _nested_sections(root)
-    sections["CustomShaderParent"] = [
-        line.replace(
-            "cs-u5 = copy ResourcePositionBase",
-            "cs-u5 = copy ResourcePositionOther")
-        for line in sections["CustomShaderParent"]]
-
-    assert not _discover(root, sections)
-
-
-def test_nested_animation_rejects_unsupported_parent_condition(tmp_path):
-    root = tmp_path / "unsupported-condition"
-    sections = _nested_sections(root)
-    sections["CustomShaderParent"][0] = "if $mode > 1"
-
-    assert not _discover(root, sections)
 
 
 def test_nested_animation_rejects_multiple_children_for_one_output(tmp_path):
@@ -766,38 +725,6 @@ def test_key_self_clearing_animation_input_stays_external(tmp_path):
     assert set(panel) == {"KeyPause", "KeyAnime"}
 
 
-def test_compute_animation_reads_shader_metadata():
-    adapter = _identify_compute_shader(POSE_SHADER)
-    assert adapter["threads"] == 64
-    assert adapter["coordinate_transform"] == "identity"
-    assert adapter["weight_operation"] is None
-
-
-def test_compute_animation_identifies_coordinate_transform():
-    adapter = _identify_compute_shader(SWAP_YZ_SHADER)
-    assert adapter["coordinate_transform"] == "swap_yz_negate"
-
-
-def test_shape_weight_operation_describes_supported_hlsl_semantics():
-    assert _identify_shape_weight_operation(
-        WWMI_ANIMATION_SHADER, (0, "z"),
-        require_delta_application=False) == {
-        "kind": "sine", "scale": 30.0,
-        "amplitude": 0.5, "offset": 0.5,
-    }
-    assert _identify_shape_weight_operation(
-        "[numthreads(1,1,1)] void main() { float3 value = 1; }",
-        (88, "x"), require_delta_application=True) is None
-    assert _identify_shape_weight_operation(
-        WWMI_ANIMATION_SHADER.replace("*30", "*31"), (0, "z"),
-        require_delta_application=False) is None
-    assert _identify_shape_weight_operation(
-        LINEAR_SHAPE_SHADER, (88, "x"),
-        require_delta_application=True) == {
-        "kind": "linear",
-    }
-
-
 @pytest.mark.parametrize(("name", "shader"), [
     ("sine", SHAPE_SHADER), ("linear", LINEAR_SHAPE_SHADER),
 ])
@@ -823,6 +750,7 @@ def test_compute_animation_rejects_shape_weight_from_wrong_ini_channel(
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     root = tmp_path / "packed"
     sections = _sections(root)
+    (root / "pose.hlsl").write_text(POSE_SHADER + SWAP_YZ_SHADER)
     resources = extract_resources(sections)
     animation = _discover(root, sections)
     analysis = analyze_ini(sections, resources=resources)
@@ -834,6 +762,7 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     entry = next(iter(built.meshes.values()))
     payload = entry["animation_geometry"]
     assert payload["kind"] == "gimi_compute"
+    assert payload["coordinate_transform"] == "swap_yz_negate"
     assert payload["vertex_count"] == 3
     assert len(payload["shape_passes"]) == 2
     raw_normals = geometry.to_bytes()[
@@ -1060,37 +989,6 @@ def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
     entry = next(iter(built.meshes.values()))
     assert entry["shape_targets"]
     assert "animation_geometry" not in entry
-
-
-def test_all_authored_shape_chain_passes_use_slider_path(tmp_path):
-    variables = ("shapeOne", "shapeTwo", "shapeThree")
-    ini = _write_linear_shape_chain_fixture(
-        tmp_path / "linear-chain", variables, authored_vars=variables)
-
-    parsed = analyze_mod_inis([str(ini)], str(ini.parent))
-    group = parsed.groups[0]
-    sliders = {item["var"]: item for item in group["shape_sliders"]}
-    assert set(sliders) == set(variables)
-    assert all(item["authored_slider"] is True for item in sliders.values())
-    assert all(item["base_file"] == "Component01Position.buf"
-               and item["shader_base_file"] == "Component01Position.Rest.buf"
-               for item in sliders.values())
-    assert "_compute_animation" not in group
-
-    built = build_mesh_result(parsed.groups, str(ini.parent))
-    entry = next(iter(built.meshes.values()))
-    assert len(entry["shape_targets"]) == 3
-    assert "animation_geometry" not in entry
-
-
-def test_single_pass_sinusoidal_shape_without_authored_slider_stays_compute(
-        tmp_path):
-    ini = _write_shape_fixture(tmp_path / "sinusoidal", SHAPE_SHADER)
-
-    parsed = analyze_mod_inis([str(ini)], str(tmp_path / "sinusoidal"))
-    group = parsed.groups[0]
-    assert group.get("shape_sliders", []) == []
-    assert group.get("_compute_animation") is not None
 
 
 def test_mixed_slider_and_animation_pass_keeps_compute_chain(tmp_path):

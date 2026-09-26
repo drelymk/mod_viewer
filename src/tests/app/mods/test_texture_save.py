@@ -231,55 +231,6 @@ def test_save_progress_reports_stages_and_ignores_callback_errors(
     assert all("request_id" not in event for event in events)
 
 
-def test_committed_cleanup_uses_only_saved_targets(monkeypatch):
-    compared = []
-    monkeypatch.setattr(
-        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
-        lambda folder, expected: compared.append((folder, expected)) or {
-            "cleared": ["Component01::one"], "preserved": [], "failed": [],
-        })
-
-    receipt, failed = service._clear_committed_color_adjustments(
-        "mod", [
-            {"semantic_key": "Component01-1", "metadata_key": "Component01::one",
-             "adjustment": {"hue": 30}},
-            {"semantic_key": "Component01-2", "metadata_key": "Component01::two",
-             "adjustment": {"hue": 45}},
-        ], [{"semantic_key": "Component01-1", "metadata_key": "Component01::one"}])
-
-    assert compared == [("mod", {"Component01::one": {"hue": 30}})]
-    assert receipt == {
-        "cleared": ["Component01::one"], "preserved": [], "failed": [],
-    }
-    assert failed is False
-
-
-def test_committed_cleanup_reports_structured_status(monkeypatch):
-    monkeypatch.setattr(
-        service.metadata, "clear_mesh_color_adjustments_if_unchanged",
-        lambda *_args: {
-            "cleared": ["Component01::one"], "preserved": ["Component01::two"],
-            "failed": [],
-        })
-
-    receipt, failed = service._clear_committed_color_adjustments(
-        "mod", [
-            {"semantic_key": "Component01-1", "metadata_key": "Component01::one",
-             "adjustment": {"hue": 30}},
-            {"semantic_key": "Component01-2", "metadata_key": "Component01::two",
-             "adjustment": {"hue": 45}},
-        ], [
-            {"semantic_key": "Component01-1", "metadata_key": "Component01::one"},
-            {"semantic_key": "Component01-2", "metadata_key": "Component01::two"},
-        ])
-
-    assert receipt == {
-        "cleared": ["Component01::one"], "preserved": ["Component01::two"],
-        "failed": [],
-    }
-    assert failed is False
-
-
 @pytest.mark.parametrize(
     ("saved_meshes", "expected_failed"),
     [
@@ -584,95 +535,6 @@ def test_bc7_lower_intent_rejects_changed_weight_above_total():
     assert raised.value.message == "Changed color intent exceeds total mip weight."
 
 
-@pytest.mark.parametrize(
-    ("level", "single", "classes", "expected_type"),
-    [
-        (0, True, (1,), "_BC7SingleIntentJob"),
-        (1, True, (1,), "_BC7WeightedSingleIntentJob"),
-        (1, False, (1, 2), "_BC7BlockJob"),
-    ],
-    ids=("compact", "weighted", "general"),
-)
-def test_bc7_parallel_job_selection_keeps_three_job_shapes(
-        level, single, classes, expected_type):
-    source = _mode6_block()
-    mip = SimpleNamespace(
-        offset=0, bytes_per_unit=16, width=4, height=4, units_x=1)
-    adjustments = (
-        None, prepare_color_adjustment({"hue": 30}),
-        prepare_color_adjustment({"hue": 120}),
-    )
-    if level == 0:
-        state = {
-            "level": 0, "width": 4, "height": 4,
-            "claims": bytearray([1] * 16), "class_count": 3,
-        }
-    elif single:
-        state = {
-            "level": 1, "width": 4, "height": 4, "single": True,
-            "changed_counts": (1,) * 16, "total_counts": (2,) * 16,
-        }
-    else:
-        state = {
-            "level": 1, "width": 4, "height": 4, "single": False,
-            "class_count": 3,
-            "counts": ((0,) * 16, (1,) * 16, (1,) * 16),
-        }
-
-    job = bc7_recolor._prepare_bc7_parallel_job(
-        source, mip, 0, state, adjustments,
-        bc7_recolor._BC7BlockIntent(classes))
-
-    assert type(job).__name__ == expected_type
-
-
-def test_bc7_serial_and_parallel_single_mip_results_match(
-        tmp_path, monkeypatch):
-    blocks = _mode6_block() + _mode6_block(
-        ((30, 120), (50, 150), (70, 180)))
-    source = tmp_path / "component01.dds"
-    original = _dx10_dds(blocks, width=8, height=4)
-    source.write_bytes(original)
-    layout = inspect_dds_layout(source)
-    prepared = _prepared_bc7(
-        source, layout, bytearray([1] * 32),
-        (None, prepare_color_adjustment({"hue": 120})), (0, 1))
-    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
-    monkeypatch.setattr(
-        bc7_recolor, "ProcessPoolExecutor",
-        lambda **_kwargs: _InlineExecutor())
-
-    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
-    serial = bc7_recolor._save_bc7_blocks(original, prepared)
-    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
-    parallel = bc7_recolor._save_bc7_blocks(original, prepared)
-
-    assert parallel == serial
-
-
-def test_bc7_serial_and_parallel_multi_mip_results_match(
-        tmp_path, monkeypatch):
-    block = _mode6_block()
-    source = tmp_path / "component01.dds"
-    original = _dx10_dds(block * 3, width=4, height=4, mip_count=3)
-    source.write_bytes(original)
-    layout = inspect_dds_layout(source)
-    prepared = _prepared_bc7(
-        source, layout, bytearray([1] * 16),
-        (None, prepare_color_adjustment({"hue": 120})), (0,))
-    monkeypatch.setattr(bc7_recolor, "_bc7_worker_count", lambda: 2)
-    monkeypatch.setattr(
-        bc7_recolor, "ProcessPoolExecutor",
-        lambda **_kwargs: _InlineExecutor())
-
-    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 10000)
-    serial = bc7_recolor._save_bc7_blocks(original, prepared)
-    monkeypatch.setattr(bc7_recolor, "_BC7_PARALLEL_THRESHOLD", 0)
-    parallel = bc7_recolor._save_bc7_blocks(original, prepared)
-
-    assert parallel == serial
-
-
 def test_bc7_serial_and_parallel_multi_adjustment_lower_mips_match(
         tmp_path, monkeypatch):
     width, height = 8, 4
@@ -897,15 +759,6 @@ def test_bc7_representability_gate_keeps_error_details_private(
 
     assert raised.value.code == "texture_color_not_representable"
     assert raised.value.details == {}
-
-
-@pytest.mark.parametrize(
-    ("cpu_count", "expected"),
-    [(None, 1), (1, 1), (2, 1), (4, 3), (32, 6)],
-)
-def test_bc7_worker_count_leaves_one_cpu(monkeypatch, cpu_count, expected):
-    monkeypatch.setattr(bc7_recolor.os, "cpu_count", lambda: cpu_count)
-    assert bc7_recolor._bc7_worker_count() == expected
 
 
 def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):

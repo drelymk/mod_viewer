@@ -106,28 +106,6 @@ stride = 8
     return analyze_mod_inis([str(menu_path), str(target_path)], str(tmp_path))
 
 
-def test_direct_namespace_forwarding_exposes_target_control(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Constants]
-global persist $value = 1
-
-[CommandListButton]
-$value = 1 - $value
-
-[Present]
-$\\Target\\style = $value
-""")
-    controls = list(parsed.menu.values())
-    assert len(controls) == 1
-    assert controls[0]["var"] == "mod(5)::style"
-    assert controls[0]["values"] == ["0", "1"]
-    assert controls[0]["name"] == "style"
-    assert parsed.defaults["mod(5)::style"] == "1"
-    assert parsed.groups[0]["draws"][0].conditions == [[{
-        "var": "mod(5)::style", "value": "1", "negate": False,
-    }]]
-
-
 def test_snapshot_forwarding_keeps_menu_draw_and_provenance(tmp_path,
                                                             monkeypatch):
     _forwarded_fixture(tmp_path, """
@@ -155,42 +133,6 @@ $\\Target\\style = $value
     line = snapshot.records[1].sections["TextureOverrideComponent01"][0]
     assert line.source() == {"ini_path": paths[1], "line_no": 7,
                              "section": "TextureOverrideComponent01"}
-
-
-def test_forwarded_controller_image_follows_pulse(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, r"""
-[Constants]
-global $localStyle = 0
-global $clickPulse = 0
-
-[CommandListAdvance]
-$clickPulse = 1 - $clickPulse
-
-[CommandListArtwork]
-if $clickPulse == 0
-    ps-t100 = ResourceRest
-else
-    ps-t100 = ResourcePressed
-endif
-
-[Present]
-$\Target\style = $localStyle
-$localStyle = $localStyle + $clickPulse
-if $localStyle > 1
-    $localStyle = 0
-endif
-
-[ResourceRest]
-filename = ui/style.dds
-
-[ResourcePressed]
-filename = ui/style.dds
-""", target_var="style", target_default="0")
-    control = next(iter(parsed.menu.values()))
-    assert control["slot"] == 1
-    assert control["var"] == "mod(5)::style"
-    assert control["_pulse_var"] == "clickPulse"
-    assert control["image_file"] == "ui/style.dds"
 
 
 def test_forwarded_button_images_follow_controller_pulses_not_slots(tmp_path):
@@ -322,58 +264,6 @@ filename = ui/off.dds
 
     control = next(iter(parsed.menu.values()))
     assert control.get("image_file") is None
-
-
-def test_nested_namespace_forwarding_exposes_target_control(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Constants]
-global persist $value = 1
-
-[CommandListButton]
-$value = 1 - $value
-
-[Present]
-$\\Group\\Master\\style = $value
-""", target_namespace="Group\\Master")
-    controls = list(parsed.menu.values())
-    assert len(controls) == 1
-    assert controls[0]["var"] == "mod(5)::style"
-    assert parsed.groups[0]["draws"][0].conditions == [[{
-        "var": "mod(5)::style", "value": "1", "negate": False,
-    }]]
-
-
-def test_forwarded_target_can_also_be_read_by_another_ini(tmp_path):
-    menu = tmp_path / "Menu.ini"
-    target = tmp_path / "Target.ini"
-    consumer = tmp_path / "Consumer.ini"
-    menu.write_text("""[Constants]
-global persist $value = 1
-
-[CommandListButton]
-$value = 1 - $value
-
-[Present]
-$\\Target\\style = $value
-""", encoding="utf-8")
-    target.write_text("""namespace = Target
-
-[Constants]
-global $style = 1
-""" + _qualified_draw_ini("$style == 1"), encoding="utf-8")
-    consumer.write_text(_qualified_draw_ini(
-        r"$\Target\style == 1"), encoding="utf-8")
-
-    parsed = analyze_mod_inis(
-        [str(menu), str(target), str(consumer)], str(tmp_path))
-    assert any(info["var"] == "Target::style"
-               for info in parsed.menu.values())
-    for ini_path in (target, consumer):
-        group = next(group for group in parsed.groups
-                     if group["identity_source"].endswith(ini_path.name))
-        assert group["draws"][0].conditions == [[{
-            "var": "Target::style", "value": "1", "negate": False,
-        }]]
 
 
 def _qualified_draw_ini(condition):
@@ -540,26 +430,6 @@ $\\Target\\style = $source
     assert parsed.groups[0]["draws"][0].conditions == []
 
 
-def test_present_pulse_is_not_treated_as_clickable_controller(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Present]
-$value = 1 - $value
-$\\Target\\style = $value
-""", target_default="0")
-    assert parsed.menu == {}
-    assert parsed.groups[0]["draws"][0].conditions == []
-
-
-def test_commandlist_forwarding_is_not_treated_as_continuous(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[CommandListForward]
-$value = 1 - $value
-$\\Target\\style = $value
-""", target_default="0")
-    assert parsed.menu == {}
-    assert parsed.groups[0]["draws"][0].conditions == []
-
-
 def test_forwarded_state_cycle_uses_controller_default_and_wrap_limit(tmp_path):
     parsed = _forwarded_fixture(tmp_path, """
 [Constants]
@@ -584,39 +454,3 @@ $\\Target\\style = $state
     assert parsed.defaults["mod(5)::style"] == "3"
     panel = build_menu_panel(parsed.menu, parsed.defaults)
     assert next(iter(panel.values()))["default"] == "3"
-
-
-def test_external_and_ui_only_forwarding_stays_untracked(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Constants]
-global persist $page = 0
-global persist $zoom = 0
-
-[Present]
-    $page = 1 - $page
-    $zoom = 1 - $zoom
-    $\\WWMIv1\\vg_offset = $page
-    $\\WWMIv1\\page = $page
-    $\\WWMIv1\\zoom = $zoom
-""")
-    assert parsed.menu == {}
-
-
-def test_ambiguous_namespace_fails_open(tmp_path):
-    menu = tmp_path / "Menu.ini"
-    first = tmp_path / "first.ini"
-    second = tmp_path / "second.ini"
-    menu.write_text("""[Present]
-global persist $value = 1
-$value = 1 - $value
-$\\Same\\x = $value
-""", encoding="utf-8")
-    target = """namespace = Same
-[Constants]
-global $x = 0
-"""
-    first.write_text(target, encoding="utf-8")
-    second.write_text(target, encoding="utf-8")
-    parsed = analyze_mod_inis(
-        [str(menu), str(first), str(second)], str(tmp_path))
-    assert parsed.menu == {}

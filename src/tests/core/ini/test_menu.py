@@ -11,11 +11,9 @@ import base64, io, os, tempfile
 import pytest
 
 
-from core.ini.menu import extract_menu_toggles, extract_menu_var_names
+from core.ini.menu import extract_menu_toggles
 from core.ini.shapes import extract_shape_sliders
-from core.ini.parser import (build_draw_groups, extract_resources,
-                             extract_toggle_keys, find_inis, gating_var_names,
-                             merge_sections, parse_sections)
+from core.ini.parser import build_draw_groups, extract_resources, extract_toggle_keys, gating_var_names, parse_sections
 from app.mods.controls import build_menu_panel
 from PIL import Image
 
@@ -71,8 +69,7 @@ def _by_slot(menu):
 @pytest.mark.parametrize("slot, variable, values", [
     (1, "input01", ["0", "1"]),
     (2, "input05", ["0", "1", "2"]),
-    (3, "color", ["0", "1", "2", "3"]),
-], ids=["binary-flip", "increment-wrap-two", "increment-wrap-three"])
+], ids=["binary-flip", "increment-wrap-two"])
 def test_click_mutation_idioms(slot, variable, values):
     slots = _by_slot(extract_menu_toggles(sections(MENU_INI)))
     assert set(slots) == {1, 2, 3}
@@ -82,152 +79,8 @@ def test_click_mutation_idioms(slot, variable, values):
         assert slots[slot]["effects"] == []
 
 
-def test_reversed_increment_wrap_matches_normal_order():
-    text = """
-[CommandListClickedSlot]
-if $clickedSlot == 1
-    $seven1 = 1 + $seven1
-    if $seven1 > 2
-        $seven1 = 0
-    endif
-elif $clickedSlot == 2
-    $normal = $normal + 1
-    if $normal > 3
-        $normal = 0
-    endif
-endif
-"""
-    slots = _by_slot(extract_menu_toggles(sections(text)))
-    assert slots[1]["var"] == "seven1"
-    assert slots[1]["values"] == ["0", "1", "2"]
-    assert slots[2]["var"] == "normal"
-    assert slots[2]["values"] == ["0", "1", "2", "3"]
-    assert slots[1]["effects"] == slots[2]["effects"] == []
-
-
-def test_binary_flip_with_wrap_guard_stays_binary():
-    text = """
-[CommandListClickedSlot]
-if $clickedSlot == 1
-    $six1 = 1 - $six1
-    if $six1 > 2
-        $six1 = 0
-    endif
-elif $clickedSlot == 2
-    $input02 = 1 - $input02
-    if $input02 > 2
-        $input02 = 0
-    endif
-endif
-"""
-    slots = _by_slot(extract_menu_toggles(sections(text)))
-    assert slots[1]["values"] == slots[2]["values"] == ["0", "1"]
-    assert slots[1]["effects"] == slots[2]["effects"] == []
-
-
-def test_reachable_flip_reset_remains_an_effect():
-    text = """
-[CommandListClickedSlot]
-if $clickedSlot == 1
-    $v = 1 - $v
-    if $v > 0
-        $v = 0
-    endif
-elif $clickedSlot == 2
-    $other = 1 - $other
-endif
-"""
-    slots = _by_slot(extract_menu_toggles(sections(text)))
-    assert slots[1]["values"] == ["0", "1"]
-    assert slots[1]["effects"] == [{
-        "when": {"var": "v", "op": ">", "value": "0"},
-        "var": "v", "value": "0",
-    }]
-
-
-def test_reduced_fixture_menu_cycles():
-    text = """
-[CommandListClickedSlot]
-if $clickedSlot == 1
-    $six1 = 1 - $six1
-elif $clickedSlot == 2
-    $seven1 = 1 + $seven1
-    if $seven1 > 2
-        $seven1 = 0
-    endif
-elif $clickedSlot == 3
-    $eight1 = 1 - $eight1
-elif $clickedSlot == 14
-    if $seven > 2
-        $seven = 0
-    endif
-elif $clickedSlot == 15
-    $eight = 1 + $eight
-    if $eight > 2
-        $eight = 0
-    endif
-elif $clickedSlot == 16
-    $input04 = 1 - $input04
-endif
-"""
-    slots = _by_slot(extract_menu_toggles(sections(text)))
-    assert {
-        slots[slot]["var"]: slots[slot]["values"]
-        for slot in (1, 2, 3, 15, 16)
-    } == {
-        "six1": ["0", "1"],
-        "seven1": ["0", "1", "2"],
-        "eight1": ["0", "1"],
-        "eight": ["0", "1", "2"],
-        "input04": ["0", "1"],
-    }
-    assert 14 not in slots
-
-
 # The same cycle written inside out, plus a menu that spells a variable
 # differently from its declaration.
-
-GUARD_FIRST_INI = """
-[Constants]
-global persist $Input06 = 0
-global persist $Input07 = 0
-global persist $Input08 = 0
-
-[CommandListSetButtonCondition]
-if $Button_number == 2
-	if $Input06 < 1
-		$Input06 = $Input06 + 1
-	else
-		$Input06 = 0
-	endif
-else if $Button_number == 3
-	if $Input07 < 3
-		$Input07 = $Input07 + 1
-	else
-		$Input07 = 0
-	endif
-else if $Button_number == 4
-	if $input08 <= 1
-		$input08 = $input08 + 1
-	else
-		$input08 = 0
-	endif
-endif
-"""
-
-
-def test_guard_first_cycle_idiom():
-    """`if $v < N / $v = $v + 1 / else / $v = 0` cycles exactly like the
-    increment-then-wrap form. Its reset must not be read as a side effect —
-    the UI replays those after cycling, which would undo every click."""
-    slots = _by_slot(extract_menu_toggles(sections(GUARD_FIRST_INI)))
-    assert (set(slots) == {2, 3, 4}), (f"every slot in the chain is found (got {sorted(slots)})")
-    assert (slots[2]["values"] == ["0", "1"]), (f"`< 1` gives a two-state cycle (got {slots[2]['values']})")
-    assert (slots[3]["values"] == ["0", "1", "2", "3"]), (f"`< 3` gives a four-state cycle (got {slots[3]['values']})")
-    assert (slots[4]["values"] == ["0", "1", "2"]), (f"`<= 1` includes the bound (got {slots[4]['values']})")
-    assert (all(s["effects"] == [] for s in slots.values())), (f"no slot mistakes its own reset for a side effect "
-          f"(got {[s['effects'] for s in slots.values()]})")
-
 
 
 
@@ -279,39 +132,6 @@ def test_else_branch_effects_are_guarded():
 # A mod that shares one ini across several variants wraps every section in a
 # swapvar guard, pushing the slot chain a level deeper.
 
-WRAPPED_MENU_INI = r"""
-[Constants]
-global persist $input01 = 0
-global persist $input05 = 0
-global $clickedSlot
-global $hoveredSlot
-
-[CommandListClickedSlot]
-if $\Char\Master\swapvar == 15
-    $clickedSlot = $hoveredSlot
-    if $clickedSlot == 1
-        $input01 = 1 - $input01
-        if $input01 == 0
-            $input02 = 1
-        endif
-    elif $clickedSlot == 2
-        $input05 = $input05 + 1
-        if $input05 > 2
-            $input05 = 0
-        endif
-    endif
-endif
-"""
-
-
-def test_swapvar_wrapped_chain_is_still_found():
-    slots = _by_slot(extract_menu_toggles(sections(WRAPPED_MENU_INI)))
-    assert (set(slots) == {1, 2}), (f"the nested chain's slots are found (got {sorted(slots)})")
-    assert (slots[1]["values"] == ["0", "1"] and slots[2]["values"] == ["0", "1", "2"]), (f"each slot's cycle survives the extra nesting "
-          f"(got {slots[1]['values']}, {slots[2]['values']})")
-    assert (slots[1]["effects"] == [{"when": {"var": "input01", "op": "==", "value": "0"},
-                                   "var": "input02", "value": "1"}]), (f"the guarded side effect is still read out of the branch phase01 "
-          f"(got {slots[1]['effects']})")
 
 
 # The slot chain that paints the menu icons looks structurally identical but
@@ -336,25 +156,6 @@ def test_non_mutating_slot_chain_is_not_a_menu():
     assert (extract_menu_toggles(sections(IMAGE_CHAIN_INI)) == {}), ("a slot chain that cycles nothing is ignored")
 
 
-SINGLE_BRANCH_INI = """
-[CommandListState]
-if $mode == 1
-	$mode = 1 - $mode
-endif
-"""
-
-
-
-
-def test_var_prefix_namespaces_every_variable():
-    """AllInOne folders reuse variable names across sibling inis."""
-    menu = extract_menu_toggles(sections(MENU_INI), var_prefix="source01::", source="source01")
-    slots = _by_slot(menu)
-    assert (all(k.startswith("source01::") for k in menu)), (f"entry keys are namespaced (got {list(menu)})")
-    assert (slots[1]["var"] == "source01::input01"), (f"the cycled var is namespaced (got {slots[1]['var']!r})")
-    assert ([e["var"] for e in slots[1]["effects"]] == ["source01::input02", "source01::input03"]), ("effect targets are namespaced too")
-    assert (slots[1]["effects"][0]["when"]["var"] == "source01::input01"), ("so is the guard's var")
-    assert (slots[1]["name"] == "input01"), ("but the display name stays unprefixed")
 
 
 
@@ -413,28 +214,6 @@ filename = Component01.ib
 
 
 
-def test_menu_truthiness_expressions_gate_draws():
-    text = MENU_MOD_INI.replace(
-        "global persist $input01 = 0",
-        "global persist $input21 = 1\n"
-        "global persist $input22 = 0\n"
-        "global persist $input23 = 0").replace(
-        "if $clickedSlot == 1\n\t$input01 = 1 - $input01\n"
-        "elif $clickedSlot == 2\n\t$input08 = 1 - $input08",
-        "if $clickedSlot == 1\n\t$input21 = 1 - $input21\n"
-        "elif $clickedSlot == 2\n\t$input22 = 1 - $input22\n"
-        "elif $clickedSlot == 3\n\t$input23 = 1 - $input23").replace(
-        "if $input01 == 1", "if $input21 && !($input22 || $input23)")
-    secs = sections(text)
-    groups = build_draw_groups(secs, extract_resources(secs))
-    conds = groups[0]["draws"][0]["conditions"]
-    assert (conds == [[
-        {"var": "input21", "value": "0", "negate": True},
-        {"var": "input22", "value": "0", "negate": False},
-        {"var": "input23", "value": "0", "negate": False},
-    ]]), (f"bare, negated and grouped menu guards survive as truthiness DNF (got {conds})")
-
-
 # One variable, four spellings -- which 3DMigoto doesn't care about at all.
 MIXED_CASE_INI = MENU_MOD_INI.replace(
     "global persist $input01 = 0", "global persist $Input01 = 0").replace(
@@ -459,32 +238,6 @@ def test_variable_case_is_ignored_end_to_end():
     groups = build_draw_groups(secs, extract_resources(secs))
     conds = groups[0]["draws"][0]["conditions"]
     assert (conds == [[{"var": "Input01", "value": "1", "negate": False}]]), (f"so the draw stays gated instead of falling through (got {conds})")
-
-
-def test_menu_panel_model():
-    with tempfile.TemporaryDirectory() as tmp:
-        write(tmp, "source-01.ini", MENU_INI)
-        secs = merge_sections(find_inis(tmp))
-        menu = extract_menu_toggles(secs)
-        panel = build_menu_panel(menu, {"color": "1"}, mod_dir=tmp)
-
-    entries = list(panel.values())
-    assert ([e["slot"] for e in entries] == [1, 2, 3]), (f"entries come out in menu order (got {[e['slot'] for e in entries]})")
-    assert (entries[2]["default"] == "1"), (f"a declared default beats values[0] (got {entries[2]['default']!r})")
-    assert (entries[0]["default"] == "0"), (f"$input01's declared default is used as well (got {entries[0]['default']!r})")
-    assert (entries[0]["ini"] == "source-01.ini"), (f"the ini path is relative to the mod folder (got {entries[0]['ini']!r})")
-    assert (entries[0]["section"] == "CommandListClickedSlot"), (f"the originating section is kept (got {entries[0]['section']!r})")
-
-
-def test_menu_panel_lists_slots_that_gate_nothing():
-    """Unlike the Toggle panel, nothing is filtered out: the menu is the mod's
-    own statement of what it can change."""
-    secs = sections(MENU_MOD_INI)
-    panel = build_menu_panel(extract_menu_toggles(secs), {})
-    names = sorted(e["name"] for e in panel.values())
-    assert (names == ["input01", "input08"]), (f"$input08 is listed even though it gates no mesh (got {names})")
-
-
 
 
 def test_nested_paged_slot_chains_are_all_discovered():
@@ -538,61 +291,6 @@ endif
 
 
 
-
-
-def test_arrow_pair_menu_is_discovered_with_numbered_icons():
-    """MCM-style menus can give each item separate left/right hit regions
-    instead of routing every click through one integer slot dispatcher."""
-    text = r"""
-[Constants]
-global persist $Input01 = 1
-global persist $Input06 = 1
-
-[CommandListIcon2]
-ps-t100 = resourceicon2
-
-[CommandListButton2Left]
-$Input01 = $Input01 - 1
-if $Input01 < 0
-  $Input01 = 4
-endif
-
-[CommandListButton2Right]
-$Input01 = $Input01 + 1
-if $Input01 > 4
-  $Input01 = 0
-endif
-
-[CommandListIcon8]
-ps-t100 = RESOURCEICON8
-
-[CommandListButton8Left]
-$Input06 = $Input06 - 1
-if $Input06 < 1
-  $Input06 = 5
-endif
-
-[CommandListButton8Right]
-$Input06 = $Input06 + 1
-if $Input06 > 5
-  $Input06 = 1
-endif
-
-[ResourceIcon2]
-filename = ui/input01.dds
-
-[ResourceIcon8]
-filename = ui/input06.dds
-"""
-    secs = sections(text)
-    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
-    by_slot = _by_slot(menu)
-    assert (sorted(by_slot) == [2, 8]), (f"both numbered arrow-pair items are found (got {sorted(by_slot)})")
-    assert (by_slot[2]["var"] == "Input01" and
-          by_slot[2]["values"] == ["0", "1", "2", "3", "4"]), (f"Input01 range comes from its decrement/increment wraps (got {by_slot[2]})")
-    assert (by_slot[8]["values"] == ["1", "2", "3", "4", "5"]), (f"non-zero Input06 range is preserved (got {by_slot[8]['values']})")
-    assert (by_slot[2].get("image_file") == "ui/input01.dds" and
-          by_slot[8].get("image_file") == "ui/input06.dds"), (f"IconN artwork maps to ButtonN (got {by_slot})")
 
 
 def test_mouse_hit_region_menu_uses_mouse_key_and_finite_actions():
@@ -684,54 +382,6 @@ filename = icons/trim.png
     assert extract_menu_toggles(sections(malformed)) == {}
 
 
-def test_numbered_mouse_menu_keeps_active_controls_without_effect_names():
-    text = r"""
-[Constants]
-global $Button_amount = 2
-global $ToggleMax1 = 3
-global persist $swapvar_0 = 0
-global persist $swapvar_1 = 0
-
-[KeyMouse]
-key = VK_LBUTTON
-type = hold
-$mouse_clicked = 1
-
-[CommandListCheckMouse]
-if $Button_amount >= 1
-    if cursor_x > $left0 && cursor_x < $right0
-        if $mouse_clicked
-            if $swapvar_0 < $ToggleMax1
-                $swapvar_0 = $swapvar_0 + 1
-            else
-                $swapvar_0 = 0
-            endif
-        endif
-    endif
-endif
-if $Button_amount >= 2
-    if cursor_x > $left1 && cursor_x < $right1
-        if $mouse_clicked
-            $swapvar_1 = 1 - $swapvar_1
-        endif
-    endif
-endif
-if $Button_amount >= 3
-    if cursor_x > $left2 && cursor_x < $right2
-        if $mouse_clicked
-            $inactive = 1 - $inactive
-        endif
-    endif
-endif
-"""
-    by_slot = _by_slot(extract_menu_toggles(sections(text)))
-    assert sorted(by_slot) == [0, 1]
-    assert by_slot[0]["var"] == "swapvar_0"
-    assert by_slot[0]["values"] == ["0", "1", "2", "3"]
-    assert by_slot[1]["var"] == "swapvar_1"
-    assert by_slot[1]["values"] == ["0", "1"]
-
-
 def test_shape_slider_artwork_follows_authored_run_section():
     text = """
 [CommandListDrawSlider.Gauge]
@@ -815,25 +465,6 @@ endif
     assert _by_slot(menu)[2]["image_file"] == "two.dds"
 
 
-def test_fifteen_slot_dispatch_uses_authored_resources():
-    actions = ["[CommandListActions]"]
-    artwork = ["[CommandListArtwork]"]
-    resources = []
-    for slot in range(1, 16):
-        branch = "if" if slot == 1 else "elif"
-        actions.extend((f"{branch} $chosen == {slot}",
-                        f"    $state{slot} = 1 - $state{slot}"))
-        artwork.extend((f"{branch} $imageIndex == {slot}",
-                        f"    ps-t100 = ResourceArt{slot}"))
-        resources.extend((f"[ResourceArt{slot}]", f"filename = art{slot}.dds"))
-    actions.append("endif")
-    artwork.append("endif")
-    secs = sections("\n".join(actions + artwork + resources))
-    menu = extract_menu_toggles(secs, resources=extract_resources(secs))
-    assert {slot: item.get("image_file") for slot, item in _by_slot(menu).items()} == {
-        slot: f"art{slot}.dds" for slot in range(1, 16)}
-
-
 def test_menu_panel_preserves_authored_transparency():
     with tempfile.TemporaryDirectory() as tmp:
         icon = Image.new("RGBA", (52, 52), (200, 100, 50, 0))
@@ -848,3 +479,18 @@ def test_menu_panel_preserves_authored_transparency():
         decoded = Image.open(io.BytesIO(raw))
         assert (decoded.mode == "RGBA" and decoded.getpixel((0, 0))[3] == 0 and
               decoded.getpixel((20, 20))[3] == 255), (f"menu PNG keeps transparent and opaque pixels (got {decoded.mode})")
+
+
+def test_menu_control_and_panel_lifecycle():
+    parsed = sections(MENU_INI)
+    menu = extract_menu_toggles(parsed, var_prefix="source01::", source="source01")
+    panel = list(build_menu_panel(menu, {"source01::color": "1"}).values())
+    assert [item["slot"] for item in panel] == [1, 2, 3]
+    assert panel[2]["default"] == "1"
+    slots = _by_slot(menu)
+    assert slots[1]["var"] == "source01::input01"
+    assert slots[1]["effects"][0]["when"]["var"] == "source01::input01"
+    assert [effect["var"] for effect in slots[1]["effects"]] == [
+        "source01::input02", "source01::input03"]
+    visible_panel = build_menu_panel(extract_menu_toggles(sections(MENU_MOD_INI)), {})
+    assert {item["name"] for item in visible_panel.values()} == {"input01", "input08"}

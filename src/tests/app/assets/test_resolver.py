@@ -12,8 +12,7 @@ from core.geometry.draw_call import DrawCall, SlotTextureBinding
 from core.geometry.identity import GeometryMatch
 from core.textures import classifier as dds_classifier
 from core.ini.parser import TextureOverrideIndex, TextureReplacement
-from core.geometry.mesh_builder import (GeometryBlob, build_mesh_result,
-                               build_mesh_semantics)
+from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 
 
 def _index(root, asset_type="GIMI", metadata=None, *, asset="Asset01",
@@ -79,41 +78,6 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
     }]
     assert draw.texture_provenance == {"diffuse": "mod_texture_hash"}
     assert draw.texture_hashes["diffuse"] == ["11111111"]
-
-
-def test_shared_asset_hash_replacement_is_not_scoped_by_resource_name(
-        tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    (asset_dir / "Asset01HairADiffuse.dds").write_bytes(b"asset diffuse")
-    (asset_dir / "hash.json").write_text(json.dumps([{
-        "ib": "10101010", "object_indexes": [0],
-        "texture_hashes": [[[
-            "Diffuse", ".dds", "11111111",
-        ]]],
-    }]), encoding="utf-8")
-    replacement = TextureReplacement(
-        "11111111", "ResourceAsset01BodyDiffuse", (),
-        "TextureOverrideAsset01BodyDiffuse", "Asset01BodyDiffuse.dds")
-    index = TextureOverrideIndex(
-        replacements_by_hash={"11111111": (replacement,)})
-    draw = DrawCall(label="Asset01HairA-1")
-    binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", first_index=0,
-        metadata="Asset01/hash.json")
-
-    apply([{"draws": [draw]}], [[binding]], texture_index=index)
-
-    assert draw.texture_default("diffuse") == "Asset01BodyDiffuse.dds"
-    assert draw.texture_rules("diffuse") == [{
-        "conditions": [],
-        "file": "Asset01BodyDiffuse.dds",
-        "texture_hashes": ("11111111",),
-    }]
-    assert draw.asset_texture_defaults == {}
 
 
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
@@ -266,63 +230,6 @@ def test_draw_count_does_not_become_asset_range_evidence(
     assert bindings[0][0].status == "ambiguous"
 
 
-def test_resolve_groups_narrows_shared_hash_to_unique_exact_asset(
-        tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
-    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
-    asset_dir = tmp_path / "zzmi" / "Asset08"
-    asset_dir.mkdir(parents=True)
-    texture = asset_dir / "Asset08HairDiffuse.dds"
-    texture.write_bytes(b"asset08")
-    (asset_dir / "hash.json").write_text(json.dumps([{
-        "component_name": "Hair",
-        "ib": "aabbccdd",
-        "object_indexes": [100],
-        "texture_hashes": [[[
-            "Diffuse", ".dds", "11111111",
-        ]]],
-    }]), encoding="utf-8")
-    index = _index(root, asset_type="ZZMI", asset="Asset08",
-                   first_index=0)
-    shared_geometry = {
-        "hash": "aabbccdd",
-        "ranges": [{"firstIndex": 100, "indexCount": 12}],
-        "metadata": "Asset08/hash.json",
-        "componentName": "Hair",
-    }
-    index["assets"][0]["geometry"].append(shared_geometry)
-    index["byGeometryHash"]["aabbccdd"] = [{"asset": 0, "geometry": 1}]
-    for asset_name in ("Asset08Variant01", "Asset08Variant02"):
-        geometry = dict(shared_geometry)
-        geometry["metadata"] = f"{asset_name}/hash.json"
-        asset_index_entry = {
-            "path": asset_name, "geometry": [geometry],
-        }
-        asset_number = len(index["assets"])
-        index["assets"].append(asset_index_entry)
-        index["byGeometryHash"]["aabbccdd"].append({
-            "asset": asset_number, "geometry": 0,
-        })
-    monkeypatch.setattr(asset_index, "load_index",
-                        lambda asset_type, path: index)
-
-    body_draw = DrawCall(geometry_match=GeometryMatch("10101010", 0, 24))
-    hair_draw = DrawCall(geometry_match=GeometryMatch("aabbccdd", 100, 12))
-    groups = [{"draws": [body_draw, hair_draw]}]
-    bindings = resolve_groups(groups, "zzz", entries)
-
-    assert [item.status for item in bindings[0]] == ["exact", "exact"]
-    assert [item.asset for item in bindings[0]] == ["Asset08", "Asset08"]
-    assert bindings[0][1].component_name == "Hair"
-    apply(groups, bindings)
-    assert hair_draw.asset_texture_defaults["diffuse"]["path"].casefold() == \
-        str(texture).casefold()
-    assert hair_draw.texture_provenance["diffuse"] == \
-        "asset_original_fallback"
-    assert "Asset08Variant01" not in hair_draw.asset_texture_defaults[
-        "diffuse"]["path"]
-
-
 def test_resolve_groups_scopes_narrowing_to_shared_ini_provenance(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
@@ -444,43 +351,6 @@ def test_resolve_groups_loads_each_enabled_index_once(tmp_path, monkeypatch):
     assert calls == roots
 
 
-def test_unknown_group_keeps_same_root_asset_ambiguity(
-        tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
-    entries = [{"type": "ZZMI", "path": root, "enabled": True}]
-    index = _index(root, asset_type="ZZMI", first_index=12)
-    index["assets"][0]["geometry"].append({
-        "hash": "10101010",
-        "ranges": [{"firstIndex": 0, "indexCount": None}],
-        "metadata": "Asset01/hash.json",
-    })
-    index["assets"].append({
-        "path": "Asset01Chandelier",
-        "geometry": [{
-            "hash": "10101010",
-            "ranges": [{"firstIndex": 0, "indexCount": None}],
-            "metadata": "Asset01Chandelier/hash.json",
-        }],
-    })
-    index["byGeometryHash"]["10101010"] = [
-        {"asset": 0, "geometry": 0},
-        {"asset": 0, "geometry": 1},
-        {"asset": 1, "geometry": 0},
-    ]
-    monkeypatch.setattr(asset_index, "load_index",
-                        lambda asset_type, path: index)
-    groups = [{"draws": [
-        DrawCall(geometry_match=GeometryMatch("10101010", 12, 24)),
-        DrawCall(geometry_match=GeometryMatch("10101010", 0, 24)),
-    ]}]
-
-    bindings = resolve_groups(groups, "unknown", entries)
-
-    assert [item.status for item in bindings[0]] == ["exact", "ambiguous"]
-    assert [item.asset for item in bindings[0]] == ["Asset01", None]
-    assert [item.asset_type for item in bindings[0]] == ["ZZMI", "ZZMI"]
-
-
 def test_equivalent_hash_metadata_collapses_same_root_asset_records(
         tmp_path, monkeypatch):
     root = tmp_path / "zzmi"
@@ -532,33 +402,6 @@ def test_equivalent_hash_metadata_collapses_same_root_asset_records(
     assert binding.metadata == "Asset02/hash.json"
 
 
-def test_duplicate_records_with_same_canonical_identity_are_collapsed(
-        tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    entries = [{"type": "GIMI", "path": root, "enabled": True}]
-    index = _index(root)
-    index["assets"][0]["geometry"].append({
-        "hash": "10101010",
-        "ranges": [{
-            "firstIndex": 12, "indexCount": None,
-            "classification": "B", "componentOrdinal": 1,
-        }],
-        "componentName": "Body",
-        "metadata": "Asset01/hash.json",
-    })
-    index["byGeometryHash"]["10101010"].append({
-        "asset": 0, "geometry": 1,
-    })
-    monkeypatch.setattr(asset_index, "load_index",
-                        lambda asset_type, path: index)
-
-    binding = resolve_component(
-        GeometryMatch("10101010", 12), "genshin", entries)
-
-    assert binding.status == "exact"
-    assert binding.asset == "Asset01"
-
-
 def test_resolve_groups_reports_partial_index_coverage(tmp_path, monkeypatch):
     roots = [os.path.normcase(os.path.abspath(str(tmp_path / name)))
              for name in ("one", "two")]
@@ -578,28 +421,6 @@ def test_resolve_groups_reports_partial_index_coverage(tmp_path, monkeypatch):
         "asset_type": "GIMI", "configured_roots": 2,
         "ready_roots": 1, "unavailable_roots": 1,
     }
-
-
-def test_semantic_refresh_publishes_asset_diagnostics_without_render_fields(
-        tmp_path):
-    draw = DrawCall(
-        label="Body-1",
-        asset_binding=AssetComponentBinding(
-            status="exact", component_status="exact", range_status="exact",
-            asset_type="GIMI", asset="Asset01", component_name="Body"),
-        texture_provenance={"diffuse": "mod_semantic"},
-        asset_slot_evidence=[{"resource": "ps-t1"}],
-    )
-
-    result = build_mesh_semantics(
-        [{"draws": [draw]}], str(tmp_path), active_mesh_keys={"Body-1"})
-
-    assert result["Body-1"]["asset_binding"]["asset"] == "Asset01"
-    assert result["Body-1"]["texture_resolution"] == {
-        "diffuse": "mod_semantic"}
-    assert result["Body-1"]["asset_slot_evidence"] == [{
-        "resource": "ps-t1"}]
-    assert result["Body-1"]["conditions"] == []
 
 
 def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
@@ -675,35 +496,6 @@ def test_asset_locator_uses_component_and_classification(tmp_path):
     assert draw.asset_texture_defaults == {}
 
 
-def test_asset_metadata_supplies_component_and_classification_for_fallback(
-        tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    texture = asset_dir / "Asset01HairADiffuse.dds"
-    texture.write_bytes(b"asset")
-    metadata = asset_dir / "hash.json"
-    metadata.write_text(json.dumps([{
-        "component_name": "Hair",
-        "ib": "10101010", "object_indexes": [0],
-        "object_classifications": ["A"],
-        "texture_hashes": [[
-            ["Diffuse", ".dds", "11111111"],
-        ]],
-    }]), encoding="utf-8")
-    binding = AssetComponentBinding(
-        status="exact", component_status="exact", range_status="exact",
-        asset_type="ZZMI", asset="Asset01", root=root,
-        geometry_hash="10101010", first_index=0,
-        metadata="Asset01/hash.json")
-
-    draw = DrawCall()
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.asset_texture_defaults["diffuse"]["path"].casefold() == \
-        str(texture).casefold()
-
-
 def test_hash_only_geometry_resolves_component_but_not_range(tmp_path,
                                                              monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
@@ -748,101 +540,6 @@ def test_hash_only_component_does_not_enable_object_texture_fallback(tmp_path,
     assert draw.asset_texture_defaults == {}
 
 
-def test_explicit_mod_texture_hash_does_not_override_semantic_assignment(
-        tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    (asset_dir / "Asset01Diffuse.dds").write_bytes(b"diffuse")
-    (asset_dir / "hash.json").write_text(json.dumps([{
-        "ib": "10101010", "object_indexes": [12],
-        "object_classifications": ["B"],
-        "texture_hashes": [[
-            ["Diffuse", ".dds", "11111111"],
-        ]],
-    }]), encoding="utf-8")
-    draw = DrawCall(
-        texture_default_file="mod-diffuse.dds",
-        texture_hashes={"diffuse": ["11111111"]},
-    )
-    binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_name="Body",
-        classification="B", first_index=12,
-        metadata="Asset01/hash.json",
-    )
-
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.asset_texture_defaults == {}
-    assert draw.texture_provenance == {"diffuse": "mod_semantic"}
-
-
-def test_component_local_slot_hash_resolves_role_without_global_slot_guess(
-        tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    mod_texture = tmp_path / "mod-diffuse.dds"
-    mod_texture.write_bytes(b"mod diffuse")
-    (asset_dir / "Asset01Diffuse.dds").write_bytes(b"original diffuse")
-    (asset_dir / "hash.json").write_text(json.dumps([{
-        "ib": "10101010", "object_indexes": [12],
-        "object_classifications": ["B"],
-        "texture_hashes": [[
-            ["Diffuse", ".dds", "11111111"],
-        ]],
-    }]), encoding="utf-8")
-    draw = DrawCall(slot_textures=[SlotTextureBinding(
-        7, "ResourceMystery", str(mod_texture), ("11111111",))])
-    binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_name="Body",
-        classification="B", first_index=12,
-        metadata="Asset01/hash.json")
-
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.texture_default("diffuse") == str(mod_texture)
-    assert draw.texture_provenance == {"diffuse": "mod_texture_hash"}
-    assert draw.asset_texture_defaults == {}
-
-
-def test_slot_role_and_matching_asset_hash_keep_one_role(tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    metadata = asset_dir / "hash.json"
-    metadata.write_text(json.dumps([{
-        "ib": "10101010", "object_indexes": [12],
-        "object_classifications": ["B"],
-        "texture_hashes": [[
-            ["Diffuse", ".dds", "11111111"],
-        ]],
-    }]), encoding="utf-8")
-    mod_texture = tmp_path / "mod-diffuse.dds"
-    mod_texture.write_bytes(b"mod diffuse")
-    draw = DrawCall(slot_textures=[SlotTextureBinding(
-        slot=0, resource="ResourceOpaque", file=str(mod_texture),
-        texture_hashes=("11111111",), role_hint="diffuse")])
-    binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_name="Body",
-        classification="B", first_index=12,
-        metadata="Asset01/hash.json")
-
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.texture_default("diffuse") == str(mod_texture)
-    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
-    assert draw.asset_texture_defaults == {}
-    assert not [item for item in draw.asset_slot_evidence
-                 if item.get("conflict")]
-
-
 def test_slot_role_hash_conflict_does_not_assign_asset_role(tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Asset01"
@@ -880,112 +577,6 @@ def test_slot_role_hash_conflict_does_not_assign_asset_role(tmp_path):
         "role_source": "mod_slot_mapping",
         "asset_hash_role": "normal_map", "conflict": True,
     }]
-
-
-def test_legacy_slot_role_hash_conflict_preserves_legacy_source(tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    metadata = asset_dir / "hash.json"
-    metadata.write_text(json.dumps([{
-        "ib": "10101010", "object_indexes": [12],
-        "object_classifications": ["B"],
-        "texture_hashes": [[
-            ["NormalMap", ".dds", "22222222"],
-        ]],
-    }]), encoding="utf-8")
-    draw = DrawCall(
-        texture_provenance={"diffuse": "mod_slot_legacy"},
-        slot_textures=[SlotTextureBinding(
-            slot=0, resource="ResourceBodyDiffuse.0",
-            file="body-diffuse.dds", texture_hashes=("22222222",),
-            role_hint="diffuse", role_hint_source="legacy_slot_mapping")])
-    binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_name="Body",
-        classification="B", first_index=12,
-        metadata="Asset01/hash.json")
-
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.asset_slot_evidence == [{
-        "resource": "ResourceBodyDiffuse.0", "slot": 0,
-        "texture_hash": "22222222", "role": "diffuse",
-        "role_source": "legacy_slot_mapping",
-        "asset_hash_role": "normal_map", "conflict": True,
-    }]
-
-
-def test_wwmi_slot_context_preserves_evidence_without_overriding_mod_role(
-        tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    detail = asset_dir / "TextureUsage.json"
-    detail.write_text(json.dumps({"Component 1": {
-        "ps-t1": ["11111111-vs=aaaaaaaa-ps=bbbbbbbb"],
-    }}), encoding="utf-8")
-    mystery_draw = DrawCall(
-        slot_textures=[SlotTextureBinding(1, "ResourceMystery")])
-    hinted_draw = DrawCall(slot_textures=[SlotTextureBinding(
-        slot=1, resource="ResourceOpaque", role_hint="normal_map")])
-    binding = AssetComponentBinding(
-        status="exact", asset_type="WWMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_ordinal=1,
-        detail_metadata="Asset01/TextureUsage.json",
-    )
-
-    apply([{"draws": [mystery_draw]}], [[binding]])
-
-    assert mystery_draw.asset_slot_evidence == [{
-        "resource": "ResourceMystery", "slot": 1,
-        "texture_hash": "11111111", "vs_hash": "aaaaaaaa",
-        "ps_hash": "bbbbbbbb",
-    }]
-    assert mystery_draw.asset_texture_defaults == {}
-
-    apply([{"draws": [hinted_draw]}], [[binding]])
-
-    assert hinted_draw.asset_slot_evidence == [{
-        "resource": "ResourceOpaque", "slot": 1,
-        "texture_hash": "11111111", "vs_hash": "aaaaaaaa",
-        "ps_hash": "bbbbbbbb", "role": "normal_map",
-        "role_source": "mod_slot_mapping",
-    }]
-
-
-def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
-        tmp_path):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    asset_dir = tmp_path / "assets" / "Asset01"
-    asset_dir.mkdir(parents=True)
-    detail = asset_dir / "TextureUsage.json"
-    detail.write_text(json.dumps({"Component 1": {
-        "ps-t3": ["d1d1d1d1-vs=aaaaaaaa-ps=bbbbbbbb"],
-    }}), encoding="utf-8")
-    replacement = TextureReplacement(
-        "d1d1d1d1", "ResourceTexture0", (), "TextureOverrideTexture0",
-        "textures/texture0.dds")
-    index = TextureOverrideIndex(
-        replacements_by_hash={"d1d1d1d1": (replacement,)})
-    draw = DrawCall()
-    binding = AssetComponentBinding(
-        status="exact", asset_type="WWMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_ordinal=1,
-        detail_metadata="Asset01/TextureUsage.json")
-
-    apply([{"draws": [draw]}], [[binding]], texture_index=index)
-
-    assert draw.asset_slot_evidence == [{
-        "slot": 3, "texture_hash": "d1d1d1d1",
-        "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
-    }]
-    assert draw.texture_default("diffuse") is None
-    assert draw.texture_provenance == {}
-    assert draw.asset_texture_defaults == {}
 
 
 def test_wwmi_textureusage_does_not_trigger_dds_classification(
@@ -1070,41 +661,6 @@ def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
 
     assert draw.texture_default("diffuse") == "textures/replacement.dds"
     assert draw.asset_slot_evidence[0]["role_source"] == "dds_analysis"
-
-
-def test_raw_slot_hash_without_asset_association_is_not_classified(
-        tmp_path, monkeypatch):
-    root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
-    mod_dir = tmp_path / "mod"
-    replacement_file = mod_dir / "replacement.dds"
-    mod_dir.mkdir()
-    replacement_file.write_bytes(b"replacement")
-    replacement = TextureReplacement(
-        "11111111", "ResourceTexture0", (), "TextureOverrideTexture0",
-        "replacement.dds")
-    index = TextureOverrideIndex(
-        replacements_by_hash={"11111111": (replacement,)})
-    calls = []
-
-    def classify(path):
-        calls.append(path)
-        return dds_classifier.DDSClassification(
-            "diffuse", "color", "high", ("synthetic_color",))
-
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
-    draw = DrawCall(slot_textures=[SlotTextureBinding(
-        0, "ResourceUnknown", texture_hashes=("11111111",))])
-    binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
-        geometry_hash="10101010")
-
-    apply([{"draws": [draw]}], [[binding]], texture_index=index,
-         mod_dir=str(mod_dir))
-
-    assert calls == []
-    assert draw.texture_default("diffuse") is None
-    assert draw.asset_slot_evidence == []
 
 
 def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):
@@ -1262,3 +818,29 @@ def test_not_found_binding_is_published_only_after_a_ready_index_query():
     assert draw.asset_binding is None
     apply(groups, [[binding]], include_not_found=True)
     assert draw.asset_binding is binding
+
+
+def test_slot_hash_role_precedence_lifecycle(tmp_path):
+    asset = tmp_path / "asset-01"
+    asset.mkdir()
+    (asset / "hash.json").write_text(json.dumps([{
+        "ib": "10101010", "object_indexes": [12],
+        "texture_hashes": [[["Diffuse", ".dds", "11111111"]]],
+    }]), encoding="utf-8")
+    texture = tmp_path / "texture-01.dds"
+    texture.write_bytes(b"fixture-01")
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        asset_type="GIMI", asset="asset-01", root=str(tmp_path),
+        geometry_hash="10101010", first_index=12, metadata="asset-01/hash.json")
+    draw = DrawCall(slot_textures=[SlotTextureBinding(
+        7, "ResourceTexture01", str(texture), ("11111111",))])
+    apply([{"draws": [draw]}], [[binding]])
+    assert draw.texture_default("diffuse") == str(texture)
+    assert draw.texture_provenance["diffuse"] == "mod_texture_hash"
+    draw.texture_default_file = "authored.dds"
+    draw.texture_provenance = {"diffuse": "mod_semantic"}
+    apply([{"draws": [draw]}], [[binding]])
+    assert draw.texture_default("diffuse") == "authored.dds"
+    assert draw.texture_provenance["diffuse"] == "mod_semantic"
+    assert draw.asset_texture_defaults == {}

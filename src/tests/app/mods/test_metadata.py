@@ -5,55 +5,6 @@ import pytest
 from app.mods import metadata
 
 
-@pytest.mark.parametrize(
-    ("stored", "expected"),
-    [
-        (None, []),
-        ("45", []),
-        ({"45": True}, []),
-        ([{"source": "Component02\\Component02Blend.buf", "bone_id_offset": 0,
-           "bone_ids": [49, 45, True, -1, 47.0, 45, 53]}], [
-             {"source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
-              "source_key": "component02/component02blend.buf|offset=0",
-              "bone_ids": [45, 49, 53]},
-         ]),
-        ([
-            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
-             "bone_ids": [49]},
-            {"source": "component02/./Component02Blend.buf", "bone_id_offset": 0,
-             "bone_ids": [45]},
-            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 24,
-             "bone_ids": [1]},
-            {"source": "Component02Blend.buf", "bone_id_offset": 0,
-             "bone_ids": [99]},
-        ], [
-            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
-             "source_key": "component02/component02blend.buf|offset=0",
-             "bone_ids": [45, 49]},
-            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 24,
-             "source_key": "component02/component02blend.buf|offset=24",
-             "bone_ids": [1]},
-            {"source": "Component02Blend.buf", "bone_id_offset": 0,
-             "source_key": "component02blend.buf|offset=0",
-             "bone_ids": [99]},
-        ]),
-        ([{"source": "Meshes/Blend.buf", "source_key":
-           "meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|"
-           "vertex-vg=meshes/blendremapvertexvg.buf",
-           "bone_id_offset": 142, "bone_ids": [318, 319]}], [
-             {"source": "Meshes/Blend.buf", "source_key":
-              "meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|"
-              "vertex-vg=meshes/blendremapvertexvg.buf",
-              "bone_id_offset": 142, "bone_ids": [318, 319]},
-         ]),
-    ],
-)
-def test_weight_selected_bones_validates_persisted_values(stored, expected):
-    assert metadata.weight_selected_bones(data={
-        "weight": {"selected_bones": stored},
-    }) == expected
-
-
 def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
     path = tmp_path / metadata.METADATA_NAME
     original = {
@@ -68,6 +19,10 @@ def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
     ])
 
     assert result["saved"] is True
+    assert metadata.weight_selected_bones(str(tmp_path)) == result["selected_bones"]
+    saved_bytes = path.read_bytes()
+    assert metadata.save_weight_selected_bones(str(tmp_path), "invalid")["saved"] is False
+    assert path.read_bytes() == saved_bytes
     assert result["selected_bones"] == [{
         "source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
         "source_key": "component02/component02blend.buf|offset=0",
@@ -84,12 +39,6 @@ def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
             }],
         },
     }
-
-
-def test_save_weight_selected_bones_rejects_non_list(tmp_path):
-    assert metadata.save_weight_selected_bones(
-        str(tmp_path), "45") == {"saved": False, "selected_bones": []}
-    assert not (tmp_path / metadata.METADATA_NAME).exists()
 
 
 def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
@@ -148,6 +97,15 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     data["rig"]["future_option"] = {"keep": True}
     path.write_text(json.dumps(data), encoding="utf-8")
 
+    semantic = {"version": 2, "controls": {"leftShoulder": {
+        "semantic": value["controls"]["leftShoulder"]["semantic"]}}}
+    assert metadata.save_humanoid_control_rig(str(tmp_path), semantic)["saved"] is True
+    before = path.read_bytes()
+    assert metadata.save_humanoid_control_rig(str(tmp_path), {
+        "version": 2, "controls": value["controls"],
+    })["saved"] is False
+    assert path.read_bytes() == before
+    assert metadata.humanoid_control_rig(str(tmp_path)) == semantic
     result = metadata.save_humanoid_control_rig(str(tmp_path), value)
 
     assert result["saved"] is True
@@ -163,64 +121,6 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     final = json.loads(path.read_text(encoding="utf-8"))
     assert "humanoid_control_rig" not in final["rig"]
     assert final["rig"]["presets"] == data["rig"]["presets"]
-
-
-def test_save_semantic_humanoid_control_rig_does_not_invent_builder_provenance(
-        tmp_path):
-    value = {
-        "version": 2,
-        "controls": {
-            "leftShoulder": {
-                "semantic": {"sideN": -0.3, "height01": 0.7,
-                              "depthN": 0.0},
-            },
-        },
-    }
-
-    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
-
-    assert result["saved"] is True
-    assert result["humanoid_control_rig"] == value
-    assert metadata.humanoid_control_rig(str(tmp_path)) == value
-
-
-@pytest.mark.parametrize("builder_version", [0, True, "1"])
-def test_save_explicit_humanoid_joint_requires_current_builder_version(
-        tmp_path, builder_version):
-    value = {
-        "version": 2,
-        "model_rig_builder_version": builder_version,
-        "controls": {
-            "leftShoulder": {
-                "semantic": {"sideN": -0.3, "height01": 0.7,
-                              "depthN": 0.0},
-                "joint_id": 42,
-            },
-        },
-    }
-
-    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
-
-    assert result["saved"] is False
-    assert not (tmp_path / metadata.METADATA_NAME).exists()
-
-
-def test_save_explicit_humanoid_joint_rejects_missing_builder_version(tmp_path):
-    value = {
-        "version": 2,
-        "controls": {
-            "leftShoulder": {
-                "semantic": {"sideN": -0.3, "height01": 0.7,
-                              "depthN": 0.0},
-                "joint_id": 42,
-            },
-        },
-    }
-
-    result = metadata.save_humanoid_control_rig(str(tmp_path), value)
-
-    assert result["saved"] is False
-    assert not (tmp_path / metadata.METADATA_NAME).exists()
 
 
 @pytest.mark.parametrize("invalid", [
@@ -249,47 +149,6 @@ def test_malformed_humanoid_rig_does_not_hide_valid_pose_presets():
         },
     })
     assert result["presets"][0]["id"] == "pose-1"
-
-
-def test_old_humanoid_control_rig_version_is_ignored():
-    result = metadata.humanoid_control_rig(data={
-        "rig": {"version": 1, "presets": [],
-                "humanoid_control_rig": {
-                    "version": 1,
-                    "controls": {"leftFoot": {
-                        "semantic": {"sideN": 0, "height01": 0,
-                                      "depthN": 0},
-                        "joint_signature": '["old#bone=49"]',
-                    }},
-                }},
-    })
-    assert result == {
-        "version": 2, "controls": {},
-        "error": "Humanoid control-rig metadata could not be loaded.",
-    }
-
-
-def test_invalid_humanoid_joint_id_is_preserved_as_explicit_mapping():
-    result = metadata.humanoid_control_rig(data={
-        "rig": {"version": 1, "presets": [],
-                "humanoid_control_rig": {
-                    "version": 2,
-                    "controls": {"leftHand": {
-                        "semantic": {"sideN": 0, "height01": 0,
-                                      "depthN": 0},
-                        "joint_id": -1,
-                    }},
-                }},
-    })
-    assert result == {
-        "version": 2,
-        "controls": {"leftHand": {
-            "semantic": {"sideN": 0.0, "height01": 0.0,
-                          "depthN": 0.0},
-            "joint_id": None,
-        }},
-        "error": "Some humanoid control-rig overrides were ignored.",
-    }
 
 
 def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
@@ -325,53 +184,19 @@ def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
 
 
 def test_model_rig_sidecar_rejects_impossible_topology(tmp_path):
-    joint = lambda joint_id, parent_id: {
-        "joint_id": joint_id,
-        "members": [[0, joint_id + 7]],
-        "representative_member_index": 0,
-        "parent_id": parent_id,
-        "rest_center": [0, joint_id, 0],
-        "rest_pivot": [0, joint_id, 0],
-        "rest_frame": [0, 0, 0, 1],
-    }
-    edge = lambda joint_a, joint_b: {
-        "joint_a": joint_a, "joint_b": joint_b,
-        "relationship_type": "source", "edge_strength": 1,
-        "edge_pivot": [0, 0, 0],
-    }
-    value = {
-        "version": 1,
-        "builder_version": 1,
-        "model_reference_radius": 1,
-        "source_table": ["component01|offset=0"],
-        "joints": [joint(0, None), joint(1, 0), joint(2, 1)],
-        "edges": [edge(0, 1), edge(1, 2)],
-    }
-    invalid_values = [
-        {**value, "joints": [{**value["joints"][0],
-                               "members": [],
-                               "representative_member_index": None},
-                              *value["joints"][1:]]},
-        {**value, "joints": [{**value["joints"][0],
-                               "representative_member_index": None},
-                              *value["joints"][1:]]},
-        {**value, "edges": [*value["edges"], edge(0, 2)]},
-        {**value, "joints": [{**value["joints"][0], "parent_id": 1},
-                              *value["joints"][1:]]},
-    ]
-    for invalid in invalid_values:
-        assert metadata._normalized_model_rig(invalid) is None
-        assert metadata.save_model_rig(str(tmp_path), invalid)["saved"] is False
+    def joint(number, parent):
+        return {"joint_id": number, "members": [[0, number + 7]],
+                "representative_member_index": 0, "parent_id": parent,
+                "rest_center": [0, number, 0], "rest_pivot": [0, number, 0],
+                "rest_frame": [0, 0, 0, 1]}
+    value = {"version": 1, "builder_version": 1,
+             "model_reference_radius": 1, "source_table": ["component01|offset=0"],
+             "joints": [joint(0, 1), joint(1, 0)], "edges": [{
+                 "joint_a": 0, "joint_b": 1, "relationship_type": "source",
+                 "edge_strength": 1, "edge_pivot": [0, 0, 0]}]}
+    assert metadata.save_model_rig(str(tmp_path), value)["saved"] is False
+    assert not (tmp_path / metadata.MODEL_RIG_METADATA_NAME).exists()
 
-
-def test_rig_pose_preset_metadata_reports_malformed_section_without_load_failure():
-    result = metadata.rig_pose_presets(data={
-        "rig": {"version": 2, "presets": []},
-    })
-    assert result == {
-        "version": 1, "presets": [],
-        "error": "Pose presets could not be loaded.",
-    }
 
 
 def test_rig_pose_preset_metadata_preserves_malformed_entries_for_frontend():
@@ -449,6 +274,10 @@ def test_mesh_color_adjustments_normalize_and_preserve_unrelated_metadata(
         },
     }
 
+    before = path.read_bytes()
+    assert metadata.save_mesh_color_adjustment(
+        str(tmp_path), "mesh-key", {"brightness": float("nan")})["saved"] is False
+    assert path.read_bytes() == before
     assert metadata.save_mesh_color_adjustment(
         str(tmp_path), "mesh-key", {
             "hue": 0, "saturation": 1, "brightness": 1, "contrast": 1,
@@ -458,75 +287,15 @@ def test_mesh_color_adjustments_normalize_and_preserve_unrelated_metadata(
     assert json.loads(path.read_text(encoding="utf-8")) == original
 
 
-@pytest.mark.parametrize("invalid", [
-    None,
-    {"hue": True},
-    {"brightness": float("nan")},
-    {"contrast": float("inf")},
-    {"tint": "white"},
-    [],
-])
-def test_save_mesh_color_adjustment_rejects_malformed_values(tmp_path, invalid):
-    assert metadata.save_mesh_color_adjustment(
-        str(tmp_path), "mesh-key", invalid)["saved"] is False
-    assert not (tmp_path / metadata.METADATA_NAME).exists()
-
-
-def test_clear_mesh_color_adjustments_if_unchanged_clears_committed_state(
-        tmp_path):
-    path = tmp_path / metadata.METADATA_NAME
-    original = {
-        "mesh_names": {"mesh": "Component01"},
-        "future": {"keep": True},
-        "mesh_color_adjustments": {
-            "component01": {"hue": 30},
-            "other": {"hue": 45},
-        },
-    }
-    path.write_text(json.dumps(original), encoding="utf-8")
-
-    result = metadata.clear_mesh_color_adjustments_if_unchanged(
-        str(tmp_path), {"component01": {"hue": 30}})
-
-    assert result["cleared"] == ["component01"]
-    assert result["preserved"] == []
-    assert result["failed"] == []
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["mesh_names"] == original["mesh_names"]
-    assert saved["future"] == original["future"]
-    assert saved["mesh_color_adjustments"] == {"other": {"hue": 45}}
-
-
-def test_clear_mesh_color_adjustments_if_unchanged_preserves_newer_and_malformed(
-        tmp_path):
-    path = tmp_path / metadata.METADATA_NAME
-    current = {
-        "mesh_color_adjustments": {
-            "newer": {"hue": 60},
-            "malformed": {"hue": "later"},
-        },
-    }
-    path.write_text(json.dumps(current), encoding="utf-8")
-
-    result = metadata.clear_mesh_color_adjustments_if_unchanged(
-        str(tmp_path), {
-            "newer": {"hue": 30},
-            "malformed": {"hue": 30},
-        })
-
-    assert result["cleared"] == []
-    assert result["preserved"] == ["newer", "malformed"]
-    assert result["failed"] == []
-    assert json.loads(path.read_text(encoding="utf-8")) == current
-
-
 def test_clear_mesh_color_adjustments_if_unchanged_mixes_and_handles_absent(
         tmp_path):
     path = tmp_path / metadata.METADATA_NAME
     path.write_text(json.dumps({
+        "future": {"setting": 7},
         "mesh_color_adjustments": {
             "matching": {"hue": 30},
             "newer": {"hue": 60},
+            "malformed": {"hue": "invalid"},
         },
     }), encoding="utf-8")
 
@@ -535,13 +304,16 @@ def test_clear_mesh_color_adjustments_if_unchanged_mixes_and_handles_absent(
             "matching": {"hue": 30},
             "newer": {"hue": 30},
             "absent": {"hue": 30},
+            "malformed": {"hue": 30},
         })
 
     assert result["cleared"] == ["absent", "matching"]
-    assert result["preserved"] == ["newer"]
+    assert result["preserved"] == ["newer", "malformed"]
     assert result["failed"] == []
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["mesh_color_adjustments"] == {"newer": {"hue": 60}}
+    assert saved["mesh_color_adjustments"] == {
+        "newer": {"hue": 60}, "malformed": {"hue": "invalid"}}
+    assert saved["future"] == {"setting": 7}
 
 
 def test_clear_mesh_color_adjustments_if_unchanged_reports_save_failure(

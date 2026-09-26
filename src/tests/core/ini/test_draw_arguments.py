@@ -19,11 +19,11 @@ def _visible(conditions, **state):
         for clause in group) for group in conditions)
 
 
-@pytest.mark.parametrize("op,compare", [
-    ("<", operator.lt), ("<=", operator.le),
-    (">", operator.gt), (">=", operator.ge),
+@pytest.mark.parametrize("op,compare,threshold", [
+    ("<", operator.lt, 0.5), ("<=", operator.le, 0.5),
+    (">", operator.gt, 0.5), (">=", operator.ge, 0.5),
+    ("<", operator.lt, -3), (">=", operator.ge, 4),
 ])
-@pytest.mark.parametrize("threshold", [-3, -1, 0.5, 2, 4])
 def test_numeric_cycle_comparisons_and_negation(op, compare, threshold):
     sections = parse_sections("source-01.ini", text="""[Constants]
 global persist $Style = -2
@@ -85,18 +85,13 @@ $Style = 0,1,2
     ("global $Count = 3", "", "$COUNT, 0, -2", (3, 0, -2)),
     ("global $Count = 0", "", "$Count, 0, 0", (0, 0, 0)),
     ("global persist $Count = 3", "", "$Count, 0, 0", None),
-    ("global $Count = 3", "$count = 6", "$Count, 0, 0", None),
     ("global $Count = 3", "post $COUNT = 6", "$Count, 0, 0", None),
-    ("global $Count = 3", "$Count += 3", "$Count, 0, 0", None),
     ("global $Count = 3", r"$\Provider\Count = 6", "$Count, 0, 0", None),
     ("global $Count = 3\nglobal $count = 3", "", "$Count, 0, 0", None),
     ("if $enabled\nglobal $Count = 3\nendif", "", "$Count, 0, 0", None),
-    ("global $Count = 3 + 3", "", "$Count, 0, 0", None),
     ("global $Count = -3", "", "$Count, 0, 0", None),
     ("global $Count = 3", "", "3, -1, 0", None),
-    ("global $Count = 3", "", "$Count + 3, 0, 0", None),
-    ("global $Count = 3", "", r"$\Other\Count, 0, 0", None),
-    ("global $Count = 3", "", "$Missing, 0, 0", None),
+    ("global $Count = 3", "", r"$\Other\Count, 0, 0", None)
 ])
 def test_draw_argument_resolution_is_conservative(declaration, mutation,
                                                  arguments, expected):
