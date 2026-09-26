@@ -196,3 +196,27 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
     assert request['sources'] == mesh['sources']
     assert page.evaluate('window.__bridge.pending["fixture-01"]')
     assert bridge_calls(page, 'export') == []
+
+
+def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
+    page = viewer({'fixture-01': model_payload()})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.locator('.draw-item').click(button='right')
+    menu = page.locator('.mesh-context-menu')
+    assert menu.locator('[data-i18n="mesh.separateLooseParts"]').is_visible()
+    page.evaluate("""() => {
+      const action = document.createElement('button');
+      action.dataset.fixture = 'action-01';
+      action.textContent = 'action-01';
+      action.setAttribute('role', 'menuitem');
+      document.querySelector('.mesh-context-menu').append(action);
+      document.body.classList.add('feature-edit-mesh-off');
+    }""")
+    page.locator('.draw-item').click(button='right')
+    assert menu.is_visible()
+    assert menu.locator('[data-fixture="action-01"]').is_visible()
+    actions = menu.locator('.mesh-edit-context-action')
+    assert actions.count() > 0
+    assert all(actions.nth(index).is_hidden() for index in range(actions.count()))
+    assert bridge_calls(page, 'meshApply') == []

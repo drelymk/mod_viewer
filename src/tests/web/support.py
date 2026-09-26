@@ -175,7 +175,7 @@ def viewer(edge_browser, frontend_url):
             save_mesh_color_adjustment: call('color', {}),
             get_model_skinning_preview: call('weights', () => window.__fixtureLoad('fixture-weights')),
             load_model_rig: call('rigRead', null),
-            save_model_rig: call('rigWrite', {status: 'ok'}),
+            save_model_rig: call('rigWrite', {saved: true}),
           }};
         """.replace('__STATE__', state))
         def load_fixture(_source, path, publish=True):
