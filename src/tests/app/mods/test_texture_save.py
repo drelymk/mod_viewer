@@ -1,6 +1,5 @@
 """Atomic BC7 Save to Texture regressions."""
 
-import struct
 from concurrent.futures import Future
 from datetime import datetime
 from types import SimpleNamespace
@@ -15,6 +14,7 @@ from core.textures.color_adjustment import (
 )
 from core.textures.dds import inspect_dds_layout
 from core.textures.uv_coverage import UVCoverage
+from tests.support.dds_data import dx10_dds, mode6_block
 
 
 def test_save_texture_color_rejects_read_only_zip_source_before_io():
@@ -27,34 +27,6 @@ def test_save_texture_color_rejects_read_only_zip_source_before_io():
         "code": "read_only_source",
         "error": "Save to Texture is unavailable for compressed mods.",
     }
-
-
-def _dx10_dds(payload, dxgi_format=98, width=4, height=4, mip_count=1):
-    header = bytearray(148)
-    header[:4] = b"DDS "
-    struct.pack_into("<I", header, 4, 124)
-    struct.pack_into("<II", header, 12, height, width)
-    struct.pack_into("<I", header, 28, mip_count)
-    struct.pack_into("<I", header, 76, 32)
-    struct.pack_into("<II", header, 80, 4, int.from_bytes(b"DX10", "little"))
-    struct.pack_into("<IIIII", header, 128, dxgi_format, 3, 0, 1, 0)
-    return bytes(header) + bytes(payload)
-
-
-def _mode6_block(endpoints=((20, 110), (40, 140), (60, 170))):
-    bits = 1 << 6
-    for channel, (low, high) in enumerate(endpoints):
-        bits = bc7.set_bits(bits, 7 + channel * 14, 7, low >> 1)
-        bits = bc7.set_bits(bits, 14 + channel * 14, 7, high >> 1)
-    bits = bc7.set_bits(bits, 49, 7, 0)
-    bits = bc7.set_bits(bits, 56, 7, 127)
-    bits = bc7.set_bits(bits, 63, 1, 0)
-    bits = bc7.set_bits(bits, 64, 1, 1)
-    indices = [0, 1, 2, 3] * 4
-    bits = bc7.set_bits(bits, 65, 3, indices[0])
-    for pixel, index in enumerate(indices[1:], 1):
-        bits = bc7.set_bits(bits, 68 + (pixel - 1) * 4, 4, index)
-    return bits.to_bytes(16, "little")
 
 
 def _role_keys(diffuse="diffuse::component01.dds"):
@@ -70,7 +42,7 @@ def _role_keys(diffuse="diffuse::component01.dds"):
 
 def test_texture_coverage_uses_staged_buffer_overrides(tmp_path, monkeypatch):
     texture = tmp_path / "component01.dds"
-    texture.write_bytes(_dx10_dds(bytes(16), width=1, height=1))
+    texture.write_bytes(dx10_dds(bytes(16), width=1, height=1))
     source = object()
     staged = {str(tmp_path / "Component01.ib"): b"staged-index-buffer"}
     context = SimpleNamespace(
@@ -150,7 +122,7 @@ class _InlineExecutor:
 
 def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    original = _dx10_dds(bytes(16))
+    original = dx10_dds(bytes(16))
     source.write_bytes(original)
     layout = inspect_dds_layout(source)
     target = SimpleNamespace(
@@ -201,7 +173,7 @@ def test_save_is_bc7_only_and_returns_a_clean_public_result(tmp_path, monkeypatc
 def test_save_progress_reports_stages_and_ignores_callback_errors(
         tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    original = _dx10_dds(bytes(16))
+    original = dx10_dds(bytes(16))
     source.write_bytes(original)
     prepared = _write_prepared_save(source)
     monkeypatch.setattr(
@@ -297,7 +269,7 @@ def test_save_progress_throttles_intermediate_blocks_but_keeps_final(
 
 def test_save_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    original = _dx10_dds(bytes(16))
+    original = dx10_dds(bytes(16))
     source.write_bytes(original)
     prepared = _write_prepared_save(source)
     monkeypatch.setattr(
@@ -327,10 +299,10 @@ def test_save_aborts_on_stale_source_before_creating_backup(tmp_path, monkeypatc
 
 def test_save_rejects_changed_candidate_layout_before_backup(tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    original = _dx10_dds(bytes(16))
+    original = dx10_dds(bytes(16))
     source.write_bytes(original)
     prepared = _write_prepared_save(source)
-    candidate = _dx10_dds(bytes(32), width=8, height=4)
+    candidate = dx10_dds(bytes(32), width=8, height=4)
     monkeypatch.setattr(
         service, "prepare_texture_save",
         lambda *args, **kwargs: prepared)
@@ -350,7 +322,7 @@ def test_save_rejects_changed_candidate_layout_before_backup(tmp_path, monkeypat
 def test_save_reports_commit_when_replace_raises_after_replacement(
         tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    original = _dx10_dds(bytes(16))
+    original = dx10_dds(bytes(16))
     candidate = bytearray(original)
     candidate[-1] ^= 1
     source.write_bytes(original)
@@ -379,7 +351,7 @@ def test_save_reports_commit_when_replace_raises_after_replacement(
 def test_save_marks_cleanup_uncertain_after_committed_cleanup_raises(
         tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    original = _dx10_dds(bytes(16))
+    original = dx10_dds(bytes(16))
     candidate = bytearray(original)
     candidate[-1] ^= 1
     source.write_bytes(original)
@@ -449,7 +421,7 @@ def test_save_request_requires_all_texture_roles():
 def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
         tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    source.write_bytes(_dx10_dds(bytes(16)))
+    source.write_bytes(dx10_dds(bytes(16)))
     anchor = SimpleNamespace(label="Anchor")
     draw = SimpleNamespace(label="Component01-1")
     group = {}
@@ -493,9 +465,9 @@ def test_save_preparation_keeps_only_bc7_intent_and_target_coverage(
 
 def test_bc7_single_intent_is_weighted_when_propagated_to_lower_mip(
         tmp_path, monkeypatch):
-    source_block = _mode6_block()
+    source_block = mode6_block()
     source = tmp_path / "component01.dds"
-    source.write_bytes(_dx10_dds(
+    source.write_bytes(dx10_dds(
         source_block + source_block, width=4, height=4, mip_count=2))
     layout = inspect_dds_layout(source)
     adjustment = prepare_color_adjustment({"brightness": 1.5})
@@ -539,8 +511,8 @@ def test_bc7_serial_and_parallel_multi_adjustment_lower_mips_match(
         tmp_path, monkeypatch):
     width, height = 8, 4
     source = tmp_path / "component01.dds"
-    blocks = _mode6_block() * 3
-    original = _dx10_dds(blocks, width=width, height=height, mip_count=2)
+    blocks = mode6_block() * 3
+    original = dx10_dds(blocks, width=width, height=height, mip_count=2)
     source.write_bytes(original)
     layout = inspect_dds_layout(source)
     claims = bytearray(
@@ -567,8 +539,8 @@ def test_bc7_serial_and_parallel_multi_adjustment_lower_mips_match(
 
 
 def test_save_rejects_target_on_different_physical_dds(tmp_path, monkeypatch):
-    (tmp_path / "component01.dds").write_bytes(_dx10_dds(bytes(16)))
-    (tmp_path / "other.dds").write_bytes(_dx10_dds(bytes(16)))
+    (tmp_path / "component01.dds").write_bytes(dx10_dds(bytes(16)))
+    (tmp_path / "other.dds").write_bytes(dx10_dds(bytes(16)))
     group = {}
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
     monkeypatch.setattr(
@@ -620,7 +592,7 @@ def test_save_rejects_asset_and_mod_root_escape_paths(
     "normal_key", ["normal_map::component01.dds", "normal_map::nested/../component01.dds"])
 def test_save_rejects_live_cross_role_physical_usage(
         tmp_path, monkeypatch, normal_key):
-    (tmp_path / "component01.dds").write_bytes(_dx10_dds(bytes(16)))
+    (tmp_path / "component01.dds").write_bytes(dx10_dds(bytes(16)))
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
     monkeypatch.setattr(
         request, "resolved_draws",
@@ -644,7 +616,7 @@ def test_save_rejects_live_cross_role_physical_usage(
 
 
 def test_save_rejects_authored_inactive_cross_role_variant(tmp_path, monkeypatch):
-    (tmp_path / "component01.dds").write_bytes(_dx10_dds(bytes(16)))
+    (tmp_path / "component01.dds").write_bytes(dx10_dds(bytes(16)))
     selected = DrawCall(
         label="Anchor", count=3, texture_default_file="component01.dds")
     inactive = DrawCall(
@@ -678,7 +650,7 @@ def test_save_rejects_authored_inactive_cross_role_variant(tmp_path, monkeypatch
 
 
 def test_save_rejects_stale_canonical_metadata_key(tmp_path, monkeypatch):
-    (tmp_path / "component01.dds").write_bytes(_dx10_dds(bytes(16)))
+    (tmp_path / "component01.dds").write_bytes(dx10_dds(bytes(16)))
     draw = SimpleNamespace(label="Anchor")
     group = {}
     parsed = SimpleNamespace(game=SimpleNamespace(game="unknown"), groups=())
@@ -704,7 +676,7 @@ def test_save_rejects_stale_canonical_metadata_key(tmp_path, monkeypatch):
 def test_invalid_bc7_has_the_same_save_error_in_serial_and_parallel_paths(
         tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    source.write_bytes(_dx10_dds(bytes(16)))
+    source.write_bytes(dx10_dds(bytes(16)))
     layout = inspect_dds_layout(source)
     prepared = SimpleNamespace(
         selected_path=str(source), info=layout.info, layout=layout,
@@ -739,9 +711,9 @@ def test_invalid_bc7_has_the_same_save_error_in_serial_and_parallel_paths(
 
 def test_bc7_representability_gate_keeps_error_details_private(
         tmp_path, monkeypatch):
-    source_block = _mode6_block()
+    source_block = mode6_block()
     source = tmp_path / "component01.dds"
-    source.write_bytes(_dx10_dds(source_block))
+    source.write_bytes(dx10_dds(source_block))
     layout = inspect_dds_layout(source)
     adjustment = prepare_color_adjustment({"hue": 30})
     prepared = SimpleNamespace(
@@ -763,7 +735,7 @@ def test_bc7_representability_gate_keeps_error_details_private(
 
 def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
     source = tmp_path / "component01.dds"
-    source.write_bytes(_dx10_dds(_mode6_block()))
+    source.write_bytes(dx10_dds(mode6_block()))
     layout = inspect_dds_layout(source)
     prepared = SimpleNamespace(
         selected_path=str(source), info=layout.info, layout=layout,
@@ -799,7 +771,7 @@ def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
 
 def test_save_rejects_non_bc7_dds(tmp_path):
     source = tmp_path / "component01.dds"
-    source.write_bytes(_dx10_dds(bytes(8), dxgi_format=71))
+    source.write_bytes(dx10_dds(bytes(8), dxgi_format=71))
 
     with pytest.raises(errors.TextureSaveError) as raised:
         request.inspect_save_texture(str(source))

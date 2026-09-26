@@ -1,6 +1,7 @@
 """Focused coverage for the conservative fixed-layout compute path."""
 
 import struct
+from pathlib import Path
 import pytest
 
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
@@ -13,78 +14,17 @@ from core.ini.sections import extract_resources, parse_sections
 from core.ini.toggles import extract_toggle_keys, extract_variable_defaults
 
 
-SHAPE_SHADER = """
-struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
-StructuredBuffer<VertexAttributes> base : register(t50);
-StructuredBuffer<VertexAttributes> shapekey : register(t51);
-Texture1D<float4> IniParams : register(t120);
-#define FREQ IniParams[88].x
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  uint i = threadID.x;
-  VertexAttributes diff;
-  diff.position = shapekey[i].position - base[i].position;
-  diff.normal = shapekey[i].normal - base[i].normal;
-  rw_buffer[i].position += diff.position * (0.5 * (sin(FREQ * 30) + 1));
-  rw_buffer[i].normal += diff.normal * (0.5 * (sin(FREQ * 30) + 1));
-}
-"""
+_DATA = Path(__file__).resolve().parents[2] / "data" / "animations"
 
-LINEAR_SHAPE_SHADER = """
-struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
-StructuredBuffer<VertexAttributes> base : register(t50);
-StructuredBuffer<VertexAttributes> shapekey : register(t51);
-Texture1D<float4> IniParams : register(t120);
-#define VALUE IniParams[88].x
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  uint i = threadID.x;
-  VertexAttributes diff;
-  diff.position = shapekey[i].position - base[i].position;
-  diff.normal = shapekey[i].normal - base[i].normal;
-  rw_buffer[i].position += diff.position * VALUE;
-  rw_buffer[i].normal += diff.normal * VALUE;
-}
-"""
 
-POSE_SHADER = """
-struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-struct BlendAttributes { float4 weights; int4 indicies; };
-struct PoseAttributes { float3 S; float3 T; float4 QR; float4 QD; };
-RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
-StructuredBuffer<VertexAttributes> base : register(t50);
-StructuredBuffer<BlendAttributes> blend : register(t51);
-StructuredBuffer<PoseAttributes> pose : register(t52);
-Texture1D<float4> IniParams : register(t120);
-#define TIME IniParams[88].x
-#define VG_COUNT IniParams[89].x
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  uint i = threadID.x;
-  BlendAttributes b = blend[i];
-  VertexAttributes v = base[i];
-  float time = frac(TIME);
-  PoseAttributes p = pose[b.indicies.x];
-  float4 qr = normalize(p.QR);
-  float4 qd = p.QD;
-  float sign = dot(qr, qr);
-  rw_buffer[i].position = v.position * p.S + p.T;
-  rw_buffer[i].normal = normalize(v.normal);
-}
-"""
+def _shader(name):
+    return (_DATA / name).read_text(encoding="utf-8")
 
-SWAP_YZ_SHADER = """
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  float4 pos = float4(v.position.x, -v.position.z, v.position.y, 1.0f);
-  float4 normal = float4(v.normal.x, -v.normal.z, v.normal.y, 0.0f);
-  rw_buffer[i].position = float3(pos_result.x, pos_result.z, -pos_result.y);
-  rw_buffer[i].normal = normalize(float3(normal_result.x, normal_result.z,
-                                         -normal_result.y));
-}
-"""
+
+SHAPE_SHADER = _shader("shape.hlsl")
+LINEAR_SHAPE_SHADER = _shader("linear-shape.hlsl")
+POSE_SHADER = _shader("pose.hlsl")
+SWAP_YZ_SHADER = _shader("swap-yz-pose.hlsl")
 
 
 def _sections(root, *, stride=40, pose_bytes=None, shader=True):

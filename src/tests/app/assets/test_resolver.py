@@ -13,31 +13,14 @@ from core.geometry.identity import GeometryMatch
 from core.textures import classifier as dds_classifier
 from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from tests.support.asset_data import standard_asset_index
 
 
 def _index(root, asset_type="GIMI", metadata=None, *, asset="Asset01",
            first_index=12, classification="B"):
-    metadata = metadata or f"{asset}/hash.json"
-    return {
-        "version": 1,
-        "type": asset_type,
-        "root": root,
-        "builtAt": "2026-01-01T00:00:00Z",
-        "stats": {
-            "assetCount": 1, "geometryRecordCount": 1,
-            "geometryHashCount": 1, "skippedCount": 0,
-        },
-        "assets": [{"path": asset, "geometry": [{
-            "hash": "10101010",
-            "ranges": [{
-                "firstIndex": first_index, "indexCount": None,
-                "classification": classification, "componentOrdinal": 1,
-            }],
-            "metadata": metadata,
-            "componentName": "Body",
-        }]}],
-        "byGeometryHash": {"10101010": [{"asset": 0, "geometry": 0}]},
-    }
+    return standard_asset_index(
+        root, asset_type=asset_type, asset=asset, metadata=metadata,
+        first_index=first_index, classification=classification)
 
 
 def test_asset_hash_applies_conditional_mod_replacement(tmp_path):

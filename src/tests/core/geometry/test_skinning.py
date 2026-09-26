@@ -10,6 +10,10 @@ from core.geometry.skinning import (
     SkinningSource, decode_skinning, normalize_skinning_source_file,
     resolve_skinning_source, skinning_source_descriptor, skinning_source_key,
 )
+from tests.support.skinning_data import (
+    gimi_four_influence, vertex_vg_remap, wwmi_u16_eight, wwmi_u8_eight,
+    wwmi_u8_four,
+)
 
 
 def unpack_values(raw, fmt):
@@ -43,7 +47,7 @@ def test_decode_consumes_retained_vertex_mapping_without_materializing_tuple():
 
 def test_decode_gimi_four_influences_to_canonical_bytes():
     source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4")
-    raw = struct.pack("<4f4I", .6, .3, .1, 0., 7, 8, 9, 0)
+    raw = gimi_four_influence()
 
     decoded = decode_skinning(source, raw, [0])
 
@@ -61,7 +65,7 @@ def test_decode_gimi_four_influences_to_canonical_bytes():
 def test_decode_wwmi_four_influences_divides_bytes_by_255():
     source = SkinningSource("blend.buf", 8, 4, "wwmi_u8_4")
 
-    decoded = decode_skinning(source, bytes([3, 5, 7, 0, 128, 64, 63, 0]), [0])
+    decoded = decode_skinning(source, wwmi_u8_four(), [0])
 
     assert unpack_values(decoded.indices, "4I") == (3, 5, 7, 0)
     assert unpack_values(decoded.weights, "4f") == pytest.approx(
@@ -70,7 +74,7 @@ def test_decode_wwmi_four_influences_divides_bytes_by_255():
 
 def test_decode_wwmi_wide_keeps_all_eight_influences():
     source = SkinningSource("blend.buf", 16, 8, "wwmi_u8_8")
-    raw = bytes(range(8)) + bytes([1, 2, 3, 4, 5, 6, 7, 8])
+    raw = wwmi_u8_eight()
 
     decoded = decode_skinning(source, raw, [0])
 
@@ -82,9 +86,7 @@ def test_decode_wwmi_wide_keeps_all_eight_influences():
 
 def test_decode_wwmi_r16_wide_layout_uses_u16_weights():
     source = SkinningSource("blend_r16.buf", 32, 8, "wwmi_u16_8")
-    raw = struct.pack(
-        "<8H8H", 3, 259, 45, 257, 0, 1, 2, 3,
-        65535, 32768, 16384, 8192, 0, 1, 2, 3)
+    raw = wwmi_u16_eight()
 
     decoded = decode_skinning(source, raw, [0])
 
@@ -113,7 +115,7 @@ def test_decode_wwmi_vertex_vg_remap_keeps_colliding_raw_indices_distinct():
         "blend.buf", 16, 8, "wwmi_u8_8", 142,
         "remap.buf", 16, "wwmi_vertex_vg")
     raw = bytes([3] * 8) + bytes([255, 128, 64, 32, 16, 8, 4, 2])
-    remap = struct.pack("<8H", 3, 259, 45, 257, 0, 1, 2, 3)
+    remap = vertex_vg_remap()
 
     decoded = decode_skinning(source, raw, [0], remap)
 

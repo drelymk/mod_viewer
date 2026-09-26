@@ -1,6 +1,7 @@
 import builtins
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +19,7 @@ from app.assets.index import (
     lookup_geometry,
     normalize_geometry_hash,
 )
+from tests.support.asset_data import gimi_asset_root, wwmi_asset_root, write_json
 
 
 def _config(tmp_path, asset_entries=None):
@@ -29,35 +31,15 @@ def _config(tmp_path, asset_entries=None):
 
 
 def _write_json(filename, value):
-    os.makedirs(os.path.dirname(filename), exist_ok=True)
-    with open(filename, "w", encoding="utf-8") as stream:
-        json.dump(value, stream)
+    write_json(Path(filename), value)
 
 
 def _gimi_root(tmp_path, name="gimi"):
-    root = tmp_path / name
-    (root / "Asset01").mkdir(parents=True)
-    _write_json(str(root / "Asset01" / "hash.json"), [
-        {"ib": "0xA1A1A1A1", "object_indexes": [0, 20],
-         "object_index_counts": [10, 5]},
-        {"ib": "a1a1a1a1", "object_indexes": [40]},
-    ])
-    return root
+    return gimi_asset_root(tmp_path, name)
 
 
 def _wwmi_root(tmp_path, name="wwmi"):
-    root = tmp_path / name
-    asset01 = root / "Asset01"
-    asset01.mkdir(parents=True)
-    _write_json(str(asset01 / "Metadata.json"), {
-        "vb0_hash": "0XABCDEF12",
-        "components": [
-            {"index_offset": 0, "index_count": 12},
-            {"index_offset": 12, "index_count": 8},
-        ],
-    })
-    (asset01 / "TextureUsage.json").write_text("{}", encoding="utf-8")
-    return root
+    return wwmi_asset_root(tmp_path, name)
 
 
 @pytest.mark.parametrize("value, expected", [

@@ -5,6 +5,7 @@ import pytest
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
+from tests.support.model_data import standard_component_resources
 
 
 def test_draw_scanner_keeps_geometry_and_texture_hash_evidence_separate():
@@ -111,19 +112,7 @@ ib = ResourceComponent01IB
 vb0 = ResourceComponent01Position
 vb1 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
-
-[ResourceComponent01IB]
-filename = component01.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceComponent01Position]
-filename = component01-position.buf
-stride = 12
-
-[ResourceComponent01Texcoord]
-filename = component01-texcoord.buf
-stride = 8
-""")
+""" + standard_component_resources())
     resources = extract_resources(sections)
     seen = {}
 
@@ -320,29 +309,16 @@ vb0 = ResourceComponent01PositionAlt
 Resource\\GIMI\\Diffuse = ResourceComponent01Diffuse
 Resource\\GIMI\\LightMap = ResourceComponent01LightMap
 drawindexed = 3, 0, 0
-
-[ResourceComponent01IB]
-filename = component01.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceComponent01Position]
-filename = component01-position.buf
-stride = 12
-
 [ResourceComponent01PositionAlt]
 filename = component01-position-alt.buf
 stride = 12
-
-[ResourceComponent01Texcoord]
-filename = component01-texcoord.buf
-stride = 8
 
 [ResourceComponent01Diffuse]
 filename = component01-diffuse.dds
 
 [ResourceComponent01LightMap]
 filename = component01-light-map.dds
-""")
+""" + standard_component_resources())
     scanned = _scan_sections_for_draws(sections, gating_vars={"mode"})
     authored = scanned["TextureOverrideComponent01"]["draws"]
     groups = build_draw_groups(

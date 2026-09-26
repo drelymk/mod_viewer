@@ -11,6 +11,7 @@ from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.geometry.skinning import SkinningSource
 from core.ini.draw_groups import build_draw_groups
 from core.ini.sections import extract_resources, merge_sections
+from tests.support.skinning_data import gimi_four_influence, vertex_vg_remap
 
 
 class _Access:
@@ -54,9 +55,8 @@ stride = 20
     (tmp_path / "component01.pos").write_bytes(b"".join(
         struct.pack("<3f", float(i), 0., 0.) for i in range(4)))
     (tmp_path / "component01.tc").write_bytes(b"\0" * 20 * 4)
-    (tmp_path / "component01.blend").write_bytes(b"".join(
-        struct.pack("<4f4I", .6, .3, .1, 0., 7, 8, 9, 0)
-        for _ in range(4)))
+    (tmp_path / "component01.blend").write_bytes(
+        gimi_four_influence() * 4)
     return ini
 
 
@@ -105,9 +105,8 @@ stride = 16
     (tmp_path / "component01.blend").write_bytes(b"".join(
         bytes([3] * 8 + [255, 128, 0, 0, 0, 0, 0, 0])
         for _ in range(3)))
-    (tmp_path / "component01.vertex_vg").write_bytes(b"".join(
-        struct.pack("<8H", 3, 259, 0, 0, 0, 0, 0, 0)
-        for _ in range(3)))
+    (tmp_path / "component01.vertex_vg").write_bytes(
+        vertex_vg_remap((3, 259, 0, 0, 0, 0, 0, 0)) * 3)
     return ini
 
 
