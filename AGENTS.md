@@ -20,6 +20,7 @@ Keep deterministic formatting, lint, and other mechanical checks in CI. Code rev
 
 - Run the repository test suite with `.venv-test\Scripts\python.exe -m pytest -q`. This project venv includes `mcp.server.fastmcp`; the system Python may not.
 - Do not run the full repository test suite unless the user explicitly asks for it. Until then, run only focused tests relevant to the requested change.
+- Do not enable browser UI or WebGPU/rendering tests in the GitHub Actions workflow: they run too long and are prone to failures in that environment. Keep those tests available for explicit local runs or a dedicated compatible environment; GitHub CI should run the unit, core, app and integration tests only.
 
 ## Test design
 
