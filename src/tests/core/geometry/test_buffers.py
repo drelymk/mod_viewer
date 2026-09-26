@@ -56,7 +56,7 @@ def test_buffer_store_reads_zip_members_through_the_source(tmp_path):
 
 
 def test_buffer_store_prefers_staged_override(tmp_path):
-    path = tmp_path / "Body.ib"
+    path = tmp_path / "Component01.ib"
     path.write_bytes(b"disk")
     assert buffers.BufferStore(overrides={str(path): b"staged"}).raw(
         str(path)) == b"staged"

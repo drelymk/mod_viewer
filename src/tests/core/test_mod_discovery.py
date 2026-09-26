@@ -70,10 +70,10 @@ def test_discovery_applies_ini_count_cap_to_selected_nested_files(
 
 
 @pytest.mark.parametrize("root_text", [
-    "[TextureOverrideBody]\ndrawindexed = 3,0,0\n",
-    "[TextureOverrideBody]\nib = ResourceIB\n",
-    "[CommandListBody]\nib = ResourceIB\n",
-    "[TextureOverrideBody] ; note\ndrawindexed = 3,0,0\n",
+    "[TextureOverrideComponent01]\ndrawindexed = 3,0,0\n",
+    "[TextureOverrideComponent01]\nib = ResourceIB\n",
+    "[CommandListComponent01]\nib = ResourceIB\n",
+    "[TextureOverrideComponent01] ; note\ndrawindexed = 3,0,0\n",
 ])
 def test_discovery_retains_only_documents_loaded_for_root_check(
         tmp_path, root_text):

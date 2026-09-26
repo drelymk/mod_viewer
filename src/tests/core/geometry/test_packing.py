@@ -33,7 +33,7 @@ def _pack_fixture(tmp_path, indices, positions, *, uvs=None, base=0,
 
     position_path = tmp_path / "position.buf"
     texcoord_path = tmp_path / "texcoord.buf"
-    index_path = tmp_path / "body.ib"
+    index_path = tmp_path / "component01.ib"
     position_path.write_bytes(position_data)
     texcoord_path.write_bytes(uv_data)
     index_path.write_bytes(struct.pack(f"<{len(indices)}I", *indices))
@@ -43,7 +43,7 @@ def _pack_fixture(tmp_path, indices, positions, *, uvs=None, base=0,
     streams = VertexStreams(
         position_data, 12, uv_data, 8, 0, "<ff")
     draw = DrawCall(
-        label="Body-1", count=len(indices), ib_file="body.ib",
+        label="Component01-1", count=len(indices), ib_file="component01.ib",
         index_size=4, base=base, position_file="position.buf",
         position_stride=12, texcoord_file="texcoord.buf",
         texcoord_stride=8)

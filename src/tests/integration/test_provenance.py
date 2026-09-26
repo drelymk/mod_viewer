@@ -29,8 +29,8 @@ key = x
 type = cycle
 $swapvar = 0,1
 
-[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 if $swapvar == 0
@@ -40,8 +40,8 @@ drawindexed = 200, 100, 0
 endif
 drawindexed = 300, 300, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -57,7 +57,7 @@ stride = 20
 def _fixture(tmp, name, text):
     """Write an ini plus the buffer files its Resource sections name."""
     path = write(tmp, name, text)
-    for buf in ("body.ib", "pos.buf", "tc.buf"):
+    for buf in ("component01.ib", "pos.buf", "tc.buf"):
         p = os.path.join(tmp, buf)
         if not os.path.exists(p):
             open(p, "wb").write(b"\0" * 4096)
@@ -75,7 +75,7 @@ def test_draw_sources():
         got = [(d["sources"][0]["line_no"], d["count"]) for d in draws]
         assert (got == [(16, 100), (18, 200), (20, 300)]), (f"each draw maps to its own line: {got}")
         assert (all(d["sources"][0]["ini_path"] == path for d in draws)), ("draw sources carry the ini path")
-        assert (all(d["sources"][0]["section"] == "TextureOverrideBodyBlend"
+        assert (all(d["sources"][0]["section"] == "TextureOverrideComponent01Blend"
                   for d in draws)), ("draw sources carry the section name")
 
 
@@ -87,8 +87,8 @@ key = x
 type = cycle
 $swapvar = 0,1,2
 
-[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 if $swapvar == 0
@@ -99,8 +99,8 @@ elif $swapvar == 2
 drawindexed = 100, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -151,8 +151,8 @@ def test_merge_across_files():
 def test_deduplicate_preserves_buffer_identity():
     """Equal index ranges using different buffers are distinct meshes."""
     draws = [
-        {"start": 0, "count": 100, "ib_file": "body.ib",
-         "position_file": "body.pos", "texcoord_file": "body.tc",
+        {"start": 0, "count": 100, "ib_file": "component01.ib",
+         "position_file": "component01.pos", "texcoord_file": "component01.tc",
          "conditions": [], "sources": []},
         {"start": 0, "count": 100, "ib_file": "head.ib",
          "position_file": "head.pos", "texcoord_file": "head.tc",
@@ -164,8 +164,8 @@ def test_deduplicate_preserves_buffer_identity():
 
 def test_deduplicate_preserves_base_index_and_material_identity():
     common = {
-        "start": 0, "count": 100, "ib_file": "body.ib",
-        "position_file": "body.pos", "texcoord_file": "body.tc",
+        "start": 0, "count": 100, "ib_file": "component01.ib",
+        "position_file": "component01.pos", "texcoord_file": "component01.tc",
         "conditions": [], "sources": [],
     }
     draws = [
@@ -184,17 +184,17 @@ def test_deduplicate_preserves_base_index_and_material_identity():
 
 def test_draw_call_ir_normalizes_inherited_state_before_deduplication():
     group = {
-        "ib_file": "body.ib", "index_size": 4,
-        "position_file": "body.pos", "position_stride": 40,
-        "texcoord_file": "body.tc", "texcoord_stride": 20,
+        "ib_file": "component01.ib", "index_size": 4,
+        "position_file": "component01.pos", "position_stride": 40,
+        "texcoord_file": "component01.tc", "texcoord_stride": 20,
         "draws": [
             {"label": "implicit", "count": 100, "start": 0, "base": 0,
              "conditions": [[{"var": "swap", "value": "0"}]],
              "sources": [{"line_no": 10}]},
             {"label": "explicit", "count": 100, "start": 0, "base": 0,
-             "ib_file": "body.ib", "index_size": 4,
-             "position_file": "body.pos", "position_stride": 40,
-             "texcoord_file": "body.tc", "texcoord_stride": 20,
+             "ib_file": "component01.ib", "index_size": 4,
+             "position_file": "component01.pos", "position_stride": 40,
+             "texcoord_file": "component01.tc", "texcoord_stride": 20,
              "conditions": [[{"var": "swap", "value": "1"}]],
              "sources": [{"line_no": 20}]},
         ],
@@ -222,15 +222,15 @@ def test_draw_call_ir_rejects_unreviewed_fields():
 
 
 COMPONENT0_INI = """[CommandListShared]
-ib = ResourceBodyIB
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb2 = ResourceTc
 
 [TextureOverrideComponent0]
 drawindexed = 100, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -253,7 +253,7 @@ def test_cross_ini_component_collision_recovered():
     under distinct payload keys."""
     with tempfile.TemporaryDirectory() as tmp:
         _fixture(tmp, "BellyDancer_mod.ini", COMPONENT0_INI)
-        _fixture(tmp, "HairPin_mod.ini", COMPONENT0_INI)
+        _fixture(tmp, "Component02Pin_mod.ini", COMPONENT0_INI)
         payload = mod_loader.load_mod(tmp)
         assert ("error" not in payload), (f"loads cleanly (got {payload.get('error')})")
 
@@ -261,7 +261,7 @@ def test_cross_ini_component_collision_recovered():
         assert (len(mesh_entries) == 2), (f"both inis' Component0 survive as distinct entries (got {list(mesh_entries)})")
 
         sources = sorted(e.get("source") for e in mesh_entries.values())
-        assert (sources == ["BellyDancer_mod", "HairPin_mod"]), (f"each entry keeps its own ini as source (got {sources})")
+        assert (sources == ["BellyDancer_mod", "Component02Pin_mod"]), (f"each entry keeps its own ini as source (got {sources})")
 
         components = {e.get("component") for e in mesh_entries.values()}
         assert (components == {"Component0"}), (f"both display as the same clean name -- no '_2' suffix leaks into the UI "

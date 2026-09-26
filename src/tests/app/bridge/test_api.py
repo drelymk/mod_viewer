@@ -242,22 +242,22 @@ def test_texture_save_forwards_targets_and_usage(monkeypatch):
         lambda *args, **kwargs: calls.append((args, kwargs))
         or {"status": "ok"},
     )
-    targets = [{"semantic_key": "Body-1", "metadata_key": "Body::one",
+    targets = [{"semantic_key": "Component01-1", "metadata_key": "Component01::one",
                 "adjustment": {"hue": 30}}]
     usage = [{
-        "semantic_key": "Body-1",
+        "semantic_key": "Component01-1",
         "texture_keys": {
-            "diffuse": "diffuse::body.dds", "normal_map": None,
+            "diffuse": "diffuse::component01.dds", "normal_map": None,
             "normal_data": None, "light_map": None,
             "material_map": None, "emission_map": None,
         },
     }]
 
     result = api.save_texture_color(
-        "mod", "diffuse::body.dds", targets, usage)
+        "mod", "diffuse::component01.dds", targets, usage)
 
     assert result == {"status": "ok"}
-    assert calls[0][0] == ("mod", "diffuse::body.dds", targets, usage)
+    assert calls[0][0] == ("mod", "diffuse::component01.dds", targets, usage)
     assert callable(calls[0][1]["progress_callback"])
 
 
@@ -295,7 +295,7 @@ def test_texture_save_progress_event_includes_request_id_and_is_best_effort():
     api._mod_preview.save_texture_color = save
     api._window = Window()
     result = api.save_texture_color(
-        "mod", "diffuse::body.dds", [], [], "request-7")
+        "mod", "diffuse::component01.dds", [], [], "request-7")
 
     assert result == {"status": "ok"}
     assert len(captured) == 1
@@ -309,4 +309,4 @@ def test_texture_save_progress_event_includes_request_id_and_is_best_effort():
 
     api._window = BrokenWindow()
     assert api.save_texture_color(
-        "mod", "diffuse::body.dds", [], [], "request-8") == {"status": "ok"}
+        "mod", "diffuse::component01.dds", [], [], "request-8") == {"status": "ok"}

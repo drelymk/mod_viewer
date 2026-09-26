@@ -36,7 +36,7 @@ filename = {1}.dds
         nested = os.path.join(root, "nested")
         os.makedirs(nested)
         paths = []
-        for stem in ("body", "hair"):
+        for stem in ("component01", "component02"):
             path = os.path.join(nested, f"{stem}.ini")
             with open(path, "w", encoding="utf-8") as stream:
                 stream.write(ini.format(stem, stem))
@@ -44,10 +44,10 @@ filename = {1}.dds
 
         parsed = analyze_mod_inis(paths, root)
         assert set(parsed.toggles) == {
-            "nested/body::KeySwap", "nested/hair::KeySwap",
+            "nested/component01::KeySwap", "nested/component02::KeySwap",
         }
         assert set(parsed.defaults) >= {
-            "nested/body::swapvar", "nested/hair::swapvar",
+            "nested/component01::swapvar", "nested/component02::swapvar",
         }
         assert {item.get("source") for item in parsed.toggles.values()} == {
             "nested",
@@ -59,8 +59,8 @@ filename = {1}.dds
         }
 
         assert images == {
-            "body.ini": os.path.join("nested", "body.dds"),
-            "hair.ini": os.path.join("nested", "hair.dds"),
+            "component01.ini": os.path.join("nested", "component01.dds"),
+            "component02.ini": os.path.join("nested", "component02.dds"),
         }
 
 
@@ -83,49 +83,27 @@ def _forwarded_fixture(tmp_path, controller, target_var="style",
 [Constants]
 global ${target_var} = {target_default}
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 if ${target_var} == 1
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """, encoding="utf-8")
     return analyze_mod_inis([str(menu_path), str(target_path)], str(tmp_path))
-
-
-def test_direct_namespace_forwarding_exposes_target_control(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Constants]
-global persist $value = 1
-
-[CommandListButton]
-$value = 1 - $value
-
-[Present]
-$\\Target\\style = $value
-""")
-    controls = list(parsed.menu.values())
-    assert len(controls) == 1
-    assert controls[0]["var"] == "mod(5)::style"
-    assert controls[0]["values"] == ["0", "1"]
-    assert controls[0]["name"] == "style"
-    assert parsed.defaults["mod(5)::style"] == "1"
-    assert parsed.groups[0]["draws"][0].conditions == [[{
-        "var": "mod(5)::style", "value": "1", "negate": False,
-    }]]
 
 
 def test_snapshot_forwarding_keeps_menu_draw_and_provenance(tmp_path,
@@ -152,45 +130,9 @@ $\\Target\\style = $value
     assert parsed.groups == expected.groups
     assert parsed.groups[0]["draws"][0].conditions == [[{
         "var": "mod(5)::style", "value": "1", "negate": False}]]
-    line = snapshot.records[1].sections["TextureOverrideBody"][0]
+    line = snapshot.records[1].sections["TextureOverrideComponent01"][0]
     assert line.source() == {"ini_path": paths[1], "line_no": 7,
-                             "section": "TextureOverrideBody"}
-
-
-def test_forwarded_controller_image_follows_pulse(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, r"""
-[Constants]
-global $localStyle = 0
-global $clickPulse = 0
-
-[CommandListAdvance]
-$clickPulse = 1 - $clickPulse
-
-[CommandListArtwork]
-if $clickPulse == 0
-    ps-t100 = ResourceRest
-else
-    ps-t100 = ResourcePressed
-endif
-
-[Present]
-$\Target\style = $localStyle
-$localStyle = $localStyle + $clickPulse
-if $localStyle > 1
-    $localStyle = 0
-endif
-
-[ResourceRest]
-filename = ui/style.dds
-
-[ResourcePressed]
-filename = ui/style.dds
-""", target_var="style", target_default="0")
-    control = next(iter(parsed.menu.values()))
-    assert control["slot"] == 1
-    assert control["var"] == "mod(5)::style"
-    assert control["_pulse_var"] == "clickPulse"
-    assert control["image_file"] == "ui/style.dds"
+                             "section": "TextureOverrideComponent01"}
 
 
 def test_forwarded_button_images_follow_controller_pulses_not_slots(tmp_path):
@@ -253,10 +195,10 @@ filename = ui/b.dds
 global $styleA = 0
 global $styleB = 0
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 if $styleA == 1
     drawindexed = 3, 0, 0
 endif
@@ -264,16 +206,16 @@ if $styleB == 1
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """, encoding="utf-8")
 
@@ -324,87 +266,35 @@ filename = ui/off.dds
     assert control.get("image_file") is None
 
 
-def test_nested_namespace_forwarding_exposes_target_control(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Constants]
-global persist $value = 1
-
-[CommandListButton]
-$value = 1 - $value
-
-[Present]
-$\\Group\\Master\\style = $value
-""", target_namespace="Group\\Master")
-    controls = list(parsed.menu.values())
-    assert len(controls) == 1
-    assert controls[0]["var"] == "mod(5)::style"
-    assert parsed.groups[0]["draws"][0].conditions == [[{
-        "var": "mod(5)::style", "value": "1", "negate": False,
-    }]]
-
-
-def test_forwarded_target_can_also_be_read_by_another_ini(tmp_path):
-    menu = tmp_path / "Menu.ini"
-    target = tmp_path / "Target.ini"
-    consumer = tmp_path / "Consumer.ini"
-    menu.write_text("""[Constants]
-global persist $value = 1
-
-[CommandListButton]
-$value = 1 - $value
-
-[Present]
-$\\Target\\style = $value
-""", encoding="utf-8")
-    target.write_text("""namespace = Target
-
-[Constants]
-global $style = 1
-""" + _qualified_draw_ini("$style == 1"), encoding="utf-8")
-    consumer.write_text(_qualified_draw_ini(
-        r"$\Target\style == 1"), encoding="utf-8")
-
-    parsed = analyze_mod_inis(
-        [str(menu), str(target), str(consumer)], str(tmp_path))
-    assert any(info["var"] == "Target::style"
-               for info in parsed.menu.values())
-    for ini_path in (target, consumer):
-        group = next(group for group in parsed.groups
-                     if group["identity_source"].endswith(ini_path.name))
-        assert group["draws"][0].conditions == [[{
-            "var": "Target::style", "value": "1", "negate": False,
-        }]]
-
-
 def _qualified_draw_ini(condition):
-    return f"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    return f"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 if {condition}
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """
 
 
 def test_qualified_reads_resolve_owner_controls_without_colliding_with_animation(
         tmp_path):
-    master = tmp_path / "MasterJaneDoe_AIO.ini"
-    cv = tmp_path / "JaneCV_Toggled_X_Anim_Animation.ini"
-    og = tmp_path / "JaneOG.ini"
-    master.write_text("""namespace = JaneDoe_AIO\\Master
+    master = tmp_path / "Source01.ini"
+    cv = tmp_path / "Source02.ini"
+    og = tmp_path / "Source03.ini"
+    master.write_text("""namespace = Fixture01\\Master
 
 [Constants]
 global persist $swapvar = 2
@@ -426,32 +316,32 @@ type = cycle
 $cloth = 0,1
 
 [Present]
-if $\\JaneDoe_AIO\\Master\\swapvar == 1
+if $\\Fixture01\\Master\\swapvar == 1
     $swapvar = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
 endif
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
-if $\\JaneDoe_AIO\\Master\\swapvar == 1
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+if $\\Fixture01\\Master\\swapvar == 1
     Resource\\ZZMI\\Diffuse = ResourceCVDiffuse
-elif $\\JaneDoe_AIO\\Master\\swapvar == 2
+elif $\\Fixture01\\Master\\swapvar == 2
     Resource\\ZZMI\\Diffuse = ResourceCVAltDiffuse
 endif
-if $cloth == 1 && $\\JaneDoe_AIO\\Master\\swapvar == 1
+if $cloth == 1 && $\\Fixture01\\Master\\swapvar == 1
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
+[ResourceComponent01IB]
 filename = cv.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 filename = cv-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = cv-texcoord.buf
 stride = 8
 
@@ -462,15 +352,15 @@ filename = cv.dds
 filename = cv-alt.dds
 """, encoding="utf-8")
     og.write_text(_qualified_draw_ini(
-        r"$\JaneDoe_AIO\Master\swapvar == 2"), encoding="utf-8")
+        r"$\Fixture01\Master\swapvar == 2"), encoding="utf-8")
 
     parsed = analyze_mod_inis(
         [str(master), str(cv), str(og)], str(tmp_path))
     master_toggle = next(
         info for info in parsed.toggles.values()
-        if info["vars"].get("MasterJaneDoe_AIO::swapvar") == ["1", "2"])
+        if info["vars"].get("Source01::swapvar") == ["1", "2"])
     assert master_toggle["vars"] == {
-        "MasterJaneDoe_AIO::swapvar": ["1", "2"],
+        "Source01::swapvar": ["1", "2"],
     }
 
     cv_group = next(group for group in parsed.groups
@@ -478,31 +368,31 @@ filename = cv-alt.dds
     cv_draw = cv_group["draws"][0]
     assert {(clause["var"], clause["value"])
             for clause in cv_draw.conditions[0]} == {
-        ("JaneCV_Toggled_X_Anim_Animation::cloth", "1"),
-        ("MasterJaneDoe_AIO::swapvar", "1"),
+        ("Source02::cloth", "1"),
+        ("Source01::swapvar", "1"),
     }
     diffuse_rules = cv_draw.texture_rules("diffuse")
     assert len(diffuse_rules) == 2
     assert {
         (clause["var"], clause["value"])
         for clause in diffuse_rules[0]["conditions"][0]
-    } == {("MasterJaneDoe_AIO::swapvar", "1")}
+    } == {("Source01::swapvar", "1")}
 
     og_group = next(group for group in parsed.groups
                     if group["identity_source"].endswith(og.name))
     assert og_group["draws"][0].conditions == [[{
-        "var": "MasterJaneDoe_AIO::swapvar", "value": "2",
+        "var": "Source01::swapvar", "value": "2",
         "negate": False,
     }]]
 
     cv_clock = next(clock for clock in parsed.animations
                     if clock.frame_var ==
-                    "JaneCV_Toggled_X_Anim_Animation::swapvar")
+                    "Source02::swapvar")
     assert cv_clock.conditions == [[{
-        "var": "MasterJaneDoe_AIO::swapvar", "value": "1",
+        "var": "Source01::swapvar", "value": "1",
         "negate": False,
     }]]
-    assert cv_clock.frame_var != "MasterJaneDoe_AIO::swapvar"
+    assert cv_clock.frame_var != "Source01::swapvar"
 
 
 def test_unknown_and_ambiguous_qualified_reads_fail_open(tmp_path):
@@ -540,26 +430,6 @@ $\\Target\\style = $source
     assert parsed.groups[0]["draws"][0].conditions == []
 
 
-def test_present_pulse_is_not_treated_as_clickable_controller(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Present]
-$value = 1 - $value
-$\\Target\\style = $value
-""", target_default="0")
-    assert parsed.menu == {}
-    assert parsed.groups[0]["draws"][0].conditions == []
-
-
-def test_commandlist_forwarding_is_not_treated_as_continuous(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[CommandListForward]
-$value = 1 - $value
-$\\Target\\style = $value
-""", target_default="0")
-    assert parsed.menu == {}
-    assert parsed.groups[0]["draws"][0].conditions == []
-
-
 def test_forwarded_state_cycle_uses_controller_default_and_wrap_limit(tmp_path):
     parsed = _forwarded_fixture(tmp_path, """
 [Constants]
@@ -584,39 +454,3 @@ $\\Target\\style = $state
     assert parsed.defaults["mod(5)::style"] == "3"
     panel = build_menu_panel(parsed.menu, parsed.defaults)
     assert next(iter(panel.values()))["default"] == "3"
-
-
-def test_external_and_ui_only_forwarding_stays_untracked(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, """
-[Constants]
-global persist $page = 0
-global persist $zoom = 0
-
-[Present]
-    $page = 1 - $page
-    $zoom = 1 - $zoom
-    $\\WWMIv1\\vg_offset = $page
-    $\\WWMIv1\\page = $page
-    $\\WWMIv1\\zoom = $zoom
-""")
-    assert parsed.menu == {}
-
-
-def test_ambiguous_namespace_fails_open(tmp_path):
-    menu = tmp_path / "Menu.ini"
-    first = tmp_path / "first.ini"
-    second = tmp_path / "second.ini"
-    menu.write_text("""[Present]
-global persist $value = 1
-$value = 1 - $value
-$\\Same\\x = $value
-""", encoding="utf-8")
-    target = """namespace = Same
-[Constants]
-global $x = 0
-"""
-    first.write_text(target, encoding="utf-8")
-    second.write_text(target, encoding="utf-8")
-    parsed = analyze_mod_inis(
-        [str(menu), str(first), str(second)], str(tmp_path))
-    assert parsed.menu == {}

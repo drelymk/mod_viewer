@@ -49,14 +49,14 @@ def _indices(geometry, reference):
     return struct.unpack(f"<{len(raw) // 4}I", raw)
 
 
-INTERLEAVED_INI = """[TextureOverrideBody]
+INTERLEAVED_INI = """[TextureOverrideComponent01]
 ib = ResourceIB
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 drawindexed = 3, 0, 0
 
 [ResourceIB]
-filename = body.ib
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -87,7 +87,7 @@ def test_interleaved_authored_normals_follow_vertex_id_compaction(tmp_path):
                                      1., 0., 0., 1.))
     _write(tmp_path, "position.buf", position)
     _write(tmp_path, "texcoord.buf", b"\0" * (20 * len(vertices)))
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 1, 4))
+    _write(tmp_path, "component01.ib", struct.pack("<3I", 0, 1, 4))
 
     meshes, geometry = _build(groups, tmp_path)
     entry = next(iter(meshes.values()))
@@ -97,7 +97,7 @@ def test_interleaved_authored_normals_follow_vertex_id_compaction(tmp_path):
         1., 0., 0., 0., 0., 1., 0., 1., 0.)
 
 
-PACKED_INI = """[TextureOverrideBody]
+PACKED_INI = """[TextureOverrideComponent01]
 ib = ResourceIB
 vb0 = ResourcePosition
 vb1 = ResourceVector
@@ -105,7 +105,7 @@ vb2 = ResourceTexcoord
 drawindexed = 3, 0, 0
 
 [ResourceIB]
-filename = body.ib
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosition]
@@ -131,7 +131,7 @@ def test_packed_vector_normals_are_detected_and_decoded(tmp_path):
     _write(tmp_path, "position.buf", struct.pack(
         "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
     _write(tmp_path, "texcoord.buf", b"\0" * 60)
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 1, 2))
+    _write(tmp_path, "component01.ib", struct.pack("<3I", 0, 1, 2))
     _write(tmp_path, "vector.buf", bytes((0, 0, 0, 0, 127, 0, 0, 0,
                                              0, 0, 0, 0, 0, 127, 0, 0,
                                              0, 0, 0, 0, 0, 0, 127, 0)))
@@ -155,7 +155,7 @@ def _write_packed_fixture(tmp_path, points, indices, normal_values,
     _write(tmp_path, "position.buf", b"".join(
         struct.pack("<3f", *point) for point in points))
     _write(tmp_path, "texcoord.buf", b"\0" * (20 * len(points)))
-    _write(tmp_path, "body.ib", struct.pack(
+    _write(tmp_path, "component01.ib", struct.pack(
         f"<{len(indices)}I", *indices))
     _write(tmp_path, "vector.buf", _packed_normals(normal_values))
     return _build(groups, tmp_path, game_profile=game_profile)
@@ -206,7 +206,7 @@ def test_wuwa_preserves_custom_interleaved_normal_direction(tmp_path):
                                     1., 0., 0., 1.))
     _write(tmp_path, "position.buf", position)
     _write(tmp_path, "texcoord.buf", b"\0" * 60)
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 2, 1))
+    _write(tmp_path, "component01.ib", struct.pack("<3I", 0, 2, 1))
 
     meshes, geometry = _build(groups, tmp_path, game_profile="wuwa")
     entry = next(iter(meshes.values()))
@@ -229,7 +229,7 @@ def test_wuwa_winding_applies_without_authored_normals(tmp_path):
     _write(tmp_path, "position.buf", b"".join(
         struct.pack("<3f", *point) for point in points[:3]))
     _write(tmp_path, "texcoord.buf", b"\0" * 60)
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 2, 1))
+    _write(tmp_path, "component01.ib", struct.pack("<3I", 0, 2, 1))
     _write(tmp_path, "color.buf", b"\0" * 24)
 
     meshes, geometry = _build(groups, tmp_path, game_profile="wuwa")
@@ -280,7 +280,7 @@ def test_effective_vector_reassignment_and_explicit_null_are_distinct(tmp_path):
     _write(tmp_path, "position.buf", struct.pack(
         "<9f", 0., 0., 0., 1., 0., 0., 0., 1., 0.))
     _write(tmp_path, "texcoord.buf", b"\0" * 60)
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 1, 2))
+    _write(tmp_path, "component01.ib", struct.pack("<3I", 0, 1, 2))
     vector = bytes((0, 0, 0, 0, 127, 0, 0, 0,
                     0, 0, 0, 0, 0, 127, 0, 0,
                     0, 0, 0, 0, 0, 0, 127, 0))
@@ -288,15 +288,15 @@ def test_effective_vector_reassignment_and_explicit_null_are_distinct(tmp_path):
     _write(tmp_path, "vector-b.buf", vector)
     meshes, _geometry = _build(groups, tmp_path)
     assert len(meshes) == 3
-    assert "normal" in meshes["Body-1"]
-    assert "normal" in meshes["Body-2"]
-    assert "normal" not in meshes["Body-3"]
+    assert "normal" in meshes["Component01-1"]
+    assert "normal" in meshes["Component01-2"]
+    assert "normal" not in meshes["Component01-3"]
 
 
 def test_missing_or_unsafe_authored_source_falls_back_without_normal_payload(tmp_path):
     groups = _parse_groups(tmp_path, INTERLEAVED_INI)
     _write(tmp_path, "texcoord.buf", b"\0" * 60)
-    _write(tmp_path, "body.ib", struct.pack("<3I", 0, 1, 2))
+    _write(tmp_path, "component01.ib", struct.pack("<3I", 0, 1, 2))
     # The structurally recognized source is missing, so it must not become a
     # partial geometry field.
     _write(tmp_path, "position.buf", b"\0" * 40 * 3)
@@ -310,7 +310,7 @@ def test_missing_or_unsafe_authored_source_falls_back_without_normal_payload(tmp
 
 def test_draw_mapping_inherits_group_normal_source():
     source = VertexAttributeSource("position.buf", 40, 12, "f32x3")
-    draw = DrawCall.from_mapping({"label": "Body-1"}, {
+    draw = DrawCall.from_mapping({"label": "Component01-1"}, {
         "normal_source": source,
     })
     assert draw.normal_source is source

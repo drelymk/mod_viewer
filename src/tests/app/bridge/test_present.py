@@ -18,35 +18,35 @@ from core.mod_source import ZipModSource
 
 
 INI = """[Constants]
-global persist $Hat = 0
-global persist $Coat = 1
+global persist $Input41 = 0
+global persist $Input42 = 1
 
-[KeyHat]
+[KeyInput41]
 condition = ($object_detected) && $mode == 2
 key = h
 type = cycle
-$Hat = 0,1
+$Input41 = 0,1
 
-[KeyCoat]
+[KeyInput42]
 condition = ($object_detected) && $mode == 2
 key = c
 type = cycle
-$Coat = 0,1,2
+$Input42 = 0,1,2
 
-[TextureOverrideBodyPosition]
-vb0 = ResourceBodyPosition
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
-[TextureOverrideBody]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
 drawindexed = 3,0,0
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 filename = p.buf
 stride = 12
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = t.buf
 stride = 8
-[ResourceBodyIB]
+[ResourceComponent01IB]
 filename = i.buf
 format = R32_UINT
 """
@@ -56,25 +56,25 @@ global persist $currFlat = 0.5
 
 [CustomShaderComputeShapes]
 x88 = $currFlat
-cs-t50 = copy ResourceBodyPosition.Base
-cs-t51 = copy ResourceBodyPosition.Flat
+cs-t50 = copy ResourceComponent01Position.Base
+cs-t51 = copy ResourceComponent01Position.Flat
 
-[ResourceBodyPosition.Base]
+[ResourceComponent01Position.Base]
 type = Buffer
 stride = 40
-filename = BodyPosition.buf
+filename = Component01Position.buf
 
-[ResourceBodyPosition.Flat]
+[ResourceComponent01Position.Flat]
 type = Buffer
 stride = 40
-filename = BodyPositionFlat.buf
+filename = Component01PositionFlat.buf
 """
 
 
 def snapshots(a_hat="0", a_coat="0", b_hat="1", b_coat="1"):
     return {
-        "a.ini": {"a::Hat": a_hat, "a::Coat": a_coat},
-        "b.ini": {"b::Hat": b_hat, "b::Coat": b_coat},
+        "a.ini": {"a::Input41": a_hat, "a::Input42": a_coat},
+        "b.ini": {"b::Input41": b_hat, "b::Input42": b_coat},
     }
 
 
@@ -129,8 +129,8 @@ def test_present_lifecycle():
         a_text = edit_session.peek(folder, paths[0]).to_string()
         b_text = edit_session.peek(folder, paths[1]).to_string()
         assert (f"[{SECTION_NAME}]" in a_text and f"[{SECTION_NAME}]" in b_text), ("each eligible INI receives its own reserved key section")
-        assert ("$Hat = 0" in a_text and "$Coat = 0" in a_text and
-              "$Hat = 1" in b_text and "$Coat = 1" in b_text), ("each section captures only the values supplied for its own INI")
+        assert ("$Input41 = 0" in a_text and "$Input42 = 0" in a_text and
+              "$Input41 = 1" in b_text and "$Input42 = 1" in b_text), ("each section captures only the values supplied for its own INI")
         assert (all(open(path, encoding="utf-8").read() == INI for path in paths)), ("batch Add remains memory-only before Export")
 
         _groups, toggles, _menu, _defaults, _rules, present = analyze_mod_inis(
@@ -147,12 +147,12 @@ def test_present_lifecycle():
         assert (duplicate.get("duplicate_positions") == [0]), ("duplicate warnings compare the complete tuple across all INIs")
 
         edited = present_api.capture_present(
-            folder, snapshots("1", "0", "1", "0"), "Casual", 1)
+            folder, snapshots("1", "0", "1", "0"), "Fixture01", 1)
         assert (edited.get("ok")), ("Edit replaces the selected position in every INI")
-        assert (metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) == {"1": "Casual"}), ("one sparse name list describes the logical cross-INI presents")
+        assert (metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) == {"1": "Fixture01"}), ("one sparse name list describes the logical cross-INI presents")
         model = {"item": {"inis": ["a.ini", "b.ini"], "count": 2}}
         metadata.hydrate_present(folder, model)
-        assert (model["item"]["names"] == ["Present 1", "Casual"]), ("logical names hydrate independently of the participating files")
+        assert (model["item"]["names"] == ["Present 1", "Fixture01"]), ("logical names hydrate independently of the participating files")
 
         binding = present_api.edit_present(folder, "ctrl p", "")
         assert (binding.get("ok") and all(
@@ -161,7 +161,7 @@ def test_present_lifecycle():
 
         removed = present_api.delete_present_position(folder, 0)
         assert (removed.get("ok") and removed["result"] == {"count": 1, "files": 2}), ("Delete removes one aligned position from every INI")
-        assert (metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) == {"0": "Casual"}), ("custom names shift with a deleted logical position")
+        assert (metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) == {"0": "Fixture01"}), ("custom names shift with a deleted logical position")
         assert ("error" in present_api.delete_present_position(folder, 0)), ("the only remaining position cannot be deleted")
 
         for index in range(1, MAX_PRESENTS):
@@ -189,7 +189,7 @@ def test_add_is_atomic_when_one_snapshot_is_missing(present_pair):
     folder, paths = present_pair
     edit_session.load_documents(folder, paths)
     failed = present_api.add_present(
-        folder, "p", "", {"a.ini": {"a::Hat": "0", "a::Coat": "0"}})
+        folder, "p", "", {"a.ini": {"a::Input41": "0", "a::Input42": "0"}})
     assert ("error" in failed and all(
         f"[{SECTION_NAME}]" not in edit_session.peek(folder, path).to_string()
         for path in paths)), ("a failed multi-INI Add rolls every staged document back")
@@ -222,7 +222,7 @@ def test_writable_present_metadata_rollback_restores_sidecar(
 def test_archive_present_metadata_rollback_restores_staged_state(
         tmp_path, monkeypatch):
     archive_path = tmp_path / "present.zip"
-    original = "[KeyHat]\nkey = h\ntype = cycle\n$Hat = 0,1\n"
+    original = "[KeyInput41]\nkey = h\ntype = cycle\n$Input41 = 0,1\n"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("Wrapper/mod.ini", original)
     source = ZipModSource(archive_path)
@@ -232,7 +232,7 @@ def test_archive_present_metadata_rollback_restores_staged_state(
     try:
         edit_session.load_documents(mod_dir, paths, source=source)
         assert present_api.add_present(
-            mod_dir, "p", "", {"mod.ini": {"Hat": "0"}}).get("ok")
+            mod_dir, "p", "", {"mod.ini": {"Input41": "0"}}).get("ok")
         before_names = edit_session.staged_present_names(mod_dir)
         before_text = edit_session.peek(mod_dir, paths[0]).to_string()
 
@@ -241,7 +241,7 @@ def test_archive_present_metadata_rollback_restores_staged_state(
 
         monkeypatch.setattr(edit_session, "_touch", fail_touch)
         result = present_api.capture_present(
-            mod_dir, {"mod.ini": {"Hat": "1"}}, "Changed")
+            mod_dir, {"mod.ini": {"Input41": "1"}}, "Changed")
 
         assert "error" in result
         assert edit_session.staged_present_names(mod_dir) == before_names
@@ -256,9 +256,9 @@ def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
 
     with edit_session.transaction(folder, [paths[0]]) as transaction:
         doc = transaction.document(paths[0])
-        present_editor.add(doc, "p", "", {"Hat": "0", "Coat": "0"})
+        present_editor.add(doc, "p", "", {"Input41": "0", "Input42": "0"})
         present_editor.capture(
-            doc, {"Hat": "1", "Coat": "2"}, allow_duplicate=True)
+            doc, {"Input41": "1", "Input42": "2"}, allow_duplicate=True)
     metadata.save_present_name(
         folder, metadata.PRESENT_NAMES_KEY, 1, "Alternate")
 
@@ -271,14 +271,14 @@ def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
                for path in paths]
     assert (completed.get("ok") and all(info["count"] == 2 for info in details)), ("Complete adds the missing section with an aligned position count")
     assert (all(info["key"] == "ctrl p" for info in details) and
-          details[1]["vars"] == {"Hat": ["1", "1"], "Coat": ["1", "1"]}), ("Complete shares the binding and repeats the missing INI's current snapshot")
+          details[1]["vars"] == {"Input41": ["1", "1"], "Input42": ["1", "1"]}), ("Complete shares the binding and repeats the missing INI's current snapshot")
     assert (metadata.present_names(folder, metadata.PRESENT_NAMES_KEY) ==
           {"1": "Alternate"}), ("completing a partial PRESENT preserves its logical names")
 
     with edit_session.transaction(folder, [paths[0]]) as transaction:
         doc = transaction.document(paths[0])
         present_editor.capture(
-            doc, {"Hat": "0", "Coat": "1"}, allow_duplicate=True)
+            doc, {"Input41": "0", "Input42": "1"}, allow_duplicate=True)
     _groups, _toggles, _menu, _defaults, _rules, mismatched = analyze_mod_inis(
         paths, folder, edit_session.overrides_for(folder))
     assert (mismatched["item"]["count"] == 0 and
@@ -288,9 +288,9 @@ def test_partial_present_is_completed_and_mismatches_are_reported(present_pair):
 def test_discard_restores_present_names_with_staged_position_delete(single_present_mod):
     folder, path = single_present_mod
     edit_session.load_documents(folder, [path])
-    one = {"a.ini": {"Hat": "0", "Coat": "0"}}
-    two = {"a.ini": {"Hat": "1", "Coat": "1"}}
-    three = {"a.ini": {"Hat": "0", "Coat": "2"}}
+    one = {"a.ini": {"Input41": "0", "Input42": "0"}}
+    two = {"a.ini": {"Input41": "1", "Input42": "1"}}
+    three = {"a.ini": {"Input41": "0", "Input42": "2"}}
     assert (present_api.add_present(folder, "p", "", one).get("ok")), ("discard fixture creates its first PRESENT position")
     assert (present_api.capture_present(folder, two, "B").get("ok") and
           present_api.capture_present(folder, three, "C").get("ok")), ("discard fixture creates three named positions")

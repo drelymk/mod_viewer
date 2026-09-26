@@ -15,7 +15,7 @@ therefore check, for every mutation:
     stale disk content â€” see edit_session.peek);
   - a rejected call (raised ToggleEditError, or record_toggle's own post
     -rewrite verify mismatch) never leaves a partial mutation sitting in the
-    session, whether this was the ini's first pending edit or one on top of
+    session, whether this was the ini's first pending edit or one on input43 of
     an already-pending doc;
   - export_changes writes exactly once per ini regardless of how many edits
     were staged against it, and clears the pending state afterwards;
@@ -28,7 +28,7 @@ record_toggle or removed via delete_toggle (see app.mods.loader.
 unwired_pending_sections / app.session.edit.new_sections_for).
 
 core.editing.record is exercised in-memory (no disk I/O, no session) by
-tests.core.editing.test_record; this file instead checks the app layer on top of it:
+tests.core.editing.test_record; this file instead checks the app layer on input43 of it:
 resolving ini_rel to a path, staging via edit_session, and turning
 ToggleEditError into a plain {"error": ...} rather than raising across the JS
 bridge. It's also the only place that exercises get_record_positions. A
@@ -61,7 +61,7 @@ type = cycle
 $Upper = 0,1
 $\\Other\\Master\\Mode = 0,1,2,3
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $Upper == 0
 drawindexed = 100,0,0
 endif
@@ -85,8 +85,8 @@ key = 1
 type = cycle
 $Upper = 0,1
 
-[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 if $Upper == 0
@@ -96,8 +96,8 @@ if $Upper == 1
 drawindexed = 200,0,0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -118,7 +118,7 @@ key = 1
 type = cycle
 $Upper = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $Upper == 0
 drawindexed = 100,0,0
 endif

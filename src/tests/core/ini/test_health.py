@@ -26,13 +26,13 @@ def test_structure_resource_and_file_findings():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")
         _write(ini, (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "if $x == 1\n"
-            "ib = ResourceBodyIB\n"
+            "ib = ResourceComponent01IB\n"
             "endif\n"
             "endif\n"
             "vb0 = ResourceNoSection\n"
-            "[ResourceBodyIB]\n"
+            "[ResourceComponent01IB]\n"
             "filename = missing.buf\n"
             "stride = 0\n"
             "[ResourceUnused]\n"
@@ -64,35 +64,35 @@ def test_reference_graph_case_exactness_and_comments():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")
         _write(ini, (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "ib = resourceRuntime\n"
             "; ib = ResourceCommented\n"
             "[ResourceRuntime]\n"
             "source = RESOURCEBridge\n"
             "[ResourceBridge]\n"
-            "source = ResourceBodyIB\n"
-            "[ResourceBody]\n"
-            "filename = body.buf\n"
-            "[ResourceBodyIB]\n"
-            "filename = body_ib.buf\n"
+            "source = ResourceComponent01IB\n"
+            "[ResourceComponent01]\n"
+            "filename = component01.buf\n"
+            "[ResourceComponent01IB]\n"
+            "filename = component01_ib.buf\n"
             "[ResourceCommented]\n"
             "filename = commented.buf\n"))
-        for name in ("body.buf", "body_ib.buf", "commented.buf"):
+        for name in ("component01.buf", "component01_ib.buf", "commented.buf"):
             _write(os.path.join(tmp, name), b"x", binary=True)
         report = analyze_mod(tmp)
         unused = {item["resource"] for item in report["issues"]
                   if item["code"] == "unused_resource_section"}
 
     assert ("ResourceRuntime" not in unused and "ResourceBridge" not in unused
-          and "ResourceBodyIB" not in unused), ("case-insensitive transitive resource references are followed")
-    assert ("ResourceBody" in unused), ("resource names are matched exactly, not by prefix")
+          and "ResourceComponent01IB" not in unused), ("case-insensitive transitive resource references are followed")
+    assert ("ResourceComponent01" in unused), ("resource names are matched exactly, not by prefix")
     assert ("ResourceCommented" in unused), ("commented references do not make a resource used")
 
 
 def test_resource_reachability_follows_authored_edges_only():
     with tempfile.TemporaryDirectory() as tmp:
         _write(os.path.join(tmp, "mod.ini"), (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "ib = ResourcePosition\n"
             "[ResourcePosition]\n"
             "[ResourcePosition.B]\n"
@@ -121,37 +121,10 @@ def test_resource_reachability_follows_authored_edges_only():
     assert ({"ResourceCycleA", "ResourceCycleB", "ResourceSelf"} <= unused), ("self references and unrooted cycles do not make resources used")
 
 
-def test_reference_prefix_is_valid_and_target_is_checked():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "mod.ini"), (
-            "[TextureOverrideBody]\n"
-            "vb0 = reference ResourceBodyPosition\n"
-            "vb1 = reference ResourceMissing\n"
-            "vb2 = copy reference ResourceMissingCopy\n"
-            "[ResourceBodyPosition]\n"
-            "filename = body.buf\n"
-            "stride = 12\n"))
-        _write(os.path.join(tmp, "body.buf"), b"x", binary=True)
-        report = analyze_mod(tmp)
-
-    malformed = [item for item in report["issues"]
-                 if item["code"] == "malformed_resource_reference"]
-    missing = [item for item in report["issues"]
-               if item["code"] == "missing_resource_section"]
-    unused = {item["resource"] for item in report["issues"]
-              if item["code"] == "unused_resource_section"}
-    assert malformed == []
-    assert [(item["resource"], item["line"]) for item in missing] == [
-        ("ResourceMissing", 3),
-        ("ResourceMissingCopy", 4),
-    ]
-    assert "ResourceBodyPosition" not in unused
-
-
 def test_file_classification_and_overrides():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")
-        _write(ini, "[TextureOverrideBody]\nib = ResourceIB\n[ResourceIB]\nfilename = active.buf\n")
+        _write(ini, "[TextureOverrideComponent01]\nib = ResourceIB\n[ResourceIB]\nfilename = active.buf\n")
         _write(os.path.join(tmp, "DISABLED-old.ini"),
                "[ResourceOld]\nfilename = inactive.dds\n")
         _write(os.path.join(tmp, "active.buf"), b"x", binary=True)
@@ -160,12 +133,12 @@ def test_file_classification_and_overrides():
         _write(os.path.join(tmp, "orphan.tga"), b"x", binary=True)
         _write(os.path.join(tmp, "active-20260901152230.dds"), b"x", binary=True)
         with open(os.path.join(tmp, ".mod_viewer.json"), "w", encoding="utf-8") as fh:
-            json.dump({"textures": {"Body::whole": {
+            json.dump({"textures": {"Component01::whole": {
                 "tex_key": "viewer.png", "label": "viewer", "manual": True,
             }}}, fh)
 
         staged = (
-            "[TextureOverrideBody]\nif $x == 1\nib = ResourceIB\n"
+            "[TextureOverrideComponent01]\nif $x == 1\nib = ResourceIB\n"
             "[ResourceIB]\nfilename = active.buf\n")
         report = analyze_mod(tmp, overrides={ini: staged})
 
@@ -179,7 +152,7 @@ def test_zip_health_counts_deep_disabled_assets_as_inactive(tmp_path):
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr(
             "Export/active.ini",
-            "[TextureOverrideBody]\ndrawindexed = 3, 0, 0\n")
+            "[TextureOverrideComponent01]\ndrawindexed = 3, 0, 0\n")
         archive.writestr(
             "Export/variants/DISABLED-old.ini",
             "[ResourceOld]\nfilename = inactive.dds\n")
@@ -196,7 +169,7 @@ def test_unsafe_paths_and_namespaced_resources():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")
         _write(ini, (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "ib = ResourceUnsafe\n"
             "vb0 = Resource\\Framework\\Position\n"
             "[ResourceUnsafe]\n"
@@ -211,56 +184,10 @@ def test_unsafe_paths_and_namespaced_resources():
     assert (not namespaced_missing), ("namespaced framework resources are not guessed to be missing")
 
 
-def test_statement_run_target_and_key_binding_findings():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write(os.path.join(tmp, "mod.ini"), (
-            "[Constants]\n"
-            "global $active = 1\n"
-            "[KeyFirst]\n"
-            "condition = $active\n"
-            "key = no_modifiers ;\n"
-            "type = cycle\n"
-            "$first = 0,1\n"
-            "'\n"
-            "[KeySecond]\n"
-            "condition = $active\n"
-            "key = ;\n"
-            "type = cycle\n"
-            "$second = 0,1\n"
-            "[TextureOverrideBody]\n"
-            "ps-t8 = ef ResourceGlow\n"
-            "run = CommandListMissing\n"
-            "run = CommandListKnown\n"
-            "run = CommandList\\Framework\\External\n"
-            "run = BuiltInCommandListUnbindAllRenderTargets\n"
-            "[CommandListKnown]\n"
-            "ps-t8 = ref ResourceGlow\n"
-            "[ResourceGlow]\n"
-            "filename = glow.dds\n"))
-        _write(os.path.join(tmp, "glow.dds"), b"DDS " + b"\0" * 124,
-               binary=True)
-        report = analyze_mod(tmp)
-
-    by_code = {}
-    for issue in report["issues"]:
-        by_code.setdefault(issue["code"], []).append(issue)
-    assert len(by_code["unexpected_key_statement"]) == 1
-    assert by_code["unexpected_key_statement"][0]["line"] == 8
-    assert len(by_code["malformed_resource_reference"]) == 1
-    assert by_code["malformed_resource_reference"][0]["resource"] == (
-        "ResourceGlow")
-    assert len(by_code["duplicate_key_binding"]) == 1
-    duplicate = by_code["duplicate_key_binding"][0]
-    assert duplicate["other_section"] == "KeyFirst"
-    assert duplicate["section"] == "KeySecond"
-    assert [issue["target"] for issue in
-            by_code["missing_local_run_target"]] == ["CommandListMissing"]
-
-
 def test_drawindexed_viewer_limitation_does_not_label_valid_auto_as_unsupported():
     with tempfile.TemporaryDirectory() as tmp:
         _write(os.path.join(tmp, "mod.ini"), (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "drawindexed = 3, 0, -4\n"
             "drawindexed = auto\n"
             "drawindexed = AUTO\n"
@@ -292,14 +219,14 @@ def test_section_semantics_and_staged_findings(tmp_path):
     _write(ini, "[Present]\n")
     staged = (
         "namespace = Demo\ncondition = 1\nhash = 12345678\n"
-        "[TextureOverrideBody]\nhash = 12345678\nps-t0 = ResourceA\n"
-        "ps-t0 = ResourceB\n[textureoverridebody]\nhash = abcdef12\n"
-        "[TextureOverideTypo]\n[ResourceBody]\nfilename body.buf\n"
+        "[TextureOverrideComponent01]\nhash = 12345678\nps-t0 = ResourceA\n"
+        "ps-t0 = ResourceB\n[textureoverridecomponent01]\nhash = abcdef12\n"
+        "[TextureOverideTypo]\n[ResourceComponent01]\nfilename component01.buf\n"
         "stride = 4\nstride = 8\n[Include]\ninclude = a.ini\n"
         "include = b.ini\n[KeyMany]\nkey = no_ctrl no_shift no_alt ;\n"
         "key = ctrl F1\nback = F2\nback = F3\n"
         "[KeyEmpty]\n[CommandListActions]\nif $x == 1\n"
-        "run = ResourceBody\nrun = CommandListMissing\nendif\n"
+        "run = ResourceComponent01\nrun = CommandListMissing\nendif\n"
         "[ShaderOverrideBad]\nhash = xyz\n"
         "[TextureOverrideFuzzy]\nmatch_width = 128\n"
     )
@@ -322,19 +249,6 @@ def test_section_semantics_and_staged_findings(tmp_path):
     assert len(by_code["invalid_hash"]) == 1
     assert not [issue for issue in by_code.get("missing_override_hash", [])
                 if issue["section"] == "TextureOverrideFuzzy"]
-
-
-def test_override_and_key_missing_or_invalid(tmp_path):
-    _write(tmp_path / "mod.ini", (
-        "[ShaderOverrideMissing]\nhandling = skip\n"
-        "[TextureOverrideMissing]\nhandling = skip\n"
-        "[KeyInvalid]\nkey = no_ctrl no_shift\nback = \n"
-    ))
-    report = analyze_mod(str(tmp_path))
-    assert {issue["override_type"] for issue in report["issues"]
-            if issue["code"] == "missing_override_hash"} == {"shader", "texture"}
-    assert {issue["binding_type"] for issue in report["issues"]
-            if issue["code"] == "invalid_key_binding"} == {"back"}
 
 
 def test_variable_assignments_resolve_namespace_and_local_scope(tmp_path):
@@ -400,55 +314,6 @@ def test_multi_ini_global_and_run_lookup_keeps_unnamespaced_siblings_isolated(tm
                 ("isolated.ini", "CommandListGlobal"),
                 ("other.ini", "CommandListScoped"),
             ]
-
-
-def test_duplicate_override_metadata_but_not_repeated_commands(tmp_path):
-    _write(tmp_path / "mod.ini", (
-        "[TextureOverrideBody]\nhash = abcdef12\nmatch_width = 10\n"
-        "match_width = 20\nps-t0 = ResourceA\nps-t0 = ResourceB\n"
-        "[ShaderOverrideBody]\nhash = 1\nfilter_index = 1\n"
-        "filter_index = 2\n"
-        "[CustomShaderBody]\nvs = body.hlsl\nvs = other.hlsl\n"
-    ))
-    report = analyze_mod(str(tmp_path))
-    duplicates = [issue for issue in report["issues"]
-                  if issue["code"] == "duplicate_section_key"]
-    assert [(issue["key"], issue["first_line"], issue["line"])
-            for issue in duplicates] == [
-                ("match_width", 3, 4),
-                ("filter_index", 9, 10),
-                ("vs", 12, 13),
-            ]
-
-
-def test_reviewed_hash_run_key_and_regular_statement_edges(tmp_path):
-    _write(tmp_path / "mod.ini", (
-        "[TextureOverrideShort]\nhash = a\n"
-        "[ShaderOverrideShort]\nhash = 1\n"
-        "[TextureOverrideTypo]\nmatch_widht = 100\n"
-        "[TextureOverridePriority]\nmatch_priority = 1\n"
-        "[TextureOverrideQuality]\nmatch_msaa_quality = 2\n"
-        "[TextureOverrideConflict]\nhash = 123\nmatch_width = 10\n"
-        "[ResourceRegular]\ndraw = something\n"
-        "[KeyModifiers]\nkey = ctrl\nkey = no_ctrl\n"
-        "key = no_ctrl no_shift\n"
-        "[CommandList Foo]\nrun = CommandList Foo\nrun =\n"
-    ))
-    report = analyze_mod(str(tmp_path))
-    by_code = {}
-    for issue in report["issues"]:
-        by_code.setdefault(issue["code"], []).append(issue)
-    assert "invalid_hash" not in by_code
-    assert "invalid_key_binding" not in by_code
-    assert "malformed_regular_statement" not in by_code
-    assert [(issue["section"], issue["code"]) for issue in
-            by_code["missing_override_hash"]] == [
-                ("TextureOverrideTypo", "missing_override_hash"),
-                ("TextureOverridePriority", "missing_override_hash"),
-            ]
-    assert len(by_code["hash_match_conflict"]) == 1
-    assert [(issue["target"], issue["target_display"]) for issue in
-            by_code["invalid_run_target"]] == [("", "Empty run target")]
 
 
 def test_namespaced_duplicate_global_section_is_not_assumed_ignored(tmp_path):

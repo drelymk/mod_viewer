@@ -14,7 +14,7 @@ def test_staged_snapshot_uses_exact_document_without_disk_read(tmp_path,
     path.parent.mkdir()
     path.write_text("[Constants]\nglobal $value = 0\n", encoding="utf-8")
     staged = IniDocument.from_string(
-        "namespace = Outfit\n[Constants]\nglobal $value = 1\n",
+        "namespace = Input01\n[Constants]\nglobal $value = 1\n",
         path=str(path))
     monkeypatch.setattr(IniDocument, "load", lambda _path: (_ for _ in ()).throw(
         AssertionError("snapshot reread disk")))
@@ -25,7 +25,7 @@ def test_staged_snapshot_uses_exact_document_without_disk_read(tmp_path,
     record = snapshot.records[0]
     assert record.document is staged
     assert record.relative_path == "nested/mod.ini"
-    assert record.namespace == "Outfit"
+    assert record.namespace == "Input01"
     assert record.canonical_vars["value"] == "value"
     assert str(record.sections["Constants"][0]) == "global $value = 1"
     assert record.sections["Constants"][0].source() == {
@@ -38,7 +38,7 @@ def test_staged_snapshot_uses_exact_document_without_disk_read(tmp_path,
 def test_snapshot_keeps_sibling_sections_separate_and_matches_legacy(tmp_path):
     paths = []
     documents = {}
-    for name in ("body", "hair"):
+    for name in ("component01", "component02"):
         path = tmp_path / "nested" / f"{name}.ini"
         path.parent.mkdir(exist_ok=True)
         text = ("[Constants]\nglobal persist $style = 0\n"
@@ -49,11 +49,11 @@ def test_snapshot_keeps_sibling_sections_separate_and_matches_legacy(tmp_path):
         documents[str(path)] = IniDocument.from_string(text, path=str(path))
     snapshot = build_mod_ini_snapshot(paths, str(tmp_path), documents)
     assert [record.relative_path for record in snapshot.records] == [
-        "nested/body.ini", "nested/hair.ini"]
+        "nested/component01.ini", "nested/component02.ini"]
     assert [record.sections["ResourceTexture"][0] for record in
-            snapshot.records] == ["filename = body.dds", "filename = hair.dds"]
+            snapshot.records] == ["filename = component01.dds", "filename = component02.dds"]
     assert [record.var_prefix for record in snapshot.records] == [
-        "nested/body::", "nested/hair::"]
+        "nested/component01::", "nested/component02::"]
     parsed = analyze_mod_inis(snapshot)
     legacy = analyze_mod_inis(paths, str(tmp_path), documents=documents)
     assert parsed.toggles == legacy.toggles
@@ -70,7 +70,7 @@ def test_archive_and_directory_snapshots_have_same_logical_records(tmp_path):
     disk_path.write_text(text, encoding="utf-8")
     archive_path = tmp_path / "sample.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("SampleMod/nested/mod.ini", text)
+        archive.writestr("fixture-01/nested/mod.ini", text)
     source = ZipModSource(archive_path)
     virtual_path = source.document_path("nested/mod.ini")
     disk = build_mod_ini_snapshot(

@@ -35,7 +35,7 @@ class FakeSevenZipClient:
 @pytest.mark.parametrize("extension", [".7z", ".rar"])
 def test_sevenzip_edits_stay_staged_and_export_never_writes(
         tmp_path, monkeypatch, extension):
-    original = "[KeyBody]\r\nkey = F1\r\n"
+    original = "[KeyComponent01]\r\nkey = F1\r\n"
     archive_path = tmp_path / f"packed{extension}"
     archive_bytes = b"mock archive bytes"
     archive_path.write_bytes(archive_bytes)
@@ -47,7 +47,7 @@ def test_sevenzip_edits_stay_staged_and_export_never_writes(
     try:
         edit_session.load_documents(str(archive_path), paths, source=source)
         edit_session.update_text(
-            str(archive_path), "mod.ini", "[KeyBody]\nkey = F2\n")
+            str(archive_path), "mod.ini", "[KeyComponent01]\nkey = F2\n")
 
         result = toggle_api.export_changes(str(archive_path))
 

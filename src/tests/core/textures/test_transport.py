@@ -23,8 +23,7 @@ from core.ini.document import IniDocument
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.mod_source import SevenZipModSource, ZipModSource
 from core.sevenzip import SevenZipEntry
-from core.textures import (encode_texture_data_uri, render_texture_png,
-                           set_texture_profile_hook)
+from tests.support.dds_data import dx10_dds
 
 
 def _write_geometry(root):
@@ -53,21 +52,8 @@ def _group(texture_names):
 
 
 def _write_bc7_dds(path, width=4, height=4):
-    """Write one valid DX10 BC7 block for transport endpoint tests."""
-    data = bytearray(148)
-    data[:4] = b"DDS "
-    struct.pack_into("<I", data, 4, 124)
-    struct.pack_into("<II", data, 12, height, width)
-    struct.pack_into("<I", data, 76, 32)
-    struct.pack_into("<II", data, 80, 4, int.from_bytes(b"DX10", "little"))
-    struct.pack_into("<IIIII", data, 128, 98, 3, 0, 1, 0)
-    data.extend(bytes(((width + 3) // 4) * ((height + 3) // 4) * 16))
-    path.write_bytes(data)
-
-
-
-
-
+    payload = bytes(((width + 3) // 4) * ((height + 3) // 4) * 16)
+    path.write_bytes(dx10_dds(payload, width=width, height=height))
 
 def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
     _write_geometry(str(tmp_path))

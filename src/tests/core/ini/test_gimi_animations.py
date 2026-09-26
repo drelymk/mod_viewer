@@ -1,17 +1,12 @@
 """Focused coverage for the conservative fixed-layout compute path."""
 
 import struct
+from pathlib import Path
 import pytest
 
 from app.mods.analysis import _attach_sparse_animations, analyze_mod_inis
 from app.mods.controls import build_toggle_panel
-from core.ini.animations import (_identify_compute_shader,
-                                 _identify_shape_weight_operation,
-                                 _compute_condition_is_supported,
-                                 compute_animation_control_vars,
-                                 discover_animation_clocks,
-                                 discover_compute_animations,
-                                 discover_wwmi_sparse_animations)
+from core.ini.animations import _compute_condition_is_supported, compute_animation_control_vars, discover_animation_clocks, discover_compute_animations, discover_wwmi_sparse_animations
 from core.ini.analysis import analyze_ini
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.ini.dnf import build_bool_alias_map
@@ -19,78 +14,17 @@ from core.ini.sections import extract_resources, parse_sections
 from core.ini.toggles import extract_toggle_keys, extract_variable_defaults
 
 
-SHAPE_SHADER = """
-struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
-StructuredBuffer<VertexAttributes> base : register(t50);
-StructuredBuffer<VertexAttributes> shapekey : register(t51);
-Texture1D<float4> IniParams : register(t120);
-#define FREQ IniParams[88].x
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  uint i = threadID.x;
-  VertexAttributes diff;
-  diff.position = shapekey[i].position - base[i].position;
-  diff.normal = shapekey[i].normal - base[i].normal;
-  rw_buffer[i].position += diff.position * (0.5 * (sin(FREQ * 30) + 1));
-  rw_buffer[i].normal += diff.normal * (0.5 * (sin(FREQ * 30) + 1));
-}
-"""
+_DATA = Path(__file__).resolve().parents[2] / "data" / "animations"
 
-LINEAR_SHAPE_SHADER = """
-struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
-StructuredBuffer<VertexAttributes> base : register(t50);
-StructuredBuffer<VertexAttributes> shapekey : register(t51);
-Texture1D<float4> IniParams : register(t120);
-#define VALUE IniParams[88].x
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  uint i = threadID.x;
-  VertexAttributes diff;
-  diff.position = shapekey[i].position - base[i].position;
-  diff.normal = shapekey[i].normal - base[i].normal;
-  rw_buffer[i].position += diff.position * VALUE;
-  rw_buffer[i].normal += diff.normal * VALUE;
-}
-"""
 
-POSE_SHADER = """
-struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-struct BlendAttributes { float4 weights; int4 indicies; };
-struct PoseAttributes { float3 S; float3 T; float4 QR; float4 QD; };
-RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
-StructuredBuffer<VertexAttributes> base : register(t50);
-StructuredBuffer<BlendAttributes> blend : register(t51);
-StructuredBuffer<PoseAttributes> pose : register(t52);
-Texture1D<float4> IniParams : register(t120);
-#define TIME IniParams[88].x
-#define VG_COUNT IniParams[89].x
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  uint i = threadID.x;
-  BlendAttributes b = blend[i];
-  VertexAttributes v = base[i];
-  float time = frac(TIME);
-  PoseAttributes p = pose[b.indicies.x];
-  float4 qr = normalize(p.QR);
-  float4 qd = p.QD;
-  float sign = dot(qr, qr);
-  rw_buffer[i].position = v.position * p.S + p.T;
-  rw_buffer[i].normal = normalize(v.normal);
-}
-"""
+def _shader(name):
+    return (_DATA / name).read_text(encoding="utf-8")
 
-SWAP_YZ_SHADER = """
-[numthreads(64, 1, 1)]
-void main(uint3 threadID : SV_DispatchThreadID) {
-  float4 pos = float4(v.position.x, -v.position.z, v.position.y, 1.0f);
-  float4 normal = float4(v.normal.x, -v.normal.z, v.normal.y, 0.0f);
-  rw_buffer[i].position = float3(pos_result.x, pos_result.z, -pos_result.y);
-  rw_buffer[i].normal = normalize(float3(normal_result.x, normal_result.z,
-                                         -normal_result.y));
-}
-"""
+
+SHAPE_SHADER = _shader("shape.hlsl")
+LINEAR_SHAPE_SHADER = _shader("linear-shape.hlsl")
+POSE_SHADER = _shader("pose.hlsl")
+SWAP_YZ_SHADER = _shader("swap-yz-pose.hlsl")
 
 
 def _sections(root, *, stride=40, pose_bytes=None, shader=True):
@@ -179,7 +113,7 @@ ResourcePosition = ref cs-u5
 Dispatch = 1, 1, 1
 cs-u5 = null
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 ib = ResourceIB
@@ -209,17 +143,17 @@ filename = texcoord.buf
 format = DXGI_FORMAT_R32_UINT
 filename = index.buf
 """
-    return parse_sections("fixture.ini", text=text)
+    return parse_sections("source-01.ini", text=text)
 
 
 def _discover(root, sections):
     return discover_compute_animations(
         sections, extract_resources(sections), mod_dir=str(root),
-        ini_path=str(root / "fixture.ini"))
+        ini_path=str(root / "source-01.ini"))
 
 
 def test_animations_reject_unknown_ordered_alias_conditions():
-    sections = parse_sections("fixture.ini", text="""[Constants]
+    sections = parse_sections("source-01.ini", text="""[Constants]
 global $fps = 30
 global $start = 0
 global $end = 1
@@ -248,7 +182,7 @@ def test_compute_animations_reject_unknown_ordered_alias_guard(tmp_path):
 
     animations = discover_compute_animations(
         sections, extract_resources(sections), mod_dir=str(root),
-        ini_path=str(root / "fixture.ini"), condition_aliases=aliases)
+        ini_path=str(root / "source-01.ini"), condition_aliases=aliases)
 
     assert not any(animation.get("shape_passes") for animation in animations)
 
@@ -267,7 +201,7 @@ def _nested_sections(root):
         (root / name).write_bytes(position)
     (root / "texcoord.buf").write_bytes(b"\0" * 60)
     (root / "index.buf").write_bytes(struct.pack("<III", 0, 1, 2))
-    return parse_sections("fixture.ini", text="""
+    return parse_sections("source-01.ini", text="""
 [Constants]
 global $mode = 0
 global $hidden = 0
@@ -295,7 +229,7 @@ cs-t51 = copy ResourcePositionAnim
 cs = anim.hlsl
 Dispatch = 1, 1, 1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 ib = ResourceIB
@@ -333,64 +267,64 @@ void main(uint3 id : SV_DispatchThreadID) {
 
 
 def _wwmi_sparse_sections():
-    return parse_sections("fixture.ini", text=r"""
+    return parse_sections("source-01.ini", text=r"""
 [Constants]
-global $ChouChaAnim = 0
-global $gangChaAnim = 0
-global $ChouChaAnimSpeed = 0.25
-global $gangChaAnimSpeed = 0.5
-global $ChouChaFreq = 0
-global $gangChaFreq = 0
+global $input33 = 0
+global $input34 = 0
+global $input31 = 0.25
+global $input32 = 0.5
+global $phase01 = 0
+global $phase02 = 0
 global $dt
 
 [Present]
 if $object_detected
     if $mod_enabled
-        if $ChouChaAnim == 1
-            run = CommandListAnimChouCha
+        if $input33 == 1
+            run = CommandListAnimTrack01
         else
-            run = CommandListResetChouChaAnim
+            run = CommandListResetinput33
         endif
-        if $gangChaAnim == 1
-            run = CommandListAnimgangCha
+        if $input34 == 1
+            run = CommandListAnimTrack02
         else
-            run = CommandListResetgangChaAnim
+            run = CommandListResetinput34
         endif
     endif
 endif
 
-[CommandListAnimChouCha]
-$ChouChaFreq = $ChouChaFreq + $ChouChaAnimSpeed * $dt
-run = CustomShaderChouChaAnim
+[CommandListAnimTrack01]
+$phase01 = $phase01 + $input31 * $dt
+run = CustomShaderinput33
 
-[CommandListAnimGangCha]
-$gangChaFreq = $gangChaFreq + $gangChaAnimSpeed * $dt
-run = CustomShaderGangChaAnim
+[CommandListAnimTrack02]
+$phase02 = $phase02 + $input32 * $dt
+run = CustomShaderTrack02Anim
 
-[CommandListResetChouChaAnim]
+[CommandListResetinput33]
 $\WWMIv1\shapekey_id =
 $\WWMIv1\shapekey_value = 0
 run = WWMIv1SetShapeKey
 
-[CommandListResetGangChaAnim]
+[CommandListResetTrack02Anim]
 $\WWMIv1\shapekey_id =
 $\WWMIv1\shapekey_value = 0
 run = WWMIv1SetShapeKey
 
-[CustomShaderChouChaAnim]
+[CustomShaderinput33]
 cs-u5 = ResourceCustomShapeKeyValuesRW
 cs = res/anim.hlsl
 x0 = 0
 y0 =
-z0 = $ChouChaFreq
+z0 = $phase01
 dispatch = 1, 1, 1
 
-[CustomShaderGangChaAnim]
+[CustomShaderTrack02Anim]
 cs-u5 = ResourceCustomShapeKeyValuesRW
 cs = res/anim.hlsl
 x0 = 0
 y0 =
-z0 = $gangChaFreq
+z0 = $phase02
 dispatch = 1, 1, 1
 """)
 
@@ -420,7 +354,7 @@ def test_wwmi_sparse_animation_discovers_one_two_pass_track(tmp_path):
     _write_wwmi_offset_table(tmp_path, range(162, 168))
     discovered = discover_wwmi_sparse_animations(
         _wwmi_sparse_sections(), _wwmi_static_shapes(), mod_dir=str(tmp_path),
-        ini_path=str(tmp_path / "fixture.ini"))
+        ini_path=str(tmp_path / "source-01.ini"))
     assert len(discovered) == 1
     animation = discovered[0]
     assert animation["kind"] == "wwmi_sparse"
@@ -434,58 +368,40 @@ def test_wwmi_sparse_animation_discovers_one_two_pass_track(tmp_path):
         "amplitude": 0.5, "offset": 0.5,
     } for item in animation["shape_passes"])
     assert animation["program"]["external_variables"] == [
-        "ChouChaAnim", "ChouChaAnimSpeed", "gangChaAnim",
-        "gangChaAnimSpeed"]
+        "input31", "input32", "input33", "input34"]
     assert compute_animation_control_vars(discovered) == {
-        "ChouChaAnim", "ChouChaAnimSpeed", "gangChaAnim",
-        "gangChaAnimSpeed",
+        "input33", "input31", "input34",
+        "input32",
     }
     assert animation["program"]["initials"] == {
-        "ChouChaFreq": 0.0, "ChouChaAnimSpeed": 0.25,
-        "gangChaFreq": 0.0, "gangChaAnimSpeed": 0.5,
+        "phase01": 0.0, "input31": 0.25,
+        "phase02": 0.0, "input32": 0.5,
     }
     groups = [{"position_file": "Meshes/Position.buf", "draws": []}]
     _attach_sparse_animations(groups, discovered)
     assert groups[0]["_compute_animation"] is animation
 
 
-def test_wwmi_sparse_animation_rejects_missing_slots_or_shader(tmp_path):
-    root = tmp_path / "missing-slots"
+@pytest.mark.parametrize("case", [
+    "missing-slots", "unsupported-shader", "wrong-input", "missing-shader",
+])
+def test_wwmi_sparse_animation_rejects_missing_slots_or_shader(tmp_path, case):
+    root = tmp_path / "fixture-01"
     (root / "res").mkdir(parents=True)
-    (root / "res" / "anim.hlsl").write_text(WWMI_ANIMATION_SHADER)
-    _write_wwmi_offset_table(root, range(162, 166))
+    shader = WWMI_ANIMATION_SHADER
+    if case == "unsupported-shader":
+        shader = "[numthreads(1, 1, 1)] void main() { float value = z0; }"
+    elif case == "wrong-input":
+        shader = shader.replace(
+            "#define ShapeKeyValue IniParams[0].z",
+            "#define ShapeKeyValue IniParams[0].z\n#define Other IniParams[5].x",
+        ).replace("sin(shape_key_value*30)", "sin(Other*30)")
+    if case != "missing-shader":
+        (root / "res" / "anim.hlsl").write_text(shader)
+        _write_wwmi_offset_table(root, range(162, 166 if case == "missing-slots" else 168))
     assert discover_wwmi_sparse_animations(
         _wwmi_sparse_sections(), _wwmi_static_shapes(), mod_dir=str(root),
-        ini_path=str(root / "fixture.ini")) == []
-
-    unsupported = tmp_path / "unsupported-shader"
-    (unsupported / "res").mkdir(parents=True)
-    (unsupported / "res" / "anim.hlsl").write_text(
-        "[numthreads(1, 1, 1)] void main() { float value = z0; }")
-    _write_wwmi_offset_table(unsupported, range(162, 168))
-    assert discover_wwmi_sparse_animations(
-        _wwmi_sparse_sections(), _wwmi_static_shapes(),
-        mod_dir=str(unsupported), ini_path=str(unsupported / "fixture.ini")) == []
-
-    wrong_input = tmp_path / "wrong-input"
-    (wrong_input / "res").mkdir(parents=True)
-    wrong_channel_shader = WWMI_ANIMATION_SHADER.replace(
-        "#define ShapeKeyValue IniParams[0].z",
-        "#define ShapeKeyValue IniParams[0].z\n"
-        "#define Other IniParams[5].x").replace(
-            "sin(shape_key_value*30)", "sin(Other*30)")
-    (wrong_input / "res" / "anim.hlsl").write_text(wrong_channel_shader)
-    _write_wwmi_offset_table(wrong_input, range(162, 168))
-    assert discover_wwmi_sparse_animations(
-        _wwmi_sparse_sections(), _wwmi_static_shapes(),
-        mod_dir=str(wrong_input),
-        ini_path=str(wrong_input / "fixture.ini")) == []
-
-    missing = tmp_path / "missing-shader"
-    missing.mkdir()
-    assert discover_wwmi_sparse_animations(
-        _wwmi_sparse_sections(), _wwmi_static_shapes(), mod_dir=str(missing),
-        ini_path=str(missing / "fixture.ini")) == []
+        ini_path=str(root / "source-01.ini")) == []
 
 
 def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
@@ -496,34 +412,34 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
     _write_wwmi_offset_table(root, range(162, 168))
     sections = _wwmi_sparse_sections()
     sections["Constants"].extend([
-        "global $BoobsSize = 0", "global $NippleSize = 0",
-        "global $ShortClo = 0", "global $Pussy = 0",
+        "global $shape01 = 0", "global $shape02 = 0",
+        "global $Shape12 = 0", "global $Shape11 = 0",
         "global $shapekey_vertex_offset_batch1 = 0",
     ])
     sections.update({
-        "CommandListDrawSlider.Boobs": ["x87 = $BoobsSize * x87"],
-        "CommandListDrawSlider.Nipple": ["x87 = $NippleSize * x87"],
-        "CommandListDrawSlider.ShortClo": ["x87 = $ShortClo * x87"],
-        "CommandListDrawSlider.Pussy": ["x87 = $Pussy * x87"],
+        "CommandListDrawSlider.Shape01": ["x87 = $shape01 * x87"],
+        "CommandListDrawSlider.Shape02": ["x87 = $shape02 * x87"],
+        "CommandListDrawSlider.Shape12": ["x87 = $Shape12 * x87"],
+        "CommandListDrawSlider.Shape11": ["x87 = $Shape11 * x87"],
         "CommandListDrawSlider.AnimSpeed": [
-            "x87 = $ChouChaAnimSpeed * x87"],
-        "CommandListDrawSlider.gangSpeed": [
-            "x87 = $gangChaAnimSpeed * x87"],
-        "CommandListSetBoobs": [
+            "x87 = $input31 * x87"],
+        "CommandListDrawSlider.Input32Control": [
+            "x87 = $input32 * x87"],
+        "CommandListSetShape01": [
             r"$\WWMIv1\shapekey_id = 161",
-            r"$\WWMIv1\shapekey_value = $BoobsSize",
+            r"$\WWMIv1\shapekey_value = $shape01",
         ],
-        "CommandListSetNipple": [
+        "CommandListSetShape02": [
             r"$\WWMIv1\shapekey_id = 162",
-            r"$\WWMIv1\shapekey_value = $NippleSize",
+            r"$\WWMIv1\shapekey_value = $shape02",
         ],
-        "CommandListSetShortClo": [
+        "CommandListSetShape12": [
             r"$\WWMIv1\shapekey_id = 163",
-            r"$\WWMIv1\shapekey_value = $ShortClo",
+            r"$\WWMIv1\shapekey_value = $Shape12",
         ],
-        "CommandListSetPussy": [
+        "CommandListSetShape11": [
             r"$\WWMIv1\shapekey_id = 164",
-            r"$\WWMIv1\shapekey_value = $Pussy",
+            r"$\WWMIv1\shapekey_value = $Shape11",
         ],
         "CommandListSetupShapeKeysBatch": [
             "cs-t33 = ResourceShapeKeyOffsetBuffer"],
@@ -531,13 +447,13 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
             "cs-t0 = ResourceShapeKeyVertexIdBuffer",
             "cs-t1 = ResourceShapeKeyVertexOffsetBuffer"],
         "CommandListApplyShapeKeys": ["cs-t6 = ResourcePosition"],
-        "TextureOverrideBody": [
+        "TextureOverrideComponent01": [
             "vb0 = ResourcePosition", "vb1 = ResourceTexcoord",
             "ib = ResourceIB", "drawindexed = 3, 0, 0"],
         "ResourcePosition": ["stride = 12", "filename = Meshes/Position.buf"],
         "ResourceTexcoord": ["stride = 8", "filename = Meshes/Texcoord.buf"],
         "ResourceIB": ["format = DXGI_FORMAT_R32_UINT",
-                        "filename = Meshes/Body.ib"],
+                        "filename = Meshes/Component01.ib"],
         "ResourceShapeKeyOffsetBuffer": [
             "filename = Meshes/ShapeKeyOffset.buf"],
         "ResourceShapeKeyVertexIdBuffer": [
@@ -545,7 +461,7 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
         "ResourceShapeKeyVertexOffsetBuffer": [
             "filename = Meshes/ShapeKeyVertexOffset.buf"],
     })
-    ini = root / "fixture.ini"
+    ini = root / "source-01.ini"
     ini.write_text("\n".join(
         line for name, lines in sections.items()
         for line in [f"[{name}]", *map(str, lines), ""]))
@@ -555,25 +471,9 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
     animation = parsed.groups[0]["_compute_animation"]
     assert animation["kind"] == "wwmi_sparse"
     assert parsed.animation_control_vars == {
-        "ChouChaAnim", "ChouChaAnimSpeed", "gangChaAnim",
-        "gangChaAnimSpeed",
+        "input33", "input31", "input34",
+        "input32",
     }
-
-
-def test_wwmi_sparse_animation_rejects_nonblank_y0(tmp_path):
-    root = tmp_path / "nonblank-y0"
-    (root / "res").mkdir(parents=True)
-    (root / "res" / "anim.hlsl").write_text(WWMI_ANIMATION_SHADER)
-    _write_wwmi_offset_table(root, range(162, 168))
-    sections = _wwmi_sparse_sections()
-    for section in ("CustomShaderChouChaAnim", "CustomShaderGangChaAnim"):
-        y0_index = next(index for index, line in enumerate(sections[section])
-                        if line.strip().casefold() == "y0 =")
-        sections[section][y0_index] = "y0 = $SomeShape"
-
-    assert discover_wwmi_sparse_animations(
-        sections, _wwmi_static_shapes(), mod_dir=str(root),
-        ini_path=str(root / "fixture.ini")) == []
 
 
 def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
@@ -611,6 +511,7 @@ def test_nested_compute_animation_uses_only_inherited_child(tmp_path):
     built = build_mesh_result(analysis.draw_groups, str(root))
     payload = next(iter(built.meshes.values()))["animation_geometry"]
     assert payload["kind"] == "gimi_compute"
+    assert payload["coordinate_transform"] == "identity"
     assert payload["overlay"] is True
     assert payload["conditions"] == animation["conditions"]
 
@@ -640,26 +541,6 @@ def test_nested_animation_is_fallback_for_supported_parent_chain(tmp_path):
     assert any(command["op"] == "dispatch"
                and command["kind"] == "shape"
                for command in discovered[0]["program"]["commands"])
-
-
-def test_nested_animation_rejects_mismatched_parent_u5_and_t50(tmp_path):
-    root = tmp_path / "mismatched-bindings"
-    sections = _nested_sections(root)
-    sections["CustomShaderParent"] = [
-        line.replace(
-            "cs-u5 = copy ResourcePositionBase",
-            "cs-u5 = copy ResourcePositionOther")
-        for line in sections["CustomShaderParent"]]
-
-    assert not _discover(root, sections)
-
-
-def test_nested_animation_rejects_unsupported_parent_condition(tmp_path):
-    root = tmp_path / "unsupported-condition"
-    sections = _nested_sections(root)
-    sections["CustomShaderParent"][0] = "if $mode > 1"
-
-    assert not _discover(root, sections)
 
 
 def test_nested_animation_rejects_multiple_children_for_one_output(tmp_path):
@@ -784,38 +665,6 @@ def test_key_self_clearing_animation_input_stays_external(tmp_path):
     assert set(panel) == {"KeyPause", "KeyAnime"}
 
 
-def test_compute_animation_reads_shader_metadata():
-    adapter = _identify_compute_shader(POSE_SHADER)
-    assert adapter["threads"] == 64
-    assert adapter["coordinate_transform"] == "identity"
-    assert adapter["weight_operation"] is None
-
-
-def test_compute_animation_identifies_coordinate_transform():
-    adapter = _identify_compute_shader(SWAP_YZ_SHADER)
-    assert adapter["coordinate_transform"] == "swap_yz_negate"
-
-
-def test_shape_weight_operation_describes_supported_hlsl_semantics():
-    assert _identify_shape_weight_operation(
-        WWMI_ANIMATION_SHADER, (0, "z"),
-        require_delta_application=False) == {
-        "kind": "sine", "scale": 30.0,
-        "amplitude": 0.5, "offset": 0.5,
-    }
-    assert _identify_shape_weight_operation(
-        "[numthreads(1,1,1)] void main() { float3 value = 1; }",
-        (88, "x"), require_delta_application=True) is None
-    assert _identify_shape_weight_operation(
-        WWMI_ANIMATION_SHADER.replace("*30", "*31"), (0, "z"),
-        require_delta_application=False) is None
-    assert _identify_shape_weight_operation(
-        LINEAR_SHAPE_SHADER, (88, "x"),
-        require_delta_application=True) == {
-        "kind": "linear",
-    }
-
-
 @pytest.mark.parametrize(("name", "shader"), [
     ("sine", SHAPE_SHADER), ("linear", LINEAR_SHAPE_SHADER),
 ])
@@ -841,6 +690,7 @@ def test_compute_animation_rejects_shape_weight_from_wrong_ini_channel(
 def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     root = tmp_path / "packed"
     sections = _sections(root)
+    (root / "pose.hlsl").write_text(POSE_SHADER + SWAP_YZ_SHADER)
     resources = extract_resources(sections)
     animation = _discover(root, sections)
     analysis = analyze_ini(sections, resources=resources)
@@ -852,6 +702,7 @@ def test_compute_inputs_follow_compact_draw_order_and_share_pose_blob(tmp_path):
     entry = next(iter(built.meshes.values()))
     payload = entry["animation_geometry"]
     assert payload["kind"] == "gimi_compute"
+    assert payload["coordinate_transform"] == "swap_yz_negate"
     assert payload["vertex_count"] == 3
     assert len(payload["shape_passes"]) == 2
     raw_normals = geometry.to_bytes()[
@@ -898,9 +749,9 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
     root = tmp_path / "shape-only"
     sections = _sections(root)
     sections.pop("CustomShaderPose")
-    sections["TextureOverrideBody"] = [
+    sections["TextureOverrideComponent01"] = [
         line.replace("vb0 = ResourcePosition", "vb0 = ResourcePosition.1")
-        for line in sections["TextureOverrideBody"]]
+        for line in sections["TextureOverrideComponent01"]]
 
     discovered = _discover(root, sections)
 
@@ -915,7 +766,7 @@ def test_compute_animation_accepts_shape_only_chain(tmp_path):
     assert len(payload["shape_passes"]) == 2
 
 
-def _write_lucy_shape_fixture(root, shader, *, authored_slider=False):
+def _write_shape_fixture(root, shader, *, authored_slider=False):
     root.mkdir()
     (root / "Shapes.hlsl").write_text(shader)
     vertex_data = bytearray()
@@ -927,12 +778,12 @@ def _write_lucy_shape_fixture(root, shader, *, authored_slider=False):
         flat_data.extend(struct.pack("<fff", x + 1., 0., 0.))
         flat_data.extend(struct.pack("<fff", 0., 3., 0.))
         flat_data.extend(b"\0" * 16)
-    (root / "BodyPosition.buf").write_bytes(vertex_data)
-    (root / "BodyPosition.Rest.buf").write_bytes(vertex_data)
-    (root / "BodyPositionFlat.buf").write_bytes(flat_data)
-    (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
-    (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
-    ini = root / "LucySummer.ini"
+    (root / "Component01Position.buf").write_bytes(vertex_data)
+    (root / "Component01Position.Rest.buf").write_bytes(vertex_data)
+    (root / "Component01PositionFlat.buf").write_bytes(flat_data)
+    (root / "Component01Texcoord.buf").write_bytes(b"\0" * 60)
+    (root / "Component01.ib").write_bytes(struct.pack("<III", 0, 1, 2))
+    ini = root / "source-01.ini"
     slider_section = ("\n[CommandListDrawSlider.Flat]\n"
                       "x87 = $currFlat * x87\n" if authored_slider else "")
     ini.write_text(f"""
@@ -942,35 +793,35 @@ global persist $currFlat = 0.5
 
 [CustomShaderComputeShapes]
 cs = Shapes.hlsl
-cs-u5 = copy ResourceBodyOriginal
+cs-u5 = copy ResourceComponent01Original
 x88 = $currFlat
-cs-t50 = copy ResourceBodyOriginal
-cs-t51 = copy ResourceBodyFlat
-ResourceBodyPosition = ref cs-u5
+cs-t50 = copy ResourceComponent01Original
+cs-t51 = copy ResourceComponent01Flat
+ResourceComponent01Position = ref cs-u5
 Dispatch = 1, 1, 1
 cs-u5 = null
 
-[TextureOverrideBody]
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
-ib = ResourceBodyIB
+[TextureOverrideComponent01]
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+ib = ResourceComponent01IB
 drawindexed = 3, 0, 0
 
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 stride = 40
-filename = BodyPosition.buf
-[ResourceBodyOriginal]
+filename = Component01Position.buf
+[ResourceComponent01Original]
 stride = 40
-filename = BodyPosition.Rest.buf
-[ResourceBodyFlat]
+filename = Component01Position.Rest.buf
+[ResourceComponent01Flat]
 stride = 40
-filename = BodyPositionFlat.buf
-[ResourceBodyTexcoord]
+filename = Component01PositionFlat.buf
+[ResourceComponent01Texcoord]
 stride = 20
-filename = BodyTexcoord.buf
-[ResourceBodyIB]
+filename = Component01Texcoord.buf
+[ResourceComponent01IB]
 format = DXGI_FORMAT_R32_UINT
-filename = Body.ib
+filename = Component01.ib
 """.strip() + "\n", encoding="utf-8")
     return ini
 
@@ -985,15 +836,15 @@ def _write_linear_shape_chain_fixture(
         base.extend(struct.pack("<fff", x, 0., 0.))
         base.extend(struct.pack("<fff", 0., 2., 0.))
         base.extend(b"\0" * 16)
-    (root / "BodyPosition.buf").write_bytes(base)
-    (root / "BodyPosition.Rest.buf").write_bytes(base)
-    (root / "BodyTexcoord.buf").write_bytes(b"\0" * 60)
-    (root / "Body.ib").write_bytes(struct.pack("<III", 0, 1, 2))
+    (root / "Component01Position.buf").write_bytes(base)
+    (root / "Component01Position.Rest.buf").write_bytes(base)
+    (root / "Component01Texcoord.buf").write_bytes(b"\0" * 60)
+    (root / "Component01.ib").write_bytes(struct.pack("<III", 0, 1, 2))
 
     targets = []
     for index, variable in enumerate(phase_vars, 1):
         target_name = f"Shape{index}"
-        target_file = f"BodyPosition{target_name}.buf"
+        target_file = f"Component01Position{target_name}.buf"
         target = bytearray()
         for x in (0., 1., 2.):
             target.extend(struct.pack("<fff", x + index, 0., 0.))
@@ -1010,9 +861,9 @@ def _write_linear_shape_chain_fixture(
         f"${phase_vars[0]} = ${phase_vars[0]} + "
         f"($target_{phase_vars[0]} - ${phase_vars[0]}) * $Speed * $dt",
         "", "[CustomShaderComputeShapeChain]",
-        "cs-u5 = copy ResourceBodyPosition.SomeRestBuffer",
+        "cs-u5 = copy ResourceComponent01Position.SomeRestBuffer",
         "cs = Shapes.hlsl",
-        "ResourceBodyPosition = ref cs-u5",
+        "ResourceComponent01Position = ref cs-u5",
     ])
     for variable, target_name, _target_file in targets:
         if variable in program_assigned:
@@ -1020,8 +871,8 @@ def _write_linear_shape_chain_fixture(
                 f"${variable} = ${variable} + $Speed * $dt")
         lines.extend([
             f"x88 = ${variable}",
-            "cs-t50 = copy ResourceBodyPosition.SomeRestBuffer",
-            f"cs-t51 = copy ResourceBodyPosition.{target_name}",
+            "cs-t50 = copy ResourceComponent01Position.SomeRestBuffer",
+            f"cs-t51 = copy ResourceComponent01Position.{target_name}",
             "Dispatch = 1, 1, 1",
         ])
     lines.append("cs-u5 = null")
@@ -1032,28 +883,28 @@ def _write_linear_shape_chain_fixture(
         ])
 
     lines.extend([
-        "", "[TextureOverrideBody]",
-        "vb0 = ResourceBodyPosition",
-        "vb1 = ResourceBodyTexcoord",
-        "ib = ResourceBodyIB",
+        "", "[TextureOverrideComponent01]",
+        "vb0 = ResourceComponent01Position",
+        "vb1 = ResourceComponent01Texcoord",
+        "ib = ResourceComponent01IB",
         "drawindexed = 3, 0, 0",
-        "", "[ResourceBodyPosition]",
-        "stride = 40", "filename = BodyPosition.buf",
+        "", "[ResourceComponent01Position]",
+        "stride = 40", "filename = Component01Position.buf",
     ])
     for _variable, target_name, target_file in targets:
         lines.extend([
-            "", f"[ResourceBodyPosition.{target_name}]",
+            "", f"[ResourceComponent01Position.{target_name}]",
             "stride = 40", f"filename = {target_file}",
         ])
     lines.extend([
-        "", "[ResourceBodyPosition.SomeRestBuffer]",
-        "stride = 40", "filename = BodyPosition.Rest.buf",
+        "", "[ResourceComponent01Position.SomeRestBuffer]",
+        "stride = 40", "filename = Component01Position.Rest.buf",
     ])
     lines.extend([
-        "", "[ResourceBodyTexcoord]",
-        "stride = 20", "filename = BodyTexcoord.buf",
-        "", "[ResourceBodyIB]",
-        "format = DXGI_FORMAT_R32_UINT", "filename = Body.ib", "",
+        "", "[ResourceComponent01Texcoord]",
+        "stride = 20", "filename = Component01Texcoord.buf",
+        "", "[ResourceComponent01IB]",
+        "format = DXGI_FORMAT_R32_UINT", "filename = Component01.ib", "",
     ])
     ini = root / "ShapeChain.ini"
     ini.write_text("\n".join(lines), encoding="utf-8")
@@ -1061,54 +912,23 @@ def _write_linear_shape_chain_fixture(
 
 
 def test_plain_shape_slider_is_not_claimed_by_compute_animation(tmp_path):
-    ini = _write_lucy_shape_fixture(
-        tmp_path / "lucy-like", LINEAR_SHAPE_SHADER, authored_slider=True)
+    ini = _write_shape_fixture(
+        tmp_path / "fixture-01", LINEAR_SHAPE_SHADER, authored_slider=True)
 
     parsed = analyze_mod_inis([str(ini)], str(ini.parent))
     group = parsed.groups[0]
     assert [slider["var"] for slider in group["shape_sliders"]] == [
         "currFlat"]
     assert group["shape_sliders"][0]["authored_slider"] is True
-    assert group["shape_sliders"][0]["base_file"] == "BodyPosition.buf"
+    assert group["shape_sliders"][0]["base_file"] == "Component01Position.buf"
     assert (group["shape_sliders"][0]["shader_base_file"] ==
-            "BodyPosition.Rest.buf")
+            "Component01Position.Rest.buf")
     assert "_compute_animation" not in group
 
     built = build_mesh_result(parsed.groups, str(ini.parent))
     entry = next(iter(built.meshes.values()))
     assert entry["shape_targets"]
     assert "animation_geometry" not in entry
-
-
-def test_all_authored_shape_chain_passes_use_slider_path(tmp_path):
-    variables = ("shapeOne", "shapeTwo", "shapeThree")
-    ini = _write_linear_shape_chain_fixture(
-        tmp_path / "linear-chain", variables, authored_vars=variables)
-
-    parsed = analyze_mod_inis([str(ini)], str(ini.parent))
-    group = parsed.groups[0]
-    sliders = {item["var"]: item for item in group["shape_sliders"]}
-    assert set(sliders) == set(variables)
-    assert all(item["authored_slider"] is True for item in sliders.values())
-    assert all(item["base_file"] == "BodyPosition.buf"
-               and item["shader_base_file"] == "BodyPosition.Rest.buf"
-               for item in sliders.values())
-    assert "_compute_animation" not in group
-
-    built = build_mesh_result(parsed.groups, str(ini.parent))
-    entry = next(iter(built.meshes.values()))
-    assert len(entry["shape_targets"]) == 3
-    assert "animation_geometry" not in entry
-
-
-def test_single_pass_sinusoidal_shape_without_authored_slider_stays_compute(
-        tmp_path):
-    ini = _write_lucy_shape_fixture(tmp_path / "sinusoidal", SHAPE_SHADER)
-
-    parsed = analyze_mod_inis([str(ini)], str(tmp_path / "sinusoidal"))
-    group = parsed.groups[0]
-    assert group.get("shape_sliders", []) == []
-    assert group.get("_compute_animation") is not None
 
 
 def test_mixed_slider_and_animation_pass_keeps_compute_chain(tmp_path):
@@ -1161,7 +981,7 @@ ResourceOutput = ref cs-u5
 Dispatch = 1, 1, 1
 cs-u5 = null
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourceOutput
 vb1 = ResourceTexcoord
 ib = ResourceIB
