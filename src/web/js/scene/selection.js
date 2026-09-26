@@ -15,8 +15,8 @@ import {
 } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
 import {
-  getLoosePartSource, getLooseParts, setLoosePartSelectionCleanup,
-  separateSelectedTriangles,
+  getLoosePartSource, getLooseParts, indicesForTriangles,
+  setLoosePartSelectionCleanup, separateSelectedTriangles,
 } from '../mesh/loose-parts.js';
 import {
   isRigTransformInteractionActive, isRigJointPickingActive,
@@ -30,7 +30,6 @@ let downX = 0;
 let downY = 0;
 let boxGesture = null;
 let selectionBox = null;
-let activeMeshEditSource = null;
 let faceSelection = null;
 let selectionInitialized = false;
 
@@ -64,25 +63,6 @@ function expandAncestorsAndScrollTo(row) {
 function dispatchSelectionChanged() {
   window.dispatchEvent(new CustomEvent('mod-viewer-mesh-selected', {
     detail: {mesh: primary, meshes: [...selected]},
-  }));
-  requestRender();
-}
-
-function dispatchFaceSelectionChanged() {
-  window.dispatchEvent(new CustomEvent('mod-viewer-face-selection-changed', {
-    detail: {
-      source: activeMeshEditSource,
-      target: faceSelection?.target || null,
-      triangles: faceSelection ? [...faceSelection.triangles] : [],
-      active: !!faceSelection,
-    },
-  }));
-  requestRender();
-}
-
-function dispatchMeshEditOwnerChanged() {
-  window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-owner-changed', {
-    detail: {source: activeMeshEditSource},
   }));
   requestRender();
 }
@@ -156,31 +136,14 @@ export function getMeshEditSource(mesh) {
 }
 
 export function getActiveMeshEditSource() {
-  return activeMeshEditSource;
+  if (faceSelection) return faceSelection.source;
+  return activeMeshes.find(mesh => getLooseParts(mesh).length) || null;
 }
 
 export function canEditMesh(mesh) {
   const source = getMeshEditSource(mesh);
-  return !!source && (!activeMeshEditSource || activeMeshEditSource === source);
-}
-
-export function acquireMeshEditSource(mesh) {
-  const source = getMeshEditSource(mesh);
-  if (!source || (activeMeshEditSource && activeMeshEditSource !== source)) {
-    return false;
-  }
-  if (activeMeshEditSource === source) return true;
-  activeMeshEditSource = source;
-  dispatchMeshEditOwnerChanged();
-  return true;
-}
-
-export function releaseMeshEditSource(source = activeMeshEditSource) {
-  if (!source || activeMeshEditSource !== source
-      || (faceSelection && faceSelection.source === source)) return false;
-  activeMeshEditSource = null;
-  dispatchMeshEditOwnerChanged();
-  return true;
+  const activeSource = getActiveMeshEditSource();
+  return !!source && (!activeSource || activeSource === source);
 }
 
 export function getFaceSelection() {
@@ -189,20 +152,6 @@ export function getFaceSelection() {
 
 export function getSelectedFaceTriangles() {
   return faceSelection ? [...faceSelection.triangles] : [];
-}
-
-function overlayIndices(source, triangles) {
-  const index = source?.geometry?.index;
-  if (!index) return null;
-  const IndexArray = index.array?.constructor || Uint32Array;
-  const indices = new IndexArray(triangles.length * 3);
-  triangles.forEach((triangle, indexOffset) => {
-    const offset = triangle * 3;
-    indices[indexOffset * 3] = index.getX(offset);
-    indices[indexOffset * 3 + 1] = index.getX(offset + 1);
-    indices[indexOffset * 3 + 2] = index.getX(offset + 2);
-  });
-  return indices;
 }
 
 function createFaceOverlay(state) {
@@ -249,8 +198,8 @@ function updateFaceOverlay() {
     faceSelection.topologyOverlay.visible = faceSelection.target.visible;
   }
   if (!faceSelection.overlay) return;
-  const indices = overlayIndices(
-    faceSelection.source, [...faceSelection.triangles]);
+  const indices = indicesForTriangles(
+    faceSelection.source.geometry, [...faceSelection.triangles]);
   if (!indices) return;
   faceSelection.overlay.geometry.setIndex(
     new THREE.BufferAttribute(indices, 1));
@@ -279,18 +228,18 @@ export function beginFaceSelection(target) {
       || (faceSelection && (faceSelection.source !== source
         || faceSelection.target !== target))) return false;
   if (faceSelection) return true;
-  if (!acquireMeshEditSource(source)) return false;
+  const activeSource = getActiveMeshEditSource();
+  if (activeSource && activeSource !== source) return false;
   faceSelection = {
     source,
     target,
     triangles: new Set(),
     topologyOverlay: null,
     overlay: null,
-    startedWithLooseParts: parts.length > 0,
   };
   createFaceOverlay(faceSelection);
   selectMesh(target);
-  dispatchFaceSelectionChanged();
+  requestRender();
   return true;
 }
 
@@ -299,23 +248,25 @@ function clearFaceSelectionState() {
   if (!state) return null;
   disposeFaceOverlay(state);
   faceSelection = null;
-  dispatchFaceSelectionChanged();
+  requestRender();
   return state;
 }
 
 export function cancelFaceSelection() {
-  const state = clearFaceSelectionState();
-  if (!state) return false;
-  if (!state.startedWithLooseParts && !getLooseParts(state.source).length) {
-    releaseMeshEditSource(state.source);
-  }
-  return true;
+  return !!clearFaceSelectionState();
 }
 
 export function applyFaceSelection({label = null} = {}) {
   if (!faceSelection) return null;
   const state = faceSelection;
-  const selectedTriangles = [...state.triangles];
+  const targetTriangles = Array.isArray(state.target.userData?.loosePartTriangles)
+    ? [...state.target.userData.loosePartTriangles]
+    : Array.from({length: Math.floor(
+      Number(state.source.geometry?.index?.count || 0) / 3)},
+    (_, triangle) => triangle);
+  const selectedSet = new Set(state.triangles);
+  const selectedTriangles = targetTriangles.filter(triangle =>
+    selectedSet.has(triangle));
   const targetCount = Array.isArray(state.target.userData?.loosePartTriangles)
     ? state.target.userData.loosePartTriangles.length
     : Math.floor(Number(state.source.geometry?.index?.count || 0) / 3);
@@ -325,16 +276,11 @@ export function applyFaceSelection({label = null} = {}) {
   clearFaceSelectionState();
   const result = separateSelectedTriangles(state.target, selectedTriangles, {label});
   if (!result) return null;
-  window.dispatchEvent(new CustomEvent('mod-viewer-face-selection-applied', {
-    detail: {...result, selectedTriangles},
-  }));
   return result;
 }
 
 export function resetMeshEditState() {
   if (faceSelection) clearFaceSelectionState();
-  activeMeshEditSource = null;
-  dispatchMeshEditOwnerChanged();
 }
 
 function removeMeshFromSelection(mesh) {
@@ -443,7 +389,7 @@ function onPointerUp(event) {
         });
         triangles.forEach(triangle => faceSelection.triangles.add(triangle));
         updateFaceOverlay();
-        dispatchFaceSelectionChanged();
+        requestRender();
       } else {
         addMeshesToSelection(meshesInClientRect({
           meshes: activeMeshes,
@@ -471,8 +417,6 @@ function onPointerUp(event) {
   if (Math.hypot(event.clientX - downX, event.clientY - downY)
       > DRAG_THRESHOLD_PIXELS) return;
   if (faceSelection) {
-    if (Math.hypot(event.clientX - downX, event.clientY - downY)
-        > DRAG_THRESHOLD_PIXELS) return;
     const hit = raycastModelAtClientPoint({
       clientX: event.clientX,
       clientY: event.clientY,
@@ -509,7 +453,7 @@ function updateFaceSelectionFromClick(event, hit) {
     faceSelection.triangles.add(triangle);
   }
   updateFaceOverlay();
-  dispatchFaceSelectionChanged();
+  requestRender();
 }
 
 function onPointerCancel(event) {

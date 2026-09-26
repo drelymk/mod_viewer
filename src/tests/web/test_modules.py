@@ -23,7 +23,7 @@ def _call_module(page, module_path, export_name, *args):
 def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {findLooseParts, separateLooseParts, clearLooseParts,
+      const {separateLooseParts, clearLooseParts,
         syncLoosePartMaterial} =
         await import('./js/mesh/loose-parts.js');
       const makeMesh = (positions, indices) => {
@@ -34,7 +34,12 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
           new Uint32Array(indices), 1));
         return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
       };
-      const parts = mesh => findLooseParts(mesh).map(index => Array.from(index));
+      const parts = mesh => {
+        const created = separateLooseParts(mesh);
+        const triangles = created.map(part => part.userData.loosePartTriangles);
+        clearLooseParts(mesh);
+        return triangles;
+      };
       const disconnected = makeMesh([
         0, 0, 0, 1, 0, 0, 0, 1, 0,
         10, 0, 0, 11, 0, 0, 10, 1, 0,
@@ -125,11 +130,11 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
         },
       };
     }""")
-    assert result["disconnected"] == [[0, 1, 2], [3, 4, 5]]
+    assert result["disconnected"] == [[0], [1]]
     assert result["connected"] == []
     assert result["duplicatedSeam"] == []
-    assert result["nearlyIdentical"] == [[0, 1, 2], [3, 4, 5]]
-    assert result["ordered"] == [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    assert result["nearlyIdentical"] == [[0], [1]]
+    assert result["ordered"] == [[0], [1], [2]]
     assert result["oneIsland"] == []
     assert result["beforeCleanup"] == {
         "labels": ["Fixture - Part 1", "Fixture - Part 2"],
@@ -154,7 +159,8 @@ def test_loose_part_detection_uses_exact_positions_and_shares_attributes(module_
 def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {findLooseParts} = await import('./js/mesh/loose-parts.js');
+       const {clearLooseParts, separateLooseParts} =
+         await import('./js/mesh/loose-parts.js');
       const makeMesh = positions => {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(
@@ -174,8 +180,12 @@ def test_loose_part_tolerance_uses_spatial_neighbors_and_exact_boundaries(module
         0.00199, 0, 0, 1, 0, 0, 0, 1, 0,
         0.00201, 0, 0, 2, 0, 0, 1, 1, 0,
       ]);
-      const count = (mesh, tolerance) =>
-        findLooseParts(mesh, {tolerance}).length;
+       const count = (mesh, tolerance) => {
+         const parts = separateLooseParts(mesh, {tolerance});
+         const count = parts.length;
+         clearLooseParts(mesh);
+         return count;
+       };
       return {
         largerGap: count(gapped, 0.0001),
         insideGap: count(gapped, 0.002),
@@ -335,7 +345,7 @@ def test_selected_triangle_split_preserves_authored_partition_and_part_order(
         return new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial());
       };
       const clean = makeSource();
-      const cleanResult = separateSelectedTriangles(clean, [2, 4]);
+       const cleanResult = separateSelectedTriangles(clean, [4, 2]);
       const loose = makeSource();
       const parts = separateLooseParts(loose, {label: 'Split'});
       const existingResult = separateSelectedTriangles(parts[1], [2]);
@@ -343,7 +353,6 @@ def test_selected_triangle_split_preserves_authored_partition_and_part_order(
         triangles: part.userData.loosePartTriangles,
         index: Array.from(part.geometry.index.array),
         label: part.userData.loosePartLabel,
-        loosePartIndex: part.userData.loosePartIndex,
       }));
       const cleanPartition = clean.userData.looseParts.map(part =>
         part.userData.loosePartTriangles);
@@ -363,14 +372,14 @@ def test_selected_triangle_split_preserves_authored_partition_and_part_order(
         "existingRemainder": [1, 3],
         "existingSelected": [2],
         "partition": [
-            {"triangles": [0], "index": [0, 1, 2],
-             "label": "Split - Part 1", "loosePartIndex": 0},
+             {"triangles": [0], "index": [0, 1, 2],
+             "label": "Split - Part 1"},
             {"triangles": [1, 3], "index": [3, 4, 5, 6, 4, 7],
-             "label": "Split - Part 2", "loosePartIndex": 1},
+             "label": "Split - Part 2"},
             {"triangles": [2], "index": [5, 4, 6],
-             "label": "Split - Part 3", "loosePartIndex": 2},
+             "label": "Split - Part 3"},
             {"triangles": [4], "index": [8, 9, 10],
-             "label": "Split - Part 4", "loosePartIndex": 3},
+             "label": "Split - Part 4"},
         ],
     }
 

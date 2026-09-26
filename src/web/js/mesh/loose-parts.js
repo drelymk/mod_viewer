@@ -49,7 +49,7 @@ export function normalizeLoosePartTolerance(value) {
     && tolerance <= MAX_LOOSE_PART_TOLERANCE ? tolerance : null;
 }
 
-/** Find original index-buffer subsets and triangle ordinals for each island. */
+/** Find triangle ordinals for each connected island. */
 function findLoosePartGroups(mesh, {tolerance = 0} = {}) {
   const geometry = mesh?.geometry;
   const index = geometry?.index;
@@ -125,28 +125,16 @@ function findLoosePartGroups(mesh, {tolerance = 0} = {}) {
   const groups = new Map();
   for (let triangle = 0; triangle < triangleCount; triangle += 1) {
     const root = components.find(triangle);
-    let indices = groups.get(root);
-    if (!indices) {
-      indices = {indices: [], triangles: []};
-      groups.set(root, indices);
+    let group = groups.get(root);
+    if (!group) {
+      group = {triangles: []};
+      groups.set(root, group);
     }
-    const offset = triangle * 3;
-    indices.indices.push(index.getX(offset), index.getX(offset + 1),
-      index.getX(offset + 2));
-    indices.triangles.push(triangle);
+    group.triangles.push(triangle);
   }
   if (groups.size <= 1) return [];
 
-  const IndexArray = index.array?.constructor || Uint32Array;
-  return [...groups.values()].map(group => ({
-    indices: new IndexArray(group.indices),
-    triangles: group.triangles,
-  }));
-}
-
-/** Preserve the original viewer API while keeping provenance internally. */
-export function findLooseParts(mesh, options = {}) {
-  return findLoosePartGroups(mesh, options).map(group => group.indices);
+  return [...groups.values()];
 }
 
 function copyGeometryAttributes(sourceGeometry, partGeometry) {
@@ -160,40 +148,20 @@ function copyGeometryAttributes(sourceGeometry, partGeometry) {
   partGeometry.morphTargetsRelative = sourceGeometry.morphTargetsRelative;
 }
 
-function loosePartLabelBase(source, label = null) {
-  if (label) return label;
-  if (source.userData?.loosePartLabelBase) {
-    return source.userData.loosePartLabelBase;
-  }
-  const existing = source.userData?.looseParts?.[0]?.userData?.loosePartLabel;
-  if (existing) {
-    return existing.replace(/\s+-\s+Part\s+\d+$/, '');
-  }
-  return source.userData?.displayName || source.name || 'Mesh';
-}
-
-function rememberLoosePartLabelBase(source, label = null) {
-  const base = loosePartLabelBase(source, label);
-  source.userData.loosePartLabelBase = base;
-  return base;
-}
-
-function partLabel(source, index, label) {
-  const base = rememberLoosePartLabelBase(source, label);
-  return `${base} - Part ${index + 1}`;
-}
-
-function normalizeLooseParts(source) {
+function normalizeLooseParts(source, label = null) {
   const parts = getLooseParts(source);
   if (!parts.length) return;
-  const base = rememberLoosePartLabelBase(source);
+  const existing = parts[0].userData?.loosePartLabel;
+  const base = label || source.userData?.loosePartLabelBase
+    || (existing ? existing.replace(/\s+-\s+Part\s+\d+$/, '') : null)
+    || source.userData?.displayName || source.name || 'Mesh';
+  source.userData.loosePartLabelBase = base;
   parts.forEach((part, index) => {
-    part.userData.loosePartIndex = index;
     part.userData.loosePartLabel = `${base} - Part ${index + 1}`;
   });
 }
 
-function indicesForTriangles(sourceGeometry, triangles) {
+export function indicesForTriangles(sourceGeometry, triangles) {
   const sourceIndex = sourceGeometry?.index;
   if (!sourceIndex || !Array.isArray(triangles)) return null;
   const sourceTriangleCount = Math.floor(sourceIndex.count / 3);
@@ -211,7 +179,7 @@ function indicesForTriangles(sourceGeometry, triangles) {
 }
 
 function createLoosePart(source, triangles, {
-  index = 0, label = null, template = null, copyTransform = true,
+  index = 0, template = null, copyTransform = true,
 } = {}) {
   const sourceGeometry = source?.geometry;
   const partIndex = indicesForTriangles(sourceGeometry, triangles);
@@ -246,8 +214,6 @@ function createLoosePart(source, triangles, {
     part.userData.manualVisible = true;
   }
   part.userData.loosePartParent = source;
-  part.userData.loosePartIndex = index;
-  part.userData.loosePartLabel = label || partLabel(source, index, null);
   part.userData.loosePartTriangles = [...triangles];
   attachOutline(part);
   source.add(part);
@@ -275,7 +241,6 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
     count: sourceGeometry.drawRange.count,
   };
   source.userData.looseParts = [];
-  rememberLoosePartLabelBase(source, label);
   sourceGeometry.setDrawRange(0, 0);
 
   for (const [partIndex, group] of groups.entries()) {
@@ -288,7 +253,7 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
     }
     source.userData.looseParts.push(part);
   }
-  normalizeLooseParts(source);
+  normalizeLooseParts(source, label);
   return source.userData.looseParts;
 }
 
@@ -315,12 +280,17 @@ export function separateSelectedTriangles(target, selectedTriangles, {
   const targetTriangles = target === source
     ? sourceTriangleOrdinals(source)
     : [...(target.userData?.loosePartTriangles || [])];
-  const available = new Set(targetTriangles);
-  const selected = [...new Set(selectedTriangles || [])]
-    .filter(triangle => Number.isInteger(triangle));
-  if (!selected.length || selected.length >= targetTriangles.length
-      || selected.some(triangle => !available.has(triangle))) return null;
-  const selectedSet = new Set(selected);
+  const requested = [...new Set(selectedTriangles || [])];
+  if (!requested.length || requested.some(triangle => !Number.isInteger(triangle))) {
+    return null;
+  }
+  if (target === source && requested.some(triangle =>
+    triangle < 0 || triangle >= targetTriangles.length)) return null;
+  if (target !== source && requested.some(triangle =>
+    !targetTriangles.includes(triangle))) return null;
+  if (requested.length >= targetTriangles.length) return null;
+  const selectedSet = new Set(requested);
+  const selected = targetTriangles.filter(triangle => selectedSet.has(triangle));
   const remainderTriangles = targetTriangles.filter(
     triangle => !selectedSet.has(triangle));
   if (!remainderTriangles.length) return null;
@@ -336,7 +306,6 @@ export function separateSelectedTriangles(target, selectedTriangles, {
       count: sourceGeometry.drawRange.count,
     };
     source.userData.looseParts = [];
-    rememberLoosePartLabelBase(source, label);
     sourceGeometry.setDrawRange(0, 0);
     const remainder = createLoosePart(source, remainderTriangles, {
       index: 0, template: source,
@@ -352,7 +321,7 @@ export function separateSelectedTriangles(target, selectedTriangles, {
       clearLooseParts(source);
       return null;
     }
-    normalizeLooseParts(source);
+    normalizeLooseParts(source, label);
     return {source, target, remainder, selected: selectedPart, full: false};
   }
 

@@ -15,10 +15,10 @@ import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import {
-  addMeshesToSelection, acquireMeshEditSource, applyFaceSelection, beginFaceSelection,
+  addMeshesToSelection, applyFaceSelection, beginFaceSelection,
   canEditMesh, cancelFaceSelection, clearSelection, getActiveMeshEditSource,
   getFaceSelection, getMeshEditSource, getSelectedFaceTriangles, getSelectedMeshes,
-  isMeshSelected, releaseMeshEditSource, selectMesh, toggleMeshSelection,
+  isMeshSelected, selectMesh, toggleMeshSelection,
 } from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
@@ -29,21 +29,16 @@ import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
-import { alertDialog, rangeInputDialog } from '../ui/dialogs.js';
+import { alertDialog, confirmDialog, rangeInputDialog } from '../ui/dialogs.js';
 import {
   MAX_LOOSE_PART_TOLERANCE, canMergeLooseParts, getLoosePartSource,
-  getLooseParts, isLoosePart, mergeLooseParts, separateLooseParts,
+  clearLooseParts, getLooseParts, isLoosePart, mergeLooseParts, separateLooseParts,
 } from '../mesh/loose-parts.js';
 
 let groupsUI = [];
 let meshSectionId = 0;
 let meshContextMenu = null;
-let meshContextSeparateAction = null;
-let meshContextSeparateSelectionAction = null;
-let meshContextMergeAction = null;
-let meshContextApplySelectionAction = null;
-let meshContextCancelSelectionAction = null;
-let meshContextApplyAction = null;
+let meshContextActions = null;
 let meshContextTarget = null;
 let meshContextListenersInstalled = false;
 let panelSelectionListenersInstalled = false;
@@ -179,75 +174,56 @@ function ensureMeshContextMenu() {
   meshContextMenu.className = 'mesh-context-menu';
   meshContextMenu.setAttribute('role', 'menu');
   meshContextMenu.hidden = true;
-  meshContextSeparateAction = document.createElement('button');
-  meshContextSeparateAction.type = 'button';
-  meshContextSeparateAction.className = 'mesh-edit-context-action';
-  meshContextSeparateAction.setAttribute('role', 'menuitem');
-  meshContextSeparateAction.dataset.i18n = 'mesh.separateLooseParts';
-  meshContextSeparateAction.textContent = t('mesh.separateLooseParts');
-  meshContextMenu.appendChild(meshContextSeparateAction);
-  meshContextSeparateSelectionAction = document.createElement('button');
-  meshContextSeparateSelectionAction.type = 'button';
-  meshContextSeparateSelectionAction.className = 'mesh-edit-context-action';
-  meshContextSeparateSelectionAction.setAttribute('role', 'menuitem');
-  meshContextSeparateSelectionAction.dataset.i18n = 'mesh.separateBySelection';
-  meshContextSeparateSelectionAction.textContent = t('mesh.separateBySelection');
-  meshContextMenu.appendChild(meshContextSeparateSelectionAction);
-  meshContextMergeAction = document.createElement('button');
-  meshContextMergeAction.type = 'button';
-  meshContextMergeAction.className = 'mesh-edit-context-action';
-  meshContextMergeAction.setAttribute('role', 'menuitem');
-  meshContextMergeAction.dataset.i18n = 'mesh.mergeLooseParts';
-  meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
-  meshContextMenu.appendChild(meshContextMergeAction);
-  meshContextApplySelectionAction = document.createElement('button');
-  meshContextApplySelectionAction.type = 'button';
-  meshContextApplySelectionAction.className = 'mesh-edit-context-action';
-  meshContextApplySelectionAction.setAttribute('role', 'menuitem');
-  meshContextApplySelectionAction.dataset.i18n = 'mesh.applySelection';
-  meshContextApplySelectionAction.textContent = t('mesh.applySelection');
-  meshContextMenu.appendChild(meshContextApplySelectionAction);
-  meshContextCancelSelectionAction = document.createElement('button');
-  meshContextCancelSelectionAction.type = 'button';
-  meshContextCancelSelectionAction.className = 'mesh-edit-context-action';
-  meshContextCancelSelectionAction.setAttribute('role', 'menuitem');
-  meshContextCancelSelectionAction.dataset.i18n = 'mesh.cancelSelection';
-  meshContextCancelSelectionAction.textContent = t('mesh.cancelSelection');
-  meshContextMenu.appendChild(meshContextCancelSelectionAction);
-  meshContextApplyAction = document.createElement('button');
-  meshContextApplyAction.type = 'button';
-  meshContextApplyAction.className = 'mesh-edit-context-action';
-  meshContextApplyAction.setAttribute('role', 'menuitem');
-  meshContextApplyAction.dataset.i18n = 'mesh.applyMeshChanges';
-  meshContextApplyAction.textContent = t('mesh.applyMeshChanges');
-  meshContextMenu.appendChild(meshContextApplyAction);
+  meshContextActions = {};
+  const addAction = (name, key) => {
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'mesh-edit-context-action';
+    action.setAttribute('role', 'menuitem');
+    action.dataset.i18n = key;
+    action.textContent = t(key);
+    meshContextActions[name] = action;
+    meshContextMenu.appendChild(action);
+  };
+  addAction('separate', 'mesh.separateLooseParts');
+  addAction('separateSelection', 'mesh.separateBySelection');
+  addAction('merge', 'mesh.mergeLooseParts');
+  addAction('applySelection', 'mesh.applySelection');
+  addAction('cancelSelection', 'mesh.cancelSelection');
+  addAction('apply', 'mesh.applyMeshChanges');
+  addAction('cancel', 'mesh.cancelMeshChanges');
   document.body.appendChild(meshContextMenu);
-  meshContextSeparateAction.addEventListener('click', () => {
+  meshContextActions.separate.addEventListener('click', () => {
     const source = meshContextTarget;
     closeMeshContextMenu();
     if (source && !isLoosePart(source)) void separateMeshRow(source);
   });
-  meshContextSeparateSelectionAction.addEventListener('click', () => {
+  meshContextActions.separateSelection.addEventListener('click', () => {
     const target = meshContextTarget;
     closeMeshContextMenu();
     if (target) beginFaceSelection(target);
   });
-  meshContextMergeAction.addEventListener('click', () => {
+  meshContextActions.merge.addEventListener('click', () => {
     closeMeshContextMenu();
     void mergeSelectedLooseParts();
   });
-  meshContextApplySelectionAction.addEventListener('click', () => {
+  meshContextActions.applySelection.addEventListener('click', () => {
     closeMeshContextMenu();
     applyCurrentFaceSelection();
   });
-  meshContextCancelSelectionAction.addEventListener('click', () => {
+  meshContextActions.cancelSelection.addEventListener('click', () => {
     closeMeshContextMenu();
     cancelFaceSelection();
   });
-  meshContextApplyAction.addEventListener('click', () => {
+  meshContextActions.apply.addEventListener('click', () => {
     const descriptor = meshContextTarget;
     closeMeshContextMenu();
     void descriptor?.applyMeshChanges?.();
+  });
+  meshContextActions.cancel.addEventListener('click', () => {
+    const descriptor = meshContextTarget;
+    closeMeshContextMenu();
+    void cancelComponentMeshChanges(descriptor);
   });
   if (!meshContextListenersInstalled) {
     document.addEventListener('pointerdown', event => {
@@ -272,21 +248,23 @@ function openMeshContextMenu(event, mesh) {
   const menu = ensureMeshContextMenu();
   meshContextTarget = mesh;
   const selectionState = getFaceSelection();
+  const actions = meshContextActions;
   if (selectionState) {
-    meshContextSeparateAction.hidden = true;
-    meshContextSeparateSelectionAction.hidden = true;
-    meshContextMergeAction.hidden = true;
-    meshContextApplySelectionAction.hidden = false;
-    meshContextCancelSelectionAction.hidden = false;
-    meshContextApplyAction.hidden = true;
+    actions.separate.hidden = true;
+    actions.separateSelection.hidden = true;
+    actions.merge.hidden = true;
+    actions.applySelection.hidden = false;
+    actions.cancelSelection.hidden = false;
+    actions.apply.hidden = true;
+    actions.cancel.hidden = true;
     const isTarget = mesh === selectionState.target;
     const selectedCount = getSelectedFaceTriangles().length;
     const targetCount = Array.isArray(mesh.userData?.loosePartTriangles)
       ? mesh.userData.loosePartTriangles.length
       : Math.floor(Number(selectionState.source.geometry?.index?.count || 0) / 3);
-    meshContextApplySelectionAction.disabled = !isTarget
+    actions.applySelection.disabled = !isTarget
       || selectedCount === 0 || selectedCount >= targetCount;
-    meshContextCancelSelectionAction.disabled = !isTarget;
+    actions.cancelSelection.disabled = !isTarget;
     showMeshContextMenuIfActionsVisible(menu, event);
     return;
   }
@@ -294,7 +272,8 @@ function openMeshContextMenu(event, mesh) {
   const descriptor = componentForMesh(source) || mesh.userData?.componentDescriptor;
   const activeSource = getActiveMeshEditSource();
   const locked = descriptor?.meshEditState === 'applied'
-    || descriptor?.meshEditWritable === false;
+    || descriptor?.meshEditWritable === false
+    || descriptor?.meshEditApplying === true;
   const selectedMeshes = getSelectedMeshes();
   const selectedSource = selectedMeshes.length
     ? getMeshEditSource(selectedMeshes[0]) : null;
@@ -303,20 +282,20 @@ function openMeshContextMenu(event, mesh) {
     && canMergeLooseParts(selectedMeshes);
   const sameSource = !activeSource || activeSource === source;
   const activePart = !!activeSource && sameSource && isLoosePart(mesh);
-  const activeSourceTarget = !!activeSource && sameSource;
   const unrelatedMesh = !!activeSource && !sameSource;
   const cleanSource = !activeSource && !isLoosePart(mesh);
-  meshContextSeparateAction.hidden = !(cleanSource || unrelatedMesh);
-  meshContextSeparateSelectionAction.hidden = !!mergeVisible
-    || !(cleanSource || activePart || activeSourceTarget || unrelatedMesh);
-  meshContextMergeAction.hidden = !mergeVisible;
-  meshContextApplySelectionAction.hidden = true;
-  meshContextCancelSelectionAction.hidden = true;
-  meshContextApplyAction.hidden = true;
-  meshContextSeparateAction.disabled = locked || !sameSource || isLoosePart(mesh);
-  meshContextSeparateSelectionAction.disabled = locked || !sameSource
-    || (!!activeSource && !activePart && !unrelatedMesh);
-  meshContextMergeAction.disabled = false;
+  actions.separate.hidden = !(cleanSource || unrelatedMesh);
+  actions.separateSelection.hidden = !!mergeVisible
+    || !(cleanSource || activePart || unrelatedMesh);
+  actions.merge.hidden = !mergeVisible;
+  actions.applySelection.hidden = true;
+  actions.cancelSelection.hidden = true;
+  actions.apply.hidden = true;
+  actions.cancel.hidden = true;
+  actions.separate.disabled = locked || !sameSource || isLoosePart(mesh);
+  actions.separateSelection.disabled = locked || !sameSource
+    || (!!activeSource && !activePart);
+  actions.merge.disabled = locked;
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
@@ -340,14 +319,22 @@ function openComponentContextMenu(event, descriptor) {
   event.stopPropagation();
   const menu = ensureMeshContextMenu();
   meshContextTarget = descriptor;
-  meshContextSeparateAction.hidden = true;
-  meshContextSeparateSelectionAction.hidden = true;
-  meshContextMergeAction.hidden = true;
-  meshContextApplySelectionAction.hidden = true;
-  meshContextCancelSelectionAction.hidden = true;
-  meshContextApplyAction.hidden = false;
-  meshContextApplyAction.disabled = descriptor.meshEditState !== 'edited'
-    || descriptor.meshEditApplying === true || !descriptor.meshEditWritable;
+  const actions = meshContextActions;
+  actions.separate.hidden = true;
+  actions.separateSelection.hidden = true;
+  actions.merge.hidden = true;
+  actions.applySelection.hidden = true;
+  actions.cancelSelection.hidden = true;
+  const faceSelection = getFaceSelection();
+  const faceSelectionOwnsComponent = faceSelection
+    && componentForMesh(faceSelection.source) === descriptor;
+  const edited = descriptor.meshEditState === 'edited';
+  actions.apply.hidden = !edited;
+  actions.cancel.hidden = !edited;
+  const disabled = descriptor.meshEditApplying === true
+    || !descriptor.meshEditWritable || faceSelectionOwnsComponent;
+  actions.apply.disabled = disabled;
+  actions.cancel.disabled = disabled;
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
@@ -662,12 +649,28 @@ function showLoosePartRows(source) {
   return true;
 }
 
+function restoreSourceRow(source, oldPartWraps = connectedPartWraps(source)) {
+  const context = meshPanelContexts.get(source);
+  const group = groupsUI.find(candidate => candidate.itemObjs.includes(source));
+  const sourceIndex = group?.itemObjs.indexOf(source) ?? -1;
+  if (!context || !group || sourceIndex < 0 || !oldPartWraps.length) return false;
+  const {wrap, cb} = buildDrawRow(
+    context.name, context.groupName, context.entry, source,
+    group.itemCbs, group.masterCb,
+    {includeInGroup: false,
+      onContextMenu: isRecording() ? null : openMeshContextMenu});
+  group.itemCbs[sourceIndex] = cb;
+  oldPartWraps[0].replaceWith(wrap);
+  oldPartWraps.slice(1).forEach(partWrap => partWrap.remove());
+  return true;
+}
+
 function showRecordingSourceRows() {
   closeMeshContextMenu();
   let selectionCleared = false;
   let partsChanged = false;
   for (const group of groupsUI) {
-    group.itemObjs.forEach((source, sourceIndex) => {
+    group.itemObjs.forEach(source => {
       const context = meshPanelContexts.get(source);
       const partWraps = connectedPartWraps(source);
       if (!context || !partWraps.length) return;
@@ -680,12 +683,7 @@ function showRecordingSourceRows() {
         clearSelection();
         selectionCleared = true;
       }
-      const {wrap, cb} = buildDrawRow(
-        context.name, context.groupName, context.entry, source,
-        group.itemCbs, group.masterCb, {includeInGroup: false});
-      group.itemCbs[sourceIndex] = cb;
-      partWraps[0].replaceWith(wrap);
-      partWraps.slice(1).forEach(partWrap => partWrap.remove());
+      restoreSourceRow(source, partWraps);
     });
   }
   if (partsChanged) invalidateCharacterShadowVisibility({request: false});
@@ -738,18 +736,26 @@ export function hasUnappliedMeshChanges() {
 async function applyComponentMeshChanges(descriptor) {
   if (!descriptor || descriptor.meshEditState !== 'edited'
       || !descriptor.meshEditWritable || !descriptor.modPath) return false;
-  const meshes = descriptor.meshes
-    .map(mesh => ({mesh, context: meshPanelContexts.get(mesh)}))
-    .filter(item => getLooseParts(item.mesh).length && item.context);
-  if (!meshes.length) return false;
+  const activeSource = getActiveMeshEditSource();
+  const context = meshPanelContexts.get(activeSource);
+  const faceSelection = getFaceSelection();
+  if (!activeSource || componentForMesh(activeSource) !== descriptor
+      || !context || !getLooseParts(activeSource).length
+      || (faceSelection && componentForMesh(faceSelection.source) === descriptor)) {
+    return false;
+  }
+  if (!await confirmDialog(t('mesh.applyMeshChangesConfirm'))) return false;
+  if (descriptor.meshEditApplying || descriptor.meshEditState !== 'edited'
+      || getActiveMeshEditSource() !== activeSource
+      || !getLooseParts(activeSource).length) return false;
   const request = {
     component: descriptor.component,
-    meshes: meshes.map(({mesh, context}) => ({
+    mesh: {
       key: context.entry.identity?.key,
       sources: context.entry.sources || [],
-      parts: getLooseParts(mesh).map(part =>
+      parts: getLooseParts(activeSource).map(part =>
         [...(part.userData.loosePartTriangles || [])]),
-    })),
+    },
   };
   descriptor.meshEditApplying = true;
   try {
@@ -759,11 +765,7 @@ async function applyComponentMeshChanges(descriptor) {
       throw new Error(result?.error || t('mesh.applyMeshChangesHint'));
     }
     setComponentMeshEditState(descriptor, 'applied');
-    const activeSource = getActiveMeshEditSource();
-    if (activeSource?.userData?.componentDescriptor === descriptor) {
-      releaseMeshEditSource(activeSource);
-    }
-    if (!hasUnappliedMeshChanges()) await descriptor.onAllMeshChangesApplied?.();
+    await descriptor.onAllMeshChangesApplied?.();
     return true;
   } catch (error) {
     await alertDialog(String(error?.message || error));
@@ -773,11 +775,34 @@ async function applyComponentMeshChanges(descriptor) {
   }
 }
 
+async function cancelComponentMeshChanges(descriptor) {
+  if (!descriptor || descriptor.meshEditState !== 'edited'
+      || !descriptor.meshEditWritable || descriptor.meshEditApplying) return false;
+  const activeSource = getActiveMeshEditSource();
+  const faceSelection = getFaceSelection();
+  if (!activeSource || componentForMesh(activeSource) !== descriptor
+      || (faceSelection && componentForMesh(faceSelection.source) === descriptor)
+      || !getLooseParts(activeSource).length) return false;
+  if (!await confirmDialog(t('mesh.cancelMeshChangesConfirm'))) return false;
+  if (descriptor.meshEditApplying || descriptor.meshEditState !== 'edited'
+      || getActiveMeshEditSource() !== activeSource) return false;
+  const oldPartWraps = connectedPartWraps(activeSource);
+  clearSelection();
+  clearLooseParts(activeSource);
+  if (!restoreSourceRow(activeSource, oldPartWraps)) return false;
+  setComponentMeshEditState(descriptor, 'clean');
+  invalidateCharacterShadowVisibility({request: false});
+  requestRender();
+  return true;
+}
+
 async function separateMeshRow(source) {
   if (isRecording()) return false;
   const descriptor = componentForMesh(source);
   if (descriptor?.meshEditState === 'applied' || !canEditMesh(source)
-      || descriptor?.meshEditWritable === false) return false;
+      || descriptor?.meshEditWritable === false || descriptor?.meshEditApplying) {
+    return false;
+  }
   const context = meshPanelContexts.get(source);
   const sourceRow = getMeshView(source)?.row;
   const sourceWrap = sourceRow?.closest('.draw-item-wrap');
@@ -792,12 +817,12 @@ async function separateMeshRow(source) {
     okKey: 'mesh.separate',
   });
   if (tolerance === null || isRecording()) return false;
-  if (!canEditMesh(source)) return false;
+  if (!canEditMesh(source) || descriptor?.meshEditApplying) return false;
   const parts = separateLooseParts(source, {
     label: meshRowLabel(source, context), tolerance,
   });
   if (parts.length <= 1) return false;
-  if (!acquireMeshEditSource(source)) {
+  if (getActiveMeshEditSource() && getActiveMeshEditSource() !== source) {
     clearLooseParts(source);
     return false;
   }
@@ -835,13 +860,7 @@ function replaceRowsAfterLoosePartMerge(source, oldPartWraps, result) {
   const group = groupsUI.find(candidate => candidate.itemObjs.includes(source));
   if (!context || !group || !oldPartWraps.length) return false;
   if (result.full) {
-    const sourceIndex = group.itemObjs.indexOf(source);
-    const {wrap, cb} = buildDrawRow(
-      context.name, context.groupName, context.entry, source,
-      group.itemCbs, group.masterCb,
-      {onContextMenu: isRecording() ? null : openMeshContextMenu});
-    group.itemCbs[sourceIndex] = cb;
-    oldPartWraps[0].replaceWith(wrap);
+    return restoreSourceRow(source, oldPartWraps);
   } else {
     oldPartWraps[0].replaceWith(...buildPartRows(source, context));
   }
@@ -856,7 +875,9 @@ function mergeSelectedLooseParts() {
   const source = getLoosePartSource(selectedMeshes[0]);
   if (getActiveMeshEditSource() !== source) return false;
   const descriptor = componentForMesh(source);
-  if (descriptor?.meshEditState === 'applied') return false;
+  if (descriptor?.meshEditState === 'applied' || descriptor?.meshEditApplying) {
+    return false;
+  }
   const oldPartWraps = getLooseParts(source).map(meshRowWrap).filter(Boolean);
   clearSelection();
   const result = mergeLooseParts(selectedMeshes);
@@ -864,10 +885,8 @@ function mergeSelectedLooseParts() {
     return false;
   }
   selectMesh(result.mesh);
-  if (result.full && (!descriptor
-      || descriptor.meshes.every(mesh => !getLooseParts(mesh).length))) {
+  if (result.full) {
     if (descriptor) setComponentMeshEditState(descriptor, 'clean');
-    releaseMeshEditSource(source);
   } else {
     markComponentMeshEdited(descriptor);
   }
@@ -1022,8 +1041,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         getTextureOverride,
         setTextureOverride,
         applyMeshChanges: () => applyComponentMeshChanges(componentDescriptor),
-        onAllMeshChangesApplied: options.onAllMeshChangesApplied
-          || options.onReload,
+        onAllMeshChangesApplied: options.onAllMeshChangesApplied,
       });
 
       const { hdr, masterCb, syncLabels, syncEditState } = buildGroupHeader(
@@ -1092,13 +1110,10 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 }
 
 window.addEventListener(LANGUAGE_CHANGED, () => {
-  if (meshContextSeparateAction) {
-    meshContextSeparateAction.textContent = t('mesh.separateLooseParts');
-    meshContextSeparateSelectionAction.textContent = t('mesh.separateBySelection');
-    meshContextMergeAction.textContent = t('mesh.mergeLooseParts');
-    meshContextApplySelectionAction.textContent = t('mesh.applySelection');
-    meshContextCancelSelectionAction.textContent = t('mesh.cancelSelection');
-    meshContextApplyAction.textContent = t('mesh.applyMeshChanges');
+  if (meshContextActions) {
+    Object.entries(meshContextActions).forEach(([, action]) => {
+      action.textContent = t(action.dataset.i18n);
+    });
   }
   groupsUI.forEach(group => {
     group.syncLabels?.();

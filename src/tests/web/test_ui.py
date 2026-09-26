@@ -291,6 +291,7 @@ def test_disabled_edit_mesh_hides_only_edit_context_actions(
         assert menu.locator("button").all_inner_texts() == [
             "Separate by Loose Parts", "Separate by Selection", "Merge Meshes",
             "Apply Selection", "Cancel Selection", "Apply Mesh Changes",
+            "Cancel Mesh Changes",
         ]
         assert menu.locator("button").evaluate_all("""buttons => buttons.map(
           button => ({
@@ -303,12 +304,13 @@ def test_disabled_edit_mesh_hides_only_edit_context_actions(
             {"editAction": True, "hidden": True},
             {"editAction": True, "hidden": True},
             {"editAction": True, "hidden": True},
+            {"editAction": True, "hidden": True},
         ]
         page.locator("#mesh-list .group-hdr").first.click(button="right")
         assert menu.evaluate("element => element.hidden") is True
         assert menu.locator("button").evaluate_all("""buttons => buttons.map(
-          button => button.hidden || getComputedStyle(button).display === 'none')""") == [
-            True, True, True, True, True, True,
+           button => button.hidden || getComputedStyle(button).display === 'none')""") == [
+            True, True, True, True, True, True, True,
         ]
 
         page.evaluate("""() => {
@@ -347,6 +349,7 @@ def test_mesh_rows_can_separate_transient_loose_parts_without_new_draws(
         assert menu.locator("button").all_inner_texts() == [
             "Separate by Loose Parts", "Separate by Selection", "Merge Meshes",
             "Apply Selection", "Cancel Selection", "Apply Mesh Changes",
+            "Cancel Mesh Changes",
         ]
         assert menu.locator("[data-i18n='mesh.mergeLooseParts']").is_hidden()
         assert menu.locator("[data-i18n='mesh.separateLooseParts']").is_enabled()
@@ -1003,21 +1006,148 @@ def test_mesh_panel_apply_stages_only_triangle_provenance_and_reloads(
         assert menu.locator("[data-i18n='mesh.applyMeshChanges']").is_visible()
         assert menu.locator("[data-i18n='mesh.applyMeshChanges']").is_enabled()
         menu.locator("[data-i18n='mesh.applyMeshChanges']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator("#dialog-message").inner_text() == (
+            "Apply mesh changes for this component?\n\n"
+            "The new mesh layout will be staged in memory. Nothing is written "
+            "to disk until Export.")
+        page.locator("#dialog-ok").click()
         page.wait_for_function(
             "window.__fakeApi.calls.applyMeshChanges.length === 1")
         page.wait_for_function(
             "window.__fakeApi.calls.loadMod.length === 2")
         request = page.evaluate("window.__fakeApi.calls.applyMeshChanges[0][1]")
-        assert set(request) == {"component", "meshes"}
-        assert set(request["meshes"][0]) == {"key", "sources", "parts"}
-        assert request["meshes"][0]["parts"] == [[0], [1], [2]]
-        assert request["meshes"][0]["key"] == "mesh:fixture-apply"
+        assert set(request) == {"component", "mesh"}
+        assert set(request["mesh"]) == {"key", "sources", "parts"}
+        assert request["mesh"]["parts"] == [[0], [1], [2]]
+        assert request["mesh"]["key"] == "mesh:fixture-apply"
         assert "C:\\" not in str(request)
         assert "bytes" not in str(request)
         assert page.evaluate("""async () => {
           const {getActiveMeshEditSource} = await import('./js/scene/selection.js');
           return getActiveMeshEditSource();
         }""") is None
+    finally:
+        context.close()
+
+
+def test_mesh_panel_cancel_discards_transient_parts_only_after_confirmation(
+        edge_browser, frontend_url):
+    path = "CancelLooseParts"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(
+            ".mesh-context-menu [data-i18n='mesh.separateLooseParts']").click()
+        page.locator("#dialog-ok").click()
+        rows = page.locator("#mesh-list .draw-item")
+        assert rows.count() == 3
+        assert page.locator(".mesh-edit-badge").get_attribute("data-state") == (
+            "edited")
+
+        page.locator(".group-hdr").click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        cancel = menu.locator("[data-i18n='mesh.cancelMeshChanges']")
+        assert cancel.is_visible()
+        cancel.click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        assert page.locator("#dialog-message").inner_text() == (
+            "Cancel mesh changes for this component?\n\n"
+            "All unapplied mesh separation and merge changes for this component "
+            "will be discarded.")
+        page.locator("#dialog-cancel").click()
+        assert rows.count() == 3
+        assert page.locator(".mesh-edit-badge").get_attribute("data-state") == (
+            "edited")
+        assert page.evaluate("window.__fakeApi.calls.applyMeshChanges.length") == 0
+
+        page.locator(".group-hdr").click(button="right")
+        menu.locator("[data-i18n='mesh.cancelMeshChanges']").click()
+        page.locator("#dialog-ok").click()
+        assert rows.all_inner_texts() == ["9, 0, 0"]
+        assert page.locator(".mesh-edit-badge").is_hidden()
+        assert page.evaluate("window.__fakeApi.calls.applyMeshChanges.length") == 0
+        assert page.evaluate("""async () => {
+          const {getActiveMeshEditSource} = await import('./js/scene/selection.js');
+          const source = window.modViewer.activeMeshes[0];
+          return {active: getActiveMeshEditSource(), parts: source.userData.looseParts.length};
+        }""") == {"active": None, "parts": 0}
+    finally:
+        context.close()
+
+
+def test_component_mesh_actions_are_disabled_during_face_selection(
+        edge_browser, frontend_url):
+    path = "FaceSelectionComponentActions"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(
+            ".mesh-context-menu [data-i18n='mesh.separateLooseParts']").click()
+        page.locator("#dialog-ok").click()
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(
+            ".mesh-context-menu [data-i18n='mesh.separateBySelection']").click()
+        page.wait_for_function("""async () => {
+          const {getFaceSelection} = await import('./js/scene/selection.js');
+          return !!getFaceSelection();
+        }""")
+        page.locator(".group-hdr").click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        assert menu.locator("[data-i18n='mesh.applyMeshChanges']").is_visible()
+        assert menu.locator("[data-i18n='mesh.cancelMeshChanges']").is_visible()
+        assert menu.locator("[data-i18n='mesh.applyMeshChanges']").is_disabled()
+        assert menu.locator("[data-i18n='mesh.cancelMeshChanges']").is_disabled()
+    finally:
+        context.close()
+
+
+def test_mesh_edit_actions_lock_while_component_apply_is_in_flight(
+        edge_browser, frontend_url):
+    path = "ApplyingLooseParts"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _loose_parts_payload(path)})
+    try:
+        _open(page, path)
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        page.locator(
+            ".mesh-context-menu [data-i18n='mesh.separateLooseParts']").click()
+        page.locator("#dialog-ok").click()
+        page.evaluate("""() => {
+          const state = window.__fakeApi;
+          state.releaseApply = null;
+          state.applyMeshChangesResult = {ok: true};
+          window.modViewer.activeMeshes[0].userData.componentDescriptor
+            .onAllMeshChangesApplied = async () => {};
+          window.pywebview.api.apply_component_mesh_changes = async (path, request) => {
+            state.calls.applyMeshChanges.push([path, request]);
+            await new Promise(resolve => { state.releaseApply = resolve; });
+            return {ok: true};
+          };
+        }""")
+        page.locator(".group-hdr").click(button="right")
+        page.locator(
+            ".mesh-context-menu [data-i18n='mesh.applyMeshChanges']").click()
+        page.locator("#dialog-ok").click()
+        page.wait_for_function(
+            "window.__fakeApi.calls.applyMeshChanges.length === 1")
+        page.locator(".group-hdr").click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        assert menu.locator("[data-i18n='mesh.applyMeshChanges']").is_disabled()
+        assert menu.locator("[data-i18n='mesh.cancelMeshChanges']").is_disabled()
+        page.keyboard.press("Escape")
+        page.locator("#mesh-list .draw-item").first.click(button="right")
+        assert menu.locator("[data-i18n='mesh.separateLooseParts']").is_disabled()
+        assert menu.locator("[data-i18n='mesh.separateBySelection']").is_disabled()
+        page.evaluate("window.__fakeApi.releaseApply()")
+        page.wait_for_function("""() => {
+          const source = window.modViewer.activeMeshes[0];
+          return source.userData.componentDescriptor.meshEditState === 'applied';
+        }""")
     finally:
         context.close()
 
@@ -1087,11 +1217,16 @@ def test_mesh_panel_hides_edited_badge_after_apply(
             .onAllMeshChangesApplied = async () => {};
         }""")
         page.locator(".mesh-context-menu [data-i18n='mesh.applyMeshChanges']").click()
+        page.locator("#dialog-backdrop.show").wait_for()
+        page.locator("#dialog-ok").click()
         page.wait_for_function(
             "window.__fakeApi.calls.applyMeshChanges.length === 1")
         page.wait_for_function(
             "document.querySelector('.mesh-edit-badge')?.dataset.state === 'applied'")
         assert page.locator(".mesh-edit-badge").is_hidden()
+        page.locator(".group-hdr").click(button="right")
+        assert page.locator(
+            "[data-i18n='mesh.cancelMeshChanges']").is_hidden()
     finally:
         context.close()
 

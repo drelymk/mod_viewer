@@ -36,16 +36,8 @@ export function raycastModelAtClientPoint({
   return raycaster.intersectObjects(visibleMeshes, false)[0] || null;
 }
 
-/** Resolve a rendered face back to the source mesh's authored triangle ordinal. */
-export function authoredTriangleOrdinal(mesh, faceIndex) {
-  const face = Number(faceIndex);
-  if (!mesh || !Number.isInteger(face) || face < 0) return null;
-  const partTriangles = mesh.userData?.loosePartTriangles;
-  if (Array.isArray(partTriangles)) {
-    const triangle = Number(partTriangles[face]);
-    return Number.isInteger(triangle) && triangle >= 0 ? triangle : null;
-  }
-  const geometry = mesh.geometry;
+function geometryRange(mesh) {
+  const geometry = mesh?.geometry;
   const index = geometry?.index;
   const position = geometry?.getAttribute?.('position');
   const availableEntries = Number(index ? index.count : position?.count || 0);
@@ -55,6 +47,19 @@ export function authoredTriangleOrdinal(mesh, faceIndex) {
     Math.max(0, availableEntries - drawStart),
     Number.isFinite(drawCount) ? Math.max(0, drawCount) : availableEntries,
   );
+  return {index, position, drawStart, entryCount};
+}
+
+/** Resolve a rendered face back to the source mesh's authored triangle ordinal. */
+export function authoredTriangleOrdinal(mesh, faceIndex) {
+  const face = Number(faceIndex);
+  if (!mesh || !Number.isInteger(face) || face < 0) return null;
+  const partTriangles = mesh.userData?.loosePartTriangles;
+  if (Array.isArray(partTriangles)) {
+    const triangle = Number(partTriangles[face]);
+    return Number.isInteger(triangle) && triangle >= 0 ? triangle : null;
+  }
+  const {index, position, drawStart, entryCount} = geometryRange(mesh);
   if (face * 3 + 2 >= entryCount) return null;
   return Math.floor((drawStart + face * 3) / 3);
 }
@@ -77,15 +82,7 @@ export function meshIntersectsClientRect({
   const canvasRect = canvas?.getBoundingClientRect?.();
   const width = Number(canvasRect?.width);
   const height = Number(canvasRect?.height);
-  const position = mesh?.geometry?.getAttribute?.('position');
-  const index = mesh?.geometry?.index;
-  const availableEntries = Number(index ? index.count : position?.count || 0);
-  const drawStart = Math.max(0, Number(mesh.geometry.drawRange?.start) || 0);
-  const drawCount = Number(mesh.geometry.drawRange?.count);
-  const entryCount = Math.min(
-    Math.max(0, availableEntries - drawStart),
-    Number.isFinite(drawCount) ? Math.max(0, drawCount) : availableEntries,
-  );
+  const {index, position, drawStart, entryCount} = geometryRange(mesh);
   if (!targetRect || !mesh?.visible || !camera || !position
       || !canvasRect || width <= 0 || height <= 0 || entryCount <= 0) {
     return false;
@@ -200,16 +197,7 @@ export function trianglesInClientRect({
   const canvasRect = canvas?.getBoundingClientRect?.();
   const width = Number(canvasRect?.width);
   const height = Number(canvasRect?.height);
-  const geometry = mesh?.geometry;
-  const index = geometry?.index;
-  const position = geometry?.getAttribute?.('position');
-  const availableEntries = Number(index ? index.count : position?.count || 0);
-  const drawStart = Math.max(0, Number(geometry?.drawRange?.start) || 0);
-  const drawCount = Number(geometry?.drawRange?.count);
-  const entryCount = Math.min(
-    Math.max(0, availableEntries - drawStart),
-    Number.isFinite(drawCount) ? Math.max(0, drawCount) : availableEntries,
-  );
+  const {index, position, drawStart, entryCount} = geometryRange(mesh);
   if (!targetRect || !mesh?.visible || !camera || !position || !canvasRect
       || width <= 0 || height <= 0 || entryCount < 3) return [];
 
