@@ -17,7 +17,7 @@ import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui
 import {
   addMeshesToSelection, acquireMeshEditSource, applyFaceSelection, beginFaceSelection,
   canEditMesh, cancelFaceSelection, clearSelection, getActiveMeshEditSource,
-  getFaceSelection, getSelectedFaceTriangles, getSelectedMeshes,
+  getFaceSelection, getMeshEditSource, getSelectedFaceTriangles, getSelectedMeshes,
   isMeshSelected, releaseMeshEditSource, selectMesh, toggleMeshSelection,
 } from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
@@ -290,35 +290,34 @@ function openMeshContextMenu(event, mesh) {
     showMeshContextMenuIfActionsVisible(menu, event);
     return;
   }
-  const source = getMeshEditSourceForContext(mesh);
+  const source = getMeshEditSource(mesh);
   const descriptor = componentForMesh(source) || mesh.userData?.componentDescriptor;
   const activeSource = getActiveMeshEditSource();
-  const sameSource = !activeSource || activeSource === source;
   const locked = descriptor?.meshEditState === 'applied'
     || descriptor?.meshEditWritable === false;
   const selectedMeshes = getSelectedMeshes();
   const selectedSource = selectedMeshes.length
-    ? getMeshEditSourceForContext(selectedMeshes[0]) : null;
+    ? getMeshEditSource(selectedMeshes[0]) : null;
   const mergeVisible = !!activeSource && selectedMeshes.length >= 2
     && selectedSource === activeSource
     && canMergeLooseParts(selectedMeshes);
-  const looseSourceMode = !!activeSource && getLooseParts(activeSource).length;
-  meshContextSeparateAction.hidden = !!activeSource;
-  meshContextSeparateSelectionAction.hidden = !!activeSource
-    && looseSourceMode && isLoosePart(mesh) && selectedMeshes.length >= 2;
+  const sameSource = !activeSource || activeSource === source;
+  const activePart = !!activeSource && sameSource && isLoosePart(mesh);
+  const activeSourceTarget = !!activeSource && sameSource;
+  const unrelatedMesh = !!activeSource && !sameSource;
+  const cleanSource = !activeSource && !isLoosePart(mesh);
+  meshContextSeparateAction.hidden = !(cleanSource || unrelatedMesh);
+  meshContextSeparateSelectionAction.hidden = !!mergeVisible
+    || !(cleanSource || activePart || activeSourceTarget || unrelatedMesh);
   meshContextMergeAction.hidden = !mergeVisible;
   meshContextApplySelectionAction.hidden = true;
   meshContextCancelSelectionAction.hidden = true;
   meshContextApplyAction.hidden = true;
   meshContextSeparateAction.disabled = locked || !sameSource || isLoosePart(mesh);
   meshContextSeparateSelectionAction.disabled = locked || !sameSource
-    || (activeSource && looseSourceMode && !isLoosePart(mesh));
+    || (!!activeSource && !activePart && !unrelatedMesh);
   meshContextMergeAction.disabled = false;
   showMeshContextMenuIfActionsVisible(menu, event);
-}
-
-function getMeshEditSourceForContext(mesh) {
-  return mesh?.userData?.loosePartParent || mesh || null;
 }
 
 window.addEventListener('mod-viewer-face-selection-contextmenu', event => {

@@ -160,9 +160,37 @@ function copyGeometryAttributes(sourceGeometry, partGeometry) {
   partGeometry.morphTargetsRelative = sourceGeometry.morphTargetsRelative;
 }
 
+function loosePartLabelBase(source, label = null) {
+  if (label) return label;
+  if (source.userData?.loosePartLabelBase) {
+    return source.userData.loosePartLabelBase;
+  }
+  const existing = source.userData?.looseParts?.[0]?.userData?.loosePartLabel;
+  if (existing) {
+    return existing.replace(/\s+-\s+Part\s+\d+$/, '');
+  }
+  return source.userData?.displayName || source.name || 'Mesh';
+}
+
+function rememberLoosePartLabelBase(source, label = null) {
+  const base = loosePartLabelBase(source, label);
+  source.userData.loosePartLabelBase = base;
+  return base;
+}
+
 function partLabel(source, index, label) {
-  const base = label || source.userData?.displayName || source.name || 'Mesh';
+  const base = rememberLoosePartLabelBase(source, label);
   return `${base} - Part ${index + 1}`;
+}
+
+function normalizeLooseParts(source) {
+  const parts = getLooseParts(source);
+  if (!parts.length) return;
+  const base = rememberLoosePartLabelBase(source);
+  parts.forEach((part, index) => {
+    part.userData.loosePartIndex = index;
+    part.userData.loosePartLabel = `${base} - Part ${index + 1}`;
+  });
 }
 
 function indicesForTriangles(sourceGeometry, triangles) {
@@ -247,11 +275,12 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
     count: sourceGeometry.drawRange.count,
   };
   source.userData.looseParts = [];
+  rememberLoosePartLabelBase(source, label);
   sourceGeometry.setDrawRange(0, 0);
 
   for (const [partIndex, group] of groups.entries()) {
     const part = createLoosePart(source, group.triangles, {
-      index: partIndex, label: partLabel(source, partIndex, label),
+      index: partIndex,
     });
     if (!part) {
       clearLooseParts(source);
@@ -259,6 +288,7 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
     }
     source.userData.looseParts.push(part);
   }
+  normalizeLooseParts(source);
   return source.userData.looseParts;
 }
 
@@ -306,14 +336,15 @@ export function separateSelectedTriangles(target, selectedTriangles, {
       count: sourceGeometry.drawRange.count,
     };
     source.userData.looseParts = [];
+    rememberLoosePartLabelBase(source, label);
     sourceGeometry.setDrawRange(0, 0);
     const remainder = createLoosePart(source, remainderTriangles, {
-      index: 0, label: partLabel(source, 0, label), template: source,
+      index: 0, template: source,
       copyTransform: false,
     });
     if (remainder) source.userData.looseParts.push(remainder);
     const selectedPart = createLoosePart(source, selected, {
-      index: 1, label: partLabel(source, 1, label), template: source,
+      index: 1, template: source,
       copyTransform: false,
     });
     if (selectedPart) source.userData.looseParts.push(selectedPart);
@@ -321,18 +352,17 @@ export function separateSelectedTriangles(target, selectedTriangles, {
       clearLooseParts(source);
       return null;
     }
+    normalizeLooseParts(source);
     return {source, target, remainder, selected: selectedPart, full: false};
   }
 
   const targetIndex = sourceParts.indexOf(target);
   const childIndex = source.children.indexOf(target);
   const remainder = createLoosePart(source, remainderTriangles, {
-    index: targetIndex, label: target.userData?.loosePartLabel ||
-      partLabel(source, targetIndex, label), template: target,
+    index: targetIndex, template: target,
   });
   const selectedPart = createLoosePart(source, selected, {
-    index: targetIndex + 1, label: partLabel(source, targetIndex + 1, label),
-    template: target,
+    index: targetIndex + 1, template: target,
   });
   if (!remainder || !selectedPart) {
     if (remainder) disposeLoosePart(source, remainder);
@@ -349,6 +379,7 @@ export function separateSelectedTriangles(target, selectedTriangles, {
     if (index >= 0) children.splice(index, 1);
   });
   children.splice(Math.max(0, childIndex), 0, remainder, selectedPart);
+  normalizeLooseParts(source);
   return {source, target, remainder, selected: selectedPart, full: false};
 }
 
@@ -416,6 +447,7 @@ export function mergeLooseParts(meshes) {
   selectedParts.slice(1).forEach(part => disposeLoosePart(source, part));
   source.userData.looseParts = sourceParts.filter(part =>
     part === survivor || !selected.has(part));
+  normalizeLooseParts(source);
   return {source, mesh: survivor, full: false};
 }
 
@@ -429,6 +461,7 @@ export function clearLooseParts(source) {
   const drawRange = source.userData.loosePartDrawRange;
   if (drawRange) source.geometry.setDrawRange(drawRange.start, drawRange.count);
   delete source.userData.loosePartDrawRange;
+  delete source.userData.loosePartLabelBase;
   source.userData.looseParts = [];
   return true;
 }

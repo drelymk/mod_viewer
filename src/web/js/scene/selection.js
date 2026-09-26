@@ -206,6 +206,19 @@ function overlayIndices(source, triangles) {
 }
 
 function createFaceOverlay(state) {
+  const topologyOverlay = new THREE.Mesh(state.target.geometry,
+    new THREE.MeshBasicNodeMaterial({
+      color: 0xffffff, wireframe: true,
+      depthTest: true, depthWrite: false, side: THREE.DoubleSide,
+    }));
+  topologyOverlay.name = `${state.target.name || 'mesh'}-face-topology`;
+  topologyOverlay.frustumCulled = false;
+  topologyOverlay.renderOrder = 1000;
+  topologyOverlay.userData.meshEditTopologyOverlay = true;
+  topologyOverlay.raycast = () => {};
+  state.target.add(topologyOverlay);
+  state.topologyOverlay = topologyOverlay;
+
   const source = state.source;
   const geometry = new THREE.BufferGeometry();
   for (const [name, attribute] of Object.entries(source.geometry.attributes || {})) {
@@ -223,7 +236,7 @@ function createFaceOverlay(state) {
   }));
   overlay.name = `${state.target.name || 'mesh'}-face-selection`;
   overlay.frustumCulled = false;
-  overlay.renderOrder = 1000;
+  overlay.renderOrder = 1001;
   overlay.userData.meshEditFaceOverlay = true;
   overlay.raycast = () => {};
   state.target.add(overlay);
@@ -231,7 +244,11 @@ function createFaceOverlay(state) {
 }
 
 function updateFaceOverlay() {
-  if (!faceSelection?.overlay) return;
+  if (!faceSelection) return;
+  if (faceSelection.topologyOverlay) {
+    faceSelection.topologyOverlay.visible = faceSelection.target.visible;
+  }
+  if (!faceSelection.overlay) return;
   const indices = overlayIndices(
     faceSelection.source, [...faceSelection.triangles]);
   if (!indices) return;
@@ -241,6 +258,12 @@ function updateFaceOverlay() {
 }
 
 function disposeFaceOverlay(state) {
+  const topologyOverlay = state?.topologyOverlay;
+  if (topologyOverlay) {
+    topologyOverlay.removeFromParent();
+    topologyOverlay.material?.dispose?.();
+    state.topologyOverlay = null;
+  }
   const overlay = state?.overlay;
   if (!overlay) return;
   overlay.removeFromParent();
@@ -261,6 +284,7 @@ export function beginFaceSelection(target) {
     source,
     target,
     triangles: new Set(),
+    topologyOverlay: null,
     overlay: null,
     startedWithLooseParts: parts.length > 0,
   };
@@ -405,6 +429,7 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  if (event.button !== 0) return;
   if (isRigTransformInteractionActive() || isRigJointPickingActive()) return;
   if (boxGesture && event.pointerId === boxGesture.pointerId) {
     const gesture = boxGesture;

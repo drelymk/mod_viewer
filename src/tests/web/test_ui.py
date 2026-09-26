@@ -591,15 +591,25 @@ def test_face_selection_click_toggle_apply_and_cancel_are_transient(
         }""") == [0]
         assert page.evaluate("""() => {
           const source = window.modViewer.activeMeshes[0];
+          const topology = source.children.find(child =>
+            child.userData.meshEditTopologyOverlay === true);
           const overlay = source.children.find(child =>
             child.userData.meshEditFaceOverlay === true);
           return {
+            topologyAttached: topology?.parent === source,
+            topologySharesGeometry: topology?.geometry === source.geometry,
+            topologyWireframe: topology?.material?.wireframe === true,
+            topologyDepthTest: topology?.material?.depthTest === true,
+            topologyDepthWrite: topology?.material?.depthWrite === false,
             attached: overlay?.parent === source,
             indexCount: overlay?.geometry?.index?.count || 0,
             raycastDisabled: overlay?.raycast !== undefined,
             inPanel: document.querySelector('[data-mesh-edit-face-overlay]') !== null,
           };
         }""") == {
+            "topologyAttached": True, "topologySharesGeometry": True,
+            "topologyWireframe": True, "topologyDepthTest": True,
+            "topologyDepthWrite": True,
             "attached": True, "indexCount": 3,
             "raycastDisabled": True, "inPanel": False,
         }
@@ -610,6 +620,12 @@ def test_face_selection_click_toggle_apply_and_cancel_are_transient(
           const {getSelectedFaceTriangles} = await import('./js/scene/selection.js');
           return getSelectedFaceTriangles().sort((a, b) => a - b);
         }""") == [0, 1]
+        page.mouse.click(points[1]["x"], points[1]["y"], button="right")
+        assert page.evaluate("""async () => {
+          const {getSelectedFaceTriangles} = await import('./js/scene/selection.js');
+          return getSelectedFaceTriangles().sort((a, b) => a - b);
+        }""") == [0, 1]
+        page.locator("#toolbar").click()
         page.keyboard.down("Control")
         page.mouse.click(points[0]["x"], points[0]["y"])
         page.keyboard.up("Control")
@@ -931,7 +947,7 @@ def test_mesh_panel_multiselect_and_merge_loose_parts(
         }""", arg=shadow_before_merge)
         rows = page.locator("#mesh-list .draw-item")
         assert rows.all_inner_texts() == [
-            "9, 0, 0 - Part 1", "9, 0, 0 - Part 3",
+            "9, 0, 0 - Part 1", "9, 0, 0 - Part 2",
         ]
         assert rows.nth(0).get_attribute("class").find("selected") >= 0
         assert page.evaluate("""() => {
@@ -1002,6 +1018,51 @@ def test_mesh_panel_apply_stages_only_triangle_provenance_and_reloads(
           const {getActiveMeshEditSource} = await import('./js/scene/selection.js');
           return getActiveMeshEditSource();
         }""") is None
+    finally:
+        context.close()
+
+
+def test_mesh_context_menu_uses_mergeability_and_preserves_edit_lock(
+        edge_browser, frontend_url):
+    path = "LoosePartsContextState"
+    payload = _loose_parts_payload(path)
+    other = next(iter(_payload(f"{path}Other")["meshes"].values()))
+    other["component"] = f"Body {path} Other"
+    other["sources"][0]["line"] = 20
+    payload["meshes"][f"Body-{path}-other"] = other
+    context, page = _page(edge_browser, frontend_url, {path: payload})
+    try:
+        _open(page, path)
+        rows = page.locator("#mesh-list .draw-item")
+        rows.first.click(button="right")
+        page.locator(".mesh-context-menu button").first.click()
+        page.locator("#dialog-ok").click()
+        rows = page.locator("#mesh-list .draw-item")
+        rows.nth(3).wait_for()
+        rows.nth(0).click()
+        rows.nth(3).click(modifiers=["Control"])
+
+        rows.nth(0).click(button="right")
+        menu = page.locator(".mesh-context-menu")
+        assert menu.is_visible()
+        assert menu.locator("[data-i18n='mesh.mergeLooseParts']").is_hidden()
+        assert menu.locator(
+            "[data-i18n='mesh.separateBySelection']").is_visible()
+        assert menu.locator(
+            "[data-i18n='mesh.separateBySelection']").is_enabled()
+
+        page.keyboard.press("Escape")
+        rows.nth(3).click(button="right")
+        assert menu.is_visible()
+        assert menu.locator(
+            "[data-i18n='mesh.separateLooseParts']").is_visible()
+        assert menu.locator(
+            "[data-i18n='mesh.separateLooseParts']").is_disabled()
+        assert menu.locator(
+            "[data-i18n='mesh.separateBySelection']").is_visible()
+        assert menu.locator(
+            "[data-i18n='mesh.separateBySelection']").is_disabled()
+        assert menu.locator("[data-i18n='mesh.mergeLooseParts']").is_hidden()
     finally:
         context.close()
 
@@ -1119,6 +1180,47 @@ def test_mesh_panel_ctrl_drag_selects_loose_parts_for_merge(
         assert page.locator(".draw-item.selected").count() == 3
         rows.nth(2).click(button="right")
         assert page.locator(".mesh-context-menu [data-i18n='mesh.mergeLooseParts']").is_enabled()
+    finally:
+        context.close()
+
+
+def test_viewport_right_click_preserves_mesh_multiselection(
+        edge_browser, frontend_url):
+    path = "ViewportRightClickSelection"
+    context, page = _page(
+        edge_browser, frontend_url, {path: _multi_row_payload(path, count=2)})
+    try:
+        _open(page, path)
+        rows = page.locator("#mesh-list .draw-item")
+        rows.nth(1).wait_for()
+        rows.nth(0).click()
+        rows.nth(1).click(modifiers=["Control"])
+        assert page.locator(".draw-item.selected").count() == 2
+        point = page.evaluate("""async () => {
+          const THREE = await import('three');
+          const {camera, renderer} = await import('./js/scene/scene.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          const position = mesh.geometry.getAttribute('position');
+          const index = mesh.geometry.index;
+          const point = new THREE.Vector3();
+          for (let offset = 0; offset < 3; offset += 1) {
+            const vertex = index.getX(offset);
+            point.x += position.getX(vertex);
+            point.y += position.getY(vertex);
+            point.z += position.getZ(vertex);
+          }
+          point.multiplyScalar(1 / 3).applyMatrix4(mesh.matrixWorld)
+            .project(camera);
+          const rect = renderer.domElement.getBoundingClientRect();
+          return {
+            x: rect.left + (point.x + 1) * rect.width / 2,
+            y: rect.top + (1 - point.y) * rect.height / 2,
+          };
+        }""")
+        page.mouse.click(point["x"], point["y"], button="right")
+        assert page.locator(".draw-item.selected").count() == 2
+        assert [rows.nth(index).get_attribute("class").find("selected") >= 0
+                for index in range(2)] == [True, True]
     finally:
         context.close()
 

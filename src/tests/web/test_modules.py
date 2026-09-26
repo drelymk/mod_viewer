@@ -258,6 +258,7 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
         visible: parts[0].visible,
         manualVisible: parts[0].userData.manualVisible,
         triangles: parts[0].userData.loosePartTriangles,
+        labels: remaining.map(part => part.userData.loosePartLabel),
       };
       const full = mergeLooseParts([remaining[1], remaining[0]]);
       const fullState = {
@@ -292,8 +293,9 @@ def test_loose_part_merge_checks_source_and_preserves_index_order(module_page):
             "uvShared": True,
             "colorShared": True,
             "visible": True,
-        "manualVisible": True,
-        "triangles": [0, 2],
+            "manualVisible": True,
+            "triangles": [0, 2],
+            "labels": ["Merge - Part 1", "Merge - Part 2"],
         },
         "fullState": {
             "sourceMesh": True,
@@ -335,11 +337,13 @@ def test_selected_triangle_split_preserves_authored_partition_and_part_order(
       const clean = makeSource();
       const cleanResult = separateSelectedTriangles(clean, [2, 4]);
       const loose = makeSource();
-      const parts = separateLooseParts(loose);
+      const parts = separateLooseParts(loose, {label: 'Split'});
       const existingResult = separateSelectedTriangles(parts[1], [2]);
       const partition = loose.userData.looseParts.map(part => ({
         triangles: part.userData.loosePartTriangles,
         index: Array.from(part.geometry.index.array),
+        label: part.userData.loosePartLabel,
+        loosePartIndex: part.userData.loosePartIndex,
       }));
       const cleanPartition = clean.userData.looseParts.map(part =>
         part.userData.loosePartTriangles);
@@ -359,10 +363,14 @@ def test_selected_triangle_split_preserves_authored_partition_and_part_order(
         "existingRemainder": [1, 3],
         "existingSelected": [2],
         "partition": [
-            {"triangles": [0], "index": [0, 1, 2]},
-            {"triangles": [1, 3], "index": [3, 4, 5, 6, 4, 7]},
-            {"triangles": [2], "index": [5, 4, 6]},
-            {"triangles": [4], "index": [8, 9, 10]},
+            {"triangles": [0], "index": [0, 1, 2],
+             "label": "Split - Part 1", "loosePartIndex": 0},
+            {"triangles": [1, 3], "index": [3, 4, 5, 6, 4, 7],
+             "label": "Split - Part 2", "loosePartIndex": 1},
+            {"triangles": [2], "index": [5, 4, 6],
+             "label": "Split - Part 3", "loosePartIndex": 2},
+            {"triangles": [4], "index": [8, 9, 10],
+             "label": "Split - Part 4", "loosePartIndex": 3},
         ],
     }
 
