@@ -9,7 +9,7 @@ from core.ini.document import IniDocument
 from tests.support_snapshot import snapshot_context
 
 
-def _index(*geometries, asset_path="Character"):
+def _index(*geometries, asset_path="Asset01"):
     return {
         "type": "ZZMI",
         "assets": [{"path": asset_path, "geometry": list(geometries)}],
@@ -27,7 +27,7 @@ def _geometry(hash_value, *ranges):
             {"firstIndex": first, "indexCount": count}
             for first, count in ranges
         ],
-        "metadata": "Character/hash.json",
+        "metadata": "Asset01/hash.json",
         "componentName": hash_value,
     }
 
@@ -128,7 +128,7 @@ def test_texture_only_hash_identifies_asset_without_covering_geometry(
     plan = asset_composition.plan_missing_asset_parts(context)
 
     assert plan.status == "ready"
-    assert plan.asset == {"path": "Character", "geometry": [
+    assert plan.asset == {"path": "Asset01", "geometry": [
         _geometry("aaaaaaaa", (0, 12))]}
     assert plan.evidence[0].geometry_evidence is False
     assert not plan.covered_parts
@@ -222,7 +222,7 @@ def test_unknown_game_fallback_keeps_cross_type_asset_ambiguity(
         tmp_path, monkeypatch):
     indexes = {
         "GIMI": _index(_geometry("aaaaaaaa", (0, 12)),
-                        asset_path="GenshinAsset"),
+                        asset_path="Asset01"),
         "ZZMI": _index(_geometry("aaaaaaaa", (0, 12)),
                         asset_path="ZZZAsset"),
     }

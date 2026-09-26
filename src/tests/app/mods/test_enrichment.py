@@ -12,7 +12,7 @@ from tests.support_snapshot import snapshot_context
 def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
     events = []
     parsed = SimpleNamespace(
-        groups=[{"name": "Body", "draws": []}],
+        groups=[{"name": "Component01", "draws": []}],
         game=SimpleNamespace(game="wuwa"),
         resource_files=["Components-2 t=aaaaaaaa.dds"],
         texture_override_indexes=[],
@@ -55,7 +55,7 @@ def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
 
 def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):
     parsed = loader.ParsedModAnalysis(
-        groups=[{"name": "Body", "draws": []}],
+        groups=[{"name": "Component01", "draws": []}],
         toggles={}, menu={}, defaults={}, state_rules=[], present={},
         game=GameDetection(
             game="unknown", runtime="unknown", texture_api="unknown",
@@ -69,14 +69,14 @@ def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):
             patch.object(loader, "enrich_mod_analysis",
                          return_value=enriched) as enrich, \
             patch.object(loader, "build_mesh_semantics",
-                         return_value={"Body-1": {}}), \
+                         return_value={"Component01-1": {}}), \
             patch.object(loader, "build_mesh_result",
                          return_value=SimpleNamespace(
-                             meshes={"Body-1": {}}, textures={})), \
+                             meshes={"Component01-1": {}}, textures={})), \
             patch.object(loader, "_assign_material_profiles", return_value={}):
         semantic_result = loader.load_mesh_semantics(context)
         assert semantic_result["meshes"] == {
-            "Body-1": {"material_kind_override": None}}
+            "Component01-1": {"material_kind_override": None}}
         assert enrich.call_count == 1
 
         full_result = loader.load_mod(context=context)

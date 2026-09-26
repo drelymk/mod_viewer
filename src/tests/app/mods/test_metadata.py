@@ -11,30 +11,30 @@ from app.mods import metadata
         (None, []),
         ("45", []),
         ({"45": True}, []),
-        ([{"source": "Hair\\HairBlend.buf", "bone_id_offset": 0,
+        ([{"source": "Component02\\Component02Blend.buf", "bone_id_offset": 0,
            "bone_ids": [49, 45, True, -1, 47.0, 45, 53]}], [
-             {"source": "Hair/HairBlend.buf", "bone_id_offset": 0,
-              "source_key": "hair/hairblend.buf|offset=0",
+             {"source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
+              "source_key": "component02/component02blend.buf|offset=0",
               "bone_ids": [45, 49, 53]},
          ]),
         ([
-            {"source": "Hair/HairBlend.buf", "bone_id_offset": 0,
+            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
              "bone_ids": [49]},
-            {"source": "hair/./HairBlend.buf", "bone_id_offset": 0,
+            {"source": "component02/./Component02Blend.buf", "bone_id_offset": 0,
              "bone_ids": [45]},
-            {"source": "Hair/HairBlend.buf", "bone_id_offset": 24,
+            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 24,
              "bone_ids": [1]},
-            {"source": "HairBlend.buf", "bone_id_offset": 0,
+            {"source": "Component02Blend.buf", "bone_id_offset": 0,
              "bone_ids": [99]},
         ], [
-            {"source": "Hair/HairBlend.buf", "bone_id_offset": 0,
-             "source_key": "hair/hairblend.buf|offset=0",
+            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
+             "source_key": "component02/component02blend.buf|offset=0",
              "bone_ids": [45, 49]},
-            {"source": "Hair/HairBlend.buf", "bone_id_offset": 24,
-             "source_key": "hair/hairblend.buf|offset=24",
+            {"source": "Component02/Component02Blend.buf", "bone_id_offset": 24,
+             "source_key": "component02/component02blend.buf|offset=24",
              "bone_ids": [1]},
-            {"source": "HairBlend.buf", "bone_id_offset": 0,
-             "source_key": "hairblend.buf|offset=0",
+            {"source": "Component02Blend.buf", "bone_id_offset": 0,
+             "source_key": "component02blend.buf|offset=0",
              "bone_ids": [99]},
         ]),
         ([{"source": "Meshes/Blend.buf", "source_key":
@@ -57,20 +57,20 @@ def test_weight_selected_bones_validates_persisted_values(stored, expected):
 def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
     path = tmp_path / metadata.METADATA_NAME
     original = {
-        "mesh_names": {"mesh": "Body"},
+        "mesh_names": {"mesh": "Component01"},
         "weight": {"future_option": "preserve"},
     }
     path.write_text(json.dumps(original), encoding="utf-8")
 
     result = metadata.save_weight_selected_bones(str(tmp_path), [
-        {"source": "Hair\\HairBlend.buf", "bone_id_offset": 0,
+        {"source": "Component02\\Component02Blend.buf", "bone_id_offset": 0,
          "bone_ids": [53, True, 45, -1, 53, 49]},
     ])
 
     assert result["saved"] is True
     assert result["selected_bones"] == [{
-        "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
-        "source_key": "hair/hairblend.buf|offset=0",
+        "source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
+        "source_key": "component02/component02blend.buf|offset=0",
         "bone_ids": [45, 49, 53],
     }]
     assert json.loads(path.read_text(encoding="utf-8")) == {
@@ -78,8 +78,8 @@ def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
         "weight": {
             "future_option": "preserve",
             "selected_bones": [{
-                "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
-                "source_key": "hair/hairblend.buf|offset=0",
+                "source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
+                "source_key": "component02/component02blend.buf|offset=0",
                 "bone_ids": [45, 49, 53],
             }],
         },
@@ -96,16 +96,16 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
     preset = {
         "id": "pose-1",
         "name": "  Look Left ",
-        "roots": [{"joint_signature": '["body#bone=7"]'}],
-        "joints": [{"joint_signature": '["body#bone=8"]',
+        "roots": [{"joint_signature": '["component01#bone=7"]'}],
+        "joints": [{"joint_signature": '["component01#bone=8"]',
                     "rotation": [0, 0, 2, 0]}],
     }
     result = metadata.save_rig_pose_preset(str(tmp_path), preset)
     assert result["saved"] is True
     assert result["preset"] == {
         "id": "pose-1", "name": "Look Left",
-        "roots": [{"joint_signature": '["body#bone=7"]'}],
-        "joints": [{"joint_signature": '["body#bone=8"]',
+        "roots": [{"joint_signature": '["component01#bone=7"]'}],
+        "joints": [{"joint_signature": '["component01#bone=8"]',
                     "rotation": [0, 0, 2, 0]}],
     }
 
@@ -297,7 +297,7 @@ def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
         "version": 1,
         "builder_version": 1,
         "model_reference_radius": 1.25,
-        "source_table": ["body|offset=0"],
+        "source_table": ["component01|offset=0"],
         "joints": [{
             "joint_id": 0,
             "members": [[0, 7]],
@@ -343,7 +343,7 @@ def test_model_rig_sidecar_rejects_impossible_topology(tmp_path):
         "version": 1,
         "builder_version": 1,
         "model_reference_radius": 1,
-        "source_table": ["body|offset=0"],
+        "source_table": ["component01|offset=0"],
         "joints": [joint(0, None), joint(1, 0), joint(2, 1)],
         "edges": [edge(0, 1), edge(1, 2)],
     }
@@ -417,7 +417,7 @@ def test_rig_pose_preset_writes_reject_unsupported_metadata_version(
 def test_mesh_color_adjustments_normalize_and_preserve_unrelated_metadata(
         tmp_path):
     path = tmp_path / metadata.METADATA_NAME
-    original = {"mesh_names": {"mesh": "Body"}, "weight": {"future": True}}
+    original = {"mesh_names": {"mesh": "Component01"}, "weight": {"future": True}}
     path.write_text(json.dumps(original), encoding="utf-8")
 
     result = metadata.save_mesh_color_adjustment(str(tmp_path), "mesh-key", {
@@ -476,19 +476,19 @@ def test_clear_mesh_color_adjustments_if_unchanged_clears_committed_state(
         tmp_path):
     path = tmp_path / metadata.METADATA_NAME
     original = {
-        "mesh_names": {"mesh": "Body"},
+        "mesh_names": {"mesh": "Component01"},
         "future": {"keep": True},
         "mesh_color_adjustments": {
-            "body": {"hue": 30},
+            "component01": {"hue": 30},
             "other": {"hue": 45},
         },
     }
     path.write_text(json.dumps(original), encoding="utf-8")
 
     result = metadata.clear_mesh_color_adjustments_if_unchanged(
-        str(tmp_path), {"body": {"hue": 30}})
+        str(tmp_path), {"component01": {"hue": 30}})
 
-    assert result["cleared"] == ["body"]
+    assert result["cleared"] == ["component01"]
     assert result["preserved"] == []
     assert result["failed"] == []
     saved = json.loads(path.read_text(encoding="utf-8"))
@@ -572,14 +572,14 @@ def test_clear_mesh_color_adjustments_if_unchanged_reports_save_failure(
 
 
 def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
-    canonical = "mesh:[5,\"A.ini\",\"Body\",null,null,[3,0,0],[]]"
+    canonical = "mesh:[5,\"A.ini\",\"Component01\",null,null,[3,0,0],[]]"
     payload = {"meshes": {
-        "Body-0": {
-            "component": "Body", "drawindexed": [3, 0, 0],
+        "Component01-0": {
+            "component": "Component01", "drawindexed": [3, 0, 0],
             "identity": {"key": canonical},
         },
-        "Body-1": {
-            "component": "Body", "drawindexed": [6, 0, 0],
+        "Component01-1": {
+            "component": "Component01", "drawindexed": [6, 0, 0],
         },
     }}
     adjustment = {
@@ -590,11 +590,11 @@ def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
     hydrated = metadata.hydrate_mesh_color_adjustments(payload, {
         "mesh_color_adjustments": {
             canonical: adjustment,
-            "Body::6,0,0": adjustment,
+            "Component01::6,0,0": adjustment,
         },
     })
 
     assert hydrated == {
         canonical: {**adjustment},
-        "Body::6,0,0": {**adjustment},
+        "Component01::6,0,0": {**adjustment},
     }

@@ -36,7 +36,7 @@ filename = {1}.dds
         nested = os.path.join(root, "nested")
         os.makedirs(nested)
         paths = []
-        for stem in ("body", "hair"):
+        for stem in ("component01", "component02"):
             path = os.path.join(nested, f"{stem}.ini")
             with open(path, "w", encoding="utf-8") as stream:
                 stream.write(ini.format(stem, stem))
@@ -44,10 +44,10 @@ filename = {1}.dds
 
         parsed = analyze_mod_inis(paths, root)
         assert set(parsed.toggles) == {
-            "nested/body::KeySwap", "nested/hair::KeySwap",
+            "nested/component01::KeySwap", "nested/component02::KeySwap",
         }
         assert set(parsed.defaults) >= {
-            "nested/body::swapvar", "nested/hair::swapvar",
+            "nested/component01::swapvar", "nested/component02::swapvar",
         }
         assert {item.get("source") for item in parsed.toggles.values()} == {
             "nested",
@@ -59,8 +59,8 @@ filename = {1}.dds
         }
 
         assert images == {
-            "body.ini": os.path.join("nested", "body.dds"),
-            "hair.ini": os.path.join("nested", "hair.dds"),
+            "component01.ini": os.path.join("nested", "component01.dds"),
+            "component02.ini": os.path.join("nested", "component02.dds"),
         }
 
 
@@ -83,24 +83,24 @@ def _forwarded_fixture(tmp_path, controller, target_var="style",
 [Constants]
 global ${target_var} = {target_default}
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 if ${target_var} == 1
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """, encoding="utf-8")
     return analyze_mod_inis([str(menu_path), str(target_path)], str(tmp_path))
@@ -152,9 +152,9 @@ $\\Target\\style = $value
     assert parsed.groups == expected.groups
     assert parsed.groups[0]["draws"][0].conditions == [[{
         "var": "mod(5)::style", "value": "1", "negate": False}]]
-    line = snapshot.records[1].sections["TextureOverrideBody"][0]
+    line = snapshot.records[1].sections["TextureOverrideComponent01"][0]
     assert line.source() == {"ini_path": paths[1], "line_no": 7,
-                             "section": "TextureOverrideBody"}
+                             "section": "TextureOverrideComponent01"}
 
 
 def test_forwarded_controller_image_follows_pulse(tmp_path):
@@ -253,10 +253,10 @@ filename = ui/b.dds
 global $styleA = 0
 global $styleB = 0
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 if $styleA == 1
     drawindexed = 3, 0, 0
 endif
@@ -264,16 +264,16 @@ if $styleB == 1
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """, encoding="utf-8")
 
@@ -377,34 +377,34 @@ global $style = 1
 
 
 def _qualified_draw_ini(condition):
-    return f"""[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    return f"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 if {condition}
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body-position.buf
+[ResourceComponent01Position]
+filename = component01-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-texcoord.buf
+[ResourceComponent01Texcoord]
+filename = component01-texcoord.buf
 stride = 8
 """
 
 
 def test_qualified_reads_resolve_owner_controls_without_colliding_with_animation(
         tmp_path):
-    master = tmp_path / "MasterJaneDoe_AIO.ini"
-    cv = tmp_path / "JaneCV_Toggled_X_Anim_Animation.ini"
-    og = tmp_path / "JaneOG.ini"
-    master.write_text("""namespace = JaneDoe_AIO\\Master
+    master = tmp_path / "Source01.ini"
+    cv = tmp_path / "Source02.ini"
+    og = tmp_path / "Source03.ini"
+    master.write_text("""namespace = Fixture01\\Master
 
 [Constants]
 global persist $swapvar = 2
@@ -426,32 +426,32 @@ type = cycle
 $cloth = 0,1
 
 [Present]
-if $\\JaneDoe_AIO\\Master\\swapvar == 1
+if $\\Fixture01\\Master\\swapvar == 1
     $swapvar = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
 endif
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
-if $\\JaneDoe_AIO\\Master\\swapvar == 1
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+if $\\Fixture01\\Master\\swapvar == 1
     Resource\\ZZMI\\Diffuse = ResourceCVDiffuse
-elif $\\JaneDoe_AIO\\Master\\swapvar == 2
+elif $\\Fixture01\\Master\\swapvar == 2
     Resource\\ZZMI\\Diffuse = ResourceCVAltDiffuse
 endif
-if $cloth == 1 && $\\JaneDoe_AIO\\Master\\swapvar == 1
+if $cloth == 1 && $\\Fixture01\\Master\\swapvar == 1
     drawindexed = 3, 0, 0
 endif
 
-[ResourceBodyIB]
+[ResourceComponent01IB]
 filename = cv.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 filename = cv-position.buf
 stride = 12
 
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = cv-texcoord.buf
 stride = 8
 
@@ -462,15 +462,15 @@ filename = cv.dds
 filename = cv-alt.dds
 """, encoding="utf-8")
     og.write_text(_qualified_draw_ini(
-        r"$\JaneDoe_AIO\Master\swapvar == 2"), encoding="utf-8")
+        r"$\Fixture01\Master\swapvar == 2"), encoding="utf-8")
 
     parsed = analyze_mod_inis(
         [str(master), str(cv), str(og)], str(tmp_path))
     master_toggle = next(
         info for info in parsed.toggles.values()
-        if info["vars"].get("MasterJaneDoe_AIO::swapvar") == ["1", "2"])
+        if info["vars"].get("Source01::swapvar") == ["1", "2"])
     assert master_toggle["vars"] == {
-        "MasterJaneDoe_AIO::swapvar": ["1", "2"],
+        "Source01::swapvar": ["1", "2"],
     }
 
     cv_group = next(group for group in parsed.groups
@@ -478,31 +478,31 @@ filename = cv-alt.dds
     cv_draw = cv_group["draws"][0]
     assert {(clause["var"], clause["value"])
             for clause in cv_draw.conditions[0]} == {
-        ("JaneCV_Toggled_X_Anim_Animation::cloth", "1"),
-        ("MasterJaneDoe_AIO::swapvar", "1"),
+        ("Source02::cloth", "1"),
+        ("Source01::swapvar", "1"),
     }
     diffuse_rules = cv_draw.texture_rules("diffuse")
     assert len(diffuse_rules) == 2
     assert {
         (clause["var"], clause["value"])
         for clause in diffuse_rules[0]["conditions"][0]
-    } == {("MasterJaneDoe_AIO::swapvar", "1")}
+    } == {("Source01::swapvar", "1")}
 
     og_group = next(group for group in parsed.groups
                     if group["identity_source"].endswith(og.name))
     assert og_group["draws"][0].conditions == [[{
-        "var": "MasterJaneDoe_AIO::swapvar", "value": "2",
+        "var": "Source01::swapvar", "value": "2",
         "negate": False,
     }]]
 
     cv_clock = next(clock for clock in parsed.animations
                     if clock.frame_var ==
-                    "JaneCV_Toggled_X_Anim_Animation::swapvar")
+                    "Source02::swapvar")
     assert cv_clock.conditions == [[{
-        "var": "MasterJaneDoe_AIO::swapvar", "value": "1",
+        "var": "Source01::swapvar", "value": "1",
         "negate": False,
     }]]
-    assert cv_clock.frame_var != "MasterJaneDoe_AIO::swapvar"
+    assert cv_clock.frame_var != "Source01::swapvar"
 
 
 def test_unknown_and_ambiguous_qualified_reads_fail_open(tmp_path):

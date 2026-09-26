@@ -103,8 +103,8 @@ def test_enabled_entries_filter_by_type_without_dropping_registry_state():
 def test_asset_child_listing_is_lazy_and_contained(tmp_path):
     filename = _config(tmp_path)
     root = _directory(tmp_path, "root")
-    child = _directory(tmp_path / "root", "Character")
-    nested = _directory(tmp_path / "root" / "Character", "Nested")
+    child = _directory(tmp_path / "root", "Asset01")
+    nested = _directory(tmp_path / "root" / "Asset01", "Nested")
     asset_folders.add_folder("GIMI", root, filename)
     result = asset_folders.list_subfolders(root, root)
     assert [item["path"] for item in result] == [mod_folders.normalize_path(child)]
