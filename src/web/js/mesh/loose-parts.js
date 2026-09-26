@@ -165,6 +165,72 @@ function partLabel(source, index, label) {
   return `${base} - Part ${index + 1}`;
 }
 
+function indicesForTriangles(sourceGeometry, triangles) {
+  const sourceIndex = sourceGeometry?.index;
+  if (!sourceIndex || !Array.isArray(triangles)) return null;
+  const sourceTriangleCount = Math.floor(sourceIndex.count / 3);
+  if (triangles.some(triangle => !Number.isInteger(triangle)
+      || triangle < 0 || triangle >= sourceTriangleCount)) return null;
+  const IndexArray = sourceIndex.array?.constructor || Uint32Array;
+  const indices = new IndexArray(triangles.length * 3);
+  triangles.forEach((triangle, index) => {
+    const offset = triangle * 3;
+    indices[index * 3] = sourceIndex.getX(offset);
+    indices[index * 3 + 1] = sourceIndex.getX(offset + 1);
+    indices[index * 3 + 2] = sourceIndex.getX(offset + 2);
+  });
+  return indices;
+}
+
+function createLoosePart(source, triangles, {
+  index = 0, label = null, template = null, copyTransform = true,
+} = {}) {
+  const sourceGeometry = source?.geometry;
+  const partIndex = indicesForTriangles(sourceGeometry, triangles);
+  if (!sourceGeometry || !partIndex) return null;
+  if (!sourceGeometry.boundingBox) sourceGeometry.computeBoundingBox();
+  if (!sourceGeometry.boundingSphere) sourceGeometry.computeBoundingSphere();
+  const geometry = new THREE.BufferGeometry();
+  copyGeometryAttributes(sourceGeometry, geometry);
+  geometry.setIndex(new THREE.BufferAttribute(partIndex, 1));
+  geometry.boundingBox = sourceGeometry.boundingBox;
+  geometry.boundingSphere = sourceGeometry.boundingSphere;
+
+  const part = new THREE.Mesh(geometry, source.material);
+  part.name = `${source.name || 'mesh'}-loose-part-${index + 1}`;
+  part.castShadow = source.castShadow;
+  part.receiveShadow = source.receiveShadow;
+  // Parts share the source bounds, but rig dragging intentionally marks
+  // only the semantic source as uncullable while its bounds are dirty.
+  part.frustumCulled = false;
+  part.layers.mask = source.layers.mask;
+  if (template) {
+    if (copyTransform) {
+      part.position.copy(template.position);
+      part.quaternion.copy(template.quaternion);
+      part.scale.copy(template.scale);
+    }
+    part.visible = template.visible;
+    part.userData.manualVisible = template.userData?.manualVisible
+      ?? template.visible;
+    part.userData.manuallyToggled = !!template.userData?.manuallyToggled;
+  } else {
+    part.userData.manualVisible = true;
+  }
+  part.userData.loosePartParent = source;
+  part.userData.loosePartIndex = index;
+  part.userData.loosePartLabel = label || partLabel(source, index, null);
+  part.userData.loosePartTriangles = [...triangles];
+  attachOutline(part);
+  source.add(part);
+  return part;
+}
+
+function sourceTriangleOrdinals(source) {
+  const count = Math.floor(Number(source?.geometry?.index?.count || 0) / 3);
+  return Array.from({length: count}, (_, triangle) => triangle);
+}
+
 /** Create viewer children while retaining the source mesh as semantic owner. */
 export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
   if (!source?.geometry || source.userData?.looseParts?.length) {
@@ -184,28 +250,13 @@ export function separateLooseParts(source, {label = null, tolerance = 0} = {}) {
   sourceGeometry.setDrawRange(0, 0);
 
   for (const [partIndex, group] of groups.entries()) {
-    const partIndexArray = group.indices;
-    const geometry = new THREE.BufferGeometry();
-    copyGeometryAttributes(sourceGeometry, geometry);
-    geometry.setIndex(new THREE.BufferAttribute(partIndexArray, 1));
-    geometry.boundingBox = sourceGeometry.boundingBox;
-    geometry.boundingSphere = sourceGeometry.boundingSphere;
-
-    const part = new THREE.Mesh(geometry, source.material);
-    part.name = `${source.name || 'mesh'}-loose-part-${partIndex + 1}`;
-    part.castShadow = source.castShadow;
-    part.receiveShadow = source.receiveShadow;
-    // Parts share the source bounds, but rig dragging intentionally marks
-    // only the semantic source as uncullable while its bounds are dirty.
-    part.frustumCulled = false;
-    part.layers.mask = source.layers.mask;
-    part.userData.loosePartParent = source;
-    part.userData.loosePartIndex = partIndex;
-    part.userData.loosePartLabel = partLabel(source, partIndex, label);
-    part.userData.loosePartTriangles = [...group.triangles];
-    part.userData.manualVisible = true;
-    attachOutline(part);
-    source.add(part);
+    const part = createLoosePart(source, group.triangles, {
+      index: partIndex, label: partLabel(source, partIndex, label),
+    });
+    if (!part) {
+      clearLooseParts(source);
+      return [];
+    }
     source.userData.looseParts.push(part);
   }
   return source.userData.looseParts;
@@ -221,6 +272,84 @@ export function isLoosePart(mesh) {
 
 export function getLoosePartSource(mesh) {
   return mesh?.userData?.loosePartParent || null;
+}
+
+/** Split one source or loose part into remainder followed by selected faces. */
+export function separateSelectedTriangles(target, selectedTriangles, {
+  label = null,
+} = {}) {
+  const source = getLoosePartSource(target) || target;
+  if (!source?.geometry?.index || !target) return null;
+  const sourceParts = getLooseParts(source);
+  if (target !== source && !sourceParts.includes(target)) return null;
+  const targetTriangles = target === source
+    ? sourceTriangleOrdinals(source)
+    : [...(target.userData?.loosePartTriangles || [])];
+  const available = new Set(targetTriangles);
+  const selected = [...new Set(selectedTriangles || [])]
+    .filter(triangle => Number.isInteger(triangle));
+  if (!selected.length || selected.length >= targetTriangles.length
+      || selected.some(triangle => !available.has(triangle))) return null;
+  const selectedSet = new Set(selected);
+  const remainderTriangles = targetTriangles.filter(
+    triangle => !selectedSet.has(triangle));
+  if (!remainderTriangles.length) return null;
+
+  const sourceWasClean = target === source && sourceParts.length === 0;
+  if (!sourceWasClean && target === source) return null;
+  if (sourceWasClean) {
+    const sourceGeometry = source.geometry;
+    if (!sourceGeometry.boundingBox) sourceGeometry.computeBoundingBox();
+    if (!sourceGeometry.boundingSphere) sourceGeometry.computeBoundingSphere();
+    source.userData.loosePartDrawRange = {
+      start: sourceGeometry.drawRange.start,
+      count: sourceGeometry.drawRange.count,
+    };
+    source.userData.looseParts = [];
+    sourceGeometry.setDrawRange(0, 0);
+    const remainder = createLoosePart(source, remainderTriangles, {
+      index: 0, label: partLabel(source, 0, label), template: source,
+      copyTransform: false,
+    });
+    if (remainder) source.userData.looseParts.push(remainder);
+    const selectedPart = createLoosePart(source, selected, {
+      index: 1, label: partLabel(source, 1, label), template: source,
+      copyTransform: false,
+    });
+    if (selectedPart) source.userData.looseParts.push(selectedPart);
+    if (!remainder || !selectedPart) {
+      clearLooseParts(source);
+      return null;
+    }
+    return {source, target, remainder, selected: selectedPart, full: false};
+  }
+
+  const targetIndex = sourceParts.indexOf(target);
+  const childIndex = source.children.indexOf(target);
+  const remainder = createLoosePart(source, remainderTriangles, {
+    index: targetIndex, label: target.userData?.loosePartLabel ||
+      partLabel(source, targetIndex, label), template: target,
+  });
+  const selectedPart = createLoosePart(source, selected, {
+    index: targetIndex + 1, label: partLabel(source, targetIndex + 1, label),
+    template: target,
+  });
+  if (!remainder || !selectedPart) {
+    if (remainder) disposeLoosePart(source, remainder);
+    if (selectedPart) disposeLoosePart(source, selectedPart);
+    return null;
+  }
+  disposeLoosePart(source, target);
+  const nextParts = sourceParts.slice();
+  nextParts.splice(targetIndex, 1, remainder, selectedPart);
+  source.userData.looseParts = nextParts;
+  const children = source.children;
+  [remainder, selectedPart].forEach(part => {
+    const index = children.indexOf(part);
+    if (index >= 0) children.splice(index, 1);
+  });
+  children.splice(Math.max(0, childIndex), 0, remainder, selectedPart);
+  return {source, target, remainder, selected: selectedPart, full: false};
 }
 
 export function canMergeLooseParts(meshes) {
