@@ -2,8 +2,11 @@
 
 import base64
 
-from .payloads import append_stream, model_payload, solid_texture, textured_payload
-from .support import bridge_calls, mesh_pixel, open_model, wait_loaded, wait_texture
+from PIL import Image
+from app.runtime import server
+
+from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
+from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, wait_loaded, wait_texture
 
 
 def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
@@ -303,4 +306,96 @@ def test_wireframe_suppresses_outlines_and_restores_preference_without_rebuildin
         stable: mesh.material === material && mesh.geometry === geometry};
     }""")
     assert result == {'enabled': True, 'suppressed': False, 'retained': True, 'restored': True, 'stable': True}
+    assert bridge_calls(page, 'export') == []
+
+
+def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path):
+    dds = tmp_path / 'texture-01.dds'
+    dds.write_bytes(split_color_dds())
+    reference = tmp_path / 'texture-02.png'
+    with Image.new('RGB', (4, 4), (255, 0, 0)) as image:
+        image.paste((0, 0, 255), (0, 2, 4, 4))
+        image.save(reference)
+    publication = server.begin_texture_publication(str(tmp_path))
+    urls = [publication.register(str(path)) for path in [dds, reference]]
+    publication.commit()
+    payload = model_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh.update(pos=append_stream(payload, 'f', [0,0,0, 1,0,0, 1,1,0, 0,1,0]),
+                uv=append_stream(payload, 'f', [0,0, 1,0, 1,1, 0,1]),
+                idx=append_stream(payload, 'I', [0,1,2, 0,2,3]), drawindexed=[6,0,0],
+                tex_key='diffuse::texture-01.dds')
+    payload['textures'] = dict(zip(['diffuse::texture-01.dds', 'diffuse::texture-02.png'], urls))
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    wait_texture(page)
+    assert page.evaluate("""async () => {
+      const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
+      const {renderer, rendererReady} = await import('./js/scene/scene.js');
+      await rendererReady;
+      return renderer.backend.isWebGPUBackend && !renderer.backend.compatibilityMode
+        && getGameMaterialTexture(window.modViewer.activeMeshes[0].material, 'diffuse').isCompressedTexture;
+    }""")
+    points = [[0.5, 0.2, 0], [0.5, 0.8, 0]]
+    compressed = mesh_pixels(page, points)
+    page.evaluate("""async () => {
+      const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
+      setManualTexOverride(window.modViewer.activeMeshes[0], 'diffuse::texture-02.png');
+    }""")
+    page.wait_for_function("""() => {
+      const texture = window.__getTexture(window.modViewer.activeMeshes[0].material, 'diffuse');
+      return texture?.image && !texture.isCompressedTexture;
+    }""")
+    reference_pixels = mesh_pixels(page, points)
+    assert compressed[0][2] > compressed[0][0] + 60
+    assert compressed[1][0] > compressed[1][2] + 60
+    assert all(max(abs(a-b) for a,b in zip(left, right)) < 40
+               for left, right in zip(compressed, reference_pixels))
+
+
+def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(viewer):
+    payload, weights = weighted_payload()
+    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    assert bridge_calls(page, 'weights') == []
+    page.locator('#weight-rig-tab').click()
+    page.evaluate("""async () => {
+      const {weightRigApi} = await import('./js/mesh/weight-rig-core.js');
+      window.__rigApi = weightRigApi;
+    }""")
+    page.wait_for_function('window.__rigApi.getModelRigState().loaded && window.__rigApi.getModelRigState().model?.joints.length > 1')
+    assert bridge_calls(page, 'weights') == [['fixture-01']]
+    result = page.evaluate("""async () => {
+      const {weightRigApi: rig} = await import('./js/mesh/weight-rig-core.js');
+      const model = rig.getModelRigState().model;
+      const joint = model.components[0].nodeIds.find(id => id !== model.components[0].rootId);
+      window.__rigJoint = joint;
+      const mesh = window.modViewer.activeMeshes[0];
+      window.__rigPosition = mesh.geometry.attributes.position;
+      window.__rigBaseline = [...window.__rigPosition.array];
+      return {joint, weights: rig.getModelWeightState().selectedBones};
+    }""")
+    page.locator('.rig-bone-select').select_option(str(result['joint']))
+    assert result['weights'] == []
+    baseline_pixel = mesh_pixel(page)
+    assert page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {weightRigApi: rig} = await import('./js/mesh/weight-rig-core.js');
+      const changed = rig.setRigJointRotation(window.__rigJoint,
+        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), Math.PI / 2), {dragging: true});
+      rig.finishRigJointPose(window.__rigJoint);
+      return changed && [...window.__rigPosition.array].some((value, i) => Math.abs(value-window.__rigBaseline[i]) > 1e-4);
+    }""")
+    posed_pixel = mesh_pixel(page)
+    assert sum(abs(a-b) for a,b in zip(baseline_pixel, posed_pixel)) > 30
+    page.locator('.rig-reset-pose').click()
+    assert page.evaluate('window.__rigPosition.array.every((value, i) => Math.abs(value-window.__rigBaseline[i]) < 1e-5)')
+    restored_pixel = mesh_pixel(page)
+    assert max(abs(a-b) for a,b in zip(baseline_pixel, restored_pixel)) < 15
+    page.locator('.rig-clear-joint').click()
+    assert page.locator('.rig-bone-select').input_value() == ''
+    assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition')
+    assert bridge_calls(page, 'weights') == [['fixture-01']]
     assert bridge_calls(page, 'export') == []

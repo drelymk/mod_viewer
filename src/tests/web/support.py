@@ -173,16 +173,20 @@ def viewer(edge_browser, frontend_url):
             save_mesh_names: call('names', {}),
             save_mesh_textures: call('textures', {}),
             save_mesh_color_adjustment: call('color', {}),
+            get_model_skinning_preview: call('weights', () => window.__fixtureLoad('fixture-weights')),
+            load_model_rig: call('rigRead', null),
+            save_model_rig: call('rigWrite', {status: 'ok'}),
           }};
         """.replace('__STATE__', state))
         def load_fixture(_source, path, publish=True):
             payload = copy.deepcopy(responses[path])
             blob = payload.pop('_fixture_blob', None)
             if blob is not None and publish:
-                payload['geometry'] = {
+                descriptor = {
                     'url': server.publish_geometry(blob, replace=False),
                     'length': len(blob) + payload.pop('_fixture_length_delta', 0),
                 }
+                payload['data' if path == 'fixture-weights' else 'geometry'] = descriptor
             if payload.pop('_fixture_missing_geometry', False):
                 payload['geometry']['url'] = '/geometry/fixture-missing'
             return payload
@@ -220,27 +224,41 @@ def bridge_calls(page, name):
 
 def mesh_pixel(page):
     """Sample the generated triangle away from edges and UI overlays."""
+    return mesh_pixels(page, [[0.25, 0.25, 0]])[0]
+
+
+def project_mesh_points(page, points):
+    return page.evaluate("""async points => {
+      const THREE = await import('three/webgpu');
+      const {camera, renderer} = await import('./js/scene/scene.js');
+      const mesh = window.modViewer.activeMeshes[0];
+      const rect = renderer.domElement.getBoundingClientRect();
+      return points.map(values => {
+        const p = new THREE.Vector3(...values).applyMatrix4(mesh.matrixWorld).project(camera);
+        return [Math.round(rect.left + (p.x + 1) * rect.width / 2),
+                Math.round(rect.top + (1 - p.y) * rect.height / 2)];
+      });
+    }""", points)
+
+
+def mesh_pixels(page, points):
     previous = page.evaluate('window.modViewer.getRenderCount()')
     page.evaluate("""async () => {
       const {requestRender} = await import('./js/scene/render-scheduler.js');
       requestRender();
     }""")
     page.wait_for_function('count => window.modViewer.getRenderCount() > count', arg=previous)
-    point = page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      const {camera, renderer} = await import('./js/scene/scene.js');
-      const mesh = window.modViewer.activeMeshes[0];
-      const rect = renderer.domElement.getBoundingClientRect();
-      const p = new THREE.Vector3(0.25, 0.25, 0).applyMatrix4(mesh.matrixWorld).project(camera);
-      return [Math.round(rect.left + (p.x + 1) * rect.width / 2),
-              Math.round(rect.top + (1 - p.y) * rect.height / 2)];
-    }""")
+    projected = project_mesh_points(page, points)
     with Image.open(io.BytesIO(page.screenshot())) as image:
-        return image.convert('RGB').getpixel(tuple(point))
+        rgb = image.convert('RGB')
+        return [rgb.getpixel(tuple(point)) for point in projected]
 
 
 def wait_texture(page, index=0, role='diffuse'):
-    page.wait_for_function("""async ({index, role}) => {
+    page.evaluate("""async () => {
       const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
-      return !!getGameMaterialTexture(window.modViewer.activeMeshes[index]?.material, role)?.image;
-    }""", arg={'index': index, 'role': role})
+      window.__getTexture = getGameMaterialTexture;
+    }""")
+    page.wait_for_function("""({index, role}) =>
+      !!window.__getTexture(window.modViewer.activeMeshes[index]?.material, role)?.image
+    """, arg={'index': index, 'role': role})

@@ -27,3 +27,16 @@ def test_locale_switch_translates_ui_and_preserves_identity(module_page):
     assert result['identity'] == 'resource-01'
     assert result['locale'] == 'en'
     assert result['interpolated'] == result['expected']
+
+
+def test_all_locale_entries_preserve_english_placeholders(module_page):
+    mismatches = module_page.evaluate(r"""async () => {
+      const {LOCALES} = await import('./js/i18n/index.js');
+      const placeholders = text => [...text.matchAll(/\{([\w.-]+)\}/g)]
+        .map(match => match[1]).sort().join(',');
+      return Object.entries(LOCALES).flatMap(([locale, catalog]) =>
+        Object.entries(LOCALES.en).filter(([key, text]) =>
+          typeof catalog[key] !== 'string' || placeholders(catalog[key]) !== placeholders(text))
+          .map(([key]) => ({locale, key})));
+    }""")
+    assert mismatches == []
