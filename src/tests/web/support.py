@@ -1,9 +1,10 @@
 """Reusable browser harness for frontend integration tests."""
 
+import copy
 import io
 import json
 import re
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 
 import pytest
 from PIL import Image
@@ -12,6 +13,7 @@ from app.settings import paths as paths
 from app.runtime import server as server
 
 playwright = pytest.importorskip("playwright.sync_api")
+
 
 @pytest.fixture(scope="session")
 def frontend_url():
@@ -26,8 +28,6 @@ def edge_browser():
         try:
             # Tests use the local server directly. Ambient proxy discovery can
             # otherwise delay the first request in every isolated context.
-            # D3D11 keeps WebGPU available on hosted Windows runners without
-            # requiring a physical adapter.
             browser = runtime.chromium.launch(
                 channel="msedge", headless=True,
                 args=["--no-proxy-server", "--enable-unsafe-webgpu",
@@ -42,7 +42,7 @@ def edge_browser():
 @pytest.fixture(scope="session")
 def module_document(frontend_url):
     """Reuse the served import map without duplicating vendor URL rules."""
-    with urlopen(frontend_url, timeout=5) as response:
+    with build_opener(ProxyHandler({})).open(frontend_url, timeout=5) as response:
         html = response.read().decode("utf-8")
     import_map = re.search(
         r'<script type="importmap"[^>]*>.*?</script>', html, re.DOTALL)
@@ -76,452 +76,171 @@ def module_page(module_context, frontend_url, module_document):
         page.close()
 
 
-def _page(edge_browser, frontend_url, responses, pending=None, picks=None,
-          mod_folders=None, subfolders=None, diagnostics=None, panel_opacity=58,
-          panel_opacity_api=True, panel_opacity_error=None, language='en',
-          language_api=True,
-          asset_folders=None, asset_subfolders=None,
-          startup_request=None, startup_api_ready=True, api_features=()):
-    # Playwright's wait_for_function uses eval internally. Bypass the app's
-    # production CSP only in this isolated test context so behavioral waits
-    # do not require weakening the served application's policy.
-    context = edge_browser.new_context(bypass_csp=True)
-    state = {
-        "responses": responses,
-        "pending": pending or {},
-        "picks": picks or [],
-        "modFolders": mod_folders or [],
-        "subfolders": subfolders or {},
-        "assetFolders": asset_folders or [],
-        "assetSubfolders": asset_subfolders or {},
-        "diagnostics": diagnostics or {
-            "summary": {"issues": 0, "errors": 0}, "files": {}, "issues": []},
-        "panelOpacity": panel_opacity,
-        "panelOpacityError": panel_opacity_error,
-        "panelOpacityApi": panel_opacity_api,
-        "language": language,
-        "languageApi": language_api,
-        "startupRequest": startup_request,
-        "startupApiReady": startup_api_ready,
-        "apiFeatures": list(api_features),
-    }
-    encoded_state = json.dumps(json.dumps(state))
-    context.add_init_script(
-        """
-        {
-          const state = window.__fakeApi = JSON.parse(__STATE__);
-          state.calls = new Proxy({}, {get: (target, key) =>
-            target[key] ||= []});
-          const copy = value => value == null ? value : structuredClone(value);
-          const loadWaiters = {};
-          const colorSaveWaiters = [];
-          state.releaseColorSaves = () => {
-            state.blockColorSaves = false;
-            colorSaveWaiters.splice(0).forEach(resolve => resolve());
+@pytest.fixture
+def viewer(edge_browser, frontend_url):
+    """Isolated viewer pages with an observable native bridge double."""
+    contexts = []
+
+    def create(responses, pending=None, startup=None, native=None):
+        context = edge_browser.new_context(bypass_csp=True, viewport={"width": 1280, "height": 900})
+        contexts.append(context)
+        state = json.dumps({
+            "pending": pending or {}, "startup": startup,
+            "controls": {path: value.get('controls', {}) for path, value in responses.items()},
+            "results": native or {},
+        })
+        context.add_init_script("""
+          window.__bridge = __STATE__;
+          const state = window.__bridge;
+          state.calls = [];
+          state.errors = {};
+          state.blocked = {};
+          state.waiters = {};
+          state.iniText = '[SectionFixture]\\nvalue = 0\\n';
+          state.release = name => {
+            state.blocked[name] = false;
+            (state.waiters[name] || []).splice(0).forEach(resolve => resolve());
           };
-          state.releaseLoad = path => {
-            state.blockLoads = state.blockLoads || {};
-            state.blockLoads[path] = false;
-            (loadWaiters[path] || []).splice(0).forEach(resolve => resolve());
+          const load = async path => {
+            const payload = await window.__fixtureLoad(path);
+            if (state.controls[path]) payload.controls = structuredClone(state.controls[path]);
+            return payload;
           };
-          const stub = (callName, result,
-              record = args => args.length === 1 ? args[0] : args) =>
-            async (...args) => {
-            if (callName) {
-              state.calls[callName].push(record(args));
-            }
-            const value = typeof result === 'function'
-              ? result(...args) : result;
-            return copy(value);
+          const semantics = async path => {
+            const payload = await window.__fixtureLoad(path, false);
+            return {meshes: payload.meshes, controls: state.controls[path] || payload.controls,
+              state: payload.state, material_profiles: payload.metadata?.material_profiles || {}};
           };
-          const pickPath = callName => async () => {
-            const path = state.nextPath || null;
-            state.nextPath = null;
-            state.calls[callName].push(path);
-            return path;
+          const stage = path => {state.pending[path] = true; return {ok: true, result: {}};};
+          const call = (name, result) => async (...args) => {
+            state.calls.push({name, args});
+            if (state.errors[name]) throw new Error('fixture failure');
+            const value = structuredClone(await (Object.hasOwn(state.results, name)
+              ? state.results[name] : typeof result === 'function' ? result(...args) : result));
+            if (state.blocked[name]) await new Promise(resolve => (state.waiters[name] ||= []).push(resolve));
+            return value;
           };
-          window.pywebview = { api: {
-            select_folder: pickPath('selectFolder'),
-            select_archive_mod: pickPath('selectArchiveMod'),
-            select_asset_folder: pickPath('selectAssetFolder'),
-            consume_startup_request: async () => {
-              state.calls.consumeStartupRequest.push(true);
-              const request = state.startupRequest;
-              state.startupRequest = null;
-              return copy(request);
-            },
-            load_mod: async (path, disabledIni = false) => {
-              state.calls.loadMod.push(path);
-              state.calls.loadModArgs.push([path, disabledIni]);
-              if (state.blockLoads?.[path]) {
-                await new Promise(resolve => {
-                  (loadWaiters[path] ||= []).push(resolve);
-                });
-              }
-              return copy(state.responses[path]);
-            },
-            load_asset: stub('loadAsset', path => state.responses[path]),
-            load_missing_asset_parts: stub(
-              'loadMissingAssetParts', path =>
-                state.responses[path]?.assetFillResponse || {
-                  status: 'nothing_missing',
-                }),
-            remove_missing_asset_parts: stub(
-              'removeMissingAssetParts', {status: 'removed', removed: true},
-              args => args[0]),
-            get_present_state: stub(
-              'presentState', path => ({
-                present: state.responses[path]?.controls?.present || {
-                  target_inis: [], item: null,
-                },
-              })),
-            get_control_state: async path => {
-              state.calls.controlState.push(path);
-              const payload = state.responses[path] || {};
-              return copy({
-                controls: payload.controls || {},
-                state: payload.state || {rules: [], defaults: {}},
-              });
-            },
-            get_mesh_semantics: async path => {
-              state.calls.meshSemantics.push(path);
-              const payload = state.responses[path] || {};
-              const meshes = payload.meshSemantics || Object.fromEntries(
-                Object.entries(payload.meshes || {}).map(([name, entry]) => {
-                  const semantic = {};
-                  for (const key of [
-                    'conditions', 'sources', 'source', 'component',
-                    'identity',
-                    'tex_key', 'texture_variants', 'normal_map_key',
-                    'normal_map_variants', 'normal_data_key',
-                    'normal_data_variants', 'light_map_key',
-                    'light_map_variants', 'material_map_key',
-                    'material_map_variants', 'emission_map_key',
-                    'emission_map_variants', 'asset_binding',
-                    'texture_resolution', 'asset_slot_evidence',
-                    'material_kind', 'material_kind_reliable',
-                    'material_kind_reason', 'material_kind_override',
-                    'material_profile_id',
-                  ]) {
-                    if (Object.hasOwn(entry, key)) semantic[key] = entry[key];
-                  }
-                  return [name, semantic];
-                })
-              );
-              return copy({
-                meshes,
-                material_profiles: payload.materialProfiles
-                  || payload.metadata?.material_profiles || {},
-                asset_resolution: payload.meshSemanticsAssetResolution
-                  ?? payload.asset_resolution ?? null,
-              });
-            },
-            get_semantic_state: async path => {
-              state.calls.semanticState.push(path);
-              const payload = state.responses[path] || {};
-              const meshes = payload.meshSemantics || Object.fromEntries(
-                Object.entries(payload.meshes || {}).map(([name, entry]) => {
-                  const semantic = {};
-                  for (const key of [
-                    'conditions', 'sources', 'source', 'component',
-                    'identity',
-                    'tex_key', 'texture_variants', 'normal_map_key',
-                    'normal_map_variants', 'normal_data_key',
-                    'normal_data_variants', 'light_map_key',
-                    'light_map_variants', 'material_map_key',
-                    'material_map_variants', 'emission_map_key',
-                    'emission_map_variants', 'asset_binding',
-                    'texture_resolution', 'asset_slot_evidence',
-                    'material_kind', 'material_kind_reliable',
-                    'material_kind_reason', 'material_kind_override',
-                    'material_profile_id',
-                  ]) {
-                    if (Object.hasOwn(entry, key)) semantic[key] = entry[key];
-                  }
-                  return [name, semantic];
-                })
-              );
-              return copy({
-                meshes,
-                material_profiles: payload.materialProfiles
-                  || payload.metadata?.material_profiles || {},
-                asset_resolution: payload.meshSemanticsAssetResolution
-                  ?? payload.asset_resolution ?? null,
-                controls: payload.controls || {},
-                state: payload.state || {rules: [], defaults: {}},
-              });
-            },
-            save_texture_color: stub(
-              'saveTextureColor',
-              (path, texKey, targets) =>
-                state.responses[path]?.textureSaveResult || {
-                  status: 'ok',
-                  tex_key: texKey,
-                  affected_tex_keys: texKey ? [texKey] : [],
-                  saved_meshes: (targets || []).map(target => ({
-                    semantic_key: target.semantic_key,
-                    metadata_key: target.metadata_key,
-                  })),
-                  texture: {file: 'body.dds'},
-                  backup: {file: 'body.modviewer.bak'},
-                }),
-            get_model_skinning_preview: async path => {
-              const single = window.__testSkinningPreview;
-              if (typeof single !== 'function') {
-                return {status: 'error', error: 'Skin preview unavailable.'};
-              }
-              const meshes = {};
-              const chunks = [];
-              let byteLength = 0;
-              for (const mesh of window.modViewer?.activeMeshes || []) {
-                const key = mesh.userData.semanticKey;
-                const entry = await single(path, key);
-                const copied = copy(entry);
-                if (copied?.status === 'ok' && copied.data?.url) {
-                  const response = await fetch(copied.data.url,
-                    {cache: 'no-store'});
-                  if (!response.ok) {
-                    throw new Error(`Skin data download failed (${response.status}).`);
-                  }
-                  const bytes = new Uint8Array(
-                    await response.arrayBuffer());
-                  const base = byteLength;
-                  byteLength += bytes.byteLength;
-                  chunks.push(bytes);
-                  const rebase = descriptor => descriptor
-                    ? {...descriptor,
-                      offset: Number(descriptor.offset || 0) + base}
-                    : descriptor;
-                  copied.data = {
-                    ...copied.data,
-                    indices: rebase(copied.data.indices),
-                    weights: rebase(copied.data.weights),
-                  };
-                  delete copied.data.url;
-                  delete copied.data.length;
-                }
-                meshes[key] = copied;
-              }
-              let data = null;
-              if (chunks.length) {
-                const bytes = new Uint8Array(byteLength);
-                let offset = 0;
-                for (const chunk of chunks) {
-                  bytes.set(chunk, offset);
-                  offset += chunk.byteLength;
-                }
-                data = {
-                  url: URL.createObjectURL(new Blob([bytes])),
-                  length: byteLength,
-                };
-              }
-              return copy({
-                status: 'ok', saved_bones: [], meshes, data,
-              });
-            },
-            delete_toggle: stub('deleteToggle', {ok: true, result: {}}),
-            export_changes: async path => {
-              state.calls.exportChanges.push(path);
+          window.pywebview = {api: {
+            select_folder: call('pick', () => {
+              const path = state.nextPath || null;
+              state.nextPath = null;
+              return path;
+            }),
+            consume_startup_request: call('startup', () => {const request = state.startup; state.startup = null; return request;}),
+            load_mod: call('load', load),
+            select_archive_mod: call('archivePick', () => {
+              const path = state.nextPath || null; state.nextPath = null; return path;
+            }),
+            load_asset: call('asset', path => window.__fixtureLoad(path)),
+            has_pending_changes: call('pending', path => !!state.pending[path]),
+            discard_changes: call('discard', path => {state.pending[path] = false;}),
+            export_changes: call('export', path => {
+              if (state.exportFailure) return {saved: [], failed: [{ini: 'source-01.ini', error: 'fixture failure'}]};
               state.pending[path] = false;
-              return copy({saved: [], failed: []});
-            },
-            apply_component_mesh_changes: async (path, request) => {
-              state.calls.applyMeshChanges.push([path, request]);
-              return copy(state.applyMeshChangesResult || {ok: true});
-            },
-            has_pending_changes: async path => !!state.pending[path],
-            discard_changes: async path => {
-              state.calls.discardChanges.push(path);
-              state.pending[path] = false;
-            },
-            get_mod_folders: async () => copy({folders: state.modFolders}),
-            get_panel_opacity: async () => state.panelOpacityError
-              ? {error: state.panelOpacityError}
-              : {value: state.panelOpacity},
-            set_panel_opacity: async value => {
-              state.panelOpacity = value;
-              state.calls.panelOpacity.push(value);
-              return {value};
-            },
-            get_language: async () => ({value: state.language}),
-            set_language: async value => {
-              state.language = value;
-              state.calls.language.push(value);
-              return {value};
-            },
-            add_mod_folder: async (name, path) => {
-              state.modFolders.push({name, path, exists: true});
-              return copy({folders: state.modFolders});
-            },
-            edit_mod_folder: async (original, name, path) => {
-              const item = state.modFolders.find(folder => folder.path === original);
-              if (item) Object.assign(item, {name, path, exists: true});
-              return copy({folders: state.modFolders});
-            },
-            delete_mod_folder: async path => {
-              state.modFolders = state.modFolders.filter(folder => folder.path !== path);
-              return copy({folders: state.modFolders});
-            },
-            list_subfolders: stub(
-              'listSubfolders', path => ({
-                folders: state.subfolders[path] || [],
-              })),
-            get_asset_folders: stub(null, () => ({folders: state.assetFolders})),
-            add_asset_folder: async (type, path) => {
-              state.assetFolders.push({type, path, enabled: true, exists: true});
-              return copy({folders: state.assetFolders});
-            },
-            edit_asset_folder: async (original, type, path) => {
-              const item = state.assetFolders.find(folder => folder.path === original);
-              if (item) Object.assign(item, {type, path, exists: true});
-              return copy({folders: state.assetFolders});
-            },
-            delete_asset_folder: async path => {
-              state.assetFolders = state.assetFolders.filter(folder => folder.path !== path);
-              return copy({folders: state.assetFolders});
-            },
-            set_asset_folder_enabled: async (path, enabled) => {
-              const item = state.assetFolders.find(folder => folder.path === path);
-              if (item) item.enabled = enabled;
-              return copy({folders: state.assetFolders});
-            },
-            rebuild_asset_index: async path => {
-              state.calls.rebuildAssetIndex.push(path);
-              return copy({folders: state.assetFolders});
-            },
-            list_asset_subfolders: stub(
-              'listAssetSubfolders', path => ({
-                folders: state.assetSubfolders[path] || [],
-              })),
-            get_diagnostics: stub('diagnostics', () => state.diagnostics),
-            list_toggle_source_inis: stub(null,
-              () => [{value: 'A.ini', label: 'A.ini'}]),
-            list_ini_files: stub(null,
-              () => [{value: 'A.ini', label: 'A.ini', dirty: false}]),
-            get_ini_text: stub(null,
-              () => ({ini: 'A.ini', text: '[Test]\\nkey = 1\\n', dirty: false})),
-            update_ini_text: stub(null, () => ({pending: true})),
-            save_mesh_textures: stub(null, () => ({})),
-            save_mesh_color_adjustment: async (path, key, adjustment) => {
-              state.calls.saveMeshColorAdjustment.push([path, key, adjustment]);
-              if (state.blockColorSaves) {
-                await new Promise(resolve => colorSaveWaiters.push(resolve));
-              }
-              return {};
-            },
-            save_mesh_names: stub(null, () => ({})),
-            save_weight_selection: stub(null, (_path, bones) => ({
-              saved: true, selected_bones: [...bones],
-            })),
-            save_component_material_kind: stub(null, () => ({})),
-            pick_texture_file: stub(null, () => state.picks.shift() || null),
-            get_record_positions: stub(null,
-              () => ({positions: 2, vars: ['toggle']})),
-            record_toggle: stub('recordToggle', {ok: true, result: {}}),
+              return {saved: ['source-01.ini'], failed: []};
+            }),
+            get_mod_folders: call('folders', {folders: []}),
+            get_asset_folders: call('assets', {folders: []}),
+            get_language: call('language', {value: 'en'}),
+            get_diagnostics: call('diagnostics', {summary: {issues: 0, errors: 0}, files: {}, issues: []}),
+            list_ini_files: call('iniList', [{value: 'source-01.ini', label: 'source-01.ini'}]),
+            get_ini_text: call('iniRead', (path, ini) => ({ini, text: state.iniText, dirty: !!state.pending[path]})),
+            update_ini_text: call('iniUpdate', (path, ini, text) => {
+              state.iniText = text; stage(path); return {pending: true};
+            }),
+            list_toggle_source_inis: call('toggleSources', [{value: 'source-01.ini', label: 'source-01.ini'}]),
+            get_toggle_details: call('toggleDetails', () => ({name: 'control-01', key: 'K', back: '', vars: {input01: ['0', '1']}})),
+            add_toggle: call('toggleAdd', (path, ini, name, key, variable, values) => {
+              state.controls[path].toggles.KeyFixture = {name, ini, section: 'KeyFixture', wired: true,
+                vars: [{var: variable, default: values[0], values}]}; return stage(path);
+            }),
+            edit_toggle: call('toggleEdit', (path, ini, section, changes) => {
+              state.controls[path].toggles[section].name = changes.new_name; return stage(path);
+            }),
+            delete_toggle: call('toggleDelete', (path, ini, section) => {
+              delete state.controls[path].toggles[section]; return stage(path);
+            }),
+            get_record_positions: call('recordPositions', {positions: 2, vars: ['input01']}),
+            record_toggle: call('record', stage),
+            get_control_state: call('controls', semantics),
+            get_mesh_semantics: call('semantics', semantics),
+            get_semantic_state: call('semanticState', semantics),
+            load_missing_asset_parts: call('fill', async () => ({status: 'loaded', fill_id: 'fill-01',
+              payload: await window.__fixtureLoad('fixture-fill')})),
+            remove_missing_asset_parts: call('fillRemove', {status: 'removed', removed: true}),
+            save_texture_color: call('textureSave', {status: 'error', error_code: 'fixture_rejected'}),
+            apply_component_mesh_changes: call('meshApply', stage),
+            save_mesh_names: call('names', {}),
+            save_mesh_textures: call('textures', {}),
+            save_mesh_color_adjustment: call('color', {}),
           }};
-          const optionalApiMethods = {
-            asset: ['load_asset'],
-            asset_fill: ['load_missing_asset_parts',
-              'remove_missing_asset_parts'],
-            panel: ['get_panel_opacity', 'set_panel_opacity',
-              'get_language', 'set_language'],
-            mod_folders: ['add_mod_folder', 'edit_mod_folder',
-              'delete_mod_folder', 'list_subfolders'],
-            asset_folders: ['get_asset_folders', 'add_asset_folder',
-              'edit_asset_folder', 'delete_asset_folder',
-              'set_asset_folder_enabled', 'rebuild_asset_index',
-              'list_asset_subfolders', 'select_asset_folder'],
-            ini: ['list_ini_files', 'get_ini_text', 'update_ini_text'],
-            mesh: ['save_mesh_textures', 'save_mesh_color_adjustment',
-              'save_mesh_names', 'save_component_material_kind'],
-            texture: ['save_texture_color', 'pick_texture_file'],
-            record: ['get_record_positions', 'record_toggle'],
-            toggle: ['delete_toggle', 'list_toggle_source_inis'],
-            skinning: ['get_model_skinning_preview',
-              'save_weight_selection'],
-          };
-          const features = new Set(state.apiFeatures || []);
-          for (const [feature, names] of Object.entries(optionalApiMethods)) {
-            if (!features.has(feature)) {
-              for (const name of names) delete window.pywebview.api[name];
-            }
-          }
-          if (!state.panelOpacityApi) {
-            delete window.pywebview.api.get_panel_opacity;
-            delete window.pywebview.api.set_panel_opacity;
-          }
-          if (!state.languageApi) {
-            delete window.pywebview.api.get_language;
-            delete window.pywebview.api.set_language;
-          }
-          if (!state.startupApiReady) {
-            delete window.pywebview.api.consume_startup_request;
-          }
-        }
-        """.replace("__STATE__", encoded_state),
-    )
-    page = context.new_page()
-    try:
-        for attempt in range(2):
-            try:
-                if attempt:
-                    page.reload(wait_until="domcontentloaded")
-                else:
-                    page.goto(frontend_url)
-                page.wait_for_function(
-                    "window.modViewer !== undefined", timeout=30_000)
-                return context, page
-            except playwright.TimeoutError:
-                if attempt:
-                    raise
-    except Exception:
+        """.replace('__STATE__', state))
+        def load_fixture(_source, path, publish=True):
+            payload = copy.deepcopy(responses[path])
+            blob = payload.pop('_fixture_blob', None)
+            if blob is not None and publish:
+                payload['geometry'] = {
+                    'url': server.publish_geometry(blob, replace=False),
+                    'length': len(blob) + payload.pop('_fixture_length_delta', 0),
+                }
+            if payload.pop('_fixture_missing_geometry', False):
+                payload['geometry']['url'] = '/geometry/fixture-missing'
+            return payload
+
+        context.expose_binding('__fixtureLoad', load_fixture)
+        page = context.new_page()
+        page.goto(frontend_url)
+        available = page.evaluate("""async () => {
+          if (!navigator.gpu) return false;
+          return !!await navigator.gpu.requestAdapter({featureLevel: 'core'});
+        }""")
+        if not available:
+            pytest.skip('viewer tests require a compatible WebGPU adapter')
+        page.wait_for_function('window.modViewer !== undefined')
+        return page
+
+    yield create
+    for context in reversed(contexts):
         context.close()
-        raise
 
 
-def _open(page, path):
-    page.evaluate("path => { window.__fakeApi.nextPath = path; }", path)
-    page.locator("#open-btn").click()
+def open_model(page, path):
+    page.evaluate('path => {window.__bridge.nextPath = path;}', path)
+    page.locator('#open-btn').click()
 
 
-def _wait_for_render(page, previous=None):
-    """Wait for a viewport render scheduled by the preceding action."""
-    if previous is None:
-        previous = page.evaluate("window.modViewer.getRenderCount()")
-    page.wait_for_function(
-        "count => window.modViewer.getRenderCount() > count", arg=previous)
+def wait_loaded(page, count=1):
+    page.wait_for_function('count => window.modViewer.activeMeshes.length === count && !document.querySelector("#loading").classList.contains("show") && !document.querySelector("#open-btn").disabled', arg=count)
+    page.locator('.draw-item').first.wait_for()
 
 
-def _open_library(page):
-    page.locator("#mod-library-tab").click()
-    page.locator("#mod-folder-panel:not([hidden])").wait_for()
+def bridge_calls(page, name):
+    return page.evaluate("name => window.__bridge.calls.filter(call => call.name === name).map(call => call.args)", name)
 
 
-def _sample_mesh_pixel(page):
-    return _sample_mesh_pixel_at(page, 0.25, 0.25)
+def mesh_pixel(page):
+    """Sample the generated triangle away from edges and UI overlays."""
+    previous = page.evaluate('window.modViewer.getRenderCount()')
+    page.evaluate("""async () => {
+      const {requestRender} = await import('./js/scene/render-scheduler.js');
+      requestRender();
+    }""")
+    page.wait_for_function('count => window.modViewer.getRenderCount() > count', arg=previous)
+    point = page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {camera, renderer} = await import('./js/scene/scene.js');
+      const mesh = window.modViewer.activeMeshes[0];
+      const rect = renderer.domElement.getBoundingClientRect();
+      const p = new THREE.Vector3(0.25, 0.25, 0).applyMatrix4(mesh.matrixWorld).project(camera);
+      return [Math.round(rect.left + (p.x + 1) * rect.width / 2),
+              Math.round(rect.top + (1 - p.y) * rect.height / 2)];
+    }""")
+    with Image.open(io.BytesIO(page.screenshot())) as image:
+        return image.convert('RGB').getpixel(tuple(point))
 
 
-def _sample_mesh_pixel_at(page, x, y):
-    return _sample_mesh_pixels_at(page, [(x, y)])[0]
-
-
-def _sample_mesh_pixels_at(page, coordinates):
-    """Read all comparison points from the same captured frame."""
-    points = page.evaluate("""
-      async coordinates => {
-        const THREE = await import('three');
-        const {camera, renderer} = await import('./js/scene/scene.js');
-        const mesh = window.modViewer.activeMeshes[0];
-        const rect = renderer.domElement.getBoundingClientRect();
-        return coordinates.map(([x, y]) => {
-          const projected = new THREE.Vector3(x, y, 0)
-            .applyMatrix4(mesh.matrixWorld).project(camera);
-          return {
-            x: Math.round(rect.left + (projected.x + 1) * rect.width / 2),
-            y: Math.round(rect.top + (1 - projected.y) * rect.height / 2),
-          };
-        });
-      }
-    """, coordinates)
-    image = Image.open(io.BytesIO(page.screenshot())).convert("RGB")
-    return [image.getpixel((point["x"], point["y"])) for point in points]
+def wait_texture(page, index=0, role='diffuse'):
+    page.wait_for_function("""async ({index, role}) => {
+      const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
+      return !!getGameMaterialTexture(window.modViewer.activeMeshes[index]?.material, role)?.image;
+    }""", arg={'index': index, 'role': role})
