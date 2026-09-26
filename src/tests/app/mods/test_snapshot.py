@@ -70,7 +70,7 @@ def test_archive_and_directory_snapshots_have_same_logical_records(tmp_path):
     disk_path.write_text(text, encoding="utf-8")
     archive_path = tmp_path / "sample.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("SampleMod/nested/mod.ini", text)
+        archive.writestr("fixture-01/nested/mod.ini", text)
     source = ZipModSource(archive_path)
     virtual_path = source.document_path("nested/mod.ini")
     disk = build_mod_ini_snapshot(

@@ -136,12 +136,12 @@ format = DXGI_FORMAT_R32_UINT
 def test_animation_clock_supports_literal_fps_and_independent_ranges():
     sections = _sections(r"""
 [Present]
-$phase01 = (time * 24 % ($bodyEnd - $bodyStart + 1) + $bodyStart) // 1
+$phase01 = (time * 24 % ($phaseEnd - $phaseStart + 1) + $phaseStart) // 1
 $phase02 = (time * 12.5 % 4 + 1) // 1
 
 [Constants]
-$bodyStart = 1
-$bodyEnd = 40
+$phaseStart = 1
+$phaseEnd = 40
 """)
 
     discovered = discover_animation_clocks(sections)

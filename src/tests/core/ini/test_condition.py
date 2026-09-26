@@ -35,12 +35,12 @@ ROUND_TRIP = [
     "ResourceMergedSkeleton !== null",
     "ResourceBlendBufferOverride === null",
     "$x == -1",
-    "$Skirt % 4 < 2",
+    "$Input44 % 4 < 2",
     "($toerings // 2) % 2 == 1",
     "$cpx > $mx + 0.0125",
     "$slot == $selectedSlot // 1",
     "$a",
-    r"$\Remielle\Master\swapvar == 2",
+    r"$\Asset08\Master\swapvar == 2",
 ]
 
 

@@ -134,14 +134,14 @@ vb0 = ResourceComponent01Position
 [TextureOverrideComponent01Texcoord]
 vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideLegsBlend]
-vb0 = ResourceLegsPosition
+[TextureOverrideComponent03Blend]
+vb0 = ResourceComponent03Position
 
-[TextureOverrideLegsTexcoord]
-vb1 = ResourceLegsTexcoord
+[TextureOverrideComponent03Texcoord]
+vb1 = ResourceComponent03Texcoord
 
-[TextureOverrideLegsA]
-ib = ResourceLegsAIB
+[TextureOverrideComponent03A]
+ib = ResourceComponent03AIB
 drawindexed = 3, 0, 0
 ib = ResourceComponent01AIB
 vb0 = ResourceComponent01RuntimeSnapshot
@@ -150,34 +150,34 @@ drawindexed = 3, 0, 0
 
 [Present]
 ResourceComponent01Position = copy ResourceComponent01PositionBase
-ResourceLegsPosition = copy ResourceLegsPositionBase
+ResourceComponent03Position = copy ResourceComponent03PositionBase
 
 [ResourceComponent01Position]
-[ResourceLegsPosition]
+[ResourceComponent03Position]
 [ResourceComponent01RuntimeSnapshot]
 
 [ResourceComponent01PositionBase]
 filename = bodyBase.buf
 stride = 40
 
-[ResourceLegsPositionBase]
-filename = legsBase.buf
+[ResourceComponent03PositionBase]
+filename = component03Base.buf
 stride = 40
 
 [ResourceComponent01Texcoord]
 filename = bodyTc.buf
 stride = 20
 
-[ResourceLegsTexcoord]
-filename = legsTc.buf
+[ResourceComponent03Texcoord]
+filename = component03Tc.buf
 stride = 20
 
 [ResourceComponent01AIB]
 filename = bodyA.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceLegsAIB]
-filename = legsA.ib
+[ResourceComponent03AIB]
+filename = component03A.ib
 format = DXGI_FORMAT_R32_UINT
 """
 
@@ -193,7 +193,7 @@ def test_runtime_position_copy_resolution():
         if not groups:
             return
         group = groups[0]
-        assert (group["position_file"] == "legsBase.buf"), (f"group position follows the explicit Legs -> LegsBase copy "
+        assert (group["position_file"] == "component03Base.buf"), (f"group position follows the explicit Component03 -> Component03Base copy "
               f"(got {group['position_file']})")
         assert (group["draws"][1].get("position_file") == "bodyBase.buf"), (f"reassigned Component01 draw follows the explicit Component01 -> Component01Base copy "
               f"(got {group['draws'][1].get('position_file')})")

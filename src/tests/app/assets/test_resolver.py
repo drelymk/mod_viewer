@@ -270,10 +270,10 @@ def test_resolve_groups_narrows_shared_hash_to_unique_exact_asset(
         tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "zzmi")))
     entries = [{"type": "ZZMI", "path": root, "enabled": True}]
-    asset_dir = tmp_path / "zzmi" / "Remielle"
+    asset_dir = tmp_path / "zzmi" / "Asset08"
     asset_dir.mkdir(parents=True)
-    texture = asset_dir / "RemielleHairDiffuse.dds"
-    texture.write_bytes(b"remielle")
+    texture = asset_dir / "Asset08HairDiffuse.dds"
+    texture.write_bytes(b"asset08")
     (asset_dir / "hash.json").write_text(json.dumps([{
         "component_name": "Hair",
         "ib": "aabbccdd",
@@ -282,17 +282,17 @@ def test_resolve_groups_narrows_shared_hash_to_unique_exact_asset(
             "Diffuse", ".dds", "11111111",
         ]]],
     }]), encoding="utf-8")
-    index = _index(root, asset_type="ZZMI", asset="Remielle",
+    index = _index(root, asset_type="ZZMI", asset="Asset08",
                    first_index=0)
     shared_geometry = {
         "hash": "aabbccdd",
         "ranges": [{"firstIndex": 100, "indexCount": 12}],
-        "metadata": "Remielle/hash.json",
+        "metadata": "Asset08/hash.json",
         "componentName": "Hair",
     }
     index["assets"][0]["geometry"].append(shared_geometry)
     index["byGeometryHash"]["aabbccdd"] = [{"asset": 0, "geometry": 1}]
-    for asset_name in ("RemielleMoonlight", "RemielleSummer"):
+    for asset_name in ("Asset08Variant01", "Asset08Variant02"):
         geometry = dict(shared_geometry)
         geometry["metadata"] = f"{asset_name}/hash.json"
         asset_index_entry = {
@@ -312,14 +312,14 @@ def test_resolve_groups_narrows_shared_hash_to_unique_exact_asset(
     bindings = resolve_groups(groups, "zzz", entries)
 
     assert [item.status for item in bindings[0]] == ["exact", "exact"]
-    assert [item.asset for item in bindings[0]] == ["Remielle", "Remielle"]
+    assert [item.asset for item in bindings[0]] == ["Asset08", "Asset08"]
     assert bindings[0][1].component_name == "Hair"
     apply(groups, bindings)
     assert hair_draw.asset_texture_defaults["diffuse"]["path"].casefold() == \
         str(texture).casefold()
     assert hair_draw.texture_provenance["diffuse"] == \
         "asset_original_fallback"
-    assert "RemielleMoonlight" not in hair_draw.asset_texture_defaults[
+    assert "Asset08Variant01" not in hair_draw.asset_texture_defaults[
         "diffuse"]["path"]
 
 
@@ -342,7 +342,7 @@ def test_resolve_groups_scopes_narrowing_to_shared_ini_provenance(
             "hash": "bbbbcccc",
             "ranges": [{"firstIndex": 50, "indexCount": 8}],
             "metadata": "AssetB/hash.json",
-            "componentName": "Legs",
+            "componentName": "Component03",
         }, {
             "hash": "aabbccdd",
             "ranges": [{"firstIndex": 100, "indexCount": 12}],
@@ -394,7 +394,7 @@ def test_resolve_groups_keeps_conflicting_exact_assets_ambiguous(
             "hash": "bbbbcccc",
             "ranges": [{"firstIndex": 50, "indexCount": 8}],
             "metadata": "AssetB/hash.json",
-            "componentName": "Legs",
+            "componentName": "Component03",
         }],
     })
     index["byGeometryHash"]["bbbbcccc"] = [{"asset": 1, "geometry": 0}]
@@ -963,13 +963,13 @@ def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
     asset_dir.mkdir(parents=True)
     detail = asset_dir / "TextureUsage.json"
     detail.write_text(json.dumps({"Component 1": {
-        "ps-t3": ["553ed32b-vs=aaaaaaaa-ps=bbbbbbbb"],
+        "ps-t3": ["d1d1d1d1-vs=aaaaaaaa-ps=bbbbbbbb"],
     }}), encoding="utf-8")
     replacement = TextureReplacement(
-        "553ed32b", "ResourceTexture0", (), "TextureOverrideTexture0",
+        "d1d1d1d1", "ResourceTexture0", (), "TextureOverrideTexture0",
         "textures/texture0.dds")
     index = TextureOverrideIndex(
-        replacements_by_hash={"553ed32b": (replacement,)})
+        replacements_by_hash={"d1d1d1d1": (replacement,)})
     draw = DrawCall()
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Asset01", root=root,
@@ -980,7 +980,7 @@ def test_wwmi_hash_replacement_is_component_diagnostic_without_role_guess(
     apply([{"draws": [draw]}], [[binding]], texture_index=index)
 
     assert draw.asset_slot_evidence == [{
-        "slot": 3, "texture_hash": "553ed32b",
+        "slot": 3, "texture_hash": "d1d1d1d1",
         "vs_hash": "aaaaaaaa", "ps_hash": "bbbbbbbb",
     }]
     assert draw.texture_default("diffuse") is None
@@ -999,14 +999,14 @@ def test_wwmi_textureusage_does_not_trigger_dds_classification(
     asset_dir.mkdir(parents=True)
     (asset_dir / "TextureUsage.json").write_text(json.dumps({
         "Component 1": {
-            "ps-t3": ["553ed32b-vs=aaaaaaaa-ps=bbbbbbbb"],
+            "ps-t3": ["d1d1d1d1-vs=aaaaaaaa-ps=bbbbbbbb"],
         },
     }), encoding="utf-8")
     replacement = TextureReplacement(
-        "553ed32b", "ResourceTexture0", (), "TextureOverrideTexture0",
+        "d1d1d1d1", "ResourceTexture0", (), "TextureOverrideTexture0",
         "textures/replacement.dds")
     index = TextureOverrideIndex(
-        replacements_by_hash={"553ed32b": (replacement,)})
+        replacements_by_hash={"d1d1d1d1": (replacement,)})
     calls = []
 
     def classify(path):

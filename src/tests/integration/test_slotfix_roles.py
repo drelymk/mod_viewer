@@ -40,7 +40,7 @@ def _draw(tmp_path, assignments, resources, prefix=""):
     return groups[0]["draws"][0]
 
 
-def _barbara_variant_groups(tmp_path):
+def _asset10_variant_groups(tmp_path):
     components = ("Head", "Component01", "Dress")
     lines = [
         "[KeySwap]",
@@ -50,61 +50,61 @@ def _barbara_variant_groups(tmp_path):
     for component in components:
         lines.extend([
             "",
-            f"[TextureOverrideBarbara{component}]",
-            f"vb0 = ResourceBarbara{component}Position",
-            f"vb1 = ResourceBarbara{component}Texcoord",
-            f"ib = ResourceBarbara{component}IB",
-            f"run = CommandListBarbara{component}",
+            f"[TextureOverrideAsset10{component}]",
+            f"vb0 = ResourceAsset10{component}Position",
+            f"vb1 = ResourceAsset10{component}Texcoord",
+            f"ib = ResourceAsset10{component}IB",
+            f"run = CommandListAsset10{component}",
             "drawindexed = 3, 0, 0",
             "",
-            f"[CommandListBarbara{component}]",
+            f"[CommandListAsset10{component}]",
         ])
         for variant in range(4):
             keyword = "if" if variant == 0 else "else if"
             lines.extend([
                 f"{keyword} $swapvar == {variant}",
-                f"ps-t0 = ResourceBarbara{component}Diffuse.{variant}",
-                f"ps-t1 = ResourceBarbara{component}LightMap.{variant}",
+                f"ps-t0 = ResourceAsset10{component}Diffuse.{variant}",
+                f"ps-t1 = ResourceAsset10{component}LightMap.{variant}",
             ])
         lines.append("endif")
     for component in components:
         lines.extend([
             "",
-            f"[ResourceBarbara{component}Position]",
+            f"[ResourceAsset10{component}Position]",
             f"filename = {component.lower()}-position.buf",
             "stride = 40",
             "",
-            f"[ResourceBarbara{component}Texcoord]",
+            f"[ResourceAsset10{component}Texcoord]",
             f"filename = {component.lower()}-texcoord.buf",
             "stride = 20",
             "",
-            f"[ResourceBarbara{component}IB]",
+            f"[ResourceAsset10{component}IB]",
             f"filename = {component.lower()}.ib",
             "format = DXGI_FORMAT_R32_UINT",
         ])
         for variant in range(4):
             lines.extend([
                 "",
-                f"[ResourceBarbara{component}Diffuse.{variant}]",
+                f"[ResourceAsset10{component}Diffuse.{variant}]",
                 f"filename = {component.lower()}-diffuse-{variant}.dds",
                 "",
-                f"[ResourceBarbara{component}LightMap.{variant}]",
+                f"[ResourceAsset10{component}LightMap.{variant}]",
                 f"filename = {component.lower()}-light-{variant}.dds",
             ])
-    path = tmp_path / "barbara-variants.ini"
+    path = tmp_path / "asset10-variants.ini"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     sections = merge_sections([str(path)])
     return build_draw_groups(sections, extract_resources(sections))
 
 
-def test_barbara_style_scopes_keep_all_component_variants_independent(tmp_path):
-    groups = _barbara_variant_groups(tmp_path)
+def test_asset10_style_scopes_keep_all_component_variants_independent(tmp_path):
+    groups = _asset10_variant_groups(tmp_path)
 
-    assert [group["name"] for group in groups] == ["BarbaraHead", "BarbaraComponent01",
-                                                    "BarbaraDress"]
+    assert [group["name"] for group in groups] == ["Asset10Head", "Asset10Component01",
+                                                    "Asset10Dress"]
     for group in groups:
         draw = group["draws"][0]
-        component = group["name"][len("Barbara"):].lower()
+        component = group["name"][len("Asset10"):].lower()
         assert [item["file"] for item in draw.texture_rules("diffuse")] == [
             f"{component}-diffuse-{variant}.dds"
             for variant in range(4)]
@@ -117,45 +117,45 @@ def test_barbara_style_scopes_keep_all_component_variants_independent(tmp_path):
         }
 
 
-def test_beidou_style_singleton_resources_keep_each_component_role(tmp_path):
+def test_asset11_style_singleton_resources_keep_each_component_role(tmp_path):
     lines = []
     components = ("Head", "Component01", "Extra")
     for component in components:
         lines.extend([
-            f"[TextureOverrideBeidou{component}]",
-            f"vb0 = ResourceBeidou{component}Position",
-            f"vb1 = ResourceBeidou{component}Texcoord",
-            f"ib = ResourceBeidou{component}IB",
-            f"ps-t0 = ResourceBeidou{component}Diffuse",
-            f"ps-t1 = ResourceBeidou{component}LightMap",
+            f"[TextureOverrideAsset11{component}]",
+            f"vb0 = ResourceAsset11{component}Position",
+            f"vb1 = ResourceAsset11{component}Texcoord",
+            f"ib = ResourceAsset11{component}IB",
+            f"ps-t0 = ResourceAsset11{component}Diffuse",
+            f"ps-t1 = ResourceAsset11{component}LightMap",
             "drawindexed = 3, 0, 0",
             "",
-            f"[ResourceBeidou{component}Position]",
+            f"[ResourceAsset11{component}Position]",
             f"filename = {component.lower()}-position.buf",
             "stride = 40",
             "",
-            f"[ResourceBeidou{component}Texcoord]",
+            f"[ResourceAsset11{component}Texcoord]",
             f"filename = {component.lower()}-texcoord.buf",
             "stride = 20",
             "",
-            f"[ResourceBeidou{component}IB]",
+            f"[ResourceAsset11{component}IB]",
             f"filename = {component.lower()}.ib",
             "format = DXGI_FORMAT_R16_UINT",
             "",
-            f"[ResourceBeidou{component}Diffuse]",
+            f"[ResourceAsset11{component}Diffuse]",
             f"filename = {component.lower()}-diffuse.dds",
             "",
-            f"[ResourceBeidou{component}LightMap]",
+            f"[ResourceAsset11{component}LightMap]",
             f"filename = {component.lower()}-light-map.dds",
             "",
         ])
-    path = tmp_path / "beidou-style.ini"
+    path = tmp_path / "asset11-style.ini"
     path.write_text("\n".join(lines), encoding="utf-8")
     sections = merge_sections([str(path)])
     groups = build_draw_groups(sections, extract_resources(sections))
 
     assert [group["name"] for group in groups] == [
-        "BeidouHead", "BeidouComponent01", "BeidouExtra"]
+        "Asset11Head", "Asset11Component01", "Asset11Extra"]
     for group in groups:
         draw = group["draws"][0]
         assert [item.role_hint for item in draw.slot_textures] == [

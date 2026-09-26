@@ -47,7 +47,7 @@ def _context(tmp_path, texts, roots=("asset-root",)):
 
 def _zzmi(hash_value, extra=""):
     return (
-        "[TextureOverrideBody]\n"
+        "[TextureOverrideComponent01]\n"
         f"hash = {hash_value}\n"
         "drawindexed = 3, 0, 0\n"
         "run = CommandList\\ZZMI\\SetTextures\n"
@@ -57,13 +57,13 @@ def _zzmi(hash_value, extra=""):
 
 def test_collect_component_overrides_includes_skip_and_range():
     result = collect_component_overrides({
-        "TextureOverrideFace": [
+        "TextureOverrideComponent02": [
             "hash = 0xAAAAAAAA",
             "match_first_index = 300",
             "match_index_count = 12",
             "handling = skip",
         ],
-    }, "nested/face.ini")
+    }, "nested/component02.ini")
 
     assert len(result) == 1
     assert result[0].key.geometry_hash == "aaaaaaaa"
@@ -76,10 +76,10 @@ def test_collect_component_overrides_includes_skip_and_range():
 
 def test_auxiliary_buffer_hash_does_not_identify_another_asset():
     result = collect_component_overrides({
-        "TextureOverrideBodyBlend": [
+        "TextureOverrideComponent01Blend": [
             "hash = 0xAAAAAAAA",
             "handling = skip",
-            "vb1 = ResourceBodyTexcoord",
+            "vb1 = ResourceComponent01Texcoord",
             "Draw = 3, 0",
         ],
     }, "mod.ini")
@@ -90,17 +90,17 @@ def test_auxiliary_buffer_hash_does_not_identify_another_asset():
 
 def test_collect_component_overrides_follows_nested_command_lists():
     result = collect_component_overrides({
-        "TextureOverrideBody": [
+        "TextureOverrideComponent01": [
             "hash = 0xAAAAAAAA",
             "match_first_index = 300",
-            "run = CommandListBody",
+            "run = CommandListComponent01",
         ],
-        "CommandListBody": [
+        "CommandListComponent01": [
             "handling = skip",
-            "run = CommandListBodyDraw",
+            "run = CommandListComponent01Draw",
         ],
-        "CommandListBodyDraw": [
-            "ib = ResourceBodyIB",
+        "CommandListComponent01Draw": [
+            "ib = ResourceComponent01IB",
             "drawindexed = 12000, 300, 0",
         ],
     }, "mod.ini")
@@ -120,7 +120,7 @@ def test_texture_only_hash_identifies_asset_without_covering_geometry(
                         lambda _type, _root: index)
     context = _context(tmp_path, {
         "mod.ini": (
-            "[TextureOverrideFaceIB]\n"
+            "[TextureOverrideComponent02IB]\n"
             "hash = aaaaaaaa\n"
             "run = CommandList\\ZZMI\\SetTextures\n"),
     })
@@ -145,7 +145,7 @@ def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(
                         lambda _type, _root: index)
     context = _context(tmp_path, {
         "mod.ini": _zzmi("aaaaaaaa"),
-        "nested/face.ini": _zzmi(
+        "nested/component02.ini": _zzmi(
             "bbbbbbbb", "handling = skip\nhash = deadbeef\n"),
     })
 
@@ -160,7 +160,7 @@ def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(
 
 def test_plan_ignores_auxiliary_hash_that_matches_another_asset(
         tmp_path, monkeypatch):
-    index = _index(_geometry("aaaaaaaa", (0, 12)), asset_path="Remielle")
+    index = _index(_geometry("aaaaaaaa", (0, 12)), asset_path="Asset08")
     index["assets"].append({
         "path": "Other",
         "geometry": [_geometry("bbbbbbbb", (0, 6))],
@@ -170,12 +170,12 @@ def test_plan_ignores_auxiliary_hash_that_matches_another_asset(
                         lambda _type, _root: index)
     context = _context(tmp_path, {
         "mod.ini": (
-            "[TextureOverrideBodyBlend]\n"
+            "[TextureOverrideComponent01Blend]\n"
             "hash = bbbbbbbb\n"
             "handling = skip\n"
-            "vb1 = ResourceBodyTexcoord\n"
+            "vb1 = ResourceComponent01Texcoord\n"
             "Draw = 3, 0\n"
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "hash = aaaaaaaa\n"
             "drawindexed = 3, 0, 0\n"
             "run = CommandList\\ZZMI\\SetTextures\n"
@@ -185,7 +185,7 @@ def test_plan_ignores_auxiliary_hash_that_matches_another_asset(
     plan = asset_composition.plan_missing_asset_parts(context)
 
     assert plan.status == "nothing_missing"
-    assert plan.asset["path"] == "Remielle"
+    assert plan.asset["path"] == "Asset08"
 
 
 def test_unknown_game_fallback_searches_all_asset_types(
@@ -194,14 +194,14 @@ def test_unknown_game_fallback_searches_all_asset_types(
         "GIMI": _index(_geometry("bbbbbbbb", (0, 12)),
                         asset_path="Other"),
         "ZZMI": _index(_geometry("aaaaaaaa", (0, 12)),
-                        asset_path="Evelyn"),
+                        asset_path="Asset09"),
     }
     monkeypatch.setattr(
         asset_index, "load_index",
         lambda asset_type, _root: indexes[asset_type])
     context = _context(tmp_path, {
         "mod.ini": (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "hash = aaaaaaaa\n"
             "drawindexed = 3, 0, 0\n"
         ),
@@ -215,7 +215,7 @@ def test_unknown_game_fallback_searches_all_asset_types(
 
     assert plan.status == "nothing_missing"
     assert plan.asset_type == "ZZMI"
-    assert plan.asset["path"] == "Evelyn"
+    assert plan.asset["path"] == "Asset09"
 
 
 def test_unknown_game_fallback_keeps_cross_type_asset_ambiguity(
@@ -231,7 +231,7 @@ def test_unknown_game_fallback_keeps_cross_type_asset_ambiguity(
         lambda asset_type, _root: indexes[asset_type])
     context = _context(tmp_path, {
         "mod.ini": (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "hash = aaaaaaaa\n"
             "drawindexed = 3, 0, 0\n"
         ),
@@ -266,9 +266,9 @@ def test_candidate_matching_reuses_indexes_and_unique_hash_support(
         "mod.ini": (
             _zzmi("aaaaaaaa")
             + _zzmi("aaaaaaaa").replace(
-                "TextureOverrideBody", "TextureOverrideFace")
+                "TextureOverrideComponent01", "TextureOverrideComponent02")
             + _zzmi("bbbbbbbb").replace(
-                "TextureOverrideBody", "TextureOverrideHair")
+                "TextureOverrideComponent01", "TextureOverrideHair")
         ),
     })
 
@@ -372,11 +372,11 @@ def test_plan_refuses_equal_support_for_different_original_assets(
         lambda _type, root: indexes[root])
     context = _context(tmp_path, {
         "mod.ini": (
-            "[TextureOverrideBody]\n"
+            "[TextureOverrideComponent01]\n"
             "hash = aaaaaaaa\n"
             "drawindexed = 3, 0, 0\n"
             "run = CommandList\\ZZMI\\SetTextures\n"
-            "[TextureOverrideFace]\n"
+            "[TextureOverrideComponent02]\n"
             "hash = bbbbbbbb\n"
             "drawindexed = 3, 0, 0\n"
             "run = CommandList\\ZZMI\\SetTextures\n"

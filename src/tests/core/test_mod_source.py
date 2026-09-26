@@ -18,23 +18,23 @@ def _write_zip(path, members):
 
 def test_zip_source_strips_one_wrapper_and_keeps_logical_paths(tmp_path):
     archive_path = _write_zip(tmp_path / "sample.zip", {
-        "SampleMod/main.ini": b"[TextureOverrideBody]\n"
+        "fixture-01/main.ini": b"[TextureOverrideComponent01]\n"
         b"drawindexed = 3, 0, 0\n",
-        "SampleMod\\nested\\mesh.buf": b"mesh-data",
-        "SampleMod/textures/body.dds": b"texture-data",
+        "fixture-01\\nested\\mesh.buf": b"mesh-data",
+        "fixture-01/textures/component01.dds": b"texture-data",
     })
 
     source = ZipModSource(archive_path)
 
     assert source.virtual is True
-    assert source.wrapper_root == "SampleMod"
+    assert source.wrapper_root == "fixture-01"
     assert source.list_files() == [
-        "main.ini", "nested/mesh.buf", "textures/body.dds"]
+        "main.ini", "nested/mesh.buf", "textures/component01.dds"]
     ini = source.document_path("main.ini")
     mesh = source.resolve_resource("nested\\mesh.buf")
     assert source.is_file(ini)
     assert source.exists("nested/mesh.buf")
-    assert source.read_text(ini).startswith("[TextureOverrideBody]")
+    assert source.read_text(ini).startswith("[TextureOverrideComponent01]")
     assert source.read(mesh) == b"mesh-data"
     assert source.read_prefix(mesh, 4) == b"mesh"
     assert source.size(mesh) == 9
@@ -50,12 +50,12 @@ def test_zip_source_strips_one_wrapper_and_keeps_logical_paths(tmp_path):
 
 def test_zip_discovery_uses_wrapper_relative_depth_and_disabled_selection(tmp_path):
     archive_path = _write_zip(tmp_path / "sample.zip", {
-        "Export/mod.ini": b"[TextureOverrideBody]\n"
+        "Export/mod.ini": b"[TextureOverrideComponent01]\n"
         b"drawindexed = 3, 0, 0\n",
         "Export/variants/extra.ini": b"[KeyExtra]\nkey = F1\n",
         "Export/variants/deep/third.ini": b"[KeyThird]\nkey = F2\n",
         "Export/variants/deep/too-deep/fourth.ini": b"[KeyFourth]\n",
-        "Export/DISABLED-old.ini": b"[TextureOverrideBody]\n"
+        "Export/DISABLED-old.ini": b"[TextureOverrideComponent01]\n"
         b"drawindexed = 3, 0, 0\n",
         "Export/variants/deep/too-deep/DISABLED-fourth.ini":
             b"[KeyFourth]\nkey = F4\n",
@@ -79,7 +79,7 @@ def test_zip_discovery_does_not_drop_late_geometry_ini(tmp_path):
         for index in range(10)
     }
     members["Export/zz-geometry.ini"] = (
-        b"[TextureOverrideBody]\n"
+        b"[TextureOverrideComponent01]\n"
         b"drawindexed = 3, 0, 0\n")
     source = ZipModSource(_write_zip(tmp_path / "many-inis.zip", members))
 
@@ -104,8 +104,8 @@ def test_zip_source_rejects_traversal_and_absolute_members(tmp_path, member):
 def test_zip_source_rejects_case_ambiguous_members(tmp_path):
     archive_path = tmp_path / "ambiguous.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("Body.dds", b"one")
-        archive.writestr("body.dds", b"two")
+        archive.writestr("Component01.dds", b"one")
+        archive.writestr("component01.dds", b"two")
 
     with pytest.raises(ModSourceError, match="case-ambiguous"):
         ZipModSource(archive_path)

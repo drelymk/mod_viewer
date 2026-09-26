@@ -114,9 +114,9 @@ if $clickedSlot == 1
         $six1 = 0
     endif
 elif $clickedSlot == 2
-    $seven2 = 1 - $seven2
-    if $seven2 > 2
-        $seven2 = 0
+    $input02 = 1 - $input02
+    if $input02 > 2
+        $input02 = 0
     endif
 endif
 """

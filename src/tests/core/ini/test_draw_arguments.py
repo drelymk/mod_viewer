@@ -109,14 +109,14 @@ def test_constant_draw_lifecycle_keeps_guards_textures_sources_and_diagnostics(t
     text = r"""[Constants]
 global $Count = 3
 global $Offset = 3
-global persist $Top = 0
-global persist $Skirt = 0
-[KeyTop]
+global persist $Input43 = 0
+global persist $Input44 = 0
+[KeyInput43]
 type = cycle
-$Top = 0, 1, 2
-[KeySkirt]
+$Input43 = 0, 1, 2
+[KeyInput44]
 type = cycle
-$Skirt = 0, 1
+$Input44 = 0, 1
 [TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
@@ -124,9 +124,9 @@ ib = ResourceComponent01IB
 run = CommandListComponent01
 [CommandListComponent01]
 Resource\ZZMI\Diffuse = ref ResourceOriginal
-if $skirt == 0 && $top < 2
+if $input44 == 0 && $input43 < 2
 drawindexed = $COUNT, 0, 0
-elif $top >= 2
+elif $input43 >= 2
 Resource\ZZMI\Diffuse = ref ResourceAlternate
 drawindexed = $Count, $Offset, 0
 else
@@ -153,17 +153,17 @@ filename = alternate.dds
     draws = result.draw_groups[0]["draws"]
     assert [(draw.count, draw.start, draw.base) for draw in draws] == [
         (3, 0, 0), (3, 3, 0), (3, 6, -1)]
-    for top in range(3):
-        for skirt in range(2):
+    for input43 in range(3):
+        for input44 in range(2):
             visible = [i for i, draw in enumerate(draws)
-                       if _visible(draw.conditions, **{"Mod::Top": top, "Mod::Skirt": skirt})]
-            assert visible == ([0] if skirt == 0 and top < 2 else [1] if top >= 2 else [2])
+                       if _visible(draw.conditions, **{"Mod::Input43": input43, "Mod::Input44": input44})]
+            assert visible == ([0] if input44 == 0 and input43 < 2 else [1] if input43 >= 2 else [2])
     assert draws[0].texture_default_file == "original.dds"
-    for top in range(3):
+    for input43 in range(3):
         assignments = draws[1].texture_assignments
         applied = [item["file"] for item in assignments if _visible(
-            item["conditions"], **{"Mod::Top": top, "Mod::Skirt": 0})]
-        assert applied[-1] == ("alternate.dds" if top >= 2 else "original.dds")
+            item["conditions"], **{"Mod::Input43": input43, "Mod::Input44": 0})]
+        assert applied[-1] == ("alternate.dds" if input43 >= 2 else "original.dds")
     assert [draw.occurrence.ordinal for draw in draws] == [0, 1, 2]
     for draw in draws:
         assert draw.sources[0]["section"] == "CommandListComponent01"

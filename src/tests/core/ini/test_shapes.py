@@ -121,7 +121,7 @@ def test_wwmi_sparse_shape_slider_is_discovered():
     text = r"""
 [Constants]
 global persist $shape01 = 0
-global $shapekey_vertex_offset_batch1 = 43085
+global $shapekey_vertex_offset_batch1 = 3
 
 [CommandListDrawSlider.Shape01]
 x87 = $shape01 * x87
@@ -153,7 +153,7 @@ filename = Meshes/ShapeKeyVertexOffset.buf
     assert (len(sliders) == 1), (f"one WWMI sparse slider is found (got {sliders})")
     slider = sliders[0]
     assert (slider.get("shape_id") == 161 and slider.get("buffer_shape_id") == 162 and
-          slider.get("sparse_entry_offset") == 43085 and
+          slider.get("sparse_entry_offset") == 3 and
           slider.get("vertex_offset_file") == "Meshes/ShapeKeyVertexOffset.buf"), (f"WWMI slider aligns its key ID, batch records, and sparse buffers (got {slider})")
     assert "shader_base_file" not in slider
 

@@ -107,7 +107,7 @@ filename = textures/b.dds
 
 def test_animation_binding_keeps_already_resolved_qualified_reads():
     sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
-if $swapvar == 1 && $\\JaneDoe_AIO\\Master\\swapvar == 1
+if $swapvar == 1 && $\\Fixture01\\Master\\swapvar == 1
 vb0 = ResourcePosition
 endif
 drawindexed = 3, 0, 0
@@ -117,7 +117,7 @@ drawindexed = 3, 0, 0
         var_prefix="Consumer::",
         animation_vars={"swapvar"},
         qualified_vars={
-            r"\janedoe_aio\master\swapvar": "Master::swapvar",
+            r"\fixture01\master\swapvar": "Master::swapvar",
         })
 
     binding = scanned["TextureOverrideComponent01"][
@@ -133,7 +133,7 @@ drawindexed = 3, 0, 0
 def test_texture_override_index_resolves_qualified_conditions():
     sections = parse_sections("source-01.ini", text="""[TextureOverrideOriginal]
 hash = 11111111
-if $\\JaneDoe_AIO\\Master\\swapvar == 1
+if $\\Fixture01\\Master\\swapvar == 1
 this = ResourceA
 endif
 
@@ -143,7 +143,7 @@ filename = textures/a.dds
     scanned = _scan_sections_for_draws(
         sections,
         qualified_vars={
-            r"\janedoe_aio\master\swapvar": "Master::swapvar",
+            r"\fixture01\master\swapvar": "Master::swapvar",
         })
     replacement = scanned.texture_override_index.replacements_by_hash[
         "11111111"][0]
@@ -184,56 +184,56 @@ stride = 8
 
 def test_per_draw_ib_switch_uses_hash_geometry_when_component_is_unknown():
     sections = parse_sections("source-01.ini", text="""
-[TextureOverride_98ece166_Position]
-vb0 = Resource98ece166Position
+[TextureOverride_a2a2a2a2_Position]
+vb0 = Resourcea2a2a2a2Position
 
-[TextureOverride_98ece166_Texcoord]
-vb1 = Resource98ece166Texcoord
+[TextureOverride_a2a2a2a2_Texcoord]
+vb1 = Resourcea2a2a2a2Texcoord
 
-[TextureOverride_d942b3a7_Position]
-vb0 = Resourced942b3a7Position
+[TextureOverride_b2b2b2b2_Position]
+vb0 = Resourceb2b2b2b2Position
 
-[TextureOverride_d942b3a7_Texcoord]
-vb1 = Resourced942b3a7Texcoord
+[TextureOverride_b2b2b2b2_Texcoord]
+vb1 = Resourceb2b2b2b2Texcoord
 
-[TextureOverride_LOD0.98ece166_26946_0]
-ib = Resource_LOD0.98ece166_26946_0_Index
+[TextureOverride_LOD0.a2a2a2a2_6_0]
+ib = Resource_LOD0.a2a2a2a2_6_0_Index
 drawindexed = 3, 0, 0
-ib = Resource_LOD0.d942b3a7_39828_0_Index
-vb0 = ResourceComponent01VB_d942b3a7_0
-vb1 = Resourced942b3a7Texcoord
-vb2 = Resourced942b3a7Blend
+ib = Resource_LOD0.b2b2b2b2_9_0_Index
+vb0 = ResourceComponent01VB_b2b2b2b2_0
+vb1 = Resourceb2b2b2b2Texcoord
+vb2 = Resourceb2b2b2b2Blend
 drawindexed = 3, 0, 0
 
-[Resource_LOD0.98ece166_26946_0_Index]
-filename = 98ece166-index.buf
+[Resource_LOD0.a2a2a2a2_6_0_Index]
+filename = a2a2a2a2-index.buf
 format = DXGI_FORMAT_R32_UINT
 
-[Resource_LOD0.d942b3a7_39828_0_Index]
-filename = d942b3a7-index.buf
+[Resource_LOD0.b2b2b2b2_9_0_Index]
+filename = b2b2b2b2-index.buf
 format = DXGI_FORMAT_R32_UINT
 
-[Resource98ece166Position]
-filename = 98ece166-position.buf
+[Resourcea2a2a2a2Position]
+filename = a2a2a2a2-position.buf
 stride = 40
 
-[Resource98ece166Texcoord]
-filename = 98ece166-texcoord.buf
+[Resourcea2a2a2a2Texcoord]
+filename = a2a2a2a2-texcoord.buf
 stride = 20
 
-[Resourced942b3a7Position]
-filename = d942b3a7-position.buf
+[Resourceb2b2b2b2Position]
+filename = b2b2b2b2-position.buf
 stride = 40
 
-[Resourced942b3a7Texcoord]
-filename = d942b3a7-texcoord.buf
+[Resourceb2b2b2b2Texcoord]
+filename = b2b2b2b2-texcoord.buf
 stride = 20
 
-[ResourceComponent01VB_d942b3a7_0]
+[ResourceComponent01VB_b2b2b2b2_0]
 stride = 40
 
-[Resourced942b3a7Blend]
-filename = d942b3a7-blend.buf
+[Resourceb2b2b2b2Blend]
+filename = b2b2b2b2-blend.buf
 stride = 32
 """)
     groups = build_draw_groups(sections, extract_resources(sections))
@@ -241,10 +241,10 @@ stride = 32
 
     assert [(draw.ib_file, draw.position_file, draw.texcoord_file)
             for draw in draws] == [
-                ("98ece166-index.buf", "98ece166-position.buf",
-                 "98ece166-texcoord.buf"),
-                ("d942b3a7-index.buf", "d942b3a7-position.buf",
-                 "d942b3a7-texcoord.buf"),
+                ("a2a2a2a2-index.buf", "a2a2a2a2-position.buf",
+                 "a2a2a2a2-texcoord.buf"),
+                ("b2b2b2b2-index.buf", "b2b2b2b2-position.buf",
+                 "b2b2b2b2-texcoord.buf"),
             ]
 
 

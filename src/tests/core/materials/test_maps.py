@@ -23,12 +23,12 @@ $detail = 0,1
 type = cycle
 $metal = 0,1
 
-[TextureOverrideBodyBlend]
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01Blend]
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideBodyA]
-ib = ResourceBodyAIB
+[TextureOverrideComponent01A]
+ib = ResourceComponent01AIB
 if $detail == 0
 Resource\\ZZMI\\NormalMap = ref ResourceNormalA
 else
@@ -40,14 +40,14 @@ Resource\\ZZMI\\MaterialMap = ref ResourceMaterial
 endif
 drawindexed = 3, 0, 0
 
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 filename = pos.buf
 stride = 40
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = tc.buf
 stride = 20
-[ResourceBodyAIB]
-filename = body.ib
+[ResourceComponent01AIB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 [ResourceNormalA]
 filename = normal-a.dds
@@ -83,10 +83,10 @@ def test_authored_auxiliary_material_maps():
 def test_direct_ps_t_auxiliary_material_maps():
     direct = AUXILIARY_MAPS_INI
     for old, new in (
-            ("ResourceNormalA", "ResourceBodyNormalMapA"),
-            ("ResourceNormalB", "ResourceBodyNormalMapB"),
-            ("ResourceLight", "ResourceBodyLightMap"),
-            ("ResourceMaterial", "ResourceBodyMaterialMap")):
+            ("ResourceNormalA", "ResourceComponent01NormalMapA"),
+            ("ResourceNormalB", "ResourceComponent01NormalMapB"),
+            ("ResourceLight", "ResourceComponent01LightMap"),
+            ("ResourceMaterial", "ResourceComponent01MaterialMap")):
         direct = direct.replace(old, new)
     direct = direct.replace(
         r"Resource\ZZMI\NormalMap = ref ", "ps-t1 = ")
@@ -95,8 +95,8 @@ def test_direct_ps_t_auxiliary_material_maps():
     direct = direct.replace(
         r"Resource\ZZMI\MaterialMap = ref ", "ps-t3 = ")
     direct = direct.replace(
-        "[TextureOverrideBodyA]\n",
-        "[TextureOverrideBodyA]\n"
+        "[TextureOverrideComponent01A]\n",
+        "[TextureOverrideComponent01A]\n"
         "ps-t1 = Resource\\ZZMI\\NormalMap\n"
         "ps-t2 = Resource\\ZZMI\\LightMap\n"
         "ps-t3 = Resource\\ZZMI\\MaterialMap\n")
@@ -134,28 +134,28 @@ def test_packed_light_map_passthrough_preserves_authored_rgb():
 
 
 DIFFUSE_SWAP_INI = """[Constants]
-global persist $seven2 = 0
+global persist $input02 = 0
 
-[KeySeven2]
+[KeyInput02]
 key = k
 type = cycle
-$seven2 = 0,1
+$input02 = 0,1
 
-[TextureOverrideColumbinaBodyBlend]
-ib = ResourceColumbinaBodyIB
+[TextureOverrideAsset06Component01Blend]
+ib = ResourceAsset06Component01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 Resource\\GIMI\\Diffuse = ref ResourceDiffuseA
 drawindexed = 10, 0, 0
-if $seven2 == 1
+if $input02 == 1
 Resource\\GIMI\\Diffuse = ref ResourceDiffuseB
 else
 Resource\\GIMI\\Diffuse = ref ResourceDiffuseC
 endif
 drawindexed = 20, 100, 0
 
-[ResourceColumbinaBodyIB]
-filename = body.ib
+[ResourceAsset06Component01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -180,7 +180,7 @@ filename = diffuseC.dds
 def test_toggle_driven_diffuse_swap_mesh_builder():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", DIFFUSE_SWAP_INI)
-        open(os.path.join(tmp, "body.ib"), "wb").write(
+        open(os.path.join(tmp, "component01.ib"), "wb").write(
             struct.pack("<3I", 0, 1, 2) + struct.pack("<3I", 3, 4, 5))
         with open(os.path.join(tmp, "pos.buf"), "wb") as f:
             for i in range(8):
@@ -207,7 +207,7 @@ def test_toggle_driven_diffuse_swap_mesh_builder():
         keys = {texture_file(v["tex_key"]) for v in variants}
         assert (keys == {"diffuseA.dds", "diffuseB.dds", "diffuseC.dds"}), (f"each assignment's tex_key names its own resolved diffuse file (got {keys})")
         assert (texture_file(second["tex_key"]) == "diffuseB.dds"), (f"the draw's own default tex_key is the first/`if`-branch "
-              f"alternative at this point in execution order (seven2==1 -> "
+              f"alternative at this point in execution order (input02==1 -> "
               f"diffuseB), not the group's earlier unconditional diffuseA "
               f"(got {second['tex_key']})")
 
@@ -220,14 +220,14 @@ key = c
 type = cycle
 $color = 0,1,2
 
-[TextureOverrideBodyPosition]
-vb0 = ResourceBodyPosition
+[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
 
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideBody]
-ib = ResourceBodyIB
+[TextureOverrideComponent01]
+ib = ResourceComponent01IB
 Resource\\GIMI\\Diffuse = ref ResourceDiffuseA
 if $color == 1
 Resource\\GIMI\\Diffuse = ref ResourceDiffuseB
@@ -237,12 +237,12 @@ Resource\\GIMI\\Diffuse = ref ResourceDiffuseC
 endif
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
-[ResourceBodyPosition]
+[ResourceComponent01IB]
+filename = component01.ib
+[ResourceComponent01Position]
 filename = pos.buf
 stride = 40
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = tc.buf
 stride = 20
 [ResourceDiffuseA]
@@ -272,10 +272,10 @@ def test_same_variable_partial_diffuse_chains_keep_assignment_history():
               ["diffuseA.dds", "diffuseB.dds", "diffuseC.dds"]), ("last-matching assignment selects the authored texture for every color")
 
 
-MULTI_REASSIGN_INI = """[KeySuitCL]
+MULTI_REASSIGN_INI = """[KeyInput01]
 key = l
 type = cycle
-$SuitCL = 0,1
+$Input01 = 0,1
 
 [TextureOverrideMultiPosition]
 vb0 = ResourceMultiPosition
@@ -289,9 +289,9 @@ vb1 = ResourceMultiTexcoord
 [TextureOverrideMultiA]
 ib = ResourceMultiIB
 drawindexed = 10, 0, 0
-if $SuitCL == 0
+if $Input01 == 0
 Resource\\ZZMI\\Diffuse = ref ResourceDiffuseA
-elif $SuitCL == 1
+elif $Input01 == 1
 Resource\\ZZMI\\Diffuse = ref ResourceDiffuseA2
 endif
 drawindexed = 20, 10, 0

@@ -479,17 +479,17 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
     sections = _wwmi_sparse_sections()
     sections["Constants"].extend([
         "global $shape01 = 0", "global $shape02 = 0",
-        "global $ShortClo = 0", "global $Pussy = 0",
+        "global $Shape12 = 0", "global $Shape11 = 0",
         "global $shapekey_vertex_offset_batch1 = 0",
     ])
     sections.update({
         "CommandListDrawSlider.Shape01": ["x87 = $shape01 * x87"],
         "CommandListDrawSlider.Shape02": ["x87 = $shape02 * x87"],
-        "CommandListDrawSlider.ShortClo": ["x87 = $ShortClo * x87"],
-        "CommandListDrawSlider.Pussy": ["x87 = $Pussy * x87"],
+        "CommandListDrawSlider.Shape12": ["x87 = $Shape12 * x87"],
+        "CommandListDrawSlider.Shape11": ["x87 = $Shape11 * x87"],
         "CommandListDrawSlider.AnimSpeed": [
             "x87 = $input31 * x87"],
-        "CommandListDrawSlider.gangSpeed": [
+        "CommandListDrawSlider.Input32Control": [
             "x87 = $input32 * x87"],
         "CommandListSetShape01": [
             r"$\WWMIv1\shapekey_id = 161",
@@ -499,13 +499,13 @@ def test_analyze_mod_inis_attaches_sparse_animation_by_base_file(tmp_path):
             r"$\WWMIv1\shapekey_id = 162",
             r"$\WWMIv1\shapekey_value = $shape02",
         ],
-        "CommandListSetShortClo": [
+        "CommandListSetShape12": [
             r"$\WWMIv1\shapekey_id = 163",
-            r"$\WWMIv1\shapekey_value = $ShortClo",
+            r"$\WWMIv1\shapekey_value = $Shape12",
         ],
-        "CommandListSetPussy": [
+        "CommandListSetShape11": [
             r"$\WWMIv1\shapekey_id = 164",
-            r"$\WWMIv1\shapekey_value = $Pussy",
+            r"$\WWMIv1\shapekey_value = $Shape11",
         ],
         "CommandListSetupShapeKeysBatch": [
             "cs-t33 = ResourceShapeKeyOffsetBuffer"],

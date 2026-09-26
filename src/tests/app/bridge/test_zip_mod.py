@@ -41,10 +41,10 @@ def test_zip_present_lifecycle_stages_ini_without_metadata_or_archive_write(
         tmp_path):
     archive_path = tmp_path / "present.zip"
     original = (
-        "[KeyHat]\n"
+        "[KeyInput41]\n"
         "key = h\n"
         "type = cycle\n"
-        "$Hat = 0,1\n")
+        "$Input41 = 0,1\n")
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("Wrapper/deep/variant/mod.ini", original)
     original_archive = archive_path.read_bytes()
@@ -55,17 +55,17 @@ def test_zip_present_lifecycle_stages_ini_without_metadata_or_archive_write(
 
     try:
         edit_session.load_documents(mod_dir, paths, source=source)
-        snapshot = {"deep/variant/mod.ini": {"Hat": "0"}}
+        snapshot = {"deep/variant/mod.ini": {"Input41": "0"}}
 
         added = present_api.add_present(mod_dir, "p", "shift p", snapshot)
         assert added["ok"] is True
         assert present_api.edit_present(mod_dir, "ctrl p", "")["ok"] is True
         captured = present_api.capture_present(
-            mod_dir, {"deep/variant/mod.ini": {"Hat": "1"}},
+            mod_dir, {"deep/variant/mod.ini": {"Input41": "1"}},
             "Alternate")
         assert captured["ok"] is True
         renamed = present_api.capture_present(
-            mod_dir, {"deep/variant/mod.ini": {"Hat": "1"}},
+            mod_dir, {"deep/variant/mod.ini": {"Input41": "1"}},
             "Renamed", position=1)
         assert renamed["ok"] is True
         removed = present_api.delete_present_position(mod_dir, 0)
@@ -77,7 +77,7 @@ def test_zip_present_lifecycle_stages_ini_without_metadata_or_archive_write(
         doc = edit_session.peek(mod_dir, paths[0])
         assert doc.section(SECTION_NAME) is not None
         assert "key = ctrl p" in doc.to_string()
-        assert "$Hat = 1" in doc.to_string()
+        assert "$Input41 = 1" in doc.to_string()
         assert edit_session.has_pending(mod_dir)
         assert toggle_api.export_changes(mod_dir)["error"] \
             == "Export is unavailable for compressed mods."

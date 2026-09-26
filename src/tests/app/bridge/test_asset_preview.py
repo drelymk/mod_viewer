@@ -32,7 +32,7 @@ def test_direct_asset_load_publishes_geometry_before_commit(monkeypatch):
     monkeypatch.setattr(
         preview, "_asset_selection",
         lambda _folder: ("asset", {"type": "GIMI", "path": "root"},
-                         {}, {"path": "Character"}),
+                         {}, {"path": "asset-01"}),
     )
     monkeypatch.setattr(
         "app.bridge.asset_preview.server.begin_texture_publication",
@@ -62,7 +62,7 @@ def test_asset_fill_uses_non_replacing_publication(monkeypatch):
         status = "ready"
         asset_type = "GIMI"
         root = "asset-root"
-        asset = {"path": "Character"}
+        asset = {"path": "asset-01"}
         missing_parts = ("hair",)
 
         def to_dict(self):

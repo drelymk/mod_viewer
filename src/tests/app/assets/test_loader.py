@@ -512,30 +512,30 @@ def test_asset_parts_with_same_component_share_one_texture_pool(tmp_path):
 def test_hash_asset_prefers_generic_texture_over_more_specific_suffix_match(
         tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Amber"
+    asset = root / "Asset07"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678", "component_name": "",
         "object_indexes": [0], "object_classifications": ["Head"],
         "texture_hashes": [[["Diffuse", ".dds", "deadbeef"]]],
     }])
-    _text_vb(asset / "Amber-vb0=12345678.txt", 92, [
+    _text_vb(asset / "Asset07-vb0=12345678.txt", 92, [
         ((0, 0, 0), (0, 0, 1), (0, 0)),
         ((1, 0, 0), (0, 0, 1), (1, 0)),
         ((0, 1, 0), (0, 0, 1), (0, 1)),
     ])
-    (asset / "Amber-ib=87654321.txt").write_text(
+    (asset / "Asset07-ib=87654321.txt").write_text(
         "first index: 0\nindex count: 3\ntopology: trianglelist\n"
         "0 1 2\n", encoding="utf-8")
-    (asset / "AmberHeadDiffuse.dds").write_bytes(b"generic")
-    (asset / "AmberFaceHeadDiffuse.dds").write_bytes(b"specific")
+    (asset / "Asset07HeadDiffuse.dds").write_bytes(b"generic")
+    (asset / "Asset07FaceHeadDiffuse.dds").write_bytes(b"specific")
 
     index = build_index("GIMI", str(root))
     result = load_asset("GIMI", str(root), index["assets"][0],
                         geometry=GeometryBlob())
 
     entry = next(iter(result.payload["meshes"].values()))
-    assert entry["tex_key"].endswith("/Amber/AmberHeadDiffuse.dds")
+    assert entry["tex_key"].endswith("/Asset07/Asset07HeadDiffuse.dds")
 
 
 def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
@@ -543,12 +543,12 @@ def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
     asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": "HairWings",
+        "ib": "87654321", "vb0": "12345678", "component_name": "Component01",
         "object_indexes": [0, 3], "object_index_counts": [3, 3],
         "object_classifications": ["Head", "Body"],
         "texture_hashes": [[], []],
     }])
-    _text_vb(asset / "HairWings-vb0=12345678.txt", 92, [
+    _text_vb(asset / "Component01-vb0=12345678.txt", 92, [
         ((0, 0, 0), (0, 0, 1), (0, 0)),
         ((1, 0, 0), (0, 0, 1), (1, 0)),
         ((0, 1, 0), (0, 0, 1), (0, 1)),
@@ -557,21 +557,21 @@ def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
         ((0, 1, 0), (0, 0, 1), (0, 1)),
     ])
     for name, first in (
-            ("HairWingsHead", 0), ("HeadPieceA", 0),
-            ("HairWingsBody", 3), ("HeadPieceB", 3)):
+            ("Component01Head", 0), ("Component02A", 0),
+            ("Component01Body", 3), ("Component02B", 3)):
         (asset / f"{name}-ib=87654321.txt").write_text(
             f"first index: {first}\nindex count: 3\ntopology: trianglelist\n"
             f"{first} {first + 1} {first + 2}\n", encoding="utf-8")
-    (asset / "HeadPieceADiffuse.dds").write_bytes(b"head")
-    (asset / "HeadPieceBDiffuse.dds").write_bytes(b"body")
+    (asset / "Component02ADiffuse.dds").write_bytes(b"fixture-01")
+    (asset / "Component02BDiffuse.dds").write_bytes(b"fixture-02")
 
     index = build_index("GIMI", str(root))
     result = load_asset("GIMI", str(root), index["assets"][0],
                         geometry=GeometryBlob())
 
     entries = list(result.payload["meshes"].values())
-    assert entries[0]["tex_key"].endswith("/HeadPieceADiffuse.dds")
-    assert entries[1]["tex_key"].endswith("/HeadPieceBDiffuse.dds")
+    assert entries[0]["tex_key"].endswith("/Component02ADiffuse.dds")
+    assert entries[1]["tex_key"].endswith("/Component02BDiffuse.dds")
 
 
 def test_hash_asset_loads_immediate_nested_hash_metadata(tmp_path):

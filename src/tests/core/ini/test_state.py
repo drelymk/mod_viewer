@@ -77,19 +77,19 @@ def test_constants_defaults_win_over_earlier_runtime_and_preset_assignments(befo
 def test_modulo_cycle_and_present_derived_rules():
     text = r"""
 [Constants]
-global persist $outfit = 0
+global persist $input11 = 0
 global $piece = 0
 [CommandListClickedSlot]
 if $clickedSlot == 1
-    $outfit = $outfit + 1
-    $outfit = $outfit % 4
+    $input11 = $input11 + 1
+    $input11 = $input11 % 4
 elif $clickedSlot == 2
     $other = 1 - $other
 endif
 [Present]
-if $outfit == 0
+if $input11 == 0
     $piece = 0
-elif $outfit == 1
+elif $input11 == 1
     $piece = 1
 endif
 """
