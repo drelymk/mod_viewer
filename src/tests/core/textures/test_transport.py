@@ -37,13 +37,13 @@ def _write_geometry(root):
 
 def _group(texture_names):
     draw = {
-        "label": "Body-1", "count": 3, "start": 0, "base": 0,
+        "label": "Component01-1", "count": 3, "start": 0, "base": 0,
         "conditions": [],
     }
     for field, name in texture_names.items():
         draw[f"{field}_default_file"] = name
     return [{
-        "name": "Body", "display_name": "Body",
+        "name": "Component01", "display_name": "Component01",
         "position_file": "p.buf", "texcoord_file": "t.buf",
         "position_stride": 12, "texcoord_stride": 8,
         "ib_file": "i.buf", "index_size": 4,
@@ -89,24 +89,24 @@ def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
     Image.new("RGB", (1, 1), (128, 128, 32)).save(tmp_path / "shared.png")
     ini_path = tmp_path / "mod.ini"
     ini_path.write_text(
-        "[TextureOverrideBodyPosition]\n"
-        "vb0 = ResourceBodyPosition\n"
-        "[TextureOverrideBodyTexcoord]\n"
-        "vb1 = ResourceBodyTexcoord\n"
-        "[TextureOverrideBody]\n"
-        "ib = ResourceBodyIB\n"
-        "Resource\\GIMI\\Diffuse = ResourceBodyDiffuse\n"
+        "[TextureOverrideComponent01Position]\n"
+        "vb0 = ResourceComponent01Position\n"
+        "[TextureOverrideComponent01Texcoord]\n"
+        "vb1 = ResourceComponent01Texcoord\n"
+        "[TextureOverrideComponent01]\n"
+        "ib = ResourceComponent01IB\n"
+        "Resource\\GIMI\\Diffuse = ResourceComponent01Diffuse\n"
         "drawindexed = 3, 0, 0\n"
-        "[ResourceBodyPosition]\n"
+        "[ResourceComponent01Position]\n"
         "filename = p.buf\n"
         "stride = 12\n"
-        "[ResourceBodyTexcoord]\n"
+        "[ResourceComponent01Texcoord]\n"
         "filename = t.buf\n"
         "stride = 8\n"
-        "[ResourceBodyIB]\n"
+        "[ResourceComponent01IB]\n"
         "filename = i.buf\n"
         "format = R32_UINT\n"
-        "[ResourceBodyDiffuse]\n"
+        "[ResourceComponent01Diffuse]\n"
         "filename = shared.png\n",
         encoding="utf-8",
     )
@@ -220,8 +220,8 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
         Image.new("RGBA", (1, 1), (128, 128, 32, 255)).save(tmp_path / name)
     payload = {
         "meshes": {
-            "Body-1": {
-                "source": "Root.ini", "component": "Body",
+            "Component01-1": {
+                "source": "Root.ini", "component": "Component01",
                 "drawindexed": [3, 0, 0],
                 "texture_options": [{
                     "tex_key": "diffuse::pool.png", "file": "pool.png",
@@ -244,8 +244,8 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
         metadata.hydrate_textures(
             str(tmp_path), payload, texture_source=register)
 
-    assert payload["meshes"]["Body-1"]["texture_pool_id"] == "p0"
-    assert "texture_options" not in payload["meshes"]["Body-1"]
+    assert payload["meshes"]["Component01-1"]["texture_pool_id"] == "p0"
+    assert "texture_options" not in payload["meshes"]["Component01-1"]
     assert set(payload["textures"]) == {
         "diffuse::pool.png", "normal_map::normal.png",
         "normal_data::packed.png", "light_map::light.png",
