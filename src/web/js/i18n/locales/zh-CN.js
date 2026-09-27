@@ -86,7 +86,8 @@ export default {
   'folder.notFound': '未找到文件夹',
   'folder.editMod': '编辑 MOD 文件夹',
   'folder.addMod': '添加 MOD 文件夹',
-  'folder.removeMod': '要从 MOD 文件夹列表中移除“{name}”吗？\n\n此操作只会将其从 Mod Viewer 中移除。\n不会删除磁盘上的文件。',
+  'folder.removeMod':
+    '要从 MOD 文件夹列表中移除“{name}”吗？\n\n此操作只会将其从 Mod Viewer 中移除。\n不会删除磁盘上的文件。',
   'folder.enterModName': '请输入 MOD 文件夹名称。',
   'folder.chooseBrowse': '请使用“浏览”选择文件夹。',
   'folder.editAsset': '编辑资源文件夹',
@@ -170,7 +171,8 @@ export default {
   'health.ambiguousDraws': '有歧义：{count}',
   'health.notFoundDraws': '未找到：{count}',
   'health.mixed': '混合组件',
-  'health.summary': '{errors} 个错误 · {warnings} 个警告 · {referenced} 个已引用资源 · {inactive} 个仅非活动资源 · {viewer} 个仅查看器资源',
+  'health.summary':
+    '{errors} 个错误 · {warnings} 个警告 · {referenced} 个已引用资源 · {inactive} 个仅非活动资源 · {viewer} 个仅查看器资源',
   'health.noIssues': '未发现 INI 问题。',
   'health.noFilterIssues': '没有符合此筛选条件的问题。',
   'health.openAtLine': '双击可在报告行打开此 INI',
@@ -210,7 +212,8 @@ export default {
   'toggle.deleteConfirm': '要删除切换“{name}”吗？\n\n此更改仅会暂存，直到点击“导出”才会写入 INI 文件。',
   'toggle.deleteError': '无法删除切换：\n\n{detail}',
   'toggle.deletedReview': '切换已删除，但请手动检查这些行：\n\n{detail}',
-  'toggle.unwired': '尚未连接到任何网格——点击下方的 ⏺ 录制，并在每个位置勾选/取消勾选网格来指定显示内容。连接此切换（或删除它）之前无法导出。',
+  'toggle.unwired':
+    '尚未连接到任何网格——点击下方的 ⏺ 录制，并在每个位置勾选/取消勾选网格来指定显示内容。连接此切换（或删除它）之前无法导出。',
   'toggle.edit': '编辑切换',
   'toggle.delete': '删除切换',
   'toggle.record': '录制每个位置显示的网格',
@@ -272,10 +275,12 @@ export default {
   'health.issueOpenOne': '{count} 个 INI 诊断问题。打开诊断',
   'health.issueOpenMany': '{count} 个 INI 诊断问题。打开诊断',
   'diagnostics.issue.unexpected_key_statement': '[{section}] 中存在意外语句：{source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': '查看器目前无法将此 drawindexed 形式还原为原始绘制；3DMigoto 可能接受它。参数：{arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments':
+    '查看器目前无法将此 drawindexed 形式还原为原始绘制；3DMigoto 可能接受它。参数：{arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} 使用了无效的资源引用前缀：{prefix}。',
   'diagnostics.issue.missing_local_run_target': '{target} 被执行，但未在此 INI 中声明；它可能由框架提供。',
-  'diagnostics.issue.duplicate_key_binding': '[{section}] 与 [{otherSection}] 使用相同的按键绑定 {key}，可能会同时激活。',
+  'diagnostics.issue.duplicate_key_binding':
+    '[{section}] 与 [{otherSection}] 使用相同的按键绑定 {key}，可能会同时激活。',
   'diagnostics.issue.duplicate_section': '重复的节 [{section}]；3DMigoto 只使用第 {firstLine} 行的首次定义。',
   'diagnostics.issue.unknown_section': '[{section}] 不是已识别的 3DMigoto 节。',
   'diagnostics.issue.statement_outside_section': '节外语句：{source}',
@@ -498,7 +503,8 @@ export default {
   'toggle.reportAlwaysTrue': '第 {line} 行存在始终为真的门控',
   'toggle.reportUnsafe': '第 {line} 行存在未解析的门控',
   'toggle.orphanConfirm': '{error}\n\n仍要应用吗？仅由已移除值显示的网格将无法再通过此切换访问。',
-  'record.reason.commandPath': '绘制通过 run= 命令列表执行路径到达，但没有可归属到此变量的实际控制分支；请手动编辑调用分支',
+  'record.reason.commandPath':
+    '绘制通过 run= 命令列表执行路径到达，但没有可归属到此变量的实际控制分支；请手动编辑调用分支',
   'record.reason.ambiguousNesting': '此节的 if/elif/endif 嵌套有歧义（参见 INI 结构错误）；请直接编辑 ini',
   'record.reason.unsupported': '{detail}',
   'record.reason.outerGate': '此变量在外层嵌套级别控制；请直接编辑 ini',

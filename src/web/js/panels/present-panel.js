@@ -14,7 +14,7 @@ let presentViewState = { modPath: null, selectedPosition: 0 };
 let syncCurrentValue = () => {};
 
 function presentName(item, index) {
-  return item?.names?.[index] || t('present.defaultName', {number: index + 1});
+  return item?.names?.[index] || t('present.defaultName', { number: index + 1 });
 }
 
 function clampPosition(item, position) {
@@ -26,10 +26,13 @@ async function removeKey() {
   const confirmed = await confirmDialog(t('present.deleteKeyConfirm'));
   if (!confirmed) return;
   const result = await window.pywebview.api.delete_present(current.modPath);
-  if (result.error) return alertDialog(t('present.deleteError', {detail: result.error}));
-  if (current.onChange) await current.onChange({
-    type: 'delete-key', selectedPosition: null, applySelection: false,
-  });
+  if (result.error) return alertDialog(t('present.deleteError', { detail: result.error }));
+  if (current.onChange)
+    await current.onChange({
+      type: 'delete-key',
+      selectedPosition: null,
+      applySelection: false,
+    });
 }
 
 function closeKeyMenu() {
@@ -48,51 +51,63 @@ function openKeyMenu() {
   action.setAttribute('aria-expanded', String(!menu.hidden));
 }
 
-$('present-action-btn').addEventListener('click', event => {
+$('present-action-btn').addEventListener('click', (event) => {
   event.stopPropagation();
   openKeyMenu();
 });
 $('present-key-add').addEventListener('click', () => {
   closeKeyMenu();
   if (!(current.present?.target_inis || []).length) return;
-  openPresentModal({ mode: 'add', modPath: current.modPath,
-    present: current.present, onSaved: current.onChange });
+  openPresentModal({ mode: 'add', modPath: current.modPath, present: current.present, onSaved: current.onChange });
 });
 $('present-key-edit').addEventListener('click', () => {
   closeKeyMenu();
   const item = current.present?.item;
   if (!item) return;
   const incomplete = (item.missing_inis || []).length > 0;
-  openPresentModal({ mode: incomplete ? 'complete' : 'edit', modPath: current.modPath,
-    present: current.present, item, onSaved: current.onChange });
+  openPresentModal({
+    mode: incomplete ? 'complete' : 'edit',
+    modPath: current.modPath,
+    present: current.present,
+    item,
+    onSaved: current.onChange,
+  });
 });
 $('present-key-remove').addEventListener('click', () => {
   closeKeyMenu();
   if (current.present?.item) void removeKey();
 });
-document.addEventListener('click', event => {
+document.addEventListener('click', (event) => {
   if (!event.target.closest('.present-key-actions')) closeKeyMenu();
 });
-document.addEventListener('keydown', event => {
+document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeKeyMenu();
 });
 
 async function capture(item, position, name, allowDuplicate = false) {
   const result = await window.pywebview.api.capture_present(
-    current.modPath, presentSnapshots(current.present), name, position, allowDuplicate);
+    current.modPath,
+    presentSnapshots(current.present),
+    name,
+    position,
+    allowDuplicate,
+  );
   if (result.warning) {
-    const labels = (result.duplicate_positions || [])
-      .map((index) => presentName(item, index)).join(', ');
-    const confirmed = await confirmDialog(t('present.duplicateConfirm', {
-      labels: labels || t('present.another'),
-    }));
+    const labels = (result.duplicate_positions || []).map((index) => presentName(item, index)).join(', ');
+    const confirmed = await confirmDialog(
+      t('present.duplicateConfirm', {
+        labels: labels || t('present.another'),
+      }),
+    );
     return confirmed ? capture(item, position, name, true) : null;
   }
   if (result.error) {
-    await alertDialog(t('present.editError', {
-      action: position === null ? t('present.createAction') : t('present.editAction'),
-      detail: result.error,
-    }));
+    await alertDialog(
+      t('present.editError', {
+        action: position === null ? t('present.createAction') : t('present.editAction'),
+        detail: result.error,
+      }),
+    );
     return null;
   }
   return result;
@@ -115,8 +130,8 @@ function buildItem(item, { applySelection = false } = {}) {
   const fields = document.createElement('div');
   fields.className = 'present-fields';
   for (const [label, value] of [
-    [t('present.keyLabel', {value: item.key}), item.key],
-    [t('present.backLabel', {value: item.back}), item.back],
+    [t('present.keyLabel', { value: item.key }), item.key],
+    [t('present.backLabel', { value: item.back }), item.back],
   ]) {
     if (!value) continue;
     const badge = document.createElement('span');
@@ -137,17 +152,14 @@ function buildItem(item, { applySelection = false } = {}) {
   const name = document.createElement('span');
   name.className = 'toggle-value';
   const showName = () => {
-    name.textContent = synchronized
-      ? presentName(item, position)
-      : t('present.unavailable');
+    name.textContent = synchronized ? presentName(item, position) : t('present.unavailable');
   };
   const sync = () => {
     if (synchronized) {
-      const matches = candidate => item.vars.every(variable =>
-        variable.values[candidate] === getToggleValue(variable.var));
+      const matches = (candidate) =>
+        item.vars.every((variable) => variable.values[candidate] === getToggleValue(variable.var));
       if (!matches(position)) {
-        const next = Array.from({ length: item.count }, (_, index) => index)
-          .find(matches);
+        const next = Array.from({ length: item.count }, (_, index) => index).find(matches);
         if (next !== undefined) position = next;
       }
       presentViewState.selectedPosition = position;
@@ -178,20 +190,24 @@ function buildItem(item, { applySelection = false } = {}) {
   const add = document.createElement('button');
   add.textContent = t('present.new');
   add.disabled = item.count >= MAX_PRESENTS || !(item.capture_vars || []).length;
-  add.title = item.count >= MAX_PRESENTS
-    ? t('present.limit', {count: MAX_PRESENTS})
-    : (add.disabled ? t('present.noCapture') : '');
+  add.title =
+    item.count >= MAX_PRESENTS
+      ? t('present.limit', { count: MAX_PRESENTS })
+      : add.disabled
+        ? t('present.noCapture')
+        : '';
   add.addEventListener('click', async () => {
-    const defaultName = presentName({names: []}, item.count);
-    const chosen = await inputConfirmDialog(
-      t('present.namePrompt'), defaultName);
+    const defaultName = presentName({ names: [] }, item.count);
+    const chosen = await inputConfirmDialog(t('present.namePrompt'), defaultName);
     if (chosen === null) return;
     if (!chosen) return alertDialog(t('present.nameRequired'));
-    if (!await capture(item, null, chosen)) return;
-    if (current.onChange) await current.onChange({
-      type: 'new-position', selectedPosition: item.count,
-      applySelection: true,
-    });
+    if (!(await capture(item, null, chosen))) return;
+    if (current.onChange)
+      await current.onChange({
+        type: 'new-position',
+        selectedPosition: item.count,
+        applySelection: true,
+      });
   });
   const replace = document.createElement('button');
   replace.textContent = t('present.update');
@@ -199,15 +215,18 @@ function buildItem(item, { applySelection = false } = {}) {
   replace.title = replace.disabled ? t('present.noCapture') : t('present.replace');
   replace.addEventListener('click', async () => {
     const chosen = await inputConfirmDialog(
-      t('present.replacePrompt', {name: presentName(item, position)}),
-      presentName(item, position));
+      t('present.replacePrompt', { name: presentName(item, position) }),
+      presentName(item, position),
+    );
     if (chosen === null) return;
     if (!chosen) return alertDialog(t('present.nameRequired'));
-    if (!await capture(item, position, chosen)) return;
-    if (current.onChange) await current.onChange({
-      type: 'update-position', selectedPosition: position,
-      applySelection: false,
-    });
+    if (!(await capture(item, position, chosen))) return;
+    if (current.onChange)
+      await current.onChange({
+        type: 'update-position',
+        selectedPosition: position,
+        applySelection: false,
+      });
   });
   const remove = document.createElement('button');
   remove.textContent = t('present.delete');
@@ -215,15 +234,15 @@ function buildItem(item, { applySelection = false } = {}) {
   remove.title = remove.disabled ? t('present.only') : '';
   remove.addEventListener('click', async () => {
     const label = presentName(item, position);
-    if (!await confirmDialog(t('present.deletePosition', {name: label}))) return;
-    const result = await window.pywebview.api.delete_present_position(
-      current.modPath, position);
-    if (result.error) return alertDialog(t('present.deleteError', {detail: result.error}));
-    if (current.onChange) await current.onChange({
-      type: 'delete-position',
-      selectedPosition: Math.min(position, item.count - 2),
-      applySelection: true,
-    });
+    if (!(await confirmDialog(t('present.deletePosition', { name: label })))) return;
+    const result = await window.pywebview.api.delete_present_position(current.modPath, position);
+    if (result.error) return alertDialog(t('present.deleteError', { detail: result.error }));
+    if (current.onChange)
+      await current.onChange({
+        type: 'delete-position',
+        selectedPosition: Math.min(position, item.count - 2),
+        applySelection: true,
+      });
   });
   actions.append(add, replace, remove);
   wrap.append(header, row, actions);
@@ -236,12 +255,14 @@ export function buildPresentPanel(present, context = {}) {
     presentViewState = { modPath, selectedPosition: 0 };
   }
   if (Object.hasOwn(context, 'selectedPosition')) {
-    presentViewState.selectedPosition = context.selectedPosition === null
-      ? 0 : Number(context.selectedPosition) || 0;
+    presentViewState.selectedPosition = context.selectedPosition === null ? 0 : Number(context.selectedPosition) || 0;
   }
-  current = { modPath, present: present || {},
+  current = {
+    modPath,
+    present: present || {},
     onChange: context.onChange || null,
-    applySelection: context.applySelection === true };
+    applySelection: context.applySelection === true,
+  };
   const panel = $('present-panel');
   const list = $('present-list');
   const action = $('present-action-btn');
@@ -274,15 +295,12 @@ export function buildPresentPanel(present, context = {}) {
   if (!item) {
     const empty = document.createElement('div');
     empty.className = 'toggle-empty';
-    empty.textContent = canAdd
-      ? t('present.noPresents')
-      : t('present.noToggle');
+    empty.textContent = canAdd ? t('present.noPresents') : t('present.noToggle');
     list.appendChild(empty);
     return;
   }
 
-  presentViewState.selectedPosition = clampPosition(
-    item, presentViewState.selectedPosition);
+  presentViewState.selectedPosition = clampPosition(item, presentViewState.selectedPosition);
   const built = buildItem(item, { applySelection: current.applySelection });
   syncCurrentValue = built.sync;
   list.appendChild(built.wrap);

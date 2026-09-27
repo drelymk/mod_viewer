@@ -17,9 +17,7 @@ function clampSpeed(x, y) {
 }
 
 /** Owns only the RMB gesture used to feed virtual physics motion. */
-export function createPhysicsDragController({
-  canvas, camera, controls, onMotion,
-} = {}) {
+export function createPhysicsDragController({ canvas, camera, controls, onMotion } = {}) {
   let enabled = false;
   let pointer = null;
 
@@ -32,8 +30,7 @@ export function createPhysicsDragController({
   }
 
   function release(event) {
-    if (!pointer || (event?.pointerId !== undefined
-        && event.pointerId !== pointer.id)) return;
+    if (!pointer || (event?.pointerId !== undefined && event.pointerId !== pointer.id)) return;
     const current = pointer;
     pointer = null;
     if (current.moved) emit([0, 0, 0], false);
@@ -71,16 +68,17 @@ export function createPhysicsDragController({
     if (!enabled || !pointer || event.pointerId !== pointer.id) return;
     event.preventDefault();
     const now = finiteTime(event, performance.now());
-    const elapsed = Math.min(.05, Math.max(1000 / 240,
-      now - pointer.time) / 1000);
+    const elapsed = Math.min(0.05, Math.max(1000 / 240, now - pointer.time) / 1000);
     const dx = event.clientX - pointer.x;
     const dy = event.clientY - pointer.y;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
     pointer.time = now;
-    if (!pointer.moved && Math.hypot(
-        event.clientX - pointer.startX, event.clientY - pointer.startY)
-        < DRAG_THRESHOLD_PIXELS) return;
+    if (
+      !pointer.moved &&
+      Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) < DRAG_THRESHOLD_PIXELS
+    )
+      return;
     pointer.moved = true;
     const rect = canvas.getBoundingClientRect?.();
     const height = Number(rect?.height) || Number(canvas.clientHeight) || 1;

@@ -5,7 +5,7 @@ import ko from './locales/ko.js';
 import es from './locales/es.js';
 import ru from './locales/ru.js';
 
-const LOCALES = Object.freeze({en, 'zh-CN': zhCN, ja, ko, es, ru});
+const LOCALES = Object.freeze({ en, 'zh-CN': zhCN, ja, ko, es, ru });
 const DEFAULT_LOCALE = 'en';
 const LANGUAGE_CHANGED = 'mod-viewer-language-changed';
 let activeLocale = DEFAULT_LOCALE;
@@ -16,8 +16,7 @@ function normalizeLocale(locale) {
 
 function interpolate(value, params) {
   if (!params || typeof value !== 'string') return value;
-  return value.replace(/\{([\w.-]+)\}/g, (match, name) =>
-    Object.hasOwn(params, name) ? String(params[name]) : match);
+  return value.replace(/\{([\w.-]+)\}/g, (match, name) => (Object.hasOwn(params, name) ? String(params[name]) : match));
 }
 
 export function t(key, params) {
@@ -42,8 +41,9 @@ export function applyTranslations(root) {
   if (target?.matches?.('[data-i18n], [data-i18n-title], [data-i18n-aria-label], [data-i18n-placeholder]')) {
     elements.push(target);
   }
-  elements.push(...scope.querySelectorAll(
-    '[data-i18n], [data-i18n-title], [data-i18n-aria-label], [data-i18n-placeholder]'));
+  elements.push(
+    ...scope.querySelectorAll('[data-i18n], [data-i18n-title], [data-i18n-aria-label], [data-i18n-placeholder]'),
+  );
   for (const element of elements) {
     if (element.dataset.i18n) element.textContent = t(element.dataset.i18n);
     if (element.dataset.i18nTitle) element.title = t(element.dataset.i18nTitle);
@@ -62,9 +62,11 @@ export function setLocale(locale) {
   if (typeof document !== 'undefined') {
     document.documentElement.lang = activeLocale;
     applyTranslations(document);
-    window.dispatchEvent(new CustomEvent(LANGUAGE_CHANGED, {
-      detail: {locale: activeLocale},
-    }));
+    window.dispatchEvent(
+      new CustomEvent(LANGUAGE_CHANGED, {
+        detail: { locale: activeLocale },
+      }),
+    );
   }
   return activeLocale;
 }

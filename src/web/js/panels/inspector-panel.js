@@ -4,31 +4,28 @@
 import { getRightDockTab, isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import {
-  canEditMeshColor, getMeshColorAdjustment, resetMeshColorAdjustment,
+  canEditMeshColor,
+  getMeshColorAdjustment,
+  resetMeshColorAdjustment,
   setMeshColorAdjustment,
 } from '../mesh/mesh-color-session.js';
-import {
-  canSaveTexture, getTextureSaveTargets,
-} from '../mesh/texture-save-session.js';
+import { canSaveTexture, getTextureSaveTargets } from '../mesh/texture-save-session.js';
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
-import {
-  assetDetailLabel, assetMatchLabel, assetSummaryLabel,
-} from './asset-diagnostics.js';
+import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
 
 const meshRecords = new WeakMap();
 let current = null;
 let selectionCount = 0;
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 function semanticMesh(mesh) {
   return getLoosePartSource(mesh) || mesh;
 }
 
 function meshDisplayLabel(mesh, fallback) {
-  return mesh?.userData?.loosePartLabel
-    || mesh?.userData?.displayName || fallback || t('inspector.mesh');
+  return mesh?.userData?.loosePartLabel || mesh?.userData?.displayName || fallback || t('inspector.mesh');
 }
 
 const MATERIAL_KIND_OPTIONS = Object.freeze([
@@ -71,18 +68,31 @@ function addText(parent, className, text) {
 }
 
 function basename(value) {
-  return String(value || '').replaceAll('\\', '/').split('/').pop() || '';
+  return (
+    String(value || '')
+      .replaceAll('\\', '/')
+      .split('/')
+      .pop() || ''
+  );
 }
 
 function textureOptionLabel(option) {
-  return option?.label || basename(option?.file)
-    || basename(String(option?.tex_key || '').split('::').slice(1).join('::'))
-    || t('inspector.texture');
+  return (
+    option?.label ||
+    basename(option?.file) ||
+    basename(
+      String(option?.tex_key || '')
+        .split('::')
+        .slice(1)
+        .join('::'),
+    ) ||
+    t('inspector.texture')
+  );
 }
 
 function automaticTextureLabel(resolved, pool) {
   if (!resolved) return t('inspector.automatic');
-  const option = pool.find(item => item.tex_key === resolved);
+  const option = pool.find((item) => item.tex_key === resolved);
   if (option) return `${t('inspector.automatic')} · ${textureOptionLabel(option)}`;
   const file = String(resolved).split('::').slice(1).join('::');
   return file ? `${t('inspector.automatic')} · ${basename(file)}` : t('inspector.automatic');
@@ -91,9 +101,11 @@ function automaticTextureLabel(resolved, pool) {
 function componentContext(record) {
   const meshes = record.meshes || [];
   const total = meshes.length;
-  const visible = meshes.filter(mesh => mesh.visible).length;
-  return t(total === 1 ? 'inspector.componentSummary.one'
-    : 'inspector.componentSummary.many', {count: total, visible});
+  const visible = meshes.filter((mesh) => mesh.visible).length;
+  return t(total === 1 ? 'inspector.componentSummary.one' : 'inspector.componentSummary.many', {
+    count: total,
+    visible,
+  });
 }
 
 function buildHeader(content, title, context, titleHint = '') {
@@ -194,8 +206,11 @@ function buildComponentTextureSection(content, record) {
   title.textContent = t('inspector.textures');
   section.appendChild(title);
   const pool = record.texturePool || [];
-  addText(section, 'inspector-texture-count', pool.length
-    ? t('inspector.available', {count: pool.length}) : t('inspector.noneDiscovered'));
+  addText(
+    section,
+    'inspector-texture-count',
+    pool.length ? t('inspector.available', { count: pool.length }) : t('inspector.noneDiscovered'),
+  );
   const manage = buildManageTexturesButton(record.openTextureManager);
   if (manage) section.appendChild(manage);
   content.appendChild(section);
@@ -211,7 +226,9 @@ function buildTextureControls(content, record, mesh) {
   section.appendChild(title);
   const pool = component?.texturePool || [];
   const override = component?.getTextureOverride?.(mesh) || {
-    value: undefined, automatic: true, resolved: null,
+    value: undefined,
+    automatic: true,
+    resolved: null,
   };
   if (!pool.length) addText(section, 'inspector-muted', t('inspector.noneDiscovered'));
   const list = document.createElement('div');
@@ -230,12 +247,22 @@ function buildTextureControls(content, record, mesh) {
     });
     list.appendChild(option);
   };
-  addOption(automaticTextureLabel(override.resolved, pool), undefined,
-    override.automatic, 'automatic', override.resolved || t('inspector.automatic'));
-  pool.forEach(option => addOption(
-    textureOptionLabel(option), option.tex_key,
-    !override.automatic && override.value === option.tex_key,
-    'texture', option.file || option.label || option.tex_key));
+  addOption(
+    automaticTextureLabel(override.resolved, pool),
+    undefined,
+    override.automatic,
+    'automatic',
+    override.resolved || t('inspector.automatic'),
+  );
+  pool.forEach((option) =>
+    addOption(
+      textureOptionLabel(option),
+      option.tex_key,
+      !override.automatic && override.value === option.tex_key,
+      'texture',
+      option.file || option.label || option.tex_key,
+    ),
+  );
   addOption(t('inspector.none'), null, !override.automatic && override.value === null, 'none');
   section.appendChild(list);
   const manage = buildManageTexturesButton(component?.openTextureManager);
@@ -247,18 +274,18 @@ function updateTextureControlState(content, mesh, component) {
   const pool = component?.texturePool || [];
   const override = component?.getTextureOverride?.(mesh);
   if (!override) return;
-  const automatic = content.querySelector(
-    '.inspector-texture-option[data-texture-choice="automatic"]');
+  const automatic = content.querySelector('.inspector-texture-option[data-texture-choice="automatic"]');
   if (automatic) {
     automatic.textContent = automaticTextureLabel(override.resolved, pool);
     automatic.title = override.resolved || t('inspector.automatic');
   }
-  content.querySelectorAll('.inspector-texture-option').forEach(option => {
-    const selected = option.dataset.textureChoice === 'automatic'
-      ? override.automatic
-      : option.dataset.textureChoice === 'none'
-        ? !override.automatic && override.value === null
-        : !override.automatic && override.value === option.dataset.textureValue;
+  content.querySelectorAll('.inspector-texture-option').forEach((option) => {
+    const selected =
+      option.dataset.textureChoice === 'automatic'
+        ? override.automatic
+        : option.dataset.textureChoice === 'none'
+          ? !override.automatic && override.value === null
+          : !override.automatic && override.value === option.dataset.textureValue;
     option.classList.toggle('selected', selected);
   });
 }
@@ -278,22 +305,18 @@ const BRIGHTNESS_MAX = 4;
 
 function brightnessSliderPosition(brightness) {
   const numeric = Number(brightness);
-  const value = Math.min(BRIGHTNESS_MAX,
-    Math.max(0, Number.isFinite(numeric) ? numeric : 1));
+  const value = Math.min(BRIGHTNESS_MAX, Math.max(0, Number.isFinite(numeric) ? numeric : 1));
   if (value <= 1) return value * BRIGHTNESS_SLIDER_NEUTRAL;
-  return BRIGHTNESS_SLIDER_NEUTRAL
-    + BRIGHTNESS_SLIDER_NEUTRAL * Math.log(value) / Math.log(BRIGHTNESS_MAX);
+  return BRIGHTNESS_SLIDER_NEUTRAL + (BRIGHTNESS_SLIDER_NEUTRAL * Math.log(value)) / Math.log(BRIGHTNESS_MAX);
 }
 
 function brightnessFromSliderPosition(position) {
   const numeric = Number(position);
-  const value = Math.min(BRIGHTNESS_SLIDER_MAX,
-    Math.max(0, Number.isFinite(numeric) ? numeric : 100));
+  const value = Math.min(BRIGHTNESS_SLIDER_MAX, Math.max(0, Number.isFinite(numeric) ? numeric : 100));
   if (value <= BRIGHTNESS_SLIDER_NEUTRAL) {
     return value / BRIGHTNESS_SLIDER_NEUTRAL;
   }
-  return BRIGHTNESS_MAX ** (
-    (value - BRIGHTNESS_SLIDER_NEUTRAL) / BRIGHTNESS_SLIDER_NEUTRAL);
+  return BRIGHTNESS_MAX ** ((value - BRIGHTNESS_SLIDER_NEUTRAL) / BRIGHTNESS_SLIDER_NEUTRAL);
 }
 
 function colorControlValue(field, adjustment) {
@@ -310,9 +333,7 @@ function colorAdjustmentValue(field, controlValue) {
 
 function formatColorControlValue(field, controlValue) {
   if (field === 'hue') return formatHue(controlValue);
-  const value = field === 'brightness'
-    ? brightnessFromSliderPosition(controlValue) * 100
-    : controlValue;
+  const value = field === 'brightness' ? brightnessFromSliderPosition(controlValue) * 100 : controlValue;
   return formatPercent(value);
 }
 
@@ -329,7 +350,15 @@ function textureEligibilityMessage(eligibility) {
 
 /** Build one range control shared by the Inspector's color sliders. */
 function buildRangeControl({
-  field, label, min, max, step, value, formatValue, onInput, onChange,
+  field,
+  label,
+  min,
+  max,
+  step,
+  value,
+  formatValue,
+  onInput,
+  onChange,
   neutralMarker = false,
 }) {
   const row = document.createElement('label');
@@ -380,11 +409,10 @@ function syncTextureSaveAction(section, mesh) {
   }
   const hasTargets = getTextureSaveTargets(mesh).length > 0;
   action.disabled = !hasTargets;
-    action.title = hasTargets ? '' : t('inspector.adjustBeforeSave');
+  action.title = hasTargets ? '' : t('inspector.adjustBeforeSave');
 }
 
-function updateColorAdjustment(section, mesh, field, controlValue,
-                               persist = false) {
+function updateColorAdjustment(section, mesh, field, controlValue, persist = false) {
   const next = getMeshColorAdjustment(mesh);
   next[field] = colorAdjustmentValue(field, controlValue);
   setMeshColorAdjustment(mesh, next, { persist, render: true });
@@ -405,8 +433,7 @@ function buildTextureSaveAction(section, mesh) {
       bake.disabled = true;
       try {
         await openTextureSaveModal(mesh, {
-          isCurrent: () => current?.type === 'mesh'
-            && semanticMesh(current.mesh) === mesh,
+          isCurrent: () => current?.type === 'mesh' && semanticMesh(current.mesh) === mesh,
         });
       } finally {
         bake.disabled = getTextureSaveTargets(mesh).length === 0;
@@ -423,8 +450,7 @@ function buildTextureSaveAction(section, mesh) {
     bake.title = textureEligibilityMessage(eligibility);
     section.appendChild(bake);
   } else if (eligibility.reason === 'unsupported-texture-type') {
-    addText(section, 'inspector-texture-bake-hint',
-      textureEligibilityMessage(eligibility));
+    addText(section, 'inspector-texture-bake-hint', textureEligibilityMessage(eligibility));
   }
 }
 
@@ -442,12 +468,10 @@ function buildColorSection(content, mesh) {
   if (!eligibility.editable) {
     if (eligibility.reason === 'asset-texture') {
       addText(section, 'inspector-color-readonly-title', t('inspector.assetTexture'));
-      addText(section, 'inspector-color-readonly',
-        t('inspector.colorUnavailableAsset'));
+      addText(section, 'inspector-color-readonly', t('inspector.colorUnavailableAsset'));
     } else {
       addText(section, 'inspector-color-readonly-title', t('inspector.noDiffuse'));
-      addText(section, 'inspector-color-readonly',
-        t('inspector.selectDiffuse'));
+      addText(section, 'inspector-color-readonly', t('inspector.selectDiffuse'));
     }
     content.appendChild(section);
     return section;
@@ -455,15 +479,20 @@ function buildColorSection(content, mesh) {
 
   const adjustment = getMeshColorAdjustment(mesh);
   const addSlider = (field, label, min, max, step, neutralMarker = false) => {
-    section.appendChild(buildRangeControl({
-      field, label, min, max, step,
-      value: colorControlValue(field, adjustment),
-      formatValue: value => formatColorControlValue(field, value),
-      onInput: value => updateColorAdjustment(section, mesh, field, value),
-      onChange: value => updateColorAdjustment(
-        section, mesh, field, value, true),
-      neutralMarker,
-    }));
+    section.appendChild(
+      buildRangeControl({
+        field,
+        label,
+        min,
+        max,
+        step,
+        value: colorControlValue(field, adjustment),
+        formatValue: (value) => formatColorControlValue(field, value),
+        onInput: (value) => updateColorAdjustment(section, mesh, field, value),
+        onChange: (value) => updateColorAdjustment(section, mesh, field, value, true),
+        neutralMarker,
+      }),
+    );
   };
   addSlider('hue', t('inspector.hue'), -180, 180, 1);
   addSlider('saturation', t('inspector.saturation'), 0, 200, 1);
@@ -498,7 +527,7 @@ function buildColorSection(content, mesh) {
   clearTint.textContent = t('common.clear');
   clearTint.disabled = adjustment.tint === null;
   clearTint.setAttribute('aria-label', t('inspector.clearTint'));
-  const applyTint = persist => {
+  const applyTint = (persist) => {
     tintValue.textContent = tintInput.value.toUpperCase();
     clearTint.disabled = false;
     const next = getMeshColorAdjustment(mesh);
@@ -535,13 +564,15 @@ function updateColorControlState(content, mesh) {
   const section = content.querySelector('.inspector-color-section');
   if (!section) return true;
   const eligibility = canEditMeshColor(mesh);
-  if (section.dataset.colorEditable !== String(eligibility.editable)
-      || section.dataset.colorReason !== (eligibility.reason || '')) {
+  if (
+    section.dataset.colorEditable !== String(eligibility.editable) ||
+    section.dataset.colorReason !== (eligibility.reason || '')
+  ) {
     return false;
   }
   if (!eligibility.editable) return true;
   const adjustment = getMeshColorAdjustment(mesh);
-  section.querySelectorAll('[data-color-field]').forEach(row => {
+  section.querySelectorAll('[data-color-field]').forEach((row) => {
     const field = row.dataset.colorField;
     const slider = row.querySelector('.inspector-color-slider');
     const value = row.querySelector('.inspector-color-value');
@@ -554,8 +585,7 @@ function updateColorControlState(content, mesh) {
   const tintValue = section.querySelector('[data-color-tint-value]');
   const clearTint = section.querySelector('.inspector-color-tint-clear');
   if (tintInput) tintInput.value = adjustment.tint || '#ffffff';
-  if (tintValue) tintValue.textContent = adjustment.tint?.toUpperCase()
-    || t('inspector.none');
+  if (tintValue) tintValue.textContent = adjustment.tint?.toUpperCase() || t('inspector.none');
   if (clearTint) clearTint.disabled = adjustment.tint === null;
   syncTextureSaveAction(section, mesh);
   return true;
@@ -564,8 +594,7 @@ function updateColorControlState(content, mesh) {
 function buildComponent(record) {
   const content = showContent();
   content.replaceChildren();
-  buildHeader(content, record.component || t('inspector.component'),
-    componentContext(record), record.source || '');
+  buildHeader(content, record.component || t('inspector.component'), componentContext(record), record.source || '');
   buildAssetSection(content, record.assetSummary, true);
   buildMaterialSection(content, record);
   buildComponentTextureSection(content, record);
@@ -578,8 +607,7 @@ function buildMesh(mesh, record) {
   const name = meshDisplayLabel(mesh, record.label);
   const component = record.component;
   const componentName = component?.component || component || t('inspector.component');
-  buildHeader(content, name, componentName,
-    record.entry?.source?.[0]?.ini || '');
+  buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
   buildAssetSection(content, source.userData.assetEntry?.asset_binding);
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
@@ -607,16 +635,14 @@ function updateInspectorState() {
     const count = content.querySelector('.inspector-texture-count');
     if (count) {
       const total = current.record.texturePool?.length || 0;
-      count.textContent = total ? t('inspector.available', {count: total})
-        : t('inspector.noneDiscovered');
+      count.textContent = total ? t('inspector.available', { count: total }) : t('inspector.noneDiscovered');
     }
   }
 }
 
 function showInspectorOnSelection() {
-  if (selectionCount++ === 0 && isRightDockOpen()
-      && getRightDockTab() !== 'weight') {
-    setRightDockTab('inspector', {persist: false});
+  if (selectionCount++ === 0 && isRightDockOpen() && getRightDockTab() !== 'weight') {
+    setRightDockTab('inspector', { persist: false });
   }
 }
 
@@ -624,7 +650,7 @@ function selectComponent(record) {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   clearSelection();
   showInspectorOnSelection();
-  current = {type: 'component', record};
+  current = { type: 'component', record };
   record.header?.classList.add('selected');
   buildComponent(record);
   const status = $('selected-mesh-status');
@@ -636,12 +662,11 @@ function selectMesh(mesh) {
   if (!record) return;
   showInspectorOnSelection();
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
-  current = {type: 'mesh', mesh, record};
+  current = { type: 'mesh', mesh, record };
   buildMesh(mesh, record);
   const status = $('selected-mesh-status');
   if (status) {
-    const componentName = record.component?.component || record.component
-      || t('inspector.component');
+    const componentName = record.component?.component || record.component || t('inspector.component');
     const meshName = meshDisplayLabel(mesh, record.label);
     status.textContent = `${componentName} > ${meshName}`;
   }
@@ -652,23 +677,22 @@ export function initInspectorPanel() {
     if (current?.type === 'component') {
       buildComponent(current.record);
       const status = $('selected-mesh-status');
-      if (status) status.textContent = current.record.component
-        || t('inspector.component');
+      if (status) status.textContent = current.record.component || t('inspector.component');
     } else if (current?.type === 'mesh') {
       buildMesh(current.mesh, current.record);
       const status = $('selected-mesh-status');
       if (status) {
-        const componentName = current.record.component?.component
-          || current.record.component || t('inspector.component');
+        const componentName =
+          current.record.component?.component || current.record.component || t('inspector.component');
         const meshName = meshDisplayLabel(current.mesh, current.record.label);
         status.textContent = `${componentName} > ${meshName}`;
       }
     }
   });
-  window.addEventListener('mod-viewer-component-selected', event => {
+  window.addEventListener('mod-viewer-component-selected', (event) => {
     if (event.detail?.component) selectComponent(event.detail.component);
   });
-  window.addEventListener('mod-viewer-mesh-selected', event => {
+  window.addEventListener('mod-viewer-mesh-selected', (event) => {
     if (event.detail?.mesh) selectMesh(event.detail.mesh);
     else {
       if (current?.type === 'component') current.record.header?.classList.remove('selected');
@@ -677,13 +701,15 @@ export function initInspectorPanel() {
       clearContent();
     }
   });
-  window.addEventListener('mod-viewer-inspector-refresh', event => {
+  window.addEventListener('mod-viewer-inspector-refresh', (event) => {
     const component = event.detail?.component;
     const reason = event.detail?.reason || 'selection';
     if (!component || !current) return;
     if (reason === 'state') {
-      if ((current.type === 'component' && current.record === component)
-          || (current.type === 'mesh' && current.record.component === component)) {
+      if (
+        (current.type === 'component' && current.record === component) ||
+        (current.type === 'mesh' && current.record.component === component)
+      ) {
         updateInspectorState();
       }
       return;
@@ -693,12 +719,13 @@ export function initInspectorPanel() {
       buildMesh(current.mesh, current.record);
     }
   });
-  window.addEventListener('mod-viewer-mesh-state-changed', event => {
+  window.addEventListener('mod-viewer-mesh-state-changed', (event) => {
     const changed = event.detail?.meshes || [];
     if (!current || !changed.length) return;
-    const affected = current.type === 'mesh'
-      ? changed.includes(semanticMesh(current.mesh))
-      : (current.record.meshes || []).some(mesh => changed.includes(mesh));
+    const affected =
+      current.type === 'mesh'
+        ? changed.includes(semanticMesh(current.mesh))
+        : (current.record.meshes || []).some((mesh) => changed.includes(mesh));
     if (affected) updateInspectorState();
   });
   clearContent();

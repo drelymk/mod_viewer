@@ -12,18 +12,18 @@ import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
-let currentMode = null;    // 'add' | 'edit'
+let currentMode = null; // 'add' | 'edit'
 let currentModPath = null;
-let currentInfo = null;    // the payload entry being edited (add: null)
-let onSaved = null;        // callback invoked after a successful staged edit
-let editVarRows = [];      // [{var, original, input}] built for edit mode
+let currentInfo = null; // the payload entry being edited (add: null)
+let onSaved = null; // callback invoked after a successful staged edit
+let editVarRows = []; // [{var, original, input}] built for edit mode
 
 function syncLabels() {
   if (!currentMode) return;
-  $('tm-title').textContent = currentMode === 'add'
-    ? t('toggle.addTitle') : t('toggle.editTitle', {name: currentInfo?.name});
-  editVarRows.forEach(row => {
-    row.label.textContent = t('toggle.valuesLabel', {name: row.var});
+  $('tm-title').textContent =
+    currentMode === 'add' ? t('toggle.addTitle') : t('toggle.editTitle', { name: currentInfo?.name });
+  editVarRows.forEach((row) => {
+    row.label.textContent = t('toggle.valuesLabel', { name: row.var });
   });
   $('tm-save').textContent = t('common.save');
   $('tm-cancel').textContent = t('common.cancel');
@@ -49,7 +49,7 @@ function buildEditVarRows(vars) {
     const row = document.createElement('label');
     row.className = 'modal-field';
     const span = document.createElement('span');
-    span.textContent = t('toggle.valuesLabel', {name});
+    span.textContent = t('toggle.valuesLabel', { name });
     const input = document.createElement('input');
     input.type = 'text';
     input.autocomplete = 'off';
@@ -77,7 +77,7 @@ async function populateIniPicker(modPath, selected, editable) {
     select.appendChild(o);
   }
   if (selected) select.value = selected;
-  field.style.display = (editable && inis.length <= 1) ? 'none' : '';
+  field.style.display = editable && inis.length <= 1 ? 'none' : '';
 }
 
 /**
@@ -124,7 +124,10 @@ export async function openToggleModal({ mode, modPath, info, onSaved: cb }) {
 }
 
 function parseValues(text) {
-  return text.split(',').map((s) => s.trim()).filter(Boolean);
+  return text
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function submitAdd() {
@@ -159,8 +162,7 @@ function submitEdit(allowConflicts) {
   if (Object.keys(varValues).length) changes.var_values = varValues;
   if (allowConflicts) changes.allow_value_conflicts = true;
 
-  return window.pywebview.api.edit_toggle(
-    currentModPath, currentInfo.ini, currentInfo.section, changes);
+  return window.pywebview.api.edit_toggle(currentModPath, currentInfo.ini, currentInfo.section, changes);
 }
 
 async function handleSubmit(evt) {
@@ -174,10 +176,8 @@ async function handleSubmit(evt) {
     // Shrinking a cycle's values can orphan meshes still gated on a removed
     // value — toggle_editor refuses by default; offer to force it, since
     // resolving that mesh's visibility is squarely the user's call.
-    if (result.error && currentMode === 'edit' &&
-        result.error_code === 'orphan_existing_gates') {
-      const proceed = await confirmDialog(
-        t('toggle.orphanConfirm', {error: result.error}));
+    if (result.error && currentMode === 'edit' && result.error_code === 'orphan_existing_gates') {
+      const proceed = await confirmDialog(t('toggle.orphanConfirm', { error: result.error }));
       if (proceed) result = await submitEdit(true);
     }
 

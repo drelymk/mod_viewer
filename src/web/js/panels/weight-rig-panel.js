@@ -1,30 +1,52 @@
 // Unified Weight/Rig controls. The panel owns one stable DOM tree for both
 // domains while keeping Weight and Rig picking lifecycles separate.
 
-import {weightRigApi} from '../mesh/weight-rig-core.js';
+import { weightRigApi } from '../mesh/weight-rig-core.js';
 const {
-  beginWeightModelPicking, cancelWeightModelPicking, clearSelectedBones,
-  ensureModelRigLoaded, ensureModelWeightsLoaded, getModelPhysicsState,
+  beginWeightModelPicking,
+  cancelWeightModelPicking,
+  clearSelectedBones,
+  ensureModelRigLoaded,
+  ensureModelWeightsLoaded,
+  getModelPhysicsState,
   getModelRigState,
-  getModelWeightState, loadSavedBoneSelection,
-  clearRigJointSelection, resetModelPhysics, resetRigJoint, resetRigPose,
+  getModelWeightState,
+  loadSavedBoneSelection,
+  clearRigJointSelection,
+  resetModelPhysics,
+  resetRigJoint,
+  resetRigPose,
   saveModelWeightSelection,
-  selectRigJoint, setBoneSelected, setPhysicsConstraintsEnabled,
-  setPhysicsContinuousLinearResponse, setPhysicsDamping, setPhysicsFrequency,
-  setPhysicsGravityEnabled, setPhysicsGravityScale, setPhysicsLinearMotionStrength,
-  setPhysicsMaxBendDegrees, setPhysicsMotionStrength, setModelWeightHeatmap,
-  beginRigJointPicking, cancelRigJointPicking, setRigIkEnabled,
+  selectRigJoint,
+  setBoneSelected,
+  setPhysicsConstraintsEnabled,
+  setPhysicsContinuousLinearResponse,
+  setPhysicsDamping,
+  setPhysicsFrequency,
+  setPhysicsGravityEnabled,
+  setPhysicsGravityScale,
+  setPhysicsLinearMotionStrength,
+  setPhysicsMaxBendDegrees,
+  setPhysicsMotionStrength,
+  setModelWeightHeatmap,
+  beginRigJointPicking,
+  cancelRigJointPicking,
+  setRigIkEnabled,
   setRigJointRoot,
-  setRigRotationSnapDegrees, setWeightPickerViewMode,
-  beginHumanoidRigEdit, cancelHumanoidRigEdit, saveHumanoidRigEdit,
+  setRigRotationSnapDegrees,
+  setWeightPickerViewMode,
+  beginHumanoidRigEdit,
+  cancelHumanoidRigEdit,
+  saveHumanoidRigEdit,
   resetHumanoidRig,
   applyRigPosePresetById,
-  deleteRigPosePreset, renameRigPosePreset,
+  deleteRigPosePreset,
+  renameRigPosePreset,
   saveRigPosePreset,
 } = weightRigApi;
-import {HUMANOID_CONTROL_KEYS} from '../mesh/humanoid-control-rig.js';
+import { HUMANOID_CONTROL_KEYS } from '../mesh/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
-import {LANGUAGE_CHANGED, applyTranslations, getLocale, t} from '../i18n/index.js';
+import { LANGUAGE_CHANGED, applyTranslations, getLocale, t } from '../i18n/index.js';
 
 let panel = null;
 let ui = null;
@@ -32,19 +54,24 @@ let loadingPromise = null;
 let latestWeightState = null;
 let latestRigState = null;
 
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 const HUMANOID_CONTROL_LABEL_KEYS = Object.freeze({
-  chest: 'weightRig.control.chest', pelvis: 'weightRig.control.pelvis',
-  neck: 'weightRig.control.neck', head: 'weightRig.control.head',
+  chest: 'weightRig.control.chest',
+  pelvis: 'weightRig.control.pelvis',
+  neck: 'weightRig.control.neck',
+  head: 'weightRig.control.head',
   leftShoulder: 'weightRig.control.leftShoulder',
   leftElbow: 'weightRig.control.leftElbow',
   leftHand: 'weightRig.control.leftHand',
   rightShoulder: 'weightRig.control.rightShoulder',
   rightElbow: 'weightRig.control.rightElbow',
   rightHand: 'weightRig.control.rightHand',
-  leftHip: 'weightRig.control.leftHip', leftKnee: 'weightRig.control.leftKnee',
-  leftFoot: 'weightRig.control.leftFoot', rightHip: 'weightRig.control.rightHip',
-  rightKnee: 'weightRig.control.rightKnee', rightFoot: 'weightRig.control.rightFoot',
+  leftHip: 'weightRig.control.leftHip',
+  leftKnee: 'weightRig.control.leftKnee',
+  leftFoot: 'weightRig.control.leftFoot',
+  rightHip: 'weightRig.control.rightHip',
+  rightKnee: 'weightRig.control.rightKnee',
+  rightFoot: 'weightRig.control.rightFoot',
 });
 
 function humanoidControlLabel(key) {
@@ -87,16 +114,15 @@ function addAdvanced(parent) {
   content.className = 'weight-rig-advanced-content';
   details.appendChild(content);
   parent.appendChild(details);
-  return {details, content};
+  return { details, content };
 }
 
 function selectedLabel(state) {
   const entries = state?.selectedBones || [];
   if (!entries.length) return t('weightRig.selectBones');
-  const count = Number(state.selectedBoneCount)
-    || entries.reduce((total, entry) => total + entry.boneIds.length, 0);
+  const count = Number(state.selectedBoneCount) || entries.reduce((total, entry) => total + entry.boneIds.length, 0);
   if (entries.length === 1 && count <= 4) return entries[0].boneIds.join(', ');
-  return t('weightRig.bonesSelected', {count});
+  return t('weightRig.bonesSelected', { count });
 }
 
 function addRange(parent, className, label, min, max, step, value, onInput) {
@@ -120,7 +146,7 @@ function addRange(parent, className, label, min, max, step, value, onInput) {
   });
   field.appendChild(input);
   parent.appendChild(field);
-  return {input, valueNode};
+  return { input, valueNode };
 }
 
 function buildWeightModelPicker(section) {
@@ -279,22 +305,66 @@ function buildWeightSection(parent) {
   physicsTitle.setAttribute('aria-hidden', 'true');
   const initial = getModelPhysicsState();
   const ranges = {};
-  ranges.frequency = addRange(advanced.content, 'weight-physics-frequency',
-    'weightRig.frequency', 0.1, 10, 0.1, initial.frequencyHz, value => setPhysicsFrequency(value));
-  ranges.damping = addRange(advanced.content, 'weight-physics-damping', 'weightRig.damping',
-    0, 2, 0.05, initial.dampingRatio, value => setPhysicsDamping(value));
-  ranges.motion = addRange(advanced.content, 'weight-physics-motion',
-    'weightRig.angularResponse', 0, 1, 0.05, initial.angularResponse,
-    value => setPhysicsMotionStrength(value));
-  ranges.linear = addRange(advanced.content, 'weight-physics-linear',
-    'weightRig.translationResponse', 0, 1, 0.05, initial.translationResponse,
-    value => setPhysicsLinearMotionStrength(value));
-  ranges.continuous = addRange(advanced.content, 'weight-physics-continuous-response',
-    'weightRig.velocityResponse', 0, 1, 0.05, initial.velocityResponse,
-    value => setPhysicsContinuousLinearResponse(value));
-  ranges.gravity = addRange(advanced.content, 'weight-physics-gravity-scale',
-    'weightRig.gravityScale', 0, 2, 0.1, initial.gravityScale,
-    value => setPhysicsGravityScale(value));
+  ranges.frequency = addRange(
+    advanced.content,
+    'weight-physics-frequency',
+    'weightRig.frequency',
+    0.1,
+    10,
+    0.1,
+    initial.frequencyHz,
+    (value) => setPhysicsFrequency(value),
+  );
+  ranges.damping = addRange(
+    advanced.content,
+    'weight-physics-damping',
+    'weightRig.damping',
+    0,
+    2,
+    0.05,
+    initial.dampingRatio,
+    (value) => setPhysicsDamping(value),
+  );
+  ranges.motion = addRange(
+    advanced.content,
+    'weight-physics-motion',
+    'weightRig.angularResponse',
+    0,
+    1,
+    0.05,
+    initial.angularResponse,
+    (value) => setPhysicsMotionStrength(value),
+  );
+  ranges.linear = addRange(
+    advanced.content,
+    'weight-physics-linear',
+    'weightRig.translationResponse',
+    0,
+    1,
+    0.05,
+    initial.translationResponse,
+    (value) => setPhysicsLinearMotionStrength(value),
+  );
+  ranges.continuous = addRange(
+    advanced.content,
+    'weight-physics-continuous-response',
+    'weightRig.velocityResponse',
+    0,
+    1,
+    0.05,
+    initial.velocityResponse,
+    (value) => setPhysicsContinuousLinearResponse(value),
+  );
+  ranges.gravity = addRange(
+    advanced.content,
+    'weight-physics-gravity-scale',
+    'weightRig.gravityScale',
+    0,
+    2,
+    0.1,
+    initial.gravityScale,
+    (value) => setPhysicsGravityScale(value),
+  );
 
   const constraintsLabel = document.createElement('label');
   constraintsLabel.className = 'weight-checkbox';
@@ -306,9 +376,16 @@ function buildWeightSection(parent) {
   addText(constraintsLabel, 'weight-label', '', 'weightRig.jointLimits');
   advanced.content.appendChild(constraintsLabel);
   ui.physicsConstraintsEnable = constraints;
-  ranges.maxBend = addRange(advanced.content, 'weight-physics-max-bend',
-    'weightRig.maxBend', 0, 90, 1, initial.maxBendDegrees,
-    value => setPhysicsMaxBendDegrees(value));
+  ranges.maxBend = addRange(
+    advanced.content,
+    'weight-physics-max-bend',
+    'weightRig.maxBend',
+    0,
+    90,
+    1,
+    initial.maxBendDegrees,
+    (value) => setPhysicsMaxBendDegrees(value),
+  );
   const reset = document.createElement('button');
   reset.type = 'button';
   reset.className = 'ui-button weight-physics-reset';
@@ -325,8 +402,7 @@ function selectedJoint(state = latestRigState) {
   if (rawId === null || rawId === undefined || rawId === '') return null;
   const id = Number(rawId);
   if (!Number.isInteger(id)) return null;
-  return state?.model?.joints?.find(joint =>
-    Number(joint.jointId) === id) || null;
+  return state?.model?.joints?.find((joint) => Number(joint.jointId) === id) || null;
 }
 
 function buildMainRigControls(parent) {
@@ -351,7 +427,7 @@ function buildMainRigControls(parent) {
   resetRig.dataset.i18n = 'weightRig.resetRig';
   resetRig.textContent = t('weightRig.resetRig');
   resetRig.addEventListener('click', async () => {
-    if (!await confirmDialog(t('weightRig.confirm.resetRig'))) return;
+    if (!(await confirmDialog(t('weightRig.confirm.resetRig')))) return;
     await resetHumanoidRig();
   });
   normalActions.append(editRig, resetRig);
@@ -376,7 +452,9 @@ function buildMainRigControls(parent) {
   saveEdit.className = 'ui-button weight-rig-primary-action rig-save-edit';
   saveEdit.dataset.i18n = 'common.save';
   saveEdit.textContent = t('common.save');
-  saveEdit.addEventListener('click', () => { void saveHumanoidRigEdit(); });
+  saveEdit.addEventListener('click', () => {
+    void saveHumanoidRigEdit();
+  });
   editActions.append(cancelEdit, saveEdit);
   editStatus.appendChild(editActions);
   mainRig.appendChild(editStatus);
@@ -417,7 +495,7 @@ function buildRigSection(parent) {
     closePopover();
     const current = latestRigState?.jointPickIntent;
     if (current?.type === 'selected-joint') cancelRigJointPicking();
-    else beginRigJointPicking({type: 'selected-joint'});
+    else beginRigJointPicking({ type: 'selected-joint' });
   });
   section.appendChild(pickJoint);
   ui.rigPickJoint = pickJoint;
@@ -511,7 +589,12 @@ function buildRigSection(parent) {
   addText(snapRow, 'rig-label', '', 'weightRig.rotationSnap');
   const snap = document.createElement('select');
   snap.className = 'rig-snap-select';
-  [[0, 'weightRig.off'], [5, null], [15, null], [30, null]].forEach(([value, key]) => {
+  [
+    [0, 'weightRig.off'],
+    [5, null],
+    [15, null],
+    [30, null],
+  ].forEach(([value, key]) => {
     const option = document.createElement('option');
     option.value = String(value);
     option.dataset.i18n = key || '';
@@ -572,21 +655,18 @@ function formatNearbyInfluence(value) {
   const percentage = Math.max(0, Number(value) || 0) * 100;
   return percentage > 0 && percentage < 1
     ? t('weightRig.nearbyLess')
-    : t('weightRig.nearby', {count: Math.round(percentage)});
+    : t('weightRig.nearby', { count: Math.round(percentage) });
 }
 
 function syncBoneFilter(weightState = latestWeightState || getModelWeightState()) {
   if (!ui?.groupBySource) return;
   const query = ui.boneSearch.value.trim().toLowerCase();
-  const selected = new Map((weightState.selectedBones || []).map(entry => [
-    entry.sourceKey, new Set(entry.boneIds),
-  ]));
+  const selected = new Map((weightState.selectedBones || []).map((entry) => [entry.sourceKey, new Set(entry.boneIds)]));
   ui.groupBySource.forEach((group, sourceKey) => {
     const sourceSelected = selected.get(sourceKey) || new Set();
     let visible = 0;
     group.optionById.forEach((option, id) => {
-      option.hidden = (!!query && !String(id).includes(query))
-        || (ui.selectedOnly.checked && !sourceSelected.has(id));
+      option.hidden = (!!query && !String(id).includes(query)) || (ui.selectedOnly.checked && !sourceSelected.has(id));
       if (!option.hidden) visible += 1;
     });
     group.root.hidden = visible === 0;
@@ -596,27 +676,32 @@ function syncBoneFilter(weightState = latestWeightState || getModelWeightState()
 function syncBoneOptions(state) {
   const allSources = state?.sources || [];
   const picked = state?.pickerViewMode === 'picked' ? state.pickedPoint : null;
-  const sources = picked
-    ? allSources.filter(source => source.key === picked.sourceKey) : allSources;
-  const optionKey = JSON.stringify([state?.pickerViewMode, sources.map(source => [
-    source.key, source.file, source.boneIdOffset,
-    state?.pickerViewMode === 'picked'
-      ? (picked?.influences || []).map(influence => influence.boneId)
-      : source.availableBoneIds,
-  ])]);
+  const sources = picked ? allSources.filter((source) => source.key === picked.sourceKey) : allSources;
+  const optionKey = JSON.stringify([
+    state?.pickerViewMode,
+    sources.map((source) => [
+      source.key,
+      source.file,
+      source.boneIdOffset,
+      state?.pickerViewMode === 'picked'
+        ? (picked?.influences || []).map((influence) => influence.boneId)
+        : source.availableBoneIds,
+    ]),
+  ]);
   if (optionKey !== ui.optionKey) {
     const scrollTop = ui.boneList.scrollTop;
     ui.boneList.replaceChildren();
     ui.groupBySource = new Map();
-    const basenames = new Map(sources.map(source => [
-      source.key, String(source.file).split('/').pop().toLowerCase(),
-    ]));
+    const basenames = new Map(
+      sources.map((source) => [source.key, String(source.file).split('/').pop().toLowerCase()]),
+    );
     const basenameCounts = new Map();
-    basenames.forEach(name => basenameCounts.set(name, (basenameCounts.get(name) || 0) + 1));
+    basenames.forEach((name) => basenameCounts.set(name, (basenameCounts.get(name) || 0) + 1));
     const fileCounts = new Map();
-    sources.forEach(source => fileCounts.set(String(source.file).toLowerCase(),
-      (fileCounts.get(String(source.file).toLowerCase()) || 0) + 1));
-    sources.forEach(source => {
+    sources.forEach((source) =>
+      fileCounts.set(String(source.file).toLowerCase(), (fileCounts.get(String(source.file).toLowerCase()) || 0) + 1),
+    );
+    sources.forEach((source) => {
       const root = document.createElement('section');
       root.className = 'weight-bone-group';
       const heading = addText(root, 'weight-bone-source');
@@ -624,17 +709,15 @@ function syncBoneOptions(state) {
       let label = basename;
       if (basenameCounts.get(basenames.get(source.key)) > 1) label = source.file;
       if (fileCounts.get(String(source.file).toLowerCase()) > 1) {
-        label += ` · ${t('weightRig.offset', {offset: source.boneIdOffset})}`;
+        label += ` · ${t('weightRig.offset', { offset: source.boneIdOffset })}`;
       }
       heading.textContent = label.toUpperCase();
       heading.title = source.file;
       const optionById = new Map();
       const metaById = new Map();
-      const pickedById = new Map((picked?.influences || [])
-        .map(influence => [influence.boneId, influence.weight]));
-      const ids = state?.pickerViewMode === 'picked'
-        ? [...pickedById.keys()] : source.availableBoneIds;
-      ids.forEach(id => {
+      const pickedById = new Map((picked?.influences || []).map((influence) => [influence.boneId, influence.weight]));
+      const ids = state?.pickerViewMode === 'picked' ? [...pickedById.keys()] : source.availableBoneIds;
+      ids.forEach((id) => {
         const row = document.createElement('label');
         row.className = 'weight-bone-option';
         row.dataset.boneId = String(id);
@@ -642,8 +725,7 @@ function syncBoneOptions(state) {
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.value = String(id);
-        checkbox.addEventListener('change', event =>
-          setBoneSelected(source.key, id, event.target.checked));
+        checkbox.addEventListener('change', (event) => setBoneSelected(source.key, id, event.target.checked));
         row.appendChild(checkbox);
         addText(row, 'weight-bone-id', String(id));
         const meta = addText(row, 'weight-bone-meta');
@@ -653,32 +735,30 @@ function syncBoneOptions(state) {
         root.appendChild(row);
       });
       ui.boneList.appendChild(root);
-      ui.groupBySource.set(source.key, {root, optionById, metaById});
+      ui.groupBySource.set(source.key, { root, optionById, metaById });
     });
     ui.boneList.scrollTop = scrollTop;
     ui.optionKey = optionKey;
   }
-  const selected = new Map((state?.selectedBones || []).map(entry => [
-    entry.sourceKey, new Set(entry.boneIds),
-  ]));
-  sources.forEach(source => {
+  const selected = new Map((state?.selectedBones || []).map((entry) => [entry.sourceKey, new Set(entry.boneIds)]));
+  sources.forEach((source) => {
     const group = ui.groupBySource.get(source.key);
     if (!group) return;
     const sourceSelected = selected.get(source.key) || new Set();
-    const pickedById = new Map((picked?.influences || [])
-      .map(influence => [influence.boneId, influence.weight]));
-    const ids = state?.pickerViewMode === 'picked'
-      ? [...pickedById.keys()] : source.availableBoneIds;
-    ids.forEach(id => {
+    const pickedById = new Map((picked?.influences || []).map((influence) => [influence.boneId, influence.weight]));
+    const ids = state?.pickerViewMode === 'picked' ? [...pickedById.keys()] : source.availableBoneIds;
+    ids.forEach((id) => {
       const row = group.optionById.get(id);
       if (!row) return;
       row.querySelector('input').checked = sourceSelected.has(id);
       const globalMeta = formatBoneMeta(source.boneStats?.[id]);
-      group.metaById.get(id).textContent = state?.pickerViewMode === 'picked'
-        ? `${formatNearbyInfluence(pickedById.get(id))} · ${globalMeta}` : globalMeta;
+      group.metaById.get(id).textContent =
+        state?.pickerViewMode === 'picked'
+          ? `${formatNearbyInfluence(pickedById.get(id))} · ${globalMeta}`
+          : globalMeta;
     });
   });
-  if (!sources.some(source => source.availableBoneIds.length)) {
+  if (!sources.some((source) => source.availableBoneIds.length)) {
     if (!ui.empty) ui.empty = addText(ui.boneList, 'weight-empty', '', 'weightRig.noBoneIds');
     ui.empty.hidden = false;
   } else if (ui.empty) ui.empty.hidden = true;
@@ -697,10 +777,9 @@ function syncWeightControls(state = latestWeightState || getModelWeightState()) 
   latestWeightState = state;
   syncBoneOptions(state);
   ui.boneButton.textContent = selectedLabel(state);
-  const available = (state.sources || []).some(source => source.availableBoneIds?.length);
+  const available = (state.sources || []).some((source) => source.availableBoneIds?.length);
   ui.boneButton.disabled = !state.loaded || !available;
-  ui.weightPick.textContent = state.picking
-    ? t('weightRig.cancelPicking') : t('weightRig.pickFromModel');
+  ui.weightPick.textContent = state.picking ? t('weightRig.cancelPicking') : t('weightRig.pickFromModel');
   ui.weightPick.classList.toggle('active', !!state.picking);
   ui.weightPick.setAttribute('aria-pressed', String(!!state.picking));
   ui.weightPick.disabled = !state.loaded || !available;
@@ -734,8 +813,7 @@ function syncPhysicsControls(state = getModelPhysicsState()) {
 function syncHumanoidEditControls(state) {
   const edit = state?.humanoidRigEdit || {};
   const editing = edit.editing === true;
-  ui.mainTitle.textContent = editing
-    ? t('weightRig.editRigTitle') : t('weightRig.mainRig');
+  ui.mainTitle.textContent = editing ? t('weightRig.editRigTitle') : t('weightRig.mainRig');
   ui.editStatus.hidden = !editing;
   ui.editRig.hidden = editing;
   ui.resetRig.hidden = editing;
@@ -747,18 +825,19 @@ function syncHumanoidEditControls(state) {
   const controlTotal = HUMANOID_CONTROL_KEYS.length;
   ui.editCount.textContent = editing
     ? t('weightRig.controlPointsVisible', {
-      count: controlCount, total: controlTotal,
-    }) : '';
+        count: controlCount,
+        total: controlTotal,
+      })
+    : '';
   const key = edit.selectedControlKey;
-  ui.editControl.textContent = key
-    ? humanoidControlLabel(key) : t('weightRig.clickPointToMove');
+  ui.editControl.textContent = key ? humanoidControlLabel(key) : t('weightRig.clickPointToMove');
   const mapped = key ? edit.mappedJointIdByControl?.[key] : null;
   ui.editConnection.textContent = key
     ? mapped === undefined || mapped === null
       ? t('weightRig.notConnected')
-      : t('weightRig.connectedJoint', {id: mapped}) : '';
-  ui.editHint.textContent = edit.error || (key
-    ? t('weightRig.movePointRelease') : t('weightRig.clickPointToMove'));
+      : t('weightRig.connectedJoint', { id: mapped })
+    : '';
+  ui.editHint.textContent = edit.error || (key ? t('weightRig.movePointRelease') : t('weightRig.clickPointToMove'));
   ui.editHint.hidden = !edit.error && !!key;
   ui.editStatus.classList.toggle('is-saving', !!edit.saving);
 }
@@ -772,7 +851,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   syncHumanoidEditControls(state);
   const optionKey = JSON.stringify([
     model?.structureRevision ?? state?.structureRevision ?? null,
-    joints.map(joint => joint.jointId),
+    joints.map((joint) => joint.jointId),
   ]);
   if (optionKey !== ui.joint.dataset.optionKey) {
     ui.joint.replaceChildren();
@@ -783,10 +862,10 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
     placeholder.disabled = true;
     placeholder.selected = true;
     ui.joint.appendChild(placeholder);
-    joints.forEach(item => {
+    joints.forEach((item) => {
       const option = document.createElement('option');
       option.value = String(item.jointId);
-      option.textContent = t('weightRig.joint', {id: item.jointId});
+      option.textContent = t('weightRig.joint', { id: item.jointId });
       ui.joint.appendChild(option);
     });
     ui.joint.dataset.optionKey = optionKey;
@@ -794,15 +873,14 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   if (ui.joint.options[0]) {
     ui.joint.options[0].textContent = t('weightRig.selectJoint');
   }
-  [...ui.joint.options].slice(1).forEach(option => {
-    option.textContent = t('weightRig.joint', {id: option.value});
+  [...ui.joint.options].slice(1).forEach((option) => {
+    option.textContent = t('weightRig.joint', { id: option.value });
   });
   ui.joint.value = selected ? String(selected.jointId) : '';
   const editing = state?.humanoidRigEdit?.editing === true;
   ui.joint.disabled = editing || !state?.loaded || !joints.length;
   const jointPickActive = state?.jointPickIntent?.type === 'selected-joint';
-  ui.rigPickJoint.textContent = jointPickActive
-    ? t('weightRig.cancelPicking') : t('weightRig.pickFromModel');
+  ui.rigPickJoint.textContent = jointPickActive ? t('weightRig.cancelPicking') : t('weightRig.pickFromModel');
   ui.rigPickJoint.classList.toggle('active', jointPickActive);
   ui.rigPickJoint.setAttribute('aria-pressed', String(jointPickActive));
   ui.rigPickJoint.disabled = editing || !state?.loaded || !joints.length;
@@ -812,7 +890,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   const hasSelected = !!selected;
   const selectedControl = ik.selectedHumanoidControlKey;
   ui.ikSelection.textContent = selectedControl
-    ? t('weightRig.selectedPoint', {name: humanoidControlLabel(selectedControl)})
+    ? t('weightRig.selectedPoint', { name: humanoidControlLabel(selectedControl) })
     : t('weightRig.selectPoint');
   ui.ik.checked = !!ik.enabled;
   ui.ik.disabled = editing || !state?.loaded || !ik.available;
@@ -825,7 +903,7 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
 
 function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
   const presetState = state?.rigPresets || {};
-  return (presetState.presets || []).find(item => item.id === id) || null;
+  return (presetState.presets || []).find((item) => item.id === id) || null;
 }
 
 const PRESET_SKIP_REASON_LABELS = Object.freeze({
@@ -840,14 +918,13 @@ const PRESET_SKIP_REASON_LABELS = Object.freeze({
 });
 
 function pluralizePresetCount(count, key) {
-  return t(`${key}.${count === 1 ? 'one' : 'many'}`, {count});
+  return t(`${key}.${count === 1 ? 'one' : 'many'}`, { count });
 }
 
 function presetSkipLabel(item) {
-  const key = PRESET_SKIP_REASON_LABELS[item?.reason]
-    || (item?.type === 'root'
-      ? 'weightRig.reason.noMatchingRoot'
-      : 'weightRig.reason.noMatchingJoint');
+  const key =
+    PRESET_SKIP_REASON_LABELS[item?.reason] ||
+    (item?.type === 'root' ? 'weightRig.reason.noMatchingRoot' : 'weightRig.reason.noMatchingJoint');
   return t(key);
 }
 
@@ -855,43 +932,40 @@ function formatPresetApplication(result) {
   if (!result) return '';
   const skipped = Array.isArray(result.skipped) ? result.skipped : [];
   const skippedReasons = new Map();
-  skipped.forEach(item => {
+  skipped.forEach((item) => {
     const label = presetSkipLabel(item);
     skippedReasons.set(label, (skippedReasons.get(label) || 0) + 1);
   });
   const applied = [];
   if (result.appliedJointCount) {
-    applied.push(pluralizePresetCount(
-      result.appliedJointCount, 'weightRig.count.jointRotation'));
+    applied.push(pluralizePresetCount(result.appliedJointCount, 'weightRig.count.jointRotation'));
   }
   if (result.appliedRootCount) {
     applied.push(pluralizePresetCount(result.appliedRootCount, 'weightRig.count.root'));
   }
   const skippedParts = [];
   if (result.skippedJointCount) {
-    skippedParts.push(pluralizePresetCount(
-      result.skippedJointCount, 'weightRig.count.joint'));
+    skippedParts.push(pluralizePresetCount(result.skippedJointCount, 'weightRig.count.joint'));
   }
   if (result.skippedRootCount) {
-    skippedParts.push(pluralizePresetCount(
-      result.skippedRootCount, 'weightRig.count.root'));
+    skippedParts.push(pluralizePresetCount(result.skippedRootCount, 'weightRig.count.root'));
   }
   const reasonText = [...skippedReasons.entries()]
-    .map(([label, count]) => count > 1
-      ? t('weightRig.reasonCount', {label, count}) : label)
+    .map(([label, count]) => (count > 1 ? t('weightRig.reasonCount', { label, count }) : label))
     .join('; ');
   const reason = reasonText ? `: ${reasonText}` : '.';
   if (!result.success) {
-    return t('weightRig.status.couldNotApplyPose', {reason});
+    return t('weightRig.status.couldNotApplyPose', { reason });
   }
   if (!skippedParts.length) {
-    return applied.length ? t('weightRig.status.applied', {
-      items: applied.join(` ${t('weightRig.and')} `),
-    }) : t('weightRig.status.appliedPose');
+    return applied.length
+      ? t('weightRig.status.applied', {
+          items: applied.join(` ${t('weightRig.and')} `),
+        })
+      : t('weightRig.status.appliedPose');
   }
   return t('weightRig.status.appliedSkipped', {
-    applied: applied.length
-      ? applied.join(` ${t('weightRig.and')} `) : t('weightRig.nothing'),
+    applied: applied.length ? applied.join(` ${t('weightRig.and')} `) : t('weightRig.nothing'),
     skipped: skippedParts.join(` ${t('weightRig.and')} `),
     reason,
   });
@@ -907,7 +981,7 @@ function syncPresetControls(state) {
   const presetState = state?.rigPresets || {};
   const presets = presetState.presets || [];
   const optionKey = JSON.stringify({
-    presets: presets.map(item => [item.id, item.name]),
+    presets: presets.map((item) => [item.id, item.name]),
   });
   if (optionKey !== ui.preset.dataset.optionKey) {
     ui.preset.replaceChildren();
@@ -927,12 +1001,13 @@ function syncPresetControls(state) {
       option.textContent = t('weightRig.noSavedPoses');
       option.disabled = true;
       group.appendChild(option);
-    } else presets.forEach(item => {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      group.appendChild(option);
-    });
+    } else
+      presets.forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.name;
+        group.appendChild(option);
+      });
     ui.preset.appendChild(group);
     ui.preset.dataset.optionKey = optionKey;
   }
@@ -947,8 +1022,7 @@ function syncPresetControls(state) {
   ui.preset.value = presetState.selectedPresetId || '';
   const current = selectedPreset(state, ui.preset.value);
   const hasPreset = !!current;
-  ui.preset.disabled = !state?.loaded || !presets.length
-    || !!presetState.loading;
+  ui.preset.disabled = !state?.loaded || !presets.length || !!presetState.loading;
   ui.savePreset.disabled = !state?.loaded;
   ui.renamePreset.disabled = !hasPreset;
   ui.deletePreset.disabled = !hasPreset;
@@ -963,26 +1037,28 @@ async function savePreset() {
   const name = await inputConfirmDialog(t('weightRig.prompt.savePose'), '');
   if (!name) return;
   const result = await saveRigPosePreset(name);
-  ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
+  ui.presetStatus.textContent = result?.saved
+    ? presetFeedback(latestRigState)
     : result?.error || t('weightRig.status.couldNotSavePose');
 }
 
 async function renamePreset() {
-  const current = latestRigState?.rigPresets?.presets?.find(item => item.id === ui.preset.value);
+  const current = latestRigState?.rigPresets?.presets?.find((item) => item.id === ui.preset.value);
   if (!current) return;
   const name = await inputConfirmDialog(t('weightRig.prompt.renamePose'), current.name);
   if (!name) return;
   const result = await renameRigPosePreset(current.id, name);
-  ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
+  ui.presetStatus.textContent = result?.saved
+    ? presetFeedback(latestRigState)
     : result?.error || t('weightRig.status.couldNotRenamePose');
 }
 
 async function deletePreset() {
-  const current = latestRigState?.rigPresets?.presets?.find(item => item.id === ui.preset.value);
-  if (!current || !await confirmDialog(
-    t('weightRig.confirm.deletePose', {name: current.name}))) return;
+  const current = latestRigState?.rigPresets?.presets?.find((item) => item.id === ui.preset.value);
+  if (!current || !(await confirmDialog(t('weightRig.confirm.deletePose', { name: current.name })))) return;
   const result = await deleteRigPosePreset(current.id);
-  ui.presetStatus.textContent = result?.saved ? presetFeedback(latestRigState)
+  ui.presetStatus.textContent = result?.saved
+    ? presetFeedback(latestRigState)
     : result?.error || t('weightRig.status.couldNotDeletePose');
 }
 
@@ -1015,26 +1091,29 @@ function closePopover() {
 }
 
 function scheduleRigLoadAfterPaint(generation) {
-  const afterPaint = typeof requestAnimationFrame === 'function'
-    ? requestAnimationFrame : callback => setTimeout(callback, 0);
-  afterPaint(() => setTimeout(() => {
-    const weight = getModelWeightState();
-    if (weight.generation !== generation || !weight.loaded
-        || weight.error || weight.noWeights) return;
-    void ensureModelRigLoaded();
-  }, 0));
+  const afterPaint =
+    typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
+  afterPaint(() =>
+    setTimeout(() => {
+      const weight = getModelWeightState();
+      if (weight.generation !== generation || !weight.loaded || weight.error || weight.noWeights) return;
+      void ensureModelRigLoaded();
+    }, 0),
+  );
 }
 
 function loadOnDemand() {
   if (loadingPromise) return loadingPromise;
   loadingPromise = ensureModelWeightsLoaded()
-    .then(weight => {
+    .then((weight) => {
       if (weight?.loaded && !weight.error && !weight.noWeights) {
         scheduleRigLoadAfterPaint(weight.generation);
       }
       return weight;
     })
-    .finally(() => { loadingPromise = null; });
+    .finally(() => {
+      loadingPromise = null;
+    });
   return loadingPromise;
 }
 
@@ -1042,16 +1121,16 @@ export function initWeightRigPanel() {
   panel = $('weight-rig-panel');
   if (!panel) return;
   buildPanel();
-  window.addEventListener('mod-viewer-model-weight-changed', event => {
+  window.addEventListener('mod-viewer-model-weight-changed', (event) => {
     latestWeightState = event.detail;
     syncWeightControls(event.detail);
     syncStatus();
   });
-  window.addEventListener('mod-viewer-model-physics-changed', event => {
+  window.addEventListener('mod-viewer-model-physics-changed', (event) => {
     syncPhysicsControls(event.detail);
     syncRigOptions(latestRigState);
   });
-  window.addEventListener('mod-viewer-model-rig-changed', event => {
+  window.addEventListener('mod-viewer-model-rig-changed', (event) => {
     latestRigState = event.detail;
     if (!event.detail?.loading && !event.detail?.loaded) loadingPromise = null;
     syncRigOptions(event.detail);
@@ -1077,7 +1156,7 @@ export function initWeightRigPanel() {
       ui.boneButton.setAttribute('aria-expanded', 'true');
     }
   });
-  window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
+  window.addEventListener('mod-viewer-right-dock-tab-changed', (event) => {
     const active = event.detail?.tab === 'weight-rig' && event.detail?.open;
     if (!active) {
       closePopover();
@@ -1085,12 +1164,12 @@ export function initWeightRigPanel() {
       if (latestRigState?.jointPickIntent) cancelRigJointPicking();
     } else void loadOnDemand();
   });
-  document.addEventListener('pointerdown', event => {
+  document.addEventListener('pointerdown', (event) => {
     if (ui?.popover?.hidden || ui.picker.contains(event.target)) return;
     if (event.target.closest?.('#canvas-container canvas, .draw-item')) return;
     closePopover();
   });
-  document.addEventListener('keydown', event => {
+  document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     if (latestWeightState?.picking) cancelWeightModelPicking();
     if (latestRigState?.jointPickIntent) cancelRigJointPicking();

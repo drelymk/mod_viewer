@@ -6,15 +6,9 @@ import { createCameraFrame } from './camera-frame.js';
 import { createCharacterShadowController } from './character-shadow-controller.js';
 import { createEnvironmentController } from './environment.js';
 import { createKeyLightController } from './key-light-controller.js';
-import {
-  resetOutlineProjectionReference,
-  updateOutlineProjectionScale,
-} from './outline-renderer.js';
+import { resetOutlineProjectionReference, updateOutlineProjectionScale } from './outline-renderer.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
-import {
-  setCharacterShadowGeometryInvalidator,
-  setCharacterShadowMapInvalidator,
-} from './shadow-invalidation.js';
+import { setCharacterShadowGeometryInvalidator, setCharacterShadowMapInvalidator } from './shadow-invalidation.js';
 import { createViewportRenderPipeline } from './viewport-render-pipeline.js';
 import { createViewGizmoController } from './view-gizmo-controller.js';
 import { createPhysicsDragController } from './physics-drag-controller.js';
@@ -60,12 +54,11 @@ function failRenderer(message) {
 
 function rendererFailureMessage(error) {
   const detail = error?.message ? ` (${error.message})` : '';
-  return t('renderer.failure', {detail});
+  return t('renderer.failure', { detail });
 }
 
 async function initializeRenderer() {
-  if (!globalThis.navigator?.gpu
-      || typeof globalThis.navigator.gpu.requestAdapter !== 'function') {
+  if (!globalThis.navigator?.gpu || typeof globalThis.navigator.gpu.requestAdapter !== 'function') {
     throw new Error('This browser does not expose navigator.gpu.');
   }
   const adapter = await globalThis.navigator.gpu.requestAdapter({
@@ -83,30 +76,38 @@ async function initializeRenderer() {
   // from attempting an implicit backend choice.
   renderer.backend.parameters.device = device;
   await renderer.init();
-  if (renderer.backend?.isWebGPUBackend !== true
-      || renderer.backend.compatibilityMode !== false
-      || renderer.samples !== 4) {
+  if (
+    renderer.backend?.isWebGPUBackend !== true ||
+    renderer.backend.compatibilityMode !== false ||
+    renderer.samples !== 4
+  ) {
     throw new Error('The renderer initialized with a non-WebGPU backend.');
   }
   return true;
 }
 
 export function isRendererAvailable() {
-  return !rendererStopped
-    && renderer.backend?.isWebGPUBackend === true
-    && renderer.backend.compatibilityMode === false
-    && renderer.samples === 4;
+  return (
+    !rendererStopped &&
+    renderer.backend?.isWebGPUBackend === true &&
+    renderer.backend.compatibilityMode === false &&
+    renderer.samples === 4
+  );
 }
 
-renderer.onDeviceLost = info => {
-  failRenderer(t('renderer.deviceLost', {
-    detail: info?.message || 'unknown reason',
-  }));
+renderer.onDeviceLost = (info) => {
+  failRenderer(
+    t('renderer.deviceLost', {
+      detail: info?.message || 'unknown reason',
+    }),
+  );
 };
-renderer.onError = info => {
-  failRenderer(t('renderer.unrecoverable', {
-    detail: info?.message || 'unknown error',
-  }));
+renderer.onError = (info) => {
+  failRenderer(
+    t('renderer.unrecoverable', {
+      detail: info?.message || 'unknown error',
+    }),
+  );
 };
 
 export const scene = new THREE.Scene();
@@ -123,8 +124,7 @@ scene.add(keyLight, keyLight.target);
 const grid = new THREE.GridHelper(4, 20, 0x21262d, 0x161b22);
 scene.add(grid);
 
-export const camera = new THREE.PerspectiveCamera(
-  45, container.clientWidth / container.clientHeight, 0.001, 1000);
+export const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.001, 1000);
 camera.position.set(0, 1, 3);
 
 export const controls = new ArcballControls(camera, renderer.domElement, scene);
@@ -140,8 +140,7 @@ const physicsDragController = createPhysicsDragController({
   canvas: renderer.domElement,
   camera,
   controls,
-  onMotion: detail => window.dispatchEvent(new CustomEvent(
-    'mod-viewer-virtual-model-motion', {detail})),
+  onMotion: (detail) => window.dispatchEvent(new CustomEvent('mod-viewer-virtual-model-motion', { detail })),
   requestRender,
 });
 
@@ -158,25 +157,36 @@ const environmentController = createEnvironmentController({
   onVisualChange: requestRender,
 });
 const keyLightController = createKeyLightController({
-  scene, camera, renderer, controls, light: keyLight, onChange: requestRender,
+  scene,
+  camera,
+  renderer,
+  controls,
+  light: keyLight,
+  onChange: requestRender,
 });
 const characterShadowController = createCharacterShadowController({
-  renderer, scene, light: keyLight,
+  renderer,
+  scene,
+  light: keyLight,
 });
 const viewportRenderPipeline = createViewportRenderPipeline({
-  renderer, scene, camera,
+  renderer,
+  scene,
+  camera,
 });
-setCharacterShadowMapInvalidator(({request = true} = {}) => {
+setCharacterShadowMapInvalidator(({ request = true } = {}) => {
   characterShadowController.invalidateMap();
   if (request) requestRender();
 });
-setCharacterShadowGeometryInvalidator(({request = true} = {}) => {
+setCharacterShadowGeometryInvalidator(({ request = true } = {}) => {
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
   if (request) requestRender();
 });
 const viewGizmoController = createViewGizmoController({
-  camera, controls, element: document.getElementById('view-gizmo'),
+  camera,
+  controls,
+  element: document.getElementById('view-gizmo'),
   onChange: requestRender,
 });
 const cameraFrame = createCameraFrame({
@@ -186,11 +196,13 @@ const cameraFrame = createCameraFrame({
   grid,
   cancelViewSnap: viewGizmoController.cancelSnap,
   onModelFit: keyLightController.rebase,
-  onOrientationChanged: detail => {
+  onOrientationChanged: (detail) => {
     if (typeof window === 'undefined') return;
-    window.dispatchEvent(new CustomEvent('mod-viewer-model-orientation-changed', {
-      detail,
-    }));
+    window.dispatchEvent(
+      new CustomEvent('mod-viewer-model-orientation-changed', {
+        detail,
+      }),
+    );
   },
 });
 
@@ -208,8 +220,7 @@ function renderFrame() {
   characterShadowController.update();
   cameraFrame.updateViewport();
   cameraFrame.updateClipping();
-  updateOutlineProjectionScale(
-    camera, controls.target, renderer.domElement.clientHeight);
+  updateOutlineProjectionScale(camera, controls.target, renderer.domElement.clientHeight);
   viewGizmoController.updateAxes();
   viewportRenderPipeline.render();
   renderCount += 1;
@@ -226,17 +237,13 @@ export const rendererReady = initializeRenderer()
     }
     requestRender();
     openButton.disabled = !isRendererAvailable();
-    void environmentController.prepare()
-      .catch(error => {
-        // Optional IBL must not make renderer startup unusable.
-        console.debug(
-          'Environment preparation failed; using baseline lighting.',
-          error,
-        );
-      });
+    void environmentController.prepare().catch((error) => {
+      // Optional IBL must not make renderer startup unusable.
+      console.debug('Environment preparation failed; using baseline lighting.', error);
+    });
     return true;
   })
-  .catch(error => {
+  .catch((error) => {
     showRendererError(rendererFailureMessage(error));
     return false;
   });
@@ -290,8 +297,7 @@ export function resetView() {
   resetOutlineProjectionReference(camera, controls.target);
   characterShadowController.invalidateGeometry();
   viewportRenderPipeline.invalidateGeometry();
-  notifyModelTransformChanged(
-    restoredMeshes, 'reset-view', reset?.translationDeltaWorld || null);
+  notifyModelTransformChanged(restoredMeshes, 'reset-view', reset?.translationDeltaWorld || null);
   requestRender();
 }
 
@@ -301,8 +307,11 @@ export function getModelTransformState() {
 
 function translationArray(delta) {
   if (!delta) return null;
-  const values = delta.isVector3 ? [delta.x, delta.y, delta.z]
-    : Array.isArray(delta) ? delta : [delta.x, delta.y, delta.z];
+  const values = delta.isVector3
+    ? [delta.x, delta.y, delta.z]
+    : Array.isArray(delta)
+      ? delta
+      : [delta.x, delta.y, delta.z];
   if (values.length < 3) return null;
   const normalized = values.slice(0, 3).map(Number);
   return normalized.every(Number.isFinite) ? normalized : null;
@@ -310,7 +319,7 @@ function translationArray(delta) {
 
 function kinematicsPayload(kinematics) {
   const velocity = translationArray(kinematics?.linearVelocityWorld);
-  return velocity ? {linearVelocityWorld: velocity} : null;
+  return velocity ? { linearVelocityWorld: velocity } : null;
 }
 
 function modelTransformPayload(value) {
@@ -321,22 +330,23 @@ function modelTransformPayload(value) {
   const orientationValues = orientation.isQuaternion
     ? [orientation.x, orientation.y, orientation.z, orientation.w]
     : orientation;
-  const translationValues = translation.isVector3
-    ? [translation.x, translation.y, translation.z] : translation;
+  const translationValues = translation.isVector3 ? [translation.x, translation.y, translation.z] : translation;
   const normalizedOrientation = orientationValues?.slice?.(0, 4).map(Number);
   const normalizedTranslation = translationValues?.slice?.(0, 3).map(Number);
-  if (normalizedOrientation?.length !== 4
-      || !normalizedOrientation.every(Number.isFinite)
-      || normalizedTranslation?.length !== 3
-      || !normalizedTranslation.every(Number.isFinite)) return null;
+  if (
+    normalizedOrientation?.length !== 4 ||
+    !normalizedOrientation.every(Number.isFinite) ||
+    normalizedTranslation?.length !== 3 ||
+    !normalizedTranslation.every(Number.isFinite)
+  )
+    return null;
   return {
     orientation: normalizedOrientation,
     translation: normalizedTranslation,
   };
 }
 
-function notifyModelTransformChanged(
-    meshes, reason, translationDeltaWorld = null, kinematics = null) {
+function notifyModelTransformChanged(meshes, reason, translationDeltaWorld = null, kinematics = null) {
   if (!meshes?.length || typeof window === 'undefined') return;
   const detail = {
     meshes,
@@ -346,9 +356,11 @@ function notifyModelTransformChanged(
   };
   const normalizedKinematics = kinematicsPayload(kinematics);
   if (normalizedKinematics) detail.kinematics = normalizedKinematics;
-  window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed', {
-    detail,
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-model-transform-changed', {
+      detail,
+    }),
+  );
 }
 
 export function translateModel(meshes = [], delta, options = {}) {
@@ -356,14 +368,13 @@ export function translateModel(meshes = [], delta, options = {}) {
   const deltaWorld = translationArray(delta);
   const kinematics = kinematicsPayload(options?.kinematics);
   const eventMeshes = changedMeshes.length ? changedMeshes : meshes;
-  if (!deltaWorld || !Array.isArray(eventMeshes) || !eventMeshes.length
-      || (!changedMeshes.length && !kinematics)) return [];
+  if (!deltaWorld || !Array.isArray(eventMeshes) || !eventMeshes.length || (!changedMeshes.length && !kinematics))
+    return [];
   if (changedMeshes.length) {
     characterShadowController.invalidateGeometry();
     viewportRenderPipeline.invalidateGeometry();
   }
-  notifyModelTransformChanged(
-    eventMeshes, 'translate', deltaWorld, kinematics);
+  notifyModelTransformChanged(eventMeshes, 'translate', deltaWorld, kinematics);
   requestRender();
   return changedMeshes;
 }

@@ -1,13 +1,19 @@
 // Primary humanoid pose session. The control rig is the only IK driver;
 // ModelJoint rotations remain a separate manual pose layer.
 
-import {RIG_LIMB_ROLES} from './weight-runtime.js';
-import {
-  HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES,
-} from './humanoid-control-rig.js';
+import { RIG_LIMB_ROLES } from './weight-runtime.js';
+import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from './humanoid-control-rig.js';
 
-export function createHumanoidPoseRuntime({modelRigState, getModelRig, getPrimaryLimb,
-    solveControlIk, mergeLimbPose, applyPose, notifyChanged, requestRender} = {}) {
+export function createHumanoidPoseRuntime({
+  modelRigState,
+  getModelRig,
+  getPrimaryLimb,
+  solveControlIk,
+  mergeLimbPose,
+  applyPose,
+  notifyChanged,
+  requestRender,
+} = {}) {
   function setActiveLimbRole(role) {
     const next = RIG_LIMB_ROLES.includes(role) ? role : null;
     if (!next || modelRigState.activeLimbRole === next) return next || false;
@@ -19,8 +25,7 @@ export function createHumanoidPoseRuntime({modelRigState, getModelRig, getPrimar
 
   function setIkEnabled(enabled) {
     const wasEnabled = modelRigState.ikEnabled === true;
-    const validationRole = enabled && !wasEnabled
-      ? 'left_arm' : modelRigState.activeLimbRole;
+    const validationRole = enabled && !wasEnabled ? 'left_arm' : modelRigState.activeLimbRole;
     const primary = getPrimaryLimb(validationRole);
     if (enabled && !primary.available) {
       modelRigState.ikEnabled = false;
@@ -41,11 +46,10 @@ export function createHumanoidPoseRuntime({modelRigState, getModelRig, getPrimar
   }
 
   function selectControl(controlKey) {
-    if (!modelRigState.ikEnabled
-        || !HUMANOID_CONTROL_KEYS.includes(controlKey)) return false;
+    if (!modelRigState.ikEnabled || !HUMANOID_CONTROL_KEYS.includes(controlKey)) return false;
     const role = HUMANOID_CONTROL_LIMB_ROLES[controlKey] || null;
-    const changed = modelRigState.selectedHumanoidControlKey !== controlKey
-      || (role && modelRigState.activeLimbRole !== role);
+    const changed =
+      modelRigState.selectedHumanoidControlKey !== controlKey || (role && modelRigState.activeLimbRole !== role);
     modelRigState.selectedHumanoidControlKey = controlKey;
     if (role) modelRigState.activeLimbRole = role;
     if (changed) {
@@ -58,8 +62,7 @@ export function createHumanoidPoseRuntime({modelRigState, getModelRig, getPrimar
   function solveTarget(target, options = {}) {
     const rig = getModelRig();
     const primary = getPrimaryLimb();
-    if (!rig?.humanoidControlRig?.accepted || !modelRigState.ikEnabled
-        || !primary.available) return false;
+    if (!rig?.humanoidControlRig?.accepted || !modelRigState.ikEnabled || !primary.available) return false;
     const previousPose = modelRigState.humanoidPose || {};
     const solved = solveControlIk({
       controlRig: rig.humanoidControlRig,
@@ -69,12 +72,11 @@ export function createHumanoidPoseRuntime({modelRigState, getModelRig, getPrimar
       bendSign: primary.bendSign,
     });
     if (!solved.positions) return solved;
-    modelRigState.humanoidPose = mergeLimbPose(
-      previousPose, solved.positions, primary.keys);
-    const applied = applyPose({dragging: options?.dragging === true});
+    modelRigState.humanoidPose = mergeLimbPose(previousPose, solved.positions, primary.keys);
+    const applied = applyPose({ dragging: options?.dragging === true });
     if (!options?.dragging) notifyChanged();
-    return {...solved, applied, controlRig: 'humanoid'};
+    return { ...solved, applied, controlRig: 'humanoid' };
   }
 
-  return {setActiveLimbRole, setIkEnabled, selectControl, solveTarget};
+  return { setActiveLimbRole, setIkEnabled, selectControl, solveTarget };
 }

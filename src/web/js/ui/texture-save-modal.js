@@ -4,7 +4,7 @@ import { bindModalDismiss, setModalError } from './modal-shell.js';
 import { createTextureSaveSession } from '../mesh/texture-save-session.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 const backdrop = $('texture-bake-modal-backdrop');
 const body = $('texture-bake-body');
 const error = $('texture-bake-error');
@@ -23,10 +23,12 @@ const saveStageLabels = {
 };
 
 function displayNameForTarget(target) {
-  return target?.mesh?.userData?.displayName
-    || target?.mesh?.userData?.semanticKey
-    || target?.semanticKey
-    || t('weightRig.mesh');
+  return (
+    target?.mesh?.userData?.displayName ||
+    target?.mesh?.userData?.semanticKey ||
+    target?.semanticKey ||
+    t('weightRig.mesh')
+  );
 }
 
 function closeTextureSaveModal() {
@@ -34,8 +36,7 @@ function closeTextureSaveModal() {
   backdrop?.classList.remove('show');
 }
 
-function setSaveAction({visible = false, disabled = true,
-                        label = t('common.save')} = {}) {
+function setSaveAction({ visible = false, disabled = true, label = t('common.save') } = {}) {
   if (!saveButton) return;
   saveButton.hidden = !visible;
   saveButton.disabled = disabled;
@@ -56,7 +57,7 @@ function textureFileForKey(key) {
 }
 
 function renderSavePrompt(state) {
-  currentView = {kind: 'prompt', state};
+  currentView = { kind: 'prompt', state };
   setModalError(error, '');
   saveProgressElements = null;
   body.replaceChildren();
@@ -76,7 +77,7 @@ function renderSavePrompt(state) {
   body.appendChild(label);
   const targets = document.createElement('ul');
   targets.className = 'texture-bake-targets';
-  (state?.targets || []).forEach(target => {
+  (state?.targets || []).forEach((target) => {
     const item = document.createElement('li');
     item.textContent = displayNameForTarget(target);
     targets.appendChild(item);
@@ -87,7 +88,7 @@ function renderSavePrompt(state) {
   note.className = 'texture-bake-summary';
   note.textContent = t('texture.backupNotice');
   body.appendChild(note);
-  setSaveAction({visible: true, disabled: !(state?.targets?.length)});
+  setSaveAction({ visible: true, disabled: !state?.targets?.length });
 }
 
 function formatSaveError(result) {
@@ -105,9 +106,7 @@ function formatSaveError(result) {
     texture_validation_failed: 'texture.reason.validationFailed',
   };
   const code = result?.error_code ?? result?.code;
-  const message = (errorKeys[code] ? t(errorKeys[code]) : '')
-    || result?.error
-    || t('texture.saveFailed');
+  const message = (errorKeys[code] ? t(errorKeys[code]) : '') || result?.error || t('texture.saveFailed');
   const details = result?.details;
   const meshes = Array.isArray(details?.meshes) ? details.meshes : [];
   if (!meshes.length) return message;
@@ -117,7 +116,7 @@ function formatSaveError(result) {
 }
 
 function renderSaveError(result) {
-  currentView = {kind: 'error', result};
+  currentView = { kind: 'error', result };
   saveProgressElements = null;
   body.replaceChildren();
   setModalError(error, formatSaveError(result));
@@ -125,7 +124,7 @@ function renderSaveError(result) {
 }
 
 function renderSaveSuccess(result, targetCount) {
-  currentView = {kind: 'success', result, targetCount};
+  currentView = { kind: 'success', result, targetCount };
   setModalError(error, '');
   saveProgressElements = null;
   body.replaceChildren();
@@ -139,16 +138,12 @@ function renderSaveSuccess(result, targetCount) {
   body.appendChild(file);
   const summary = document.createElement('p');
   summary.className = 'texture-bake-summary';
-  const count = Array.isArray(result.saved_meshes)
-    ? result.saved_meshes.length : targetCount;
-  summary.textContent = t(
-    count === 1 ? 'texture.colorSavedOne' : 'texture.colorSavedMany',
-    {count});
+  const count = Array.isArray(result.saved_meshes) ? result.saved_meshes.length : targetCount;
+  summary.textContent = t(count === 1 ? 'texture.colorSavedOne' : 'texture.colorSavedMany', { count });
   body.appendChild(summary);
   const rows = document.createElement('dl');
   rows.className = 'texture-bake-details';
-  addDetail(rows, t('texture.backupLabel'),
-    result.backup?.file || t('texture.created'));
+  addDetail(rows, t('texture.backupLabel'), result.backup?.file || t('texture.created'));
   body.appendChild(rows);
   if (result.warning === 'color_state_reset_failed') {
     const warning = document.createElement('p');
@@ -159,8 +154,8 @@ function renderSaveSuccess(result, targetCount) {
   setSaveAction();
 }
 
-function renderSaveProgress(detail = {stage: 'preparing'}) {
-  currentView = {...currentView, kind: 'progress', detail};
+function renderSaveProgress(detail = { stage: 'preparing' }) {
+  currentView = { ...currentView, kind: 'progress', detail };
   if (!saveProgressElements) {
     body.replaceChildren();
     const view = document.createElement('div');
@@ -182,34 +177,40 @@ function renderSaveProgress(detail = {stage: 'preparing'}) {
     view.append(heading, status, progress, progressDetail);
     body.appendChild(view);
     saveProgressElements = {
-      status, progress, progressDetail, stage: null,
+      status,
+      progress,
+      progressDetail,
+      stage: null,
     };
   }
 
-  const stage = typeof detail?.stage === 'string'
-    ? detail.stage : 'preparing';
+  const stage = typeof detail?.stage === 'string' ? detail.stage : 'preparing';
   const label = t(saveStageLabels[stage] || 'texture.saveStage.saving');
   saveProgressElements.status.textContent = label;
   saveProgressElements.stage = stage;
   const completed = Number(detail?.completed_blocks);
   const total = Number(detail?.total_blocks);
-  if (stage === 'processing' && Number.isFinite(completed)
-      && Number.isFinite(total) && total > 0) {
+  if (stage === 'processing' && Number.isFinite(completed) && Number.isFinite(total) && total > 0) {
     const boundedCompleted = Math.max(0, Math.min(completed, total));
-    saveProgressElements.progress.value = boundedCompleted / total * 100;
+    saveProgressElements.progress.value = (boundedCompleted / total) * 100;
     saveProgressElements.progress.setAttribute(
-      'aria-valuetext', t('texture.blocks', {
-        completed: boundedCompleted, total,
-      }));
+      'aria-valuetext',
+      t('texture.blocks', {
+        completed: boundedCompleted,
+        total,
+      }),
+    );
     const mip = Number(detail?.mip);
     const mipCount = Number(detail?.mip_count);
-    const mipLabel = mipCount > 1 && Number.isInteger(mip)
-      ? `Mip ${mip + 1} of ${mipCount} · ` : '';
+    const mipLabel = mipCount > 1 && Number.isInteger(mip) ? `Mip ${mip + 1} of ${mipCount} · ` : '';
     saveProgressElements.progressDetail.textContent = mipLabel
       ? t('texture.mipBlocks', {
-        mip: mip + 1, mips: mipCount, completed: boundedCompleted, total,
-      })
-      : t('texture.blocks', {completed: boundedCompleted, total});
+          mip: mip + 1,
+          mips: mipCount,
+          completed: boundedCompleted,
+          total,
+        })
+      : t('texture.blocks', { completed: boundedCompleted, total });
   } else {
     saveProgressElements.progress.removeAttribute('value');
     saveProgressElements.progress.removeAttribute('aria-valuetext');
@@ -221,21 +222,21 @@ const textureSaveSession = createTextureSaveSession({
   onError: renderSaveError,
   onProgress: renderSaveProgress,
   onPrompt: renderSavePrompt,
-  onRefreshing: () => renderSaveProgress({stage: 'refreshing'}),
+  onRefreshing: () => renderSaveProgress({ stage: 'refreshing' }),
   onSuccess: renderSaveSuccess,
   onClose: closeTextureSaveModal,
 });
 
 /** Open the Save to Texture modal without performing a backend preflight. */
-export function openTextureSaveModal(mesh, {isCurrent} = {}) {
+export function openTextureSaveModal(mesh, { isCurrent } = {}) {
   if (!backdrop || !body) return null;
-  const state = textureSaveSession.open(mesh, {isCurrent});
+  const state = textureSaveSession.open(mesh, { isCurrent });
   backdrop.classList.add('show');
   if (state.texKey && state.targets.length) {
     renderSavePrompt(state);
   } else {
     body.replaceChildren();
-    currentView = {kind: 'empty'};
+    currentView = { kind: 'empty' };
     setSaveAction();
     setModalError(error, t('texture.noChangedMeshes'));
   }
@@ -254,15 +255,12 @@ bindModalDismiss({
 });
 
 window.addEventListener('mod-viewer-mesh-selected', () => {
-  if (backdrop?.classList.contains('show')
-      && !textureSaveSession.isSaving()) {
+  if (backdrop?.classList.contains('show') && !textureSaveSession.isSaving()) {
     closeTextureSaveModal();
   }
 });
 
-window.addEventListener(
-  'mod-viewer-texture-save-progress', event =>
-    textureSaveSession.handleProgress(event));
+window.addEventListener('mod-viewer-texture-save-progress', (event) => textureSaveSession.handleProgress(event));
 
 window.addEventListener(LANGUAGE_CHANGED, () => {
   if (!backdrop?.classList.contains('show') || !currentView) return;

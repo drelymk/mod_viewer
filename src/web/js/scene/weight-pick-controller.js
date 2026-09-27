@@ -6,7 +6,13 @@ const LEFT_BUTTON = 0;
 const DRAG_THRESHOLD_PIXELS = 5;
 
 export function createWeightPickController({
-  canvas, controls, camera, getMeshes, onPick, onStateChanged, requestRender,
+  canvas,
+  controls,
+  camera,
+  getMeshes,
+  onPick,
+  onStateChanged,
+  requestRender,
 } = {}) {
   let enabled = false;
   let pointer = null;
@@ -16,15 +22,19 @@ export function createWeightPickController({
     if (canvas?.style) canvas.style.cursor = '';
   }
 
-  function finish(intersection, {cancelled = false} = {}) {
+  function finish(intersection, { cancelled = false } = {}) {
     const current = pointer;
     pointer = null;
     enabled = false;
     if (current?.id !== undefined && canvas?.hasPointerCapture?.(current.id)) {
-      try { canvas.releasePointerCapture(current.id); } catch { /* best effort */ }
+      try {
+        canvas.releasePointerCapture(current.id);
+      } catch {
+        /* best effort */
+      }
     }
     restoreControls();
-    onStateChanged?.(false, {cancelled});
+    onStateChanged?.(false, { cancelled });
     if (!cancelled) onPick?.(intersection || null);
     requestRender?.();
   }
@@ -35,14 +45,14 @@ export function createWeightPickController({
     pointer = null;
     controls?.unsetMouseAction?.(LEFT_BUTTON);
     if (canvas?.style) canvas.style.cursor = 'crosshair';
-    onStateChanged?.(true, {cancelled: false});
+    onStateChanged?.(true, { cancelled: false });
     requestRender?.();
     return true;
   }
 
   function cancel() {
     if (!enabled) return false;
-    finish(null, {cancelled: true});
+    finish(null, { cancelled: true });
     return true;
   }
 
@@ -55,28 +65,30 @@ export function createWeightPickController({
       startX: event.clientX,
       startY: event.clientY,
     };
-    try { canvas.setPointerCapture?.(event.pointerId); } catch { /* best effort */ }
+    try {
+      canvas.setPointerCapture?.(event.pointerId);
+    } catch {
+      /* best effort */
+    }
   }
 
   function pointerMove(event) {
     if (!enabled || !pointer || event.pointerId !== pointer.id) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (Math.hypot(
-      event.clientX - pointer.startX, event.clientY - pointer.startY)
-      > DRAG_THRESHOLD_PIXELS) pointer.moved = true;
+    if (Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) > DRAG_THRESHOLD_PIXELS)
+      pointer.moved = true;
   }
 
   function pointerUp(event) {
-    if (!enabled || !pointer || event.button !== LEFT_BUTTON
-        || event.pointerId !== pointer.id) return;
+    if (!enabled || !pointer || event.button !== LEFT_BUTTON || event.pointerId !== pointer.id) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    const moved = pointer.moved || Math.hypot(
-      event.clientX - pointer.startX, event.clientY - pointer.startY)
-      > DRAG_THRESHOLD_PIXELS;
+    const moved =
+      pointer.moved ||
+      Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) > DRAG_THRESHOLD_PIXELS;
     if (moved) {
-      finish(null, {cancelled: true});
+      finish(null, { cancelled: true });
       return;
     }
     const intersection = raycastModelAtClientPoint({
@@ -90,11 +102,10 @@ export function createWeightPickController({
   }
 
   function pointerCancel(event) {
-    if (!enabled || !pointer || (event.pointerId !== undefined
-        && event.pointerId !== pointer.id)) return;
+    if (!enabled || !pointer || (event.pointerId !== undefined && event.pointerId !== pointer.id)) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    finish(null, {cancelled: true});
+    finish(null, { cancelled: true });
   }
 
   function keyDown(event) {
@@ -119,7 +130,7 @@ export function createWeightPickController({
     cancel,
     isEnabled: () => enabled,
     dispose() {
-      if (enabled) finish(null, {cancelled: true});
+      if (enabled) finish(null, { cancelled: true });
       canvas?.removeEventListener('pointerdown', pointerDown, true);
       canvas?.removeEventListener('pointermove', pointerMove, true);
       canvas?.removeEventListener('pointerup', pointerUp, true);

@@ -1,17 +1,33 @@
 // Entry point: composes frontend application flows and initializes the UI.
 
 import {
-  camera, controls, renderer, scene,
-  getAmbientOcclusionStrength, getBloomEnabled, getEnvironmentPreset, getRenderCount,
-  isRendererAvailable, rendererReady,
-  resetView, rotateModelHorizontalQuarterTurn, rotateModelQuarterTurn,
-  setAmbientOcclusionStrength, setBloomAvailable, setBloomEnabled,
+  camera,
+  controls,
+  renderer,
+  scene,
+  getAmbientOcclusionStrength,
+  getBloomEnabled,
+  getEnvironmentPreset,
+  getRenderCount,
+  isRendererAvailable,
+  rendererReady,
+  resetView,
+  rotateModelHorizontalQuarterTurn,
+  rotateModelQuarterTurn,
+  setAmbientOcclusionStrength,
+  setBloomAvailable,
+  setBloomEnabled,
   setBloomSuppressedByDebug,
-  toggleGrid, toggleTrackballGizmo,
+  toggleGrid,
+  toggleTrackballGizmo,
 } from './scene/scene.js';
 import {
-  activeMeshes, resetMeshState,
-  toggleGlossy, toggleSmoothShading, toggleToonShading, toggleWireframe,
+  activeMeshes,
+  resetMeshState,
+  toggleGlossy,
+  toggleSmoothShading,
+  toggleToonShading,
+  toggleWireframe,
 } from './mesh/visibility.js';
 import { refreshMeshTexture } from './mesh/mesh-factory.js';
 import { initSelection } from './scene/selection.js';
@@ -22,15 +38,14 @@ import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-prof
 import { requestRender } from './scene/render-scheduler.js';
 import { initInspectorPanel } from './panels/inspector-panel.js';
 import { initRightDock } from './panels/right-dock.js';
-import {
-  getLoadedWeightRigFeature, loadWeightRigFeature,
-} from './mesh/weight-rig-feature.js';
+import { getLoadedWeightRigFeature, loadWeightRigFeature } from './mesh/weight-rig-feature.js';
 import { initLanguageControl, initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
 import { LANGUAGE_CHANGED, t } from './i18n/index.js';
 import {
   getOutlineState as getMeshOutlineState,
-  setOutlineSuppressedByDebug, setOutlinesEnabled,
+  setOutlineSuppressedByDebug,
+  setOutlinesEnabled,
 } from './scene/outline-renderer.js';
 import {
   displayMeshPayload as displayMeshPayloadFlow,
@@ -52,9 +67,7 @@ import {
 } from './app/semantic-refresh.js';
 import { viewerState } from './app/state.js';
 import { getLoadBenchmark } from './app/load-benchmark.js';
-import {
-  initEnvironmentControl, initToolPopovers, initToolbarOverflow,
-} from './ui/toolbar.js';
+import { initEnvironmentControl, initToolPopovers, initToolbarOverflow } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
 
 const $ = (id) => document.getElementById(id);
@@ -66,7 +79,9 @@ function initializeWeightRigOverlay(feature) {
   if (rigOverlayController) return;
   const runtime = feature;
   rigOverlayController = feature.createRigOverlayController({
-    scene, camera, canvas: renderer.domElement,
+    scene,
+    camera,
+    canvas: renderer.domElement,
     arcballControls: controls,
     getMeshes: () => activeMeshes,
     getRigState: runtime.getModelRigState,
@@ -83,8 +98,8 @@ function initializeWeightRigOverlay(feature) {
     updateHumanoidControlDraft: runtime.updateHumanoidControlDraft,
     finishHumanoidControlCarry: runtime.finishHumanoidControlCarry,
     cancelHumanoidControlCarry: runtime.cancelHumanoidControlCarry,
-    onTransformControlsUnavailable: () => runtime.setRigPoseControlStatus(
-      runtime.weightRigStatus('weightRig.status.poseGizmoUnavailable')),
+    onTransformControlsUnavailable: () =>
+      runtime.setRigPoseControlStatus(runtime.weightRigStatus('weightRig.status.poseGizmoUnavailable')),
     requestRender,
   });
 }
@@ -97,17 +112,19 @@ function activateWeightRig() {
     weightRigActivationPromise = Promise.resolve(loadedFeature);
     return weightRigActivationPromise;
   }
-  weightRigActivationPromise = loadWeightRigFeature().then(feature => {
+  weightRigActivationPromise = loadWeightRigFeature().then((feature) => {
     initializeWeightRigOverlay(feature);
-    window.dispatchEvent(new CustomEvent('mod-viewer-right-dock-tab-changed', {
-      detail: {tab: 'weight-rig', open: true},
-    }));
+    window.dispatchEvent(
+      new CustomEvent('mod-viewer-right-dock-tab-changed', {
+        detail: { tab: 'weight-rig', open: true },
+      }),
+    );
     return feature;
   });
   return weightRigActivationPromise;
 }
 
-window.addEventListener('mod-viewer-right-dock-tab-changed', event => {
+window.addEventListener('mod-viewer-right-dock-tab-changed', (event) => {
   if (event.detail?.tab === 'weight-rig' && event.detail?.open) {
     void activateWeightRig();
   }
@@ -135,9 +152,17 @@ async function handlePresentChange(change = {}) {
   // PRESENT authoring can insert or remove lines in every participating INI,
   // shifting draw provenance just like toggle Add/Edit. Refresh the combined
   // geometry-free semantics once while keeping the existing rendered meshes.
-  if (['add-key', 'complete-key', 'edit-key', 'delete-key',
-       'new-position', 'update-position', 'delete-position']
-      .includes(change.type)) {
+  if (
+    [
+      'add-key',
+      'complete-key',
+      'edit-key',
+      'delete-key',
+      'new-position',
+      'update-position',
+      'delete-position',
+    ].includes(change.type)
+  ) {
     return refreshSemanticStateFlow(semanticHandlers(), change);
   }
   return refreshPresentStateFlow(change, semanticHandlers());
@@ -151,8 +176,7 @@ async function handleToggleChange(change = {}) {
     // patching is not safe here; rebuild from the authoritative session.
     return reloadCurrentMod();
   }
-  if (change.type === 'add' || change.type === 'edit'
-      || change.type === 'record') {
+  if (change.type === 'add' || change.type === 'edit' || change.type === 'record') {
     return refreshSemanticStateFlow(semanticHandlers());
   }
   return refreshControlSemanticsFlow(semanticHandlers());
@@ -187,22 +211,22 @@ function initOpenModMenu() {
     trigger.setAttribute('aria-expanded', 'true');
   };
 
-  trigger.addEventListener('click', event => {
+  trigger.addEventListener('click', (event) => {
     event.stopPropagation();
     if (menu.hidden) open();
     else close();
   });
-  menu.addEventListener('click', event => {
+  menu.addEventListener('click', (event) => {
     const choice = event.target.closest('[data-open-source]');
     if (!choice) return;
     close();
     if (choice.dataset.openSource === 'archive') void openArchiveMod();
     else void openMod();
   });
-  document.addEventListener('click', event => {
+  document.addEventListener('click', (event) => {
     if (!event.target.closest('#open-mod-control, #open-mod-menu')) close();
   });
-  document.addEventListener('keydown', event => {
+  document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') close();
   });
 }
@@ -219,14 +243,16 @@ async function openStartupMod() {
   try {
     request = await consume.call(window.pywebview.api);
   } catch (error) {
-    await alertDialog(t('errors.startupMod', {
-      detail: error?.message || String(error),
-    }));
+    await alertDialog(
+      t('errors.startupMod', {
+        detail: error?.message || String(error),
+      }),
+    );
     return true;
   }
   if (!request) return true;
   if (request.error) {
-    await alertDialog(t('errors.startupMod', {detail: request.error}));
+    await alertDialog(t('errors.startupMod', { detail: request.error }));
     return true;
   }
 
@@ -251,13 +277,15 @@ function exportChanges() {
 }
 
 function hasEmissionCapability() {
-  return activeMeshes.some(mesh => {
+  return activeMeshes.some((mesh) => {
     const game = mesh.material?.userData?.gameMaterial;
     if (game?.profile?.emission_source !== 'emission_map_rgb') return false;
-    return !!mesh.userData.emissionMapKey
-      || !!mesh.userData.defaultEmissionMapKey
-      || !!mesh.userData.resolvedEmissionMapKey
-      || (mesh.userData.emissionMapVariants?.length ?? 0) > 0;
+    return (
+      !!mesh.userData.emissionMapKey ||
+      !!mesh.userData.defaultEmissionMapKey ||
+      !!mesh.userData.resolvedEmissionMapKey ||
+      (mesh.userData.emissionMapVariants?.length ?? 0) > 0
+    );
   });
 }
 
@@ -272,7 +300,7 @@ function syncBloomControl() {
   button.classList.toggle('active', enabled);
   button.setAttribute('aria-pressed', String(enabled));
   const label = available
-    ? t('render.emissionBloom', {state: enabled ? t('common.on') : t('common.off')})
+    ? t('render.emissionBloom', { state: enabled ? t('common.on') : t('common.off') })
     : t('render.bloomUnavailable');
   button.title = label;
   button.setAttribute('aria-label', label);
@@ -284,13 +312,13 @@ initPanelOpacityControl();
 initLanguageControl();
 initOpenModMenu();
 
-rendererReady.then(ready => {
+rendererReady.then((ready) => {
   if (!ready || !isRendererAvailable()) return;
 
   $('open-btn').addEventListener('click', openMod);
   $('open-menu-btn').disabled = false;
   $('export-btn').addEventListener('click', exportChanges);
-  $('asset-fill-btn').addEventListener('click', event => {
+  $('asset-fill-btn').addEventListener('click', (event) => {
     event.stopPropagation();
     void toggleMissingAssetParts();
   });
@@ -321,8 +349,7 @@ rendererReady.then(ready => {
     const outlineButton = $('outline-btn');
     if (outlineButton) {
       const label = t('render.outlines', {
-        state: outlineButton.getAttribute('aria-pressed') === 'true'
-          ? t('common.on') : t('common.off'),
+        state: outlineButton.getAttribute('aria-pressed') === 'true' ? t('common.on') : t('common.off'),
       });
       outlineButton.title = label;
       outlineButton.setAttribute('aria-label', label);
@@ -330,21 +357,22 @@ rendererReady.then(ready => {
     const gridButton = $('grid-btn');
     if (gridButton) {
       const label = t('render.grid', {
-        state: gridButton.getAttribute('aria-pressed') === 'true'
-          ? t('common.on') : t('common.off'),
+        state: gridButton.getAttribute('aria-pressed') === 'true' ? t('common.on') : t('common.off'),
       });
       gridButton.title = label;
       gridButton.setAttribute('aria-label', label);
     }
   });
   for (const eventName of [
-    'mod-viewer-mod-load-started', 'mod-viewer-mod-loaded',
-    'mod-viewer-asset-load-started', 'mod-viewer-asset-loaded',
+    'mod-viewer-mod-load-started',
+    'mod-viewer-mod-loaded',
+    'mod-viewer-asset-load-started',
+    'mod-viewer-asset-loaded',
     'mod-viewer-mesh-state-changed',
   ]) {
     window.addEventListener(eventName, syncBloomControl);
   }
-  $('reset-state-btn').addEventListener('click', event => {
+  $('reset-state-btn').addEventListener('click', (event) => {
     event.stopPropagation();
     resetMeshState();
   });
@@ -368,15 +396,13 @@ rendererReady.then(ready => {
   initPanelCollapse($('menu-panel'), 'menu-list');
   const emptyFolderAction = $('empty-add-folder-btn');
   let hasModFolders = false;
-  const updateEmptyFolderAction = hasFolders => {
+  const updateEmptyFolderAction = (hasFolders) => {
     hasModFolders = !!hasFolders;
-    emptyFolderAction.textContent = hasModFolders
-      ? t('empty.openModFolder') : t('empty.addModFolder');
+    emptyFolderAction.textContent = hasModFolders ? t('empty.openModFolder') : t('empty.addModFolder');
     emptyFolderAction.setAttribute('aria-label', emptyFolderAction.textContent);
   };
   updateEmptyFolderAction(false);
-  window.addEventListener(LANGUAGE_CHANGED, () =>
-    updateEmptyFolderAction(hasModFolders));
+  window.addEventListener(LANGUAGE_CHANGED, () => updateEmptyFolderAction(hasModFolders));
   const modFolderPanel = initModFolderPanel({
     switchMod,
     onRegistryChanged: updateEmptyFolderAction,
@@ -419,8 +445,7 @@ rendererReady.then(ready => {
       shadowMaskBound: !!game?.bindings?.light_map?.enabledNode?.value,
       normalSource: game?.normalSource || 'normal_map',
       normalPacking: game?.normalPacking || 'rgb',
-      normalSourceBound: !!game?.bindings?.[game?.normalSource || 'normal_map']
-        ?.enabledNode?.value,
+      normalSourceBound: !!game?.bindings?.[game?.normalSource || 'normal_map']?.enabledNode?.value,
       normalDataBound: !!game?.bindings?.normal_data?.enabledNode?.value,
       lightMapBound: !!game?.bindings?.light_map?.enabledNode?.value,
       materialMapBound: !!game?.bindings?.material_map?.enabledNode?.value,
@@ -430,7 +455,7 @@ rendererReady.then(ready => {
       debugMode: getMaterialDebugMode(mesh?.material),
     };
   };
-  const setMaterialDebugModeForMeshes = mode => {
+  const setMaterialDebugModeForMeshes = (mode) => {
     const normalized = setMaterialDebugMode(activeMeshes, mode);
     setOutlineSuppressedByDebug(normalized !== 'off');
     setBloomSuppressedByDebug(normalized !== 'off');
@@ -442,7 +467,11 @@ rendererReady.then(ready => {
     return normalized;
   };
   window.modViewer = {
-    displayMeshPayload, openMod, switchMod, switchAsset, reloadCurrentMod,
+    displayMeshPayload,
+    openMod,
+    switchMod,
+    switchAsset,
+    reloadCurrentMod,
     getLoadBenchmark,
     exportChanges,
     refreshPresentState: handlePresentChange,
@@ -453,13 +482,13 @@ rendererReady.then(ready => {
     setEnvironmentPreset: applyEnvironmentPreset,
     getEnvironmentPreset,
     getAmbientOcclusionStrength,
-    setAmbientOcclusionStrength: value => {
+    setAmbientOcclusionStrength: (value) => {
       const changed = setAmbientOcclusionStrength(value);
       syncAmbientOcclusionControl?.();
       return changed;
     },
     getBloomEnabled,
-    setBloomEnabled: value => {
+    setBloomEnabled: (value) => {
       const changed = setBloomEnabled(value);
       syncBloomControl();
       return changed;
@@ -467,7 +496,7 @@ rendererReady.then(ready => {
     getMaterialState,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
-    setOutlineEnabled: value => {
+    setOutlineEnabled: (value) => {
       const enabled = setOutlinesEnabled(value);
       const button = $('outline-btn');
       button.classList.toggle('active', enabled);
@@ -475,14 +504,12 @@ rendererReady.then(ready => {
       button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
       return enabled;
     },
-    getOutlineState: index => getMeshOutlineState(activeMeshes[index]),
-    getCurrentSource: () => viewerState.currentSource
-      ? { ...viewerState.currentSource } : null,
+    getOutlineState: (index) => getMeshOutlineState(activeMeshes[index]),
+    getCurrentSource: () => (viewerState.currentSource ? { ...viewerState.currentSource } : null),
   };
-  void openStartupMod().then(apiReady => {
+  void openStartupMod().then((apiReady) => {
     if (!apiReady) {
-      window.addEventListener(
-        'pywebviewready', () => void openStartupMod(), { once: true });
+      window.addEventListener('pywebviewready', () => void openStartupMod(), { once: true });
     }
   });
 });

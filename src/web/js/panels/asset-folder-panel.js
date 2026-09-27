@@ -5,15 +5,23 @@ import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
 
 function baseName(path) {
-  return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+  return (
+    String(path || '')
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() || ''
+  );
 }
 
 function canonicalPath(path) {
-  return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 function setTextError(element, message) {
@@ -28,8 +36,7 @@ function isAssetMatchingEnabled(entry) {
 function indexSummary(entry) {
   const index = entry?.index || {};
   if (index.status === 'ready') {
-    const skipped = index.skippedCount
-      ? t('folder.skipped', {count: index.skippedCount}) : '';
+    const skipped = index.skippedCount ? t('folder.skipped', { count: index.skippedCount }) : '';
     return t('folder.assetsHashesSkipped', {
       assets: index.assetCount || 0,
       hashes: index.geometryHashCount || 0,
@@ -60,33 +67,35 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
   let selectedPath = null;
   let editorBusy = false;
 
-  typeInput.replaceChildren(...ASSET_TYPES.map(value => {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = value;
-    return option;
-  }));
+  typeInput.replaceChildren(
+    ...ASSET_TYPES.map((value) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      return option;
+    }),
+  );
 
   const tree = createFolderRegistryPanel({
     listElement: list,
     emptyElement: empty,
     errorElement: error,
-    listChildren: path => window.pywebview.api.list_asset_subfolders(path),
-    onRootSelected: path => tree.setActivePath(path),
+    listChildren: (path) => window.pywebview.api.list_asset_subfolders(path),
+    onRootSelected: (path) => tree.setActivePath(path),
     onChildSelected: (path, entry) => {
       if (!entry?.asset) {
         tree.setActivePath(path);
         return;
       }
       if (typeof switchAsset !== 'function') return;
-      void Promise.resolve(switchAsset(path, entry)).then(loaded => {
+      void Promise.resolve(switchAsset(path, entry)).then((loaded) => {
         if (loaded) tree.setActivePath(path);
       });
     },
-    onEdit: entry => openEditor('edit', entry),
-    onDelete: entry => removeFolder(entry),
+    onEdit: (entry) => openEditor('edit', entry),
+    onDelete: (entry) => removeFolder(entry),
     rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],
-    renderRootExtras: entry => {
+    renderRootExtras: (entry) => {
       const tools = document.createElement('span');
       tools.className = 'asset-folder-tools';
       const toggle = document.createElement('button');
@@ -97,26 +106,29 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       toggle.textContent = enabled ? t('common.on') : t('common.off');
       toggle.setAttribute('aria-checked', String(enabled));
       toggle.setAttribute(
-        'aria-label', t('folder.useForAssetMatching', {
+        'aria-label',
+        t('folder.useForAssetMatching', {
           name: baseName(entry.path),
-        }));
-      toggle.title = enabled
-        ? t('folder.includeAssetMatching')
-        : t('folder.excludeAssetMatching');
-      toggle.addEventListener('click', async event => {
+        }),
+      );
+      toggle.title = enabled ? t('folder.includeAssetMatching') : t('folder.excludeAssetMatching');
+      toggle.addEventListener('click', async (event) => {
         event.stopPropagation();
         if (toggle.disabled) return;
         tree.setRootBusy(entry.path, true);
         try {
           const response = await window.pywebview.api.set_asset_folder_enabled(
-            entry.path, !isAssetMatchingEnabled(entry));
+            entry.path,
+            !isAssetMatchingEnabled(entry),
+          );
           if (response?.error) {
             setTextError(error, response.error);
             return;
           }
           setTextError(error, '');
-          const updated = (response?.folders || []).find(candidate =>
-            canonicalPath(candidate.path) === canonicalPath(entry.path));
+          const updated = (response?.folders || []).find(
+            (candidate) => canonicalPath(candidate.path) === canonicalPath(entry.path),
+          );
           if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
         } catch (caught) {
           setTextError(error, caught.message || String(caught));
@@ -131,24 +143,27 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       rebuild.className = 'asset-folder-rebuild';
       rebuild.appendChild(createIcon('rebuild'));
       rebuild.title = t('folder.rebuildAssetIndex');
-      rebuild.setAttribute('aria-label', t('folder.rebuildAssetIndexFor', {
-        name: baseName(entry.path),
-      }));
-      rebuild.addEventListener('click', async event => {
+      rebuild.setAttribute(
+        'aria-label',
+        t('folder.rebuildAssetIndexFor', {
+          name: baseName(entry.path),
+        }),
+      );
+      rebuild.addEventListener('click', async (event) => {
         event.stopPropagation();
         if (rebuild.disabled) return;
         tree.setRootBusy(entry.path, true);
         try {
           const response = await window.pywebview.api.rebuild_asset_index(entry.path);
           if (response?.error) {
-            const suffix = response.indexPreserved
-              ? t('folder.previousIndexAvailable') : '';
+            const suffix = response.indexPreserved ? t('folder.previousIndexAvailable') : '';
             setTextError(error, `${response.error}${suffix}`);
             return;
           }
           setTextError(error, '');
-          const updated = (response?.folders || []).find(candidate =>
-            canonicalPath(candidate.path) === canonicalPath(entry.path));
+          const updated = (response?.folders || []).find(
+            (candidate) => canonicalPath(candidate.path) === canonicalPath(entry.path),
+          );
           if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
         } catch (caught) {
           setTextError(error, caught.message || String(caught));
@@ -159,7 +174,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       tools.appendChild(rebuild);
       return tools;
     },
-    renderRootMeta: entry => {
+    renderRootMeta: (entry) => {
       const meta = document.createElement('div');
       meta.className = 'asset-folder-index-status';
       meta.textContent = indexSummary(entry);
@@ -211,10 +226,12 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
 
   window.addEventListener(LANGUAGE_CHANGED, () => {
     if (!backdrop.classList.contains('show')) return;
-    title.textContent = editorMode === 'edit'
-      ? t('folder.editAsset') : t('folder.addAsset');
-    save.textContent = editorBusy ? t('folder.buildingIndex')
-      : (editorMode === 'edit' ? t('common.save') : t('common.add'));
+    title.textContent = editorMode === 'edit' ? t('folder.editAsset') : t('folder.addAsset');
+    save.textContent = editorBusy
+      ? t('folder.buildingIndex')
+      : editorMode === 'edit'
+        ? t('common.save')
+        : t('common.add');
   });
 
   async function removeFolder(entry) {
@@ -226,7 +243,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
 
   add.addEventListener('click', openAddDialog);
   cancel.addEventListener('click', closeEditor);
-  backdrop.addEventListener('click', event => {
+  backdrop.addEventListener('click', (event) => {
     if (event.target === backdrop) closeEditor();
   });
   browse.addEventListener('click', async () => {
@@ -235,7 +252,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     selectedPath = picked;
     pathInput.value = picked;
   });
-  form.addEventListener('submit', async event => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const path = selectedPath || pathInput.value.trim();
     if (!path) {
@@ -251,10 +268,10 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     save.disabled = true;
     save.textContent = t('folder.buildingIndex');
     try {
-      const response = editorMode === 'edit'
-        ? await window.pywebview.api.edit_asset_folder(
-          originalPath, typeInput.value, path)
-        : await window.pywebview.api.add_asset_folder(typeInput.value, path);
+      const response =
+        editorMode === 'edit'
+          ? await window.pywebview.api.edit_asset_folder(originalPath, typeInput.value, path)
+          : await window.pywebview.api.add_asset_folder(typeInput.value, path);
       if (response?.error) {
         setTextError(modalError, response.error);
         return;
@@ -278,9 +295,9 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
   if (typeof getAssetFolders === 'function') {
     getAssetFolders()
       .then(applyRegistryResponse)
-      .catch(caught => setTextError(error, caught.message || String(caught)));
+      .catch((caught) => setTextError(error, caught.message || String(caught)));
   } else {
-    applyRegistryResponse({folders: []});
+    applyRegistryResponse({ folders: [] });
   }
 
   return {

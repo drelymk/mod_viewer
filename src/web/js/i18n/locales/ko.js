@@ -43,7 +43,8 @@ export default {
   'environment.preset.outdoor': '실외',
   'renderer.webgpuUnavailable': 'WebGPU를 사용할 수 없음',
   'renderer.webgpuRequired': '이 버전의 Mod Viewer에는 WebGPU가 필요합니다.',
-  'renderer.failure': '이 버전의 Mod Viewer에는 WebGPU가 필요합니다. 그래픽 드라이버를 업데이트하거나 WebGPU를 지원하는 브라우저를 사용하세요{detail}',
+  'renderer.failure':
+    '이 버전의 Mod Viewer에는 WebGPU가 필요합니다. 그래픽 드라이버를 업데이트하거나 WebGPU를 지원하는 브라우저를 사용하세요{detail}',
   'renderer.deviceLost': 'WebGPU 장치를 잃었습니다: {detail}',
   'renderer.unrecoverable': 'WebGPU에서 복구할 수 없는 오류가 발생했습니다: {detail}',
   'gizmo.title': '드래그하여 회전 · 축을 클릭하여 맞춤 · 스크롤하여 확대',
@@ -86,12 +87,14 @@ export default {
   'folder.notFound': '폴더를 찾을 수 없음',
   'folder.editMod': 'MOD 폴더 편집',
   'folder.addMod': 'MOD 폴더 추가',
-  'folder.removeMod': 'MOD 폴더에서 “{name}”을(를) 제거할까요?\n\nMod Viewer에서만 제거됩니다.\n디스크의 파일은 삭제되지 않습니다.',
+  'folder.removeMod':
+    'MOD 폴더에서 “{name}”을(를) 제거할까요?\n\nMod Viewer에서만 제거됩니다.\n디스크의 파일은 삭제되지 않습니다.',
   'folder.enterModName': 'MOD 폴더 이름을 입력하세요.',
   'folder.chooseBrowse': '찾아보기를 사용하여 폴더를 선택하세요.',
   'folder.editAsset': '에셋 폴더 편집',
   'folder.addAsset': '에셋 폴더 추가',
-  'folder.removeAsset': '이 에셋 폴더를 제거할까요?\n\nMod Viewer에서만 제거됩니다.\n디스크의 파일은 삭제되지 않습니다.',
+  'folder.removeAsset':
+    '이 에셋 폴더를 제거할까요?\n\nMod Viewer에서만 제거됩니다.\n디스크의 파일은 삭제되지 않습니다.',
   'folder.buildingIndex': '인덱스 생성 중…',
   'mesh.loadMissingParts': '누락된 파트 로드',
   'mesh.removeMissingParts': '누락된 파트 제거',
@@ -170,7 +173,8 @@ export default {
   'health.ambiguousDraws': '모호함: {count}',
   'health.notFoundDraws': '찾지 못함: {count}',
   'health.mixed': '혼합 컴포넌트',
-  'health.summary': '오류 {errors} · 경고 {warnings} · 참조된 에셋 {referenced} · 비활성 전용 {inactive} · 뷰어 전용 {viewer}',
+  'health.summary':
+    '오류 {errors} · 경고 {warnings} · 참조된 에셋 {referenced} · 비활성 전용 {inactive} · 뷰어 전용 {viewer}',
   'health.noIssues': 'INI 문제가 없습니다.',
   'health.noFilterIssues': '이 필터와 일치하는 문제가 없습니다.',
   'health.openAtLine': '보고된 줄에서 이 INI를 열려면 두 번 클릭하세요',
@@ -205,12 +209,16 @@ export default {
   'errors.loadMissingAsset': '누락된 에셋 파트를 로드하지 못했습니다:\n\n{detail}',
   'errors.removeMissingAsset': '누락된 에셋 파트를 제거하지 못했습니다:\n\n{detail}',
   'errors.exportPartial': 'INI 파일 {saved}개를 내보냈지만 {failed}개가 실패하여 아직 대기 중입니다:\n\n{detail}',
-  'confirm.unsavedSwitch': '내보내지 않은 변경 사항이 있습니다.\n\n다른 MOD 폴더를 열면 변경 사항이 삭제됩니다. 계속할까요?',
-  'confirm.unsavedAsset': '내보내지 않은 변경 사항이 있습니다.\n\n에셋 미리 보기를 열면 변경 사항이 삭제됩니다. 계속할까요?',
-  'toggle.deleteConfirm': '토글 “{name}”을(를) 삭제할까요?\n\n이는 변경 사항을 대기시키기만 하며 Export를 클릭할 때까지 INI에 기록되지 않습니다.',
+  'confirm.unsavedSwitch':
+    '내보내지 않은 변경 사항이 있습니다.\n\n다른 MOD 폴더를 열면 변경 사항이 삭제됩니다. 계속할까요?',
+  'confirm.unsavedAsset':
+    '내보내지 않은 변경 사항이 있습니다.\n\n에셋 미리 보기를 열면 변경 사항이 삭제됩니다. 계속할까요?',
+  'toggle.deleteConfirm':
+    '토글 “{name}”을(를) 삭제할까요?\n\n이는 변경 사항을 대기시키기만 하며 Export를 클릭할 때까지 INI에 기록되지 않습니다.',
   'toggle.deleteError': '토글을 삭제하지 못했습니다:\n\n{detail}',
   'toggle.deletedReview': '토글을 삭제했지만 다음 줄을 직접 확인하세요:\n\n{detail}',
-  'toggle.unwired': '아직 메시와 연결되지 않았습니다. 아래의 ⏺ Record를 클릭하고 각 위치에서 메시를 선택하거나 해제하여 이 토글이 표시할 항목을 지정하세요. 연결하거나 삭제할 때까지 Export가 비활성화됩니다.',
+  'toggle.unwired':
+    '아직 메시와 연결되지 않았습니다. 아래의 ⏺ Record를 클릭하고 각 위치에서 메시를 선택하거나 해제하여 이 토글이 표시할 항목을 지정하세요. 연결하거나 삭제할 때까지 Export가 비활성화됩니다.',
   'toggle.edit': '토글 편집',
   'toggle.delete': '토글 삭제',
   'toggle.record': '각 위치에 표시할 메시 기록',
@@ -219,7 +227,8 @@ export default {
   'toggle.noToggles': '토글이 아직 없습니다. 추가를 클릭하여 만드세요.',
   'toggle.addTitle': '토글 추가',
   'toggle.editTitle': '{name} 편집',
-  'present.deleteKeyConfirm': '참여하는 모든 INI에서 PRESENT 키를 삭제할까요?\n\n이는 변경 사항을 대기시키기만 하며 Export할 때까지 INI에 기록되지 않습니다.',
+  'present.deleteKeyConfirm':
+    '참여하는 모든 INI에서 PRESENT 키를 삭제할까요?\n\n이는 변경 사항을 대기시키기만 하며 Export할 때까지 INI에 기록되지 않습니다.',
   'present.deleteError': 'PRESENT를 삭제하지 못했습니다:\n\n{detail}',
   'present.duplicateConfirm': '이 변수 값은 {labels}와 같습니다.\n\n그래도 저장할까요?',
   'present.editError': 'PRESENT를 {action}하지 못했습니다:\n\n{detail}',
@@ -272,11 +281,15 @@ export default {
   'health.issueOpenOne': 'INI 진단 문제 {count}개. 진단 열기',
   'health.issueOpenMany': 'INI 진단 문제 {count}개. 진단 열기',
   'diagnostics.issue.unexpected_key_statement': '[{section}]에 예기치 않은 문이 있습니다: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': '뷰어는 현재 이 drawindexed 형식을 원래 드로우로 재현할 수 없습니다. 3DMigoto에서는 유효할 수 있습니다. 인수: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments':
+    '뷰어는 현재 이 drawindexed 형식을 원래 드로우로 재현할 수 없습니다. 3DMigoto에서는 유효할 수 있습니다. 인수: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs}에서 잘못된 리소스 참조 접두사를 사용합니다: {prefix}.',
-  'diagnostics.issue.missing_local_run_target': '{target}이(가) 실행되지만 이 INI에 선언되지 않았습니다. 프레임워크에서 제공될 수 있습니다.',
-  'diagnostics.issue.duplicate_key_binding': '[{section}]과(와) [{otherSection}]이(가) 키 바인딩 {key}을(를) 공유하여 함께 활성화될 수 있습니다.',
-  'diagnostics.issue.duplicate_section': '[{section}] 섹션이 중복되었습니다. 3DMigoto는 {firstLine}번째 줄의 첫 정의만 사용합니다.',
+  'diagnostics.issue.missing_local_run_target':
+    '{target}이(가) 실행되지만 이 INI에 선언되지 않았습니다. 프레임워크에서 제공될 수 있습니다.',
+  'diagnostics.issue.duplicate_key_binding':
+    '[{section}]과(와) [{otherSection}]이(가) 키 바인딩 {key}을(를) 공유하여 함께 활성화될 수 있습니다.',
+  'diagnostics.issue.duplicate_section':
+    '[{section}] 섹션이 중복되었습니다. 3DMigoto는 {firstLine}번째 줄의 첫 정의만 사용합니다.',
   'diagnostics.issue.unknown_section': '[{section}]은(는) 인식된 3DMigoto 섹션이 아닙니다.',
   'diagnostics.issue.statement_outside_section': '섹션 밖의 문: {source}',
   'diagnostics.issue.malformed_regular_statement': '[{section}]에는 key=value 문이 필요합니다: {source}',
@@ -294,7 +307,8 @@ export default {
   'diagnostics.issue.unbalanced_condition_parentheses': '{reason}',
   'diagnostics.issue.missing_resource_section': '{resource}이(가) 참조되지만 이 INI에 리소스 섹션이 없습니다.',
   'diagnostics.issue.invalid_resource_stride': '{resource}의 stride가 잘못되었습니다: {stride}.',
-  'diagnostics.issue.unsafe_resource_path': '{resource}이(가) 허용된 리소스 경로 밖의 파일 이름을 사용합니다: {filename}.',
+  'diagnostics.issue.unsafe_resource_path':
+    '{resource}이(가) 허용된 리소스 경로 밖의 파일 이름을 사용합니다: {filename}.',
   'diagnostics.issue.missing_resource_file': '{resource}이(가) 존재하지 않는 파일을 참조합니다: {filename}.',
   'diagnostics.issue.unused_resource_section': '{resource}이(가) 이 INI에서 참조되지 않습니다.',
   'diagnostics.issue.unreadable_ini': '이 INI를 UTF-8로 읽을 수 없습니다: {detail}',
@@ -482,7 +496,8 @@ export default {
   'texture.created': '생성됨',
   'texture.saveFailed': '텍스처 저장 실패.',
   'texture.conflictingMeshes': '충돌하는 메시: {meshes}.',
-  'texture.colorMetadataWarning': '텍스처는 저장했지만 색상 메타데이터를 지우지 못했습니다. MOD를 다시 열기 전에 메타데이터 쓰기 오류를 해결하세요.',
+  'texture.colorMetadataWarning':
+    '텍스처는 저장했지만 색상 메타데이터를 지우지 못했습니다. MOD를 다시 열기 전에 메타데이터 쓰기 오류를 해결하세요.',
   'texture.saveProgress': '텍스처 저장 진행률',
   'texture.noChangedMeshes': '변경된 편집 가능 메시 중 이 DDS를 사용하는 메시가 없습니다.',
   'texture.blocks': '{completed} / {total} 블록',
@@ -497,13 +512,17 @@ export default {
   'toggle.reportAlwaysFalse': '{line}줄의 항상 false인 게이트',
   'toggle.reportAlwaysTrue': '{line}줄의 항상 true인 게이트',
   'toggle.reportUnsafe': '{line}줄의 해결되지 않은 게이트',
-  'toggle.orphanConfirm': '{error}\n\n그래도 적용할까요? 삭제된 값에서만 표시되는 메시는 이 토글을 통해 더 이상 도달할 수 없습니다.',
-  'record.reason.commandPath': 'draw가 run= 명령 목록을 통해 실행되지만 이 변수가 직접 제어하는 섹션이 아닙니다. 호출하는 쪽의 분기를 직접 편집하세요',
-  'record.reason.ambiguousNesting': '이 섹션의 if/elif/endif 중첩이 모호합니다(INI 구조 오류 참조). INI를 직접 편집하세요',
+  'toggle.orphanConfirm':
+    '{error}\n\n그래도 적용할까요? 삭제된 값에서만 표시되는 메시는 이 토글을 통해 더 이상 도달할 수 없습니다.',
+  'record.reason.commandPath':
+    'draw가 run= 명령 목록을 통해 실행되지만 이 변수가 직접 제어하는 섹션이 아닙니다. 호출하는 쪽의 분기를 직접 편집하세요',
+  'record.reason.ambiguousNesting':
+    '이 섹션의 if/elif/endif 중첩이 모호합니다(INI 구조 오류 참조). INI를 직접 편집하세요',
   'record.reason.unsupported': '{detail}',
   'record.reason.outerGate': '바깥 중첩 수준에서 이 변수로 게이트되었습니다. 이 조건을 직접 편집하세요',
   'record.reason.multipleVariables': '이 기록 세션에서 둘 이상의 변수가 대상입니다',
-  'record.reason.nestedRewrite': '같은 저장에서 다시 쓰는 다른 변수의 게이트 안에 있습니다. 이 조건을 중첩하려면 INI를 직접 편집하세요',
+  'record.reason.nestedRewrite':
+    '같은 저장에서 다시 쓰는 다른 변수의 게이트 안에 있습니다. 이 조건을 중첩하려면 INI를 직접 편집하세요',
   'record.reason.sameValue': '{detail}',
   'inspector.materialKind.auto': '자동',
   'inspector.materialKind.body': '몸',
@@ -569,7 +588,8 @@ export default {
   'model.assetPreview': '에셋 미리 보기',
   'model.assetPreviewSeparator': '에셋 미리 보기  —  {name}',
   'model.exportCompressedDetail': '압축 MOD에서는 내보내기를 사용할 수 없습니다.',
-  'model.unwiredToggleDetail': '새로 추가한 토글이 아직 메시와 연결되지 않았습니다. 내보내기 전에 Record (⏺)하거나 삭제하세요.',
+  'model.unwiredToggleDetail':
+    '새로 추가한 토글이 아직 메시와 연결되지 않았습니다. 내보내기 전에 Record (⏺)하거나 삭제하세요.',
   'semanticRefresh.drawMismatch': '대기 중인 드로우 집합이 표시된 모델과 더 이상 일치하지 않습니다.',
   'gizmo.toggle': '탐색 기즈모 전환: {state}',
   'panel.collapseSource': '{source} 접기',
@@ -608,8 +628,10 @@ export default {
   'mesh.mergeLooseParts': '메시 병합',
   'mesh.applyMeshChanges': '메시 변경 적용',
   'mesh.cancelMeshChanges': '메시 변경 취소',
-  'mesh.applyMeshChangesConfirm': '이 구성 요소의 메시 변경을 적용할까요?\n\n새 메시 레이아웃은 메모리에 스테이징됩니다. Export 전에는 디스크에 아무것도 기록되지 않습니다.',
-  'mesh.cancelMeshChangesConfirm': '이 구성 요소의 메시 변경을 취소할까요?\n\n적용하지 않은 모든 메시 분리 및 병합 변경 사항이 삭제됩니다.',
+  'mesh.applyMeshChangesConfirm':
+    '이 구성 요소의 메시 변경을 적용할까요?\n\n새 메시 레이아웃은 메모리에 스테이징됩니다. Export 전에는 디스크에 아무것도 기록되지 않습니다.',
+  'mesh.cancelMeshChangesConfirm':
+    '이 구성 요소의 메시 변경을 취소할까요?\n\n적용하지 않은 모든 메시 분리 및 병합 변경 사항이 삭제됩니다.',
   'mesh.applyMeshChangesHint': '이 구성 요소의 메시 변경 적용',
   'mesh.unappliedChangesDetail': '적용되지 않은 메시 변경 사항이 있습니다',
   'mesh.separate': '분리',

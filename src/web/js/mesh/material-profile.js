@@ -69,15 +69,14 @@ const CHANNELS = new Set(['r', 'g', 'b', 'a']);
 // `normalView` delegates to the material's normal node outside its NORMAL
 // sub-build, so assigning it back to `material.normalNode` would recurse.
 // Keep the NORMAL-path behavior locally, including r185's flat-shading rule.
-const orientedGeometryNormal = /*@__PURE__*/ (Fn((builder) => {
+const orientedGeometryNormal = /*@__PURE__*/ Fn((builder) => {
   let node = normalViewGeometry;
   if (builder.isFlatShading() !== true) node = negateOnBackSide(node);
   return node;
-}, 'vec3').once())();
+}, 'vec3').once()();
 
 function createPlaceholder(name, bytes, colorSpace) {
-  const result = new DataTexture(
-    new Uint8Array(bytes), 1, 1, RGBAFormat, UnsignedByteType);
+  const result = new DataTexture(new Uint8Array(bytes), 1, 1, RGBAFormat, UnsignedByteType);
   result.name = `mod-viewer-${name}-placeholder`;
   result.colorSpace = colorSpace;
   result.needsUpdate = true;
@@ -87,12 +86,9 @@ function createPlaceholder(name, bytes, colorSpace) {
 // These textures are deliberately shared. A disabled binding still needs a
 // valid texture object so changing a role does not introduce a new graph or
 // force a material/pipeline rebuild.
-const DIFFUSE_PLACEHOLDER = createPlaceholder(
-  'diffuse', [255, 255, 255, 255], SRGBColorSpace);
-const NORMAL_PLACEHOLDER = createPlaceholder(
-  'normal', [128, 128, 255, 255], NoColorSpace);
-const PACKED_PLACEHOLDER = createPlaceholder(
-  'packed', [0, 0, 0, 255], NoColorSpace);
+const DIFFUSE_PLACEHOLDER = createPlaceholder('diffuse', [255, 255, 255, 255], SRGBColorSpace);
+const NORMAL_PLACEHOLDER = createPlaceholder('normal', [128, 128, 255, 255], NoColorSpace);
+const PACKED_PLACEHOLDER = createPlaceholder('packed', [0, 0, 0, 255], NoColorSpace);
 
 const PLACEHOLDERS = Object.freeze({
   diffuse: DIFFUSE_PLACEHOLDER,
@@ -112,25 +108,28 @@ function hasNumericValue(value) {
 }
 
 function profileRenderSources(profile) {
-  return [profile?.shadow_mask, profile?.metalness, profile?.specular,
-    profile?.specular_area, profile?.toon_specular_mask,
-    profile?.metal_route]
+  return [
+    profile?.shadow_mask,
+    profile?.metalness,
+    profile?.specular,
+    profile?.specular_area,
+    profile?.toon_specular_mask,
+    profile?.metal_route,
+  ]
     .filter(validRef)
-    .map(ref => ref.source)
+    .map((ref) => ref.source)
     .filter((source, index, all) => all.indexOf(source) === index);
 }
 
 function profileNormalXY(profile) {
   const xy = profile?.normal_xy;
-  return Array.isArray(xy) && xy.length === 2
-    && xy.every(channel => CHANNELS.has(channel)) ? xy : null;
+  return Array.isArray(xy) && xy.length === 2 && xy.every((channel) => CHANNELS.has(channel)) ? xy : null;
 }
 
 function profileNormalSources(profile) {
   // The source is part of the material profile, independent of packed
   // response classification.
-  return profileNormalXY(profile) && profile?.normal_source === 'normal_data'
-    ? ['normal_data'] : [];
+  return profileNormalXY(profile) && profile?.normal_source === 'normal_data' ? ['normal_data'] : [];
 }
 
 function profileDebugSource(profile, mode) {
@@ -206,8 +205,7 @@ function channelNode(ref, bindings) {
 
 function enabledChannelNode(ref, bindings, disabledValue) {
   const binding = bindings[ref.source];
-  return binding.enabledNode.select(
-    channelNode(ref, bindings), float(disabledValue));
+  return binding.enabledNode.select(channelNode(ref, bindings), float(disabledValue));
 }
 
 function numericOr(value, fallback) {
@@ -217,12 +215,9 @@ function numericOr(value, fallback) {
 function createSpecularResponseNode(profile, bindings) {
   if (!validRef(profile?.specular)) return float(1);
   const sampled = enabledChannelNode(profile.specular, bindings, 1);
-  const response = sampled
-    .mul(float(numericOr(profile.specular_scale, 1)))
-    .clamp(0, 1);
+  const response = sampled.mul(float(numericOr(profile.specular_scale, 1))).clamp(0, 1);
   return hasNumericValue(profile.specular_influence)
-    ? mix(float(1), response,
-      clamp(float(Number(profile.specular_influence)), 0, 1))
+    ? mix(float(1), response, clamp(float(Number(profile.specular_influence)), 0, 1))
     : response;
 }
 
@@ -234,39 +229,33 @@ function createMaterialIdNode(profile, bindings) {
   const raw = channelNode(ref, bindings);
   // The inclusive/exclusive comparisons mirror HoyoToon's sequential
   // assignments: later overlapping regions own the exact .40/.80 edges.
-  return raw.greaterThan(0.8).select(
-    2, raw.greaterThanEqual(0.6).select(
-      5, raw.greaterThan(0.4).select(
-        3, raw.greaterThanEqual(0.2).select(4, 1))));
+  return raw
+    .greaterThan(0.8)
+    .select(
+      2,
+      raw.greaterThanEqual(0.6).select(5, raw.greaterThan(0.4).select(3, raw.greaterThanEqual(0.2).select(4, 1))),
+    );
 }
 
 function createSpecularAreaNode(profile, bindings) {
-  return validRef(profile?.specular_area)
-    ? enabledChannelNode(profile.specular_area, bindings, 1)
-    : float(1);
+  return validRef(profile?.specular_area) ? enabledChannelNode(profile.specular_area, bindings, 1) : float(1);
 }
 
-function createProfileNormalNode(profile, bindings, normalScaleNode,
-  fallbackNormal) {
+function createProfileNormalNode(profile, bindings, normalScaleNode, fallbackNormal) {
   const xy = profileNormalXY(profile);
   if (xy) {
-    const binding = bindings[profile?.normal_source === 'normal_data'
-      ? 'normal_data' : 'normal_map'];
-    const sampled = vec3(
-      binding.textureNode[xy[0]], binding.textureNode[xy[1]], 1);
+    const binding = bindings[profile?.normal_source === 'normal_data' ? 'normal_data' : 'normal_map'];
+    const sampled = vec3(binding.textureNode[xy[0]], binding.textureNode[xy[1]], 1);
     const packedNormal = normalMap(sampled, normalScaleNode);
     packedNormal.unpackNormalMode = NormalRGPacking;
     return binding.enabledNode.select(packedNormal, fallbackNormal);
   }
   const binding = bindings.normal_map;
-  return binding.enabledNode.select(
-    normalMap(binding.textureNode, normalScaleNode), fallbackNormal);
+  return binding.enabledNode.select(normalMap(binding.textureNode, normalScaleNode), fallbackNormal);
 }
 
 function createRawChannelNode(ref, bindings) {
-  return validRef(ref)
-    ? enabledChannelNode(ref, bindings, 0)
-    : float(0);
+  return validRef(ref) ? enabledChannelNode(ref, bindings, 0) : float(0);
 }
 
 function colorMap(rgb, transform) {
@@ -275,14 +264,18 @@ function colorMap(rgb, transform) {
 
 function linearToEditorSrgbChannel(value) {
   const clamped = value.clamp(0, 1);
-  return clamped.lessThanEqual(0.0031308)
-    .select(clamped.mul(12.92), clamped.pow(1 / 2.4).mul(1.055).sub(0.055));
+  return clamped.lessThanEqual(0.0031308).select(
+    clamped.mul(12.92),
+    clamped
+      .pow(1 / 2.4)
+      .mul(1.055)
+      .sub(0.055),
+  );
 }
 
 function editorSrgbToLinearChannel(value) {
   const clamped = value.clamp(0, 1);
-  return clamped.lessThanEqual(0.04045)
-    .select(clamped.div(12.92), clamped.add(0.055).div(1.055).pow(2.4));
+  return clamped.lessThanEqual(0.04045).select(clamped.div(12.92), clamped.add(0.055).div(1.055).pow(2.4));
 }
 
 function rgbToHsv(rgb) {
@@ -293,10 +286,10 @@ function rgbToHsv(rgb) {
   const redHue = rgb.g.sub(rgb.b).div(safeDelta);
   const greenHue = rgb.b.sub(rgb.r).div(safeDelta).add(2);
   const blueHue = rgb.r.sub(rgb.g).div(safeDelta).add(4);
-  const hue = maximum.equal(rgb.r).select(
-    redHue.lessThan(0).select(redHue.add(6), redHue),
-    maximum.equal(rgb.g).select(greenHue, blueHue),
-  ).div(6);
+  const hue = maximum
+    .equal(rgb.r)
+    .select(redHue.lessThan(0).select(redHue.add(6), redHue), maximum.equal(rgb.g).select(greenHue, blueHue))
+    .div(6);
   const saturation = maximum.equal(0).select(0, delta.div(maximum));
   return vec3(hue, saturation, maximum);
 }
@@ -310,14 +303,23 @@ function hsvToRgb(hsv) {
   const fraction = sectorValue.sub(sector);
   const p = value.mul(float(1).sub(saturation));
   const q = value.mul(float(1).sub(saturation.mul(fraction)));
-  const t = value.mul(float(1).sub(
-    saturation.mul(float(1).sub(fraction))));
-  return sector.equal(0).select(vec3(value, t, p),
-    sector.equal(1).select(vec3(q, value, p),
-      sector.equal(2).select(vec3(p, value, t),
-        sector.equal(3).select(vec3(p, q, value),
-          sector.equal(4).select(vec3(t, p, value),
-            vec3(value, p, q))))));
+  const t = value.mul(float(1).sub(saturation.mul(float(1).sub(fraction))));
+  return sector
+    .equal(0)
+    .select(
+      vec3(value, t, p),
+      sector
+        .equal(1)
+        .select(
+          vec3(q, value, p),
+          sector
+            .equal(2)
+            .select(
+              vec3(p, value, t),
+              sector.equal(3).select(vec3(p, q, value), sector.equal(4).select(vec3(t, p, value), vec3(value, p, q))),
+            ),
+        ),
+    );
 }
 
 function adjustColorChannel(channel, intensity, amount) {
@@ -330,8 +332,7 @@ function createColorAdjustmentNode(state, baseColor) {
   const editorColor = colorMap(baseColor, linearToEditorSrgbChannel);
   const sourceIntensity = editorColor.r.max(editorColor.g).max(editorColor.b);
   const tinted = state.colorTintNode.mul(sourceIntensity);
-  const adjustmentColor = state.colorTintEnabledNode.select(
-    tinted, editorColor);
+  const adjustmentColor = state.colorTintEnabledNode.select(tinted, editorColor);
   const hsv = rgbToHsv(adjustmentColor);
   let hue = hsv.x.add(state.colorHueNode.div(360));
   hue = hue.lessThan(0).select(hue.add(1), hue);
@@ -359,15 +360,11 @@ function createDebugOutputNode(state, baseColor) {
   // unsupported mode has no active branch, so the final output remains the
   // normal shaded result for that material in a mixed-profile scene.
   const outputs = [
-    ['material-id', state.hasMaterialId
-      ? materialIdDebugColor(state.materialIdNode) : null],
-    ['specular-area', state.hasSpecularArea
-      ? vec3(state.specularAreaNode) : null],
+    ['material-id', state.hasMaterialId ? materialIdDebugColor(state.materialIdNode) : null],
+    ['specular-area', state.hasSpecularArea ? vec3(state.specularAreaNode) : null],
     ['shadow-mask', state.hasShadowMask ? vec3(state.shadowMaskNode) : null],
-    ['normal-data-b', state.hasNormalDataB
-      ? vec3(state.normalDataBNode) : null],
-    ['normal-data-a', state.hasNormalDataA
-      ? vec3(state.normalDataANode) : null],
+    ['normal-data-b', state.hasNormalDataB ? vec3(state.normalDataBNode) : null],
+    ['normal-data-a', state.hasNormalDataA ? vec3(state.normalDataANode) : null],
   ].filter(([, node]) => node !== null);
 
   let output = baseColor;
@@ -397,12 +394,9 @@ function setStableMaterialNodes(material, state, fallbackColor) {
   if (hasUv) {
     // Apply adjustments only to an active diffuse sample. A loading, failed,
     // disabled or no-texture state must retain the viewer's flat fallback.
-    const adjustedDiffuse = createColorAdjustmentNode(
-      state, bindings.diffuse.textureNode.rgb);
-    baseColor = bindings.diffuse.enabledNode.select(
-      adjustedDiffuse, color(fallbackColor));
-    material.normalNode = createProfileNormalNode(
-      profile, bindings, state.normalScaleNode, fallbackNormal);
+    const adjustedDiffuse = createColorAdjustmentNode(state, bindings.diffuse.textureNode.rgb);
+    baseColor = bindings.diffuse.enabledNode.select(adjustedDiffuse, color(fallbackColor));
+    material.normalNode = createProfileNormalNode(profile, bindings, state.normalScaleNode, fallbackNormal);
   } else {
     baseColor = color(fallbackColor);
     material.normalNode = fallbackNormal;
@@ -419,17 +413,13 @@ function setStableMaterialNodes(material, state, fallbackColor) {
 
   if (validRef(profile.metalness)) {
     const sampled = enabledChannelNode(profile.metalness, bindings, 0);
-    material.metalnessNode = sampled
-      .mul(float(numericOr(profile.metalness_scale, 1)))
-      .clamp(0, 1);
+    material.metalnessNode = sampled.mul(float(numericOr(profile.metalness_scale, 1))).clamp(0, 1);
   }
-
 }
 
 function applyDebugOverride(state, result) {
   if (!state?.debugOutputNode || !state?.debugActiveNode) return result;
-  return state.debugActiveNode.lessThan(0.5).select(
-    result, vec4(state.debugOutputNode, result.a));
+  return state.debugActiveNode.lessThan(0.5).select(result, vec4(state.debugOutputNode, result.a));
 }
 
 function applyViewerRim(state, result) {
@@ -438,9 +428,7 @@ function applyViewerRim(state, result) {
   }
   const facing = abs(normalView.dot(positionViewDirection)).clamp(0, 1);
   const edge = float(1).sub(facing);
-  const amount = edge.pow(state.rimPowerNode)
-    .mul(state.rimStrengthNode)
-    .mul(state.rimEnabledNode);
+  const amount = edge.pow(state.rimPowerNode).mul(state.rimStrengthNode).mul(state.rimEnabledNode);
   const tint = mix(diffuseColor.rgb, vec3(1), float(0.2));
   return vec4(result.rgb.add(tint.mul(amount)), result.a);
 }
@@ -452,8 +440,7 @@ function applyViewerOutput(state, result) {
 function createEmissionNode(profile, bindings, hasUv) {
   if (!hasUv || profile?.emission_source !== 'emission_map_rgb') return vec3(0);
   const strength = clamp(float(numericOr(profile.emission_strength, 1)), 0, 1);
-  return bindings.emission_map.enabledNode.select(
-    bindings.emission_map.textureNode.rgb.mul(strength), vec3(0));
+  return bindings.emission_map.enabledNode.select(bindings.emission_map.textureNode.rgb.mul(strength), vec3(0));
 }
 
 function physicalLightingFlags(material) {
@@ -464,41 +451,29 @@ function physicalLightingFlags(material) {
     material.useAnisotropy,
     material.useTransmission,
     material.useDispersion,
-  ].map(value => value === true);
+  ].map((value) => value === true);
 }
 
 function toonLightCoordinate(lightDirection) {
-  return normalView
-    .dot(lightDirection)
-    .clamp(-1, 1)
-    .mul(0.5)
-    .add(0.5);
+  return normalView.dot(lightDirection).clamp(-1, 1).mul(0.5).add(0.5);
 }
 
 function toonDiffuseFactor(state, lightDirection, boundary) {
-  const physicalFactor = normalView
-    .dot(lightDirection)
-    .clamp(0, 1);
+  const physicalFactor = normalView.dot(lightDirection).clamp(0, 1);
   const band = smoothstep(
     state.shadowThresholdNode.sub(state.shadowSoftnessNode),
     state.shadowThresholdNode.add(state.shadowSoftnessNode),
     boundary,
   );
   const toonFactor = mix(state.shadowLevelNode, float(1), band);
-  const effectiveInfluence = state.shadowInfluenceNode
-    .mul(state.toonEnabledNode);
+  const effectiveInfluence = state.shadowInfluenceNode.mul(state.toonEnabledNode);
   return mix(physicalFactor, toonFactor, effectiveInfluence);
 }
 
-function replaceDirectDiffuse(
-    reflectedLight, diffuseBefore, lightColor, irradianceFactor) {
+function replaceDirectDiffuse(reflectedLight, diffuseBefore, lightColor, irradianceFactor) {
   const irradiance = lightColor.mul(irradianceFactor);
-  const toonDiffuse = irradiance.mul(
-    BRDF_Lambert({ diffuseColor: diffuseContribution }),
-  );
-  reflectedLight.directDiffuse.assign(
-    diffuseBefore.add(toonDiffuse),
-  );
+  const toonDiffuse = irradiance.mul(BRDF_Lambert({ diffuseColor: diffuseContribution }));
+  reflectedLight.directDiffuse.assign(diffuseBefore.add(toonDiffuse));
 }
 
 class ZzzLightingModel extends ThreePhysicalLightingModel {
@@ -509,15 +484,10 @@ class ZzzLightingModel extends ThreePhysicalLightingModel {
 
   direct(lightData, builder) {
     const { lightDirection, lightColor, reflectedLight } = lightData;
-    const diffuseBefore = reflectedLight.directDiffuse.toVar(
-      'zzzDirectDiffuseBefore');
+    const diffuseBefore = reflectedLight.directDiffuse.toVar('zzzDirectDiffuseBefore');
     super.direct(lightData, builder);
 
-    const factor = toonDiffuseFactor(
-      this.gameMaterialState,
-      lightDirection,
-      toonLightCoordinate(lightDirection),
-    );
+    const factor = toonDiffuseFactor(this.gameMaterialState, lightDirection, toonLightCoordinate(lightDirection));
     replaceDirectDiffuse(reflectedLight, diffuseBefore, lightColor, factor);
   }
 }
@@ -553,11 +523,9 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
     let boundary = toonLightCoordinate(lightDirection);
     if (this.gameMaterialState.hasShadowMask && validRef(maskRef)) {
       const authoredMask = enabledChannelNode(maskRef, bindings, 0.5);
-      boundary = boundary.add(
-        authoredMask.sub(0.5).mul(shadowMaskStrengthNode));
+      boundary = boundary.add(authoredMask.sub(0.5).mul(shadowMaskStrengthNode));
     }
-    const factor = toonDiffuseFactor(
-      this.gameMaterialState, lightDirection, boundary);
+    const factor = toonDiffuseFactor(this.gameMaterialState, lightDirection, boundary);
     replaceDirectDiffuse(reflectedLight, diffuseBefore, lightColor, factor);
 
     const areaRef = profile.specular_area;
@@ -569,25 +537,22 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
       const ndoth = normalView.dot(halfDirection).clamp(0, 1);
       const term = ndoth.max(0.001).pow(toonSpecularShininessNode);
       const softness = numericOr(profile.toon_specular_softness, 0);
-      const computedGate = softness > 0
-        ? smoothstep(threshold.sub(toonSpecularSoftnessNode),
-          threshold.add(toonSpecularSoftnessNode), term)
-        : step(threshold, term);
+      const computedGate =
+        softness > 0
+          ? smoothstep(threshold.sub(toonSpecularSoftnessNode), threshold.add(toonSpecularSoftnessNode), term)
+          : step(threshold, term);
       areaGate = areaBinding.enabledNode.select(computedGate, float(1));
 
-      const metalRef = validRef(profile.metalness)
-        ? profile.metalness : profile.specular;
+      const metalRef = validRef(profile.metalness) ? profile.metalness : profile.specular;
       if (validRef(metalRef) && toonSpecularMetalCutoffNode) {
         const metalBinding = bindings[metalRef.source];
         const metalRaw = enabledChannelNode(metalRef, bindings, 0);
-        const metalRegion = metalBinding.enabledNode.select(
-          step(toonSpecularMetalCutoffNode, metalRaw), float(0));
+        const metalRegion = metalBinding.enabledNode.select(step(toonSpecularMetalCutoffNode, metalRaw), float(0));
         areaGate = mix(areaGate, float(1), metalRegion);
       }
     }
     const specularContribution = reflectedLight.directSpecular.sub(specularBefore);
-    reflectedLight.directSpecular.assign(
-      specularBefore.add(specularContribution.mul(areaGate)));
+    reflectedLight.directSpecular.assign(specularBefore.add(specularContribution.mul(areaGate)));
   }
 }
 
@@ -624,20 +589,13 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
     const ndotl = normalView.dot(lightDirection);
     const area = ndotl.add(wuwaShadowFrontOffsetNode);
     const width = wuwaShadowWidthNode.add(0.25).clamp(0, 1);
-    const lightBoundary = smoothstep(
-      wuwaShadowProcessNode,
-      wuwaShadowProcessNode.add(width),
-      area,
-    );
-    const authoredMask = maskBinding
-      ? enabledChannelNode(maskRef, bindings, 1) : float(1);
+    const lightBoundary = smoothstep(wuwaShadowProcessNode, wuwaShadowProcessNode.add(width), area);
+    const authoredMask = maskBinding ? enabledChannelNode(maskRef, bindings, 1) : float(1);
     // LightMap.G is a packed visibility classification, not a linear
     // brightness value.  Multiplying by raw G can make a RabbitFX component
     // nearly black in all-map mode when its valid authored values are below
     // 0.5.
-    const classifiedVisibility = authoredMask
-      .greaterThanEqual(wuwaShadowMaskCutoffNode)
-      .select(float(1), float(0));
+    const classifiedVisibility = authoredMask.greaterThanEqual(wuwaShadowMaskCutoffNode).select(float(1), float(0));
     // A value at either endpoint is not a usable authored classification for
     // every RabbitFX LightMap.  Treat it as an absent mask so binary/alternate
     // packed maps do not erase the key light.  Midrange values retain the
@@ -645,26 +603,18 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
     const endpointTolerance = wuwaShadowMaskEndpointToleranceNode;
     const endpointInvalid = authoredMask
       .lessThanEqual(endpointTolerance)
-      .select(float(1), authoredMask.greaterThanEqual(
-        float(1).sub(endpointTolerance)).select(float(1), float(0)));
-    const endpointAwareVisibility = endpointInvalid.greaterThan(0)
-      .select(float(1), classifiedVisibility);
-    const authoredVisibility = endpointTolerance.greaterThan(0)
-      .select(endpointAwareVisibility, classifiedVisibility);
+      .select(float(1), authoredMask.greaterThanEqual(float(1).sub(endpointTolerance)).select(float(1), float(0)));
+    const endpointAwareVisibility = endpointInvalid.greaterThan(0).select(float(1), classifiedVisibility);
+    const authoredVisibility = endpointTolerance.greaterThan(0).select(endpointAwareVisibility, classifiedVisibility);
     const shadowArea = lightBoundary.mul(authoredVisibility).clamp(0, 1);
-    const effectiveInfluence = wuwaShadowInfluenceNode
-      .mul(toonEnabledNode);
-    const computedFactor = mix(
-      float(1), shadowArea, effectiveInfluence);
+    const effectiveInfluence = wuwaShadowInfluenceNode.mul(toonEnabledNode);
+    const computedFactor = mix(float(1), shadowArea, effectiveInfluence);
     // A missing Lightmap is an explicit no-mask case, not permission to
     // borrow Diffuse.A or a Normalmap channel.
-    const factor = maskBinding
-      ? maskBinding.enabledNode.select(computedFactor, float(1))
-      : float(1);
+    const factor = maskBinding ? maskBinding.enabledNode.select(computedFactor, float(1)) : float(1);
 
     const diffuseContribution = reflectedLight.directDiffuse.sub(diffuseBefore);
-    reflectedLight.directDiffuse.assign(
-      diffuseBefore.add(diffuseContribution.mul(factor)));
+    reflectedLight.directDiffuse.assign(diffuseBefore.add(diffuseContribution.mul(factor)));
   }
 }
 
@@ -678,31 +628,20 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
 export function wuwaMetalRouteValue(value) {
   const raw = Math.min(Math.max(Number(value), 0), 1);
   const shaped = raw > 0.00000003 ? Math.pow(raw, 0.1) : 0;
-  return Math.min(Math.max(
-    ((1 - shaped) * 19.899 + 0.1) * -999 + 1000, 0), 1);
+  return Math.min(Math.max(((1 - shaped) * 19.899 + 0.1) * -999 + 1000, 0), 1);
 }
 
 export function wuwaMetalRouteNode(a) {
   const raw = a.clamp(0, 1);
-  const shaped = raw.greaterThan(0.00000003).select(
-    raw.pow(float(0.1)),
-    float(0),
-  );
-  return float(1)
-    .sub(shaped)
-    .mul(19.899)
-    .add(0.1)
-    .mul(-999)
-    .add(1000)
-    .clamp(0, 1);
+  const shaped = raw.greaterThan(0.00000003).select(raw.pow(float(0.1)), float(0));
+  return float(1).sub(shaped).mul(19.899).add(0.1).mul(-999).add(1000).clamp(0, 1);
 }
 
 /** WuWa RabbitFX body response layered on top of the validated shadow model. */
 class WuwaBodyLightingModel extends WuwaLightingModel {
   direct(lightData, builder) {
     const { reflectedLight } = lightData;
-    const specularBefore = reflectedLight.directSpecular.toVar(
-      'wuwaBodyDirectSpecularBefore');
+    const specularBefore = reflectedLight.directSpecular.toVar('wuwaBodyDirectSpecularBefore');
     super.direct(lightData, builder);
 
     const {
@@ -714,8 +653,7 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
       metalRouteNode,
     } = this.gameMaterialState;
     const physicalSpecular = reflectedLight.directSpecular.sub(specularBefore);
-    const halfDirection = lightData.lightDirection
-      .add(positionViewDirection).normalize();
+    const halfDirection = lightData.lightDirection.add(positionViewDirection).normalize();
     const ndoth = normalView.dot(halfDirection).clamp(0, 1);
     const specTerm = ndoth.max(0.001).pow(wuwaSpecularPowerNode);
     const shapeGate = step(wuwaToonSpecularCutoffNode, specTerm);
@@ -728,10 +666,7 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
     // base WuWa lighting model above. It must not zero the body's highlight:
     // diffuse-only mode disables that map and otherwise changes the
     // specular result merely by changing the viewer display mode.
-    const toonSpecular = physicalSpecular
-      .mul(responseColor)
-      .mul(shapeGate)
-      .mul(float(1).sub(packedA).clamp(0, 1));
+    const toonSpecular = physicalSpecular.mul(responseColor).mul(shapeGate).mul(float(1).sub(packedA).clamp(0, 1));
     // A low B value means that this packed texture has no authored toon
     // highlight at the pixel. It must not erase the ordinary physical key
     // light: some RabbitFX body textures keep B at zero across nearly the
@@ -739,20 +674,16 @@ class WuwaBodyLightingModel extends WuwaLightingModel {
     // for direct specular. When B is authored, it still selects the toon
     // response above.
     const authoredSpecular = mix(physicalSpecular, toonSpecular, maskGate);
-    const replacement = mix(authoredSpecular, physicalSpecular,
-      wuwaMetalRouteNode(packedA));
+    const replacement = mix(authoredSpecular, physicalSpecular, wuwaMetalRouteNode(packedA));
     // The packed source is optional.  A missing/failed Normalmap must retain
     // the exact PR18 physical direct-specular contribution.
     const normalDataBinding = bindings.normal_data;
-    const bodySpecular = normalDataBinding.enabledNode.select(
-      replacement, physicalSpecular);
-    reflectedLight.directSpecular.assign(
-      specularBefore.add(bodySpecular));
+    const bodySpecular = normalDataBinding.enabledNode.select(replacement, physicalSpecular);
+    reflectedLight.directSpecular.assign(specularBefore.add(bodySpecular));
   }
 }
 
-function createGameLightingModel(
-    material, state, { allowPackedSpecializations = true } = {}) {
+function createGameLightingModel(material, state, { allowPackedSpecializations = true } = {}) {
   switch (state?.profile?.direct_shadow_model) {
     case 'zzz_toon':
       return new ZzzLightingModel(material, state);
@@ -778,12 +709,9 @@ class GamePhysicalNodeMaterial extends MeshPhysicalNodeMaterial {
 
     ior.assign(iorNode);
     specularColor.assign(
-      min(
-        pow2(ior.sub(1).div(ior.add(1))).mul(materialSpecularColor),
-        vec3(1),
-      ).mul(specularIntensity));
-    specularColorBlended.assign(
-      mix(specularColor, diffuseColor.rgb, metalness));
+      min(pow2(ior.sub(1).div(ior.add(1))).mul(materialSpecularColor), vec3(1)).mul(specularIntensity),
+    );
+    specularColorBlended.assign(mix(specularColor, diffuseColor.rgb, metalness));
     specularF90.assign(mix(specularIntensity, 1, metalness));
   }
 
@@ -830,23 +758,16 @@ export function createGameMaterial(profile, fallbackColor, options = {}) {
 /** Attach stable profile-specific TSL nodes to a material. */
 export function configureGameMaterial(material, profile, options = {}) {
   const hasUv = options.hasUv !== false;
-  const packedResponse = Boolean(
-    (options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
+  const packedResponse = Boolean((options.packedResponse ?? hasPackedResponse(profile)) && hasUv);
   const resolvedProfile = profile || { id: 'none' };
-  const normalSource = profileNormalXY(resolvedProfile)
-    && resolvedProfile.normal_source === 'normal_data'
-    ? 'normal_data' : 'normal_map';
-  const hasMaterialId = hasUv
-    && validRef(resolvedProfile.material_id)
-    && resolvedProfile.material_id_decoder === 'genshin_5_region';
-  const hasSpecularArea = hasUv
-    && validRef(resolvedProfile.specular_area);
-  const hasShadowMask = hasUv
-    && validRef(resolvedProfile.shadow_mask);
-  const hasNormalDataB = hasUv
-    && validRef(resolvedProfile.normal_data_b);
-  const hasNormalDataA = hasUv
-    && validRef(resolvedProfile.normal_data_a);
+  const normalSource =
+    profileNormalXY(resolvedProfile) && resolvedProfile.normal_source === 'normal_data' ? 'normal_data' : 'normal_map';
+  const hasMaterialId =
+    hasUv && validRef(resolvedProfile.material_id) && resolvedProfile.material_id_decoder === 'genshin_5_region';
+  const hasSpecularArea = hasUv && validRef(resolvedProfile.specular_area);
+  const hasShadowMask = hasUv && validRef(resolvedProfile.shadow_mask);
+  const hasNormalDataB = hasUv && validRef(resolvedProfile.normal_data_b);
+  const hasNormalDataA = hasUv && validRef(resolvedProfile.normal_data_a);
   const supportedDebugModes = [
     hasMaterialId ? 'material-id' : null,
     hasSpecularArea ? 'specular-area' : null,
@@ -862,48 +783,32 @@ export function configureGameMaterial(material, profile, options = {}) {
     hasUv,
     bindings: createBindings(hasUv),
     normalScaleNode: uniform(new Vector2(1, -1)),
-    shadowThresholdNode: uniform(
-      numericOr(profile?.shadow_threshold, 0.5)),
-    shadowSoftnessNode: uniform(
-      numericOr(profile?.shadow_softness, 0.08)),
-    shadowLevelNode: uniform(
-      numericOr(resolvedProfile?.shadow_level, 0)),
+    shadowThresholdNode: uniform(numericOr(profile?.shadow_threshold, 0.5)),
+    shadowSoftnessNode: uniform(numericOr(profile?.shadow_softness, 0.08)),
+    shadowLevelNode: uniform(numericOr(resolvedProfile?.shadow_level, 0)),
     toonEnabledNode: uniform(false),
-    shadowMaskStrengthNode: uniform(
-      numericOr(profile?.shadow_mask_strength, 0.5)),
-    shadowInfluenceNode: uniform(
-      numericOr(profile?.shadow_influence, 1.0)),
-    wuwaShadowProcessNode: uniform(
-      numericOr(profile?.wuwa_shadow_process, 0.55)),
-    wuwaShadowFrontOffsetNode: uniform(
-      numericOr(profile?.wuwa_shadow_front_offset, 0.4)),
-    wuwaShadowWidthNode: uniform(
-      numericOr(profile?.wuwa_shadow_width, 0.01)),
-    wuwaShadowMaskCutoffNode: uniform(
-      numericOr(profile?.wuwa_shadow_mask_cutoff, 0.1)),
-    wuwaShadowMaskEndpointToleranceNode: uniform(
-      numericOr(profile?.wuwa_shadow_mask_endpoint_tolerance, 0.01)),
-    wuwaShadowInfluenceNode: uniform(
-      numericOr(profile?.wuwa_shadow_influence, 1.0)),
-    wuwaSpecularPowerNode: uniform(
-      numericOr(profile?.wuwa_specular_power, 1.0)),
-    wuwaToonSpecularCutoffNode: uniform(
-      numericOr(profile?.wuwa_toon_specular_cutoff, 0.1)),
-    wuwaSpecularMaskCutoffNode: uniform(
-      numericOr(profile?.wuwa_specular_mask_cutoff, 0.5)),
+    shadowMaskStrengthNode: uniform(numericOr(profile?.shadow_mask_strength, 0.5)),
+    shadowInfluenceNode: uniform(numericOr(profile?.shadow_influence, 1.0)),
+    wuwaShadowProcessNode: uniform(numericOr(profile?.wuwa_shadow_process, 0.55)),
+    wuwaShadowFrontOffsetNode: uniform(numericOr(profile?.wuwa_shadow_front_offset, 0.4)),
+    wuwaShadowWidthNode: uniform(numericOr(profile?.wuwa_shadow_width, 0.01)),
+    wuwaShadowMaskCutoffNode: uniform(numericOr(profile?.wuwa_shadow_mask_cutoff, 0.1)),
+    wuwaShadowMaskEndpointToleranceNode: uniform(numericOr(profile?.wuwa_shadow_mask_endpoint_tolerance, 0.01)),
+    wuwaShadowInfluenceNode: uniform(numericOr(profile?.wuwa_shadow_influence, 1.0)),
+    wuwaSpecularPowerNode: uniform(numericOr(profile?.wuwa_specular_power, 1.0)),
+    wuwaToonSpecularCutoffNode: uniform(numericOr(profile?.wuwa_toon_specular_cutoff, 0.1)),
+    wuwaSpecularMaskCutoffNode: uniform(numericOr(profile?.wuwa_specular_mask_cutoff, 0.5)),
     materialIdNode: float(0),
     specularAreaNode: float(1),
     shadowMaskNode: float(0),
     normalDataBNode: float(0),
     normalDataANode: float(0),
-    toonSpecularShininessNode: uniform(
-      numericOr(profile?.toon_specular_shininess, 10.0)),
-    toonSpecularThresholdBiasNode: uniform(
-      numericOr(profile?.toon_specular_threshold_bias, 1.015)),
-    toonSpecularSoftnessNode: uniform(
-      numericOr(profile?.toon_specular_softness, 0.0)),
+    toonSpecularShininessNode: uniform(numericOr(profile?.toon_specular_shininess, 10.0)),
+    toonSpecularThresholdBiasNode: uniform(numericOr(profile?.toon_specular_threshold_bias, 1.015)),
+    toonSpecularSoftnessNode: uniform(numericOr(profile?.toon_specular_softness, 0.0)),
     toonSpecularMetalCutoffNode: hasNumericValue(profile?.toon_specular_metal_cutoff)
-      ? uniform(Number(profile.toon_specular_metal_cutoff)) : null,
+      ? uniform(Number(profile.toon_specular_metal_cutoff))
+      : null,
     debugModeNode: uniform(0),
     rimEnabledNode: uniform(true),
     rimStrengthNode: uniform(0.075),
@@ -931,13 +836,9 @@ export function configureGameMaterial(material, profile, options = {}) {
   // stable for the lifetime of the material. Conservative no-UV materials
   // deliberately keep these as scalar fallbacks, so no packed texture node
   // can become reachable in that path.
-  state.materialIdNode = hasMaterialId
-    ? createMaterialIdNode(resolvedProfile, state.bindings) : float(0);
-  state.specularAreaNode = hasSpecularArea
-    ? createSpecularAreaNode(resolvedProfile, state.bindings) : float(1);
-  state.shadowMaskNode = hasShadowMask
-    ? createRawChannelNode(resolvedProfile.shadow_mask, state.bindings)
-    : float(0);
+  state.materialIdNode = hasMaterialId ? createMaterialIdNode(resolvedProfile, state.bindings) : float(0);
+  state.specularAreaNode = hasSpecularArea ? createSpecularAreaNode(resolvedProfile, state.bindings) : float(1);
+  state.shadowMaskNode = hasShadowMask ? createRawChannelNode(resolvedProfile.shadow_mask, state.bindings) : float(0);
   state.normalDataBNode = hasNormalDataB
     ? createRawChannelNode(resolvedProfile.normal_data_b, state.bindings)
     : float(0);
@@ -950,8 +851,7 @@ export function configureGameMaterial(material, profile, options = {}) {
   state.metalRouteNode = validRef(resolvedProfile.metal_route)
     ? createRawChannelNode(resolvedProfile.metal_route, state.bindings)
     : float(0);
-  state.emissionNode = createEmissionNode(
-    resolvedProfile, state.bindings, hasUv);
+  state.emissionNode = createEmissionNode(resolvedProfile, state.bindings, hasUv);
   state.sources = state.bindings;
   state.nodes = {
     diffuse: state.bindings.diffuse,
@@ -969,8 +869,7 @@ export function configureGameMaterial(material, profile, options = {}) {
 function updateBinding(binding, value, enabled = !!value) {
   const next = value || binding.placeholder;
   const isEnabled = enabled && !!value;
-  const changed = binding.textureNode.value !== next
-    || binding.enabledNode.value !== isEnabled;
+  const changed = binding.textureNode.value !== next || binding.enabledNode.value !== isEnabled;
   binding.textureNode.value = next;
   binding.enabledNode.value = isEnabled;
   return changed;
@@ -995,8 +894,7 @@ export function updateGameMaterialTextures(mesh, maps = {}, options = {}) {
     changed = updateBinding(state.bindings[role], value, !pending) || changed;
   }
   if (Object.hasOwn(maps, 'normal_map_y_sign')) {
-    state.normalScaleNode.value.set(
-      1, Number.isFinite(maps.normal_map_y_sign) ? maps.normal_map_y_sign : -1);
+    state.normalScaleNode.value.set(1, Number.isFinite(maps.normal_map_y_sign) ? maps.normal_map_y_sign : -1);
   }
   return changed;
 }
@@ -1006,8 +904,7 @@ export function usesPackedNormal(material) {
 }
 
 export function isGameMaterialTextureBound(material, role) {
-  return material?.userData?.gameMaterial?.bindings?.[role]
-    ?.enabledNode?.value === true;
+  return material?.userData?.gameMaterial?.bindings?.[role]?.enabledNode?.value === true;
 }
 
 export function getGameMaterialTexture(material, role) {
@@ -1026,8 +923,7 @@ export function getGameMaterialSources(material) {
   if (state.profile?.emission_source === 'emission_map_rgb') {
     sources.add('emission_map');
   }
-  const debugSource = profileDebugSource(
-    state.profile, getMaterialDebugMode(material));
+  const debugSource = profileDebugSource(state.profile, getMaterialDebugMode(material));
   if (debugSource) sources.add(debugSource);
   return sources;
 }
@@ -1057,13 +953,12 @@ export function setMaterialDebugMode(materials, mode) {
 
 export function getMaterialDebugMode(material) {
   const value = material?.userData?.gameMaterial?.debugModeNode?.value;
-  return Object.entries(DEBUG_MODE_VALUES).find(([, id]) => id === value)?.[0]
-    || 'off';
+  return Object.entries(DEBUG_MODE_VALUES).find(([, id]) => id === value)?.[0] || 'off';
 }
 
 function getGameMaterialColorAdjustment(material) {
   const state = material?.userData?.gameMaterial;
-  if (!state) return {...DEFAULT_COLOR_ADJUSTMENT};
+  if (!state) return { ...DEFAULT_COLOR_ADJUSTMENT };
   const tintEnabled = state.colorTintEnabledNode?.value === true;
   return normalizeColorAdjustment({
     hue: state.colorHueNode?.value,
@@ -1077,8 +972,7 @@ function getGameMaterialColorAdjustment(material) {
   });
 }
 
-export function setGameMaterialColorAdjustment(
-    material, adjustment = {}, {enabled = false} = {}) {
+export function setGameMaterialColorAdjustment(material, adjustment = {}, { enabled = false } = {}) {
   const state = material?.userData?.gameMaterial;
   if (!state?.colorAdjustmentEnabledNode) return false;
   const value = normalizeColorAdjustment(adjustment);
@@ -1098,19 +992,16 @@ export function setGameMaterialColorAdjustment(
     node.value = next;
   });
   const tintNode = state.colorTintNode;
-  const currentTint = state.colorTintEnabledNode.value
-    ? tintHexFromRgb(tintNode.value) : null;
+  const currentTint = state.colorTintEnabledNode.value ? tintHexFromRgb(tintNode.value) : null;
   const tintRgb = tintRgbFromHex(value.tint);
   changed = currentTint !== value.tint || changed;
   if (tintNode.value?.set) tintNode.value.set(...tintRgb);
   else tintNode.value = new Vector3(...tintRgb);
   const tintEnabled = value.tint !== null;
-  changed = !Object.is(state.colorTintEnabledNode.value, tintEnabled)
-    || changed;
+  changed = !Object.is(state.colorTintEnabledNode.value, tintEnabled) || changed;
   state.colorTintEnabledNode.value = tintEnabled;
   const nextEnabled = enabled === true;
-  changed = !Object.is(state.colorAdjustmentEnabledNode.value, nextEnabled)
-    || changed;
+  changed = !Object.is(state.colorAdjustmentEnabledNode.value, nextEnabled) || changed;
   state.colorAdjustmentEnabledNode.value = nextEnabled;
   return changed;
 }
@@ -1128,9 +1019,9 @@ export function captureGameMaterialViewerState(material) {
 /** Restore per-material viewer state onto a newly-created material graph. */
 export function restoreGameMaterialViewerState(material, viewerState = {}) {
   setMaterialDebugMode([material], viewerState.debugMode || 'off');
-  setGameMaterialColorAdjustment(
-    material, viewerState.colorAdjustment || DEFAULT_COLOR_ADJUSTMENT,
-    {enabled: viewerState.colorAdjustmentEnabled === true});
+  setGameMaterialColorAdjustment(material, viewerState.colorAdjustment || DEFAULT_COLOR_ADJUSTMENT, {
+    enabled: viewerState.colorAdjustmentEnabled === true,
+  });
 }
 
 /** Toggle viewer rim lighting without rebuilding the material node graph. */

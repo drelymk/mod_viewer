@@ -4,7 +4,10 @@ import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 function canonicalPath(path) {
-  return String(path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 function setTextError(element, message) {
@@ -32,40 +35,42 @@ export function createFolderRegistryPanel({
   let roots = [];
   let activePath = null;
 
-  const className = suffix => `${classPrefix}-${suffix} folder-${suffix}`;
-  const selector = suffix => `.${classPrefix}-${suffix}`;
+  const className = (suffix) => `${classPrefix}-${suffix} folder-${suffix}`;
+  const selector = (suffix) => `.${classPrefix}-${suffix}`;
   const pathAttribute = `data-${classPrefix}-path`;
 
   function closeMenus(except = null) {
-    listElement.querySelectorAll(selector('action-menu')).forEach(menu => {
+    listElement.querySelectorAll(selector('action-menu')).forEach((menu) => {
       if (menu !== except) {
         menu.hidden = true;
-        menu.parentElement?.querySelector(`:scope > ${selector('more')}`)
-          ?.setAttribute('aria-expanded', 'false');
+        menu.parentElement?.querySelector(`:scope > ${selector('more')}`)?.setAttribute('aria-expanded', 'false');
       }
     });
   }
 
-  document.addEventListener('click', event => {
+  document.addEventListener('click', (event) => {
     if (!event.target.closest(selector('actions'))) closeMenus();
   });
 
   function setActivePath(path) {
     activePath = canonicalPath(path);
-    listElement.querySelectorAll(`[${pathAttribute}]`).forEach(row => {
+    listElement.querySelectorAll(`[${pathAttribute}]`).forEach((row) => {
       const rowPath = canonicalPath(row.getAttribute(pathAttribute));
       row.classList.toggle('active', rowPath === activePath);
-      row.classList.toggle('active-descendant', !!activePath && rowPath !== activePath
-        && activePath.startsWith(`${rowPath}/`));
+      row.classList.toggle(
+        'active-descendant',
+        !!activePath && rowPath !== activePath && activePath.startsWith(`${rowPath}/`),
+      );
     });
   }
 
   function renderChildren(node, children) {
     const childList = node.querySelector(`:scope > ${selector('children')}`);
     childList.innerHTML = '';
-    node.querySelector(`:scope > ${selector('row')} ${selector('expand')}`)
+    node
+      .querySelector(`:scope > ${selector('row')} ${selector('expand')}`)
       .classList.toggle('leaf', children.length === 0 && !node.classList.contains('expanded'));
-    children.forEach(child => childList.appendChild(createNode(child, false)));
+    children.forEach((child) => childList.appendChild(createNode(child, false)));
   }
 
   async function expandNode(node, path, arrow) {
@@ -76,7 +81,7 @@ export function createFolderRegistryPanel({
       childList.hidden = true;
       arrow.classList.toggle('leaf', childCache.get(canonicalPath(path))?.length === 0);
       arrow.setAttribute('aria-expanded', 'false');
-      arrow.setAttribute('aria-label', t('folder.expand', {name: arrow.dataset.folderName}));
+      arrow.setAttribute('aria-label', t('folder.expand', { name: arrow.dataset.folderName }));
       return;
     }
 
@@ -84,7 +89,7 @@ export function createFolderRegistryPanel({
     arrow.classList.add('expanded');
     childList.hidden = false;
     arrow.setAttribute('aria-expanded', 'true');
-    arrow.setAttribute('aria-label', t('folder.collapse', {name: arrow.dataset.folderName}));
+    arrow.setAttribute('aria-label', t('folder.collapse', { name: arrow.dataset.folderName }));
     const key = canonicalPath(path);
     if (childCache.has(key)) {
       renderChildren(node, childCache.get(key));
@@ -131,15 +136,18 @@ export function createFolderRegistryPanel({
     arrow.className = className('expand');
     arrow.textContent = '›';
     arrow.dataset.folderName = entry.name || entry.path;
-    arrow.setAttribute('aria-label', t('folder.assetTreeExpand', {
-      name: arrow.dataset.folderName,
-    }));
+    arrow.setAttribute(
+      'aria-label',
+      t('folder.assetTreeExpand', {
+        name: arrow.dataset.folderName,
+      }),
+    );
     arrow.setAttribute('aria-expanded', 'false');
     const expandable = entry.expandable !== false && entry.kind !== 'archive';
     arrow.classList.toggle('leaf', !expandable);
     arrow.disabled = !expandable;
     if (expandable) {
-      arrow.addEventListener('click', event => {
+      arrow.addEventListener('click', (event) => {
         event.stopPropagation();
         void expandNode(node, entry.path, arrow);
       });
@@ -150,7 +158,7 @@ export function createFolderRegistryPanel({
     select.className = className('select');
     appendLabel(select, entry, isRoot);
     select.title = entry.path;
-    select.addEventListener('click', event => {
+    select.addEventListener('click', (event) => {
       event.stopPropagation();
       const callback = isRoot ? onRootSelected : onChildSelected;
       callback?.(entry.path, entry);
@@ -169,9 +177,12 @@ export function createFolderRegistryPanel({
       more.className = className('more');
       more.appendChild(createIcon('more'));
       more.title = t('folder.moreActions');
-      more.setAttribute('aria-label', t('folder.moreActionsFor', {
-        name: entry.name || entry.path,
-      }));
+      more.setAttribute(
+        'aria-label',
+        t('folder.moreActionsFor', {
+          name: entry.name || entry.path,
+        }),
+      );
       more.setAttribute('aria-haspopup', 'menu');
       more.setAttribute('aria-expanded', 'false');
       const menu = document.createElement('span');
@@ -184,7 +195,7 @@ export function createFolderRegistryPanel({
         edit.className = className('edit');
         edit.setAttribute('role', 'menuitem');
         edit.textContent = t('folder.edit');
-        edit.addEventListener('click', event => {
+        edit.addEventListener('click', (event) => {
           event.stopPropagation();
           menu.hidden = true;
           more.setAttribute('aria-expanded', 'false');
@@ -198,7 +209,7 @@ export function createFolderRegistryPanel({
         remove.className = className('remove');
         remove.setAttribute('role', 'menuitem');
         remove.textContent = t('folder.remove');
-        remove.addEventListener('click', event => {
+        remove.addEventListener('click', (event) => {
           event.stopPropagation();
           menu.hidden = true;
           more.setAttribute('aria-expanded', 'false');
@@ -206,7 +217,7 @@ export function createFolderRegistryPanel({
         });
         menu.appendChild(remove);
       }
-      more.addEventListener('click', event => {
+      more.addEventListener('click', (event) => {
         event.stopPropagation();
         closeMenus(menu);
         menu.hidden = !menu.hidden;
@@ -223,8 +234,7 @@ export function createFolderRegistryPanel({
     if (meta instanceof Node) {
       meta.classList.add(`${classPrefix}-meta`);
       node.append(row, meta, children);
-    }
-    else node.append(row, children);
+    } else node.append(row, children);
     if (entry.exists === false && isRoot) {
       const missing = document.createElement('div');
       missing.className = className('missing');
@@ -236,14 +246,14 @@ export function createFolderRegistryPanel({
 
   function setRootBusy(path, busy) {
     const key = canonicalPath(path);
-    const node = [...listElement.children].find(candidate => {
+    const node = [...listElement.children].find((candidate) => {
       const row = candidate.querySelector(`:scope > ${selector('row')}`);
       return row && canonicalPath(row.getAttribute(pathAttribute)) === key;
     });
     if (!node) return false;
     node.classList.toggle(`${classPrefix}-busy`, busy);
-    rootBusySelectors.forEach(suffix => {
-      node.querySelectorAll(selector(suffix)).forEach(button => {
+    rootBusySelectors.forEach((suffix) => {
+      node.querySelectorAll(selector(suffix)).forEach((button) => {
         button.disabled = busy;
       });
     });
@@ -252,45 +262,47 @@ export function createFolderRegistryPanel({
 
   function expandedNodePaths() {
     return [...listElement.querySelectorAll(selector('node'))]
-      .filter(node => node.classList.contains('expanded'))
-      .map(node => node.querySelector(`:scope > ${selector('row')}`)
-        ?.getAttribute(pathAttribute))
+      .filter((node) => node.classList.contains('expanded'))
+      .map((node) => node.querySelector(`:scope > ${selector('row')}`)?.getAttribute(pathAttribute))
       .filter(Boolean);
   }
 
   function findNode(path) {
     const key = canonicalPath(path);
-    return [...listElement.querySelectorAll(selector('node'))].find(node => {
+    return [...listElement.querySelectorAll(selector('node'))].find((node) => {
       const row = node.querySelector(`:scope > ${selector('row')}`);
       return row && canonicalPath(row.getAttribute(pathAttribute)) === key;
     });
   }
 
   function restoreExpanded(paths) {
-    const ordered = [...new Set(paths.map(canonicalPath))]
-      .sort((left, right) => left.split('/').length - right.split('/').length);
-    ordered.forEach(path => {
+    const ordered = [...new Set(paths.map(canonicalPath))].sort(
+      (left, right) => left.split('/').length - right.split('/').length,
+    );
+    ordered.forEach((path) => {
       const node = findNode(path);
-      const arrow = node?.querySelector(
-        `:scope > ${selector('row')} ${selector('expand')}`);
+      const arrow = node?.querySelector(`:scope > ${selector('row')} ${selector('expand')}`);
       const children = node?.querySelector(`:scope > ${selector('children')}`);
       if (!node || !arrow || arrow.disabled || !children) return;
       node.classList.add('expanded');
       arrow.classList.add('expanded');
       arrow.setAttribute('aria-expanded', 'true');
-      arrow.setAttribute('aria-label', t('folder.collapse', {
-        name: arrow.dataset.folderName,
-      }));
+      arrow.setAttribute(
+        'aria-label',
+        t('folder.collapse', {
+          name: arrow.dataset.folderName,
+        }),
+      );
       children.hidden = false;
       if (childCache.has(path)) renderChildren(node, childCache.get(path));
     });
   }
 
-  function render(entries, {expandedPaths = []} = {}) {
+  function render(entries, { expandedPaths = [] } = {}) {
     roots = entries || [];
     listElement.innerHTML = '';
     listElement.hidden = roots.length === 0;
-    roots.forEach(entry => listElement.appendChild(createNode(entry, true)));
+    roots.forEach((entry) => listElement.appendChild(createNode(entry, true)));
     restoreExpanded(expandedPaths);
     if (emptyElement) emptyElement.hidden = roots.length !== 0;
     setActivePath(activePath);
@@ -298,22 +310,19 @@ export function createFolderRegistryPanel({
 
   function updateRoot(entry) {
     const key = canonicalPath(entry?.path);
-    const index = roots.findIndex(root => canonicalPath(root.path) === key);
+    const index = roots.findIndex((root) => canonicalPath(root.path) === key);
     if (!key || index < 0) return false;
-    const currentNode = [...listElement.children].find(node => {
+    const currentNode = [...listElement.children].find((node) => {
       const row = node.querySelector(`:scope > ${selector('row')}`);
       return row && canonicalPath(row.getAttribute(pathAttribute)) === key;
     });
     if (!currentNode) return false;
 
-    const currentChildren = currentNode.querySelector(
-      `:scope > ${selector('children')}`);
+    const currentChildren = currentNode.querySelector(`:scope > ${selector('children')}`);
     const expanded = currentNode.classList.contains('expanded');
     const replacement = createNode(entry, true);
-    const replacementArrow = replacement.querySelector(
-      `:scope > ${selector('row')} ${selector('expand')}`);
-    const replacementChildren = replacement.querySelector(
-      `:scope > ${selector('children')}`);
+    const replacementArrow = replacement.querySelector(`:scope > ${selector('row')} ${selector('expand')}`);
+    const replacementChildren = replacement.querySelector(`:scope > ${selector('children')}`);
     if (currentChildren && replacementChildren) {
       replacementChildren.replaceWith(currentChildren);
     }
@@ -325,9 +334,11 @@ export function createFolderRegistryPanel({
       replacementArrow.classList.add('expanded');
       replacementArrow.setAttribute('aria-expanded', 'true');
       replacementArrow.setAttribute(
-        'aria-label', t('folder.collapse', {
+        'aria-label',
+        t('folder.collapse', {
           name: replacementArrow.dataset.folderName,
-        }));
+        }),
+      );
     }
     currentNode.replaceWith(replacement);
     roots[index] = entry;
@@ -350,7 +361,7 @@ export function createFolderRegistryPanel({
 
   window.addEventListener(LANGUAGE_CHANGED, () => {
     const expandedPaths = expandedNodePaths();
-    render(roots, {expandedPaths});
+    render(roots, { expandedPaths });
   });
 
   return {

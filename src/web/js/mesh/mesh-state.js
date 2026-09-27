@@ -1,18 +1,17 @@
 // Active meshes and the mod control state resolved onto their rendering data.
 
 import {
-  invalidateCharacterShadowGeometry, invalidateCharacterShadowVisibility,
+  invalidateCharacterShadowGeometry,
+  invalidateCharacterShadowVisibility,
   forgetModelMeshes as forgetSceneModelMeshes,
-  resetCharacterShadows, scene, resetModelOrientation,
+  resetCharacterShadows,
+  scene,
+  resetModelOrientation,
 } from '../scene/scene.js';
 import { dnfSatisfied, getControlValue } from '../editing/control-state.js';
 import { disposeGameMaterial } from './material-profile.js';
-import {
-  refreshMeshTexture, setMeshTextureState, updateGeometryNormals,
-} from './mesh-factory.js';
-import {
-  replaceMeshMaterial, updateMeshMaterialMetadata,
-} from './mesh-material-state.js';
+import { refreshMeshTexture, setMeshTextureState, updateGeometryNormals } from './mesh-factory.js';
+import { replaceMeshMaterial, updateMeshMaterialMetadata } from './mesh-material-state.js';
 import { clearTextureRunGroups, recomputeAllTextureRuns } from './mesh-texture-runs.js';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
@@ -20,8 +19,10 @@ import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
 import { clearLooseParts, syncLoosePartMaterial } from './loose-parts.js';
 import {
-  disposeSkinningExperiment, getSkinningBaseMaterial,
-  destroyModelPhysicsSession, registerSkinningMesh,
+  disposeSkinningExperiment,
+  getSkinningBaseMaterial,
+  destroyModelPhysicsSession,
+  registerSkinningMesh,
   refreshSkinningAfterShapeChange,
   withSkinningBaseMaterial,
 } from './weight-rig-feature.js';
@@ -32,18 +33,60 @@ const controlDependencies = new WeakMap();
 // These fields all follow the same variants -> default -> resolved -> current
 // lifecycle. Keep role-specific rendering policy below this mechanical table.
 const TEXTURE_ROLE_FIELDS = Object.freeze([
-  {role: 'diffuse', variants: 'textureVariants', payloadVariants: 'texture_variants',
-    default: 'defaultTexKey', payloadDefault: 'tex_key', resolved: 'resolvedTexKey', current: 'texKey'},
-  {role: 'normal_map', variants: 'normalMapVariants', payloadVariants: 'normal_map_variants',
-    default: 'defaultNormalMapKey', payloadDefault: 'normal_map_key', resolved: 'resolvedNormalMapKey', current: 'normalMapKey'},
-  {role: 'normal_data', variants: 'normalDataVariants', payloadVariants: 'normal_data_variants',
-    default: 'defaultNormalDataKey', payloadDefault: 'normal_data_key', resolved: 'resolvedNormalDataKey', current: 'normalDataKey'},
-  {role: 'light_map', variants: 'lightMapVariants', payloadVariants: 'light_map_variants',
-    default: 'defaultLightMapKey', payloadDefault: 'light_map_key', resolved: 'resolvedLightMapKey', current: 'lightMapKey'},
-  {role: 'material_map', variants: 'materialMapVariants', payloadVariants: 'material_map_variants',
-    default: 'defaultMaterialMapKey', payloadDefault: 'material_map_key', resolved: 'resolvedMaterialMapKey', current: 'materialMapKey'},
-  {role: 'emission_map', variants: 'emissionMapVariants', payloadVariants: 'emission_map_variants',
-    default: 'defaultEmissionMapKey', payloadDefault: 'emission_map_key', resolved: 'resolvedEmissionMapKey', current: 'emissionMapKey'},
+  {
+    role: 'diffuse',
+    variants: 'textureVariants',
+    payloadVariants: 'texture_variants',
+    default: 'defaultTexKey',
+    payloadDefault: 'tex_key',
+    resolved: 'resolvedTexKey',
+    current: 'texKey',
+  },
+  {
+    role: 'normal_map',
+    variants: 'normalMapVariants',
+    payloadVariants: 'normal_map_variants',
+    default: 'defaultNormalMapKey',
+    payloadDefault: 'normal_map_key',
+    resolved: 'resolvedNormalMapKey',
+    current: 'normalMapKey',
+  },
+  {
+    role: 'normal_data',
+    variants: 'normalDataVariants',
+    payloadVariants: 'normal_data_variants',
+    default: 'defaultNormalDataKey',
+    payloadDefault: 'normal_data_key',
+    resolved: 'resolvedNormalDataKey',
+    current: 'normalDataKey',
+  },
+  {
+    role: 'light_map',
+    variants: 'lightMapVariants',
+    payloadVariants: 'light_map_variants',
+    default: 'defaultLightMapKey',
+    payloadDefault: 'light_map_key',
+    resolved: 'resolvedLightMapKey',
+    current: 'lightMapKey',
+  },
+  {
+    role: 'material_map',
+    variants: 'materialMapVariants',
+    payloadVariants: 'material_map_variants',
+    default: 'defaultMaterialMapKey',
+    payloadDefault: 'material_map_key',
+    resolved: 'resolvedMaterialMapKey',
+    current: 'materialMapKey',
+  },
+  {
+    role: 'emission_map',
+    variants: 'emissionMapVariants',
+    payloadVariants: 'emission_map_variants',
+    default: 'defaultEmissionMapKey',
+    payloadDefault: 'emission_map_key',
+    resolved: 'resolvedEmissionMapKey',
+    current: 'emissionMapKey',
+  },
 ]);
 
 /** Add every variable referenced by an existing DNF condition structure. */
@@ -69,13 +112,10 @@ export function dependenciesFor(mesh) {
 
   const visibility = variablesFromConditions(mesh.userData?.conditions);
   const textures = new Set();
-  for (const {variants} of TEXTURE_ROLE_FIELDS) {
+  for (const { variants } of TEXTURE_ROLE_FIELDS) {
     variablesFromVariants(mesh.userData?.[variants], textures);
   }
-  const shapes = new Set(
-    (mesh.userData?.shapeTargets || [])
-      .map(target => target?.var)
-      .filter(Boolean));
+  const shapes = new Set((mesh.userData?.shapeTargets || []).map((target) => target?.var).filter(Boolean));
   dependencies = { visibility, textures, shapes };
   controlDependencies.set(mesh, dependencies);
   return dependencies;
@@ -89,14 +129,14 @@ export function resetMeshes({ preserveModelOrientation = false } = {}) {
   // Release source-level physics participants before their member geometry is
   // disposed. This keeps teardown callbacks on live meshes.
   destroyModelPhysicsSession();
-  activeMeshes.forEach(mesh => {
+  activeMeshes.forEach((mesh) => {
     clearLooseParts(mesh);
     disposeSkinningExperiment(mesh);
     detachOutline(mesh);
     scene.remove(mesh);
     mesh.geometry.dispose();
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => {
+    materials.forEach((material) => {
       disposeGameMaterial(material);
       material.dispose();
     });
@@ -143,7 +183,7 @@ export function removeMesh(mesh) {
   scene.remove(mesh);
   mesh.geometry?.dispose?.();
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  materials.forEach(material => {
+  materials.forEach((material) => {
     disposeGameMaterial(material);
     material?.dispose?.();
   });
@@ -153,16 +193,14 @@ export function removeMesh(mesh) {
 }
 
 export function removeAssetFillMeshes() {
-  const removed = activeMeshes
-    .filter(mesh => mesh.userData.assetFill === true)
-    .slice();
+  const removed = activeMeshes.filter((mesh) => mesh.userData.assetFill === true).slice();
   removed.forEach(removeMesh);
   if (removed.length) requestRender();
   return removed.length;
 }
 
 export function resetMeshVisibility() {
-  activeMeshes.forEach(mesh => {
+  activeMeshes.forEach((mesh) => {
     mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;
     mesh.userData.manuallyToggled = false;
     applyMeshVisibility(mesh, { notify: false });
@@ -172,13 +210,18 @@ export function resetMeshVisibility() {
 }
 
 const SEMANTIC_SNAPSHOT_FIELDS = [
-  'conditions', 'sources', 'source', 'component',
+  'conditions',
+  'sources',
+  'source',
+  'component',
   'identity',
-  ...TEXTURE_ROLE_FIELDS.flatMap(({variants, default: defaultField, current}) => [
-    variants, defaultField, current,
-  ]),
-  'assetEntry', 'materialKind', 'materialKindReliable',
-  'materialKindReason', 'materialKindOverride', 'materialProfileId',
+  ...TEXTURE_ROLE_FIELDS.flatMap(({ variants, default: defaultField, current }) => [variants, defaultField, current]),
+  'assetEntry',
+  'materialKind',
+  'materialKindReliable',
+  'materialKindReason',
+  'materialKindOverride',
+  'materialProfileId',
   'materialProfile',
 ];
 
@@ -187,7 +230,7 @@ function snapshotMeshSemantics(mesh) {
   for (const field of SEMANTIC_SNAPSHOT_FIELDS) {
     values[field] = mesh.userData[field];
   }
-  return {mesh, values};
+  return { mesh, values };
 }
 
 function restoreMeshSemantics(snapshot) {
@@ -197,26 +240,24 @@ function restoreMeshSemantics(snapshot) {
 /** Replace draw visibility, texture and material semantics without reloading. */
 export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
   const next = semantics || {};
-  const semanticMeshes = activeMeshes.filter(
-    mesh => mesh.userData.assetFill !== true);
-  const keys = semanticMeshes.map(mesh => mesh.userData.semanticKey);
-  if (keys.some(key => !next[key])
-      || Object.keys(next).length !== keys.length) {
-    return {success: false, materialChangedMeshes: []};
+  const semanticMeshes = activeMeshes.filter((mesh) => mesh.userData.assetFill !== true);
+  const keys = semanticMeshes.map((mesh) => mesh.userData.semanticKey);
+  if (keys.some((key) => !next[key]) || Object.keys(next).length !== keys.length) {
+    return { success: false, materialChangedMeshes: [] };
   }
-  const identityMismatch = semanticMeshes.some(mesh => {
+  const identityMismatch = semanticMeshes.some((mesh) => {
     const currentKey = mesh.userData.identity?.key;
     const nextKey = next[mesh.userData.semanticKey]?.identity?.key;
     return currentKey && nextKey && currentKey !== nextKey;
   });
   if (identityMismatch) {
-    return {success: false, materialChangedMeshes: []};
+    return { success: false, materialChangedMeshes: [] };
   }
 
-  const updates = semanticMeshes.map(mesh => {
+  const updates = semanticMeshes.map((mesh) => {
     const semantic = next[mesh.userData.semanticKey];
     if (!Object.hasOwn(semantic, 'material_profile_id')) {
-      return {mesh, semantic, material: null};
+      return { mesh, semantic, material: null };
     }
     const profileId = semantic.material_profile_id || 'none';
     const profile = materialProfiles?.[profileId] || null;
@@ -230,15 +271,15 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       },
     };
   });
-  if (updates.some(update => update === null)) {
-    return {success: false, materialChangedMeshes: []};
+  if (updates.some((update) => update === null)) {
+    return { success: false, materialChangedMeshes: [] };
   }
 
   const snapshots = semanticMeshes.map(snapshotMeshSemantics);
   const materialChangedMeshes = [];
   const replacements = [];
   try {
-    updates.forEach(({mesh, semantic, material}) => {
+    updates.forEach(({ mesh, semantic, material }) => {
       mesh.userData.conditions = semantic.conditions || [];
       mesh.userData.sources = semantic.sources || [];
       if (Object.hasOwn(semantic, 'source')) {
@@ -250,18 +291,16 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       if (Object.hasOwn(semantic, 'identity')) {
         mesh.userData.identity = semantic.identity || null;
       }
-      for (const {variants, payloadVariants} of TEXTURE_ROLE_FIELDS) {
+      for (const { variants, payloadVariants } of TEXTURE_ROLE_FIELDS) {
         mesh.userData[variants] = semantic[payloadVariants] || [];
       }
-      for (const {default: defaultField, payloadDefault} of TEXTURE_ROLE_FIELDS) {
+      for (const { default: defaultField, payloadDefault } of TEXTURE_ROLE_FIELDS) {
         if (Object.hasOwn(semantic, payloadDefault)) {
           mesh.userData[defaultField] = semantic[payloadDefault] || null;
         }
       }
-      const assetEntry = {...(mesh.userData.assetEntry || {})};
-      for (const field of [
-        'asset_binding', 'texture_resolution', 'asset_slot_evidence',
-      ]) {
+      const assetEntry = { ...(mesh.userData.assetEntry || {}) };
+      for (const field of ['asset_binding', 'texture_resolution', 'asset_slot_evidence']) {
         if (Object.hasOwn(semantic, field)) assetEntry[field] = semantic[field];
         else delete assetEntry[field];
       }
@@ -269,25 +308,26 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       if (material?.changed) {
         const replacement = withSkinningBaseMaterial(mesh, () =>
           replaceMeshMaterial(mesh, material.profile, semantic, {
-            render: false, disposeOld: false,
-          }));
+            render: false,
+            disposeOld: false,
+          }),
+        );
         replacements.push({
-          mesh, oldMaterial: replacement.oldMaterial,
+          mesh,
+          oldMaterial: replacement.oldMaterial,
           newMaterial: replacement.material,
         });
         materialChangedMeshes.push(mesh);
-      } else if (material && updateMeshMaterialMetadata(
-          mesh, semantic, material.profile)) {
+      } else if (material && updateMeshMaterialMetadata(mesh, semantic, material.profile)) {
         materialChangedMeshes.push(mesh);
       }
       invalidateControlDependencies(mesh);
     });
   } catch (error) {
     console.error('Could not apply mesh semantic material update', error);
-    for (const {mesh, oldMaterial, newMaterial} of replacements.reverse()) {
+    for (const { mesh, oldMaterial, newMaterial } of replacements.reverse()) {
       const currentMaterial = getSkinningBaseMaterial(mesh);
-      const materialToDispose = currentMaterial === oldMaterial
-        ? newMaterial : currentMaterial;
+      const materialToDispose = currentMaterial === oldMaterial ? newMaterial : currentMaterial;
       if (materialToDispose && materialToDispose !== oldMaterial) {
         disposeGameMaterial(materialToDispose);
         materialToDispose.dispose();
@@ -298,13 +338,13 @@ export function updateMeshSemantics(semantics, { materialProfiles = {} } = {}) {
       syncLoosePartMaterial(mesh);
     }
     snapshots.forEach(restoreMeshSemantics);
-    return {success: false, materialChangedMeshes: []};
+    return { success: false, materialChangedMeshes: [] };
   }
-  replacements.forEach(({oldMaterial}) => {
+  replacements.forEach(({ oldMaterial }) => {
     disposeGameMaterial(oldMaterial);
     oldMaterial.dispose();
   });
-  return {success: true, materialChangedMeshes};
+  return { success: true, materialChangedMeshes };
 }
 
 /** Pin or clear one mesh's highlighted diffuse. Ordered component propagation
@@ -321,30 +361,31 @@ export function conditionsSatisfied(mesh) {
 }
 
 export function applyTextureVariant(mesh, { render = true } = {}) {
-  const previous = TEXTURE_ROLE_FIELDS.flatMap(({resolved, current}) => [
-    mesh.userData[resolved], mesh.userData[current],
+  const previous = TEXTURE_ROLE_FIELDS.flatMap(({ resolved, current }) => [
+    mesh.userData[resolved],
+    mesh.userData[current],
   ]);
   const resolve = (variants, fallback) => {
     variants = variants || [];
     const variant = variants.findLast
-      ? variants.findLast(item => dnfSatisfied(item.conditions))
-      : [...variants].reverse().find(item => dnfSatisfied(item.conditions));
+      ? variants.findLast((item) => dnfSatisfied(item.conditions))
+      : [...variants].reverse().find((item) => dnfSatisfied(item.conditions));
     return variant ? variant.tex_key : fallback;
   };
-  for (const {variants, default: defaultField, resolved} of TEXTURE_ROLE_FIELDS) {
-    mesh.userData[resolved] = resolve(
-      mesh.userData[variants], mesh.userData[defaultField]);
+  for (const { variants, default: defaultField, resolved } of TEXTURE_ROLE_FIELDS) {
+    mesh.userData[resolved] = resolve(mesh.userData[variants], mesh.userData[defaultField]);
   }
   const textureState = {};
-  for (const {role, resolved} of TEXTURE_ROLE_FIELDS) {
-    textureState[role] = role === 'diffuse'
-      && mesh.userData.manualTexOverride !== undefined
-      ? mesh.userData.manualTexOverride
-      : mesh.userData[resolved];
+  for (const { role, resolved } of TEXTURE_ROLE_FIELDS) {
+    textureState[role] =
+      role === 'diffuse' && mesh.userData.manualTexOverride !== undefined
+        ? mesh.userData.manualTexOverride
+        : mesh.userData[resolved];
   }
   const materialChanged = setMeshTextureState(mesh, textureState, { render });
-  const next = TEXTURE_ROLE_FIELDS.flatMap(({resolved, current}) => [
-    mesh.userData[resolved], mesh.userData[current],
+  const next = TEXTURE_ROLE_FIELDS.flatMap(({ resolved, current }) => [
+    mesh.userData[resolved],
+    mesh.userData[current],
   ]);
   return materialChanged || next.some((value, index) => !Object.is(value, previous[index]));
 }
@@ -355,9 +396,8 @@ export function applyMeshVisibility(mesh, { notify = true, render = true } = {})
   const previous = mesh.visible;
   mesh.visible = mesh.userData.manualVisible !== false;
   const changed = previous !== mesh.visible;
-  if (changed && mesh.visible
-      && mesh.userData.textureRequestsDeferred !== true) {
-    refreshMeshTexture(mesh, {render: false});
+  if (changed && mesh.visible && mesh.userData.textureRequestsDeferred !== true) {
+    refreshMeshTexture(mesh, { render: false });
   }
   if (changed) invalidateCharacterShadowVisibility({ request: render });
   if (notify) notifyMeshStateChanged([mesh]);
@@ -368,16 +408,16 @@ export function applyMeshVisibility(mesh, { notify = true, render = true } = {})
 function applyShapeTargets(mesh, { render = true } = {}) {
   const targets = mesh.userData.shapeTargets || [];
   if (!targets.length) return false;
-  const controlValues = targets.map(target => getControlValue(target.var) ?? 0);
+  const controlValues = targets.map((target) => getControlValue(target.var) ?? 0);
   const previous = mesh.userData.shapeControlValues;
-  if (previous?.length === controlValues.length
-      && controlValues.every((value, index) => value === previous[index])) return false;
+  if (previous?.length === controlValues.length && controlValues.every((value, index) => value === previous[index]))
+    return false;
   mesh.userData.shapeControlValues = controlValues;
 
   const attr = mesh.geometry.attributes.position;
   const base = mesh.userData.basePositions;
   attr.array.set(base);
-  const midpointTargets = targets.filter(target => target.mode === 'midpoint_pair');
+  const midpointTargets = targets.filter((target) => target.mode === 'midpoint_pair');
   for (const target of targets) {
     const weight = Number(getControlValue(target.var) ?? 0);
     if (!Number.isFinite(weight)) continue;
@@ -405,8 +445,7 @@ function applyShapeTargets(mesh, { render = true } = {}) {
   mesh.geometry.computeBoundingSphere();
   // Shape targets define the rest geometry for semantic fitting. Capture it
   // before the Weight runtime re-baselines or applies any pose/Physics state.
-  mesh.userData.humanoidRestPositions = deformed
-    ? new Float32Array(attr.array) : base;
+  mesh.userData.humanoidRestPositions = deformed ? new Float32Array(attr.array) : base;
   const normal = mesh.geometry.attributes.normal;
   if (normal) {
     mesh.userData.humanoidRestNormals = new Float32Array(normal.array);
@@ -425,28 +464,24 @@ function intersects(left, right) {
 export function refreshMeshes(options) {
   // Keep direct low-level callers compatible with the former all-mesh API.
   const legacyRefresh = options === undefined;
-  const {
-    changedVariables = new Set(),
-    force = {},
-    additionalMeshes = [],
-  } = options || {};
-  const changed = changedVariables instanceof Set
-    ? changedVariables : new Set(changedVariables || []);
-  const effectiveForce = legacyRefresh
-    ? { visibility: true, textures: true, shapes: true } : force;
+  const { changedVariables = new Set(), force = {}, additionalMeshes = [] } = options || {};
+  const changed = changedVariables instanceof Set ? changedVariables : new Set(changedVariables || []);
+  const effectiveForce = legacyRefresh ? { visibility: true, textures: true, shapes: true } : force;
   const visibilityForced = effectiveForce.visibility === true;
   const texturesForced = effectiveForce.textures === true;
   const shapesForced = effectiveForce.shapes === true;
-  const normalMeshes = activeMeshes.filter(mesh => mesh.userData.assetFill !== true);
-  const textureDirty = texturesForced || normalMeshes.some(mesh =>
-    intersects(dependenciesFor(mesh).textures, changed));
+  const normalMeshes = activeMeshes.filter((mesh) => mesh.userData.assetFill !== true);
+  const textureDirty =
+    texturesForced || normalMeshes.some((mesh) => intersects(dependenciesFor(mesh).textures, changed));
   // A control refresh can reveal a mesh before its conditional variant and
   // ordered component run have settled. Suppress requests across that whole
   // transaction so only the final visible binding reaches the loader.
   const requestDeferred = (textureDirty ? normalMeshes : []).filter(
-    mesh => mesh.userData.textureRequestsDeferred !== true);
-  requestDeferred.forEach(
-    mesh => { mesh.userData.textureRequestsDeferred = true; });
+    (mesh) => mesh.userData.textureRequestsDeferred !== true,
+  );
+  requestDeferred.forEach((mesh) => {
+    mesh.userData.textureRequestsDeferred = true;
+  });
   const changedMeshes = new Set();
   for (const mesh of additionalMeshes || []) {
     if (activeMeshes.includes(mesh)) changedMeshes.add(mesh);
@@ -458,15 +493,16 @@ export function refreshMeshes(options) {
   try {
     for (const mesh of activeMeshes) {
       const dependencies = dependenciesFor(mesh);
-      const needsVisibility = visibilityForced
-        || mesh.userData.manuallyToggled === true
-        || intersects(dependencies.visibility, changed);
+      const needsVisibility =
+        visibilityForced || mesh.userData.manuallyToggled === true || intersects(dependencies.visibility, changed);
       if (needsVisibility) {
         mesh.userData.manualVisible = conditionsSatisfied(mesh);
         mesh.userData.manuallyToggled = false;
-        visibilityChanged = applyMeshVisibility(mesh, {
-          notify: false, render: false,
-        }) || visibilityChanged;
+        visibilityChanged =
+          applyMeshVisibility(mesh, {
+            notify: false,
+            render: false,
+          }) || visibilityChanged;
         changedMeshes.add(mesh);
         if (!mesh.userData.defaultCaptured) {
           mesh.userData.loadedVisible = mesh.visible;
@@ -494,17 +530,18 @@ export function refreshMeshes(options) {
       texturesChanged = runChangedMeshes.size > 0 || texturesChanged;
     }
   } finally {
-    requestDeferred.forEach(
-      mesh => { mesh.userData.textureRequestsDeferred = false; });
+    requestDeferred.forEach((mesh) => {
+      mesh.userData.textureRequestsDeferred = false;
+    });
   }
-  requestDeferred.forEach(mesh => {
-    if (mesh.visible) refreshMeshTexture(mesh, {render: false});
+  requestDeferred.forEach((mesh) => {
+    if (mesh.visible) refreshMeshTexture(mesh, { render: false });
   });
 
   const changedList = [...changedMeshes];
   if (changedList.length) notifyMeshStateChanged(changedList);
-  if (visibilityChanged || texturesChanged || shapesChanged
-      || (additionalMeshes?.length && changedMeshes.size)) requestRender();
+  if (visibilityChanged || texturesChanged || shapesChanged || (additionalMeshes?.length && changedMeshes.size))
+    requestRender();
   return {
     visibilityChanged,
     texturesChanged,

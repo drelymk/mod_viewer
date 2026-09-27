@@ -105,42 +105,46 @@ const STUDIO_CAPTURE = freeze({
   }),
 });
 
-const makeStops = (entries) => freeze(
-  entries.map(([offset, color]) => freeze({ offset, color })));
+const makeStops = (entries) => freeze(entries.map(([offset, color]) => freeze({ offset, color })));
 
-const makeGradient = (type, entries, options = {}) => freeze({
-  type,
-  stops: makeStops(entries),
-  ...options,
-});
+const makeGradient = (type, entries, options = {}) =>
+  freeze({
+    type,
+    stops: makeStops(entries),
+    ...options,
+  });
 
-const radialBackground = (center, outerRadius, entries, overlay) => makeGradient(
-  'radial',
-  entries,
-  {
+const radialBackground = (center, outerRadius, entries, overlay) =>
+  makeGradient('radial', entries, {
     center: freeze(center),
     innerRadius: 0.04,
     outerRadius,
     ...(overlay ? { overlay: makeGradient('vertical', overlay) } : {}),
-  },
-);
+  });
 
 const verticalBackground = (entries) => makeGradient('vertical', entries);
 const makeAmbient = (color, intensity) => freeze({ color, intensity });
-const makeHemisphere = (color, groundColor, intensity) => freeze({
-  color, groundColor, intensity,
-});
-const makeAccent = (color, intensity, position) => freeze({
-  color, intensity, position: freeze(position),
-});
-const makePreset = (id, label, background, ambient, hemisphere, accent) => freeze({
-  id,
-  label,
-  ...(background ? { background } : {}),
-  ...(ambient ? { ambient } : {}),
-  ...(hemisphere ? { hemisphere } : {}),
-  ...(accent ? { accent } : {}),
-});
+const makeHemisphere = (color, groundColor, intensity) =>
+  freeze({
+    color,
+    groundColor,
+    intensity,
+  });
+const makeAccent = (color, intensity, position) =>
+  freeze({
+    color,
+    intensity,
+    position: freeze(position),
+  });
+const makePreset = (id, label, background, ambient, hemisphere, accent) =>
+  freeze({
+    id,
+    label,
+    ...(background ? { background } : {}),
+    ...(ambient ? { ambient } : {}),
+    ...(hemisphere ? { hemisphere } : {}),
+    ...(accent ? { accent } : {}),
+  });
 
 // Keep the visual vocabulary in one declarative table. These are presentation
 // moods, not attempts to reproduce literal rooms or outdoor photographs.
@@ -152,9 +156,16 @@ export const ENVIRONMENT_PRESETS = freeze({
     radialBackground(
       [0.5, 0.4],
       0.82,
-      [[0, '#69717c'], [0.38, '#4e5662'], [1, '#2b313a']],
-      [[0, 'rgba(0,0,0,0)'], [0.7, 'rgba(0,0,0,0.02)'],
-       [1, 'rgba(0,0,0,0.12)']],
+      [
+        [0, '#69717c'],
+        [0.38, '#4e5662'],
+        [1, '#2b313a'],
+      ],
+      [
+        [0, 'rgba(0,0,0,0)'],
+        [0.7, 'rgba(0,0,0,0.02)'],
+        [1, 'rgba(0,0,0,0.12)'],
+      ],
     ),
     makeAmbient(0xf5f7fa, 0.38),
     makeHemisphere(0xe1e9f3, 0x737b85, 0.42),
@@ -166,9 +177,16 @@ export const ENVIRONMENT_PRESETS = freeze({
     radialBackground(
       [0.5, 0.43],
       0.88,
-      [[0, '#807165'], [0.42, '#62564d'], [1, '#36312e']],
-      [[0, 'rgba(24,12,8,0.10)'], [0.66, 'rgba(0,0,0,0)'],
-       [1, 'rgba(0,0,0,0.12)']],
+      [
+        [0, '#807165'],
+        [0.42, '#62564d'],
+        [1, '#36312e'],
+      ],
+      [
+        [0, 'rgba(24,12,8,0.10)'],
+        [0.66, 'rgba(0,0,0,0)'],
+        [1, 'rgba(0,0,0,0.12)'],
+      ],
     ),
     makeAmbient(0xfff2e5, 0.32),
     makeHemisphere(0xfff0dc, 0x686868, 0.38),
@@ -178,7 +196,10 @@ export const ENVIRONMENT_PRESETS = freeze({
     'outdoor',
     'Outdoor',
     verticalBackground([
-      [0, '#285b8a'], [0.42, '#75a8ce'], [0.68, '#879eae'], [1, '#46515a'],
+      [0, '#285b8a'],
+      [0.42, '#75a8ce'],
+      [0.68, '#879eae'],
+      [1, '#46515a'],
     ]),
     makeAmbient(0xdbeaff, 0.26),
     makeHemisphere(0x78b5ed, 0x667068, 0.45),
@@ -187,13 +208,10 @@ export const ENVIRONMENT_PRESETS = freeze({
 });
 
 function directionFromPresetAccent(id) {
-  return freeze(new THREE.Vector3()
-    .fromArray(ENVIRONMENT_PRESETS[id].accent.position)
-    .normalize()
-    .toArray());
+  return freeze(new THREE.Vector3().fromArray(ENVIRONMENT_PRESETS[id].accent.position).normalize().toArray());
 }
 
-const DEFAULT_PMREM = freeze({size: 256, sigma: 0, near: 0.1, far: 100});
+const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
 
 function configureOutdoorSky(sky) {
   sky.scale.setScalar(10000);
@@ -217,7 +235,7 @@ function createOutdoorCaptureScene() {
   return captureScene;
 }
 
-function createLightCard({color, intensity, position, size, target}) {
+function createLightCard({ color, intensity, position, size, target }) {
   const card = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshLambertMaterial({
@@ -233,7 +251,7 @@ function createLightCard({color, intensity, position, size, target}) {
   return card;
 }
 
-function createCaptureRoom({room: roomConfig, floor: floorConfig}) {
+function createCaptureRoom({ room: roomConfig, floor: floorConfig }) {
   const room = new THREE.Mesh(
     new THREE.BoxGeometry(...roomConfig.size),
     new THREE.MeshStandardMaterial({
@@ -255,13 +273,13 @@ function createCaptureRoom({room: roomConfig, floor: floorConfig}) {
   );
   floor.rotation.x = -Math.PI / 2;
   floor.position.fromArray(floorConfig.position);
-  return {room, floor};
+  return { room, floor };
 }
 
 function createIndoorCaptureScene() {
   const captureScene = new THREE.Scene();
   captureScene.userData.iblPresetId = 'indoor';
-  const {room, floor} = createCaptureRoom(INDOOR_CAPTURE);
+  const { room, floor } = createCaptureRoom(INDOOR_CAPTURE);
 
   const mainPosition = new THREE.Vector3()
     .fromArray(IBL_PROFILES.indoor.dominantDirection)
@@ -281,7 +299,8 @@ function createIndoorCaptureScene() {
     INDOOR_CAPTURE.roomLight.distance,
     INDOOR_CAPTURE.roomLight.decay,
   );
-  roomLight.position.fromArray(IBL_PROFILES.indoor.dominantDirection)
+  roomLight.position
+    .fromArray(IBL_PROFILES.indoor.dominantDirection)
     .multiplyScalar(INDOOR_CAPTURE.roomLight.distanceFromOrigin);
   captureScene.add(room, floor, mainCard, ceilingCard, fillCard, roomLight);
   return captureScene;
@@ -290,7 +309,7 @@ function createIndoorCaptureScene() {
 function createStudioCaptureScene() {
   const captureScene = new THREE.Scene();
   captureScene.userData.iblPresetId = 'studio';
-  const {room, floor} = createCaptureRoom(STUDIO_CAPTURE);
+  const { room, floor } = createCaptureRoom(STUDIO_CAPTURE);
   const mainPosition = new THREE.Vector3()
     .fromArray(IBL_PROFILES.studio.dominantDirection)
     .multiplyScalar(STUDIO_CAPTURE.mainCard.distance)
@@ -309,11 +328,10 @@ function createStudioCaptureScene() {
     STUDIO_CAPTURE.roomLight.distance,
     STUDIO_CAPTURE.roomLight.decay,
   );
-  roomLight.position.fromArray(IBL_PROFILES.studio.dominantDirection)
+  roomLight.position
+    .fromArray(IBL_PROFILES.studio.dominantDirection)
     .multiplyScalar(STUDIO_CAPTURE.roomLight.distanceFromOrigin);
-  captureScene.add(
-    room, floor, mainCard, fillCard, overheadCard, backCard, roomLight,
-  );
+  captureScene.add(room, floor, mainCard, fillCard, overheadCard, backCard, roomLight);
   return captureScene;
 }
 
@@ -356,11 +374,9 @@ const IBL_PROFILES = freeze({
 function disposeCaptureScene(captureScene) {
   if (!captureScene) return;
   const resources = new Set();
-  captureScene.traverse(object => {
+  captureScene.traverse((object) => {
     if (object.geometry) resources.add(object.geometry);
-    const materials = Array.isArray(object.material)
-      ? object.material
-      : object.material ? [object.material] : [];
+    const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
     for (const material of materials) resources.add(material);
   });
   for (const resource of resources) resource.dispose?.();
@@ -459,14 +475,17 @@ export function createEnvironmentController({
   let preparationAttempted = false;
   let preparePromise = null;
   const iblResources = new Map(
-    Object.keys(IBL_PROFILES).map(id => [id, {
-      target: null,
-      texture: null,
-      attempted: false,
-      available: false,
-      error: null,
-      generationCount: 0,
-    }]),
+    Object.keys(IBL_PROFILES).map((id) => [
+      id,
+      {
+        target: null,
+        texture: null,
+        attempted: false,
+        available: false,
+        error: null,
+        generationCount: 0,
+      },
+    ]),
   );
 
   function drawBackground(preset) {
@@ -502,8 +521,7 @@ export function createEnvironmentController({
     ambientLight.intensity = intensities?.ambient ?? preset.ambient.intensity;
     hemisphereLight.color.set(preset.hemisphere.color);
     hemisphereLight.groundColor.set(preset.hemisphere.groundColor);
-    hemisphereLight.intensity = intensities?.hemisphere
-      ?? preset.hemisphere.intensity;
+    hemisphereLight.intensity = intensities?.hemisphere ?? preset.hemisphere.intensity;
     applyAccent(preset.accent, intensities?.accent);
   }
 
@@ -559,9 +577,8 @@ export function createEnvironmentController({
     let generatedTarget = null;
     try {
       captureScene = profile.createCaptureScene();
-      const {sigma, near, far, size} = profile.pmrem;
-      generatedTarget = pmremGenerator.fromScene(
-        captureScene, sigma, near, far, {size});
+      const { sigma, near, far, size } = profile.pmrem;
+      generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
       if (!generatedTarget?.texture) {
         throw new Error(`${id} PMREM generation returned no texture.`);
       }
@@ -574,10 +591,7 @@ export function createEnvironmentController({
     } catch (error) {
       resource.available = false;
       resource.error = error?.message || String(error);
-      console.debug(
-        `${id} environment preparation failed; using baseline lighting.`,
-        error,
-      );
+      console.debug(`${id} environment preparation failed; using baseline lighting.`, error);
       return false;
     } finally {
       generatedTarget?.dispose?.();
@@ -589,7 +603,7 @@ export function createEnvironmentController({
     if (disposed) return false;
     if (preparePromise) return preparePromise;
     if (preparationAttempted) {
-      return [...iblResources.values()].every(resource => resource.available);
+      return [...iblResources.values()].every((resource) => resource.available);
     }
     preparationAttempted = true;
 
@@ -600,7 +614,7 @@ export function createEnvironmentController({
         for (const id of Object.keys(IBL_PROFILES)) {
           // Yield before each GPU-heavy capture so renderer startup and the
           // intervals between resources remain available to browser work.
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           if (disposed) return false;
           pmremGenerator ||= new THREE.PMREMGenerator(renderer);
           const generated = generateIblResource(id, pmremGenerator);
@@ -620,16 +634,20 @@ export function createEnvironmentController({
   }
 
   function getDebugState() {
-    const activeIblPreset = [...iblResources.entries()]
-      .find(([, resource]) => resource.texture
-        && scene.environment === resource.texture)?.[0] || null;
+    const activeIblPreset =
+      [...iblResources.entries()].find(
+        ([, resource]) => resource.texture && scene.environment === resource.texture,
+      )?.[0] || null;
     const resources = Object.fromEntries(
-      [...iblResources.entries()].map(([id, resource]) => [id, {
-        attempted: resource.attempted,
-        available: resource.available,
-        generationCount: resource.generationCount,
-        error: resource.error,
-      }]),
+      [...iblResources.entries()].map(([id, resource]) => [
+        id,
+        {
+          attempted: resource.attempted,
+          available: resource.available,
+          generationCount: resource.generationCount,
+          error: resource.error,
+        },
+      ]),
     );
     return {
       preset: currentPresetId,
@@ -638,8 +656,10 @@ export function createEnvironmentController({
       environmentIntensity: scene.environmentIntensity,
       preparationInFlight: preparePromise !== null,
       resources,
-      totalPmremGenerationCount: [...iblResources.values()]
-        .reduce((total, resource) => total + resource.generationCount, 0),
+      totalPmremGenerationCount: [...iblResources.values()].reduce(
+        (total, resource) => total + resource.generationCount,
+        0,
+      ),
       activeDominantDirection: getDominantLightDirection(),
     };
   }

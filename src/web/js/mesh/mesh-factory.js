@@ -3,7 +3,9 @@
 import * as THREE from 'three';
 import { decodeF32, decodeU32 } from '../textures/decode.js';
 import {
-  createGameMaterial, getGameMaterialSources, updateGameMaterialTextures,
+  createGameMaterial,
+  getGameMaterialSources,
+  updateGameMaterialTextures,
   usesPackedNormal,
 } from './material-profile.js';
 import { syncMeshColorAdjustment } from './mesh-color-session.js';
@@ -81,13 +83,11 @@ function reloadUri(uri, token) {
   const hashIndex = uri.indexOf('#');
   const base = hashIndex < 0 ? uri : uri.slice(0, hashIndex);
   const hash = hashIndex < 0 ? '' : uri.slice(hashIndex);
-  const separator = base.includes('?')
-    ? (base.endsWith('?') || base.endsWith('&') ? '' : '&') : '?';
+  const separator = base.includes('?') ? (base.endsWith('?') || base.endsWith('&') ? '' : '&') : '?';
   return `${base}${separator}reload=${token}${hash}`;
 }
 
-function loadPngReload(key, uri, requestUri, oldTexture, token,
-                       keepOld) {
+function loadPngReload(key, uri, requestUri, oldTexture, token, keepOld) {
   return new Promise((resolve, reject) => {
     let replacement;
     let loadedBeforeAssignment = false;
@@ -107,14 +107,13 @@ function loadPngReload(key, uri, requestUri, oldTexture, token,
       handleTextureReady(key, replacement, uri);
       resolve(true);
     };
-    const finishError = error => {
+    const finishError = (error) => {
       if (reloadTokens.get(key) !== token || registry[key] !== uri) {
         disposeTexture(replacement);
         resolve(false);
         return;
       }
-      if (keepOld && oldTexture && loaders[key] === oldTexture
-          && readyTextures.has(key)) {
+      if (keepOld && oldTexture && loaders[key] === oldTexture && readyTextures.has(key)) {
         reject(error);
         return;
       }
@@ -129,17 +128,15 @@ function loadPngReload(key, uri, requestUri, oldTexture, token,
       }
       finishReady();
     };
-    const onError = error => {
+    const onError = (error) => {
       if (!replacement) {
         errorBeforeAssignment = error;
         return;
       }
       finishError(error);
     };
-    replacement = new THREE.TextureLoader().load(
-      requestUri, onLoad, undefined, onError);
-    replacement.colorSpace = splitTextureKey(key)?.role === 'diffuse'
-      ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    replacement = new THREE.TextureLoader().load(requestUri, onLoad, undefined, onError);
+    replacement.colorSpace = splitTextureKey(key)?.role === 'diffuse' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     if (!keepOld) loaders[key] = replacement;
     if (loadedBeforeAssignment) finishReady();
     if (errorBeforeAssignment) finishError(errorBeforeAssignment);
@@ -157,7 +154,7 @@ function reloadNativeTexture(key, uri, requestUri, texture, token) {
       handleTextureReady(key, texture, uri);
       resolve(true);
     };
-    const onError = error => {
+    const onError = (error) => {
       errorHandled = true;
       if (reloadTokens.get(key) !== token || registry[key] !== uri) {
         resolve(false);
@@ -167,9 +164,14 @@ function reloadNativeTexture(key, uri, requestUri, texture, token) {
       reject(error);
     };
     reloadDDSTexture(
-      texture, requestUri, onLoad, onError,
+      texture,
+      requestUri,
+      onLoad,
+      onError,
       () => reloadTokens.get(key) === token && registry[key] === uri,
-    ).catch(error => { if (!errorHandled) reject(error); });
+    ).catch((error) => {
+      if (!errorHandled) reject(error);
+    });
   });
 }
 
@@ -187,7 +189,7 @@ function loadNativeReload(key, uri, requestUri, token) {
       handleTextureReady(key, texture, uri);
       resolve(true);
     };
-    const finishError = error => {
+    const finishError = (error) => {
       if (reloadTokens.get(key) !== token || registry[key] !== uri) {
         disposeTexture(texture);
         resolve(false);
@@ -202,17 +204,18 @@ function loadNativeReload(key, uri, requestUri, token) {
         if (!texture) loadedBeforeAssignment = true;
         else finishReady();
       },
-      error => {
+      (error) => {
         if (!texture) errorBeforeAssignment = error || new Error('DDS load failed');
         else finishError(error);
-      });
+      },
+    );
     loaders[key] = texture;
     if (loadedBeforeAssignment) finishReady();
     if (errorBeforeAssignment) finishError(errorBeforeAssignment);
   });
 }
 
-export function reloadTextures(keys, {force = false} = {}) {
+export function reloadTextures(keys, { force = false } = {}) {
   const users = new Set();
   const reloads = [];
   for (const key of keys || []) {
@@ -224,11 +227,11 @@ export function reloadTextures(keys, {force = false} = {}) {
     const oldTexture = loaders[key];
     const nativeDDS = isDDSUri(uri);
     if (nativeDDS) {
-      reloads.push(oldTexture?.isCompressedTexture || oldTexture?.isDataTexture
-        ? reloadNativeTexture(
-          key, uri, force ? reloadUri(uri, token) : uri, oldTexture, token)
-        : loadNativeReload(
-          key, uri, force ? reloadUri(uri, token) : uri, token));
+      reloads.push(
+        oldTexture?.isCompressedTexture || oldTexture?.isDataTexture
+          ? reloadNativeTexture(key, uri, force ? reloadUri(uri, token) : uri, oldTexture, token)
+          : loadNativeReload(key, uri, force ? reloadUri(uri, token) : uri, token),
+      );
       continue;
     }
 
@@ -239,18 +242,16 @@ export function reloadTextures(keys, {force = false} = {}) {
       readyTextures.delete(key);
       failedTextures.delete(key);
     }
-    reloads.push(loadPngReload(
-      key, uri, requestUri, force ? oldTexture : null, token, force));
+    reloads.push(loadPngReload(key, uri, requestUri, force ? oldTexture : null, token, force));
   }
-  return Promise.all(reloads).then(results => {
-    if ([...users].some(mesh => mesh.visible)) requestRender();
-    return {users: users.size, reloaded: results.filter(Boolean).length};
+  return Promise.all(reloads).then((results) => {
+    if ([...users].some((mesh) => mesh.visible)) requestRender();
+    return { users: users.size, reloaded: results.filter(Boolean).length };
   });
 }
 
 export function hasTexture(key) {
-  return !!(splitTextureKey(key) && registry[key]
-    && !failedTextures.has(key));
+  return !!(splitTextureKey(key) && registry[key] && !failedTextures.has(key));
 }
 
 function trackTextureUser(mesh, key) {
@@ -263,9 +264,13 @@ function trackTextureUser(mesh, key) {
 }
 
 function primePendingTexture(mesh, role, texture) {
-  updateGameMaterialTextures(mesh, {[role]: texture}, {
-    pending: {[role]: true},
-  });
+  updateGameMaterialTextures(
+    mesh,
+    { [role]: texture },
+    {
+      pending: { [role]: true },
+    },
+  );
 }
 
 function handleTextureReady(key, texture, uri) {
@@ -330,11 +335,9 @@ function getTexture(mesh, key) {
     if (nativeDDS) {
       texture = loadDDSTexture(requestUri, onReady, onError);
     } else {
-      texture = new THREE.TextureLoader().load(
-        requestUri, onReady, undefined, onError);
+      texture = new THREE.TextureLoader().load(requestUri, onReady, undefined, onError);
     }
-    texture.colorSpace = parsed.role === 'diffuse'
-      ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    texture.colorSpace = parsed.role === 'diffuse' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     loaders[key] = texture;
     if (failedBeforeAssignment) {
       handleTextureError(key, texture, uri);
@@ -347,8 +350,7 @@ function getTexture(mesh, key) {
     const texture = loaders[key];
     const uri = registry[key];
     queueMicrotask(() => {
-      if (registry[key] === uri && loaders[key] === texture
-          && !readyTextures.has(key) && !failedTextures.has(key)) {
+      if (registry[key] === uri && loaders[key] === texture && !readyTextures.has(key) && !failedTextures.has(key)) {
         primePendingTexture(mesh, parsed.role, texture);
       }
     });
@@ -364,31 +366,29 @@ export function refreshMeshTexture(mesh, { render = true } = {}) {
   const showMaterialMaps = textureMode === 'all';
   const showNormal = showMaterialMaps || textureMode === 'diffuse-normal';
   const gameMaterialSources = getGameMaterialSources(mesh.material);
-  const usePackedSource = role =>
-    showMaterialMaps && gameMaterialSources.has(role);
-  const normalSource = mesh.material?.userData?.gameMaterial?.normalSource
-    || 'normal_map';
-  const requestTextures = mesh.visible !== false
-    && mesh.userData.textureRequestsDeferred !== true;
-  const texture = key => requestTextures ? getTexture(mesh, key) : null;
+  const usePackedSource = (role) => showMaterialMaps && gameMaterialSources.has(role);
+  const normalSource = mesh.material?.userData?.gameMaterial?.normalSource || 'normal_map';
+  const requestTextures = mesh.visible !== false && mesh.userData.textureRequestsDeferred !== true;
+  const texture = (key) => (requestTextures ? getTexture(mesh, key) : null);
   const map = showDiffuse ? texture(mesh.userData.texKey) : null;
-  const normalMap = showNormal && normalSource === 'normal_map'
-    && mesh.userData.normalMapEnabled !== false
-    ? texture(mesh.userData.normalMapKey) : null;
-  const normalData = (usePackedSource('normal_data')
-      || (showNormal && normalSource === 'normal_data'
-        && gameMaterialSources.has('normal_data')))
-    ? texture(mesh.userData.normalDataKey) : null;
-  const lightMap = usePackedSource('light_map')
-    ? texture(mesh.userData.lightMapKey) : null;
-  const materialMap = usePackedSource('material_map')
-    ? texture(mesh.userData.materialMapKey) : null;
-  const emissionMap = usePackedSource('emission_map')
-    ? texture(mesh.userData.emissionMapKey) : null;
+  const normalMap =
+    showNormal && normalSource === 'normal_map' && mesh.userData.normalMapEnabled !== false
+      ? texture(mesh.userData.normalMapKey)
+      : null;
+  const normalData =
+    usePackedSource('normal_data') ||
+    (showNormal && normalSource === 'normal_data' && gameMaterialSources.has('normal_data'))
+      ? texture(mesh.userData.normalDataKey)
+      : null;
+  const lightMap = usePackedSource('light_map') ? texture(mesh.userData.lightMapKey) : null;
+  const materialMap = usePackedSource('material_map') ? texture(mesh.userData.materialMapKey) : null;
+  const emissionMap = usePackedSource('emission_map') ? texture(mesh.userData.emissionMapKey) : null;
   const changed = updateGameMaterialTextures(mesh, {
     diffuse: map,
     normal_map: normalMap,
-    normal_data: normalData, light_map: lightMap, material_map: materialMap,
+    normal_data: normalData,
+    light_map: lightMap,
+    material_map: materialMap,
     emission_map: emissionMap,
     normal_map_y_sign: mesh.userData.normalMapYSign ?? -1,
   });
@@ -407,8 +407,7 @@ export function setTextureMode(mode) {
 export function updateGeometryNormals(mesh, deformed) {
   const normal = mesh.geometry.attributes.normal;
   const baseNormals = mesh.userData.baseNormals;
-  if (!deformed && baseNormals && normal
-      && normal.array.length === baseNormals.length) {
+  if (!deformed && baseNormals && normal && normal.array.length === baseNormals.length) {
     normal.array.set(baseNormals);
     normal.needsUpdate = true;
     return;
@@ -419,8 +418,7 @@ export function updateGeometryNormals(mesh, deformed) {
 /** Update the complete resolved texture state with one material refresh. */
 export function setMeshTextureState(mesh, state, { render = true } = {}) {
   mesh.userData.texKey = state.diffuse || null;
-  mesh.userData.normalMapKey = usesPackedNormal(mesh.material)
-    ? null : (state.normal_map || null);
+  mesh.userData.normalMapKey = usesPackedNormal(mesh.material) ? null : state.normal_map || null;
   if (Object.hasOwn(state, 'normal_data')) {
     mesh.userData.normalDataKey = state.normal_data || null;
   }
@@ -435,10 +433,9 @@ export function setMeshTextureState(mesh, state, { render = true } = {}) {
   return textureChanged || colorChanged;
 }
 
-
-export function activateMeshTextures(mesh, {render = true} = {}) {
+export function activateMeshTextures(mesh, { render = true } = {}) {
   mesh.userData.textureRequestsDeferred = false;
-  return refreshMeshTexture(mesh, {render});
+  return refreshMeshTexture(mesh, { render });
 }
 
 export function buildMesh(name, data, materialProfile = null, options = {}) {
@@ -451,15 +448,13 @@ export function buildMesh(name, data, materialProfile = null, options = {}) {
   geo.setIndex(new THREE.BufferAttribute(decodeU32(data.idx), 1));
 
   if (data.normal) {
-    geo.setAttribute('normal', new THREE.BufferAttribute(
-      decodeF32(data.normal), 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(decodeF32(data.normal), 3));
   } else {
     geo.computeVertexNormals();
   }
 
   const fallback = 0xcccccc;
-  const mat = createGameMaterial(materialProfile, fallback,
-    { hasUv: !!data.uv });
+  const mat = createGameMaterial(materialProfile, fallback, { hasUv: !!data.uv });
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.layers.enable(CHARACTER_AO_LAYER);
@@ -467,11 +462,10 @@ export function buildMesh(name, data, materialProfile = null, options = {}) {
   // Keep immutable rest positions for the primary geometry-fitted humanoid
   // control rig and its binding diagnostics.
   mesh.userData.humanoidRestPositions = mesh.userData.basePositions;
-  mesh.userData.baseNormals = data.normal
-    ? new Float32Array(geo.attributes.normal.array) : null;
+  mesh.userData.baseNormals = data.normal ? new Float32Array(geo.attributes.normal.array) : null;
   mesh.userData.hasAuthoredNormals = !!data.normal;
   mesh.userData.skinningAvailable = data.skinning_available === true;
-  mesh.userData.shapeTargets = (data.shape_targets || []).map(target => ({
+  mesh.userData.shapeTargets = (data.shape_targets || []).map((target) => ({
     var: target.var,
     mode: target.mode,
     positions: new Float32Array(decodeF32(target.pos)),
@@ -485,8 +479,7 @@ export function buildMesh(name, data, materialProfile = null, options = {}) {
   // binding state without rebuilding the material.
   mesh.userData.defaultTexKey = data.tex_key || null;
   const authoredNormalMapKey = data.normal_map_key || null;
-  mesh.userData.normalMapKey = usesPackedNormal(mat)
-    ? null : authoredNormalMapKey;
+  mesh.userData.normalMapKey = usesPackedNormal(mat) ? null : authoredNormalMapKey;
   mesh.userData.normalDataKey = data.normal_data_key || null;
   mesh.userData.lightMapKey = data.light_map_key || null;
   mesh.userData.materialMapKey = data.material_map_key || null;
@@ -499,8 +492,7 @@ export function buildMesh(name, data, materialProfile = null, options = {}) {
   mesh.userData.materialProfileId = data.material_profile_id || 'none';
   mesh.userData.materialProfile = materialProfile;
   mesh.userData.normalMapEnabled = data.normal_map_enabled !== false;
-  mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign)
-    ? data.normal_map_y_sign : -1;
+  mesh.userData.normalMapYSign = Number.isFinite(data.normal_map_y_sign) ? data.normal_map_y_sign : -1;
   // Keep the authored normal-map default even while a packed profile hides
   // it. A later profile swap may need to restore that role in place.
   mesh.userData.defaultNormalMapKey = authoredNormalMapKey;

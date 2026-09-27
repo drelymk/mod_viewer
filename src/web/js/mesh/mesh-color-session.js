@@ -3,10 +3,7 @@
 import { isAssetTextureKey, splitTextureKey } from '../textures/texture-key.js';
 import { viewerState } from '../app/state.js';
 import { setGameMaterialColorAdjustment } from './material-profile.js';
-import {
-  DEFAULT_COLOR_ADJUSTMENT, isNeutralColorAdjustment,
-  normalizeColorAdjustment,
-} from './color-adjustment.js';
+import { DEFAULT_COLOR_ADJUSTMENT, isNeutralColorAdjustment, normalizeColorAdjustment } from './color-adjustment.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
 const persistenceTails = new WeakMap();
@@ -30,8 +27,7 @@ function persistenceValue(adjustment) {
 }
 
 function persistMeshColorAdjustment(mesh, adjustment = getMeshColorAdjustment(mesh)) {
-  if (viewerState.currentSource?.kind === 'mod'
-      && viewerState.currentSource?.readOnly === true) return null;
+  if (viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true) return null;
   const path = mesh?.userData?.modPath;
   const key = mesh?.userData?.metadataKey;
   const save = window.pywebview?.api?.save_mesh_color_adjustment;
@@ -41,7 +37,7 @@ function persistMeshColorAdjustment(mesh, adjustment = getMeshColorAdjustment(me
   const request = previous
     .catch(() => {})
     .then(() => save(path, key, value))
-    .then(result => {
+    .then((result) => {
       if (result?.error) throw new Error(result.error);
       return result;
     });
@@ -85,9 +81,7 @@ export function syncMeshColorAdjustment(mesh, { render = true } = {}) {
   return changed;
 }
 
-export function setMeshColorAdjustment(mesh, adjustment, {
-  render = true, persist = false, sync = true,
-} = {}) {
+export function setMeshColorAdjustment(mesh, adjustment, { render = true, persist = false, sync = true } = {}) {
   if (!mesh) return DEFAULT_COLOR_ADJUSTMENT;
   const normalized = normalizeColorAdjustment(adjustment);
   mesh.userData.colorAdjustment = normalized;

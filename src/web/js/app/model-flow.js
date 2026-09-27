@@ -2,46 +2,37 @@
 
 import { viewerState, samePath } from './state.js';
 import { resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
-import {
-  fitTo, isRendererAvailable, setBloomSuppressedByDebug,
-} from '../scene/scene.js';
+import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
 import { clearInspector } from '../panels/inspector-panel.js';
-import {
-  activeMeshes, refreshAll, reset, setStateRules,
-} from '../mesh/visibility.js';
+import { activeMeshes, refreshAll, reset, setStateRules } from '../mesh/visibility.js';
 import { activateMeshTextures, setTextures } from '../mesh/mesh-factory.js';
 import { buildPayloadMeshes } from '../mesh/mesh-model-builder.js';
 import { resetAnimationRuntime } from '../mesh/animation-runtime.js';
-import {
-  buildMeshPanel, hasUnappliedMeshChanges,
-} from '../panels/mesh-panel.js';
+import { buildMeshPanel, hasUnappliedMeshChanges } from '../panels/mesh-panel.js';
 import { setMeshesAvailable } from '../panels/left-dock.js';
 import { buildTogglePanel } from '../panels/toggle-panel.js';
 import { buildMenuPanel } from '../panels/menu-panel.js';
 import { buildPresentPanel } from '../panels/present-panel.js';
 import { alertDialog, confirmDialog } from '../ui/dialogs.js';
 import { setGeometryBlob } from '../textures/decode.js';
-import {
-  refreshHealthReport, setAssetResolution, setHealthLoader,
-  setHealthReport,
-} from '../panels/health-report.js';
-import {
-  setPendingHumanoidRigMetadata, setPendingRigMetadata,
-} from '../mesh/weight-rig-feature.js';
+import { refreshHealthReport, setAssetResolution, setHealthLoader, setHealthReport } from '../panels/health-report.js';
+import { setPendingHumanoidRigMetadata, setPendingRigMetadata } from '../mesh/weight-rig-feature.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
-import {
-  beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage,
-  measureLoadStage,
-} from './load-benchmark.js';
+import { beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage, measureLoadStage } from './load-benchmark.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 const $ = (id) => document.getElementById(id);
 
 function sourceName(path) {
-  return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+  return (
+    String(path || '')
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() || ''
+  );
 }
 
 function syncSourceLabelLanguage() {
@@ -74,15 +65,13 @@ function showLoading(on, message) {
 }
 
 function hasUnwiredToggle() {
-  return Object.values(viewerState.lastToggles)
-    .some((info) => info.wired === false);
+  return Object.values(viewerState.lastToggles).some((info) => info.wired === false);
 }
 
 // Reflect the currently open mod's staged-but-not-yet-exported edits onto
 // the toolbar: Export only enables once there's something to export, and the
 // indicator is the persistent signal that something is unsaved.
-export async function refreshPendingState(
-    path = viewerState.currentModPath, guard = null) {
+export async function refreshPendingState(path = viewerState.currentModPath, guard = null) {
   const pending = path ? await window.pywebview.api.has_pending_changes(path) : false;
   if ((guard && !guard()) || (path && !samePath(viewerState.currentModPath, path))) {
     return false;
@@ -91,16 +80,15 @@ export async function refreshPendingState(
   const edited = pending || unapplied;
   $('pending-indicator').classList.toggle('show', edited);
   const blocked = unapplied || (pending && hasUnwiredToggle());
-  const readOnlySource = viewerState.currentSource?.kind === 'mod'
-    && viewerState.currentSource?.readOnly === true;
+  const readOnlySource = viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true;
   $('export-btn').disabled = readOnlySource || !pending || blocked;
   $('export-btn').title = unapplied
-    ? t('errors.exportBlocked', {detail: t('mesh.unappliedChangesDetail')})
+    ? t('errors.exportBlocked', { detail: t('mesh.unappliedChangesDetail') })
     : readOnlySource
-    ? t('errors.exportBlocked', {detail: t('model.exportCompressedDetail')})
-    : blocked
-    ? t('errors.exportBlocked', {detail: t('model.unwiredToggleDetail')})
-    : '';
+      ? t('errors.exportBlocked', { detail: t('model.exportCompressedDetail') })
+      : blocked
+        ? t('errors.exportBlocked', { detail: t('model.unwiredToggleDetail') })
+        : '';
 }
 
 window.addEventListener('mod-viewer-mesh-edit-state', () => {
@@ -157,10 +145,7 @@ function setSourceUi(kind) {
 }
 
 /** Commit the UI to a new folder before asking the backend to load it. */
-function beginModLoad(path, message, {
-  preserveModelOrientation = false,
-  onReload = null,
-} = {}) {
+function beginModLoad(path, message, { preserveModelOrientation = false, onReload = null } = {}) {
   beginLoadBenchmark();
   viewerState.assetFill.epoch += 1;
   viewerState.currentModPath = path;
@@ -169,9 +154,11 @@ function beginModLoad(path, message, {
   viewerState.semanticRefreshEpoch += 1;
   clearScene({ preserveModelOrientation });
   clearPendingState();
-  window.dispatchEvent(new CustomEvent('mod-viewer-mod-load-started', {
-    detail: { path },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-mod-load-started', {
+      detail: { path },
+    }),
+  );
   $('hint').style.display = 'none';
   $('empty-actions').style.display = 'none';
   $('mod-path').textContent = path;
@@ -182,36 +169,41 @@ function beginModLoad(path, message, {
   showLoading(true, message);
 }
 
-function beginAssetLoad(path, entry, message = t('status.loadingAsset'), {
-  preserveModelOrientation = false,
-} = {}) {
+function beginAssetLoad(path, entry, message = t('status.loadingAsset'), { preserveModelOrientation = false } = {}) {
   viewerState.assetFill.epoch += 1;
   viewerState.currentModPath = null;
   viewerState.currentSource = {
-    kind: 'asset', path, assetType: entry?.asset_type || null,
+    kind: 'asset',
+    path,
+    assetType: entry?.asset_type || null,
   };
   viewerState.semanticRefreshEpoch += 1;
   clearScene({ preserveModelOrientation });
   clearPendingState();
   setSourceUi('asset');
-  window.dispatchEvent(new CustomEvent('mod-viewer-asset-load-started', {
-    detail: { path, entry },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-asset-load-started', {
+      detail: { path, entry },
+    }),
+  );
   $('hint').style.display = 'none';
   $('empty-actions').style.display = 'none';
-  $('mod-path').textContent = t('model.assetPreviewSeparator', {name: path});
+  $('mod-path').textContent = t('model.assetPreviewSeparator', { name: path });
   $('mod-path').title = path;
   setAssetResolution(null);
   showLoading(true, message);
 }
 
-export async function displayMeshPayload(payload, {
-  preserveCamera = false,
-  onToggleChange = null,
-  onPresentChange = null,
-  onMaterialKindChanged = reloadCurrentMod,
-  onReload = reloadCurrentMod,
-} = {}) {
+export async function displayMeshPayload(
+  payload,
+  {
+    preserveCamera = false,
+    onToggleChange = null,
+    onPresentChange = null,
+    onMaterialKindChanged = reloadCurrentMod,
+    onReload = reloadCurrentMod,
+  } = {},
+) {
   const geometry = payload.geometry;
   if (geometry) {
     await measureAsyncLoadStage('geometry_fetch_arraybuffer', async () => {
@@ -228,10 +220,8 @@ export async function displayMeshPayload(payload, {
   const controls = payload.controls || {};
   const state = payload.state || {};
   const meshes = payload.meshes || {};
-  const assetMode = viewerState.currentSource?.kind === 'asset'
-    || payload.metadata?.source_kind === 'asset';
-  const sourceReadOnly = !assetMode
-    && payload.metadata?.source_read_only === true;
+  const assetMode = viewerState.currentSource?.kind === 'asset' || payload.metadata?.source_kind === 'asset';
+  const sourceReadOnly = !assetMode && payload.metadata?.source_read_only === true;
   if (!assetMode && viewerState.currentSource?.kind === 'mod') {
     viewerState.currentSource = {
       ...viewerState.currentSource,
@@ -239,11 +229,11 @@ export async function displayMeshPayload(payload, {
       sourceKind: payload.metadata?.source_kind || 'directory',
     };
   }
-  viewerState.assetFill.available = !assetMode
-    && Number(payload.asset_resolution?.configured_roots || 0) > 0;
+  viewerState.assetFill.available = !assetMode && Number(payload.asset_resolution?.configured_roots || 0) > 0;
   if (assetMode && viewerState.currentSource?.kind !== 'asset') {
     viewerState.currentSource = {
-      kind: 'asset', path: payload.metadata?.asset?.path || '',
+      kind: 'asset',
+      path: payload.metadata?.asset?.path || '',
       assetType: payload.metadata?.asset?.type || null,
     };
     setSourceUi('asset');
@@ -253,64 +243,73 @@ export async function displayMeshPayload(payload, {
   setPendingHumanoidRigMetadata(assetMode ? null : payload.metadata?.rig);
   viewerState.lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {}, {
-    toggles: controls.toggles || {}, menu: controls.menu || {},
+    toggles: controls.toggles || {},
+    menu: controls.menu || {},
   });
   setTextures(payload.textures);
   let liveMeshes;
   measureLoadStage('build_mesh_panel', () => {
     liveMeshes = buildPayloadMeshes(
-      meshes, modelPath, payload.metadata?.mesh_names || {},
-      payload.metadata?.material_profiles || {}, {
+      meshes,
+      modelPath,
+      payload.metadata?.mesh_names || {},
+      payload.metadata?.material_profiles || {},
+      {
         colorAdjustments: payload.metadata?.mesh_color_adjustments || {},
         texturePools: payload.texture_pools || {},
         animations: payload.animations || {},
         deferTextureRequests: true,
-      });
-    buildMeshPanel(
-      meshes, liveMeshes, modelPath, {
-        onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
-        texturePools: payload.texture_pools || {},
-        assetResolution: payload.asset_resolution || null,
-        // Asset Preview has no editing session at all. An archive mod is read-only
-        // only at the persistence boundary; viewer controls can still stage
-        // session-local state while Export remains disabled.
-        readOnlySource: assetMode,
-        meshEditReadOnly: assetMode || sourceReadOnly,
-        canPersistMetadata: !assetMode && !sourceReadOnly,
-        texturePicker: assetMode
-          ? (role => window.pywebview.api.pick_asset_texture_file(
-            viewerState.currentSource.path, role)) : null,
-        onAllMeshChangesApplied: assetMode ? null : onReload,
-      });
+      },
+    );
+    buildMeshPanel(meshes, liveMeshes, modelPath, {
+      onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
+      texturePools: payload.texture_pools || {},
+      assetResolution: payload.asset_resolution || null,
+      // Asset Preview has no editing session at all. An archive mod is read-only
+      // only at the persistence boundary; viewer controls can still stage
+      // session-local state while Export remains disabled.
+      readOnlySource: assetMode,
+      meshEditReadOnly: assetMode || sourceReadOnly,
+      canPersistMetadata: !assetMode && !sourceReadOnly,
+      texturePicker: assetMode
+        ? (role) => window.pywebview.api.pick_asset_texture_file(viewerState.currentSource.path, role)
+        : null,
+      onAllMeshChangesApplied: assetMode ? null : onReload,
+    });
   });
   measureLoadStage('control_panels', () => {
     buildTogglePanel(controls.toggles, {
-      modPath: viewerState.currentModPath, onChange: onToggleChange,
+      modPath: viewerState.currentModPath,
+      onChange: onToggleChange,
     });
     buildMenuPanel(controls.menu);
     buildPresentPanel(controls.present, {
-      modPath: viewerState.currentModPath, onChange: onPresentChange,
+      modPath: viewerState.currentModPath,
+      onChange: onPresentChange,
     });
   });
-  measureLoadStage('refresh_all', () => refreshAll({
-    force: { visibility: true, textures: true, shapes: true },
-  }));
+  measureLoadStage('refresh_all', () =>
+    refreshAll({
+      force: { visibility: true, textures: true, shapes: true },
+    }),
+  );
   measureLoadStage('activate_textures', () => {
-    liveMeshes.forEach(mesh => activateMeshTextures(mesh, {render: false}));
+    liveMeshes.forEach((mesh) => activateMeshTextures(mesh, { render: false }));
   });
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();
   const gameId = payload.metadata?.game?.id || null;
-  measureLoadStage('fit_to', () => fitTo(activeMeshes, {
-    preserveCamera,
-    gameId,
-    // WWMI models use the opposite horizontal facing convention from the
-    // viewer's default front view. Keep this as a model base transform so
-    // camera controls and viewer-only orientation state remain independent.
-    initialRotationY: String(gameId || '').toLowerCase() === 'wuwa'
-      ? Math.PI : 0,
-  }));
+  measureLoadStage('fit_to', () =>
+    fitTo(activeMeshes, {
+      preserveCamera,
+      gameId,
+      // WWMI models use the opposite horizontal facing convention from the
+      // viewer's default front view. Keep this as a model base transform so
+      // camera controls and viewer-only orientation state remain independent.
+      initialRotationY: String(gameId || '').toLowerCase() === 'wuwa' ? Math.PI : 0,
+    }),
+  );
 
   updateAssetFillButton();
   showLoading(false);
@@ -325,19 +324,21 @@ async function loadModAt(path, disabledIni, handlers = {}) {
 
   let data;
   try {
-    data = await measureAsyncLoadStage('bridge_load_mod', () => disabledIni === undefined
-      ? window.pywebview.api.load_mod(path)
-      : window.pywebview.api.load_mod(path, disabledIni));
+    data = await measureAsyncLoadStage('bridge_load_mod', () =>
+      disabledIni === undefined
+        ? window.pywebview.api.load_mod(path)
+        : window.pywebview.api.load_mod(path, disabledIni),
+    );
   } catch (error) {
-    finishLoadBenchmark({success: false, error: error?.message || String(error)});
+    finishLoadBenchmark({ success: false, error: error?.message || String(error) });
     throw error;
   }
   setHealthReport(data?.health, data?.asset_resolution);
   if (data && data.error) {
     showLoading(false);
     await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
-    finishLoadBenchmark({success: false, error: data.error});
-    await alertDialog(t('errors.loadMod', {detail: data.error}));
+    finishLoadBenchmark({ success: false, error: data.error });
+    await alertDialog(t('errors.loadMod', { detail: data.error }));
     return false;
   }
   try {
@@ -350,8 +351,8 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     clearPendingState();
     showLoading(false);
     await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
-    finishLoadBenchmark({success: false, error: error?.message || String(error)});
-    await alertDialog(t('errors.loadGeometry', {detail: error.message}));
+    finishLoadBenchmark({ success: false, error: error?.message || String(error) });
+    await alertDialog(t('errors.loadGeometry', { detail: error.message }));
     return false;
   }
   await measureAsyncLoadStage('refresh_pending_state', () => refreshPendingState());
@@ -362,9 +363,11 @@ async function loadModAt(path, disabledIni, handlers = {}) {
   $('mod-path').title = path;
   viewerState.displayedModPath = path;
   viewerState.displayedSource = { ...viewerState.currentSource };
-  window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded', {
-    detail: { path },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-mod-loaded', {
+      detail: { path },
+    }),
+  );
   // Diagnostics are independent of geometry rendering. Start them after the
   // mod is visible so the toolbar badge is populated without requiring a
   // click on the Diagnostics button.
@@ -378,15 +381,15 @@ async function loadModAt(path, disabledIni, handlers = {}) {
 }
 
 async function loadAssetAt(path, entry = {}, handlers = {}) {
-  const preserveViewerPose = viewerState.displayedSource?.kind === 'asset'
-    && samePath(viewerState.displayedSource.path, path);
+  const preserveViewerPose =
+    viewerState.displayedSource?.kind === 'asset' && samePath(viewerState.displayedSource.path, path);
   beginAssetLoad(path, entry, t('status.loadingAsset'), {
     preserveModelOrientation: preserveViewerPose,
   });
   const data = await window.pywebview.api.load_asset(path);
   if (data && data.error) {
     showLoading(false);
-    await alertDialog(t('errors.loadAsset', {detail: data.error}));
+    await alertDialog(t('errors.loadAsset', { detail: data.error }));
     return false;
   }
   try {
@@ -398,27 +401,31 @@ async function loadAssetAt(path, entry = {}, handlers = {}) {
     clearScene({ preserveModelOrientation: preserveViewerPose });
     clearPendingState();
     showLoading(false);
-    await alertDialog(t('errors.loadAssetGeometry', {detail: error.message}));
+    await alertDialog(t('errors.loadAssetGeometry', { detail: error.message }));
     return false;
   }
   const folderName = path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1);
-  $('mod-path').textContent = t('model.assetPreviewSeparator', {name: folderName});
+  $('mod-path').textContent = t('model.assetPreviewSeparator', { name: folderName });
   $('mod-path').title = path;
   viewerState.displayedModPath = null;
   viewerState.displayedSource = { ...viewerState.currentSource };
-  window.dispatchEvent(new CustomEvent('mod-viewer-asset-loaded', {
-    detail: { path, entry, source: viewerState.displayedSource },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-asset-loaded', {
+      detail: { path, entry, source: viewerState.displayedSource },
+    }),
+  );
   return true;
 }
 
 async function performModSwitch(path, handlers = {}) {
   // Switching to a different folder while the current one has staged,
   // not-yet-exported edits would silently strand them in memory, so ask first.
-  if (viewerState.currentSource?.kind === 'mod' && viewerState.currentModPath
-      && !samePath(viewerState.currentModPath, path)
-      && (hasUnappliedMeshChanges()
-        || await window.pywebview.api.has_pending_changes(viewerState.currentModPath))) {
+  if (
+    viewerState.currentSource?.kind === 'mod' &&
+    viewerState.currentModPath &&
+    !samePath(viewerState.currentModPath, path) &&
+    (hasUnappliedMeshChanges() || (await window.pywebview.api.has_pending_changes(viewerState.currentModPath)))
+  ) {
     const proceed = await confirmDialog(t('confirm.unsavedSwitch'));
     if (!proceed) return false;
     await window.pywebview.api.discard_changes(viewerState.currentModPath);
@@ -430,8 +437,7 @@ async function performModSwitch(path, handlers = {}) {
 
 async function confirmLeaveCurrentModIfDirty() {
   if (viewerState.currentSource?.kind !== 'mod' || !viewerState.currentModPath) return true;
-  if (!hasUnappliedMeshChanges()
-      && !await window.pywebview.api.has_pending_changes(viewerState.currentModPath)) {
+  if (!hasUnappliedMeshChanges() && !(await window.pywebview.api.has_pending_changes(viewerState.currentModPath))) {
     return true;
   }
   const proceed = await confirmDialog(t('confirm.unsavedAsset'));
@@ -444,11 +450,11 @@ export async function switchAsset(path, entry = {}, handlers = {}) {
   if (!path || !entry?.asset) return false;
   return await runModTransition(async () => {
     try {
-      if (!await confirmLeaveCurrentModIfDirty()) return false;
+      if (!(await confirmLeaveCurrentModIfDirty())) return false;
       return await loadAssetAt(path, entry, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog(t('errors.unexpectedAsset', {detail: error}));
+      await alertDialog(t('errors.unexpectedAsset', { detail: error }));
       return false;
     }
   });
@@ -474,7 +480,7 @@ export async function switchMod(path, handlers = {}) {
       return await performModSwitch(path, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog(t('errors.unexpected', {detail: error}));
+      await alertDialog(t('errors.unexpected', { detail: error }));
       return false;
     }
   });
@@ -488,20 +494,18 @@ async function openModFromPicker(picker, handlers = {}) {
       return await performModSwitch(path, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog(t('errors.unexpected', {detail: error}));
+      await alertDialog(t('errors.unexpected', { detail: error }));
       return false;
     }
   });
 }
 
 export async function openMod(handlers = {}) {
-  return await openModFromPicker(
-    () => window.pywebview.api.select_folder(), handlers);
+  return await openModFromPicker(() => window.pywebview.api.select_folder(), handlers);
 }
 
 export async function openArchiveMod(handlers = {}) {
-  return await openModFromPicker(
-    () => window.pywebview.api.select_archive_mod(), handlers);
+  return await openModFromPicker(() => window.pywebview.api.select_archive_mod(), handlers);
 }
 
 // Re-render the current authoritative edit session after a staged authoring
@@ -517,7 +521,7 @@ export async function reloadCurrentMod(handlers = {}) {
       return await loadModAt(viewerState.currentModPath, undefined, handlers);
     } catch (error) {
       showLoading(false);
-      await alertDialog(t('errors.unexpectedReload', {detail: error}));
+      await alertDialog(t('errors.unexpectedReload', { detail: error }));
       return false;
     }
   });
@@ -533,31 +537,33 @@ export async function exportChanges() {
       // Refused outright — e.g. a newly-added toggle is still unwired. The
       // button is normally already disabled for this case, so reaching here
       // means the panel was momentarily stale; nothing was written either way.
-      await alertDialog(t('errors.exportBlocked', {detail: result.error}));
-    } else if ((result.failed && result.failed.length)
-               || (result.buffers_failed && result.buffers_failed.length)) {
+      await alertDialog(t('errors.exportBlocked', { detail: result.error }));
+    } else if ((result.failed && result.failed.length) || (result.buffers_failed && result.buffers_failed.length)) {
       const failures = [
-        ...(result.failed || []).map(failure =>
-          `${failure.ini}: ${failure.error}`),
-        ...(result.buffers_failed || []).map(failure =>
-          `${failure.buffer}: ${failure.error}`),
+        ...(result.failed || []).map((failure) => `${failure.ini}: ${failure.error}`),
+        ...(result.buffers_failed || []).map((failure) => `${failure.buffer}: ${failure.error}`),
       ];
       const detail = failures.join('\n');
-      await alertDialog(t('errors.exportPartial', {
-        saved: (result.saved || []).length
-          + (result.buffers_saved || []).length,
-        failed: failures.length, detail,
-      }));
+      await alertDialog(
+        t('errors.exportPartial', {
+          saved: (result.saved || []).length + (result.buffers_saved || []).length,
+          failed: failures.length,
+          detail,
+        }),
+      );
     }
-    if (Object.hasOwn(result, 'buffers_saved')
-        && (result.buffers_saved?.length || result.saved?.length)
-        && !result.buffers_failed?.length && !result.failed?.length) {
+    if (
+      Object.hasOwn(result, 'buffers_saved') &&
+      (result.buffers_saved?.length || result.saved?.length) &&
+      !result.buffers_failed?.length &&
+      !result.failed?.length
+    ) {
       await reloadCurrentMod();
     }
     await refreshPendingState();
     void refreshHealthReport();
   } catch (error) {
-    await alertDialog(t('errors.export', {detail: error}));
+    await alertDialog(t('errors.export', { detail: error }));
     await refreshPendingState();
   }
 }

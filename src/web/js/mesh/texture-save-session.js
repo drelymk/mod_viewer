@@ -3,8 +3,10 @@
 import { viewerState, samePath } from '../app/state.js';
 import { activeMeshes } from './mesh-state.js';
 import {
-  canEditMeshColor, getMeshColorAdjustment,
-  flushMeshColorAdjustmentPersistence, persistCurrentMeshColorAdjustment,
+  canEditMeshColor,
+  getMeshColorAdjustment,
+  flushMeshColorAdjustmentPersistence,
+  persistCurrentMeshColorAdjustment,
   resetMeshColorAdjustment,
 } from './mesh-color-session.js';
 import { reloadTextures } from './mesh-factory.js';
@@ -51,8 +53,8 @@ function targetState(mesh) {
 /** Return the complete model-wide role snapshot used by the backend. */
 function buildTextureUsageSnapshot() {
   return activeMeshes
-    .filter(mesh => mesh?.userData?.assetFill !== true)
-    .map(mesh => {
+    .filter((mesh) => mesh?.userData?.assetFill !== true)
+    .map((mesh) => {
       const data = mesh.userData || {};
       const textureKeys = {
         diffuse: data.texKey || null,
@@ -81,8 +83,7 @@ export function canSaveTexture(mesh) {
   if (!editable.editable || !parsed || parsed.role !== 'diffuse') {
     return { editable: false, reason: 'no-diffuse' };
   }
-  if (viewerState.currentSource?.kind === 'mod'
-      && viewerState.currentSource?.readOnly === true) {
+  if (viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true) {
     return {
       editable: false,
       reason: 'compressed-mod',
@@ -104,13 +105,15 @@ export function getTextureSaveTargets(mesh) {
   const selectedIdentity = textureIdentity(mesh.userData?.texKey);
   if (!selectedIdentity) return [];
   return activeMeshes
-    .filter(candidate => {
+    .filter((candidate) => {
       const data = candidate?.userData || {};
-      if (data.assetFill === true
-          || !samePath(data.modPath, viewerState.currentModPath)
-          || textureIdentity(data.texKey) !== selectedIdentity
-          || !canSaveTexture(candidate).editable
-          || isNeutralColorAdjustment(getMeshColorAdjustment(candidate))) {
+      if (
+        data.assetFill === true ||
+        !samePath(data.modPath, viewerState.currentModPath) ||
+        textureIdentity(data.texKey) !== selectedIdentity ||
+        !canSaveTexture(candidate).editable ||
+        isNeutralColorAdjustment(getMeshColorAdjustment(candidate))
+      ) {
         return false;
       }
       return Boolean(data.semanticKey && data.metadataKey);
@@ -128,7 +131,7 @@ function captureTextureSaveState(mesh) {
 }
 
 function publicTargets(targets) {
-  return (targets || []).map(target => ({
+  return (targets || []).map((target) => ({
     semantic_key: target.semanticKey,
     metadata_key: target.metadataKey,
     adjustment: copyAdjustment(target.adjustment),
@@ -152,73 +155,70 @@ function comparableState(state) {
 function textureSaveStateMatches(mesh, snapshot, current = null) {
   if (!snapshot || !activeMeshes.includes(mesh)) return false;
   const actual = current || captureTextureSaveState(mesh);
-  return samePath(actual.modPath, snapshot.modPath)
-    && JSON.stringify(comparableState(actual))
-      === JSON.stringify(comparableState(snapshot));
+  return (
+    samePath(actual.modPath, snapshot.modPath) &&
+    JSON.stringify(comparableState(actual)) === JSON.stringify(comparableState(snapshot))
+  );
 }
 
 /** Check one committed target before clearing its live Color state. */
 function textureSaveTargetIdentityMatches(mesh, snapshot, target) {
   if (!snapshot || !target || !activeMeshes.includes(mesh)) return false;
   const data = mesh.userData || {};
-  return viewerState.currentSource?.kind === 'mod'
-    && samePath(snapshot.modPath, viewerState.currentModPath)
-    && samePath(data.modPath, snapshot.modPath)
-    && data.semanticKey === target.semanticKey
-    && data.metadataKey === target.metadataKey
-    && textureIdentity(data.texKey) === textureIdentity(snapshot.texKey);
+  return (
+    viewerState.currentSource?.kind === 'mod' &&
+    samePath(snapshot.modPath, viewerState.currentModPath) &&
+    samePath(data.modPath, snapshot.modPath) &&
+    data.semanticKey === target.semanticKey &&
+    data.metadataKey === target.metadataKey &&
+    textureIdentity(data.texKey) === textureIdentity(snapshot.texKey)
+  );
 }
 
 /** Find the current replacement for a captured committed target. */
 function findCurrentTextureSaveTarget(snapshot, target) {
   if (!snapshot || !target) return null;
-  return activeMeshes.find(mesh =>
-    textureSaveTargetIdentityMatches(mesh, snapshot, target)) || null;
+  return activeMeshes.find((mesh) => textureSaveTargetIdentityMatches(mesh, snapshot, target)) || null;
 }
 
 /** Check one committed target before clearing its live Color state. */
 function textureSaveTargetMatches(mesh, snapshot, target) {
   if (!textureSaveTargetIdentityMatches(mesh, snapshot, target)) return false;
-  return JSON.stringify(publicTargets([targetState(mesh)]))
-    === JSON.stringify(publicTargets([target]));
+  return JSON.stringify(publicTargets([targetState(mesh)])) === JSON.stringify(publicTargets([target]));
 }
 
 function affectedTextureKeys(result) {
-  const reported = Array.isArray(result?.affected_tex_keys)
-    && result.affected_tex_keys.length
-    ? result.affected_tex_keys : [result?.tex_key];
-  return [...new Set(reported.filter(key => typeof key === 'string' && key))];
+  const reported =
+    Array.isArray(result?.affected_tex_keys) && result.affected_tex_keys.length
+      ? result.affected_tex_keys
+      : [result?.tex_key];
+  return [...new Set(reported.filter((key) => typeof key === 'string' && key))];
 }
 
 async function synchronizeCommittedSave(state, result) {
-  const sameLoadedMod = viewerState.currentSource?.kind === 'mod'
-    && samePath(viewerState.currentModPath, state.modPath);
+  const sameLoadedMod =
+    viewerState.currentSource?.kind === 'mod' && samePath(viewerState.currentModPath, state.modPath);
   if (!sameLoadedMod) return false;
 
   const affectedKeys = affectedTextureKeys(result);
   const saved = Array.isArray(result.saved_meshes) ? result.saved_meshes : [];
-  const capturedTargets = new Map((state.targets || []).map(target => [
-    `${target.semanticKey || ''}\u0000${target.metadataKey || ''}`, target,
-  ]));
-  const receipt = result.metadata_reset
-    && typeof result.metadata_reset === 'object'
-    ? result.metadata_reset : null;
-  const receiptValid = receipt
-    && Array.isArray(receipt.cleared)
-    && Array.isArray(receipt.preserved)
-    && Array.isArray(receipt.failed);
-  const statusFor = metadataKey => {
+  const capturedTargets = new Map(
+    (state.targets || []).map((target) => [`${target.semanticKey || ''}\u0000${target.metadataKey || ''}`, target]),
+  );
+  const receipt = result.metadata_reset && typeof result.metadata_reset === 'object' ? result.metadata_reset : null;
+  const receiptValid =
+    receipt && Array.isArray(receipt.cleared) && Array.isArray(receipt.preserved) && Array.isArray(receipt.failed);
+  const statusFor = (metadataKey) => {
     if (!receiptValid) return 'failed';
     if (receipt.failed.includes(metadataKey)) return 'failed';
     if (receipt.preserved.includes(metadataKey)) return 'preserved';
     if (receipt.cleared.includes(metadataKey)) return 'cleared';
     return 'failed';
   };
-  const records = saved.map(item => {
+  const records = saved.map((item) => {
     const semanticKey = item?.semantic_key;
     const metadataKey = item?.metadata_key;
-    const target = capturedTargets.get(
-      `${semanticKey || ''}\u0000${metadataKey || ''}`);
+    const target = capturedTargets.get(`${semanticKey || ''}\u0000${metadataKey || ''}`);
     return {
       target,
       metadataKey,
@@ -241,7 +241,7 @@ async function synchronizeCommittedSave(state, result) {
     }
     if (record.status === 'cleared') {
       if (textureSaveTargetMatches(mesh, state, record.target)) {
-        resetMeshColorAdjustment(mesh, {persist: false, render: false});
+        resetMeshColorAdjustment(mesh, { persist: false, render: false });
         changedMeshes.add(mesh);
       } else {
         try {
@@ -256,7 +256,7 @@ async function synchronizeCommittedSave(state, result) {
 
     try {
       if (textureSaveTargetMatches(mesh, state, record.target)) {
-        resetMeshColorAdjustment(mesh, {persist: true, render: false});
+        resetMeshColorAdjustment(mesh, { persist: true, render: false });
         changedMeshes.add(mesh);
       } else {
         persistCurrentMeshColorAdjustment(mesh);
@@ -267,21 +267,22 @@ async function synchronizeCommittedSave(state, result) {
     }
   }
 
-  if (unresolvedFailedTargets
-      && (!result.warning || result.warning === 'color_state_reset_failed')) {
+  if (unresolvedFailedTargets && (!result.warning || result.warning === 'color_state_reset_failed')) {
     result.warning = 'color_state_reset_failed';
   } else if (result.warning === 'color_state_reset_failed') {
     delete result.warning;
   }
-  await reloadTextures(affectedKeys, {force: true});
+  await reloadTextures(affectedKeys, { force: true });
   if (changedMeshes.size) notifyMeshStateChanged([...changedMeshes]);
-  window.dispatchEvent(new CustomEvent('mod-viewer-texture-saved', {
-    detail: {
-      texKey: result.tex_key,
-      affectedTexKeys: affectedKeys,
-      savedMeshes: saved,
-    },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-texture-saved', {
+      detail: {
+        texKey: result.tex_key,
+        affectedTexKeys: affectedKeys,
+        savedMeshes: saved,
+      },
+    }),
+  );
   return true;
 }
 
@@ -306,34 +307,32 @@ export function createTextureSaveSession({
     return true;
   }
 
-  function open(mesh, {isCurrent} = {}) {
+  function open(mesh, { isCurrent } = {}) {
     activeSaveRequestId = null;
     const state = captureTextureSaveState(mesh);
-    pendingSave = {mesh, isCurrent, state};
+    pendingSave = { mesh, isCurrent, state };
     return state;
   }
 
   function handleProgress(event) {
     const detail = event?.detail;
-    if (!saving || activeSaveRequestId === null
-        || detail?.request_id !== activeSaveRequestId) return;
+    if (!saving || activeSaveRequestId === null || detail?.request_id !== activeSaveRequestId) return;
     onProgress(detail);
   }
 
   async function runSave(job) {
     const api = window.pywebview?.api?.save_texture_color;
     if (typeof api !== 'function') {
-      onError({status: 'error', error_code: 'texture_saving_unavailable'});
+      onError({ status: 'error', error_code: 'texture_saving_unavailable' });
       return null;
     }
     saving = true;
     const requestId = String(++saveRequestSequence);
     activeSaveRequestId = requestId;
-    onProgress({stage: 'preparing'});
+    onProgress({ stage: 'preparing' });
 
     try {
-      await Promise.all((job.state.targets || []).map(target =>
-        flushMeshColorAdjustmentPersistence(target.mesh)));
+      await Promise.all((job.state.targets || []).map((target) => flushMeshColorAdjustmentPersistence(target.mesh)));
     } catch {
       saving = false;
       activeSaveRequestId = null;
@@ -344,11 +343,13 @@ export function createTextureSaveSession({
       return null;
     }
     const currentState = captureTextureSaveState(job.mesh);
-    if ((typeof job.isCurrent === 'function' && !job.isCurrent())
-        || !textureSaveStateMatches(job.mesh, job.state, currentState)) {
+    if (
+      (typeof job.isCurrent === 'function' && !job.isCurrent()) ||
+      !textureSaveStateMatches(job.mesh, job.state, currentState)
+    ) {
       saving = false;
       activeSaveRequestId = null;
-      pendingSave = {mesh: job.mesh, isCurrent: job.isCurrent, state: currentState};
+      pendingSave = { mesh: job.mesh, isCurrent: job.isCurrent, state: currentState };
       onPrompt(currentState);
       return null;
     }
@@ -360,11 +361,14 @@ export function createTextureSaveSession({
     let result;
     try {
       result = await api(
-        job.state.modPath, job.state.texKey,
-        textureSaveTargetsPayload(job.state), job.state.textureUsage,
-        requestId);
+        job.state.modPath,
+        job.state.texKey,
+        textureSaveTargetsPayload(job.state),
+        job.state.textureUsage,
+        requestId,
+      );
     } catch {
-      result = {status: 'error', error_code: 'texture_save_failed'};
+      result = { status: 'error', error_code: 'texture_save_failed' };
     }
     if (result?.status !== 'ok') {
       saving = false;

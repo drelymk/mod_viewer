@@ -6,13 +6,15 @@ import { usesPackedNormal } from './material-profile.js';
 import { setHealthReport } from '../panels/health-report.js';
 
 export {
-  clearTextureRunGroups, recomputeAllTextureRuns, recomputeTextureRuns,
-  registerTextureRunGroup, unregisterTextureRunGroup,
+  clearTextureRunGroups,
+  recomputeAllTextureRuns,
+  recomputeTextureRuns,
+  registerTextureRunGroup,
+  unregisterTextureRunGroup,
 } from './mesh-texture-runs.js';
 
 export function saveTextureState(modPath) {
-  if (viewerState.currentSource?.kind === 'mod'
-      && viewerState.currentSource?.readOnly === true) return;
+  if (viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true) return;
   if (!modPath || !window.pywebview?.api?.save_mesh_textures) return;
   const state = {};
   for (const mesh of activeMeshes) {
@@ -21,13 +23,11 @@ export function saveTextureState(modPath) {
     if (mesh.userData.manualTexOverride !== undefined) {
       texKey = mesh.userData.manualTexOverride;
       manual = true;
-    } else if (mesh.userData.automaticTextureBoundary
-               && !mesh.userData.textureHighlightDisabled) {
+    } else if (mesh.userData.automaticTextureBoundary && !mesh.userData.textureHighlightDisabled) {
       texKey = mesh.userData.resolvedTexKey;
     }
     if (!texKey) continue;
-    const option = (mesh.userData.texturePool || [])
-      .find(candidate => candidate.tex_key === texKey);
+    const option = (mesh.userData.texturePool || []).find((candidate) => candidate.tex_key === texKey);
     // Removing an option also removes its persisted highlight.
     if (!option) continue;
     const savedState = {
@@ -51,9 +51,12 @@ export function saveTextureState(modPath) {
   }
   const request = window.pywebview.api.save_mesh_textures(modPath, state);
   if (request && typeof request.then === 'function') {
-    request.then(result => {
-      if (!result?.error) setHealthReport(null);
-    }, () => {});
+    request.then(
+      (result) => {
+        if (!result?.error) setHealthReport(null);
+      },
+      () => {},
+    );
   } else {
     setHealthReport(null);
   }

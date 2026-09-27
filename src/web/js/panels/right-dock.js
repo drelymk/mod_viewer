@@ -17,12 +17,8 @@ function validTab(tab) {
 
 function elements() {
   return {
-    tabs: Object.fromEntries(VALID_TABS.map(tab => [
-      tab, document.getElementById(`${tab}-tab`),
-    ])),
-    panes: Object.fromEntries(VALID_TABS.map(tab => [
-      tab, document.getElementById(`${tab}-panel`),
-    ])),
+    tabs: Object.fromEntries(VALID_TABS.map((tab) => [tab, document.getElementById(`${tab}-tab`)])),
+    panes: Object.fromEntries(VALID_TABS.map((tab) => [tab, document.getElementById(`${tab}-panel`)])),
     dock: document.getElementById('right-dock'),
   };
 }
@@ -30,15 +26,17 @@ function elements() {
 function notifyTabChange(activeTab) {
   if (activeTab === lastNotifiedTab) return;
   lastNotifiedTab = activeTab;
-  window.dispatchEvent(new CustomEvent('mod-viewer-right-dock-tab-changed', {
-    detail: {tab: activeTab, open: !!activeTab},
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-right-dock-tab-changed', {
+      detail: { tab: activeTab, open: !!activeTab },
+    }),
+  );
 }
 
 function renderRightDock() {
-  const {tabs, panes, dock} = elements();
+  const { tabs, panes, dock } = elements();
   const activeTab = dockEnabled && validTab(openTab) ? openTab : null;
-  VALID_TABS.forEach(tab => {
+  VALID_TABS.forEach((tab) => {
     const active = activeTab === tab;
     tabs[tab]?.classList.toggle('active', active);
     tabs[tab]?.setAttribute('aria-selected', String(active));
@@ -51,13 +49,17 @@ function renderRightDock() {
   notifyTabChange(activeTab);
 }
 
-export function setRightDockTab(tab, {persist = true, userInitiated = false} = {}) {
+export function setRightDockTab(tab, { persist = true, userInitiated = false } = {}) {
   if (!validTab(tab)) return false;
   selectedTab = tab;
   openTab = tab;
   if (userInitiated) userHasChosenDockState = true;
   if (persist) {
-    try { localStorage.setItem(STORAGE_KEY, tab); } catch { /* private mode */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, tab);
+    } catch {
+      /* private mode */
+    }
   }
   renderRightDock();
   return true;
@@ -71,7 +73,11 @@ export function toggleRightDockTab(tab) {
   } else {
     selectedTab = tab;
     openTab = tab;
-    try { localStorage.setItem(STORAGE_KEY, tab); } catch { /* private mode */ }
+    try {
+      localStorage.setItem(STORAGE_KEY, tab);
+    } catch {
+      /* private mode */
+    }
   }
   renderRightDock();
   return true;
@@ -92,20 +98,20 @@ export function setRightDockEnabled(enabled) {
 }
 
 export function initRightDock() {
-  const {tabs} = elements();
+  const { tabs } = elements();
   if (!tabs.controls || !tabs.inspector || !tabs['weight-rig']) return;
-  VALID_TABS.forEach(tab =>
-    tabs[tab].addEventListener('click', () => toggleRightDockTab(tab)));
+  VALID_TABS.forEach((tab) => tabs[tab].addEventListener('click', () => toggleRightDockTab(tab)));
   if (!ready) {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      const migrated = stored === 'weight' || stored === 'rig'
-        ? 'weight-rig' : stored;
+      const migrated = stored === 'weight' || stored === 'rig' ? 'weight-rig' : stored;
       if (validTab(migrated)) {
         selectedTab = migrated;
         if (migrated !== stored) localStorage.setItem(STORAGE_KEY, migrated);
       }
-    } catch { /* private mode */ }
+    } catch {
+      /* private mode */
+    }
     ready = true;
   }
   renderRightDock();

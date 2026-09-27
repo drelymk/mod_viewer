@@ -10,17 +10,20 @@ import { activeMeshes } from '../mesh/visibility.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
 import { setMeshSelectionOutline } from './outline-renderer.js';
 import {
-  authoredTriangleOrdinal, meshesInClientRect, raycastModelAtClientPoint,
+  authoredTriangleOrdinal,
+  meshesInClientRect,
+  raycastModelAtClientPoint,
   trianglesInClientRect,
 } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
 import {
-  getLoosePartSource, getLooseParts, indicesForTriangles,
-  setLoosePartSelectionCleanup, separateSelectedTriangles,
+  getLoosePartSource,
+  getLooseParts,
+  indicesForTriangles,
+  setLoosePartSelectionCleanup,
+  separateSelectedTriangles,
 } from '../mesh/loose-parts.js';
-import {
-  isRigTransformInteractionActive, isRigJointPickingActive,
-} from './rig-overlay-state.js';
+import { isRigTransformInteractionActive, isRigJointPickingActive } from './rig-overlay-state.js';
 
 const DRAG_THRESHOLD_PIXELS = 5;
 
@@ -57,13 +60,15 @@ function expandAncestorsAndScrollTo(row) {
     }
     el = el.parentElement;
   }
-  row.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function dispatchSelectionChanged() {
-  window.dispatchEvent(new CustomEvent('mod-viewer-mesh-selected', {
-    detail: {mesh: primary, meshes: [...selected]},
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-mesh-selected', {
+      detail: { mesh: primary, meshes: [...selected] },
+    }),
+  );
   requestRender();
 }
 
@@ -82,7 +87,7 @@ function replaceSelection(meshes, nextPrimary) {
     }
   }
   selected.clear();
-  next.forEach(mesh => selected.add(mesh));
+  next.forEach((mesh) => selected.add(mesh));
   primary = next.has(nextPrimary) ? nextPrimary : [...next].pop() || null;
   if (primary) {
     const row = getMeshView(primary)?.row;
@@ -93,8 +98,7 @@ function replaceSelection(meshes, nextPrimary) {
 
 export function selectMesh(mesh) {
   const next = mesh ? [mesh] : [];
-  if (selected.size === next.length && primary === mesh
-      && (!mesh || selected.has(mesh))) return;
+  if (selected.size === next.length && primary === mesh && (!mesh || selected.has(mesh))) return;
   replaceSelection(next, mesh);
 }
 
@@ -113,7 +117,7 @@ export function toggleMeshSelection(mesh) {
 }
 
 export function addMeshesToSelection(meshes) {
-  const additions = [...new Set(meshes || [])].filter(mesh => !selected.has(mesh));
+  const additions = [...new Set(meshes || [])].filter((mesh) => !selected.has(mesh));
   if (!additions.length) return false;
   replaceSelection([...selected, ...additions], additions.at(-1));
   return true;
@@ -137,7 +141,7 @@ export function getMeshEditSource(mesh) {
 
 export function getActiveMeshEditSource() {
   if (faceSelection) return faceSelection.source;
-  return activeMeshes.find(mesh => getLooseParts(mesh).length) || null;
+  return activeMeshes.find((mesh) => getLooseParts(mesh).length) || null;
 }
 
 export function canEditMesh(mesh) {
@@ -155,11 +159,16 @@ export function getSelectedFaceTriangles() {
 }
 
 function createFaceOverlay(state) {
-  const topologyOverlay = new THREE.Mesh(state.target.geometry,
+  const topologyOverlay = new THREE.Mesh(
+    state.target.geometry,
     new THREE.MeshBasicNodeMaterial({
-      color: 0xffffff, wireframe: true,
-      depthTest: true, depthWrite: false, side: THREE.DoubleSide,
-    }));
+      color: 0xffffff,
+      wireframe: true,
+      depthTest: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
   topologyOverlay.name = `${state.target.name || 'mesh'}-face-topology`;
   topologyOverlay.frustumCulled = false;
   topologyOverlay.renderOrder = 1000;
@@ -173,16 +182,22 @@ function createFaceOverlay(state) {
   for (const [name, attribute] of Object.entries(source.geometry.attributes || {})) {
     if (attribute) geometry.setAttribute(name, attribute);
   }
-  for (const [name, attributes] of Object.entries(
-    source.geometry.morphAttributes || {})) {
+  for (const [name, attributes] of Object.entries(source.geometry.morphAttributes || {})) {
     geometry.morphAttributes[name] = [...attributes];
   }
   geometry.morphTargetsRelative = source.geometry.morphTargetsRelative;
   geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(), 1));
-  const overlay = new THREE.Mesh(geometry, new THREE.MeshBasicNodeMaterial({
-    color: 0xffdf5d, transparent: true, opacity: 0.55,
-    depthTest: false, depthWrite: false, side: THREE.DoubleSide,
-  }));
+  const overlay = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicNodeMaterial({
+      color: 0xffdf5d,
+      transparent: true,
+      opacity: 0.55,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
   overlay.name = `${state.target.name || 'mesh'}-face-selection`;
   overlay.frustumCulled = false;
   overlay.renderOrder = 1001;
@@ -198,11 +213,9 @@ function updateFaceOverlay() {
     faceSelection.topologyOverlay.visible = faceSelection.target.visible;
   }
   if (!faceSelection.overlay) return;
-  const indices = indicesForTriangles(
-    faceSelection.source.geometry, [...faceSelection.triangles]);
+  const indices = indicesForTriangles(faceSelection.source.geometry, [...faceSelection.triangles]);
   if (!indices) return;
-  faceSelection.overlay.geometry.setIndex(
-    new THREE.BufferAttribute(indices, 1));
+  faceSelection.overlay.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   faceSelection.overlay.visible = faceSelection.target.visible;
 }
 
@@ -224,9 +237,13 @@ function disposeFaceOverlay(state) {
 export function beginFaceSelection(target) {
   const source = getMeshEditSource(target);
   const parts = getLooseParts(source);
-  if (!source || !target || (parts.length && !parts.includes(target))
-      || (faceSelection && (faceSelection.source !== source
-        || faceSelection.target !== target))) return false;
+  if (
+    !source ||
+    !target ||
+    (parts.length && !parts.includes(target)) ||
+    (faceSelection && (faceSelection.source !== source || faceSelection.target !== target))
+  )
+    return false;
   if (faceSelection) return true;
   const activeSource = getActiveMeshEditSource();
   if (activeSource && activeSource !== source) return false;
@@ -256,7 +273,7 @@ export function cancelFaceSelection() {
   return !!clearFaceSelectionState();
 }
 
-export function applyFaceSelection({label = null} = {}) {
+export function applyFaceSelection({ label = null } = {}) {
   if (!faceSelection) return null;
   const state = faceSelection;
   const selectedTriangles = [...state.triangles];
@@ -267,7 +284,7 @@ export function applyFaceSelection({label = null} = {}) {
     return null;
   }
   clearFaceSelectionState();
-  const result = separateSelectedTriangles(state.target, selectedTriangles, {label});
+  const result = separateSelectedTriangles(state.target, selectedTriangles, { label });
   if (!result) return null;
   return result;
 }
@@ -278,7 +295,7 @@ export function resetMeshEditState() {
 
 function removeMeshFromSelection(mesh) {
   if (!selected.has(mesh)) return;
-  const remaining = [...selected].filter(candidate => candidate !== mesh);
+  const remaining = [...selected].filter((candidate) => candidate !== mesh);
   replaceSelection(remaining, primary === mesh ? remaining.at(-1) : primary);
 }
 
@@ -318,15 +335,18 @@ function updateSelectionBox(event) {
   box.style.width = `${right - left}px`;
   box.style.height = `${bottom - top}px`;
   box.hidden = false;
-  return {left, top, right, bottom};
+  return { left, top, right, bottom };
 }
 
 function restoreBoxGesture(event) {
   const gesture = boxGesture;
   if (!gesture || event.pointerId !== gesture.pointerId) return null;
   if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
-    try { renderer.domElement.releasePointerCapture(event.pointerId); }
-    catch { /* best effort */ }
+    try {
+      renderer.domElement.releasePointerCapture(event.pointerId);
+    } catch {
+      /* best effort */
+    }
   }
   controls.enabled = gesture.controlsEnabled;
   if (selectionBox) selectionBox.hidden = true;
@@ -337,8 +357,14 @@ function restoreBoxGesture(event) {
 function onPointerDown(event) {
   downX = event.clientX;
   downY = event.clientY;
-  if (event.button !== 0 || !event.ctrlKey || event.defaultPrevented
-      || isRigTransformInteractionActive() || isRigJointPickingActive()) return;
+  if (
+    event.button !== 0 ||
+    !event.ctrlKey ||
+    event.defaultPrevented ||
+    isRigTransformInteractionActive() ||
+    isRigJointPickingActive()
+  )
+    return;
   const rect = canvasRect();
   if (!rect) return;
   boxGesture = {
@@ -352,15 +378,16 @@ function onPointerDown(event) {
   controls.enabled = false;
   event.preventDefault();
   event.stopPropagation();
-  try { renderer.domElement.setPointerCapture(event.pointerId); }
-  catch { /* best effort */ }
+  try {
+    renderer.domElement.setPointerCapture(event.pointerId);
+  } catch {
+    /* best effort */
+  }
 }
 
 function onPointerMove(event) {
   if (!boxGesture || event.pointerId !== boxGesture.pointerId) return;
-  if (!boxGesture.dragging
-      && Math.hypot(event.clientX - downX, event.clientY - downY)
-        <= DRAG_THRESHOLD_PIXELS) return;
+  if (!boxGesture.dragging && Math.hypot(event.clientX - downX, event.clientY - downY) <= DRAG_THRESHOLD_PIXELS) return;
   boxGesture.dragging = true;
   updateSelectionBox(event);
   event.preventDefault();
@@ -377,19 +404,23 @@ function onPointerUp(event) {
     if (gesture.dragging && rect) {
       if (faceSelection) {
         const triangles = trianglesInClientRect({
-          mesh: faceSelection.target, camera,
-          canvas: renderer.domElement, selectionRect: rect,
-        });
-        triangles.forEach(triangle => faceSelection.triangles.add(triangle));
-        updateFaceOverlay();
-        requestRender();
-      } else {
-        addMeshesToSelection(meshesInClientRect({
-          meshes: activeMeshes,
+          mesh: faceSelection.target,
           camera,
           canvas: renderer.domElement,
           selectionRect: rect,
-        }));
+        });
+        triangles.forEach((triangle) => faceSelection.triangles.add(triangle));
+        updateFaceOverlay();
+        requestRender();
+      } else {
+        addMeshesToSelection(
+          meshesInClientRect({
+            meshes: activeMeshes,
+            camera,
+            canvas: renderer.domElement,
+            selectionRect: rect,
+          }),
+        );
       }
       return;
     }
@@ -407,8 +438,7 @@ function onPointerUp(event) {
     toggleMeshSelection(hit?.object || null);
     return;
   }
-  if (Math.hypot(event.clientX - downX, event.clientY - downY)
-      > DRAG_THRESHOLD_PIXELS) return;
+  if (Math.hypot(event.clientX - downX, event.clientY - downY) > DRAG_THRESHOLD_PIXELS) return;
   if (faceSelection) {
     const hit = raycastModelAtClientPoint({
       clientX: event.clientX,
@@ -465,14 +495,15 @@ function onViewportContextMenu(event) {
   if (hit?.object !== faceSelection.target) return;
   event.preventDefault();
   event.stopPropagation();
-  window.dispatchEvent(new CustomEvent(
-    'mod-viewer-face-selection-contextmenu', {
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-face-selection-contextmenu', {
       detail: {
         mesh: faceSelection.target,
         clientX: event.clientX,
         clientY: event.clientY,
       },
-    }));
+    }),
+  );
 }
 
 function onKeyDown(event) {
@@ -485,8 +516,8 @@ export function initSelection() {
   if (selectionInitialized) return;
   selectionInitialized = true;
   const canvas = renderer.domElement;
-  canvas.addEventListener('pointerdown', onPointerDown, {capture: true});
-  canvas.addEventListener('pointermove', onPointerMove, {capture: true});
+  canvas.addEventListener('pointerdown', onPointerDown, { capture: true });
+  canvas.addEventListener('pointermove', onPointerMove, { capture: true });
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerCancel);
   canvas.addEventListener('lostpointercapture', onPointerCancel);

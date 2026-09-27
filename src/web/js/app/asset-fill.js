@@ -18,22 +18,22 @@ export function updateAssetFillButton() {
   const button = $('asset-fill-btn');
   if (!button) return;
   const { assetFill } = viewerState;
-  const available = assetFill.available
-    && viewerState.currentSource?.kind === 'mod' && !!viewerState.currentModPath;
+  const available = assetFill.available && viewerState.currentSource?.kind === 'mod' && !!viewerState.currentModPath;
   const state = assetFill.loading ? 'loading' : assetFill.loaded ? 'remove' : 'load';
-  const label = state === 'remove'
-    ? t('mesh.removeMissingParts')
-    : state === 'loading'
-      ? assetFill.loaded ? t('mesh.removingMissingParts') : t('mesh.loadingMissingParts')
-      : t('mesh.loadMissingParts');
+  const label =
+    state === 'remove'
+      ? t('mesh.removeMissingParts')
+      : state === 'loading'
+        ? assetFill.loaded
+          ? t('mesh.removingMissingParts')
+          : t('mesh.loadingMissingParts')
+        : t('mesh.loadMissingParts');
   button.disabled = !available || assetFill.loading;
   button.dataset.state = state;
   button.setAttribute('aria-label', label);
   button.setAttribute('aria-pressed', String(assetFill.loaded));
   button.replaceChildren(createIcon(state === 'remove' ? 'close' : 'mesh-add'));
-  button.title = assetFill.loaded
-    ? t('mesh.removeOriginalParts')
-    : t('mesh.addOriginalParts');
+  button.title = assetFill.loaded ? t('mesh.removeOriginalParts') : t('mesh.addOriginalParts');
 }
 
 window.addEventListener(LANGUAGE_CHANGED, updateAssetFillButton);
@@ -49,30 +49,31 @@ export function resetAssetFillState() {
 }
 
 function assetFillOperationIsCurrent(operation, path) {
-  return operation === viewerState.assetFill.epoch
-    && viewerState.currentSource?.kind === 'mod'
-    && samePath(viewerState.currentModPath, path);
+  return (
+    operation === viewerState.assetFill.epoch &&
+    viewerState.currentSource?.kind === 'mod' &&
+    samePath(viewerState.currentModPath, path)
+  );
 }
 
 function rollbackAssetFillFrontend(addedMeshes, textureKeys) {
   const targetMeshes = [...new Set(addedMeshes || [])];
   const removedFromPanel = removeAssetFillMeshPanel(targetMeshes);
-  const remaining = targetMeshes.filter(mesh => activeMeshes.includes(mesh));
+  const remaining = targetMeshes.filter((mesh) => activeMeshes.includes(mesh));
   remaining.forEach(removeMesh);
   const removed = [...new Set([...removedFromPanel, ...remaining])];
   if (removed.length) requestRender();
 
   const keys = new Set(textureKeys || []);
   removeTextures(keys);
-  keys.forEach(key => viewerState.assetFill.textureKeys.delete(key));
+  keys.forEach((key) => viewerState.assetFill.textureKeys.delete(key));
   viewerState.assetFill.loaded = false;
   viewerState.assetFill.fillId = null;
 }
 
 async function releaseBackendAssetFill(path, fillId = null) {
   try {
-    const result = await window.pywebview.api.remove_missing_asset_parts(
-      path, fillId);
+    const result = await window.pywebview.api.remove_missing_asset_parts(path, fillId);
     if (result?.status === 'error') {
       console.warn('Could not roll back missing Asset parts:', result.error);
     }
@@ -81,8 +82,7 @@ async function releaseBackendAssetFill(path, fillId = null) {
   }
 }
 
-async function rollbackAssetFill(
-    path, operation, fillId, addedMeshes, textureKeys) {
+async function rollbackAssetFill(path, operation, fillId, addedMeshes, textureKeys) {
   if (assetFillOperationIsCurrent(operation, path)) {
     rollbackAssetFillFrontend(addedMeshes, textureKeys);
   } else {
@@ -90,15 +90,14 @@ async function rollbackAssetFill(
     // entries are still owned by this transaction, so release only those.
     const keys = new Set(textureKeys || []);
     removeTextures(keys);
-    keys.forEach(key => viewerState.assetFill.textureKeys.delete(key));
+    keys.forEach((key) => viewerState.assetFill.textureKeys.delete(key));
   }
   await releaseBackendAssetFill(path, fillId);
 }
 
 export async function loadMissingAssetParts() {
   const state = viewerState;
-  if (!state.currentModPath || state.currentSource?.kind !== 'mod'
-      || state.assetFill.loading) {
+  if (!state.currentModPath || state.currentSource?.kind !== 'mod' || state.assetFill.loading) {
     return false;
   }
   const path = state.currentModPath;
@@ -112,9 +111,7 @@ export async function loadMissingAssetParts() {
     if (rolledBack) return;
     rolledBack = true;
     if (backendLoaded) {
-      await rollbackAssetFill(
-        path, operation, transactionFillId,
-        addedMeshes, transactionTextureKeys);
+      await rollbackAssetFill(path, operation, transactionFillId, addedMeshes, transactionTextureKeys);
     }
   };
   state.assetFill.loading = true;
@@ -173,19 +170,17 @@ export async function loadMissingAssetParts() {
     const before = new Set(activeMeshes);
     try {
       const entries = payload.meshes || {};
-      const liveMeshes = buildPayloadMeshes(
-        entries, null, {}, payload.metadata?.material_profiles || {}, {
-          texturePools: payload.texture_pools || {},
-          animations: payload.animations || {},
-        });
-      appendMeshPanel(
-        entries, liveMeshes, null, {
-          replace: false,
-          texturePools: payload.texture_pools || {},
-          readOnlySource: true,
-        });
+      const liveMeshes = buildPayloadMeshes(entries, null, {}, payload.metadata?.material_profiles || {}, {
+        texturePools: payload.texture_pools || {},
+        animations: payload.animations || {},
+      });
+      appendMeshPanel(entries, liveMeshes, null, {
+        replace: false,
+        texturePools: payload.texture_pools || {},
+        readOnlySource: true,
+      });
     } finally {
-      addedMeshes = activeMeshes.filter(mesh => !before.has(mesh));
+      addedMeshes = activeMeshes.filter((mesh) => !before.has(mesh));
     }
     adoptModelMeshes(addedMeshes);
     if (!assetFillOperationIsCurrent(operation, path)) {
@@ -203,7 +198,7 @@ export async function loadMissingAssetParts() {
   } catch (error) {
     await rollback();
     if (!assetFillOperationIsCurrent(operation, path)) return false;
-    await alertDialog(t('errors.loadMissingAsset', {detail: error.message}));
+    await alertDialog(t('errors.loadMissingAsset', { detail: error.message }));
     return false;
   } finally {
     if (operation === state.assetFill.epoch) {
@@ -223,13 +218,11 @@ export async function removeMissingAssetParts() {
   state.assetFill.loading = true;
   updateAssetFillButton();
   try {
-    const result = await window.pywebview.api.remove_missing_asset_parts(
-      path, state.assetFill.fillId);
+    const result = await window.pywebview.api.remove_missing_asset_parts(path, state.assetFill.fillId);
     if (!assetFillOperationIsCurrent(operation, path)) return false;
     if (result?.status === 'error') throw new Error(result.error);
     if (result?.stale) return false;
-    const fillMeshes = activeMeshes.filter(
-      mesh => mesh.userData.assetFill === true).slice();
+    const fillMeshes = activeMeshes.filter((mesh) => mesh.userData.assetFill === true).slice();
     removeAssetFillMeshPanel(fillMeshes);
     fillMeshes.forEach(removeMesh);
     removeTextures(state.assetFill.textureKeys);
@@ -240,7 +233,7 @@ export async function removeMissingAssetParts() {
     return true;
   } catch (error) {
     if (!assetFillOperationIsCurrent(operation, path)) return false;
-    await alertDialog(t('errors.removeMissingAsset', {detail: error.message}));
+    await alertDialog(t('errors.removeMissingAsset', { detail: error.message }));
     return false;
   } finally {
     if (operation === state.assetFill.epoch) {
@@ -251,6 +244,5 @@ export async function removeMissingAssetParts() {
 }
 
 export async function toggleMissingAssetParts() {
-  return viewerState.assetFill.loaded
-    ? removeMissingAssetParts() : loadMissingAssetParts();
+  return viewerState.assetFill.loaded ? removeMissingAssetParts() : loadMissingAssetParts();
 }

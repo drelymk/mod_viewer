@@ -4,19 +4,14 @@ const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 
 function vectorFromCenter(center) {
   if (center?.isVector3) return center.clone();
-  return new THREE.Vector3(
-    Number(center?.[0]) || 0,
-    Number(center?.[1]) || 0,
-    Number(center?.[2]) || 0,
-  );
+  return new THREE.Vector3(Number(center?.[0]) || 0, Number(center?.[1]) || 0, Number(center?.[2]) || 0);
 }
 
 function rotationAroundPivot(pivot, rotation) {
   return new THREE.Matrix4()
     .makeTranslation(pivot.x, pivot.y, pivot.z)
     .multiply(new THREE.Matrix4().makeRotationFromQuaternion(rotation))
-    .multiply(new THREE.Matrix4().makeTranslation(
-      -pivot.x, -pivot.y, -pivot.z));
+    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
 }
 
 function centerFromCollection(nodeCenters, boneId) {
@@ -34,71 +29,74 @@ function valueFromCollection(collection, boneId) {
 }
 
 function rotationFromCollection(rotationByBoneId, boneId) {
-  const value = rotationByBoneId instanceof Map
-    ? rotationByBoneId.get(boneId) ?? rotationByBoneId.get(String(boneId))
-    : rotationByBoneId?.[boneId];
+  const value =
+    rotationByBoneId instanceof Map
+      ? (rotationByBoneId.get(boneId) ?? rotationByBoneId.get(String(boneId)))
+      : rotationByBoneId?.[boneId];
   const rotation = value?.rotationVector ?? value;
   const values = rotation?.isVector3
     ? [rotation.x, rotation.y, rotation.z]
-    : Array.isArray(rotation) ? rotation
+    : Array.isArray(rotation)
+      ? rotation
       : [rotation?.x, rotation?.y, rotation?.z];
   const vector = values.slice(0, 3).map(Number);
-  return vector.length === 3 && vector.every(Number.isFinite)
-    ? new THREE.Vector3(...vector) : new THREE.Vector3();
+  return vector.length === 3 && vector.every(Number.isFinite) ? new THREE.Vector3(...vector) : new THREE.Vector3();
 }
 
 function quaternionFromRotationVector(rotationVector) {
   const vector = rotationVector?.isVector3
-    ? rotationVector : new THREE.Vector3(
-      Number(rotationVector?.[0] ?? rotationVector?.x) || 0,
-      Number(rotationVector?.[1] ?? rotationVector?.y) || 0,
-      Number(rotationVector?.[2] ?? rotationVector?.z) || 0,
-    );
+    ? rotationVector
+    : new THREE.Vector3(
+        Number(rotationVector?.[0] ?? rotationVector?.x) || 0,
+        Number(rotationVector?.[1] ?? rotationVector?.y) || 0,
+        Number(rotationVector?.[2] ?? rotationVector?.z) || 0,
+      );
   const angle = vector.length();
   if (!Number.isFinite(angle) || angle < 1e-12) {
     return new THREE.Quaternion();
   }
-  return new THREE.Quaternion().setFromAxisAngle(
-    vector.clone().multiplyScalar(1 / angle), angle);
+  return new THREE.Quaternion().setFromAxisAngle(vector.clone().multiplyScalar(1 / angle), angle);
 }
 
 function quaternionFromCollection(quaternionByBoneId, boneId) {
   const value = valueFromCollection(quaternionByBoneId, boneId);
   const quaternion = value?.quaternion ?? value;
   if (quaternion?.isQuaternion) return quaternion.clone().normalize();
-  const values = quaternion?.length >= 4
-    ? quaternion.slice(0, 4).map(Number)
-    : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w]
-      .map(Number);
+  const values =
+    quaternion?.length >= 4
+      ? quaternion.slice(0, 4).map(Number)
+      : [quaternion?.x, quaternion?.y, quaternion?.z, quaternion?.w].map(Number);
   return values.length === 4 && values.every(Number.isFinite)
-    ? new THREE.Quaternion(...values).normalize() : new THREE.Quaternion();
+    ? new THREE.Quaternion(...values).normalize()
+    : new THREE.Quaternion();
 }
 
-export function buildForestTransformsFromLocalRotations(
-    forest, nodeCenters, options = {}) {
+export function buildForestTransformsFromLocalRotations(forest, nodeCenters, options = {}) {
   const transforms = new Map();
   const rotations = new Map();
-  const transformCache = options.transformCache instanceof Map
-    ? options.transformCache : new Map();
-  const entryFor = boneId => {
+  const transformCache = options.transformCache instanceof Map ? options.transformCache : new Map();
+  const entryFor = (boneId) => {
     let entry = transformCache.get(boneId);
     if (!entry) {
-      entry = {matrix: new THREE.Matrix4(), rotation: new THREE.Quaternion()};
+      entry = { matrix: new THREE.Matrix4(), rotation: new THREE.Quaternion() };
       transformCache.set(boneId, entry);
     }
     return entry;
   };
   const rotationByBoneId = options.rotationByBoneId || new Map();
-  const getRotation = typeof options.getRotation === 'function'
-    ? options.getRotation : boneId => rotationFromCollection(
-      rotationByBoneId, boneId);
-  const getQuaternion = typeof options.getQuaternion === 'function'
-    ? options.getQuaternion : options.quaternionByBoneId
-      ? boneId => quaternionFromCollection(options.quaternionByBoneId, boneId)
-      : null;
+  const getRotation =
+    typeof options.getRotation === 'function'
+      ? options.getRotation
+      : (boneId) => rotationFromCollection(rotationByBoneId, boneId);
+  const getQuaternion =
+    typeof options.getQuaternion === 'function'
+      ? options.getQuaternion
+      : options.quaternionByBoneId
+        ? (boneId) => quaternionFromCollection(options.quaternionByBoneId, boneId)
+        : null;
   const jointPivotByBoneId = options.jointPivotByBoneId || null;
 
-  (forest?.components || []).forEach(component => {
+  (forest?.components || []).forEach((component) => {
     const rootId = Number(component.rootId);
     if (!Number.isFinite(rootId)) return;
     const rootEntry = entryFor(rootId);
@@ -111,33 +109,27 @@ export function buildForestTransformsFromLocalRotations(
     while (queue.length) {
       const parentId = queue.shift();
       const parentTransform = transforms.get(parentId);
-      const parentRotation = rotations.get(parentId)
-        || new THREE.Quaternion();
-      const parentCenter = vectorFromCenter(
-        centerFromCollection(nodeCenters, parentId));
+      const parentRotation = rotations.get(parentId) || new THREE.Quaternion();
+      const parentCenter = vectorFromCenter(centerFromCollection(nodeCenters, parentId));
       const children = component.childrenById?.[parentId] || [];
-      children.forEach(childValue => {
+      children.forEach((childValue) => {
         const childId = Number(childValue);
         if (!Number.isFinite(childId) || visited.has(childId)) return;
         visited.add(childId);
         const localRotation = getQuaternion
-          ? (getQuaternion(childId)?.clone?.() || new THREE.Quaternion())
+          ? getQuaternion(childId)?.clone?.() || new THREE.Quaternion()
           : quaternionFromRotationVector(getRotation(childId));
         localRotation.normalize();
         // The local rotation vector is expressed in the parent frame. Convert
         // it to a world-space rotation around the already transformed pivot,
         // then inherit the parent's affine transform.
-        const worldRotation = parentRotation.clone()
-          .multiply(localRotation)
-          .multiply(parentRotation.clone().invert());
-        const jointCenter = vectorFromCenter(
-          valueFromCollection(jointPivotByBoneId, childId));
-        const pivot = jointPivotByBoneId
-          && valueFromCollection(jointPivotByBoneId, childId)
-          ? jointCenter.applyMatrix4(parentTransform)
-          : parentCenter.clone().applyMatrix4(parentTransform);
-        const aroundPivot = rotationAroundPivot(
-          pivot, worldRotation);
+        const worldRotation = parentRotation.clone().multiply(localRotation).multiply(parentRotation.clone().invert());
+        const jointCenter = vectorFromCenter(valueFromCollection(jointPivotByBoneId, childId));
+        const pivot =
+          jointPivotByBoneId && valueFromCollection(jointPivotByBoneId, childId)
+            ? jointCenter.applyMatrix4(parentTransform)
+            : parentCenter.clone().applyMatrix4(parentTransform);
+        const aroundPivot = rotationAroundPivot(pivot, worldRotation);
         const childEntry = entryFor(childId);
         childEntry.matrix.copy(aroundPivot).multiply(parentTransform);
         childEntry.rotation.copy(parentRotation).multiply(localRotation);
@@ -148,7 +140,7 @@ export function buildForestTransformsFromLocalRotations(
     }
     // Malformed orientation data receives safe identity transforms rather
     // than making a vertex silently lose its authored influence.
-    (component.nodeIds || []).forEach(nodeValue => {
+    (component.nodeIds || []).forEach((nodeValue) => {
       const nodeId = Number(nodeValue);
       if (Number.isFinite(nodeId) && !transforms.has(nodeId)) {
         const entry = entryFor(nodeId);
@@ -188,40 +180,35 @@ export function composeBasePoseWithPhysicsOffsets({
   const transforms = new Map();
   const rotations = new Map();
   const cache = transformCache instanceof Map ? transformCache : new Map();
-  const entryFor = boneId => {
+  const entryFor = (boneId) => {
     const id = Number(boneId);
     let entry = cache.get(id);
     if (!entry) {
-      entry = {matrix: new THREE.Matrix4(), rotation: new THREE.Quaternion()};
+      entry = { matrix: new THREE.Matrix4(), rotation: new THREE.Quaternion() };
       cache.set(id, entry);
     }
     return entry;
   };
-  const baseMatrixFor = boneId => {
+  const baseMatrixFor = (boneId) => {
     const value = transformForBone(baseTransformByBoneId, boneId);
     return value?.isMatrix4 ? value : null;
   };
-  const baseRotationFor = boneId => {
+  const baseRotationFor = (boneId) => {
     const value = valueFromCollection(baseRotationByBoneId, boneId);
     const quaternion = value?.quaternion ?? value;
     if (quaternion?.isQuaternion) return quaternion.clone().normalize();
     const matrix = baseMatrixFor(boneId);
-    return matrix
-      ? new THREE.Quaternion().setFromRotationMatrix(matrix).normalize()
-      : new THREE.Quaternion();
+    return matrix ? new THREE.Quaternion().setFromRotationMatrix(matrix).normalize() : new THREE.Quaternion();
   };
-  const offsetQuaternionFor = boneId => {
-    const callbackValue = typeof getOffsetRotation === 'function'
-      ? getOffsetRotation(boneId) : undefined;
-    const value = callbackValue ?? valueFromCollection(
-      rotationByBoneId, boneId);
+  const offsetQuaternionFor = (boneId) => {
+    const callbackValue = typeof getOffsetRotation === 'function' ? getOffsetRotation(boneId) : undefined;
+    const value = callbackValue ?? valueFromCollection(rotationByBoneId, boneId);
     if (value?.isQuaternion || value?.quaternion?.isQuaternion) {
       return (value.quaternion || value).clone().normalize();
     }
     return quaternionFromRotationVector(value?.rotationVector ?? value);
   };
-  const baseMatrixOrIdentity = boneId => baseMatrixFor(boneId)
-    || RIG_IDENTITY_MATRIX;
+  const baseMatrixOrIdentity = (boneId) => baseMatrixFor(boneId) || RIG_IDENTITY_MATRIX;
   const parentDeltaMatrix = new THREE.Matrix4();
   const baseInverseMatrix = new THREE.Matrix4();
   const aroundPivot = new THREE.Matrix4();
@@ -250,7 +237,7 @@ export function composeBasePoseWithPhysicsOffsets({
     });
   }
 
-  (forest?.components || []).forEach(component => {
+  (forest?.components || []).forEach((component) => {
     const rootId = Number(component.rootId);
     if (!Number.isFinite(rootId)) return;
     const rootEntry = entryFor(rootId);
@@ -263,45 +250,36 @@ export function composeBasePoseWithPhysicsOffsets({
     while (queue.length) {
       const parentId = queue.shift();
       const parentTransform = transforms.get(parentId) || RIG_IDENTITY_MATRIX;
-      const parentRotation = rotations.get(parentId)
-        || new THREE.Quaternion();
+      const parentRotation = rotations.get(parentId) || new THREE.Quaternion();
       const baseParent = baseMatrixOrIdentity(parentId);
       baseInverseMatrix.copy(baseParent).invert();
       parentDeltaMatrix.copy(parentTransform).multiply(baseInverseMatrix);
       baseParentRotation.copy(baseRotationFor(parentId));
-      parentDeltaRotation.copy(parentRotation)
-        .multiply(baseParentRotation.invert());
+      parentDeltaRotation.copy(parentRotation).multiply(baseParentRotation.invert());
       const children = component.childrenById?.[parentId] || [];
-      children.forEach(childValue => {
+      children.forEach((childValue) => {
         const childId = Number(childValue);
         if (!Number.isFinite(childId) || visited.has(childId)) return;
         visited.add(childId);
-        inheritedMatrix.copy(parentDeltaMatrix)
-          .multiply(baseMatrixOrIdentity(childId));
+        inheritedMatrix.copy(parentDeltaMatrix).multiply(baseMatrixOrIdentity(childId));
         // Base rotations are cumulative, so inherit only the parent's
         // composed delta before applying the child's cumulative base pose.
         baseChildRotation.copy(baseRotationFor(childId));
-        inheritedRotation.copy(parentDeltaRotation)
-          .multiply(baseChildRotation);
+        inheritedRotation.copy(parentDeltaRotation).multiply(baseChildRotation);
         const offset = offsetQuaternionFor(childId);
         // Physics solver vectors are in the model reference frame.  The
         // composed parent delta is the accumulated Physics change from that
         // frame to the posed scene; manual model rotation must not redefine
         // the solver vector's frame.
         inverseRotation.copy(parentDeltaRotation).invert();
-        worldRotation.copy(parentDeltaRotation)
-          .multiply(offset)
-          .multiply(inverseRotation);
-        const pivotValue = valueFromCollection(
-          jointPivotByBoneId, childId)
-          || centerFromCollection(nodeCenters, parentId);
+        worldRotation.copy(parentDeltaRotation).multiply(offset).multiply(inverseRotation);
+        const pivotValue =
+          valueFromCollection(jointPivotByBoneId, childId) || centerFromCollection(nodeCenters, parentId);
         pivot.copy(vectorFromCenter(pivotValue)).applyMatrix4(parentTransform);
         translationToPivot.makeTranslation(pivot.x, pivot.y, pivot.z);
         rotationMatrix.makeRotationFromQuaternion(worldRotation);
         translationFromPivot.makeTranslation(-pivot.x, -pivot.y, -pivot.z);
-        aroundPivot.copy(translationToPivot)
-          .multiply(rotationMatrix)
-          .multiply(translationFromPivot);
+        aroundPivot.copy(translationToPivot).multiply(rotationMatrix).multiply(translationFromPivot);
         const entry = entryFor(childId);
         entry.matrix.copy(aroundPivot).multiply(inheritedMatrix);
         entry.rotation.copy(worldRotation).multiply(inheritedRotation).normalize();
@@ -310,7 +288,7 @@ export function composeBasePoseWithPhysicsOffsets({
         queue.push(childId);
       });
     }
-    (component.nodeIds || []).forEach(nodeValue => {
+    (component.nodeIds || []).forEach((nodeValue) => {
       const nodeId = Number(nodeValue);
       if (Number.isFinite(nodeId) && !transforms.has(nodeId)) {
         const entry = entryFor(nodeId);
@@ -338,37 +316,45 @@ function transformForBone(transformByBoneId, boneId) {
 }
 
 export function applyWeightedTransformDeformation(
-    baselinePositions, indices, weights, influenceCount, transformByBoneId) {
+  baselinePositions,
+  indices,
+  weights,
+  influenceCount,
+  transformByBoneId,
+) {
   const result = new Float32Array(baselinePositions || 0);
-  applyWeightedTransformDeformationInto(
-    result, baselinePositions, indices, weights, influenceCount,
-    transformByBoneId);
+  applyWeightedTransformDeformationInto(result, baselinePositions, indices, weights, influenceCount, transformByBoneId);
   return result;
 }
 
 export function applyWeightedTransformDeformationInto(
-    outputPositions, baselinePositions, indices, weights, influenceCount,
-    transformByBoneId, activeVertices = null) {
-  if (!baselinePositions || !indices || !weights || influenceCount <= 0
-      || !transformByBoneId || !outputPositions) return 0;
+  outputPositions,
+  baselinePositions,
+  indices,
+  weights,
+  influenceCount,
+  transformByBoneId,
+  activeVertices = null,
+) {
+  if (!baselinePositions || !indices || !weights || influenceCount <= 0 || !transformByBoneId || !outputPositions)
+    return 0;
   const vertexCount = Math.floor(baselinePositions.length / 3);
   const baseline = new THREE.Vector3();
   const transformed = new THREE.Vector3();
-  const vertices = activeVertices || {length: vertexCount};
+  const vertices = activeVertices || { length: vertexCount };
   for (let activeIndex = 0; activeIndex < vertices.length; activeIndex += 1) {
     const vertex = activeVertices ? Number(vertices[activeIndex]) : activeIndex;
     if (!Number.isInteger(vertex) || vertex < 0 || vertex >= vertexCount) continue;
     const offset = vertex * 3;
-    baseline.set(
-      baselinePositions[offset], baselinePositions[offset + 1],
-      baselinePositions[offset + 2]);
+    baseline.set(baselinePositions[offset], baselinePositions[offset + 1], baselinePositions[offset + 2]);
     const start = vertex * influenceCount;
     let transformedWeight = 0;
-    let x = 0, y = 0, z = 0;
+    let x = 0,
+      y = 0,
+      z = 0;
     for (let influence = 0; influence < influenceCount; influence += 1) {
       const weight = weights[start + influence];
-      const transform = transformForBone(
-        transformByBoneId, indices[start + influence]);
+      const transform = transformForBone(transformByBoneId, indices[start + influence]);
       if (!transform || !Number.isFinite(weight) || weight <= 0) continue;
       transformedWeight += weight;
       transformed.copy(baseline).applyMatrix4(transform);
@@ -388,28 +374,32 @@ export function applyWeightedTransformDeformationInto(
 }
 
 export function applyWeightedNormalDeformationInto(
-    outputNormals, baselineNormals, indices, weights, influenceCount,
-    rotationByBoneId, activeVertices = null) {
-  if (!outputNormals || !baselineNormals || !indices || !weights
-      || influenceCount <= 0 || !rotationByBoneId) return 0;
+  outputNormals,
+  baselineNormals,
+  indices,
+  weights,
+  influenceCount,
+  rotationByBoneId,
+  activeVertices = null,
+) {
+  if (!outputNormals || !baselineNormals || !indices || !weights || influenceCount <= 0 || !rotationByBoneId) return 0;
   const vertexCount = Math.floor(baselineNormals.length / 3);
   const baseline = new THREE.Vector3();
   const transformed = new THREE.Vector3();
-  const vertices = activeVertices || {length: vertexCount};
+  const vertices = activeVertices || { length: vertexCount };
   for (let activeIndex = 0; activeIndex < vertices.length; activeIndex += 1) {
     const vertex = activeVertices ? Number(vertices[activeIndex]) : activeIndex;
     if (!Number.isInteger(vertex) || vertex < 0 || vertex >= vertexCount) continue;
     const offset = vertex * 3;
-    baseline.set(
-      baselineNormals[offset], baselineNormals[offset + 1],
-      baselineNormals[offset + 2]);
+    baseline.set(baselineNormals[offset], baselineNormals[offset + 1], baselineNormals[offset + 2]);
     const start = vertex * influenceCount;
     let transformedWeight = 0;
-    let x = 0, y = 0, z = 0;
+    let x = 0,
+      y = 0,
+      z = 0;
     for (let influence = 0; influence < influenceCount; influence += 1) {
       const weight = weights[start + influence];
-      const rotation = transformForBone(
-        rotationByBoneId, indices[start + influence]);
+      const rotation = transformForBone(rotationByBoneId, indices[start + influence]);
       if (!rotation || !Number.isFinite(weight) || weight <= 0) continue;
       transformedWeight += weight;
       transformed.copy(baseline).applyQuaternion(rotation);
@@ -418,11 +408,7 @@ export function applyWeightedNormalDeformationInto(
       z += transformed.z * weight;
     }
     const unchanged = Math.max(0, 1 - transformedWeight);
-    transformed.set(
-      baseline.x * unchanged + x,
-      baseline.y * unchanged + y,
-      baseline.z * unchanged + z,
-    );
+    transformed.set(baseline.x * unchanged + x, baseline.y * unchanged + y, baseline.z * unchanged + z);
     if (transformed.lengthSq() > 1e-20) transformed.normalize();
     else transformed.copy(baseline).normalize();
     outputNormals[offset] = transformed.x;

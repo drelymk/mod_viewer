@@ -6,16 +6,22 @@ import { computeModelBounds } from './model-bounds.js';
 const INITIAL_CAMERA_DIRECTION = new THREE.Vector3(0, 0, 1);
 const INITIAL_CAMERA_UP = new THREE.Vector3(0, 1, 0);
 
-export function shouldApplyUprightRotation({gameId, rawSize} = {}) {
-  const id = String(gameId || '').trim().toLowerCase();
+export function shouldApplyUprightRotation({ gameId, rawSize } = {}) {
+  const id = String(gameId || '')
+    .trim()
+    .toLowerCase();
   if (id === 'zzz' || id === 'wuwa') return true;
   if (id && id !== 'unknown') return false;
-  return Number(rawSize?.z) > Number(rawSize?.y) * 1.5
-    && Number(rawSize?.z) > Number(rawSize?.x) * 1.15;
+  return Number(rawSize?.z) > Number(rawSize?.y) * 1.5 && Number(rawSize?.z) > Number(rawSize?.x) * 1.15;
 }
 
 export function createCameraFrame({
-  camera, renderer, controls, grid, cancelViewSnap, onModelFit,
+  camera,
+  renderer,
+  controls,
+  grid,
+  cancelViewSnap,
+  onModelFit,
   onOrientationChanged,
 }) {
   let homeView = null;
@@ -66,9 +72,13 @@ export function createCameraFrame({
     camera.clearViewOffset();
     if (Math.abs(viewport.centerShiftX) > 0.5) {
       camera.setViewOffset(
-        viewport.fullWidth, viewport.fullHeight,
-        -viewport.centerShiftX, 0,
-        viewport.fullWidth, viewport.fullHeight);
+        viewport.fullWidth,
+        viewport.fullHeight,
+        -viewport.centerShiftX,
+        0,
+        viewport.fullWidth,
+        viewport.fullHeight,
+      );
     }
     camera.updateProjectionMatrix();
     return viewport;
@@ -101,11 +111,8 @@ export function createCameraFrame({
     const radius = Math.max(size.length() * 0.5, 0.001);
     const viewport = updateViewport();
     const narrowScale = Math.max(1, viewport.fullHeight / viewport.width);
-    const distance = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))
-      * 1.15 * narrowScale;
-    const offset = direction
-      ? direction.clone().normalize()
-      : camera.position.clone().sub(controls.target).normalize();
+    const distance = (radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.15 * narrowScale;
+    const offset = direction ? direction.clone().normalize() : camera.position.clone().sub(controls.target).normalize();
     if (offset.lengthSq() < 0.01) offset.set(0.3, 0.5, 1).normalize();
     controls.target.copy(center);
     camera.position.copy(center).addScaledVector(offset, distance);
@@ -118,14 +125,11 @@ export function createCameraFrame({
   }
 
   function currentModelPivot() {
-    return modelPivot
-      ? modelPivot.clone().add(modelTranslation)
-      : null;
+    return modelPivot ? modelPivot.clone().add(modelTranslation) : null;
   }
 
   function getModelTransformState() {
-    const baseOrientation = baseFacingRotation.clone()
-      .multiply(uprightRotation).normalize();
+    const baseOrientation = baseFacingRotation.clone().multiply(uprightRotation).normalize();
     return {
       orientation: modelRotation.clone().multiply(baseOrientation).normalize(),
       baseOrientation,
@@ -147,7 +151,7 @@ export function createCameraFrame({
       if (box.isEmpty()) return [];
       center = box.getCenter(new THREE.Vector3());
     }
-    meshes.forEach(mesh => {
+    meshes.forEach((mesh) => {
       mesh.position.sub(center).applyQuaternion(rotation).add(center);
       mesh.quaternion.premultiply(rotation);
     });
@@ -156,10 +160,8 @@ export function createCameraFrame({
 
   function rotateModelQuarterTurn(meshes = []) {
     if (!meshes.length) return [];
-    const rotation = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0), Math.PI / 2);
-    const changed = rotateMeshesAroundCenter(meshes, rotation,
-      currentModelPivot());
+    const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    const changed = rotateMeshesAroundCenter(meshes, rotation, currentModelPivot());
     if (!changed.length) return [];
     modelRotation.premultiply(rotation);
     return changed;
@@ -167,10 +169,8 @@ export function createCameraFrame({
 
   function rotateModelHorizontalQuarterTurn(meshes = []) {
     if (!meshes.length) return [];
-    const rotation = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(1, 0, 0), Math.PI / 2);
-    const changed = rotateMeshesAroundCenter(meshes, rotation,
-      currentModelPivot());
+    const rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    const changed = rotateMeshesAroundCenter(meshes, rotation, currentModelPivot());
     if (!changed.length) return [];
     modelRotation.premultiply(rotation);
     return changed;
@@ -178,25 +178,24 @@ export function createCameraFrame({
 
   function applyCurrentModelOrientation(meshes = [], { includeUserRotation = true } = {}) {
     if (!orientationInitialized || !modelPivot || !meshes.length) return;
-    meshes.forEach(mesh => mesh.quaternion.copy(uprightRotation));
+    meshes.forEach((mesh) => mesh.quaternion.copy(uprightRotation));
     rotateMeshesAroundCenter(meshes, baseFacingRotation, modelPivot);
-    if (includeUserRotation) rotateMeshesAroundCenter(
-      meshes, modelRotation, modelPivot);
+    if (includeUserRotation) rotateMeshesAroundCenter(meshes, modelRotation, modelPivot);
   }
 
   function adoptModelMeshes(meshes = []) {
     if (!orientationInitialized || !homeView || !meshes.length) return [];
-    const known = new Set(homeView.meshes.map(item => item.mesh));
-    const added = meshes.filter(mesh => mesh && !known.has(mesh));
+    const known = new Set(homeView.meshes.map((item) => item.mesh));
+    const added = meshes.filter((mesh) => mesh && !known.has(mesh));
     if (!added.length) return [];
-    applyCurrentModelOrientation(added, {includeUserRotation: false});
-    const homeTransforms = added.map(mesh => ({
+    applyCurrentModelOrientation(added, { includeUserRotation: false });
+    const homeTransforms = added.map((mesh) => ({
       mesh,
       quaternion: mesh.quaternion.clone(),
       position: mesh.position.clone(),
     }));
     rotateMeshesAroundCenter(added, modelRotation, modelPivot);
-    added.forEach(mesh => mesh.position.add(modelTranslation));
+    added.forEach((mesh) => mesh.position.add(modelTranslation));
     homeView.meshes.push(...homeTransforms);
     return added;
   }
@@ -204,7 +203,7 @@ export function createCameraFrame({
   function forgetModelMeshes(meshes = []) {
     if (!homeView || !meshes.length) return;
     const removed = new Set(meshes);
-    homeView.meshes = homeView.meshes.filter(item => !removed.has(item.mesh));
+    homeView.meshes = homeView.meshes.filter((item) => !removed.has(item.mesh));
   }
 
   function resetModelOrientation({ preserveRotation = false } = {}) {
@@ -244,8 +243,11 @@ export function createCameraFrame({
     }
     const size = box.getSize(new THREE.Vector3());
     camera.up.copy(INITIAL_CAMERA_UP);
-    frameView(homeView.meshes.map(({ mesh }) => mesh),
-      INITIAL_CAMERA_DIRECTION, size.y * 0.08);
+    frameView(
+      homeView.meshes.map(({ mesh }) => mesh),
+      INITIAL_CAMERA_DIRECTION,
+      size.y * 0.08,
+    );
     camera.updateMatrix();
     camera.updateMatrixWorld();
     controls.setCamera(camera);
@@ -260,67 +262,63 @@ export function createCameraFrame({
     const values = delta?.isVector3
       ? [delta.x, delta.y, delta.z]
       : Array.isArray(delta)
-      ? delta
-      : [delta?.x, delta?.y, delta?.z];
+        ? delta
+        : [delta?.x, delta?.y, delta?.z];
     if (values.length < 3) return null;
-    const vector = new THREE.Vector3(
-      Number(values[0]), Number(values[1]), Number(values[2]));
-    return Number.isFinite(vector.x) && Number.isFinite(vector.y)
-      && Number.isFinite(vector.z) ? vector : null;
+    const vector = new THREE.Vector3(Number(values[0]), Number(values[1]), Number(values[2]));
+    return Number.isFinite(vector.x) && Number.isFinite(vector.y) && Number.isFinite(vector.z) ? vector : null;
   }
 
   function translateModel(meshes = [], delta) {
     if (!Array.isArray(meshes) || !meshes.length) return [];
     const vector = translationVector(delta);
     if (!vector || vector.lengthSq() === 0) return [];
-    meshes.forEach(mesh => mesh.position.add(vector));
+    meshes.forEach((mesh) => mesh.position.add(vector));
     modelTranslation.add(vector);
     return meshes;
   }
 
-  function fitTo(meshes, {
-    preserveCamera = false,
-    preserveHomeView = false,
-    gameId = null,
-    initialRotationY = 0,
-  } = {}) {
+  function fitTo(
+    meshes,
+    { preserveCamera = false, preserveHomeView = false, gameId = null, initialRotationY = 0 } = {},
+  ) {
     let orientationChanged = false;
-    const preservedView = preserveCamera ? {
-      position: camera.position.clone(),
-      quaternion: camera.quaternion.clone(),
-      up: camera.up.clone(),
-      target: controls.target.clone(),
-      zoom: camera.zoom,
-    } : null;
+    const preservedView = preserveCamera
+      ? {
+          position: camera.position.clone(),
+          quaternion: camera.quaternion.clone(),
+          up: camera.up.clone(),
+          target: controls.target.clone(),
+          zoom: camera.zoom,
+        }
+      : null;
     let homeMeshTransforms = null;
     if (!orientationInitialized && meshes.length) {
       const rawBox = computeModelBounds(meshes);
       const rawSize = rawBox.getSize(new THREE.Vector3());
       uprightRotation.identity();
-      if (shouldApplyUprightRotation({gameId, rawSize})) {
-        uprightRotation.setFromAxisAngle(
-          new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      if (shouldApplyUprightRotation({ gameId, rawSize })) {
+        uprightRotation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
       }
-      meshes.forEach(mesh => mesh.quaternion.copy(uprightRotation));
+      meshes.forEach((mesh) => mesh.quaternion.copy(uprightRotation));
       const uprightBox = computeModelBounds(meshes);
       baseFacingRotation.identity();
       if (!uprightBox.isEmpty()) {
         modelPivot = uprightBox.getCenter(new THREE.Vector3());
         if (Number.isFinite(initialRotationY) && initialRotationY !== 0) {
-          baseFacingRotation.setFromAxisAngle(
-            new THREE.Vector3(0, 1, 0), initialRotationY);
+          baseFacingRotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), initialRotationY);
           // Capture the base game orientation in homeView.  Manual turns are
           // tracked separately in modelRotation and can still be reset.
           rotateMeshesAroundCenter(meshes, baseFacingRotation, modelPivot);
         }
       }
-      homeMeshTransforms = meshes.map(mesh => ({
+      homeMeshTransforms = meshes.map((mesh) => ({
         mesh,
         quaternion: mesh.quaternion.clone(),
         position: mesh.position.clone(),
       }));
       rotateMeshesAroundCenter(meshes, modelRotation, modelPivot);
-      meshes.forEach(mesh => mesh.position.add(modelTranslation));
+      meshes.forEach((mesh) => mesh.position.add(modelTranslation));
       orientationInitialized = true;
       modelOrientationRevision += 1;
       orientationChanged = true;
@@ -352,11 +350,13 @@ export function createCameraFrame({
         target: controls.target.clone(),
         near: camera.near,
         far: camera.far,
-        meshes: homeMeshTransforms || meshes.map(mesh => ({
-          mesh,
-          quaternion: mesh.quaternion.clone(),
-          position: mesh.position.clone(),
-        })),
+        meshes:
+          homeMeshTransforms ||
+          meshes.map((mesh) => ({
+            mesh,
+            quaternion: mesh.quaternion.clone(),
+            position: mesh.position.clone(),
+          })),
       };
     }
     if (preservedView) {

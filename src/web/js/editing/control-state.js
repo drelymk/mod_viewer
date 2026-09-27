@@ -23,10 +23,7 @@ export function getControlState() {
 /** Return variables whose final values differ between two control snapshots. */
 export function changedControlVariables(previous, current) {
   const changed = new Set();
-  const keys = new Set([
-    ...Object.keys(previous || {}),
-    ...Object.keys(current || {}),
-  ]);
+  const keys = new Set([...Object.keys(previous || {}), ...Object.keys(current || {})]);
   for (const variable of keys) {
     if (!Object.is(previous?.[variable], current?.[variable])) {
       changed.add(variable);
@@ -39,13 +36,13 @@ export function changedControlVariables(previous, current) {
 // satisfied by the current control state.
 export function dnfSatisfied(condGroups) {
   if (!condGroups || condGroups.length === 0) return true;
-  return condGroups.some(group => group.every(condition => {
-    const current = values[condition.var];
-    if (current === undefined) return true;
-    return condition.negate
-      ? current !== condition.value
-      : current === condition.value;
-  }));
+  return condGroups.some((group) =>
+    group.every((condition) => {
+      const current = values[condition.var];
+      if (current === undefined) return true;
+      return condition.negate ? current !== condition.value : current === condition.value;
+    }),
+  );
 }
 
 function controlValues(controls) {
@@ -55,7 +52,7 @@ function controlValues(controls) {
     legal.set(variable, [...new Set([...existing, ...(values || [])])]);
   };
   for (const info of Object.values(controls?.toggles || {})) {
-    for (const variable of (info.cycle_vars || info.vars || [])) {
+    for (const variable of info.cycle_vars || info.vars || []) {
       addLegalValues(variable.var, variable.values);
     }
   }

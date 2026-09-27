@@ -20,10 +20,7 @@ export function expandByModelMesh(box, mesh) {
   mesh.updateWorldMatrix(true, false);
   if (!geometry.boundingBox) return box;
   const worldBox = geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld);
-  const values = [
-    worldBox.min.x, worldBox.min.y, worldBox.min.z,
-    worldBox.max.x, worldBox.max.y, worldBox.max.z,
-  ];
+  const values = [worldBox.min.x, worldBox.min.y, worldBox.min.z, worldBox.max.x, worldBox.max.y, worldBox.max.z];
   if (values.every(Number.isFinite)) box.union(worldBox);
   return box;
 }

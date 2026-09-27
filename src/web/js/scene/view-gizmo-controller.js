@@ -17,10 +17,9 @@ export function createViewGizmoController({ camera, controls, element, onChange 
   let drag = null;
 
   function syncAxisLabels() {
-    axes.forEach(axis => {
-      const key = Number(axis.dataset.sign) < 0
-        ? 'gizmo.viewNegative' : 'gizmo.viewPositive';
-      axis.setAttribute('aria-label', t(key, {axis: axis.dataset.axis.toUpperCase()}));
+    axes.forEach((axis) => {
+      const key = Number(axis.dataset.sign) < 0 ? 'gizmo.viewNegative' : 'gizmo.viewPositive';
+      axis.setAttribute('aria-label', t(key, { axis: axis.dataset.axis.toUpperCase() }));
     });
   }
 
@@ -40,9 +39,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     const targetDirection = axisVectors[axisName].clone().multiplyScalar(sign);
     const startDirection = camera.position.clone().sub(controls.target).normalize();
     const turn = new THREE.Quaternion().setFromUnitVectors(startDirection, targetDirection);
-    const endUp = axisName === 'y'
-      ? new THREE.Vector3(0, 0, sign > 0 ? -1 : 1)
-      : new THREE.Vector3(0, 1, 0);
+    const endUp = axisName === 'y' ? new THREE.Vector3(0, 0, sign > 0 ? -1 : 1) : new THREE.Vector3(0, 1, 0);
     snap = {
       started: null,
       duration: 190,
@@ -60,8 +57,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     if (snap.started === null) snap.started = performance.now();
     const raw = Math.min(1, (performance.now() - snap.started) / snap.duration);
     const progress = 1 - Math.pow(1 - raw, 3);
-    const rotation = new THREE.Quaternion().slerpQuaternions(
-      new THREE.Quaternion(), snap.turn, progress);
+    const rotation = new THREE.Quaternion().slerpQuaternions(new THREE.Quaternion(), snap.turn, progress);
     const direction = snap.startDirection.clone().applyQuaternion(rotation).normalize();
     camera.position.copy(controls.target).addScaledVector(direction, snap.distance);
     camera.up.lerpVectors(snap.startUp, snap.endUp, progress).normalize();
@@ -73,10 +69,9 @@ export function createViewGizmoController({ camera, controls, element, onChange 
   function updateAxes() {
     if (!visible) return;
     inverseCamera.copy(camera.quaternion).invert();
-    const projected = axes.map(axis => {
+    const projected = axes.map((axis) => {
       const sign = Number(axis.dataset.sign);
-      local.copy(axisVectors[axis.dataset.axis]).multiplyScalar(sign)
-        .applyQuaternion(inverseCamera);
+      local.copy(axisVectors[axis.dataset.axis]).multiplyScalar(sign).applyQuaternion(inverseCamera);
       return {
         axis,
         x: 52 + local.x * 34,
@@ -111,8 +106,8 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     });
   }
 
-  axes.forEach(axis => {
-    axis.addEventListener('keydown', event => {
+  axes.forEach((axis) => {
+    axis.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         snapToAxis(axis.dataset.axis, Number(axis.dataset.sign));
@@ -120,7 +115,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     });
   });
 
-  element.addEventListener('pointerdown', event => {
+  element.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
     snap = null;
     drag = {
@@ -131,7 +126,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
       axis: event.target.closest?.('.gizmo-axis') || null,
     };
   });
-  element.addEventListener('pointermove', event => {
+  element.addEventListener('pointermove', (event) => {
     if (!drag) return;
     const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
@@ -146,8 +141,7 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     const offset = camera.position.clone().sub(controls.target);
     const spherical = new THREE.Spherical().setFromVector3(offset);
     spherical.theta -= dx * 0.012;
-    spherical.phi = THREE.MathUtils.clamp(
-      spherical.phi + dy * 0.012, 0.025, Math.PI - 0.025);
+    spherical.phi = THREE.MathUtils.clamp(spherical.phi + dy * 0.012, 0.025, Math.PI - 0.025);
     camera.position.copy(controls.target).add(offset.setFromSpherical(spherical));
     camera.up.set(0, 1, 0);
     camera.lookAt(controls.target);
@@ -169,17 +163,24 @@ export function createViewGizmoController({ camera, controls, element, onChange 
     drag = null;
   }
   element.addEventListener('pointerup', finishDrag);
-  element.addEventListener('pointercancel', event => finishDrag(event, true));
-  element.addEventListener('wheel', event => {
-    event.preventDefault();
-    snap = null;
-    const offset = camera.position.clone().sub(controls.target);
-    const scale = Math.exp(event.deltaY * 0.0015);
-    const distance = THREE.MathUtils.clamp(
-      offset.length() * scale, Math.max(camera.near * 4, 0.0001), camera.far * 0.8);
-    camera.position.copy(controls.target).addScaledVector(offset.normalize(), distance);
-    onChange?.();
-  }, { passive: false });
+  element.addEventListener('pointercancel', (event) => finishDrag(event, true));
+  element.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault();
+      snap = null;
+      const offset = camera.position.clone().sub(controls.target);
+      const scale = Math.exp(event.deltaY * 0.0015);
+      const distance = THREE.MathUtils.clamp(
+        offset.length() * scale,
+        Math.max(camera.near * 4, 0.0001),
+        camera.far * 0.8,
+      );
+      camera.position.copy(controls.target).addScaledVector(offset.normalize(), distance);
+      onChange?.();
+    },
+    { passive: false },
+  );
 
   function toggle() {
     visible = !visible;

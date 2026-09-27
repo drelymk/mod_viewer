@@ -1,13 +1,8 @@
 // Playback for backend-normalized, frame-baked mesh attributes.
 
 import { decodeF32, decodeI32 } from '../textures/decode.js';
-import {
-  getControlValue, setControlValue, dnfSatisfied,
-} from '../editing/control-state.js';
-import {
-  invalidateCharacterShadowGeometry,
-  invalidateCharacterShadowMap,
-} from '../scene/shadow-invalidation.js';
+import { getControlValue, setControlValue, dnfSatisfied } from '../editing/control-state.js';
+import { invalidateCharacterShadowGeometry, invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
 const tracks = new Map();
@@ -22,11 +17,10 @@ export function frameForElapsed(clock, elapsedSeconds) {
   const start = Number(clock?.frame_start);
   const end = Number(clock?.frame_end);
   const fps = Number(clock?.fps ?? 0);
-  if (!Number.isFinite(start) || !Number.isFinite(end)
-      || end < start || !Number.isFinite(fps) || fps <= 0) return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || !Number.isFinite(fps) || fps <= 0) return null;
   const count = end - start + 1;
   const tick = Math.floor(Math.max(0, elapsedSeconds) * fps);
-  return start + (tick % count + count) % count;
+  return start + (((tick % count) + count) % count);
 }
 
 function clockActive(clock) {
@@ -34,14 +28,11 @@ function clockActive(clock) {
 }
 
 function clockFps(clock) {
-  const configured = clock?.fps_var
-    ? getControlValue(clock.fps_var) : undefined;
-  const configuredSpeed = clock?.speed_var
-    ? getControlValue(clock.speed_var) : undefined;
+  const configured = clock?.fps_var ? getControlValue(clock.fps_var) : undefined;
+  const configuredSpeed = clock?.speed_var ? getControlValue(clock.speed_var) : undefined;
   const fps = Number(configured ?? clock?.fps);
   const speed = Number(configuredSpeed ?? clock?.speed ?? 1);
-  if (!Number.isFinite(fps) || fps <= 0
-      || !Number.isFinite(speed) || speed <= 0) return 0;
+  if (!Number.isFinite(fps) || fps <= 0 || !Number.isFinite(speed) || speed <= 0) return 0;
   return fps * speed;
 }
 
@@ -57,9 +48,12 @@ function numeric(value, fallback = 0) {
 function evaluateExpression(expression, program) {
   if (!expression) return 0;
   switch (expression.kind) {
-    case 'literal': return numeric(expression.value);
-    case 'dt': return program.dt;
-    case 'variable': return numeric(program.variables[expression.variable]);
+    case 'literal':
+      return numeric(expression.value);
+    case 'dt':
+      return program.dt;
+    case 'variable':
+      return numeric(program.variables[expression.variable]);
     case 'binary': {
       const left = evaluateExpression(expression.left, program);
       const right = evaluateExpression(expression.right, program);
@@ -68,7 +62,8 @@ function evaluateExpression(expression, program) {
       if (expression.op === '*') return left * right;
       return 0;
     }
-    default: return 0;
+    default:
+      return 0;
   }
 }
 
@@ -78,38 +73,39 @@ function evaluateCondition(condition, program) {
   const left = evaluateExpression(condition.left, program);
   const right = evaluateExpression(condition.right, program);
   switch (condition.op) {
-    case '==': return left === right;
-    case '>': return left > right;
-    default: return false;
+    case '==':
+      return left === right;
+    case '>':
+      return left > right;
+    default:
+      return false;
   }
 }
 
 function expressionUsesDt(expression) {
   if (!expression || typeof expression !== 'object') return false;
   if (expression.kind === 'dt') return true;
-  return Object.values(expression).some(value => Array.isArray(value)
-    ? value.some(item => expressionUsesDt(item))
-    : expressionUsesDt(value));
+  return Object.values(expression).some((value) =>
+    Array.isArray(value) ? value.some((item) => expressionUsesDt(item)) : expressionUsesDt(value),
+  );
 }
 
 function initializeGimiProgram(program) {
-  const variables = {...(program?.initials || {})};
+  const variables = { ...(program?.initials || {}) };
   const published = {};
   for (const variable of program?.external_variables || []) {
     const external = getControlValue(variable);
     if (external !== undefined) variables[variable] = numeric(external);
     if (variables[variable] === undefined) variables[variable] = 0;
-    published[variable] = external === undefined
-      ? String(variables[variable]) : String(external);
+    published[variable] = external === undefined ? String(variables[variable]) : String(external);
   }
-  return {variables, published, dt: 0};
+  return { variables, published, dt: 0 };
 }
 
 function syncGimiProgramControls(program) {
   for (const variable of program.program.external_variables || []) {
     const external = getControlValue(variable);
-    if (external !== undefined
-        && String(external) !== program.published[variable]) {
+    if (external !== undefined && String(external) !== program.published[variable]) {
       program.variables[variable] = numeric(external);
       program.published[variable] = String(external);
     }
@@ -129,8 +125,7 @@ function executeGimiProgram(track, now) {
   const program = track.programState;
   if (!program) return false;
   const previousNow = track.lastNow;
-  const dt = previousNow === null
-    ? 0 : Math.max(0, (now - previousNow) / 1000);
+  const dt = previousNow === null ? 0 : Math.max(0, (now - previousNow) / 1000);
   track.lastNow = now;
   program.dt = dt;
   syncGimiProgramControls(program);
@@ -142,11 +137,9 @@ function executeGimiProgram(track, now) {
   let activeDtCommand = false;
   for (const command of track.program.commands || []) {
     const conditions = command.conditions || [];
-    const conditionActive = conditions.every(condition =>
-      evaluateCondition(condition, program));
-    const commandUsesDt = conditions.some(expressionUsesDt)
-      || expressionUsesDt(command.expression)
-      || expressionUsesDt(command.phase);
+    const conditionActive = conditions.every((condition) => evaluateCondition(condition, program));
+    const commandUsesDt =
+      conditions.some(expressionUsesDt) || expressionUsesDt(command.expression) || expressionUsesDt(command.phase);
     activeDtCommand = activeDtCommand || (conditionActive && commandUsesDt);
     if (!conditionActive) continue;
     if (command.op === 'set') {
@@ -179,16 +172,14 @@ function applyGimiPose(mesh, meshState, output) {
   const position = mesh.geometry?.attributes?.position;
   const normal = mesh.geometry?.attributes?.normal;
   const basePositions = meshState.overlay
-    ? (mesh.userData?.humanoidRestPositions
-      || mesh.userData?.basePositions)
+    ? mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions
     : mesh.userData?.basePositions;
   const baseNormals = meshState.overlay
-    ? (mesh.userData?.humanoidRestNormals || meshState.baseNormals)
+    ? mesh.userData?.humanoidRestNormals || meshState.baseNormals
     : meshState.baseNormals;
   const vertexCount = meshState.vertexCount;
   const positionOnly = meshState.positionOnly === true;
-  if (!position || !normal || !basePositions
-      || (!baseNormals && !positionOnly)) return false;
+  if (!position || !normal || !basePositions || (!baseNormals && !positionOnly)) return false;
 
   const positions = position.array;
   const normals = normal.array;
@@ -201,10 +192,8 @@ function applyGimiPose(mesh, meshState, output) {
   const hasPose = meshState.poseFrames != null;
   const swapYZNegate = output.coordinateTransform === 'swap_yz_negate';
   const frameValue = hasPose ? Math.max(0, output.poseTime) : 0;
-  const frame = hasPose ? Math.min(
-    meshState.poseFrameCount - 1, Math.floor(frameValue)) : 0;
-  const nextFrame = hasPose
-    ? Math.min(meshState.poseFrameCount - 1, frame + 1) : 0;
+  const frame = hasPose ? Math.min(meshState.poseFrameCount - 1, Math.floor(frameValue)) : 0;
+  const nextFrame = hasPose ? Math.min(meshState.poseFrameCount - 1, frame + 1) : 0;
   const inter = hasPose ? Math.min(1, Math.max(0, frameValue - frame)) : 0;
   const weights = meshState.weights;
   const indices = meshState.indices;
@@ -218,12 +207,9 @@ function applyGimiPose(mesh, meshState, output) {
     let py = basePositions[positionOffset + 1];
     let pz = basePositions[positionOffset + 2];
     let nx = baseNormals ? baseNormals[positionOffset] : normals[positionOffset];
-    let ny = baseNormals
-      ? baseNormals[positionOffset + 1] : normals[positionOffset + 1];
-    let nz = baseNormals
-      ? baseNormals[positionOffset + 2] : normals[positionOffset + 2];
-    for (let passIndex = 0;
-      passIndex < meshState.shapePasses.length; passIndex += 1) {
+    let ny = baseNormals ? baseNormals[positionOffset + 1] : normals[positionOffset + 1];
+    let nz = baseNormals ? baseNormals[positionOffset + 2] : normals[positionOffset + 2];
+    for (let passIndex = 0; passIndex < meshState.shapePasses.length; passIndex += 1) {
       const pass = meshState.shapePasses[passIndex];
       const weight = shapeWeights[passIndex];
       const source = vertex * (positionOnly ? 3 : 6);
@@ -298,36 +284,32 @@ function applyGimiPose(mesh, meshState, output) {
       biasY += weight * (prevBiasY * (1 - inter) + nextBiasY * inter);
       biasZ += weight * (prevBiasZ * (1 - inter) + nextBiasZ * inter);
 
-      const prevSign = influence === 0 ? 1 : signedUnit(
-        pose[referencePrev + 6] * pose[prev + 6]
-        + pose[referencePrev + 7] * pose[prev + 7]
-        + pose[referencePrev + 8] * pose[prev + 8]
-        + pose[referencePrev + 9] * pose[prev + 9]);
+      const prevSign =
+        influence === 0
+          ? 1
+          : signedUnit(
+              pose[referencePrev + 6] * pose[prev + 6] +
+                pose[referencePrev + 7] * pose[prev + 7] +
+                pose[referencePrev + 8] * pose[prev + 8] +
+                pose[referencePrev + 9] * pose[prev + 9],
+            );
       const nextSign = signedUnit(
-        pose[referencePrev + 6] * pose[next + 6]
-        + pose[referencePrev + 7] * pose[next + 7]
-        + pose[referencePrev + 8] * pose[next + 8]
-        + pose[referencePrev + 9] * pose[next + 9]);
-      qrX += (pose[prev + 6] * weight * (1 - inter) * prevSign
-              + pose[next + 6] * weight * inter * nextSign);
-      qrY += (pose[prev + 7] * weight * (1 - inter) * prevSign
-              + pose[next + 7] * weight * inter * nextSign);
-      qrZ += (pose[prev + 8] * weight * (1 - inter) * prevSign
-              + pose[next + 8] * weight * inter * nextSign);
-      qrW += (pose[prev + 9] * weight * (1 - inter) * prevSign
-              + pose[next + 9] * weight * inter * nextSign);
-      qdX += (pose[prev + 10] * weight * (1 - inter) * prevSign
-              + pose[next + 10] * weight * inter * nextSign);
-      qdY += (pose[prev + 11] * weight * (1 - inter) * prevSign
-              + pose[next + 11] * weight * inter * nextSign);
-      qdZ += (pose[prev + 12] * weight * (1 - inter) * prevSign
-              + pose[next + 12] * weight * inter * nextSign);
-      qdW += (pose[prev + 13] * weight * (1 - inter) * prevSign
-              + pose[next + 13] * weight * inter * nextSign);
+        pose[referencePrev + 6] * pose[next + 6] +
+          pose[referencePrev + 7] * pose[next + 7] +
+          pose[referencePrev + 8] * pose[next + 8] +
+          pose[referencePrev + 9] * pose[next + 9],
+      );
+      qrX += pose[prev + 6] * weight * (1 - inter) * prevSign + pose[next + 6] * weight * inter * nextSign;
+      qrY += pose[prev + 7] * weight * (1 - inter) * prevSign + pose[next + 7] * weight * inter * nextSign;
+      qrZ += pose[prev + 8] * weight * (1 - inter) * prevSign + pose[next + 8] * weight * inter * nextSign;
+      qrW += pose[prev + 9] * weight * (1 - inter) * prevSign + pose[next + 9] * weight * inter * nextSign;
+      qdX += pose[prev + 10] * weight * (1 - inter) * prevSign + pose[next + 10] * weight * inter * nextSign;
+      qdY += pose[prev + 11] * weight * (1 - inter) * prevSign + pose[next + 11] * weight * inter * nextSign;
+      qdZ += pose[prev + 12] * weight * (1 - inter) * prevSign + pose[next + 12] * weight * inter * nextSign;
+      qdW += pose[prev + 13] * weight * (1 - inter) * prevSign + pose[next + 13] * weight * inter * nextSign;
     }
 
-    const qrLength = Math.max(1e-6,
-      Math.hypot(qrX, qrY, qrZ, qrW));
+    const qrLength = Math.max(1e-6, Math.hypot(qrX, qrY, qrZ, qrW));
     qrX /= qrLength;
     qrY /= qrLength;
     qrZ /= qrLength;
@@ -356,26 +338,18 @@ function applyGimiPose(mesh, meshState, output) {
     const transformedY = m10 * posedX + m11 * posedY + m12 * posedZ + t1;
     const transformedZ = m20 * posedX + m21 * posedY + m22 * posedZ + t2;
     positions[positionOffset] = transformedX;
-    positions[positionOffset + 1] = swapYZNegate
-      ? transformedZ : transformedY;
-    positions[positionOffset + 2] = swapYZNegate
-      ? -transformedY : transformedZ;
+    positions[positionOffset + 1] = swapYZNegate ? transformedZ : transformedY;
+    positions[positionOffset + 2] = swapYZNegate ? -transformedY : transformedZ;
     const transformedNormalX = m00 * nx + m01 * ny + m02 * nz;
     const transformedNormalY = m10 * nx + m11 * ny + m12 * nz;
     const transformedNormalZ = m20 * nx + m21 * ny + m22 * nz;
     const outputNormalX = transformedNormalX;
-    const outputNormalY = swapYZNegate
-      ? transformedNormalZ : transformedNormalY;
-    const outputNormalZ = swapYZNegate
-      ? -transformedNormalY : transformedNormalZ;
-    const normalLength = Math.hypot(
-      outputNormalX, outputNormalY, outputNormalZ);
-    normals[positionOffset] = normalLength > 1e-12
-      ? outputNormalX / normalLength : 0;
-    normals[positionOffset + 1] = normalLength > 1e-12
-      ? outputNormalY / normalLength : 0;
-    normals[positionOffset + 2] = normalLength > 1e-12
-      ? outputNormalZ / normalLength : 0;
+    const outputNormalY = swapYZNegate ? transformedNormalZ : transformedNormalY;
+    const outputNormalZ = swapYZNegate ? -transformedNormalY : transformedNormalZ;
+    const normalLength = Math.hypot(outputNormalX, outputNormalY, outputNormalZ);
+    normals[positionOffset] = normalLength > 1e-12 ? outputNormalX / normalLength : 0;
+    normals[positionOffset + 1] = normalLength > 1e-12 ? outputNormalY / normalLength : 0;
+    normals[positionOffset + 2] = normalLength > 1e-12 ? outputNormalZ / normalLength : 0;
   }
   position.needsUpdate = true;
   if (!positionOnly) normal.needsUpdate = true;
@@ -385,7 +359,7 @@ function applyGimiPose(mesh, meshState, output) {
 function evaluateShapeWeight(operation, phase) {
   if (operation?.kind === 'linear') return phase;
   if (operation?.kind !== 'sine') return 0;
-  const {scale, amplitude, offset} = operation;
+  const { scale, amplitude, offset } = operation;
   if (![scale, amplitude, offset].every(Number.isFinite)) return 0;
   const weight = amplitude * Math.sin(phase * scale) + offset;
   return Number.isFinite(weight) ? weight : 0;
@@ -410,8 +384,7 @@ function restoreCanonical(mesh) {
   const position = mesh.geometry?.attributes?.position;
   const meshState = mesh.userData?.animationState;
   const base = meshState?.overlay
-    ? (mesh.userData?.humanoidRestPositions
-      || mesh.userData?.basePositions)
+    ? mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions
     : mesh.userData?.basePositions;
   let changed = false;
   if (position && base && position.array.length === base.length) {
@@ -421,11 +394,10 @@ function restoreCanonical(mesh) {
   }
   const normal = mesh.geometry?.attributes?.normal;
   const baseNormals = meshState?.overlay
-    ? (mesh.userData?.humanoidRestNormals || mesh.userData?.baseNormals)
+    ? mesh.userData?.humanoidRestNormals || mesh.userData?.baseNormals
     : mesh.userData?.baseNormals;
   if (normal && baseNormals && normal.array.length === baseNormals.length) {
-    changed = normal.array.some((value, index) => value !== baseNormals[index])
-      || changed;
+    changed = normal.array.some((value, index) => value !== baseNormals[index]) || changed;
     normal.array.set(baseNormals);
     normal.needsUpdate = true;
   } else if (normal) {
@@ -439,9 +411,14 @@ function installAnimationBounds(mesh, bounds) {
   if (!geometry) return;
   const min = bounds?.min;
   const max = bounds?.max;
-  if (!Array.isArray(min) || min.length !== 3
-      || !Array.isArray(max) || max.length !== 3
-      || !min.every(Number.isFinite) || !max.every(Number.isFinite)) {
+  if (
+    !Array.isArray(min) ||
+    min.length !== 3 ||
+    !Array.isArray(max) ||
+    max.length !== 3 ||
+    !min.every(Number.isFinite) ||
+    !max.every(Number.isFinite)
+  ) {
     geometry.computeBoundingBox?.();
     geometry.computeBoundingSphere?.();
     return;
@@ -455,13 +432,8 @@ function installAnimationBounds(mesh, bounds) {
   geometry.computeBoundingSphere?.();
   const sphere = geometry.boundingSphere;
   if (sphere?.center?.set) {
-    const center = [
-      (min[0] + max[0]) / 2,
-      (min[1] + max[1]) / 2,
-      (min[2] + max[2]) / 2,
-    ];
-    const radius = Math.hypot(
-      max[0] - center[0], max[1] - center[1], max[2] - center[2]);
+    const center = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+    const radius = Math.hypot(max[0] - center[0], max[1] - center[1], max[2] - center[2]);
     sphere.center.set(center[0], center[1], center[2]);
     sphere.radius = radius;
   }
@@ -473,8 +445,7 @@ function applyFrame(mesh, state, frame) {
   if (state.lastFrame === frame) return false;
   const position = mesh.geometry?.attributes?.position;
   const offset = index * state.positionFrameFloats;
-  const positionFrame = state.positions.subarray(
-    offset, offset + state.positionFrameFloats);
+  const positionFrame = state.positions.subarray(offset, offset + state.positionFrameFloats);
   if (!position || position.array.length !== positionFrame.length) return false;
   position.array.set(positionFrame);
   position.needsUpdate = true;
@@ -482,8 +453,7 @@ function applyFrame(mesh, state, frame) {
   const normal = mesh.geometry?.attributes?.normal;
   if (state.normals && normal) {
     const normalOffset = index * state.normalFrameFloats;
-    const normalFrame = state.normals.subarray(
-      normalOffset, normalOffset + state.normalFrameFloats);
+    const normalFrame = state.normals.subarray(normalOffset, normalOffset + state.normalFrameFloats);
     if (normal.array.length === normalFrame.length) {
       normal.array.set(normalFrame);
       normal.needsUpdate = true;
@@ -503,7 +473,7 @@ function schedule() {
 function selectedClock(state) {
   for (const id of state.clockIds) {
     const clock = state.clocks[id];
-    if (clock && clockActive(clock)) return {id, clock};
+    if (clock && clockActive(clock)) return { id, clock };
   }
   return null;
 }
@@ -518,8 +488,7 @@ function tick(now) {
       let active = false;
       for (const mesh of state.meshes) {
         const meshState = state.meshesByMesh.get(mesh);
-        if (mesh.visible !== false
-            && mesh.userData?.animationSuspended !== true) {
+        if (mesh.visible !== false && mesh.userData?.animationSuspended !== true) {
           visible = true;
           if (gimiMeshActive(meshState)) active = true;
           else if (meshState?.overlay) {
@@ -533,8 +502,7 @@ function tick(now) {
       }
       const advanced = executeGimiProgram(state, now);
       const geometryInterval = 1000 / 30;
-      const due = state.lastGeometryTime === null
-        || now - state.lastGeometryTime >= geometryInterval;
+      const due = state.lastGeometryTime === null || now - state.lastGeometryTime >= geometryInterval;
       if (state.dirty || (advanced && due)) {
         changed = applyGimiTrack(state) || changed;
         state.dirty = false;
@@ -546,7 +514,7 @@ function tick(now) {
     const selected = selectedClock(state);
     if (!selected) {
       if (state.active) {
-        state.meshes.forEach(mesh => {
+        state.meshes.forEach((mesh) => {
           const meshState = state.meshesByMesh.get(mesh);
           if (mesh.userData?.animationSuspended === true) {
             meshState.lastFrame = null;
@@ -564,8 +532,9 @@ function tick(now) {
     }
     const fps = clockFps(selected.clock);
     if (!fps) continue;
-    const visibleMeshes = [...state.meshes].filter(mesh =>
-      mesh.visible !== false && mesh.userData?.animationSuspended !== true);
+    const visibleMeshes = [...state.meshes].filter(
+      (mesh) => mesh.visible !== false && mesh.userData?.animationSuspended !== true,
+    );
     if (!visibleMeshes.length) continue;
     playing = true;
     if (!state.active || state.activeClockId !== selected.id) {
@@ -574,12 +543,11 @@ function tick(now) {
       state.activeClockId = selected.id;
       state.active = true;
     }
-    const clock = {...selected.clock, fps};
+    const clock = { ...selected.clock, fps };
     const frame = frameForElapsed(clock, (now - state.startedAt) / 1000);
     if (frame === null) continue;
-    state.meshes.forEach(mesh => {
-      if (mesh.userData?.animationSuspended === true
-          || mesh.visible === false) {
+    state.meshes.forEach((mesh) => {
+      if (mesh.userData?.animationSuspended === true || mesh.visible === false) {
         state.meshesByMesh.get(mesh).lastFrame = null;
         return;
       }
@@ -589,7 +557,7 @@ function tick(now) {
   if (changed) {
     // Character shadows are demand-driven. One invalidation covers every
     // mesh changed during this animation tick.
-    invalidateCharacterShadowMap({request: false});
+    invalidateCharacterShadowMap({ request: false });
     requestRender();
   }
   if (playing) schedule();
@@ -614,17 +582,21 @@ function registerGimiMesh(mesh, animationId, geometry) {
     if (!state) {
       state = {
         kind: 'gimi_compute',
-        meshes: new Set(), meshesByMesh: new Map(),
-        program, programState: {
-          program, ...initializeGimiProgram(program),
+        meshes: new Set(),
+        meshesByMesh: new Map(),
+        program,
+        programState: {
+          program,
+          ...initializeGimiProgram(program),
         },
         outputs: new Map(),
-        lastNow: null, lastGeometryTime: null, dirty: true,
+        lastNow: null,
+        lastGeometryTime: null,
+        dirty: true,
       };
       tracks.set(programId, state);
     }
-    const baseNormals = geometry.base_normals
-      ? decodeF32(geometry.base_normals) : null;
+    const baseNormals = geometry.base_normals ? decodeF32(geometry.base_normals) : null;
     let weights = null;
     let indices = null;
     if (hasPose) {
@@ -635,22 +607,29 @@ function registerGimiMesh(mesh, animationId, geometry) {
     if (hasPose) {
       decodedPoseFrames = decodeF32(poseFrames);
     }
-    const shapePasses = (geometry.shape_passes || []).map(pass => ({
+    const shapePasses = (geometry.shape_passes || []).map((pass) => ({
       deltas: decodeF32(pass.deltas),
       weightOperation: pass.weight_operation,
     }));
     const meshState = {
-      vertexCount, baseNormals, weights, indices, shapePasses,
+      vertexCount,
+      baseNormals,
+      weights,
+      indices,
+      shapePasses,
       positionOnly: geometry.position_only === true,
       poseFrames: decodedPoseFrames,
-      poseBoneCount, poseFrameCount, trackId,
+      poseBoneCount,
+      poseFrameCount,
+      trackId,
       overlay: geometry.overlay === true,
       conditions: geometry.conditions || [],
       animationBounds: geometry.bounds || null,
     };
     if (!state.outputs.has(trackId)) {
       state.outputs.set(trackId, {
-        shapePhases: [], poseTime: 0,
+        shapePhases: [],
+        poseTime: 0,
         coordinateTransform,
       });
     }
@@ -669,35 +648,36 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
   if (geometry?.kind === 'gimi_compute') {
     return registerGimiMesh(mesh, animationId, geometry);
   }
-  const clockIds = Array.isArray(geometry?.clock_ids)
-    && geometry.clock_ids.length ? geometry.clock_ids : [animationId];
-  const clocksForTrack = Object.fromEntries(clockIds
-    .map(id => [id, animationClocks?.[id]])
-    .filter(([, clock]) => !!clock));
+  const clockIds = Array.isArray(geometry?.clock_ids) && geometry.clock_ids.length ? geometry.clock_ids : [animationId];
+  const clocksForTrack = Object.fromEntries(
+    clockIds.map((id) => [id, animationClocks?.[id]]).filter(([, clock]) => !!clock),
+  );
   if (!mesh || !Object.keys(clocksForTrack).length || !geometry?.positions) {
     return false;
   }
   let state = tracks.get(animationId);
   if (!state) {
     state = {
-      clocks: clocksForTrack, clockIds: Object.keys(clocksForTrack),
-      meshes: new Set(), meshesByMesh: new Map(), startedAt: 0,
-      lastFrame: null, activeClockId: null, active: false,
+      clocks: clocksForTrack,
+      clockIds: Object.keys(clocksForTrack),
+      meshes: new Set(),
+      meshesByMesh: new Map(),
+      startedAt: 0,
+      lastFrame: null,
+      activeClockId: null,
+      active: false,
     };
     tracks.set(animationId, state);
   } else {
     Object.assign(state.clocks, clocksForTrack);
-    state.clockIds = [...new Set([...state.clockIds, ...clockIds])]
-      .filter(id => state.clocks[id]);
+    state.clockIds = [...new Set([...state.clockIds, ...clockIds])].filter((id) => state.clocks[id]);
   }
   const frameCount = positiveInteger(geometry.frames);
   const positionFrameBytes = positiveInteger(geometry.position_frame_bytes);
-  const positions = frameCount && positionFrameBytes
-    ? decodeF32(geometry.positions) : null;
+  const positions = frameCount && positionFrameBytes ? decodeF32(geometry.positions) : null;
   if (!positions) return false;
   const normalFrameBytes = positiveInteger(geometry.normal_frame_bytes);
-  const normals = geometry.normals && normalFrameBytes
-    ? decodeF32(geometry.normals) : null;
+  const normals = geometry.normals && normalFrameBytes ? decodeF32(geometry.normals) : null;
   const firstClock = state.clocks[state.clockIds[0]];
   const meshState = {
     frameStart: Number(geometry.frame_start ?? firstClock?.frame_start ?? 0),
@@ -750,7 +730,7 @@ export function resumeAnimatedMesh(mesh) {
       state.lastGeometryTime = null;
       state.lastNow = null;
     }
-    invalidateCharacterShadowGeometry({request: false});
+    invalidateCharacterShadowGeometry({ request: false });
     requestRender();
     schedule();
     return true;
@@ -761,8 +741,7 @@ export function resumeAnimatedMesh(mesh) {
 export function animationRuntimeSnapshot() {
   return {
     clocks: tracks.size,
-    meshes: [...tracks.values()].reduce(
-      (total, state) => total + state.meshes.size, 0),
+    meshes: [...tracks.values()].reduce((total, state) => total + state.meshes.size, 0),
     rafActive: rafId !== null,
   };
 }

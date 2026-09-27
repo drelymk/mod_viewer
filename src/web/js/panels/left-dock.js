@@ -10,8 +10,8 @@ let ready = false;
 function elements() {
   const tabs = [...document.querySelectorAll('[data-left-tab]')];
   const panels = Object.fromEntries(
-    tabs.map(tab => [tab.dataset.leftTab,
-      document.getElementById(tab.getAttribute('aria-controls'))]));
+    tabs.map((tab) => [tab.dataset.leftTab, document.getElementById(tab.getAttribute('aria-controls'))]),
+  );
   return { dock: document.getElementById('left-dock'), tabs, panels };
 }
 
@@ -22,7 +22,7 @@ function tabCanOpen(tab) {
 function render() {
   const { dock, tabs, panels } = elements();
   const visible = !!activeTab && tabCanOpen(activeTab);
-  tabs.forEach(tab => {
+  tabs.forEach((tab) => {
     const name = tab.dataset.leftTab;
     const active = visible && name === activeTab;
     const disabled = name === 'meshes' && !meshesAvailable;
@@ -81,9 +81,11 @@ export function initLeftDock() {
     return;
   }
   const { tabs } = elements();
-  tabs.forEach(tab => tab.addEventListener('click', () => {
-    toggleLeftDockTab(tab.dataset.leftTab);
-  }));
+  tabs.forEach((tab) =>
+    tab.addEventListener('click', () => {
+      toggleLeftDockTab(tab.dataset.leftTab);
+    }),
+  );
   ready = true;
   render();
 }

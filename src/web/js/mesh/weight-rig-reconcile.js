@@ -2,8 +2,8 @@
 // authored skinning streams remain source-scoped; this module only builds a
 // viewer-owned model graph from neutral geometry and source topology.
 
-import {Quaternion, Vector3} from 'three';
-import {createWorkBudget} from './cooperative-scheduler.js';
+import { Quaternion, Vector3 } from 'three';
+import { createWorkBudget } from './cooperative-scheduler.js';
 
 export const CROSS_SOURCE_CANDIDATE_DISTANCE = 0.1;
 export const CROSS_SOURCE_STRICT_DISTANCE = 0.04;
@@ -18,8 +18,7 @@ export const CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE = 0.6;
 const EPSILON = 1e-8;
 
 function clockNow() {
-  return typeof globalThis.performance?.now === 'function'
-    ? globalThis.performance.now() : Date.now();
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 
 function number(value, fallback = 0) {
@@ -29,11 +28,9 @@ function number(value, fallback = 0) {
 
 function vectorFrom(value) {
   if (value?.isVector3) return value.clone();
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? value : [value?.x, value?.y, value?.z];
+  const values = Array.isArray(value) || ArrayBuffer.isView(value) ? value : [value?.x, value?.y, value?.z];
   if (!values || values.length < 3) return null;
-  const vector = new Vector3(
-    number(values[0], NaN), number(values[1], NaN), number(values[2], NaN));
+  const vector = new Vector3(number(values[0], NaN), number(values[1], NaN), number(values[2], NaN));
   return vector.toArray().every(Number.isFinite) ? vector : null;
 }
 
@@ -43,11 +40,13 @@ function vectorArray(value, fallback = [0, 0, 0]) {
 
 function quaternionArray(value) {
   if (value?.isQuaternion) return value.clone().normalize().toArray();
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? [...value].slice(0, 4).map(Number)
-    : [value?.x, value?.y, value?.z, value?.w].map(Number);
+  const values =
+    Array.isArray(value) || ArrayBuffer.isView(value)
+      ? [...value].slice(0, 4).map(Number)
+      : [value?.x, value?.y, value?.z, value?.w].map(Number);
   return values.length === 4 && values.every(Number.isFinite)
-    ? new Quaternion(...values).normalize().toArray() : [0, 0, 0, 1];
+    ? new Quaternion(...values).normalize().toArray()
+    : [0, 0, 0, 1];
 }
 
 function mapValue(collection, boneId) {
@@ -61,13 +60,12 @@ function sourceBoneKey(sourceKey, boneId) {
   return `${String(sourceKey)}#bone=${Number(boneId)}`;
 }
 
-export {sourceBoneKey};
+export { sourceBoneKey };
 
 function componentFor(rig, boneId) {
   const componentId = mapValue(rig?.inferredForest?.componentByBoneId, boneId);
   const components = rig?.inferredForest?.components || [];
-  return Number.isInteger(Number(componentId))
-    ? components[Number(componentId)] || null : null;
+  return Number.isInteger(Number(componentId)) ? components[Number(componentId)] || null : null;
 }
 
 function parentFor(component, boneId) {
@@ -83,29 +81,28 @@ function childrenFor(component, boneId) {
 }
 
 function edgeScore(edge) {
-  return number(edge?.treeEdgeScore ?? edge?.score
-    ?? edge?.containment ?? edge?.jaccard, 0);
+  return number(edge?.treeEdgeScore ?? edge?.score ?? edge?.containment ?? edge?.jaccard, 0);
 }
 
 function sourceEdgeEvidence(rig, component, boneId) {
-  return (component?.edges || []).filter(edge => {
-    const left = Number(edge.boneA);
-    const right = Number(edge.boneB);
-    return left === boneId || right === boneId;
-  }).map(edge => ({
-    boneA: Number(edge.boneA),
-    boneB: Number(edge.boneB),
-    treeEdgeScore: edgeScore(edge),
-    sharedVertexCount: number(edge.sharedVertexCount),
-    centerDistance: edge.centerDistance === null
-      ? null : number(edge.centerDistance, 0),
-    sourceKey: String(rig.sourceKey),
-  }));
+  return (component?.edges || [])
+    .filter((edge) => {
+      const left = Number(edge.boneA);
+      const right = Number(edge.boneB);
+      return left === boneId || right === boneId;
+    })
+    .map((edge) => ({
+      boneA: Number(edge.boneA),
+      boneB: Number(edge.boneB),
+      treeEdgeScore: edgeScore(edge),
+      sharedVertexCount: number(edge.sharedVertexCount),
+      centerDistance: edge.centerDistance === null ? null : number(edge.centerDistance, 0),
+      sourceKey: String(rig.sourceKey),
+    }));
 }
 
 function directionAvailable(evidence) {
-  return !!evidence?.restDirection
-    && evidence.directionSource !== 'canonical-y';
+  return !!evidence?.restDirection && evidence.directionSource !== 'canonical-y';
 }
 
 function anchorFor(parentId, center, pivot) {
@@ -122,38 +119,39 @@ function sourceAdjacencyByBoneId(rig) {
     adjacency.set(left, leftNeighbors);
     adjacency.set(right, rightNeighbors);
   };
-  (rig?.inferredForest?.components || []).forEach(component => {
+  (rig?.inferredForest?.components || []).forEach((component) => {
     Object.entries(component.parentById || {}).forEach(([childId, parentId]) => {
       if (parentId !== null && parentId !== undefined) {
         addEdge(Number(childId), Number(parentId));
       }
     });
     Object.entries(component.childrenById || {}).forEach(([parentId, children]) =>
-      (children || []).forEach(childId => addEdge(Number(parentId), Number(childId))));
+      (children || []).forEach((childId) => addEdge(Number(parentId), Number(childId))),
+    );
   });
-  return new Map([...adjacency.entries()].map(([boneId, neighbors]) => [
-    Number(boneId), [...neighbors].filter(Number.isFinite)
-      .sort((left, right) => left - right),
-  ]));
+  return new Map(
+    [...adjacency.entries()].map(([boneId, neighbors]) => [
+      Number(boneId),
+      [...neighbors].filter(Number.isFinite).sort((left, right) => left - right),
+    ]),
+  );
 }
 
 function collectSourceBoneEvidence(rig) {
   const result = new Map();
   const sourceAdjacency = sourceAdjacencyByBoneId(rig);
   const boneIds = [...(rig?.boneIds || rig?.influenceGraph?.nodes || [])]
-    .map(value => Number(value?.boneId ?? value)).filter(Number.isFinite)
+    .map((value) => Number(value?.boneId ?? value))
+    .filter(Number.isFinite)
     .sort((left, right) => left - right);
-  const nodes = new Map((rig?.influenceGraph?.nodes || []).map(node => [
-    Number(node.boneId), node,
-  ]));
-  boneIds.forEach(boneId => {
+  const nodes = new Map((rig?.influenceGraph?.nodes || []).map((node) => [Number(node.boneId), node]));
+  boneIds.forEach((boneId) => {
     const component = componentFor(rig, boneId);
     const parentBoneId = parentFor(component, boneId);
     const childBoneIds = childrenFor(component, boneId);
     const neighborBoneIds = sourceAdjacency.get(boneId) || [];
     const node = nodes.get(boneId);
-    const center = vectorArray(
-      mapValue(rig?.centerByBoneId, boneId) || node?.weightedCenter);
+    const center = vectorArray(mapValue(rig?.centerByBoneId, boneId) || node?.weightedCenter);
     const pivot = vectorFrom(mapValue(rig?.jointPivotByBoneId, boneId));
     const direction = vectorFrom(mapValue(rig?.restDirectionByBoneId, boneId));
     const key = sourceBoneKey(rig.sourceKey, boneId);
@@ -166,8 +164,7 @@ function collectSourceBoneEvidence(rig) {
       jointPivot: pivot?.toArray() || null,
       restAnchor: anchorFor(parentBoneId, center, pivot?.toArray() || null),
       restDirection: direction?.normalize().toArray() || null,
-      directionSource: mapValue(rig?.restFrameEvidenceByBoneId, boneId)
-        ?.directionSource || null,
+      directionSource: mapValue(rig?.restFrameEvidenceByBoneId, boneId)?.directionSource || null,
       restFrame: quaternionArray(mapValue(rig?.restFrameByBoneId, boneId)),
       parentBoneId,
       childBoneIds,
@@ -184,7 +181,7 @@ function collectSourceBoneEvidence(rig) {
 }
 
 function prepareSourceBoneEvidence(evidenceByKey) {
-  evidenceByKey.forEach(evidence => {
+  evidenceByKey.forEach((evidence) => {
     const weightedCenter = vectorFrom(evidence.weightedCenter);
     const restAnchor = vectorFrom(evidence.restAnchor);
     const restDirection = vectorFrom(evidence.restDirection);
@@ -207,8 +204,9 @@ function prepareSourceBoneEvidence(evidenceByKey) {
         enumerable: false,
       },
       _neighborBoneKeys: {
-        value: Object.freeze((evidence.neighborBoneIds || []).map(boneId =>
-          sourceBoneKey(evidence.sourceKey, boneId))),
+        value: Object.freeze(
+          (evidence.neighborBoneIds || []).map((boneId) => sourceBoneKey(evidence.sourceKey, boneId)),
+        ),
         enumerable: false,
       },
     });
@@ -217,18 +215,16 @@ function prepareSourceBoneEvidence(evidenceByKey) {
 }
 
 function evidenceVector(evidence, property, fallback) {
-  return evidence?.[property]?.clone()
-    || vectorFrom(evidence?.[fallback]);
+  return evidence?.[property]?.clone() || vectorFrom(evidence?.[fallback]);
 }
 
 function modelReferenceRadius(evidence) {
-  const points = [...evidence.values()].map(item =>
-    evidenceVector(item, '_weightedCenterVector', 'weightedCenter'))
+  const points = [...evidence.values()]
+    .map((item) => evidenceVector(item, '_weightedCenterVector', 'weightedCenter'))
     .filter(Boolean);
   if (!points.length) return 1;
-  const center = points.reduce((sum, point) => sum.add(point), new Vector3())
-    .multiplyScalar(1 / points.length);
-  return Math.max(EPSILON, ...points.map(point => point.distanceTo(center)));
+  const center = points.reduce((sum, point) => sum.add(point), new Vector3()).multiplyScalar(1 / points.length);
+  return Math.max(EPSILON, ...points.map((point) => point.distanceTo(center)));
 }
 
 function clamp(value, minimum = 0, maximum = 1) {
@@ -238,35 +234,33 @@ function clamp(value, minimum = 0, maximum = 1) {
 function neighborDirection(evidence, allEvidence, incoming) {
   if (!evidence) return null;
   if (incoming) {
-    const parent = allEvidence.get(sourceBoneKey(
-      evidence.sourceKey, evidence.parentBoneId));
-    const vector = parent && evidenceVector(evidence, '_restAnchorVector',
-      'restAnchor') && evidenceVector(parent, '_restAnchorVector', 'restAnchor')
-      ? evidenceVector(evidence, '_restAnchorVector', 'restAnchor')
-        .sub(evidenceVector(parent, '_restAnchorVector', 'restAnchor'))
-      : null;
+    const parent = allEvidence.get(sourceBoneKey(evidence.sourceKey, evidence.parentBoneId));
+    const vector =
+      parent &&
+      evidenceVector(evidence, '_restAnchorVector', 'restAnchor') &&
+      evidenceVector(parent, '_restAnchorVector', 'restAnchor')
+        ? evidenceVector(evidence, '_restAnchorVector', 'restAnchor').sub(
+            evidenceVector(parent, '_restAnchorVector', 'restAnchor'),
+          )
+        : null;
     if (vector?.length() > EPSILON) return vector.normalize();
   }
-  return directionAvailable(evidence)
-    ? evidenceVector(evidence, '_restDirectionVector', 'restDirection') : null;
+  return directionAvailable(evidence) ? evidenceVector(evidence, '_restDirectionVector', 'restDirection') : null;
 }
 
 function topologyFeature(left, right) {
-  const parent = left.parentBoneId === null && right.parentBoneId === null
-    || left.parentBoneId !== null && right.parentBoneId !== null;
+  const parent =
+    (left.parentBoneId === null && right.parentBoneId === null) ||
+    (left.parentBoneId !== null && right.parentBoneId !== null);
   const leftChildren = left.childBoneIds.length;
   const rightChildren = right.childBoneIds.length;
-  const childSimilarity = 1 - clamp(
-    Math.abs(leftChildren - rightChildren)
-      / Math.max(1, leftChildren, rightChildren));
-  const degreeSimilarity = 1 - clamp(
-    Math.abs(left.degree - right.degree) / Math.max(1, left.degree, right.degree));
+  const childSimilarity = 1 - clamp(Math.abs(leftChildren - rightChildren) / Math.max(1, leftChildren, rightChildren));
+  const degreeSimilarity = 1 - clamp(Math.abs(left.degree - right.degree) / Math.max(1, left.degree, right.degree));
   return {
     parentPresent: parent,
     childCount: childSimilarity,
     degree: degreeSimilarity,
-    value: (Number(parent) * .35 + childSimilarity * .4
-      + degreeSimilarity * .25),
+    value: Number(parent) * 0.35 + childSimilarity * 0.4 + degreeSimilarity * 0.25,
     rootConflict: left.isRoot !== right.isRoot,
   };
 }
@@ -276,43 +270,39 @@ function crossPairKey(leftSourceBoneKey, rightSourceBoneKey) {
 }
 
 function vertexEvidenceDescriptors(rig) {
-  return (rig?.vertexEvidence || []).map((entry, entryIndex) => {
-    const positions = entry.positions || entry.baselinePositions;
-    const indices = entry.indices;
-    const weights = entry.weights;
-    const influenceCount = Number(entry.influenceCount);
-    if (!positions || !indices || !weights || !Number.isInteger(influenceCount)
-        || influenceCount <= 0) return null;
-    return {
-      entry,
-      entryIndex,
-      positions,
-      indices,
-      weights,
-      influenceCount,
-      vertexCount: Math.floor(Math.min(
-        positions.length / 3, indices.length / influenceCount,
-        weights.length / influenceCount)),
-    };
-  }).filter(Boolean);
+  return (rig?.vertexEvidence || [])
+    .map((entry, entryIndex) => {
+      const positions = entry.positions || entry.baselinePositions;
+      const indices = entry.indices;
+      const weights = entry.weights;
+      const influenceCount = Number(entry.influenceCount);
+      if (!positions || !indices || !weights || !Number.isInteger(influenceCount) || influenceCount <= 0) return null;
+      return {
+        entry,
+        entryIndex,
+        positions,
+        indices,
+        weights,
+        influenceCount,
+        vertexCount: Math.floor(
+          Math.min(positions.length / 3, indices.length / influenceCount, weights.length / influenceCount),
+        ),
+      };
+    })
+    .filter(Boolean);
 }
 
 function appendVertexSample(samples, descriptor, vertexIndex) {
-  const {entry, entryIndex, positions, indices, weights, influenceCount} =
-    descriptor;
+  const { entry, entryIndex, positions, indices, weights, influenceCount } = descriptor;
   const offset = vertexIndex * 3;
-  const point = vectorFrom([
-    positions[offset], positions[offset + 1], positions[offset + 2],
-  ]);
+  const point = vectorFrom([positions[offset], positions[offset + 1], positions[offset + 2]]);
   if (!point) return;
   const influenceMap = new Map();
   const start = vertexIndex * influenceCount;
-  for (let influenceIndex = 0; influenceIndex < influenceCount;
-       influenceIndex += 1) {
+  for (let influenceIndex = 0; influenceIndex < influenceCount; influenceIndex += 1) {
     const boneId = Number(indices[start + influenceIndex]);
     const weight = Number(weights[start + influenceIndex]);
-    if (!Number.isInteger(boneId) || boneId < 0
-        || !Number.isFinite(weight) || weight <= 0) continue;
+    if (!Number.isInteger(boneId) || boneId < 0 || !Number.isFinite(weight) || weight <= 0) continue;
     influenceMap.set(boneId, (influenceMap.get(boneId) || 0) + weight);
   }
   if (!influenceMap.size) return;
@@ -320,24 +310,23 @@ function appendVertexSample(samples, descriptor, vertexIndex) {
     sampleKey: `${String(entry.meshKey || entryIndex)}#vertex=${vertexIndex}`,
     point,
     influences: [...influenceMap.entries()].map(([boneId, weight]) => ({
-      boneId, weight,
+      boneId,
+      weight,
     })),
   });
 }
 
 function sortVertexSamples(samples) {
-  return samples.sort((left, right) =>
-    left.sampleKey.localeCompare(right.sampleKey));
+  return samples.sort((left, right) => left.sampleKey.localeCompare(right.sampleKey));
 }
 
-async function vertexSamplesForRigCooperative(rig, {
-    budget = createWorkBudget(), isCurrent = () => true,
-    vertexBatch = 256,
-} = {}) {
+async function vertexSamplesForRigCooperative(
+  rig,
+  { budget = createWorkBudget(), isCurrent = () => true, vertexBatch = 256 } = {},
+) {
   const samples = [];
   for (const descriptor of vertexEvidenceDescriptors(rig)) {
-    for (let vertexIndex = 0; vertexIndex < descriptor.vertexCount;
-         vertexIndex += 1) {
+    for (let vertexIndex = 0; vertexIndex < descriptor.vertexCount; vertexIndex += 1) {
       if (vertexIndex % vertexBatch === 0) {
         if (!isCurrent()) return null;
         await budget.checkpoint();
@@ -353,34 +342,32 @@ async function vertexSamplesForRigCooperative(rig, {
 }
 
 function cellKey(point, cellSize) {
-  return [point.x, point.y, point.z].map(value =>
-    Math.floor(value / cellSize)).join(':');
+  return [point.x, point.y, point.z].map((value) => Math.floor(value / cellSize)).join(':');
 }
 
 function considerNearestSample(sample, candidate, matchDistance, best) {
   const deltaX = sample.point.x - candidate.point.x;
   const deltaY = sample.point.y - candidate.point.y;
   const deltaZ = sample.point.z - candidate.point.z;
-  const distanceSquared = deltaX * deltaX + deltaY * deltaY
-    + deltaZ * deltaZ;
+  const distanceSquared = deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ;
   let distance = null;
-  if (distanceSquared > matchDistance * matchDistance
-      && (distance = Math.sqrt(distanceSquared)) > matchDistance) {
+  if (distanceSquared > matchDistance * matchDistance && (distance = Math.sqrt(distanceSquared)) > matchDistance) {
     return best;
   }
   if (best && distanceSquared > best.distanceSquared) return best;
   distance ??= Math.sqrt(distanceSquared);
   if (distance > matchDistance) return best;
-  if (!best || distance < best.distance
-      || distance === best.distance
-        && candidate.sampleKey.localeCompare(best.sample.sampleKey) < 0) {
-    return {sample: candidate, distance, distanceSquared};
+  if (
+    !best ||
+    distance < best.distance ||
+    (distance === best.distance && candidate.sampleKey.localeCompare(best.sample.sampleKey) < 0)
+  ) {
+    return { sample: candidate, distance, distanceSquared };
   }
   return best;
 }
 
-async function nearestSampleCooperative(sample, cells, cellSize, matchDistance,
-    {budget, isCurrent}) {
+async function nearestSampleCooperative(sample, cells, cellSize, matchDistance, { budget, isCurrent }) {
   const [x, y, z] = cellKey(sample.point, cellSize).split(':').map(Number);
   let best = null;
   let candidateCount = 0;
@@ -391,12 +378,11 @@ async function nearestSampleCooperative(sample, cells, cellSize, matchDistance,
         if (!entries) continue;
         for (const candidate of entries) {
           if ((candidateCount++ & 255) === 0) {
-            if (!isCurrent()) return {cancelled: true};
+            if (!isCurrent()) return { cancelled: true };
             await budget.checkpoint();
-            if (!isCurrent()) return {cancelled: true};
+            if (!isCurrent()) return { cancelled: true };
           }
-          best = considerNearestSample(
-            sample, candidate, matchDistance, best);
+          best = considerNearestSample(sample, candidate, matchDistance, best);
         }
       }
     }
@@ -411,10 +397,11 @@ function addSpatialSample(cells, sample, cellSize) {
   cells.set(key, entries);
 }
 
-async function buildSpatialCellsCooperative(samples, cellSize, {
-    budget = createWorkBudget(), isCurrent = () => true,
-    sampleBatch = 256,
-} = {}) {
+async function buildSpatialCellsCooperative(
+  samples,
+  cellSize,
+  { budget = createWorkBudget(), isCurrent = () => true, sampleBatch = 256 } = {},
+) {
   const cells = new Map();
   for (let index = 0; index < samples.length; index += 1) {
     if (index % sampleBatch === 0) {
@@ -430,8 +417,7 @@ async function buildSpatialCellsCooperative(samples, cellSize, {
   return cells;
 }
 
-function addMutualCrossSourceEvidence(evidence, leftRig, rightRig,
-    leftSample, rightSample, distance, matchDistance) {
+function addMutualCrossSourceEvidence(evidence, leftRig, rightRig, leftSample, rightSample, distance, matchDistance) {
   const confidence = clamp(1 - distance / matchDistance);
   for (const leftInfluence of leftSample.influences) {
     for (const rightInfluence of rightSample.influences) {
@@ -454,8 +440,7 @@ function addMutualCrossSourceEvidence(evidence, leftRig, rightRig,
         record.matchedVertexKeys.add(vertexPairKey);
         record.matchedVertexCount += 1;
       }
-      record.weightedMatchStrength += leftInfluence.weight
-        * rightInfluence.weight * confidence;
+      record.weightedMatchStrength += leftInfluence.weight * rightInfluence.weight * confidence;
       record.leftMass += leftMass;
       record.rightMass += rightMass;
       evidence.set(key, record);
@@ -466,42 +451,40 @@ function addMutualCrossSourceEvidence(evidence, leftRig, rightRig,
 function finishCrossSourceEvidence(evidence, isCurrent = () => true) {
   for (const record of evidence.values()) {
     if (!isCurrent()) return null;
-    const minimumMass = Math.max(EPSILON,
-      Math.min(record.leftMass, record.rightMass));
-    const unionMass = Math.max(EPSILON,
-      record.leftMass + record.rightMass - record.weightedMatchStrength);
-    record.crossContainment = clamp(
-      record.weightedMatchStrength / minimumMass);
+    const minimumMass = Math.max(EPSILON, Math.min(record.leftMass, record.rightMass));
+    const unionMass = Math.max(EPSILON, record.leftMass + record.rightMass - record.weightedMatchStrength);
+    record.crossContainment = clamp(record.weightedMatchStrength / minimumMass);
     record.crossJaccard = clamp(record.weightedMatchStrength / unionMass);
-    record.overlapScore = clamp(record.crossContainment * .55
-      + record.crossJaccard * .45);
+    record.overlapScore = clamp(record.crossContainment * 0.55 + record.crossJaccard * 0.45);
     record.supportReliability = Math.min(
       clamp(record.matchedVertexCount / CROSS_SOURCE_STRONG_VERTEX_COUNT),
-      clamp(record.weightedMatchStrength
-        / CROSS_SOURCE_STRONG_WEIGHT_STRENGTH));
+      clamp(record.weightedMatchStrength / CROSS_SOURCE_STRONG_WEIGHT_STRENGTH),
+    );
     delete record.matchedVertexKeys;
   }
   return evidence;
 }
 
 export async function crossSourceWeightEvidenceCooperative(
-    leftRig, rightRig, referenceRadius, leftSamples = null,
-    rightSamples = null, leftCells = null, rightCells = null, {
-      budget = createWorkBudget(), isCurrent = () => true,
-      sampleBatch = 128,
-    } = {}) {
-  const leftSampleList = leftSamples || await vertexSamplesForRigCooperative(
-    leftRig, {budget, isCurrent});
-  const rightSampleList = rightSamples || await vertexSamplesForRigCooperative(
-    rightRig, {budget, isCurrent});
+  leftRig,
+  rightRig,
+  referenceRadius,
+  leftSamples = null,
+  rightSamples = null,
+  leftCells = null,
+  rightCells = null,
+  { budget = createWorkBudget(), isCurrent = () => true, sampleBatch = 128 } = {},
+) {
+  const leftSampleList = leftSamples || (await vertexSamplesForRigCooperative(leftRig, { budget, isCurrent }));
+  const rightSampleList = rightSamples || (await vertexSamplesForRigCooperative(rightRig, { budget, isCurrent }));
   if (!leftSampleList || !rightSampleList) return null;
   if (!leftSampleList.length || !rightSampleList.length) return new Map();
   const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
   const cellSize = matchDistance;
-  const leftCellMap = leftCells || await buildSpatialCellsCooperative(
-    leftSampleList, cellSize, {budget, isCurrent});
-  const rightCellMap = rightCells || await buildSpatialCellsCooperative(
-    rightSampleList, cellSize, {budget, isCurrent});
+  const leftCellMap =
+    leftCells || (await buildSpatialCellsCooperative(leftSampleList, cellSize, { budget, isCurrent }));
+  const rightCellMap =
+    rightCells || (await buildSpatialCellsCooperative(rightSampleList, cellSize, { budget, isCurrent }));
   if (!leftCellMap || !rightCellMap) return null;
   const nearestLeftByRight = new Map();
   const nearestRightByLeft = new Map();
@@ -511,12 +494,16 @@ export async function crossSourceWeightEvidenceCooperative(
       await budget.checkpoint();
     }
     const rightSample = rightSampleList[index];
-    const best = await nearestSampleCooperative(rightSample, leftCellMap,
-      cellSize, matchDistance, {budget, isCurrent});
-    if (best?.cancelled) return null;
-    if (best) nearestLeftByRight.set(rightSample, {
-      leftSample: best.sample, distance: best.distance,
+    const best = await nearestSampleCooperative(rightSample, leftCellMap, cellSize, matchDistance, {
+      budget,
+      isCurrent,
     });
+    if (best?.cancelled) return null;
+    if (best)
+      nearestLeftByRight.set(rightSample, {
+        leftSample: best.sample,
+        distance: best.distance,
+      });
   }
   for (let index = 0; index < leftSampleList.length; index += 1) {
     if (index % sampleBatch === 0) {
@@ -524,27 +511,28 @@ export async function crossSourceWeightEvidenceCooperative(
       await budget.checkpoint();
     }
     const leftSample = leftSampleList[index];
-    const best = await nearestSampleCooperative(leftSample, rightCellMap,
-      cellSize, matchDistance, {budget, isCurrent});
-    if (best?.cancelled) return null;
-    if (best) nearestRightByLeft.set(leftSample, {
-      rightSample: best.sample, distance: best.distance,
+    const best = await nearestSampleCooperative(leftSample, rightCellMap, cellSize, matchDistance, {
+      budget,
+      isCurrent,
     });
+    if (best?.cancelled) return null;
+    if (best)
+      nearestRightByLeft.set(leftSample, {
+        rightSample: best.sample,
+        distance: best.distance,
+      });
   }
 
   const evidence = new Map();
   let pairIndex = 0;
-  for (const [rightSample, {leftSample, distance}] of
-      nearestLeftByRight.entries()) {
+  for (const [rightSample, { leftSample, distance }] of nearestLeftByRight.entries()) {
     if (pairIndex++ % sampleBatch === 0) {
       if (!isCurrent()) return null;
       await budget.checkpoint();
     }
     const reverse = nearestRightByLeft.get(leftSample);
     if (!reverse || reverse.rightSample !== rightSample) continue;
-    addMutualCrossSourceEvidence(
-      evidence, leftRig, rightRig, leftSample, rightSample, distance,
-      matchDistance);
+    addMutualCrossSourceEvidence(evidence, leftRig, rightRig, leftSample, rightSample, distance, matchDistance);
   }
   return finishCrossSourceEvidence(evidence, isCurrent);
 }
@@ -552,70 +540,65 @@ export async function crossSourceWeightEvidenceCooperative(
 function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
   // Equivalence compares like-for-like neutral regions. The parent joint pivot
   // is a structural anchor, not a replacement for a source bone's region.
-  const leftCenter = evidenceVector(left, '_weightedCenterVector',
-    'weightedCenter');
-  const rightCenter = evidenceVector(right, '_weightedCenterVector',
-    'weightedCenter');
+  const leftCenter = evidenceVector(left, '_weightedCenterVector', 'weightedCenter');
+  const rightCenter = evidenceVector(right, '_weightedCenterVector', 'weightedCenter');
   const distance = leftCenter?.distanceTo(rightCenter);
   if (!Number.isFinite(distance)) return null;
   const normalizedDistance = distance / gate.referenceRadius;
   if (normalizedDistance > CROSS_SOURCE_CANDIDATE_DISTANCE) return null;
-  const directionAlignment = directionAvailable(left)
-    && directionAvailable(right)
-    ? Math.abs(evidenceVector(left, '_restDirectionVector', 'restDirection')
-      .dot(evidenceVector(right, '_restDirectionVector', 'restDirection')))
-    : null;
-  const radiusRatio = left.weightedRadius > EPSILON
-    && right.weightedRadius > EPSILON
-    ? Math.min(left.weightedRadius, right.weightedRadius)
-      / Math.max(left.weightedRadius, right.weightedRadius) : null;
+  const directionAlignment =
+    directionAvailable(left) && directionAvailable(right)
+      ? Math.abs(
+          evidenceVector(left, '_restDirectionVector', 'restDirection').dot(
+            evidenceVector(right, '_restDirectionVector', 'restDirection'),
+          ),
+        )
+      : null;
+  const radiusRatio =
+    left.weightedRadius > EPSILON && right.weightedRadius > EPSILON
+      ? Math.min(left.weightedRadius, right.weightedRadius) / Math.max(left.weightedRadius, right.weightedRadius)
+      : null;
   const leftIncoming = neighborDirection(left, allEvidence, true);
   const rightIncoming = neighborDirection(right, allEvidence, true);
-  const incomingAlignment = leftIncoming && rightIncoming
-    ? Math.abs(leftIncoming.dot(rightIncoming)) : null;
+  const incomingAlignment = leftIncoming && rightIncoming ? Math.abs(leftIncoming.dot(rightIncoming)) : null;
   const topology = topologyFeature(left, right);
-  const crossEvidence = crossEvidenceByPair.get(crossPairKey(
-    left.sourceBoneKey, right.sourceBoneKey)) || null;
+  const crossEvidence = crossEvidenceByPair.get(crossPairKey(left.sourceBoneKey, right.sourceBoneKey)) || null;
   const crossQuality = crossEvidence?.overlapScore ?? null;
   const geometryFeatures = [
-    {value: clamp(1 - normalizedDistance / CROSS_SOURCE_CANDIDATE_DISTANCE), weight: .34},
-    {value: directionAlignment, weight: .1},
-    {value: radiusRatio, weight: .05},
-    {value: topology.value, weight: .1},
-    {value: incomingAlignment, weight: .05},
-  ].filter(item => item.value !== null && item.value !== undefined);
-  const geometryWeightTotal = geometryFeatures.reduce(
-    (sum, item) => sum + item.weight, 0);
-  const geometryConfidence = geometryFeatures.reduce(
-    (sum, item) => sum + item.value * item.weight, 0)
-    / Math.max(EPSILON, geometryWeightTotal);
+    { value: clamp(1 - normalizedDistance / CROSS_SOURCE_CANDIDATE_DISTANCE), weight: 0.34 },
+    { value: directionAlignment, weight: 0.1 },
+    { value: radiusRatio, weight: 0.05 },
+    { value: topology.value, weight: 0.1 },
+    { value: incomingAlignment, weight: 0.05 },
+  ].filter((item) => item.value !== null && item.value !== undefined);
+  const geometryWeightTotal = geometryFeatures.reduce((sum, item) => sum + item.weight, 0);
+  const geometryConfidence =
+    geometryFeatures.reduce((sum, item) => sum + item.value * item.weight, 0) / Math.max(EPSILON, geometryWeightTotal);
   const supportReliability = crossEvidence?.supportReliability || 0;
-  const crossConfidence = crossQuality === null
-    ? 0 : crossQuality * supportReliability;
+  const crossConfidence = crossQuality === null ? 0 : crossQuality * supportReliability;
   // Cross-source evidence is corroborating evidence. This combination is
   // monotonic in both inputs, so partial overlap cannot punish a good shape
   // and a one-vertex coincidence cannot become a seed by itself.
-  const combinedConfidence = 1 - (1 - geometryConfidence)
-    * (1 - crossConfidence);
-  const strongCrossEvidence = !!crossEvidence
-    && crossEvidence.matchedVertexCount >= CROSS_SOURCE_STRONG_VERTEX_COUNT
-    && crossEvidence.weightedMatchStrength
-      >= CROSS_SOURCE_STRONG_WEIGHT_STRENGTH
-    && crossQuality >= .7;
-  const exactRootAnchor = normalizedDistance <= .01
-    && geometryConfidence >= .8
-    && topology.degree >= .75
-    && (directionAlignment === null || directionAlignment >= .75);
-  const geometrySeed = normalizedDistance <= CROSS_SOURCE_STRICT_DISTANCE
-    && geometryConfidence >= .7
-    && (!topology.rootConflict || exactRootAnchor)
-    && (directionAlignment === null || directionAlignment >= .55);
+  const combinedConfidence = 1 - (1 - geometryConfidence) * (1 - crossConfidence);
+  const strongCrossEvidence =
+    !!crossEvidence &&
+    crossEvidence.matchedVertexCount >= CROSS_SOURCE_STRONG_VERTEX_COUNT &&
+    crossEvidence.weightedMatchStrength >= CROSS_SOURCE_STRONG_WEIGHT_STRENGTH &&
+    crossQuality >= 0.7;
+  const exactRootAnchor =
+    normalizedDistance <= 0.01 &&
+    geometryConfidence >= 0.8 &&
+    topology.degree >= 0.75 &&
+    (directionAlignment === null || directionAlignment >= 0.75);
+  const geometrySeed =
+    normalizedDistance <= CROSS_SOURCE_STRICT_DISTANCE &&
+    geometryConfidence >= 0.7 &&
+    (!topology.rootConflict || exactRootAnchor) &&
+    (directionAlignment === null || directionAlignment >= 0.55);
   const confidenceClass = strongCrossEvidence ? 2 : geometrySeed ? 1 : 0;
   return {
-    left: {sourceKey: left.sourceKey, boneId: left.boneId,
-      sourceBoneKey: left.sourceBoneKey},
-    right: {sourceKey: right.sourceKey, boneId: right.boneId,
-      sourceBoneKey: right.sourceBoneKey},
+    left: { sourceKey: left.sourceKey, boneId: left.boneId, sourceBoneKey: left.sourceBoneKey },
+    right: { sourceKey: right.sourceKey, boneId: right.boneId, sourceBoneKey: right.sourceBoneKey },
     normalizedDistance,
     anchorDistance: distance,
     directionAlignment,
@@ -639,30 +622,33 @@ function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
 }
 
 function compareCandidate(left, right) {
-  return (left.confidenceClass || 0) - (right.confidenceClass || 0)
-    || left.combinedConfidence - right.combinedConfidence
-    || left.supportReliability - right.supportReliability
-    || (left.crossQuality || 0) - (right.crossQuality || 0)
-    || left.geometryConfidence - right.geometryConfidence
-    || right.normalizedDistance - left.normalizedDistance
-    || right.left.sourceBoneKey.localeCompare(left.left.sourceBoneKey)
-    || right.right.sourceBoneKey.localeCompare(left.right.sourceBoneKey);
+  return (
+    (left.confidenceClass || 0) - (right.confidenceClass || 0) ||
+    left.combinedConfidence - right.combinedConfidence ||
+    left.supportReliability - right.supportReliability ||
+    (left.crossQuality || 0) - (right.crossQuality || 0) ||
+    left.geometryConfidence - right.geometryConfidence ||
+    right.normalizedDistance - left.normalizedDistance ||
+    right.left.sourceBoneKey.localeCompare(left.left.sourceBoneKey) ||
+    right.right.sourceBoneKey.localeCompare(left.right.sourceBoneKey)
+  );
 }
 
 function candidateAmbiguous(best, second) {
-  return !!best && !!second
-    && (best.confidenceClass || 0) === (second.confidenceClass || 0)
-    && (best.propagationScore ?? best.combinedConfidence ?? best.score)
-      - (second.propagationScore ?? second.combinedConfidence ?? second.score)
-      < CROSS_SOURCE_AMBIGUITY_MARGIN;
+  return (
+    !!best &&
+    !!second &&
+    (best.confidenceClass || 0) === (second.confidenceClass || 0) &&
+    (best.propagationScore ?? best.combinedConfidence ?? best.score) -
+      (second.propagationScore ?? second.combinedConfidence ?? second.score) <
+      CROSS_SOURCE_AMBIGUITY_MARGIN
+  );
 }
 
 function endpointDescriptor(candidate, endpoint) {
   return candidate.left.sourceBoneKey === endpoint
-    ? {otherSource: candidate.right.sourceKey,
-      otherKey: candidate.right.sourceBoneKey}
-    : {otherSource: candidate.left.sourceKey,
-      otherKey: candidate.left.sourceBoneKey};
+    ? { otherSource: candidate.right.sourceKey, otherKey: candidate.right.sourceBoneKey }
+    : { otherSource: candidate.left.sourceKey, otherKey: candidate.left.sourceBoneKey };
 }
 
 function endpointCompetitionKey(endpoint, otherSource) {
@@ -671,9 +657,8 @@ function endpointCompetitionKey(endpoint, otherSource) {
 
 class GuardedUnionFind {
   constructor(keys) {
-    this.parent = new Map(keys.map(key => [key, key]));
-    this.sources = new Map(keys.map(key => [key,
-      new Set([key.split('#bone=')[0]])]));
+    this.parent = new Map(keys.map((key) => [key, key]));
+    this.sources = new Map(keys.map((key) => [key, new Set([key.split('#bone=')[0]])]));
   }
 
   find(key) {
@@ -692,17 +677,17 @@ class GuardedUnionFind {
     const leftRoot = this.find(left);
     const rightRoot = this.find(right);
     if (!leftRoot || !rightRoot || leftRoot === rightRoot) {
-      return {accepted: leftRoot === rightRoot, reason: null};
+      return { accepted: leftRoot === rightRoot, reason: null };
     }
     const leftSources = this.sources.get(leftRoot) || new Set();
     const rightSources = this.sources.get(rightRoot) || new Set();
-    if ([...leftSources].some(source => rightSources.has(source))) {
-      return {accepted: false, reason: 'cluster_source_conflict'};
+    if ([...leftSources].some((source) => rightSources.has(source))) {
+      return { accepted: false, reason: 'cluster_source_conflict' };
     }
     this.parent.set(rightRoot, leftRoot);
     this.sources.set(leftRoot, new Set([...leftSources, ...rightSources]));
     this.sources.delete(rightRoot);
-    return {accepted: true, reason: null};
+    return { accepted: true, reason: null };
   }
 
   clusters() {
@@ -726,8 +711,7 @@ function buildModelWideBoneIdentity(evidenceByKey) {
     members.push(sourceBoneKey);
     byBoneId.set(boneId, members);
   });
-  const sortedBuckets = [...byBoneId.entries()].sort((left, right) =>
-    left[0] - right[0]);
+  const sortedBuckets = [...byBoneId.entries()].sort((left, right) => left[0] - right[0]);
   const clusterOrder = new Map();
   sortedBuckets.forEach((bucket, order) => {
     const members = bucket[1];
@@ -748,26 +732,27 @@ function neighborMatches(candidate, evidenceByKey, unionFind) {
   const left = evidenceByKey.get(candidate.left.sourceBoneKey);
   const right = evidenceByKey.get(candidate.right.sourceBoneKey);
   if (!left || !right) {
-    return {matchedNeighborCount: 0, matchedNeighborPairs: []};
+    return { matchedNeighborCount: 0, matchedNeighborPairs: [] };
   }
   const leftNeighbors = left.neighborBoneIds || [];
   const rightNeighbors = right.neighborBoneIds || [];
-  const leftNeighborKeys = left._neighborBoneKeys || leftNeighbors.map(
-    boneId => sourceBoneKey(left.sourceKey, boneId));
-  const rightNeighborKeys = right._neighborBoneKeys || rightNeighbors.map(
-    boneId => sourceBoneKey(right.sourceKey, boneId));
+  const leftNeighborKeys =
+    left._neighborBoneKeys || leftNeighbors.map((boneId) => sourceBoneKey(left.sourceKey, boneId));
+  const rightNeighborKeys =
+    right._neighborBoneKeys || rightNeighbors.map((boneId) => sourceBoneKey(right.sourceKey, boneId));
   const usedRightNeighbors = new Set();
   const matchedNeighborPairs = [];
-  leftNeighbors.forEach(leftNeighborId => {
+  leftNeighbors.forEach((leftNeighborId) => {
     const leftNeighborIndex = leftNeighbors.indexOf(leftNeighborId);
-    const rightNeighborIndex = rightNeighborKeys.findIndex((candidateKey,
-      index) => !usedRightNeighbors.has(rightNeighbors[index])
-      && unionFind.same(leftNeighborKeys[leftNeighborIndex], candidateKey));
-    const rightNeighborId = rightNeighborIndex < 0
-      ? undefined : rightNeighbors[rightNeighborIndex];
+    const rightNeighborIndex = rightNeighborKeys.findIndex(
+      (candidateKey, index) =>
+        !usedRightNeighbors.has(rightNeighbors[index]) &&
+        unionFind.same(leftNeighborKeys[leftNeighborIndex], candidateKey),
+    );
+    const rightNeighborId = rightNeighborIndex < 0 ? undefined : rightNeighbors[rightNeighborIndex];
     if (rightNeighborId === undefined) return;
     usedRightNeighbors.add(rightNeighborId);
-    matchedNeighborPairs.push({leftBoneId: leftNeighborId, rightBoneId: rightNeighborId});
+    matchedNeighborPairs.push({ leftBoneId: leftNeighborId, rightBoneId: rightNeighborId });
   });
   return {
     matchedNeighborCount: matchedNeighborPairs.length,
@@ -776,9 +761,7 @@ function neighborMatches(candidate, evidenceByKey, unionFind) {
 }
 
 function average(values, fallback = null) {
-  return values.length
-    ? values.reduce((sum, value) => sum + value, 0) / values.length
-    : fallback;
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : fallback;
 }
 
 function graphAlignmentFeatures(candidate, evidenceByKey, unionFind) {
@@ -787,42 +770,36 @@ function graphAlignmentFeatures(candidate, evidenceByKey, unionFind) {
   const right = evidenceByKey.get(candidate.right.sourceBoneKey);
   const edgeAlignments = [];
   const edgeLengthRatios = [];
-  matches.matchedNeighborPairs.forEach(pair => {
-    const leftNeighbor = evidenceByKey.get(sourceBoneKey(
-      left.sourceKey, pair.leftBoneId));
-    const rightNeighbor = evidenceByKey.get(sourceBoneKey(
-      right.sourceKey, pair.rightBoneId));
-    const leftVector = evidenceVector(leftNeighbor, '_weightedCenterVector',
-      'weightedCenter')?.sub(evidenceVector(left, '_weightedCenterVector',
-      'weightedCenter'));
-    const rightVector = evidenceVector(rightNeighbor, '_weightedCenterVector',
-      'weightedCenter')?.sub(evidenceVector(right, '_weightedCenterVector',
-      'weightedCenter'));
-    if (!leftVector || !rightVector
-        || leftVector.length() <= EPSILON || rightVector.length() <= EPSILON) {
+  matches.matchedNeighborPairs.forEach((pair) => {
+    const leftNeighbor = evidenceByKey.get(sourceBoneKey(left.sourceKey, pair.leftBoneId));
+    const rightNeighbor = evidenceByKey.get(sourceBoneKey(right.sourceKey, pair.rightBoneId));
+    const leftVector = evidenceVector(leftNeighbor, '_weightedCenterVector', 'weightedCenter')?.sub(
+      evidenceVector(left, '_weightedCenterVector', 'weightedCenter'),
+    );
+    const rightVector = evidenceVector(rightNeighbor, '_weightedCenterVector', 'weightedCenter')?.sub(
+      evidenceVector(right, '_weightedCenterVector', 'weightedCenter'),
+    );
+    if (!leftVector || !rightVector || leftVector.length() <= EPSILON || rightVector.length() <= EPSILON) {
       return;
     }
     const leftLength = leftVector.length();
     const rightLength = rightVector.length();
-    edgeAlignments.push(Math.abs(leftVector.normalize().dot(
-      rightVector.normalize())));
-    edgeLengthRatios.push(Math.min(leftLength, rightLength)
-      / Math.max(leftLength, rightLength));
+    edgeAlignments.push(Math.abs(leftVector.normalize().dot(rightVector.normalize())));
+    edgeLengthRatios.push(Math.min(leftLength, rightLength) / Math.max(leftLength, rightLength));
   });
-  const relativeEdgeAlignment = average(edgeAlignments, .5);
-  const edgeLengthRatio = average(edgeLengthRatios, .5);
-  const distanceQuality = clamp(1 - candidate.normalizedDistance
-    / CROSS_SOURCE_CANDIDATE_DISTANCE);
-  const crossSignal = candidate.crossQuality === null
-    ? .5 : candidate.crossConfidence;
+  const relativeEdgeAlignment = average(edgeAlignments, 0.5);
+  const edgeLengthRatio = average(edgeLengthRatios, 0.5);
+  const distanceQuality = clamp(1 - candidate.normalizedDistance / CROSS_SOURCE_CANDIDATE_DISTANCE);
+  const crossSignal = candidate.crossQuality === null ? 0.5 : candidate.crossConfidence;
   const graphAlignmentScore = clamp(
-    clamp(matches.matchedNeighborCount / 2) * .4
-    + crossSignal * .15
-    + (candidate.directionAlignment ?? .5) * .1
-    + relativeEdgeAlignment * .15
-    + edgeLengthRatio * .1
-    + distanceQuality * .05
-    + (candidate.topology?.degree ?? .5) * .05);
+    clamp(matches.matchedNeighborCount / 2) * 0.4 +
+      crossSignal * 0.15 +
+      (candidate.directionAlignment ?? 0.5) * 0.1 +
+      relativeEdgeAlignment * 0.15 +
+      edgeLengthRatio * 0.1 +
+      distanceQuality * 0.05 +
+      (candidate.topology?.degree ?? 0.5) * 0.05,
+  );
   return {
     matchedNeighborCount: matches.matchedNeighborCount,
     matchedNeighborPairs: matches.matchedNeighborPairs,
@@ -834,8 +811,8 @@ function graphAlignmentFeatures(candidate, evidenceByKey, unionFind) {
 
 function diagnosticCandidate(candidate, decision, rejectionReason = null) {
   return {
-    left: {...candidate.left},
-    right: {...candidate.right},
+    left: { ...candidate.left },
+    right: { ...candidate.right },
     anchorDistance: candidate.anchorDistance,
     normalizedDistance: candidate.normalizedDistance,
     mutualBest: !!candidate.mutualBest,
@@ -847,16 +824,13 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
     crossConfidence: candidate.crossConfidence,
     supportReliability: candidate.supportReliability,
     matchedNeighborCount: candidate.matchedNeighborCount || 0,
-    matchedNeighborPairs: (candidate.matchedNeighborPairs || [])
-      .map(pair => ({...pair})),
+    matchedNeighborPairs: (candidate.matchedNeighborPairs || []).map((pair) => ({ ...pair })),
     relativeEdgeAlignment: candidate.relativeEdgeAlignment,
     edgeLengthRatio: candidate.edgeLengthRatio,
     graphAlignmentScore: candidate.graphAlignmentScore,
     graphAlignmentPathLength: candidate.graphAlignmentPathLength || null,
-    matchedVertexCount: candidate.matchedVertexCount
-      ?? candidate.crossEvidence?.matchedVertexCount ?? 0,
-    weightedMatchStrength: candidate.weightedMatchStrength
-      ?? candidate.crossEvidence?.weightedMatchStrength ?? 0,
+    matchedVertexCount: candidate.matchedVertexCount ?? candidate.crossEvidence?.matchedVertexCount ?? 0,
+    weightedMatchStrength: candidate.weightedMatchStrength ?? candidate.crossEvidence?.weightedMatchStrength ?? 0,
     crossContainment: candidate.crossEvidence?.crossContainment ?? null,
     crossJaccard: candidate.crossEvidence?.crossJaccard ?? null,
     strongCrossEvidence: !!candidate.strongCrossEvidence,
@@ -870,17 +844,18 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
 }
 
 function orderedSourceRigs(sourceRigs) {
-  return [...sourceRigs].sort((left, right) =>
-    String(left.sourceKey).localeCompare(String(right.sourceKey)));
+  return [...sourceRigs].sort((left, right) => String(left.sourceKey).localeCompare(String(right.sourceKey)));
 }
 
 function crossSourceMatchDistance(referenceRadius) {
   return Math.max(referenceRadius * 0.02, EPSILON);
 }
 
-async function buildCrossSourceWeightEvidenceCooperative(sourceRigs,
-    referenceRadius, {budget = createWorkBudget(), isCurrent = () => true,
-      timings = null} = {}) {
+async function buildCrossSourceWeightEvidenceCooperative(
+  sourceRigs,
+  referenceRadius,
+  { budget = createWorkBudget(), isCurrent = () => true, timings = null } = {},
+) {
   const rigs = orderedSourceRigs(sourceRigs);
   const matchDistance = crossSourceMatchDistance(referenceRadius);
   const samplesBySourceKey = new Map();
@@ -890,18 +865,18 @@ async function buildCrossSourceWeightEvidenceCooperative(sourceRigs,
     const sourceKey = String(rig.sourceKey);
     const sampleStartedAt = clockNow();
     const samples = await vertexSamplesForRigCooperative(rig, {
-      budget, isCurrent,
+      budget,
+      isCurrent,
     });
     if (!samples) return null;
-    if (timings) timings.sampleBuildMs = (timings.sampleBuildMs || 0)
-      + clockNow() - sampleStartedAt;
+    if (timings) timings.sampleBuildMs = (timings.sampleBuildMs || 0) + clockNow() - sampleStartedAt;
     const spatialStartedAt = clockNow();
     const cells = await buildSpatialCellsCooperative(samples, matchDistance, {
-      budget, isCurrent,
+      budget,
+      isCurrent,
     });
     if (!cells) return null;
-    if (timings) timings.spatialIndexMs = (timings.spatialIndexMs || 0)
-      + clockNow() - spatialStartedAt;
+    if (timings) timings.spatialIndexMs = (timings.spatialIndexMs || 0) + clockNow() - spatialStartedAt;
     samplesBySourceKey.set(sourceKey, samples);
     cellsBySourceKey.set(sourceKey, cells);
     await budget.checkpoint();
@@ -918,15 +893,17 @@ async function buildCrossSourceWeightEvidenceCooperative(sourceRigs,
       const rightRig = rigs[rightIndex];
       const matchStartedAt = clockNow();
       const pairEvidence = await crossSourceWeightEvidenceCooperative(
-        leftRig, rightRig, referenceRadius,
+        leftRig,
+        rightRig,
+        referenceRadius,
         samplesBySourceKey.get(String(leftRig.sourceKey)),
         samplesBySourceKey.get(String(rightRig.sourceKey)),
         cellsBySourceKey.get(String(leftRig.sourceKey)),
         cellsBySourceKey.get(String(rightRig.sourceKey)),
-        {budget, isCurrent});
+        { budget, isCurrent },
+      );
       if (!pairEvidence) return null;
-      if (timings) timings.crossSourceMatchMs =
-        (timings.crossSourceMatchMs || 0) + clockNow() - matchStartedAt;
+      if (timings) timings.crossSourceMatchMs = (timings.crossSourceMatchMs || 0) + clockNow() - matchStartedAt;
       pairEvidence.forEach((record, key) => evidence.set(key, record));
     }
   }
@@ -949,21 +926,19 @@ function buildCandidates(evidenceByKey, referenceRadius, options = {}) {
       const rightEntries = bySource.get(sources[rightIndex]);
       for (const left of leftEntries) {
         for (const right of rightEntries) {
-          const candidate = candidateFor(left, right, evidenceByKey,
-            crossEvidenceByPair, {referenceRadius});
+          const candidate = candidateFor(left, right, evidenceByKey, crossEvidenceByPair, { referenceRadius });
           if (candidate) candidates.push(candidate);
         }
       }
     }
   }
-  return {candidates, crossEvidenceByPair};
+  return { candidates, crossEvidenceByPair };
 }
 
 function markSpatialRelationships(candidates) {
   const endpointMap = new Map();
-  candidates.forEach(candidate => {
-    for (const endpoint of [candidate.left.sourceBoneKey,
-      candidate.right.sourceBoneKey]) {
+  candidates.forEach((candidate) => {
+    for (const endpoint of [candidate.left.sourceBoneKey, candidate.right.sourceBoneKey]) {
       const descriptor = endpointDescriptor(candidate, endpoint);
       const key = endpointCompetitionKey(endpoint, descriptor.otherSource);
       const incident = endpointMap.get(key) || [];
@@ -974,111 +949,103 @@ function markSpatialRelationships(candidates) {
   const rankedByEndpoint = new Map();
   endpointMap.forEach((candidatesForEndpoint, key) => {
     const [endpoint] = JSON.parse(key);
-    rankedByEndpoint.set(key, [...candidatesForEndpoint].sort((left, right) => {
-      const leftDescriptor = endpointDescriptor(left, endpoint);
-      const rightDescriptor = endpointDescriptor(right, endpoint);
-      return (right.confidenceClass || 0) - (left.confidenceClass || 0)
-        || right.combinedConfidence - left.combinedConfidence
-        || right.supportReliability - left.supportReliability
-        || (right.crossQuality || 0) - (left.crossQuality || 0)
-        || right.geometryConfidence - left.geometryConfidence
-        || left.normalizedDistance - right.normalizedDistance
-        || leftDescriptor.otherKey.localeCompare(rightDescriptor.otherKey);
-    }));
+    rankedByEndpoint.set(
+      key,
+      [...candidatesForEndpoint].sort((left, right) => {
+        const leftDescriptor = endpointDescriptor(left, endpoint);
+        const rightDescriptor = endpointDescriptor(right, endpoint);
+        return (
+          (right.confidenceClass || 0) - (left.confidenceClass || 0) ||
+          right.combinedConfidence - left.combinedConfidence ||
+          right.supportReliability - left.supportReliability ||
+          (right.crossQuality || 0) - (left.crossQuality || 0) ||
+          right.geometryConfidence - left.geometryConfidence ||
+          left.normalizedDistance - right.normalizedDistance ||
+          leftDescriptor.otherKey.localeCompare(rightDescriptor.otherKey)
+        );
+      }),
+    );
   });
-  candidates.forEach(candidate => {
-    const leftDescriptor = endpointDescriptor(
-      candidate, candidate.left.sourceBoneKey);
-    const rightDescriptor = endpointDescriptor(
-      candidate, candidate.right.sourceBoneKey);
-    const leftCandidates = rankedByEndpoint.get(endpointCompetitionKey(
-      candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [];
-    const rightCandidates = rankedByEndpoint.get(endpointCompetitionKey(
-      candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [];
-    candidate.mutualBest = leftCandidates[0] === candidate
-      && rightCandidates[0] === candidate;
-    candidate.leftAmbiguous = candidateAmbiguous(
-      leftCandidates[0], leftCandidates[1]);
-    candidate.rightAmbiguous = candidateAmbiguous(
-      rightCandidates[0], rightCandidates[1]);
+  candidates.forEach((candidate) => {
+    const leftDescriptor = endpointDescriptor(candidate, candidate.left.sourceBoneKey);
+    const rightDescriptor = endpointDescriptor(candidate, candidate.right.sourceBoneKey);
+    const leftCandidates =
+      rankedByEndpoint.get(endpointCompetitionKey(candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [];
+    const rightCandidates =
+      rankedByEndpoint.get(endpointCompetitionKey(candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [];
+    candidate.mutualBest = leftCandidates[0] === candidate && rightCandidates[0] === candidate;
+    candidate.leftAmbiguous = candidateAmbiguous(leftCandidates[0], leftCandidates[1]);
+    candidate.rightAmbiguous = candidateAmbiguous(rightCandidates[0], rightCandidates[1]);
   });
 }
 
-function acceptedEquivalence(candidate, pass, unionFind, diagnostics,
-    accepted, correspondenceStrength) {
+function acceptedEquivalence(candidate, pass, unionFind, diagnostics, accepted, correspondenceStrength) {
   const left = candidate.left.sourceBoneKey;
   const right = candidate.right.sourceBoneKey;
   if (unionFind.same(left, right)) {
-    diagnostics.push(diagnosticCandidate(
-      candidate, 'rejected', 'already_equivalent'));
+    diagnostics.push(diagnosticCandidate(candidate, 'rejected', 'already_equivalent'));
     return false;
   }
   const union = unionFind.union(left, right);
   if (!union.accepted) {
-    diagnostics.push(diagnosticCandidate(
-      candidate, 'rejected', union.reason || 'cluster_source_conflict'));
+    diagnostics.push(diagnosticCandidate(candidate, 'rejected', union.reason || 'cluster_source_conflict'));
     return false;
   }
   const record = diagnosticCandidate(candidate, 'accepted', null);
   record.pass = pass;
   accepted.push(record);
-  const strength = Math.max(candidate.score || 0,
-    candidate.propagationScore || 0, candidate.graphAlignmentScore || 0);
-  correspondenceStrength.set(left, Math.max(
-    correspondenceStrength.get(left) || 0, strength));
-  correspondenceStrength.set(right, Math.max(
-    correspondenceStrength.get(right) || 0, strength));
+  const strength = Math.max(candidate.score || 0, candidate.propagationScore || 0, candidate.graphAlignmentScore || 0);
+  correspondenceStrength.set(left, Math.max(correspondenceStrength.get(left) || 0, strength));
+  correspondenceStrength.set(right, Math.max(correspondenceStrength.get(right) || 0, strength));
   return true;
 }
 
 function compareGraphAlignmentCandidate(left, right) {
-  return right.matchedNeighborCount - left.matchedNeighborCount
-    || right.crossConfidence - left.crossConfidence
-    || (right.directionAlignment ?? .5) - (left.directionAlignment ?? .5)
-    || right.relativeEdgeAlignment - left.relativeEdgeAlignment
-    || right.edgeLengthRatio - left.edgeLengthRatio
-    || right.graphAlignmentScore - left.graphAlignmentScore
-    || right.topology.degree - left.topology.degree
-    || right.geometryConfidence - left.geometryConfidence
-    || left.normalizedDistance - right.normalizedDistance
-    || left.left.sourceBoneKey.localeCompare(right.left.sourceBoneKey)
-    || left.right.sourceBoneKey.localeCompare(right.right.sourceBoneKey);
+  return (
+    right.matchedNeighborCount - left.matchedNeighborCount ||
+    right.crossConfidence - left.crossConfidence ||
+    (right.directionAlignment ?? 0.5) - (left.directionAlignment ?? 0.5) ||
+    right.relativeEdgeAlignment - left.relativeEdgeAlignment ||
+    right.edgeLengthRatio - left.edgeLengthRatio ||
+    right.graphAlignmentScore - left.graphAlignmentScore ||
+    right.topology.degree - left.topology.degree ||
+    right.geometryConfidence - left.geometryConfidence ||
+    left.normalizedDistance - right.normalizedDistance ||
+    left.left.sourceBoneKey.localeCompare(right.left.sourceBoneKey) ||
+    left.right.sourceBoneKey.localeCompare(right.right.sourceBoneKey)
+  );
 }
 
 function uniqueGraphWinner(candidate, ranked, tier) {
   if (ranked[0] !== candidate) return false;
   const second = ranked[1];
   if (!second) return true;
-  if (tier === 1 && candidate.matchedNeighborCount
-      > second.matchedNeighborCount) return true;
-  return candidate.graphAlignmentScore - second.graphAlignmentScore
-    >= CROSS_SOURCE_GRAPH_ALIGNMENT_MARGIN;
+  if (tier === 1 && candidate.matchedNeighborCount > second.matchedNeighborCount) return true;
+  return candidate.graphAlignmentScore - second.graphAlignmentScore >= CROSS_SOURCE_GRAPH_ALIGNMENT_MARGIN;
 }
 
 function graphEvidenceContradicts(candidate) {
-  return candidate.crossQuality !== null
-    && candidate.supportReliability >= .75
-    && candidate.crossQuality < .35;
+  return candidate.crossQuality !== null && candidate.supportReliability >= 0.75 && candidate.crossQuality < 0.35;
 }
 
-function runGraphAlignment(candidates, evidenceByKey, unionFind,
-    diagnostics, accepted, correspondenceStrength) {
+function runGraphAlignment(candidates, evidenceByKey, unionFind, diagnostics, accepted, correspondenceStrength) {
   let changed = true;
   while (changed) {
     changed = false;
-    candidates.forEach(candidate => Object.assign(candidate,
-      graphAlignmentFeatures(candidate, evidenceByKey, unionFind)));
-    const available = candidates.filter(candidate =>
-      !graphEvidenceContradicts(candidate)
-      && candidate.matchedNeighborCount > 0
-      && candidate.graphAlignmentScore >= CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE
-      && candidate.topology.degree >= .5
-      && !unionFind.same(candidate.left.sourceBoneKey,
-        candidate.right.sourceBoneKey));
+    candidates.forEach((candidate) =>
+      Object.assign(candidate, graphAlignmentFeatures(candidate, evidenceByKey, unionFind)),
+    );
+    const available = candidates.filter(
+      (candidate) =>
+        !graphEvidenceContradicts(candidate) &&
+        candidate.matchedNeighborCount > 0 &&
+        candidate.graphAlignmentScore >= CROSS_SOURCE_GRAPH_ALIGNMENT_MIN_SCORE &&
+        candidate.topology.degree >= 0.5 &&
+        !unionFind.same(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
+    );
     const rankedByEndpoint = new Map();
-    available.forEach(candidate => {
-      for (const endpoint of [candidate.left.sourceBoneKey,
-        candidate.right.sourceBoneKey]) {
+    available.forEach((candidate) => {
+      for (const endpoint of [candidate.left.sourceBoneKey, candidate.right.sourceBoneKey]) {
         const descriptor = endpointDescriptor(candidate, endpoint);
         const key = endpointCompetitionKey(endpoint, descriptor.otherSource);
         const bucket = rankedByEndpoint.get(key) || [];
@@ -1086,31 +1053,39 @@ function runGraphAlignment(candidates, evidenceByKey, unionFind,
         rankedByEndpoint.set(key, bucket);
       }
     });
-    rankedByEndpoint.forEach(bucket => {
+    rankedByEndpoint.forEach((bucket) => {
       bucket.sort(compareGraphAlignmentCandidate);
     });
-    const rankFor = candidate => {
-      const leftDescriptor = endpointDescriptor(
-        candidate, candidate.left.sourceBoneKey);
-      const rightDescriptor = endpointDescriptor(
-        candidate, candidate.right.sourceBoneKey);
+    const rankFor = (candidate) => {
+      const leftDescriptor = endpointDescriptor(candidate, candidate.left.sourceBoneKey);
+      const rightDescriptor = endpointDescriptor(candidate, candidate.right.sourceBoneKey);
       return {
-        left: rankedByEndpoint.get(endpointCompetitionKey(
-          candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [],
-        right: rankedByEndpoint.get(endpointCompetitionKey(
-          candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [],
+        left:
+          rankedByEndpoint.get(endpointCompetitionKey(candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [],
+        right:
+          rankedByEndpoint.get(endpointCompetitionKey(candidate.right.sourceBoneKey, rightDescriptor.otherSource)) ||
+          [],
       };
     };
-    const selected = available.filter(candidate => {
-      const ranked = rankFor(candidate);
-      const tier = candidate.matchedNeighborCount >= 2 ? 1 : 2;
-      return uniqueGraphWinner(candidate, ranked.left, tier)
-        && uniqueGraphWinner(candidate, ranked.right, tier);
-    }).sort(compareGraphAlignmentCandidate);
+    const selected = available
+      .filter((candidate) => {
+        const ranked = rankFor(candidate);
+        const tier = candidate.matchedNeighborCount >= 2 ? 1 : 2;
+        return uniqueGraphWinner(candidate, ranked.left, tier) && uniqueGraphWinner(candidate, ranked.right, tier);
+      })
+      .sort(compareGraphAlignmentCandidate);
     for (const candidate of selected) {
       const tier = candidate.matchedNeighborCount >= 2 ? 1 : 2;
-      if (acceptedEquivalence(candidate, `graph-alignment-${tier}`,
-        unionFind, diagnostics, accepted, correspondenceStrength)) {
+      if (
+        acceptedEquivalence(
+          candidate,
+          `graph-alignment-${tier}`,
+          unionFind,
+          diagnostics,
+          accepted,
+          correspondenceStrength,
+        )
+      ) {
         changed = true;
       }
     }
@@ -1140,16 +1115,15 @@ function pathBetweenSourceBones(startKey, endKey, evidenceByKey) {
   }
   if (!previous.has(endKey)) return null;
   const path = [];
-  for (let current = endKey; current !== null;
-       current = previous.get(current)) path.push(current);
+  for (let current = endKey; current !== null; current = previous.get(current)) path.push(current);
   return path.reverse();
 }
 
 function matchedSourcePairs(unionFind) {
   const result = new Map();
-  unionFind.clusters().forEach(members => {
+  unionFind.clusters().forEach((members) => {
     const bySource = new Map();
-    members.forEach(key => {
+    members.forEach((key) => {
       const sourceKey = sourceKeyFromBoneKey(key);
       const entries = bySource.get(sourceKey) || [];
       entries.push(key);
@@ -1157,14 +1131,13 @@ function matchedSourcePairs(unionFind) {
     });
     const sources = [...bySource.keys()].sort();
     for (let leftIndex = 0; leftIndex < sources.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1;
-           rightIndex < sources.length; rightIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < sources.length; rightIndex += 1) {
         const left = bySource.get(sources[leftIndex])?.[0];
         const right = bySource.get(sources[rightIndex])?.[0];
         if (!left || !right) continue;
         const key = [sources[leftIndex], sources[rightIndex]].join('|');
         const pairs = result.get(key) || [];
-        pairs.push({left, right});
+        pairs.push({ left, right });
         result.set(key, pairs);
       }
     }
@@ -1172,12 +1145,13 @@ function matchedSourcePairs(unionFind) {
   return result;
 }
 
-function runPathAlignment(candidates, evidenceByKey, unionFind,
-    diagnostics, accepted, correspondenceStrength) {
-  const candidateByPair = new Map(candidates.map(candidate => [
-    crossPairKey(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
-    candidate,
-  ]));
+function runPathAlignment(candidates, evidenceByKey, unionFind, diagnostics, accepted, correspondenceStrength) {
+  const candidateByPair = new Map(
+    candidates.map((candidate) => [
+      crossPairKey(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
+      candidate,
+    ]),
+  );
   let changed = true;
   const pathCache = new Map();
   const pathFor = (startKey, endKey) => {
@@ -1190,58 +1164,66 @@ function runPathAlignment(candidates, evidenceByKey, unionFind,
   while (changed) {
     changed = false;
     const alignments = new Map();
-    matchedSourcePairs(unionFind).forEach(anchors => {
+    matchedSourcePairs(unionFind).forEach((anchors) => {
       for (let leftIndex = 0; leftIndex < anchors.length; leftIndex += 1) {
-        for (let rightIndex = leftIndex + 1;
-             rightIndex < anchors.length; rightIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < anchors.length; rightIndex += 1) {
           const first = anchors[leftIndex];
           const second = anchors[rightIndex];
           const leftPath = pathFor(first.left, second.left);
           const rightPath = pathFor(first.right, second.right);
-          if (!leftPath || !rightPath || leftPath.length !== rightPath.length
-              || leftPath.length < 3) continue;
+          if (!leftPath || !rightPath || leftPath.length !== rightPath.length || leftPath.length < 3) continue;
           const internal = [];
           for (let index = 1; index < leftPath.length - 1; index += 1) {
-            const candidate = candidateByPair.get(crossPairKey(
-              leftPath[index], rightPath[index]));
-            if (!candidate || graphEvidenceContradicts(candidate)
-                || unionFind.same(candidate.left.sourceBoneKey,
-                  candidate.right.sourceBoneKey)) {
+            const candidate = candidateByPair.get(crossPairKey(leftPath[index], rightPath[index]));
+            if (
+              !candidate ||
+              graphEvidenceContradicts(candidate) ||
+              unionFind.same(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey)
+            ) {
               internal.length = 0;
               break;
             }
             internal.push(candidate);
           }
           if (!internal.length) continue;
-          const alignmentKey = internal.map(candidate => crossPairKey(
-            candidate.left.sourceBoneKey, candidate.right.sourceBoneKey))
+          const alignmentKey = internal
+            .map((candidate) => crossPairKey(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey))
             .join('|');
           if (alignments.has(alignmentKey)) continue;
           alignments.set(alignmentKey, {
             candidates: internal,
             pathLength: leftPath.length,
-            score: average(internal.map(candidate =>
-              candidate.graphAlignmentScore ?? candidate.combinedConfidence), 0),
+            score: average(
+              internal.map((candidate) => candidate.graphAlignmentScore ?? candidate.combinedConfidence),
+              0,
+            ),
             leftAnchor: first.left,
             rightAnchor: first.right,
           });
         }
       }
     });
-    const ordered = [...alignments.values()].sort((left, right) =>
-      right.pathLength - left.pathLength || right.score - left.score
-      || left.leftAnchor.localeCompare(right.leftAnchor)
-      || left.rightAnchor.localeCompare(right.rightAnchor));
+    const ordered = [...alignments.values()].sort(
+      (left, right) =>
+        right.pathLength - left.pathLength ||
+        right.score - left.score ||
+        left.leftAnchor.localeCompare(right.leftAnchor) ||
+        left.rightAnchor.localeCompare(right.rightAnchor),
+    );
     for (const alignment of ordered) {
-      if (alignment.candidates.some(candidate => unionFind.same(
-        candidate.left.sourceBoneKey, candidate.right.sourceBoneKey))) continue;
+      if (
+        alignment.candidates.some((candidate) =>
+          unionFind.same(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
+        )
+      )
+        continue;
       let acceptedPath = false;
       for (const candidate of alignment.candidates) {
         candidate.graphAlignmentPathLength = alignment.pathLength;
-        candidate.graphAlignmentScore = Math.max(
-          candidate.graphAlignmentScore || 0, alignment.score);
-        if (acceptedEquivalence(candidate, 'graph-alignment-3', unionFind,
-          diagnostics, accepted, correspondenceStrength)) {
+        candidate.graphAlignmentScore = Math.max(candidate.graphAlignmentScore || 0, alignment.score);
+        if (
+          acceptedEquivalence(candidate, 'graph-alignment-3', unionFind, diagnostics, accepted, correspondenceStrength)
+        ) {
           acceptedPath = true;
           changed = true;
         }
@@ -1256,58 +1238,55 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
   const diagnostics = [];
   const correspondenceStrength = new Map();
   markSpatialRelationships(candidates);
-  candidates.forEach(candidate => {
+  candidates.forEach((candidate) => {
     if (!candidate.mutualBest) {
-      diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'not_mutual'));
+      diagnostics.push(diagnosticCandidate(candidate, 'rejected', 'not_mutual'));
       return;
     }
     if (candidate.leftAmbiguous || candidate.rightAmbiguous) {
-      diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'ambiguous'));
+      diagnostics.push(diagnosticCandidate(candidate, 'rejected', 'ambiguous'));
       return;
     }
     // A source root is not an identity signal. Strong cross-source evidence
     // may seed a root-to-internal match, while the close geometric lane keeps
     // conservative old behavior for ordinary source-local matches.
     if (!candidate.strongCrossEvidence && !candidate.geometrySeed) {
-      diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', candidate.normalizedDistance
-          > CROSS_SOURCE_STRICT_DISTANCE
-          ? 'too_far' : 'insufficient_seed_evidence'));
+      diagnostics.push(
+        diagnosticCandidate(
+          candidate,
+          'rejected',
+          candidate.normalizedDistance > CROSS_SOURCE_STRICT_DISTANCE ? 'too_far' : 'insufficient_seed_evidence',
+        ),
+      );
       return;
     }
-    if (candidate.combinedConfidence < .7) {
-      diagnostics.push(diagnosticCandidate(
-        candidate, 'rejected', 'insufficient_confidence'));
+    if (candidate.combinedConfidence < 0.7) {
+      diagnostics.push(diagnosticCandidate(candidate, 'rejected', 'insufficient_confidence'));
       return;
     }
-    acceptedEquivalence(candidate, 'strict', unionFind, diagnostics,
-      accepted, correspondenceStrength);
+    acceptedEquivalence(candidate, 'strict', unionFind, diagnostics, accepted, correspondenceStrength);
   });
 
   let changed = true;
   while (changed) {
     changed = false;
-    const propagation = candidates.map(candidate => {
-      const matches = graphAlignmentFeatures(
-        candidate, evidenceByKey, unionFind);
-      Object.assign(candidate, matches);
-      const score = Math.min(1, candidate.score
-        + Math.min(.3, matches.matchedNeighborCount * .15));
-      return {...candidate, propagationScore: score};
-    }).filter(candidate => {
-      if (unionFind.same(candidate.left.sourceBoneKey,
-        candidate.right.sourceBoneKey)) return false;
-      if (candidate.normalizedDistance > CROSS_SOURCE_PROPAGATION_DISTANCE) {
-        return false;
-      }
-      return candidate.matchedNeighborCount > 0;
-    });
+    const propagation = candidates
+      .map((candidate) => {
+        const matches = graphAlignmentFeatures(candidate, evidenceByKey, unionFind);
+        Object.assign(candidate, matches);
+        const score = Math.min(1, candidate.score + Math.min(0.3, matches.matchedNeighborCount * 0.15));
+        return { ...candidate, propagationScore: score };
+      })
+      .filter((candidate) => {
+        if (unionFind.same(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey)) return false;
+        if (candidate.normalizedDistance > CROSS_SOURCE_PROPAGATION_DISTANCE) {
+          return false;
+        }
+        return candidate.matchedNeighborCount > 0;
+      });
     const endpointMap = new Map();
-    propagation.forEach(candidate => {
-      for (const endpoint of [candidate.left.sourceBoneKey,
-        candidate.right.sourceBoneKey]) {
+    propagation.forEach((candidate) => {
+      for (const endpoint of [candidate.left.sourceBoneKey, candidate.right.sourceBoneKey]) {
         const descriptor = endpointDescriptor(candidate, endpoint);
         const key = endpointCompetitionKey(endpoint, descriptor.otherSource);
         const incident = endpointMap.get(key) || [];
@@ -1318,54 +1297,62 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
     const rankedByEndpoint = new Map();
     endpointMap.forEach((candidatesForEndpoint, key) => {
       const [endpoint] = JSON.parse(key);
-      rankedByEndpoint.set(key, [...candidatesForEndpoint].sort((left, right) =>
-        right.propagationScore - left.propagationScore
-        || (right.confidenceClass || 0) - (left.confidenceClass || 0)
-        || right.combinedConfidence - left.combinedConfidence
-        || right.supportReliability - left.supportReliability
-        || left.normalizedDistance - right.normalizedDistance
-        || endpointDescriptor(left, endpoint).otherKey.localeCompare(
-          endpointDescriptor(right, endpoint).otherKey)));
+      rankedByEndpoint.set(
+        key,
+        [...candidatesForEndpoint].sort(
+          (left, right) =>
+            right.propagationScore - left.propagationScore ||
+            (right.confidenceClass || 0) - (left.confidenceClass || 0) ||
+            right.combinedConfidence - left.combinedConfidence ||
+            right.supportReliability - left.supportReliability ||
+            left.normalizedDistance - right.normalizedDistance ||
+            endpointDescriptor(left, endpoint).otherKey.localeCompare(endpointDescriptor(right, endpoint).otherKey),
+        ),
+      );
     });
-    const selected = propagation.filter(candidate => {
-      const leftDescriptor = endpointDescriptor(
-        candidate, candidate.left.sourceBoneKey);
-      const rightDescriptor = endpointDescriptor(
-        candidate, candidate.right.sourceBoneKey);
-      const leftBest = rankedByEndpoint.get(endpointCompetitionKey(
-        candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [];
-      const rightBest = rankedByEndpoint.get(endpointCompetitionKey(
-        candidate.right.sourceBoneKey, rightDescriptor.otherSource)) || [];
-      const leftAmbiguous = candidateAmbiguous(
-        leftBest[0] && {...leftBest[0], score: leftBest[0].propagationScore},
-        leftBest[1] && {...leftBest[1], score: leftBest[1].propagationScore});
-      const rightAmbiguous = candidateAmbiguous(
-        rightBest[0] && {...rightBest[0], score: rightBest[0].propagationScore},
-        rightBest[1] && {...rightBest[1], score: rightBest[1].propagationScore});
-      return leftBest[0] === candidate && rightBest[0] === candidate
-        && !leftAmbiguous && !rightAmbiguous
-        && candidate.propagationScore >= .7
-        && (candidate.directionAlignment === null
-          || candidate.directionAlignment >= .55
-          || candidate.crossScore >= .55
-          || candidate.relativeEdgeAlignment >= .6);
-    }).sort((left, right) => right.propagationScore - left.propagationScore
-      || compareCandidate(right, left));
-    selected.forEach(candidate => {
-      if (acceptedEquivalence(candidate, 'propagation', unionFind,
-        diagnostics, accepted, correspondenceStrength)) changed = true;
+    const selected = propagation
+      .filter((candidate) => {
+        const leftDescriptor = endpointDescriptor(candidate, candidate.left.sourceBoneKey);
+        const rightDescriptor = endpointDescriptor(candidate, candidate.right.sourceBoneKey);
+        const leftBest =
+          rankedByEndpoint.get(endpointCompetitionKey(candidate.left.sourceBoneKey, leftDescriptor.otherSource)) || [];
+        const rightBest =
+          rankedByEndpoint.get(endpointCompetitionKey(candidate.right.sourceBoneKey, rightDescriptor.otherSource)) ||
+          [];
+        const leftAmbiguous = candidateAmbiguous(
+          leftBest[0] && { ...leftBest[0], score: leftBest[0].propagationScore },
+          leftBest[1] && { ...leftBest[1], score: leftBest[1].propagationScore },
+        );
+        const rightAmbiguous = candidateAmbiguous(
+          rightBest[0] && { ...rightBest[0], score: rightBest[0].propagationScore },
+          rightBest[1] && { ...rightBest[1], score: rightBest[1].propagationScore },
+        );
+        return (
+          leftBest[0] === candidate &&
+          rightBest[0] === candidate &&
+          !leftAmbiguous &&
+          !rightAmbiguous &&
+          candidate.propagationScore >= 0.7 &&
+          (candidate.directionAlignment === null ||
+            candidate.directionAlignment >= 0.55 ||
+            candidate.crossScore >= 0.55 ||
+            candidate.relativeEdgeAlignment >= 0.6)
+        );
+      })
+      .sort((left, right) => right.propagationScore - left.propagationScore || compareCandidate(right, left));
+    selected.forEach((candidate) => {
+      if (acceptedEquivalence(candidate, 'propagation', unionFind, diagnostics, accepted, correspondenceStrength))
+        changed = true;
     });
   }
-  runGraphAlignment(candidates, evidenceByKey, unionFind, diagnostics,
-    accepted, correspondenceStrength);
-  runPathAlignment(candidates, evidenceByKey, unionFind, diagnostics,
-    accepted, correspondenceStrength);
-  return {accepted, diagnostics, correspondenceStrength};
+  runGraphAlignment(candidates, evidenceByKey, unionFind, diagnostics, accepted, correspondenceStrength);
+  runPathAlignment(candidates, evidenceByKey, unionFind, diagnostics, accepted, correspondenceStrength);
+  return { accepted, diagnostics, correspondenceStrength };
 }
 
 class ComponentUnionFind {
   constructor(ids) {
-    this.parent = new Map(ids.map(id => [id, id]));
+    this.parent = new Map(ids.map((id) => [id, id]));
   }
 
   find(id) {
@@ -1386,67 +1373,75 @@ class ComponentUnionFind {
 }
 
 function weightedAverage(points) {
-  const valid = points.filter(item => item.point);
+  const valid = points.filter((item) => item.point);
   if (!valid.length) return null;
   const total = valid.reduce((sum, item) => sum + Math.max(EPSILON, item.weight), 0);
-  return valid.reduce((sum, item) => {
-    const weight = Math.max(EPSILON, item.weight) / total;
-    return [sum[0] + item.point[0] * weight,
-      sum[1] + item.point[1] * weight,
-      sum[2] + item.point[2] * weight];
-  }, [0, 0, 0]);
+  return valid.reduce(
+    (sum, item) => {
+      const weight = Math.max(EPSILON, item.weight) / total;
+      return [sum[0] + item.point[0] * weight, sum[1] + item.point[1] * weight, sum[2] + item.point[2] * weight];
+    },
+    [0, 0, 0],
+  );
 }
 
 function medoid(points) {
   if (!points.length) return null;
-  return points.map((point, index) => ({
-    point, index,
-    distance: points.reduce((sum, other) => sum + point.distanceTo(other), 0),
-  })).sort((left, right) => left.distance - right.distance
-    || left.index - right.index)[0].point.clone();
+  return points
+    .map((point, index) => ({
+      point,
+      index,
+      distance: points.reduce((sum, other) => sum + point.distanceTo(other), 0),
+    }))
+    .sort((left, right) => left.distance - right.distance || left.index - right.index)[0]
+    .point.clone();
 }
 
-function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
-    referenceRadius, {clusterOrder = null} = {}) {
+function buildModelJoints(unionFind, evidenceByKey, strengthByKey, referenceRadius, { clusterOrder = null } = {}) {
   const clusters = [...unionFind.clusters().values()]
-    .map(members => members.sort())
-    .sort((left, right) => clusterOrder
-      ? clusterOrder.get(left[0]) - clusterOrder.get(right[0])
-        || left[0].localeCompare(right[0])
-      : left[0].localeCompare(right[0]));
+    .map((members) => members.sort())
+    .sort((left, right) =>
+      clusterOrder
+        ? clusterOrder.get(left[0]) - clusterOrder.get(right[0]) || left[0].localeCompare(right[0])
+        : left[0].localeCompare(right[0]),
+    );
   const keyToJoint = new Map();
   const joints = clusters.map((memberKeys, jointId) => {
-    memberKeys.forEach(key => keyToJoint.set(key, jointId));
-    const members = memberKeys.map(key => evidenceByKey.get(key)).filter(Boolean);
+    memberKeys.forEach((key) => keyToJoint.set(key, jointId));
+    const members = memberKeys.map((key) => evidenceByKey.get(key)).filter(Boolean);
     const signature = JSON.stringify(memberKeys);
-    const center = weightedAverage(members.map(evidence => ({
-      point: evidenceVector(evidence, '_weightedCenterVector',
-        'weightedCenter')?.toArray(),
-      weight: Math.max(evidence.totalWeight, evidence.affectedVertexCount, 1),
-    }))) || [0, 0, 0];
-    const pivots = members.map(evidence =>
-      evidenceVector(evidence, '_jointPivotVector', 'jointPivot')
-        || (evidence.isRoot ? null : evidenceVector(evidence,
-          '_restAnchorVector', 'restAnchor')))
+    const center = weightedAverage(
+      members.map((evidence) => ({
+        point: evidenceVector(evidence, '_weightedCenterVector', 'weightedCenter')?.toArray(),
+        weight: Math.max(evidence.totalWeight, evidence.affectedVertexCount, 1),
+      })),
+    ) || [0, 0, 0];
+    const pivots = members
+      .map(
+        (evidence) =>
+          evidenceVector(evidence, '_jointPivotVector', 'jointPivot') ||
+          (evidence.isRoot ? null : evidenceVector(evidence, '_restAnchorVector', 'restAnchor')),
+      )
       .filter(Boolean);
     const pivotMedoid = medoid(pivots);
     const pivotTolerance = referenceRadius * CROSS_SOURCE_STRICT_DISTANCE;
-    const acceptedPivots = pivotMedoid
-      ? pivots.filter(pivot => pivot.distanceTo(pivotMedoid) <= pivotTolerance)
-      : [];
-    const restPivot = weightedAverage((acceptedPivots.length
-      ? acceptedPivots : pivots).map(point => ({point: point.toArray(), weight: 1})));
-    const representative = [...members].sort((left, right) =>
-      (strengthByKey.get(right.sourceBoneKey) || 0)
-        - (strengthByKey.get(left.sourceBoneKey) || 0)
-      || right.affectedVertexCount - left.affectedVertexCount
-      || right.totalWeight - left.totalWeight
-      || left.sourceBoneKey.localeCompare(right.sourceBoneKey))[0] || null;
+    const acceptedPivots = pivotMedoid ? pivots.filter((pivot) => pivot.distanceTo(pivotMedoid) <= pivotTolerance) : [];
+    const restPivot = weightedAverage(
+      (acceptedPivots.length ? acceptedPivots : pivots).map((point) => ({ point: point.toArray(), weight: 1 })),
+    );
+    const representative =
+      [...members].sort(
+        (left, right) =>
+          (strengthByKey.get(right.sourceBoneKey) || 0) - (strengthByKey.get(left.sourceBoneKey) || 0) ||
+          right.affectedVertexCount - left.affectedVertexCount ||
+          right.totalWeight - left.totalWeight ||
+          left.sourceBoneKey.localeCompare(right.sourceBoneKey),
+      )[0] || null;
     return {
       jointId,
       jointKey: `joint=${jointId}`,
       signature,
-      members: members.map(evidence => ({
+      members: members.map((evidence) => ({
         sourceKey: evidence.sourceKey,
         boneId: evidence.boneId,
         sourceBoneKey: evidence.sourceBoneKey,
@@ -1457,20 +1452,21 @@ function buildModelJoints(unionFind, evidenceByKey, strengthByKey,
       restFrame: representative?.restFrame || [0, 0, 0, 1],
       parentId: null,
       childrenIds: [],
-      representativeMember: representative ? {
-        sourceKey: representative.sourceKey,
-        boneId: representative.boneId,
-        sourceBoneKey: representative.sourceBoneKey,
-      } : null,
+      representativeMember: representative
+        ? {
+            sourceKey: representative.sourceKey,
+            boneId: representative.boneId,
+            sourceBoneKey: representative.sourceBoneKey,
+          }
+        : null,
       evidence: {
         totalWeight: members.reduce((sum, item) => sum + item.totalWeight, 0),
-        affectedVertexCount: members.reduce(
-          (sum, item) => sum + item.affectedVertexCount, 0),
+        affectedVertexCount: members.reduce((sum, item) => sum + item.affectedVertexCount, 0),
         memberCount: members.length,
       },
     };
   });
-  return {joints, keyToJoint};
+  return { joints, keyToJoint };
 }
 
 function sourceModelEdges(sourceRigs, keyToJoint) {
@@ -1486,37 +1482,35 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
         const childKey = sourceBoneKey(rig.sourceKey, childBoneId);
         const jointA = keyToJoint.get(parentKey);
         const jointB = keyToJoint.get(childKey);
-        if (!Number.isInteger(jointA) || !Number.isInteger(jointB)
-            || jointA === jointB) continue;
+        if (!Number.isInteger(jointA) || !Number.isInteger(jointB) || jointA === jointB) continue;
         const left = Math.min(jointA, jointB);
         const right = Math.max(jointA, jointB);
         const key = `${left}:${right}`;
         const edge = edgeMap.get(key) || {
-          jointA: left, jointB: right, sourceSupportCount: 0,
-          sourceEdges: [], combinedTreeScore: 0,
+          jointA: left,
+          jointB: right,
+          sourceSupportCount: 0,
+          sourceEdges: [],
+          combinedTreeScore: 0,
           relationshipType: 'source',
         };
-        const sourceEdge = (component.edges || []).find(candidate => {
+        const sourceEdge = (component.edges || []).find((candidate) => {
           const a = Number(candidate.boneA);
           const b = Number(candidate.boneB);
-          return (a === parentBoneId && b === childBoneId)
-            || (a === childBoneId && b === parentBoneId);
+          return (a === parentBoneId && b === childBoneId) || (a === childBoneId && b === parentBoneId);
         });
-        const sourceRelationship = (rig.influenceGraph?.relationships || [])
-          .find(candidate => {
-            const a = Number(candidate.boneA);
-            const b = Number(candidate.boneB);
-            return (a === parentBoneId && b === childBoneId)
-              || (a === childBoneId && b === parentBoneId);
-          });
+        const sourceRelationship = (rig.influenceGraph?.relationships || []).find((candidate) => {
+          const a = Number(candidate.boneA);
+          const b = Number(candidate.boneB);
+          return (a === parentBoneId && b === childBoneId) || (a === childBoneId && b === parentBoneId);
+        });
         const treeScore = edgeScore(sourceEdge);
         edge.sourceEdges.push({
           sourceKey: String(rig.sourceKey),
           parentBoneId,
           childBoneId,
           treeEdgeScore: treeScore,
-          jointCenter: sourceRelationship?.jointCenter
-            ? [...sourceRelationship.jointCenter] : null,
+          jointCenter: sourceRelationship?.jointCenter ? [...sourceRelationship.jointCenter] : null,
           jointWeightTotal: Number(sourceRelationship?.jointWeightTotal) || 0,
         });
         edge.combinedTreeScore += treeScore;
@@ -1524,21 +1518,25 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
       }
     }
   }
-  edgeMap.forEach(edge => {
-    edge.sourceSupportCount = new Set(edge.sourceEdges.map(item =>
-      item.sourceKey)).size;
+  edgeMap.forEach((edge) => {
+    edge.sourceSupportCount = new Set(edge.sourceEdges.map((item) => item.sourceKey)).size;
     edge.weight = edge.sourceSupportCount * 2 + edge.combinedTreeScore;
   });
   return [...edgeMap.values()];
 }
 
 function maximumSpanningForest(joints, edges) {
-  const unionFind = new ComponentUnionFind(joints.map(joint => joint.jointId));
-  return [...edges].sort((left, right) => right.weight - left.weight
-    || right.sourceSupportCount - left.sourceSupportCount
-    || right.combinedTreeScore - left.combinedTreeScore
-    || left.jointA - right.jointA || left.jointB - right.jointB)
-    .filter(edge => unionFind.union(edge.jointA, edge.jointB));
+  const unionFind = new ComponentUnionFind(joints.map((joint) => joint.jointId));
+  return [...edges]
+    .sort(
+      (left, right) =>
+        right.weight - left.weight ||
+        right.sourceSupportCount - left.sourceSupportCount ||
+        right.combinedTreeScore - left.combinedTreeScore ||
+        left.jointA - right.jointA ||
+        left.jointB - right.jointB,
+    )
+    .filter((edge) => unionFind.union(edge.jointA, edge.jointB));
 }
 
 function rootVotes(sourceRigs, keyToJoint) {
@@ -1548,24 +1546,22 @@ function rootVotes(sourceRigs, keyToJoint) {
       const root = Number(component.rootId);
       const jointId = keyToJoint.get(sourceBoneKey(rig.sourceKey, root));
       if (!Number.isInteger(jointId)) continue;
-      votes.set(jointId, (votes.get(jointId) || 0)
-        + Math.max(1, component.nodeIds?.length || 1));
+      votes.set(jointId, (votes.get(jointId) || 0) + Math.max(1, component.nodeIds?.length || 1));
     }
   }
   return votes;
 }
 
 function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
-  const adjacency = new Map(joints.map(joint => [joint.jointId, []]));
-  edges.forEach(edge => {
-    adjacency.get(edge.jointA)?.push({edge, other: edge.jointB});
-    adjacency.get(edge.jointB)?.push({edge, other: edge.jointA});
+  const adjacency = new Map(joints.map((joint) => [joint.jointId, []]));
+  edges.forEach((edge) => {
+    adjacency.get(edge.jointA)?.push({ edge, other: edge.jointB });
+    adjacency.get(edge.jointB)?.push({ edge, other: edge.jointA });
   });
-  adjacency.forEach(items => items.sort((left, right) =>
-    left.other - right.other));
+  adjacency.forEach((items) => items.sort((left, right) => left.other - right.other));
   const componentById = new Map();
   const components = [];
-  const unseen = new Set(joints.map(joint => joint.jointId));
+  const unseen = new Set(joints.map((joint) => joint.jointId));
   while (unseen.size) {
     const start = Math.min(...unseen);
     const members = [];
@@ -1574,7 +1570,7 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
     while (queue.length) {
       const current = queue.shift();
       members.push(current);
-      (adjacency.get(current) || []).forEach(item => {
+      (adjacency.get(current) || []).forEach((item) => {
         if (!unseen.has(item.other)) return;
         unseen.delete(item.other);
         queue.push(item.other);
@@ -1582,21 +1578,20 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
     }
     members.sort((left, right) => left - right);
     const override = Number(rootOverrides.get(components.length));
-    const rootId = members.includes(override) ? override : [...members].sort((left, right) =>
-      (votes.get(right) || 0) - (votes.get(left) || 0)
-      || right - left)[0];
-    const parentById = {[rootId]: null};
-    const childrenById = {[rootId]: []};
-    const depthById = {[rootId]: 0};
-    const edgeByPair = new Map(edges.map(edge => [
-      `${Math.min(edge.jointA, edge.jointB)}:${Math.max(edge.jointA, edge.jointB)}`,
-      edge,
-    ]));
+    const rootId = members.includes(override)
+      ? override
+      : [...members].sort((left, right) => (votes.get(right) || 0) - (votes.get(left) || 0) || right - left)[0];
+    const parentById = { [rootId]: null };
+    const childrenById = { [rootId]: [] };
+    const depthById = { [rootId]: 0 };
+    const edgeByPair = new Map(
+      edges.map((edge) => [`${Math.min(edge.jointA, edge.jointB)}:${Math.max(edge.jointA, edge.jointB)}`, edge]),
+    );
     const walk = [rootId];
     const visited = new Set([rootId]);
     while (walk.length) {
       const parent = walk.shift();
-      (adjacency.get(parent) || []).forEach(item => {
+      (adjacency.get(parent) || []).forEach((item) => {
         if (visited.has(item.other)) return;
         visited.add(item.other);
         parentById[item.other] = parent;
@@ -1608,44 +1603,49 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
       });
     }
     const componentId = components.length;
-    members.forEach(jointId => componentById.set(jointId, componentId));
+    members.forEach((jointId) => componentById.set(jointId, componentId));
     components.push({
-      componentId, nodeIds: members, rootId, parentById, childrenById,
-      depthById, maxDepth: Math.max(...Object.values(depthById)),
-      edges: members.flatMap(jointId => (adjacency.get(jointId) || [])
-        .filter(item => jointId < item.other)
-        .map(item => edgeByPair.get(`${jointId}:${item.other}`)))
+      componentId,
+      nodeIds: members,
+      rootId,
+      parentById,
+      childrenById,
+      depthById,
+      maxDepth: Math.max(...Object.values(depthById)),
+      edges: members
+        .flatMap((jointId) =>
+          (adjacency.get(jointId) || [])
+            .filter((item) => jointId < item.other)
+            .map((item) => edgeByPair.get(`${jointId}:${item.other}`)),
+        )
         .filter(Boolean),
     });
   }
-  joints.forEach(joint => {
+  joints.forEach((joint) => {
     const componentId = componentById.get(joint.jointId);
     const component = components[componentId];
     joint.parentId = component?.parentById?.[joint.jointId] ?? null;
     joint.childrenIds = [...(component?.childrenById?.[joint.jointId] || [])];
   });
-  return {components, componentByJointId: componentById};
+  return { components, componentByJointId: componentById };
 }
 
 function cloneForestComponent(component) {
   return {
     ...component,
     nodeIds: [...(component?.nodeIds || [])],
-    parentById: {...(component?.parentById || {})},
-    childrenById: Object.fromEntries(Object.entries(
-      component?.childrenById || {}).map(([id, children]) => [
-      id, [...children],
-    ])),
-    depthById: {...(component?.depthById || {})},
-    edges: (component?.edges || []).map(edge => ({...edge})),
+    parentById: { ...(component?.parentById || {}) },
+    childrenById: Object.fromEntries(
+      Object.entries(component?.childrenById || {}).map(([id, children]) => [id, [...children]]),
+    ),
+    depthById: { ...(component?.depthById || {}) },
+    edges: (component?.edges || []).map((edge) => ({ ...edge })),
   };
 }
 
 function componentAdjacency(component) {
-  const adjacency = new Map((component?.nodeIds || []).map(id => [
-    Number(id), [],
-  ]));
-  (component?.edges || []).forEach(edge => {
+  const adjacency = new Map((component?.nodeIds || []).map((id) => [Number(id), []]));
+  (component?.edges || []).forEach((edge) => {
     const left = Number(edge.jointA ?? edge.boneA);
     const right = Number(edge.jointB ?? edge.boneB);
     if (!adjacency.has(left) || !adjacency.has(right) || left === right) {
@@ -1663,27 +1663,28 @@ function componentAdjacency(component) {
       adjacency.get(parent).push(id);
     }
   });
-  adjacency.forEach(neighbors => {
+  adjacency.forEach((neighbors) => {
     neighbors.sort((left, right) => left - right);
   });
   return adjacency;
 }
 
 function orientComponentFromRoot(component, rootId) {
-  const nodeIds = (component?.nodeIds || []).map(Number)
-    .filter(Number.isFinite).sort((left, right) => left - right);
-  const root = nodeIds.includes(Number(rootId))
-    ? Number(rootId) : Number(component?.rootId);
-  const parentById = Object.fromEntries(nodeIds.map(id => [id, null]));
-  const childrenById = Object.fromEntries(nodeIds.map(id => [id, []]));
-  const depthById = Object.fromEntries(nodeIds.map(id => [id, null]));
+  const nodeIds = (component?.nodeIds || [])
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const root = nodeIds.includes(Number(rootId)) ? Number(rootId) : Number(component?.rootId);
+  const parentById = Object.fromEntries(nodeIds.map((id) => [id, null]));
+  const childrenById = Object.fromEntries(nodeIds.map((id) => [id, []]));
+  const depthById = Object.fromEntries(nodeIds.map((id) => [id, null]));
   const adjacency = componentAdjacency(component);
   const queue = Number.isFinite(root) ? [root] : [];
   const visited = new Set(queue);
   if (Number.isFinite(root)) depthById[root] = 0;
   while (queue.length) {
     const parent = queue.shift();
-    (adjacency.get(parent) || []).forEach(child => {
+    (adjacency.get(parent) || []).forEach((child) => {
       if (visited.has(child)) return;
       visited.add(child);
       parentById[child] = parent;
@@ -1699,81 +1700,88 @@ function orientComponentFromRoot(component, rootId) {
     parentById,
     childrenById,
     depthById,
-    maxDepth: Math.max(0, ...Object.values(depthById)
-      .filter(depth => depth !== null).map(Number)),
+    maxDepth: Math.max(
+      0,
+      ...Object.values(depthById)
+        .filter((depth) => depth !== null)
+        .map(Number),
+    ),
   };
 }
 
 function componentStableKey(component, joints) {
-  const memberKeys = (component?.nodeIds || []).flatMap(jointId =>
-    (joints[Number(jointId)]?.members || []).map(member =>
-      String(member.sourceBoneKey)));
-  return (memberKeys.length ? memberKeys : component?.nodeIds || [])
-    .map(String).sort().join('|');
+  const memberKeys = (component?.nodeIds || []).flatMap((jointId) =>
+    (joints[Number(jointId)]?.members || []).map((member) => String(member.sourceBoneKey)),
+  );
+  return (memberKeys.length ? memberKeys : component?.nodeIds || []).map(String).sort().join('|');
 }
 
-function compareAttachmentHosts(left, right, joints, votes,
-    incomingCount, outgoingCount) {
-  return componentSupport(right, joints) - componentSupport(left, joints)
-    || (incomingCount.get(left.componentId) || 0)
-      - (incomingCount.get(right.componentId) || 0)
-    || (outgoingCount.get(right.componentId) || 0)
-      - (outgoingCount.get(left.componentId) || 0)
-    || (votes.get(Number(right.rootId)) || 0)
-      - (votes.get(Number(left.rootId)) || 0)
-    || componentStableKey(left, joints).localeCompare(
-      componentStableKey(right, joints))
-    || left.componentId - right.componentId;
+function compareAttachmentHosts(left, right, joints, votes, incomingCount, outgoingCount) {
+  return (
+    componentSupport(right, joints) - componentSupport(left, joints) ||
+    (incomingCount.get(left.componentId) || 0) - (incomingCount.get(right.componentId) || 0) ||
+    (outgoingCount.get(right.componentId) || 0) - (outgoingCount.get(left.componentId) || 0) ||
+    (votes.get(Number(right.rootId)) || 0) - (votes.get(Number(left.rootId)) || 0) ||
+    componentStableKey(left, joints).localeCompare(componentStableKey(right, joints)) ||
+    left.componentId - right.componentId
+  );
 }
 
 function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
   const sourceComponents = sourceForest?.components || [];
-  const componentById = new Map(sourceComponents.map(component => [
-    Number(component.componentId), component,
-  ]));
-  const componentForJoint = jointId => sourceForest?.componentByJointId
-    instanceof Map
-    ? sourceForest.componentByJointId.get(Number(jointId))
-    : sourceForest?.componentByJointId?.[Number(jointId)];
-  const attachments = (edges || []).filter(edge =>
-    edge.relationshipType === 'attachment').map(edge => {
-    const targetComponentId = Number(edge.targetComponentId
-      ?? componentForJoint(edge.jointA));
-    const accessoryComponentId = Number(edge.accessoryComponentId
-      ?? componentForJoint(edge.jointB));
-    return {
-      edge,
-      targetComponentId,
-      accessoryComponentId,
-      targetJointId: Number(edge.targetJointId ?? edge.jointA),
-      accessoryJointId: Number(edge.accessoryJointId ?? edge.jointB),
-    };
-  }).filter(item => componentById.has(item.targetComponentId)
-    && componentById.has(item.accessoryComponentId)
-    && item.targetComponentId !== item.accessoryComponentId);
+  const componentById = new Map(sourceComponents.map((component) => [Number(component.componentId), component]));
+  const componentForJoint = (jointId) =>
+    sourceForest?.componentByJointId instanceof Map
+      ? sourceForest.componentByJointId.get(Number(jointId))
+      : sourceForest?.componentByJointId?.[Number(jointId)];
+  const attachments = (edges || [])
+    .filter((edge) => edge.relationshipType === 'attachment')
+    .map((edge) => {
+      const targetComponentId = Number(edge.targetComponentId ?? componentForJoint(edge.jointA));
+      const accessoryComponentId = Number(edge.accessoryComponentId ?? componentForJoint(edge.jointB));
+      return {
+        edge,
+        targetComponentId,
+        accessoryComponentId,
+        targetJointId: Number(edge.targetJointId ?? edge.jointA),
+        accessoryJointId: Number(edge.accessoryJointId ?? edge.jointB),
+      };
+    })
+    .filter(
+      (item) =>
+        componentById.has(item.targetComponentId) &&
+        componentById.has(item.accessoryComponentId) &&
+        item.targetComponentId !== item.accessoryComponentId,
+    );
 
-  const adjacency = new Map([...componentById.keys()].map(id => [id, []]));
-  const outgoing = new Map([...componentById.keys()].map(id => [id, []]));
-  const incomingCount = new Map([...componentById.keys()].map(id => [id, 0]));
-  const outgoingCount = new Map([...componentById.keys()].map(id => [id, 0]));
-  attachments.forEach(item => {
+  const adjacency = new Map([...componentById.keys()].map((id) => [id, []]));
+  const outgoing = new Map([...componentById.keys()].map((id) => [id, []]));
+  const incomingCount = new Map([...componentById.keys()].map((id) => [id, 0]));
+  const outgoingCount = new Map([...componentById.keys()].map((id) => [id, 0]));
+  attachments.forEach((item) => {
     adjacency.get(item.targetComponentId).push(item);
     adjacency.get(item.accessoryComponentId).push(item);
     outgoing.get(item.targetComponentId).push(item);
-    incomingCount.set(item.accessoryComponentId,
-      (incomingCount.get(item.accessoryComponentId) || 0) + 1);
-    outgoingCount.set(item.targetComponentId,
-      (outgoingCount.get(item.targetComponentId) || 0) + 1);
+    incomingCount.set(item.accessoryComponentId, (incomingCount.get(item.accessoryComponentId) || 0) + 1);
+    outgoingCount.set(item.targetComponentId, (outgoingCount.get(item.targetComponentId) || 0) + 1);
   });
-  adjacency.forEach(items => items.sort((left, right) =>
-    left.targetComponentId - right.targetComponentId
-      || left.accessoryComponentId - right.accessoryComponentId
-      || left.targetJointId - right.targetJointId
-      || left.accessoryJointId - right.accessoryJointId));
-  outgoing.forEach(items => items.sort((left, right) =>
-    left.accessoryComponentId - right.accessoryComponentId
-      || left.targetJointId - right.targetJointId
-      || left.accessoryJointId - right.accessoryJointId));
+  adjacency.forEach((items) =>
+    items.sort(
+      (left, right) =>
+        left.targetComponentId - right.targetComponentId ||
+        left.accessoryComponentId - right.accessoryComponentId ||
+        left.targetJointId - right.targetJointId ||
+        left.accessoryJointId - right.accessoryJointId,
+    ),
+  );
+  outgoing.forEach((items) =>
+    items.sort(
+      (left, right) =>
+        left.accessoryComponentId - right.accessoryComponentId ||
+        left.targetJointId - right.targetJointId ||
+        left.accessoryJointId - right.accessoryJointId,
+    ),
+  );
 
   const unseen = new Set(componentById.keys());
   const orientedGroups = [];
@@ -1785,24 +1793,27 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
     while (queue.length) {
       const current = queue.shift();
       groupIds.push(current);
-      (adjacency.get(current) || []).forEach(item => {
-        const other = item.targetComponentId === current
-          ? item.accessoryComponentId : item.targetComponentId;
+      (adjacency.get(current) || []).forEach((item) => {
+        const other = item.targetComponentId === current ? item.accessoryComponentId : item.targetComponentId;
         if (!unseen.has(other)) return;
         unseen.delete(other);
         queue.push(other);
       });
     }
     const groupSet = new Set(groupIds);
-    const groupRoots = groupIds.filter(id => (incomingCount.get(id) || 0) === 0)
-      .map(id => componentById.get(id))
+    const groupRoots = groupIds
+      .filter((id) => (incomingCount.get(id) || 0) === 0)
+      .map((id) => componentById.get(id))
       .filter(Boolean)
-      .sort((left, right) => compareAttachmentHosts(
-        left, right, joints, votes, incomingCount, outgoingCount));
-    const host = (groupRoots.length ? groupRoots
-      : groupIds.map(id => componentById.get(id)).filter(Boolean)
-        .sort((left, right) => compareAttachmentHosts(
-          left, right, joints, votes, incomingCount, outgoingCount)))[0];
+      .sort((left, right) => compareAttachmentHosts(left, right, joints, votes, incomingCount, outgoingCount));
+    const host = (
+      groupRoots.length
+        ? groupRoots
+        : groupIds
+            .map((id) => componentById.get(id))
+            .filter(Boolean)
+            .sort((left, right) => compareAttachmentHosts(left, right, joints, votes, incomingCount, outgoingCount))
+    )[0];
     const oriented = new Map();
     const attachmentLinks = [];
     if (host) {
@@ -1810,12 +1821,10 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
       const pending = [host.componentId];
       while (pending.length) {
         const parentComponentId = pending.shift();
-        (outgoing.get(parentComponentId) || []).forEach(item => {
-          if (!groupSet.has(item.accessoryComponentId)
-              || oriented.has(item.accessoryComponentId)) return;
+        (outgoing.get(parentComponentId) || []).forEach((item) => {
+          if (!groupSet.has(item.accessoryComponentId) || oriented.has(item.accessoryComponentId)) return;
           const accessory = componentById.get(item.accessoryComponentId);
-          oriented.set(item.accessoryComponentId,
-            orientComponentFromRoot(accessory, item.accessoryJointId));
+          oriented.set(item.accessoryComponentId, orientComponentFromRoot(accessory, item.accessoryJointId));
           attachmentLinks.push({
             ...item,
             parentComponentId,
@@ -1828,53 +1837,51 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
     // The accepted attachment graph is a forest, so every component should be
     // reachable from its stable host. Keep a source orientation for any
     // malformed diagnostic fixture rather than dropping its geometry.
-    groupIds.forEach(componentId => {
+    groupIds.forEach((componentId) => {
       if (oriented.has(componentId)) return;
       const component = componentById.get(componentId);
       if (component) oriented.set(componentId, cloneForestComponent(component));
     });
 
-    const nodeIds = groupIds.flatMap(componentId =>
-      oriented.get(componentId)?.nodeIds || []).sort((left, right) => left - right);
+    const nodeIds = groupIds
+      .flatMap((componentId) => oriented.get(componentId)?.nodeIds || [])
+      .sort((left, right) => left - right);
     const nodeSet = new Set(nodeIds);
     const parentById = {};
     const childrenById = {};
-    groupIds.forEach(componentId => {
+    groupIds.forEach((componentId) => {
       const component = oriented.get(componentId);
-      (component?.nodeIds || []).forEach(jointId => {
+      (component?.nodeIds || []).forEach((jointId) => {
         parentById[jointId] = component.parentById?.[jointId] ?? null;
         childrenById[jointId] = [...(component.childrenById?.[jointId] || [])];
       });
     });
-    attachmentLinks.forEach(item => {
+    attachmentLinks.forEach((item) => {
       const component = oriented.get(item.childComponentId);
       const accessoryRoot = component?.rootId;
-      if (!Number.isFinite(accessoryRoot)
-          || !nodeSet.has(item.targetJointId)
-          || !nodeSet.has(accessoryRoot)) return;
+      if (!Number.isFinite(accessoryRoot) || !nodeSet.has(item.targetJointId) || !nodeSet.has(accessoryRoot)) return;
       parentById[accessoryRoot] = item.targetJointId;
       childrenById[item.targetJointId] ||= [];
       childrenById[item.targetJointId].push(accessoryRoot);
     });
-    Object.values(childrenById).forEach(children =>
-      children.sort((left, right) => Number(left) - Number(right)));
-    const rootId = oriented.get(host?.componentId)?.rootId
-      ?? nodeIds[0] ?? null;
-    const depthById = Object.fromEntries(nodeIds.map(id => [id, null]));
+    Object.values(childrenById).forEach((children) => children.sort((left, right) => Number(left) - Number(right)));
+    const rootId = oriented.get(host?.componentId)?.rootId ?? nodeIds[0] ?? null;
+    const depthById = Object.fromEntries(nodeIds.map((id) => [id, null]));
     if (Number.isFinite(rootId) && Object.hasOwn(depthById, rootId)) {
       depthById[rootId] = 0;
       const pending = [rootId];
       while (pending.length) {
         const parent = pending.shift();
-        (childrenById[parent] || []).forEach(child => {
+        (childrenById[parent] || []).forEach((child) => {
           if (depthById[child] !== null) return;
           depthById[child] = depthById[parent] + 1;
           pending.push(child);
         });
       }
     }
-    const groupEdges = (edges || []).filter(edge =>
-      nodeSet.has(Number(edge.jointA)) && nodeSet.has(Number(edge.jointB)));
+    const groupEdges = (edges || []).filter(
+      (edge) => nodeSet.has(Number(edge.jointA)) && nodeSet.has(Number(edge.jointB)),
+    );
     orientedGroups.push({
       componentId: Math.min(...nodeIds),
       nodeIds,
@@ -1882,38 +1889,45 @@ function orientModelForestWithAttachments(joints, sourceForest, edges, votes) {
       parentById,
       childrenById,
       depthById,
-      maxDepth: Math.max(0, ...Object.values(depthById)
-        .filter(depth => depth !== null).map(Number)),
+      maxDepth: Math.max(
+        0,
+        ...Object.values(depthById)
+          .filter((depth) => depth !== null)
+          .map(Number),
+      ),
       edges: groupEdges,
     });
   }
   orientedGroups.sort((left, right) => left.componentId - right.componentId);
   const components = orientedGroups.map((component, componentId) => ({
-    ...component, componentId,
+    ...component,
+    componentId,
   }));
   const componentByJointId = new Map();
-  components.forEach(component => component.nodeIds.forEach(jointId =>
-    componentByJointId.set(jointId, component.componentId)));
-  joints.forEach(joint => {
+  components.forEach((component) =>
+    component.nodeIds.forEach((jointId) => componentByJointId.set(jointId, component.componentId)),
+  );
+  joints.forEach((joint) => {
     const componentId = componentByJointId.get(joint.jointId);
     const component = components[componentId];
     joint.parentId = component?.parentById?.[joint.jointId] ?? null;
     joint.childrenIds = [...(component?.childrenById?.[joint.jointId] || [])];
   });
-  return {components, componentByJointId};
+  return { components, componentByJointId };
 }
 
 export function orientModelRigForest(joints, edges, rootOverrides = {}) {
-  const overrides = rootOverrides instanceof Map
-    ? rootOverrides
-    : new Map(Object.entries(rootOverrides || {}).map(([componentId, jointId]) => [
-      Number(componentId), Number(jointId)]));
+  const overrides =
+    rootOverrides instanceof Map
+      ? rootOverrides
+      : new Map(
+          Object.entries(rootOverrides || {}).map(([componentId, jointId]) => [Number(componentId), Number(jointId)]),
+        );
   return orientModelForest(joints || [], edges || [], new Map(), overrides);
 }
 
 function componentSupport(component, joints) {
-  return component.nodeIds.reduce((sum, id) =>
-    sum + number(joints[id]?.evidence?.totalWeight, 0), 0);
+  return component.nodeIds.reduce((sum, id) => sum + number(joints[id]?.evidence?.totalWeight, 0), 0);
 }
 
 function jointPairKey(leftId, rightId) {
@@ -1922,11 +1936,10 @@ function jointPairKey(leftId, rightId) {
 
 function aggregateJointCrossEvidence(left, right, crossEvidenceByPair) {
   const records = [];
-  (left?.members || []).forEach(leftMember => {
-    (right?.members || []).forEach(rightMember => {
+  (left?.members || []).forEach((leftMember) => {
+    (right?.members || []).forEach((rightMember) => {
       if (leftMember.sourceKey === rightMember.sourceKey) return;
-      const record = crossEvidenceByPair.get(crossPairKey(
-        leftMember.sourceBoneKey, rightMember.sourceBoneKey));
+      const record = crossEvidenceByPair.get(crossPairKey(leftMember.sourceBoneKey, rightMember.sourceBoneKey));
       if (record) records.push(record);
     });
   });
@@ -1938,76 +1951,75 @@ function aggregateJointCrossEvidence(left, right, crossEvidenceByPair) {
       supportedPairCount: 0,
     };
   }
-  const totalWeight = records.reduce((sum, record) => sum
-    + Math.max(EPSILON, record.weightedMatchStrength), 0);
+  const totalWeight = records.reduce((sum, record) => sum + Math.max(EPSILON, record.weightedMatchStrength), 0);
   return {
-    matchedVertexCount: records.reduce((sum, record) =>
-      sum + record.matchedVertexCount, 0),
-    weightedMatchStrength: records.reduce((sum, record) =>
-      sum + record.weightedMatchStrength, 0),
-    crossQuality: records.reduce((sum, record) => sum
-      + record.overlapScore * Math.max(EPSILON, record.weightedMatchStrength), 0)
-      / totalWeight,
-    supportedPairCount: records.filter(record =>
-      record.matchedVertexCount > 0).length,
+    matchedVertexCount: records.reduce((sum, record) => sum + record.matchedVertexCount, 0),
+    weightedMatchStrength: records.reduce((sum, record) => sum + record.weightedMatchStrength, 0),
+    crossQuality:
+      records.reduce((sum, record) => sum + record.overlapScore * Math.max(EPSILON, record.weightedMatchStrength), 0) /
+      totalWeight,
+    supportedPairCount: records.filter((record) => record.matchedVertexCount > 0).length,
   };
 }
 
-function aggregateComponentCrossEvidence(component, target, joints,
-    crossEvidenceByPair, referenceRadius, jointEvidenceByPair = null) {
+function aggregateComponentCrossEvidence(
+  component,
+  target,
+  joints,
+  crossEvidenceByPair,
+  referenceRadius,
+  jointEvidenceByPair = null,
+) {
   const jointEvidence = [];
-  component.nodeIds.forEach(accessoryId => {
-    target.nodeIds.forEach(targetId => {
+  component.nodeIds.forEach((accessoryId) => {
+    target.nodeIds.forEach((targetId) => {
       const key = jointPairKey(accessoryId, targetId);
-      const evidence = jointEvidenceByPair?.get(key)
-        || aggregateJointCrossEvidence(joints[accessoryId],
-          joints[targetId], crossEvidenceByPair);
+      const evidence =
+        jointEvidenceByPair?.get(key) ||
+        aggregateJointCrossEvidence(joints[accessoryId], joints[targetId], crossEvidenceByPair);
       jointEvidenceByPair?.set(key, evidence);
       const accessoryCenter = vectorFrom(joints[accessoryId]?.restCenter);
       const targetCenter = vectorFrom(joints[targetId]?.restCenter);
-      const distance = accessoryCenter && targetCenter
-        ? accessoryCenter.distanceTo(targetCenter) / referenceRadius : Infinity;
+      const distance =
+        accessoryCenter && targetCenter ? accessoryCenter.distanceTo(targetCenter) / referenceRadius : Infinity;
       if (evidence.matchedVertexCount > 0 || Number.isFinite(distance)) {
-        jointEvidence.push({accessoryId, targetId, distance, evidence});
+        jointEvidence.push({ accessoryId, targetId, distance, evidence });
       }
     });
   });
-  const supported = jointEvidence.filter(item =>
-    item.evidence.matchedVertexCount > 0);
+  const supported = jointEvidence.filter((item) => item.evidence.matchedVertexCount > 0);
   const supportedTargetCountByAccessory = new Map();
-  supported.forEach(item => supportedTargetCountByAccessory.set(item.accessoryId,
-    (supportedTargetCountByAccessory.get(item.accessoryId) || 0) + 1));
-  const totalWeight = supported.reduce((sum, item) => sum
-    + Math.max(EPSILON, item.evidence.weightedMatchStrength), 0);
+  supported.forEach((item) =>
+    supportedTargetCountByAccessory.set(
+      item.accessoryId,
+      (supportedTargetCountByAccessory.get(item.accessoryId) || 0) + 1,
+    ),
+  );
+  const totalWeight = supported.reduce((sum, item) => sum + Math.max(EPSILON, item.evidence.weightedMatchStrength), 0);
   return {
-    matchedVertexCount: supported.reduce((sum, item) =>
-      sum + item.evidence.matchedVertexCount, 0),
-    weightedMatchStrength: supported.reduce((sum, item) =>
-      sum + item.evidence.weightedMatchStrength, 0),
-    crossQuality: totalWeight > EPSILON
-      ? supported.reduce((sum, item) => sum
-        + item.evidence.crossQuality
-        * Math.max(EPSILON, item.evidence.weightedMatchStrength), 0)
-        / totalWeight : 0,
+    matchedVertexCount: supported.reduce((sum, item) => sum + item.evidence.matchedVertexCount, 0),
+    weightedMatchStrength: supported.reduce((sum, item) => sum + item.evidence.weightedMatchStrength, 0),
+    crossQuality:
+      totalWeight > EPSILON
+        ? supported.reduce(
+            (sum, item) => sum + item.evidence.crossQuality * Math.max(EPSILON, item.evidence.weightedMatchStrength),
+            0,
+          ) / totalWeight
+        : 0,
     supportedJointPairCount: supported.length,
-    nearestSupportedDistance: supported.length
-      ? Math.min(...supported.map(item => item.distance)) : null,
+    nearestSupportedDistance: supported.length ? Math.min(...supported.map((item) => item.distance)) : null,
     supportedTargetCountByAccessory,
   };
 }
 
 function sourceKeysForJoint(joint) {
-  return [...new Set((joint?.members || []).map(member =>
-    String(member.sourceKey ?? '')).filter(Boolean))].sort();
+  return [...new Set((joint?.members || []).map((member) => String(member.sourceKey ?? '')).filter(Boolean))].sort();
 }
 
-function sourceWitnessesForJoints(targetJoint, accessoryJoint,
-    sourceKeysByJointId = null) {
+function sourceWitnessesForJoints(targetJoint, accessoryJoint, sourceKeysByJointId = null) {
   const witnesses = new Set();
-  const targetSourceKeys = sourceKeysByJointId?.get(targetJoint?.jointId)
-    || sourceKeysForJoint(targetJoint);
-  const accessorySourceKeys = sourceKeysByJointId?.get(
-    accessoryJoint?.jointId) || sourceKeysForJoint(accessoryJoint);
+  const targetSourceKeys = sourceKeysByJointId?.get(targetJoint?.jointId) || sourceKeysForJoint(targetJoint);
+  const accessorySourceKeys = sourceKeysByJointId?.get(accessoryJoint?.jointId) || sourceKeysForJoint(accessoryJoint);
   for (const targetSourceKey of targetSourceKeys) {
     for (const accessorySourceKey of accessorySourceKeys) {
       if (targetSourceKey === accessorySourceKey) {
@@ -2016,7 +2028,7 @@ function sourceWitnessesForJoints(targetJoint, accessoryJoint,
       witnesses.add(`${targetSourceKey}\u0000${accessorySourceKey}`);
     }
   }
-  return [...witnesses].sort().map(value => {
+  return [...witnesses].sort().map((value) => {
     const separator = value.indexOf('\u0000');
     return {
       targetSourceKey: value.slice(0, separator),
@@ -2025,58 +2037,69 @@ function sourceWitnessesForJoints(targetJoint, accessoryJoint,
   });
 }
 
-function attachmentCandidates(joints, forest, referenceRadius,
-    crossEvidenceByPair = new Map()) {
+function attachmentCandidates(joints, forest, referenceRadius, crossEvidenceByPair = new Map()) {
   const candidates = [];
   const components = forest.components;
   const componentEvidenceByPair = new Map();
   const jointEvidenceByPair = new Map();
-  const sourceKeysByJointId = new Map(joints.map(joint => [
-    joint.jointId, sourceKeysForJoint(joint),
-  ]));
+  const sourceKeysByJointId = new Map(joints.map((joint) => [joint.jointId, sourceKeysForJoint(joint)]));
   const sourceWitnessesByJointPair = new Map();
-  const supportByComponentId = new Map(components.map(component => [
-    component.componentId, componentSupport(component, joints),
-  ]));
-  const jointDescriptorById = new Map(joints.map(joint => [joint.jointId, {
-    anchor: vectorFrom(joint.restCenter),
-    direction: vectorFrom(joint.restDirection),
-  }]));
+  const supportByComponentId = new Map(
+    components.map((component) => [component.componentId, componentSupport(component, joints)]),
+  );
+  const jointDescriptorById = new Map(
+    joints.map((joint) => [
+      joint.jointId,
+      {
+        anchor: vectorFrom(joint.restCenter),
+        direction: vectorFrom(joint.restDirection),
+      },
+    ]),
+  );
   const componentEvidenceFor = (accessory, target) => {
     const key = `${accessory.componentId}:${target.componentId}`;
     if (!componentEvidenceByPair.has(key)) {
-      componentEvidenceByPair.set(key, aggregateComponentCrossEvidence(
-        accessory, target, joints, crossEvidenceByPair, referenceRadius,
-        jointEvidenceByPair));
+      componentEvidenceByPair.set(
+        key,
+        aggregateComponentCrossEvidence(
+          accessory,
+          target,
+          joints,
+          crossEvidenceByPair,
+          referenceRadius,
+          jointEvidenceByPair,
+        ),
+      );
     }
     return componentEvidenceByPair.get(key);
   };
-  const directions = new Map([...jointDescriptorById.entries()].map(([
-    jointId, descriptor]) => [jointId, descriptor.direction]));
+  const directions = new Map(
+    [...jointDescriptorById.entries()].map(([jointId, descriptor]) => [jointId, descriptor.direction]),
+  );
   // The model joint direction is represented by the selected source member's
   // rest frame +Y. Keeping this derivation here avoids inventing labels or
   // changing the source-local rest-frame contract.
-  joints.forEach(joint => {
+  joints.forEach((joint) => {
     if (directions.get(joint.jointId)) return;
     const frame = new Quaternion(...quaternionArray(joint.restFrame));
-    directions.set(joint.jointId, new Vector3(0, 1, 0)
-      .applyQuaternion(frame).normalize());
+    directions.set(joint.jointId, new Vector3(0, 1, 0).applyQuaternion(frame).normalize());
   });
   for (const accessory of components) {
-    const accessorySupport = supportByComponentId.get(accessory.componentId)
-      || 0;
+    const accessorySupport = supportByComponentId.get(accessory.componentId) || 0;
     for (const target of components) {
       if (target.componentId === accessory.componentId) continue;
       const targetSupport = supportByComponentId.get(target.componentId) || 0;
       // Attach smaller inferred components to a larger body. This also makes
       // the direction of an attachment deterministic when two disconnected
       // components have identical synthetic support in a test fixture.
-      if (targetSupport < accessorySupport
-          || targetSupport === accessorySupport
-            && target.nodeIds.length < accessory.nodeIds.length
-          || targetSupport === accessorySupport
-            && target.nodeIds.length === accessory.nodeIds.length
-            && target.componentId > accessory.componentId) continue;
+      if (
+        targetSupport < accessorySupport ||
+        (targetSupport === accessorySupport && target.nodeIds.length < accessory.nodeIds.length) ||
+        (targetSupport === accessorySupport &&
+          target.nodeIds.length === accessory.nodeIds.length &&
+          target.componentId > accessory.componentId)
+      )
+        continue;
       const componentEvidence = componentEvidenceFor(accessory, target);
       for (const targetId of target.nodeIds) {
         const targetJoint = joints[targetId];
@@ -2089,8 +2112,7 @@ function attachmentCandidates(joints, forest, referenceRadius,
           const witnessKey = jointPairKey(targetId, accessoryId);
           let sourceWitnesses = sourceWitnessesByJointPair.get(witnessKey);
           if (!sourceWitnesses) {
-            sourceWitnesses = sourceWitnessesForJoints(targetJoint,
-              accessoryJoint, sourceKeysByJointId);
+            sourceWitnesses = sourceWitnessesForJoints(targetJoint, accessoryJoint, sourceKeysByJointId);
             sourceWitnessesByJointPair.set(witnessKey, sourceWitnesses);
           }
           if (!sourceWitnesses.length) continue;
@@ -2103,38 +2125,38 @@ function attachmentCandidates(joints, forest, referenceRadius,
           const directionAlignment = accessoryDirection
             ? Math.abs(accessoryDirection.dot(towardAccessory.normalize()))
             : null;
-          const pairEvidence = jointEvidenceByPair.get(witnessKey)
-            || aggregateJointCrossEvidence(targetJoint, accessoryJoint,
-              crossEvidenceByPair);
+          const pairEvidence =
+            jointEvidenceByPair.get(witnessKey) ||
+            aggregateJointCrossEvidence(targetJoint, accessoryJoint, crossEvidenceByPair);
           jointEvidenceByPair.set(witnessKey, pairEvidence);
-          const nearbyTargetAgreement = Math.max(0,
-            (componentEvidence.supportedTargetCountByAccessory.get(accessoryId)
-              || 0) - (pairEvidence.matchedVertexCount > 0 ? 1 : 0));
+          const nearbyTargetAgreement = Math.max(
+            0,
+            (componentEvidence.supportedTargetCountByAccessory.get(accessoryId) || 0) -
+              (pairEvidence.matchedVertexCount > 0 ? 1 : 0),
+          );
           const targetChildren = targetJoint.childrenIds || [];
           const targetDirection = directions.get(targetId);
-          const targetTopology = targetChildren.length ? 1 : .5;
-          const supportScore = targetSupport / Math.max(
-            targetSupport, accessorySupport, EPSILON);
-          const distanceScore = clamp(1 - normalizedDistance
-            / CROSS_SOURCE_CANDIDATE_DISTANCE);
-          const componentSupportScore = clamp(
-            componentEvidence.matchedVertexCount / 32) * .35
-            + clamp(componentEvidence.weightedMatchStrength / 2) * .25
-            + componentEvidence.crossQuality * .2
-            + clamp(componentEvidence.supportedJointPairCount / 3) * .2;
-          const endpointEvidenceScore = clamp(pairEvidence.matchedVertexCount
-            / 8) * .35
-            + clamp(pairEvidence.weightedMatchStrength / .5) * .25
-            + pairEvidence.crossQuality * .2
-            + clamp(nearbyTargetAgreement / 3) * .2;
-          const endpointScore = distanceScore * .55
-            + (directionAlignment ?? .5) * .3
-            + supportScore * .1 + targetTopology * .05
-            + (accessory.rootId === accessoryId ? .15 : 0);
-          const endpointCombinedScore = endpointScore * .65
-            + endpointEvidenceScore * .35;
-          const score = componentSupportScore * .45
-            + endpointCombinedScore * .55;
+          const targetTopology = targetChildren.length ? 1 : 0.5;
+          const supportScore = targetSupport / Math.max(targetSupport, accessorySupport, EPSILON);
+          const distanceScore = clamp(1 - normalizedDistance / CROSS_SOURCE_CANDIDATE_DISTANCE);
+          const componentSupportScore =
+            clamp(componentEvidence.matchedVertexCount / 32) * 0.35 +
+            clamp(componentEvidence.weightedMatchStrength / 2) * 0.25 +
+            componentEvidence.crossQuality * 0.2 +
+            clamp(componentEvidence.supportedJointPairCount / 3) * 0.2;
+          const endpointEvidenceScore =
+            clamp(pairEvidence.matchedVertexCount / 8) * 0.35 +
+            clamp(pairEvidence.weightedMatchStrength / 0.5) * 0.25 +
+            pairEvidence.crossQuality * 0.2 +
+            clamp(nearbyTargetAgreement / 3) * 0.2;
+          const endpointScore =
+            distanceScore * 0.55 +
+            (directionAlignment ?? 0.5) * 0.3 +
+            supportScore * 0.1 +
+            targetTopology * 0.05 +
+            (accessory.rootId === accessoryId ? 0.15 : 0);
+          const endpointCombinedScore = endpointScore * 0.65 + endpointEvidenceScore * 0.35;
+          const score = componentSupportScore * 0.45 + endpointCombinedScore * 0.55;
           candidates.push({
             targetComponentId: target.componentId,
             accessoryComponentId: accessory.componentId,
@@ -2150,11 +2172,9 @@ function attachmentCandidates(joints, forest, referenceRadius,
             endpointEvidenceScore,
             targetDirection: targetDirection?.toArray() || null,
             componentMatchedVertexCount: componentEvidence.matchedVertexCount,
-            componentWeightedMatchStrength:
-              componentEvidence.weightedMatchStrength,
+            componentWeightedMatchStrength: componentEvidence.weightedMatchStrength,
             componentCrossQuality: componentEvidence.crossQuality,
-            componentSupportedJointPairCount:
-              componentEvidence.supportedJointPairCount,
+            componentSupportedJointPairCount: componentEvidence.supportedJointPairCount,
             nearestSupportedDistance: componentEvidence.nearestSupportedDistance,
             accessoryRoot: accessory.rootId === accessoryId,
             endpointMatchedVertexCount: pairEvidence.matchedVertexCount,
@@ -2167,83 +2187,96 @@ function attachmentCandidates(joints, forest, referenceRadius,
       }
     }
   }
-  return candidates.sort((left, right) => right.score - left.score
-    || left.normalizedDistance - right.normalizedDistance
-    || left.jointA - right.jointA || left.jointB - right.jointB
-    || left.accessoryComponentId - right.accessoryComponentId
-    || left.targetComponentId - right.targetComponentId);
+  return candidates.sort(
+    (left, right) =>
+      right.score - left.score ||
+      left.normalizedDistance - right.normalizedDistance ||
+      left.jointA - right.jointA ||
+      left.jointB - right.jointB ||
+      left.accessoryComponentId - right.accessoryComponentId ||
+      left.targetComponentId - right.targetComponentId,
+  );
 }
 
-function addAttachments(joints, sourceEdges, forest, referenceRadius,
-    crossEvidenceByPair = new Map()) {
-  const candidates = attachmentCandidates(joints, forest, referenceRadius,
-    crossEvidenceByPair);
+function addAttachments(joints, sourceEdges, forest, referenceRadius, crossEvidenceByPair = new Map()) {
+  const candidates = attachmentCandidates(joints, forest, referenceRadius, crossEvidenceByPair);
   const diagnostics = [];
   const accepted = [];
   const usedAccessoryComponents = new Set();
   const candidatesByAccessory = new Map();
-  candidates.forEach(candidate => {
-    const byTarget = candidatesByAccessory.get(
-      candidate.accessoryComponentId) || new Map();
+  candidates.forEach((candidate) => {
+    const byTarget = candidatesByAccessory.get(candidate.accessoryComponentId) || new Map();
     const entries = byTarget.get(candidate.targetComponentId) || [];
     entries.push(candidate);
     byTarget.set(candidate.targetComponentId, entries);
     candidatesByAccessory.set(candidate.accessoryComponentId, byTarget);
   });
   const compareEndpoint = (left, right) =>
-    right.endpointEvidenceScore - left.endpointEvidenceScore
-    || right.nearbyTargetAgreement - left.nearbyTargetAgreement
-    || right.endpointScore - left.endpointScore
-    || right.score - left.score
-    || left.normalizedDistance - right.normalizedDistance
-    || left.jointA - right.jointA || left.jointB - right.jointB;
+    right.endpointEvidenceScore - left.endpointEvidenceScore ||
+    right.nearbyTargetAgreement - left.nearbyTargetAgreement ||
+    right.endpointScore - left.endpointScore ||
+    right.score - left.score ||
+    left.normalizedDistance - right.normalizedDistance ||
+    left.jointA - right.jointA ||
+    left.jointB - right.jointB;
   const compareComponent = (left, right) =>
-    right.componentScore - left.componentScore
-    || right.componentMatchedVertexCount - left.componentMatchedVertexCount
-    || right.componentWeightedMatchStrength
-      - left.componentWeightedMatchStrength
-    || compareEndpoint(left, right);
-  const groupScore = group => [...group].sort(compareComponent)[0];
+    right.componentScore - left.componentScore ||
+    right.componentMatchedVertexCount - left.componentMatchedVertexCount ||
+    right.componentWeightedMatchStrength - left.componentWeightedMatchStrength ||
+    compareEndpoint(left, right);
+  const groupScore = (group) => [...group].sort(compareComponent)[0];
   for (const [accessoryComponentId, byTarget] of candidatesByAccessory) {
-    const groups = [...byTarget.entries()].map(([targetComponentId, group]) => ({
-      targetComponentId,
-      candidates: group,
-      best: groupScore(group),
-    })).sort((left, right) => compareComponent(left.best, right.best)
-      || left.targetComponentId - right.targetComponentId);
+    const groups = [...byTarget.entries()]
+      .map(([targetComponentId, group]) => ({
+        targetComponentId,
+        candidates: group,
+        best: groupScore(group),
+      }))
+      .sort(
+        (left, right) => compareComponent(left.best, right.best) || left.targetComponentId - right.targetComponentId,
+      );
     const bestGroup = groups[0];
     if (!bestGroup) continue;
     if (usedAccessoryComponents.has(accessoryComponentId)) {
-      bestGroup.candidates.forEach(candidate => diagnostics.push({...candidate,
-        decision: 'rejected', rejectionReason: 'attachment_cycle'}));
+      bestGroup.candidates.forEach((candidate) =>
+        diagnostics.push({ ...candidate, decision: 'rejected', rejectionReason: 'attachment_cycle' }),
+      );
       continue;
     }
     const secondGroup = groups[1];
-    if (secondGroup
-        && bestGroup.best.componentScore - secondGroup.best.componentScore
-          < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN
-        && bestGroup.best.score - secondGroup.best.score
-          < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN) {
-      groups.flatMap(group => group.candidates).forEach(candidate =>
-        diagnostics.push({...candidate, decision: 'rejected',
-          rejectionReason: candidate === bestGroup.best
-            ? 'attachment_ambiguous' : 'attachment_component_competition'}));
+    if (
+      secondGroup &&
+      bestGroup.best.componentScore - secondGroup.best.componentScore < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN &&
+      bestGroup.best.score - secondGroup.best.score < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN
+    ) {
+      groups
+        .flatMap((group) => group.candidates)
+        .forEach((candidate) =>
+          diagnostics.push({
+            ...candidate,
+            decision: 'rejected',
+            rejectionReason: candidate === bestGroup.best ? 'attachment_ambiguous' : 'attachment_component_competition',
+          }),
+        );
       continue;
     }
     const competing = [...bestGroup.candidates].sort(compareEndpoint);
     const best = competing[0];
     const second = competing[1];
-    const evidenceWinner = second && (
-      best.endpointMatchedVertexCount > second.endpointMatchedVertexCount
-      || best.nearbyTargetAgreement > second.nearbyTargetAgreement
-      || best.endpointEvidenceScore - second.endpointEvidenceScore >= .1
-      || best.accessoryRoot && !second.accessoryRoot
-        && best.componentMatchedVertexCount >= 8);
-    if (second && best.score - second.score
-        < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN && !evidenceWinner) {
-      competing.forEach(candidate => diagnostics.push({...candidate,
-        decision: 'rejected', rejectionReason: candidate === best
-          ? 'attachment_ambiguous' : 'attachment_competition'}));
+    const evidenceWinner =
+      second &&
+      (best.endpointMatchedVertexCount > second.endpointMatchedVertexCount ||
+        best.nearbyTargetAgreement > second.nearbyTargetAgreement ||
+        best.endpointEvidenceScore - second.endpointEvidenceScore >= 0.1 ||
+        (best.accessoryRoot && !second.accessoryRoot && best.componentMatchedVertexCount >= 8));
+    if (second && best.score - second.score < CROSS_SOURCE_ATTACHMENT_AMBIGUITY_MARGIN && !evidenceWinner) {
+      competing.forEach((candidate) =>
+        diagnostics.push({
+          ...candidate,
+          decision: 'rejected',
+          rejectionReason: candidate === best ? 'attachment_ambiguous' : 'attachment_competition',
+        }),
+      );
       continue;
     }
     const edge = {
@@ -2262,88 +2295,117 @@ function addAttachments(joints, sourceEdges, forest, referenceRadius,
     };
     accepted.push(edge);
     usedAccessoryComponents.add(accessoryComponentId);
-    candidates.forEach(candidate => {
+    candidates.forEach((candidate) => {
       if (candidate.accessoryComponentId !== accessoryComponentId) return;
-      diagnostics.push({...candidate, decision: candidate === best
-        ? 'accepted' : 'rejected', rejectionReason: candidate === best
-        ? null : candidate.targetComponentId === best.targetComponentId
-          ? 'attachment_competition' : 'attachment_component_competition',
-        survivedFinalForest: false});
+      diagnostics.push({
+        ...candidate,
+        decision: candidate === best ? 'accepted' : 'rejected',
+        rejectionReason:
+          candidate === best
+            ? null
+            : candidate.targetComponentId === best.targetComponentId
+              ? 'attachment_competition'
+              : 'attachment_component_competition',
+        survivedFinalForest: false,
+      });
     });
   }
-  return {edges: [...sourceEdges, ...accepted], accepted, diagnostics};
+  return { edges: [...sourceEdges, ...accepted], accepted, diagnostics };
 }
 
 function evidenceSnapshot(evidence) {
-  return [...evidence.entries()].map(([key, item]) => [key, {
-    ...item,
-    weightedCenter: [...item.weightedCenter],
-    jointPivot: item.jointPivot ? [...item.jointPivot] : null,
-    restAnchor: [...item.restAnchor],
-    restDirection: item.restDirection ? [...item.restDirection] : null,
-    restFrame: [...item.restFrame],
-    childBoneIds: [...item.childBoneIds],
-    sourceEdgeEvidence: item.sourceEdgeEvidence.map(edge => ({...edge})),
-  }]);
+  return [...evidence.entries()].map(([key, item]) => [
+    key,
+    {
+      ...item,
+      weightedCenter: [...item.weightedCenter],
+      jointPivot: item.jointPivot ? [...item.jointPivot] : null,
+      restAnchor: [...item.restAnchor],
+      restDirection: item.restDirection ? [...item.restDirection] : null,
+      restFrame: [...item.restFrame],
+      childBoneIds: [...item.childBoneIds],
+      sourceEdgeEvidence: item.sourceEdgeEvidence.map((edge) => ({ ...edge })),
+    },
+  ]);
 }
 
-function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
-    referenceRadius, {useModelWideBoneIds = false, options = {}} = {}) {
-  const identity = useModelWideBoneIds
-    ? buildModelWideBoneIdentity(evidenceByKey) : null;
-  const candidateBuild = identity ? {
-    candidates: [], crossEvidenceByPair: new Map(),
-  } : buildCandidates(evidenceByKey, referenceRadius, options);
+function assembleModelRigReconciliation(
+  sourceRigs,
+  evidenceByKey,
+  referenceRadius,
+  { useModelWideBoneIds = false, options = {} } = {},
+) {
+  const identity = useModelWideBoneIds ? buildModelWideBoneIdentity(evidenceByKey) : null;
+  const candidateBuild = identity
+    ? {
+        candidates: [],
+        crossEvidenceByPair: new Map(),
+      }
+    : buildCandidates(evidenceByKey, referenceRadius, options);
   const candidates = candidateBuild.candidates;
-  const unionFind = identity?.unionFind
-    || new GuardedUnionFind([...evidenceByKey.keys()]);
-  const equivalence = identity ? {
-    correspondenceStrength: new Map(), accepted: [], diagnostics: [],
-  } : runEquivalencePasses(candidates, evidenceByKey, unionFind);
-  const model = buildModelJoints(unionFind, evidenceByKey,
-    equivalence.correspondenceStrength, referenceRadius, {
-      clusterOrder: identity?.clusterOrder || null,
-    });
+  const unionFind = identity?.unionFind || new GuardedUnionFind([...evidenceByKey.keys()]);
+  const equivalence = identity
+    ? {
+        correspondenceStrength: new Map(),
+        accepted: [],
+        diagnostics: [],
+      }
+    : runEquivalencePasses(candidates, evidenceByKey, unionFind);
+  const model = buildModelJoints(unionFind, evidenceByKey, equivalence.correspondenceStrength, referenceRadius, {
+    clusterOrder: identity?.clusterOrder || null,
+  });
   const sourceEdges = sourceModelEdges(sourceRigs, model.keyToJoint);
   const sourceForestEdges = maximumSpanningForest(model.joints, sourceEdges);
   const votes = rootVotes(sourceRigs, model.keyToJoint);
   const sourceForest = orientModelForest(model.joints, sourceForestEdges, votes);
   const attachments = addAttachments(
-    model.joints, sourceForestEdges, sourceForest, referenceRadius,
-    candidateBuild.crossEvidenceByPair);
+    model.joints,
+    sourceForestEdges,
+    sourceForest,
+    referenceRadius,
+    candidateBuild.crossEvidenceByPair,
+  );
   const finalEdges = maximumSpanningForest(model.joints, attachments.edges);
-  const finalForest = orientModelForestWithAttachments(
-    model.joints, sourceForest, finalEdges, votes);
-  const survivingAttachments = finalEdges.filter(edge =>
-    edge.relationshipType === 'attachment');
-  attachments.diagnostics.forEach(diagnostic => {
+  const finalForest = orientModelForestWithAttachments(model.joints, sourceForest, finalEdges, votes);
+  const survivingAttachments = finalEdges.filter((edge) => edge.relationshipType === 'attachment');
+  attachments.diagnostics.forEach((diagnostic) => {
     if (diagnostic.decision !== 'accepted') return;
-    diagnostic.survivedFinalForest = survivingAttachments.some(edge =>
-      edge.jointA === diagnostic.jointA && edge.jointB === diagnostic.jointB);
+    diagnostic.survivedFinalForest = survivingAttachments.some(
+      (edge) => edge.jointA === diagnostic.jointA && edge.jointB === diagnostic.jointB,
+    );
   });
-  const attachmentDiagnostics = attachments.diagnostics.map(item => ({
+  const attachmentDiagnostics = attachments.diagnostics.map((item) => ({
     ...item,
-    left: {jointId: item.jointA}, right: {jointId: item.jointB},
+    left: { jointId: item.jointA },
+    right: { jointId: item.jointB },
   }));
-  const rejectedCandidates = [...equivalence.diagnostics,
-    ...attachmentDiagnostics.filter(item => item.decision === 'rejected')];
-  const sourceBoneToModelJointId = Object.fromEntries(
-    [...model.keyToJoint.entries()]);
-  const unmatchedCount = [...unionFind.clusters().values()]
-    .filter(members => members.length === 1).length;
-  const ambiguousCount = rejectedCandidates.filter(item =>
-    item.rejectionReason === 'ambiguous'
-      || item.rejectionReason === 'attachment_ambiguous').length;
-  const mainComponent = [...finalForest.components].sort((left, right) =>
-    componentSupport(right, model.joints) - componentSupport(left, model.joints)
-    || right.nodeIds.length - left.nodeIds.length
-    || left.componentId - right.componentId)[0] || null;
+  const rejectedCandidates = [
+    ...equivalence.diagnostics,
+    ...attachmentDiagnostics.filter((item) => item.decision === 'rejected'),
+  ];
+  const sourceBoneToModelJointId = Object.fromEntries([...model.keyToJoint.entries()]);
+  const unmatchedCount = [...unionFind.clusters().values()].filter((members) => members.length === 1).length;
+  const ambiguousCount = rejectedCandidates.filter(
+    (item) => item.rejectionReason === 'ambiguous' || item.rejectionReason === 'attachment_ambiguous',
+  ).length;
+  const mainComponent =
+    [...finalForest.components].sort(
+      (left, right) =>
+        componentSupport(right, model.joints) - componentSupport(left, model.joints) ||
+        right.nodeIds.length - left.nodeIds.length ||
+        left.componentId - right.componentId,
+    )[0] || null;
   const mainComponentId = mainComponent?.componentId ?? null;
-  const unresolvedComponents = finalForest.components.filter(component =>
-    component.componentId !== mainComponentId);
-  const unresolvedSourceKeys = [...new Set(unresolvedComponents.flatMap(component =>
-    component.nodeIds.flatMap(jointId => (model.joints[jointId]?.members || [])
-      .map(member => member.sourceKey))))].sort();
+  const unresolvedComponents = finalForest.components.filter((component) => component.componentId !== mainComponentId);
+  const unresolvedSourceKeys = [
+    ...new Set(
+      unresolvedComponents.flatMap((component) =>
+        component.nodeIds.flatMap((jointId) =>
+          (model.joints[jointId]?.members || []).map((member) => member.sourceKey),
+        ),
+      ),
+    ),
+  ].sort();
   const reconciliation = {
     identityMode: identity ? 'model-wide-bone-id' : 'geometric-reconciliation',
     uniqueModelBoneIdCount: identity?.uniqueModelBoneIdCount ?? null,
@@ -2354,10 +2416,9 @@ function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
     spatialIndexMs: identity ? 0 : null,
     crossSourceMatchMs: identity ? 0 : null,
     modelJointCount: model.joints.length,
-    equivalenceClusterCount: [...unionFind.clusters().values()]
-      .filter(members => members.length > 1).length,
+    equivalenceClusterCount: [...unionFind.clusters().values()].filter((members) => members.length > 1).length,
     equivalentSourceBoneCount: [...unionFind.clusters().values()]
-      .filter(members => members.length > 1)
+      .filter((members) => members.length > 1)
       .reduce((sum, members) => sum + members.length, 0),
     attachmentCount: survivingAttachments.length,
     unmatchedCount,
@@ -2365,12 +2426,11 @@ function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
     componentCount: finalForest.components.length,
     mainComponentId,
     unresolvedComponentCount: unresolvedComponents.length,
-    unresolvedJointCount: unresolvedComponents.reduce((sum, component) =>
-      sum + component.nodeIds.length, 0),
+    unresolvedJointCount: unresolvedComponents.reduce((sum, component) => sum + component.nodeIds.length, 0),
     unresolvedSourceKeys,
     modelReferenceRadius: referenceRadius,
     joints: model.joints,
-    acceptedEquivalences: equivalence.accepted.map(item => ({...item})),
+    acceptedEquivalences: equivalence.accepted.map((item) => ({ ...item })),
     acceptedAttachments: survivingAttachments,
     attachmentDiagnostics,
     rejectedCandidates,
@@ -2379,8 +2439,8 @@ function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
     modelReferenceRadius: referenceRadius,
     sourceBoneEvidence: evidenceSnapshot(evidenceByKey),
     restAnchorBySourceBoneKey: Object.fromEntries(
-      [...evidenceByKey.entries()].map(([key, item]) => [
-        key, [...item.restAnchor]])),
+      [...evidenceByKey.entries()].map(([key, item]) => [key, [...item.restAnchor]]),
+    ),
     sourceBoneToModelJointId,
     sourceBoneToModelJointMap: model.keyToJoint,
     joints: model.joints,
@@ -2398,24 +2458,22 @@ function assembleModelRigReconciliation(sourceRigs, evidenceByKey,
  * assembly after those large geometry passes are complete.
  */
 export async function buildModelRigReconciliationCooperative(
-    sourceRigs = [], options = {}, {
-      budget = createWorkBudget(), isCurrent = () => true, timings = null,
-    } = {}) {
-  const rigs = [...sourceRigs].filter(rig => rig?.sourceKey !== undefined)
-    .sort((left, right) => String(left.sourceKey)
-      .localeCompare(String(right.sourceKey)));
-  const useModelWideBoneIds = rigs.length > 0
-    && rigs.every(rig => rig.boneIdsModelWide === true);
+  sourceRigs = [],
+  options = {},
+  { budget = createWorkBudget(), isCurrent = () => true, timings = null } = {},
+) {
+  const rigs = [...sourceRigs]
+    .filter((rig) => rig?.sourceKey !== undefined)
+    .sort((left, right) => String(left.sourceKey).localeCompare(String(right.sourceKey)));
+  const useModelWideBoneIds = rigs.length > 0 && rigs.every((rig) => rig.boneIdsModelWide === true);
   const evidenceByKey = new Map();
   for (const rig of rigs) {
     if (!isCurrent()) return null;
-    collectSourceBoneEvidence(rig).forEach((evidence, key) =>
-      evidenceByKey.set(key, evidence));
+    collectSourceBoneEvidence(rig).forEach((evidence, key) => evidenceByKey.set(key, evidence));
     await budget.checkpoint();
   }
   prepareSourceBoneEvidence(evidenceByKey);
-  const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius,
-    modelReferenceRadius(evidenceByKey)));
+  const referenceRadius = Math.max(EPSILON, number(options.modelReferenceRadius, modelReferenceRadius(evidenceByKey)));
   if (useModelWideBoneIds) {
     if (timings) {
       timings.sampleBuildMs = 0;
@@ -2423,22 +2481,24 @@ export async function buildModelRigReconciliationCooperative(
       timings.crossSourceMatchMs = 0;
     }
     const graphStartedAt = clockNow();
-    const result = assembleModelRigReconciliation(
-      rigs, evidenceByKey, referenceRadius, {
-        useModelWideBoneIds: true, options,
-      });
+    const result = assembleModelRigReconciliation(rigs, evidenceByKey, referenceRadius, {
+      useModelWideBoneIds: true,
+      options,
+    });
     if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
     return result;
   }
-  const crossEvidenceByPair = await buildCrossSourceWeightEvidenceCooperative(
-    rigs, referenceRadius, {budget, isCurrent, timings});
+  const crossEvidenceByPair = await buildCrossSourceWeightEvidenceCooperative(rigs, referenceRadius, {
+    budget,
+    isCurrent,
+    timings,
+  });
   if (!crossEvidenceByPair || !isCurrent()) return null;
   await budget.checkpoint();
   if (!isCurrent()) return null;
   const graphStartedAt = clockNow();
-  const result = assembleModelRigReconciliation(
-    rigs, evidenceByKey, referenceRadius, {
-      options: {...options, crossEvidenceByPair},
+  const result = assembleModelRigReconciliation(rigs, evidenceByKey, referenceRadius, {
+    options: { ...options, crossEvidenceByPair },
   });
   if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
   return result;

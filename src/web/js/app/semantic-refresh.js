@@ -2,9 +2,7 @@
 
 import { viewerState, samePath } from './state.js';
 import { refreshAll, setStateRules, updateMeshSemantics } from '../mesh/visibility.js';
-import {
-  refreshAutomaticTextureBoundaries, refreshMeshAssetDiagnostics,
-} from '../panels/mesh-panel.js';
+import { refreshAutomaticTextureBoundaries, refreshMeshAssetDiagnostics } from '../panels/mesh-panel.js';
 import { buildMenuPanel } from '../panels/menu-panel.js';
 import { buildPresentPanel } from '../panels/present-panel.js';
 import { t } from '../i18n/index.js';
@@ -20,15 +18,13 @@ export function beginSemanticRefresh() {
 }
 
 export function semanticRefreshIsCurrent(path, epoch) {
-  return !!path && epoch === viewerState.semanticRefreshEpoch
-    && samePath(viewerState.currentModPath, path);
+  return !!path && epoch === viewerState.semanticRefreshEpoch && samePath(viewerState.currentModPath, path);
 }
 
 async function finishSemanticRefresh(path, epoch, { refreshPendingState } = {}) {
   if (!semanticRefreshIsCurrent(path, epoch)) return;
   if (refreshPendingState) {
-    await refreshPendingState(
-      path, () => semanticRefreshIsCurrent(path, epoch));
+    await refreshPendingState(path, () => semanticRefreshIsCurrent(path, epoch));
   }
   if (semanticRefreshIsCurrent(path, epoch)) void refreshHealthReport();
 }
@@ -47,14 +43,17 @@ function applyControlSemanticResult(result, path, callbacks, change = {}) {
   const state = result.state || {};
   viewerState.lastToggles = controls.toggles || {};
   setStateRules(state.rules || [], state.defaults || {}, {
-    toggles: controls.toggles || {}, menu: controls.menu || {},
+    toggles: controls.toggles || {},
+    menu: controls.menu || {},
   });
   buildTogglePanel(controls.toggles, {
-    modPath: path, onChange: callbacks.onToggleChange,
+    modPath: path,
+    onChange: callbacks.onToggleChange,
   });
   buildMenuPanel(controls.menu);
   const presentContext = {
-    modPath: path, onChange: callbacks.onPresentChange,
+    modPath: path,
+    onChange: callbacks.onPresentChange,
   };
   if (Object.hasOwn(change, 'selectedPosition')) {
     presentContext.selectedPosition = change.selectedPosition;
@@ -81,13 +80,13 @@ async function requestSemanticResult(path, epoch, request, errorKey) {
     result = await request(path);
   } catch (error) {
     if (semanticRefreshIsCurrent(path, epoch)) {
-      await alertDialog(t(errorKey, {detail: error}));
+      await alertDialog(t(errorKey, { detail: error }));
     }
     return null;
   }
   if (!semanticRefreshIsCurrent(path, epoch)) return null;
   if (result?.error) {
-    await alertDialog(t(errorKey, {detail: result.error}));
+    await alertDialog(t(errorKey, { detail: result.error }));
     return null;
   }
   return result;
@@ -99,8 +98,11 @@ export async function refreshPresentState(change = {}, handlers = {}) {
   try {
     if (!path) return false;
     const result = await requestSemanticResult(
-      path, epoch, currentPath => window.pywebview.api.get_present_state(currentPath),
-      'errors.refreshPresent');
+      path,
+      epoch,
+      (currentPath) => window.pywebview.api.get_present_state(currentPath),
+      'errors.refreshPresent',
+    );
     if (result === null) return false;
     const context = { modPath: path, onChange: callbacks.onPresentChange };
     if (Object.hasOwn(change, 'selectedPosition')) {
@@ -121,8 +123,11 @@ export async function refreshControlSemantics(handlers = {}) {
   try {
     if (!path) return false;
     const result = await requestSemanticResult(
-      path, epoch, currentPath => window.pywebview.api.get_control_state(currentPath),
-      'errors.refreshControls');
+      path,
+      epoch,
+      (currentPath) => window.pywebview.api.get_control_state(currentPath),
+      'errors.refreshControls',
+    );
     if (result === null) return false;
     applyControlSemanticResult(result, path, callbacks);
     callbacks.syncViewportControlPlacement();
@@ -139,18 +144,23 @@ export async function refreshMeshSemantics(handlers = {}) {
   try {
     if (!path) return false;
     const result = await requestSemanticResult(
-      path, epoch, currentPath => window.pywebview.api.get_mesh_semantics(currentPath),
-      'errors.refreshSemantics');
+      path,
+      epoch,
+      (currentPath) => window.pywebview.api.get_mesh_semantics(currentPath),
+      'errors.refreshSemantics',
+    );
     if (result === null) return false;
     const update = applyMeshSemanticResult(result);
     if (!update.success) {
-      await alertDialog(t('errors.refreshSemantics', {
-        detail: t('semanticRefresh.drawMismatch'),
-      }));
+      await alertDialog(
+        t('errors.refreshSemantics', {
+          detail: t('semanticRefresh.drawMismatch'),
+        }),
+      );
       return false;
     }
     refreshAll({
-      force: {visibility: true, textures: true},
+      force: { visibility: true, textures: true },
       additionalMeshes: update.materialChangedMeshes,
     });
     return true;
@@ -165,20 +175,25 @@ export async function refreshSemanticState(handlers = {}, change = {}) {
   try {
     if (!path) return false;
     const result = await requestSemanticResult(
-      path, epoch, currentPath => window.pywebview.api.get_semantic_state(currentPath),
-      'errors.refreshSemantics');
+      path,
+      epoch,
+      (currentPath) => window.pywebview.api.get_semantic_state(currentPath),
+      'errors.refreshSemantics',
+    );
     if (result === null) return false;
     const update = applyMeshSemanticResult(result);
     if (!update.success) {
-      await alertDialog(t('errors.refreshSemantics', {
-        detail: t('semanticRefresh.drawMismatch'),
-      }));
+      await alertDialog(
+        t('errors.refreshSemantics', {
+          detail: t('semanticRefresh.drawMismatch'),
+        }),
+      );
       return false;
     }
     applyControlSemanticResult(result, path, callbacks, change);
     callbacks.syncViewportControlPlacement();
     refreshAll({
-      force: {visibility: true, textures: true},
+      force: { visibility: true, textures: true },
       additionalMeshes: update.materialChangedMeshes,
     });
     return true;

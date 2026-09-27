@@ -33,19 +33,21 @@ function createLightHandle() {
   core.addColorStop(1, 'rgba(246,201,93,0)');
   context.fillStyle = core;
   context.fillRect(0, 0, 128, 128);
-  const handle = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: new THREE.CanvasTexture(canvas), transparent: true,
-    // Model depth must occlude the marker instead of showing through meshes.
-    depthTest: true, depthWrite: false,
-  }));
+  const handle = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: new THREE.CanvasTexture(canvas),
+      transparent: true,
+      // Model depth must occlude the marker instead of showing through meshes.
+      depthTest: true,
+      depthWrite: false,
+    }),
+  );
   handle.renderOrder = 1000;
   handle.visible = true;
   return handle;
 }
 
-export function createKeyLightController({
-  scene, camera, renderer, controls, light, onChange,
-}) {
+export function createKeyLightController({ scene, camera, renderer, controls, light, onChange }) {
   const handle = createLightHandle();
   scene.add(handle);
 
@@ -65,15 +67,19 @@ export function createKeyLightController({
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.set(
       ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1);
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    );
     raycaster.setFromCamera(pointer, camera);
   }
 
   function canInteract(event = null) {
     if (event) {
       const rect = renderer.domElement.getBoundingClientRect();
-      pointerInside = event.clientX >= rect.left && event.clientX <= rect.right
-        && event.clientY >= rect.top && event.clientY <= rect.bottom;
+      pointerInside =
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
       updatePointer(event);
     }
     if (!pointerInside || !handle.visible) return false;
@@ -82,10 +88,8 @@ export function createKeyLightController({
     const handleHit = raycaster.intersectObject(handle, false)[0];
     if (!handleHit) return false;
     const visibleMeshes = [];
-    scene.traverseVisible(object => {
-      if (object.isMesh
-          && !object.userData.isViewerOutline
-          && !object.userData.isViewerGround) {
+    scene.traverseVisible((object) => {
+      if (object.isMesh && !object.userData.isViewerOutline && !object.userData.isViewerGround) {
         visibleMeshes.push(object);
       }
     });
@@ -98,7 +102,7 @@ export function createKeyLightController({
     renderer.domElement.style.cursor = canInteract(event) ? 'crosshair' : '';
   }
 
-  renderer.domElement.addEventListener('pointerenter', event => {
+  renderer.domElement.addEventListener('pointerenter', (event) => {
     pointerInside = true;
     updateCursor(event);
   });
@@ -106,25 +110,29 @@ export function createKeyLightController({
     pointerInside = false;
     if (!drag) renderer.domElement.style.cursor = '';
   });
-  renderer.domElement.addEventListener('pointerdown', event => {
-    if (event.button !== 0 || !canInteract(event)) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
-    dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, light.position);
-    drag = {
-      pointerId: event.pointerId,
-      depthMode: event.shiftKey,
-      startY: event.clientY,
-      startPosition: light.position.clone(),
-      cameraDirection,
-      depthScale: Math.max(camera.position.distanceTo(controls.target) * 0.004, 0.0001),
-    };
-    controls.enabled = false;
-    renderer.domElement.setPointerCapture(event.pointerId);
-    renderer.domElement.style.cursor = 'grabbing';
-  }, { capture: true });
-  renderer.domElement.addEventListener('pointermove', event => {
+  renderer.domElement.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.button !== 0 || !canInteract(event)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const cameraDirection = camera.getWorldDirection(new THREE.Vector3());
+      dragPlane.setFromNormalAndCoplanarPoint(cameraDirection, light.position);
+      drag = {
+        pointerId: event.pointerId,
+        depthMode: event.shiftKey,
+        startY: event.clientY,
+        startPosition: light.position.clone(),
+        cameraDirection,
+        depthScale: Math.max(camera.position.distanceTo(controls.target) * 0.004, 0.0001),
+      };
+      controls.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+      renderer.domElement.style.cursor = 'grabbing';
+    },
+    { capture: true },
+  );
+  renderer.domElement.addEventListener('pointermove', (event) => {
     if (!drag) {
       pointerInside = true;
       updateCursor(event);
@@ -132,8 +140,9 @@ export function createKeyLightController({
     }
     if (event.pointerId !== drag.pointerId) return;
     if (drag.depthMode) {
-      light.position.copy(drag.startPosition).addScaledVector(
-        drag.cameraDirection, (drag.startY - event.clientY) * drag.depthScale);
+      light.position
+        .copy(drag.startPosition)
+        .addScaledVector(drag.cameraDirection, (drag.startY - event.clientY) * drag.depthScale);
       onChange?.();
       return;
     }
@@ -158,8 +167,7 @@ export function createKeyLightController({
 
   function setIntensity(value) {
     const number = Number(value);
-    const next = Number.isNaN(number)
-      ? 0 : Math.min(KEY_LIGHT_MAX_INTENSITY, Math.max(0, number));
+    const next = Number.isNaN(number) ? 0 : Math.min(KEY_LIGHT_MAX_INTENSITY, Math.max(0, number));
     if (next === intensity) return false;
     intensity = next;
     light.intensity = intensity;
@@ -171,8 +179,7 @@ export function createKeyLightController({
 
   function rebase(modelSize) {
     const distance = Math.max(modelSize * 0.55, 0.001);
-    light.position.copy(controls.target).addScaledVector(
-      new THREE.Vector3(-0.55, 0.82, 0.35).normalize(), distance);
+    light.position.copy(controls.target).addScaledVector(new THREE.Vector3(-0.55, 0.82, 0.35).normalize(), distance);
     handle.position.copy(light.position);
     onChange?.();
   }
@@ -180,12 +187,9 @@ export function createKeyLightController({
   function update() {
     light.target.position.copy(controls.target);
     handle.position.copy(light.position);
-    const normalized = THREE.MathUtils.clamp(
-      intensity / KEY_LIGHT_MAX_INTENSITY, 0, 1);
+    const normalized = THREE.MathUtils.clamp(intensity / KEY_LIGHT_MAX_INTENSITY, 0, 1);
     const sizeMultiplier = 0.75 + normalized * 1.25;
-    const size = Math.max(
-      camera.position.distanceTo(controls.target) * 0.035 * sizeMultiplier,
-      0.0001);
+    const size = Math.max(camera.position.distanceTo(controls.target) * 0.035 * sizeMultiplier, 0.0001);
     handle.scale.set(size, size, 1);
   }
 

@@ -8,10 +8,12 @@ const sourceSections = new Set();
 
 function syncSourceSection(section) {
   const collapsed = section.items.classList.contains('collapsed');
-  section.chevron.setAttribute('aria-label', t(
-    collapsed ? 'panel.expandSource' : 'panel.collapseSource', {
+  section.chevron.setAttribute(
+    'aria-label',
+    t(collapsed ? 'panel.expandSource' : 'panel.collapseSource', {
       source: section.source,
-    }));
+    }),
+  );
 }
 
 function syncSourceSections() {
@@ -40,10 +42,11 @@ export function usesSourceSections(grouped) {
   return sources.length > 1 || (sources.length === 1 && sources[0] !== '');
 }
 
-export function buildSourceSection(source, container, {
-  headerClass = 'toggle-src-hdr',
-  itemsClass = 'toggle-src-items',
-} = {}) {
+export function buildSourceSection(
+  source,
+  container,
+  { headerClass = 'toggle-src-hdr', itemsClass = 'toggle-src-items' } = {},
+) {
   const header = document.createElement('div');
   header.className = headerClass;
   const chevron = document.createElement('button');
@@ -59,7 +62,7 @@ export function buildSourceSection(source, container, {
   const items = document.createElement('div');
   items.className = itemsClass;
   items.id = `source-section-${++sourceSectionId}`;
-  const section = {header, items, chevron, source};
+  const section = { header, items, chevron, source };
   syncSourceSection(section);
   chevron.setAttribute('aria-controls', items.id);
   header.addEventListener('click', () => {
@@ -85,14 +88,21 @@ export function initPanelCollapse(panel, contentId) {
     content.classList.toggle('collapsed', collapsed);
     chevron.setAttribute('aria-expanded', String(!collapsed));
     const name = panel.querySelector('h3')?.textContent || t('panel.default');
-    chevron.setAttribute('aria-label', t(
-      collapsed ? 'panel.expandPanel' : 'panel.collapsePanel', {name}));
+    chevron.setAttribute('aria-label', t(collapsed ? 'panel.expandPanel' : 'panel.collapsePanel', { name }));
     if (persist) {
-      try { localStorage.setItem(storageKey, String(collapsed)); } catch { /* private mode */ }
+      try {
+        localStorage.setItem(storageKey, String(collapsed));
+      } catch {
+        /* private mode */
+      }
     }
   };
   let initiallyCollapsed = false;
-  try { initiallyCollapsed = localStorage.getItem(storageKey) === 'true'; } catch { /* private mode */ }
+  try {
+    initiallyCollapsed = localStorage.getItem(storageKey) === 'true';
+  } catch {
+    /* private mode */
+  }
   chevron.setAttribute('aria-controls', contentId);
   setCollapsed(initiallyCollapsed, false);
   const toggle = (event) => {
@@ -100,11 +110,11 @@ export function initPanelCollapse(panel, contentId) {
     event?.stopPropagation?.();
     setCollapsed(!content.classList.contains('collapsed'));
   };
-  hdr.addEventListener('click', event => {
-    if (event.target.closest('.icon-btn, .group-toggle, .panel-hdr-actions, .panel-actions, .panel-action-menu')) return;
+  hdr.addEventListener('click', (event) => {
+    if (event.target.closest('.icon-btn, .group-toggle, .panel-hdr-actions, .panel-actions, .panel-action-menu'))
+      return;
     setCollapsed(!content.classList.contains('collapsed'));
   });
   chevron.addEventListener('click', toggle);
-  window.addEventListener(LANGUAGE_CHANGED, () =>
-    setCollapsed(content.classList.contains('collapsed'), false));
+  window.addEventListener(LANGUAGE_CHANGED, () => setCollapsed(content.classList.contains('collapsed'), false));
 }

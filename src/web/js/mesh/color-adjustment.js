@@ -24,8 +24,7 @@ const COLOR_RANGES = Object.freeze({
 const TINT_PATTERN = /^#[0-9a-f]{6}$/i;
 
 function finiteNumber(value, fallback) {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? value : fallback;
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function clamp(value, [minimum, maximum]) {
@@ -33,15 +32,13 @@ function clamp(value, [minimum, maximum]) {
 }
 
 function tintValue(value) {
-  return typeof value === 'string' && TINT_PATTERN.test(value)
-    ? value.toLowerCase() : null;
+  return typeof value === 'string' && TINT_PATTERN.test(value) ? value.toLowerCase() : null;
 }
 
 function normalizedTint(source) {
   const tint = tintValue(source.tint);
   const legacyStrength = source.tintStrength ?? source.tint_strength;
-  if (legacyStrength !== undefined
-      && finiteNumber(legacyStrength, 0) <= 0) {
+  if (legacyStrength !== undefined && finiteNumber(legacyStrength, 0) <= 0) {
     return null;
   }
   return tint;
@@ -50,42 +47,31 @@ function normalizedTint(source) {
 /** Normalize frontend or backend-shaped state to the canonical JS shape. */
 export function normalizeColorAdjustment(value) {
   const source = value && typeof value === 'object' ? value : {};
-  const read = (name, legacyName = name) =>
-    source[name] ?? source[legacyName];
+  const read = (name, legacyName = name) => source[name] ?? source[legacyName];
   return {
-    hue: clamp(finiteNumber(read('hue'), DEFAULT_COLOR_ADJUSTMENT.hue),
-      COLOR_RANGES.hue),
-    saturation: clamp(
-      finiteNumber(read('saturation'), DEFAULT_COLOR_ADJUSTMENT.saturation),
-      COLOR_RANGES.saturation),
-    brightness: clamp(
-      finiteNumber(read('brightness'), DEFAULT_COLOR_ADJUSTMENT.brightness),
-      COLOR_RANGES.brightness),
-    contrast: clamp(
-      finiteNumber(read('contrast'), DEFAULT_COLOR_ADJUSTMENT.contrast),
-      COLOR_RANGES.contrast),
-    red: clamp(finiteNumber(read('red'), DEFAULT_COLOR_ADJUSTMENT.red),
-      COLOR_RANGES.red),
-    green: clamp(
-      finiteNumber(read('green'), DEFAULT_COLOR_ADJUSTMENT.green),
-      COLOR_RANGES.green),
-    blue: clamp(
-      finiteNumber(read('blue'), DEFAULT_COLOR_ADJUSTMENT.blue),
-      COLOR_RANGES.blue),
+    hue: clamp(finiteNumber(read('hue'), DEFAULT_COLOR_ADJUSTMENT.hue), COLOR_RANGES.hue),
+    saturation: clamp(finiteNumber(read('saturation'), DEFAULT_COLOR_ADJUSTMENT.saturation), COLOR_RANGES.saturation),
+    brightness: clamp(finiteNumber(read('brightness'), DEFAULT_COLOR_ADJUSTMENT.brightness), COLOR_RANGES.brightness),
+    contrast: clamp(finiteNumber(read('contrast'), DEFAULT_COLOR_ADJUSTMENT.contrast), COLOR_RANGES.contrast),
+    red: clamp(finiteNumber(read('red'), DEFAULT_COLOR_ADJUSTMENT.red), COLOR_RANGES.red),
+    green: clamp(finiteNumber(read('green'), DEFAULT_COLOR_ADJUSTMENT.green), COLOR_RANGES.green),
+    blue: clamp(finiteNumber(read('blue'), DEFAULT_COLOR_ADJUSTMENT.blue), COLOR_RANGES.blue),
     tint: normalizedTint(source),
   };
 }
 
 export function isNeutralColorAdjustment(value) {
   const adjustment = normalizeColorAdjustment(value);
-  return adjustment.hue === 0
-    && adjustment.saturation === 1
-    && adjustment.brightness === 1
-    && adjustment.contrast === 1
-    && adjustment.red === 1
-    && adjustment.green === 1
-    && adjustment.blue === 1
-    && adjustment.tint === null;
+  return (
+    adjustment.hue === 0 &&
+    adjustment.saturation === 1 &&
+    adjustment.brightness === 1 &&
+    adjustment.contrast === 1 &&
+    adjustment.red === 1 &&
+    adjustment.green === 1 &&
+    adjustment.blue === 1 &&
+    adjustment.tint === null
+  );
 }
 
 /** Parse picker sRGB bytes without Three.js color-management conversion. */
@@ -101,11 +87,17 @@ export function tintRgbFromHex(value) {
 /** Format a raw sRGB vector back to the color-picker representation. */
 export function tintHexFromRgb(value) {
   if (!value) return DEFAULT_COLOR_ADJUSTMENT.tint;
-  const channels = [value.x, value.y, value.z].map(channel =>
-    Number.isFinite(channel) ? Math.min(1, Math.max(0, channel)) : null);
-  if (channels.some(channel => channel === null)) {
+  const channels = [value.x, value.y, value.z].map((channel) =>
+    Number.isFinite(channel) ? Math.min(1, Math.max(0, channel)) : null,
+  );
+  if (channels.some((channel) => channel === null)) {
     return DEFAULT_COLOR_ADJUSTMENT.tint;
   }
-  return `#${channels.map(channel => Math.round(channel * 255)
-    .toString(16).padStart(2, '0')).join('')}`;
+  return `#${channels
+    .map((channel) =>
+      Math.round(channel * 255)
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`;
 }

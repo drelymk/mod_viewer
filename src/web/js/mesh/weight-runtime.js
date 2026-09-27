@@ -2,9 +2,7 @@
 
 export const EMPTY_ACTIVE_VERTICES = new Uint32Array();
 export const RIG_ROTATION_SNAP_DEGREES = Object.freeze([0, 5, 15, 30]);
-export const RIG_LIMB_ROLES = Object.freeze([
-  'left_arm', 'right_arm', 'left_leg', 'right_leg',
-]);
+export const RIG_LIMB_ROLES = Object.freeze(['left_arm', 'right_arm', 'left_leg', 'right_leg']);
 
 function collectionEntries(collection) {
   if (collection instanceof Map) return [...collection.entries()];
@@ -14,22 +12,14 @@ function collectionEntries(collection) {
 export function matrixIsIdentity(value, tolerance = 1e-5) {
   const elements = value?.elements || value;
   if (!elements || elements.length < 16) return false;
-  const identity = [
-    1, 0, 0, 0,
-    0, 1, 0, 0,
-    0, 0, 1, 0,
-    0, 0, 0, 1,
-  ];
-  return identity.every((expected, index) =>
-    Math.abs(Number(elements[index]) - expected) <= tolerance);
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  return identity.every((expected, index) => Math.abs(Number(elements[index]) - expected) <= tolerance);
 }
 
-export function activePoseJointIds({manualRotations, driverTransforms,
-    quaternionIsIdentity} = {}) {
+export function activePoseJointIds({ manualRotations, driverTransforms, quaternionIsIdentity } = {}) {
   const ids = new Set();
   collectionEntries(manualRotations).forEach(([jointId, quaternion]) => {
-    if (typeof quaternionIsIdentity !== 'function'
-        || !quaternionIsIdentity(quaternion)) {
+    if (typeof quaternionIsIdentity !== 'function' || !quaternionIsIdentity(quaternion)) {
       ids.add(Number(jointId));
     }
   });
@@ -96,8 +86,12 @@ export function aggregateModelBoneStats(nodeLists) {
       const boneId = Number(node?.boneId);
       const affectedVertexCount = Number(node?.affectedVertexCount);
       const totalWeight = Number(node?.totalWeight);
-      if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
-          || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+      if (
+        !Number.isFinite(boneId) ||
+        !Number.isFinite(affectedVertexCount) ||
+        affectedVertexCount < 0 ||
+        !Number.isFinite(totalWeight)
+      ) {
         continue;
       }
       const entry = totals.get(boneId) || {
@@ -109,13 +103,17 @@ export function aggregateModelBoneStats(nodeLists) {
       totals.set(boneId, entry);
     }
   }
-  return Object.fromEntries([...totals.entries()]
-    .sort(([left], [right]) => Number(left) - Number(right))
-    .map(([boneId, entry]) => [boneId, {
-      affectedVertexCount: entry.affectedVertexCount,
-      averageInfluence: entry.affectedVertexCount > 0
-        ? entry.totalWeight / entry.affectedVertexCount : 0,
-    }]));
+  return Object.fromEntries(
+    [...totals.entries()]
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .map(([boneId, entry]) => [
+        boneId,
+        {
+          affectedVertexCount: entry.affectedVertexCount,
+          averageInfluence: entry.affectedVertexCount > 0 ? entry.totalWeight / entry.affectedVertexCount : 0,
+        },
+      ]),
+  );
 }
 
 export function aggregateModelWeightBoneStats(statMaps) {
@@ -123,12 +121,14 @@ export function aggregateModelWeightBoneStats(statMaps) {
   for (const stats of statMaps || []) {
     for (const [rawBoneId, rawEntry] of Object.entries(stats || {})) {
       const boneId = Number(rawBoneId);
-      const affectedVertexCount = Number(
-        rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
-      const totalWeight = Number(
-        rawEntry?.totalWeight ?? rawEntry?.total_weight);
-      if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
-          || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+      const affectedVertexCount = Number(rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
+      const totalWeight = Number(rawEntry?.totalWeight ?? rawEntry?.total_weight);
+      if (
+        !Number.isFinite(boneId) ||
+        !Number.isFinite(affectedVertexCount) ||
+        affectedVertexCount < 0 ||
+        !Number.isFinite(totalWeight)
+      ) {
         continue;
       }
       const entry = totals.get(boneId) || {
@@ -140,13 +140,17 @@ export function aggregateModelWeightBoneStats(statMaps) {
       totals.set(boneId, entry);
     }
   }
-  return Object.fromEntries([...totals.entries()]
-    .sort(([left], [right]) => Number(left) - Number(right))
-    .map(([boneId, entry]) => [boneId, {
-      affectedVertexCount: entry.affectedVertexCount,
-      averageInfluence: entry.affectedVertexCount > 0
-        ? entry.totalWeight / entry.affectedVertexCount : 0,
-    }]));
+  return Object.fromEntries(
+    [...totals.entries()]
+      .sort(([left], [right]) => Number(left) - Number(right))
+      .map(([boneId, entry]) => [
+        boneId,
+        {
+          affectedVertexCount: entry.affectedVertexCount,
+          averageInfluence: entry.affectedVertexCount > 0 ? entry.totalWeight / entry.affectedVertexCount : 0,
+        },
+      ]),
+  );
 }
 
 export function createWeightRuntimeState() {

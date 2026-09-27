@@ -27,8 +27,7 @@ function displayName(variable) {
  * permanently stuck on the first duplicate.  Prefer the position we last
  * applied when the complete tuple itself is duplicated. */
 function findCyclePosition(vars, positions, preferred = -1) {
-  const matches = (position) => vars.every(v =>
-    cycleValueAt(v, position) === getToggleValue(v.var));
+  const matches = (position) => vars.every((v) => cycleValueAt(v, position) === getToggleValue(v.var));
   if (preferred >= 0 && preferred < positions && matches(preferred)) return preferred;
   // Duplicate complete tuples use the last position, matching the app's
   // toggle identity invariant and Record/PRESENT tie-breaking.
@@ -45,7 +44,7 @@ let valueSyncers = [];
 let labelSyncers = [];
 
 window.addEventListener(LANGUAGE_CHANGED, () => {
-  labelSyncers.forEach(sync => sync());
+  labelSyncers.forEach((sync) => sync());
   syncView('toggle-panel');
 });
 
@@ -71,27 +70,24 @@ function setOthersEnabled(enabled, exceptItem) {
 
 function summarizeReport(report) {
   const lines = [
-    ...(report.always_false_gates || []).map((line) => t(
-      'toggle.reportAlwaysFalse', {line})),
-    ...(report.always_true_gates || []).map((line) => t(
-      'toggle.reportAlwaysTrue', {line})),
-    ...(report.unsafe_gates || []).map((line) => t(
-      'toggle.reportUnsafe', {line})),
+    ...(report.always_false_gates || []).map((line) => t('toggle.reportAlwaysFalse', { line })),
+    ...(report.always_true_gates || []).map((line) => t('toggle.reportAlwaysTrue', { line })),
+    ...(report.unsafe_gates || []).map((line) => t('toggle.reportUnsafe', { line })),
   ];
   return lines.join('\n');
 }
 
 async function handleDelete(info, ctx) {
-  const ok = await confirmDialog(t('toggle.deleteConfirm', {name: info.name}));
+  const ok = await confirmDialog(t('toggle.deleteConfirm', { name: info.name }));
   if (!ok) return;
 
   const result = await window.pywebview.api.delete_toggle(ctx.modPath, info.ini, info.section);
   if (result.error) {
-    await alertDialog(t('toggle.deleteError', {detail: result.error}));
+    await alertDialog(t('toggle.deleteError', { detail: result.error }));
     return;
   }
   const summary = summarizeReport(result.result || {});
-  if (summary) await alertDialog(t('toggle.deletedReview', {detail: summary}));
+  if (summary) await alertDialog(t('toggle.deletedReview', { detail: summary }));
   if (ctx.onChange) await ctx.onChange({ type: 'delete' });
 }
 
@@ -164,9 +160,7 @@ function buildToggleItem(info, ctx) {
 
   // A key can drive one or several vars; always name them so the value is
   // never ambiguous.
-  const describe = () => info.vars
-    .map(v => `${displayName(v.var)}=${getToggleValue(v.var)}`)
-    .join(', ');
+  const describe = () => info.vars.map((v) => `${displayName(v.var)}=${getToggleValue(v.var)}`).join(', ');
 
   const row = document.createElement('div');
   row.className = 'toggle-row';
@@ -220,7 +214,16 @@ function buildToggleItem(info, ctx) {
 
   recordBtn.addEventListener('click', () => {
     startRecordSession(info, ctx, {
-      item, row, cycleBtn: btn, valSpan, recordBtn, editBtn, deleteBtn, recordRow, saveBtn, cancelBtn,
+      item,
+      row,
+      cycleBtn: btn,
+      valSpan,
+      recordBtn,
+      editBtn,
+      deleteBtn,
+      recordRow,
+      saveBtn,
+      cancelBtn,
       describe,
       disableOthers: () => setOthersEnabled(false, item),
       enableOthers: () => setOthersEnabled(true, item),
@@ -268,7 +271,7 @@ export function buildTogglePanel(toggles, ctx = {}) {
   valueSyncers = [];
   labelSyncers = [];
   registerViewSync('toggle-panel', () => {
-    valueSyncers.forEach(sync => sync());
+    valueSyncers.forEach((sync) => sync());
   });
 
   if (!currentCtx.modPath) {
@@ -297,10 +300,9 @@ export function buildTogglePanel(toggles, ctx = {}) {
   const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
-    const container = (multiSource && src) ? buildSourceSection(src, list) : list;
+    const container = multiSource && src ? buildSourceSection(src, list) : list;
     for (const section of bySource[src]) {
       container.appendChild(buildToggleItem(toggles[section], currentCtx));
     }
   }
-
 }

@@ -1,13 +1,7 @@
 // Shared WebGPU/TSL inverted-hull silhouette outlines.
 
 import * as THREE from 'three/webgpu';
-import {
-  cameraProjectionMatrix,
-  normalViewGeometry,
-  positionView,
-  uniform,
-  vec4,
-} from 'three/tsl';
+import { cameraProjectionMatrix, normalViewGeometry, positionView, uniform, vec4 } from 'three/tsl';
 import { requestRender } from './render-scheduler.js';
 
 const REFERENCE_OUTLINE_WIDTH_PIXELS = 0.75;
@@ -16,10 +10,8 @@ const MAX_OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineScalePerDepthNode = uniform(0);
 const outlineViewDepth = positionView.z.negate().max(0.000001);
 const outlineWidthView = outlineViewDepth.mul(outlineScalePerDepthNode);
-const displacedOutlinePositionView = positionView.add(
-  normalViewGeometry.mul(outlineWidthView));
-const outlineVertexNode = cameraProjectionMatrix.mul(
-  vec4(displacedOutlinePositionView, 1));
+const displacedOutlinePositionView = positionView.add(normalViewGeometry.mul(outlineWidthView));
+const outlineVertexNode = cameraProjectionMatrix.mul(vec4(displacedOutlinePositionView, 1));
 
 function createOutlineMaterial(color) {
   const material = new THREE.MeshBasicNodeMaterial({
@@ -123,11 +115,9 @@ export function setOutlineSuppressedByDebug(value) {
 }
 
 function effectiveFovRadians(camera) {
-  const effectiveFov = typeof camera?.getEffectiveFOV === 'function'
-    ? camera.getEffectiveFOV() : camera?.fov;
+  const effectiveFov = typeof camera?.getEffectiveFOV === 'function' ? camera.getEffectiveFOV() : camera?.fov;
   const fovDegrees = Number(effectiveFov);
-  if (!Number.isFinite(fovDegrees)
-      || fovDegrees <= 0 || fovDegrees >= 180) return null;
+  if (!Number.isFinite(fovDegrees) || fovDegrees <= 0 || fovDegrees >= 180) return null;
   return {
     degrees: fovDegrees,
     radians: THREE.MathUtils.degToRad(fovDegrees),
@@ -144,8 +134,7 @@ function projectionSpan(camera, target, fovRadians) {
 /** Capture the fitted camera projection without changing it during Arcball zoom. */
 export function resetOutlineProjectionReference(camera, target) {
   const fov = effectiveFovRadians(camera);
-  outlineReferenceProjectionSpan = fov
-    ? projectionSpan(camera, target, fov.radians) : 0;
+  outlineReferenceProjectionSpan = fov ? projectionSpan(camera, target, fov.radians) : 0;
   return outlineReferenceProjectionSpan;
 }
 
@@ -153,10 +142,8 @@ export function resetOutlineProjectionReference(camera, target) {
 export function updateOutlineProjectionScale(camera, target, viewportHeight) {
   const height = Number(viewportHeight);
   const fov = effectiveFovRadians(camera);
-  const currentSpan = fov
-    ? projectionSpan(camera, target, fov.radians) : 0;
-  if (!camera || !Number.isFinite(height) || height <= 0
-      || !fov || currentSpan <= 0) {
+  const currentSpan = fov ? projectionSpan(camera, target, fov.radians) : 0;
+  if (!camera || !Number.isFinite(height) || height <= 0 || !fov || currentSpan <= 0) {
     outlineScalePerDepthNode.value = 0;
     outlineViewportHeight = 0;
     outlineEffectiveFov = 0;
@@ -165,17 +152,15 @@ export function updateOutlineProjectionScale(camera, target, viewportHeight) {
     outlineProjectionRatio = 0;
     return 0;
   }
-  const referenceSpan = outlineReferenceProjectionSpan > 0
-    ? outlineReferenceProjectionSpan : currentSpan;
+  const referenceSpan = outlineReferenceProjectionSpan > 0 ? outlineReferenceProjectionSpan : currentSpan;
   const ratio = referenceSpan / currentSpan;
   const effectiveWidthPixels = THREE.MathUtils.clamp(
     REFERENCE_OUTLINE_WIDTH_PIXELS * Math.sqrt(ratio),
     MIN_OUTLINE_WIDTH_PIXELS,
-    MAX_OUTLINE_WIDTH_PIXELS);
-  const scalePerDepth = 2 * Math.tan(fov.radians / 2)
-    * effectiveWidthPixels / height;
-  outlineScalePerDepthNode.value = Number.isFinite(scalePerDepth)
-    ? scalePerDepth : 0;
+    MAX_OUTLINE_WIDTH_PIXELS,
+  );
+  const scalePerDepth = (2 * Math.tan(fov.radians / 2) * effectiveWidthPixels) / height;
+  outlineScalePerDepthNode.value = Number.isFinite(scalePerDepth) ? scalePerDepth : 0;
   outlineViewportHeight = height;
   outlineEffectiveFov = fov.degrees;
   outlineEffectiveWidthPixels = effectiveWidthPixels;
@@ -190,8 +175,7 @@ export function getOutlineState(mesh) {
     attached: !!outline,
     visible: !!outline?.visible,
     selected: outline?.userData?.selectionSelected === true,
-    material: outline?.material === selectionOutlineMaterial
-      ? 'selection' : 'normal',
+    material: outline?.material === selectionOutlineMaterial ? 'selection' : 'normal',
     globalEnabled: outlinesEnabled,
     referenceWidthPixels: REFERENCE_OUTLINE_WIDTH_PIXELS,
     minWidthPixels: MIN_OUTLINE_WIDTH_PIXELS,

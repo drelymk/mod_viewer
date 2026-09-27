@@ -53,9 +53,12 @@ function bindingOf(value) {
 }
 
 function componentLabel(binding) {
-  return binding?.component || (binding?.componentOrdinal !== null
-    && binding?.componentOrdinal !== undefined
-    ? label('asset.componentOrdinal', {number: binding.componentOrdinal}) : null);
+  return (
+    binding?.component ||
+    (binding?.componentOrdinal !== null && binding?.componentOrdinal !== undefined
+      ? label('asset.componentOrdinal', { number: binding.componentOrdinal })
+      : null)
+  );
 }
 
 export function normalizeAssetBinding(value) {
@@ -79,8 +82,7 @@ export function normalizeAssetBinding(value) {
 }
 
 function normalizedBinding(value) {
-  return value && Object.hasOwn(value, 'componentStatus')
-    ? value : normalizeAssetBinding(value);
+  return value && Object.hasOwn(value, 'componentStatus') ? value : normalizeAssetBinding(value);
 }
 
 export function assetMatchLabel(binding) {
@@ -88,9 +90,8 @@ export function assetMatchLabel(binding) {
   if (!normalized) return label(MATCH_LABELS.unavailable);
   if (normalized.status === 'ambiguous') return label(MATCH_LABELS.ambiguous);
   if (normalized.status === 'not_found') return label(MATCH_LABELS.not_found);
-  if (normalized.status === 'exact'
-      && normalized.componentStatus === 'exact'
-      && normalized.rangeStatus === 'exact') return label(MATCH_LABELS.exact);
+  if (normalized.status === 'exact' && normalized.componentStatus === 'exact' && normalized.rangeStatus === 'exact')
+    return label(MATCH_LABELS.exact);
   if (normalized.status === 'exact') return label(MATCH_LABELS.partial);
   return label(MATCH_LABELS.unknown);
 }
@@ -98,9 +99,8 @@ export function assetMatchLabel(binding) {
 export function bindingMatchKind(binding) {
   const normalized = normalizedBinding(binding);
   if (!normalized) return 'unmatched';
-  if (normalized.status === 'exact'
-      && normalized.componentStatus === 'exact'
-      && normalized.rangeStatus === 'exact') return 'exact';
+  if (normalized.status === 'exact' && normalized.componentStatus === 'exact' && normalized.rangeStatus === 'exact')
+    return 'exact';
   if (normalized.status === 'ambiguous') return 'ambiguous';
   if (normalized.status === 'not_found') return 'unmatched';
   return 'partial';
@@ -149,20 +149,22 @@ function identityOf(binding) {
 function rangeOf(binding) {
   const normalized = normalizedBinding(binding);
   if (!normalized || normalized.rangeStatus !== 'exact') return null;
-  return [normalized.classification, normalized.componentOrdinal,
-    normalized.firstIndex, normalized.indexCount].join('\0');
+  return [normalized.classification, normalized.componentOrdinal, normalized.firstIndex, normalized.indexCount].join(
+    '\0',
+  );
 }
 
 export function summarizeAssetBindings(entries = [], resolution = null) {
   const bindings = entries.map(normalizeAssetBinding).filter(Boolean);
   const counts = { exact: 0, partial: 0, ambiguous: 0, unmatched: 0 };
-  const indexUnavailable = resolution?.index_status === 'partial'
-    || resolution?.index_status === 'unavailable'
-    ? entries.filter(entry => !normalizeAssetBinding(entry)).length : 0;
+  const indexUnavailable =
+    resolution?.index_status === 'partial' || resolution?.index_status === 'unavailable'
+      ? entries.filter((entry) => !normalizeAssetBinding(entry)).length
+      : 0;
   const identities = new Set();
   const ranges = new Set();
   const assets = new Set();
-  bindings.forEach(binding => {
+  bindings.forEach((binding) => {
     const kind = bindingMatchKind(binding);
     counts[kind] += 1;
     const identity = identityOf(binding);
@@ -176,7 +178,7 @@ export function summarizeAssetBindings(entries = [], resolution = null) {
   else if (counts.ambiguous) status = 'ambiguous';
   else if (counts.partial || counts.unmatched || indexUnavailable) status = 'partial';
   else if (counts.exact) status = 'exact';
-  const first = bindings.find(binding => identityOf(binding));
+  const first = bindings.find((binding) => identityOf(binding));
   return {
     status,
     asset: first?.asset || null,
@@ -193,9 +195,9 @@ export function summarizeAssetBindings(entries = [], resolution = null) {
 
 export function textureProvenance(value) {
   const raw = value?.texture_resolution || value || {};
-  return Object.fromEntries(TEXTURE_ROLES.map(([role]) => [
-    role, label(PROVENANCE_LABELS[raw[role]] || PROVENANCE_LABELS.unresolved),
-  ]));
+  return Object.fromEntries(
+    TEXTURE_ROLES.map(([role]) => [role, label(PROVENANCE_LABELS[raw[role]] || PROVENANCE_LABELS.unresolved)]),
+  );
 }
 
 export function textureRoleLabels() {
@@ -207,9 +209,7 @@ export function textureRoleLabel(role) {
 }
 
 export function textureRoleSourceLabel(source) {
-  return label(TEXTURE_ROLE_SOURCE_LABELS[source]
-    || PROVENANCE_LABELS[source]
-    || MATCH_LABELS.unknown);
+  return label(TEXTURE_ROLE_SOURCE_LABELS[source] || PROVENANCE_LABELS[source] || MATCH_LABELS.unknown);
 }
 
 export function provenanceLabel(value) {
@@ -221,7 +221,7 @@ export function assetResolutionLabel(summary) {
   if (summary.index_status === 'unavailable') return label('asset.indexUnavailable');
   const total = Number(summary.total_draws) || 0;
   const exact = Number(summary.exact_draws) || 0;
-  return label('asset.drawsExact', {exact, total});
+  return label('asset.drawsExact', { exact, total });
 }
 
 export function assetSummaryLabel(summary) {
@@ -230,13 +230,14 @@ export function assetSummaryLabel(summary) {
   if (summary.status === 'ambiguous') return label('asset.summaryAmbiguous');
   if (summary.status === 'partial' && !summary.asset) return label('asset.summaryPartial');
   if (!summary.asset) return '';
-  const displayComponent = summary.component || (summary.componentOrdinal !== null
-    && summary.componentOrdinal !== undefined
-    ? label('asset.componentOrdinal', {number: summary.componentOrdinal}) : null);
+  const displayComponent =
+    summary.component ||
+    (summary.componentOrdinal !== null && summary.componentOrdinal !== undefined
+      ? label('asset.componentOrdinal', { number: summary.componentOrdinal })
+      : null);
   const component = displayComponent ? ` · ${displayComponent}` : '';
   const ranges = summary.rangesVary ? ` · ${label('asset.rangesVary')}` : '';
-  const partial = summary.status === 'partial'
-    ? ` · ${label('asset.partial')}` : '';
+  const partial = summary.status === 'partial' ? ` · ${label('asset.partial')}` : '';
   return label('asset.label', {
     value: `${summary.asset}${component}${ranges}${partial}`,
   });

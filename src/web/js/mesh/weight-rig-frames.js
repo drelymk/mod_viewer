@@ -1,13 +1,7 @@
-import {
-  Euler, Matrix4, Quaternion, Vector3,
-} from 'three';
+import { Euler, Matrix4, Quaternion, Vector3 } from 'three';
 
 const EPSILON = 1e-8;
-const CANONICAL_AXES = Object.freeze([
-  new Vector3(1, 0, 0),
-  new Vector3(0, 0, 1),
-  new Vector3(0, 1, 0),
-]);
+const CANONICAL_AXES = Object.freeze([new Vector3(1, 0, 0), new Vector3(0, 0, 1), new Vector3(0, 1, 0)]);
 
 function collectionValue(collection, boneId) {
   if (collection instanceof Map) {
@@ -18,8 +12,7 @@ function collectionValue(collection, boneId) {
 
 function vectorFrom(value) {
   if (value?.isVector3) return value.clone();
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? value : [value?.x, value?.y, value?.z];
+  const values = Array.isArray(value) || ArrayBuffer.isView(value) ? value : [value?.x, value?.y, value?.z];
   if (!values || values.length < 3) return null;
   const vector = new Vector3(...values.slice(0, 3).map(Number));
   return vector.toArray().every(Number.isFinite) ? vector : null;
@@ -37,34 +30,41 @@ function parentIdFor(component, boneId) {
 }
 
 function childrenFor(component, boneId) {
-  return (component?.childrenById?.[boneId] || [])
-    .map(Number).filter(Number.isFinite);
+  return (component?.childrenById?.[boneId] || []).map(Number).filter(Number.isFinite);
 }
 
 function edgeFor(component, parentId, childId) {
-  return (component?.edges || []).find(edge => {
-    const left = Number(edge.boneA ?? edge.jointA);
-    const right = Number(edge.boneB ?? edge.jointB);
-    return (left === parentId && right === childId)
-      || (left === childId && right === parentId);
-  }) || null;
+  return (
+    (component?.edges || []).find((edge) => {
+      const left = Number(edge.boneA ?? edge.jointA);
+      const right = Number(edge.boneB ?? edge.jointB);
+      return (left === parentId && right === childId) || (left === childId && right === parentId);
+    }) || null
+  );
 }
 
 function edgeStrength(edge) {
-  return Number(edge?.treeEdgeScore ?? edge?.score
-    ?? edge?.combinedTreeScore ?? edge?.attachmentScore
-    ?? edge?.containment ?? edge?.jaccard ?? 0) || 0;
+  return (
+    Number(
+      edge?.treeEdgeScore ??
+        edge?.score ??
+        edge?.combinedTreeScore ??
+        edge?.attachmentScore ??
+        edge?.containment ??
+        edge?.jaccard ??
+        0,
+    ) || 0
+  );
 }
 
 function restPointFor(boneId, centerByBoneId, jointPivotByBoneId) {
   const pivot = vectorFor(jointPivotByBoneId, boneId);
-  if (pivot) return {vector: pivot, source: 'joint-pivot'};
+  if (pivot) return { vector: pivot, source: 'joint-pivot' };
   const center = vectorFor(centerByBoneId, boneId);
-  return center ? {vector: center, source: 'weighted-center'} : null;
+  return center ? { vector: center, source: 'weighted-center' } : null;
 }
 
-function directionCandidate(component, parentId, childId, centers, pivots,
-    pivotB) {
+function directionCandidate(component, parentId, childId, centers, pivots, pivotB) {
   const child = restPointFor(childId, centers, pivots);
   if (!child) return null;
   const vector = child.vector.clone().sub(pivotB);
@@ -105,26 +105,25 @@ function canonicalDirection() {
 function directionForBone(component, boneId, centers, pivots) {
   const parentId = parentIdFor(component, boneId);
   const ownPoint = restPointFor(boneId, centers, pivots);
-  const parentPoint = parentId === null
-    ? vectorFor(centers, boneId) : restPointFor(parentId, centers, pivots)?.vector;
-  const pivotB = vectorFor(pivots, boneId) || ownPoint?.vector
-    || vectorFor(centers, boneId) || new Vector3();
+  const parentPoint = parentId === null ? vectorFor(centers, boneId) : restPointFor(parentId, centers, pivots)?.vector;
+  const pivotB = vectorFor(pivots, boneId) || ownPoint?.vector || vectorFor(centers, boneId) || new Vector3();
   const incoming = parentPoint ? pivotB.clone().sub(parentPoint) : null;
   if (incoming && incoming.length() <= EPSILON) incoming.set(0, 0, 0);
   else incoming?.normalize();
 
   let best = null;
-  childrenFor(component, boneId).forEach(childId => {
-    best = betterCandidate(best,
+  childrenFor(component, boneId).forEach((childId) => {
+    best = betterCandidate(
+      best,
       directionCandidate(component, boneId, childId, centers, pivots, pivotB),
-      parentId !== null ? incoming : null);
+      parentId !== null ? incoming : null,
+    );
   });
   if (best) {
     return {
       direction: best.vector,
       continuationChildId: best.childId,
-      directionSource: best.pivotSource === 'joint-pivot'
-        ? 'child-joint-pivot' : 'child-weighted-center',
+      directionSource: best.pivotSource === 'joint-pivot' ? 'child-joint-pivot' : 'child-weighted-center',
     };
   }
 
@@ -156,7 +155,7 @@ function directionForBone(component, boneId, centers, pivots) {
 function canonicalReferenceAxis(y) {
   let best = CANONICAL_AXES[0];
   let bestAlignment = Math.abs(best.dot(y));
-  CANONICAL_AXES.slice(1).forEach(axis => {
+  CANONICAL_AXES.slice(1).forEach((axis) => {
     const alignment = Math.abs(axis.dot(y));
     if (alignment < bestAlignment - EPSILON) {
       best = axis;
@@ -185,63 +184,56 @@ function basisFor(direction, parentBasis = null) {
   if (parentBasis && x.dot(parentBasis.x) < 0) x.negate();
   const z = new Vector3().crossVectors(x, y).normalize();
   x.crossVectors(y, z).normalize();
-  return {x, y, z};
+  return { x, y, z };
 }
 
 function quaternionForBasis(basis) {
-  return new Quaternion().setFromRotationMatrix(
-    new Matrix4().makeBasis(basis.x, basis.y, basis.z)).normalize();
+  return new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(basis.x, basis.y, basis.z)).normalize();
 }
 
 function addComponentFrames(component, centers, pivots, result) {
-  const nodeIds = (component?.nodeIds || []).map(Number)
-    .filter(Number.isFinite);
+  const nodeIds = (component?.nodeIds || []).map(Number).filter(Number.isFinite);
   if (!nodeIds.length) return;
-  const rootId = nodeIds.includes(Number(component.rootId))
-    ? Number(component.rootId) : nodeIds[0];
-  nodeIds.forEach(boneId => {
+  const rootId = nodeIds.includes(Number(component.rootId)) ? Number(component.rootId) : nodeIds[0];
+  nodeIds.forEach((boneId) => {
     const direction = directionForBone(component, boneId, centers, pivots);
     result.directionByBoneId.set(boneId, direction.direction.clone().normalize());
-    result.continuationChildByBoneId.set(
-      boneId, direction.continuationChildId ?? null);
+    result.continuationChildByBoneId.set(boneId, direction.continuationChildId ?? null);
     result.evidenceByBoneId.set(boneId, {
       directionSource: direction.directionSource,
       continuationChildId: direction.continuationChildId ?? null,
     });
   });
 
-  const queue = [{boneId: rootId, parentBasis: null}];
+  const queue = [{ boneId: rootId, parentBasis: null }];
   const visited = new Set();
   while (queue.length) {
-    const {boneId, parentBasis} = queue.shift();
+    const { boneId, parentBasis } = queue.shift();
     if (visited.has(boneId)) continue;
     visited.add(boneId);
-    const basis = basisFor(
-      result.directionByBoneId.get(boneId) || canonicalDirection(),
-      parentBasis);
+    const basis = basisFor(result.directionByBoneId.get(boneId) || canonicalDirection(), parentBasis);
     result.frameByBoneId.set(boneId, quaternionForBasis(basis));
-    childrenFor(component, boneId).forEach(childId => {
-      if (!visited.has(childId)) queue.push({boneId: childId, parentBasis: basis});
+    childrenFor(component, boneId).forEach((childId) => {
+      if (!visited.has(childId)) queue.push({ boneId: childId, parentBasis: basis });
     });
   }
-  nodeIds.forEach(boneId => {
+  nodeIds.forEach((boneId) => {
     if (result.frameByBoneId.has(boneId)) return;
-    const basis = basisFor(
-      result.directionByBoneId.get(boneId) || canonicalDirection());
+    const basis = basisFor(result.directionByBoneId.get(boneId) || canonicalDirection());
     result.frameByBoneId.set(boneId, quaternionForBasis(basis));
   });
 }
 
-export function buildInferredRigRestFrames(
-    forest, centerByBoneId, jointPivotByBoneId) {
+export function buildInferredRigRestFrames(forest, centerByBoneId, jointPivotByBoneId) {
   const result = {
     frameByBoneId: new Map(),
     directionByBoneId: new Map(),
     continuationChildByBoneId: new Map(),
     evidenceByBoneId: new Map(),
   };
-  (forest?.components || []).forEach(component =>
-    addComponentFrames(component, centerByBoneId, jointPivotByBoneId, result));
+  (forest?.components || []).forEach((component) =>
+    addComponentFrames(component, centerByBoneId, jointPivotByBoneId, result),
+  );
   return result;
 }
 
@@ -252,10 +244,12 @@ function modelJointPairKey(left, right) {
 }
 
 function finiteVectorArray(value) {
-  const values = value?.toArray ? value.toArray()
-    : Array.isArray(value) || ArrayBuffer.isView(value) ? [...value] : null;
-  return values?.length >= 3 && values.slice(0, 3).every(Number.isFinite)
-    ? values.slice(0, 3) : null;
+  const values = value?.toArray
+    ? value.toArray()
+    : Array.isArray(value) || ArrayBuffer.isView(value)
+      ? [...value]
+      : null;
+  return values?.length >= 3 && values.slice(0, 3).every(Number.isFinite) ? values.slice(0, 3) : null;
 }
 
 function buildModelJointPivotByEdgeKey(rig) {
@@ -263,43 +257,44 @@ function buildModelJointPivotByEdgeKey(rig) {
   for (const edge of rig.edges || []) {
     const jointA = Number(edge.jointA);
     const jointB = Number(edge.jointB);
-    if (!Number.isInteger(jointA) || !Number.isInteger(jointB)
-        || jointA === jointB) continue;
+    if (!Number.isInteger(jointA) || !Number.isInteger(jointB) || jointA === jointB) continue;
     const observations = (edge.sourceEdges || [])
-      .map(sourceEdge => ({
+      .map((sourceEdge) => ({
         point: finiteVectorArray(sourceEdge.jointCenter),
         weight: Number(sourceEdge.jointWeightTotal) || 0,
       }))
-      .filter(observation => observation.point && observation.weight > 0);
+      .filter((observation) => observation.point && observation.weight > 0);
     let pivot = observations.length
-      ? observations.reduce((sum, observation) => {
-        const weight = observation.weight;
-        sum.weight += weight;
-        sum.point[0] += observation.point[0] * weight;
-        sum.point[1] += observation.point[1] * weight;
-        sum.point[2] += observation.point[2] * weight;
-        return sum;
-      }, {point: [0, 0, 0], weight: 0}) : null;
-    pivot = pivot?.weight > 0
-      ? pivot.point.map(value => value / pivot.weight)
-      : finiteVectorArray(edge.jointCenter);
+      ? observations.reduce(
+          (sum, observation) => {
+            const weight = observation.weight;
+            sum.weight += weight;
+            sum.point[0] += observation.point[0] * weight;
+            sum.point[1] += observation.point[1] * weight;
+            sum.point[2] += observation.point[2] * weight;
+            return sum;
+          },
+          { point: [0, 0, 0], weight: 0 },
+        )
+      : null;
+    pivot = pivot?.weight > 0 ? pivot.point.map((value) => value / pivot.weight) : finiteVectorArray(edge.jointCenter);
     if (!pivot) {
       for (const component of rig.components || []) {
         const parentOfA = component.parentById?.[jointA];
         const parentOfB = component.parentById?.[jointB];
-        const childId = parentOfA !== null && parentOfA !== undefined
-          && Number(parentOfA) === jointB ? jointA
-          : parentOfB !== null && parentOfB !== undefined
-            && Number(parentOfB) === jointA ? jointB : null;
+        const childId =
+          parentOfA !== null && parentOfA !== undefined && Number(parentOfA) === jointB
+            ? jointA
+            : parentOfB !== null && parentOfB !== undefined && Number(parentOfB) === jointA
+              ? jointB
+              : null;
         if (childId === null) continue;
-        pivot = finiteVectorArray(rig.jointPivotByJointId.get(childId)
-          || rig.joints[childId]?.restPivot);
+        pivot = finiteVectorArray(rig.jointPivotByJointId.get(childId) || rig.joints[childId]?.restPivot);
         if (pivot) break;
       }
     }
     if (!pivot) {
-      pivot = finiteVectorArray(rig.joints[jointB]?.restPivot)
-        || finiteVectorArray(rig.joints[jointA]?.restPivot);
+      pivot = finiteVectorArray(rig.joints[jointB]?.restPivot) || finiteVectorArray(rig.joints[jointA]?.restPivot);
     }
     if (pivot) pivots.set(modelJointPairKey(jointA, jointB), pivot);
   }
@@ -307,13 +302,13 @@ function buildModelJointPivotByEdgeKey(rig) {
 }
 
 export function rebuildModelRestFrames(rig, forest) {
-  const edgePivots = rig.jointPivotByEdgeKey
-    || buildModelJointPivotByEdgeKey(rig);
+  const edgePivots = rig.jointPivotByEdgeKey || buildModelJointPivotByEdgeKey(rig);
   rig.jointPivotByEdgeKey = edgePivots;
   const pivots = new Map();
-  const rootIds = new Set((forest?.components || []).map(component =>
-    Number(component.rootId)).filter(Number.isInteger));
-  (forest?.components || []).forEach(component => {
+  const rootIds = new Set(
+    (forest?.components || []).map((component) => Number(component.rootId)).filter(Number.isInteger),
+  );
+  (forest?.components || []).forEach((component) => {
     Object.entries(component.parentById || {}).forEach(([childValue, parentValue]) => {
       if (parentValue === null || parentValue === undefined) return;
       const childId = Number(childValue);
@@ -323,26 +318,23 @@ export function rebuildModelRestFrames(rig, forest) {
       if (pivot) pivots.set(childId, [...pivot]);
     });
   });
-  (rig.joints || []).forEach(joint => {
+  (rig.joints || []).forEach((joint) => {
     const jointId = Number(joint.jointId);
     if (rootIds.has(jointId)) {
-      pivots.set(jointId, finiteVectorArray(joint.restCenter)
-        || [0, 0, 0]);
+      pivots.set(jointId, finiteVectorArray(joint.restCenter) || [0, 0, 0]);
       return;
     }
     if (!pivots.has(jointId)) {
-      pivots.set(jointId, finiteVectorArray(joint.restPivot)
-        || finiteVectorArray(joint.restCenter) || [0, 0, 0]);
+      pivots.set(jointId, finiteVectorArray(joint.restPivot) || finiteVectorArray(joint.restCenter) || [0, 0, 0]);
     }
   });
   rig.jointPivotByJointId = pivots;
-  const frames = buildInferredRigRestFrames(
-    forest, rig.centerByJointId, rig.jointPivotByJointId);
+  const frames = buildInferredRigRestFrames(forest, rig.centerByJointId, rig.jointPivotByJointId);
   rig.restFrameByJointId = frames.frameByBoneId;
   rig.restDirectionByJointId = frames.directionByBoneId;
   rig.restFrameEvidenceByJointId = frames.evidenceByBoneId;
   rig.restContinuationChildByJointId = frames.continuationChildByBoneId;
-  (rig.joints || []).forEach(joint => {
+  (rig.joints || []).forEach((joint) => {
     const jointId = Number(joint.jointId);
     const pivot = rig.jointPivotByJointId.get(jointId);
     const frame = frames.frameByBoneId.get(jointId);
@@ -355,23 +347,23 @@ export function rebuildModelRestFrames(rig, forest) {
 
 function quaternionFrom(value) {
   if (value?.isQuaternion) return value.clone().normalize();
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? [...value].slice(0, 4).map(Number)
-    : [value?.x, value?.y, value?.z, value?.w].map(Number);
+  const values =
+    Array.isArray(value) || ArrayBuffer.isView(value)
+      ? [...value].slice(0, 4).map(Number)
+      : [value?.x, value?.y, value?.z, value?.w].map(Number);
   return values.length === 4 && values.every(Number.isFinite)
-    ? new Quaternion(...values).normalize() : new Quaternion();
+    ? new Quaternion(...values).normalize()
+    : new Quaternion();
 }
 
 export function poseToRestFrameDelta(localPose, restFrame) {
   const rest = quaternionFrom(restFrame);
-  return rest.clone().invert().multiply(quaternionFrom(localPose))
-    .multiply(rest).normalize();
+  return rest.clone().invert().multiply(quaternionFrom(localPose)).multiply(rest).normalize();
 }
 
 export function restFrameDeltaToPose(frameDelta, restFrame) {
   const rest = quaternionFrom(restFrame);
-  return rest.clone().multiply(quaternionFrom(frameDelta))
-    .multiply(rest.invert()).normalize();
+  return rest.clone().multiply(quaternionFrom(frameDelta)).multiply(rest.invert()).normalize();
 }
 
 export function eulerFromRestFrameDelta(localPose, restFrame, order = 'XYZ') {
