@@ -299,7 +299,7 @@ def render_texture_png(path, max_size=2048, preserve_alpha=False,
 
 def encode_texture_data_uri(path, max_size=2048, preserve_alpha=False,
                             texture_role=None, source_name=None):
-    """Return the historical base64 data URI compatibility representation."""
+    """Return the rendered PNG as a base64 data URI."""
     png = render_texture_png(
         path, max_size=max_size, preserve_alpha=preserve_alpha,
         texture_role=texture_role, source_name=source_name)

@@ -43,8 +43,7 @@ RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
                  "__geometry__", "__state_rules__", "__state_defaults__",
                  "__health__", "__present__")
 
-# Kept for callers that imported the old helper from this module. The loader
-# itself only consumes an explicit path list or ModLoadContext.
+# Re-export discovery under the helper name used by existing imports.
 find_inis = discover_ini_paths
 
 

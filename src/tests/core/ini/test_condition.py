@@ -98,7 +98,7 @@ def test_eliminate_dead_var_inside_arithmetic():
     assert (elim("$other == $v + 1", ["v"]) == TRUE), ("a live var mixed with a dead one in arithmetic still folds "
           "(the dead var makes the whole expression unknowable)")
     assert (elim("$other == $another + 1", ["v"]) == "$other == $another + 1"), ("arithmetic naming only live vars is left completely untouched")
-    assert (elim("cursor_x < $img_x + $norm_width", ["img_x", "img_y"]) == TRUE), ("the exact real-world mouse-drag condition that used to hang now folds")
+    assert (elim("cursor_x < $img_x + $norm_width", ["img_x", "img_y"]) == TRUE), ("mouse-drag condition should reduce to true")
     assert (elim("$a == 1 && $v + 1 == 2", ["v"]) == "$a == 1"), ("survivor kept when the dead-arithmetic conjunct drops out")
     assert (elim("$v + 1", ["v"]) == TRUE), ("a bare arithmetic condition (no comparison at all) with a dead "
           "var also folds to TRUE")

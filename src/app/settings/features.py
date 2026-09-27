@@ -1,15 +1,8 @@
-"""Build-time feature flags: which optional UI actions a *built* exe exposes.
+"""Feature flags for optional UI actions.
 
-The four flags (Export / Modify_Toggle / Open_Disabled_Mod / Edit_Mesh) are
-configured via features.ini at the repo root, a build-time-only input never
-bundled into the exe. build.py reads it and bakes the resolved booleans into
-app/settings/_baked_features.py, a generated module compiled into the exe like
-any other app code, then deletes it again after PyInstaller has run — so
-there's no plain config file for an end user to flip back on.
-
-Only consulted when running as a built exe (paths.is_frozen()); a source
-checkout always shows every feature. This only hides optional UI actions; the
-backend it would have called is untouched and still reachable.
+Source runs enable every action. Frozen builds use build-time values, defaulting
+missing flags to enabled. These flags hide UI actions; backend APIs remain
+available.
 """
 
 from . import paths

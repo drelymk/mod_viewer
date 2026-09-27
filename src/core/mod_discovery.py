@@ -45,11 +45,9 @@ def _ini_names(folder, source, *, disabled=False):
 def _has_geometry_sections(document):
     """Return whether an INI looks like a mod root without resolving geometry.
 
-    Discovery must not call the full draw/mesh analyzer.  The root anchor only
-    decides whether bounded nested INIs belong to this selection, so a
-    conservative command-shape check is sufficient and avoids the old
-    ``core.ini.sections -> core.ini.parser`` dependency.  Missing buffers are allowed;
-    geometry loading reports those later.
+    The root anchor decides whether nested INIs belong to this selection, so
+    inspect command shape without invoking geometry analysis. Missing buffers
+    are handled during geometry loading.
     """
     for section in document.sections:
         name = section.name.lower()
@@ -68,11 +66,11 @@ def discover_ini_paths(mod_dir, *, disabled=False, source=None,
                        documents=None):
     """Return selected INIs from a directory or virtual archive.
 
-    Directory discovery retains its historical bounded nested search. Virtual
-    archives have no filesystem root to infer, so they scan all members
-    deterministically. ``disabled`` selects
-    only filenames beginning with ``DISABLED`` (case-insensitively); active and
-    disabled files are never combined.
+    If a direct INI contains geometry, directory discovery also checks bounded
+    nested paths. Virtual archives have no filesystem root to infer, so they
+    scan all members deterministically. ``disabled`` selects only filenames
+    beginning with ``DISABLED`` (case-insensitively); active and disabled files
+    are never combined.
     """
     source = source or mod_source_for_path(mod_dir)
     if source.virtual:

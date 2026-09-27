@@ -1,6 +1,4 @@
-// Base64 -> typed array decoding for the mesh buffers the Python side sends.
-// Normal loads fetch one binary localhost blob. Direct fixtures may still use
-// the legacy base64 fields, so decodeBytes keeps that fallback.
+// Decode packed mesh buffers from the binary localhost blob, with base64 fallback for direct payloads.
 
 let geometryBlob = null;
 

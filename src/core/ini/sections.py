@@ -59,11 +59,9 @@ def canonical_var_names(sections):
 def merge_sections(ini_paths, overrides=None, documents=None):
     """Parse all ini files and merge sections with the same name.
 
-    `overrides`, if given, is {ini_path: text} — parse that ini from this
-    in-memory text instead of reading it from disk. Used to preview pending,
-    not-yet-exported edits (see app/session/edit.py) without writing
-    anything to the real file first; an ini not present in `overrides` is
-    read from disk exactly as before.
+    `overrides`, if given, is {ini_path: text}; those INIs are parsed from
+    memory so pending edits can be previewed without writing to disk. INIs
+    absent from `overrides` are read from disk.
     """
     overrides = overrides or {}
     documents = documents or {}
@@ -121,10 +119,9 @@ def first_source(lines):
 
 def parse_sections(ini_path, text=None):
     """Parse one ini file's sections, either from disk (the default) or from
-    `text` directly. The in-memory path lets a caller preview a pending,
-    not-yet-exported edit (see app/session/edit.py) — `ini_path` still tags
-    every SrcLine's provenance either way, it's just not opened when `text`
-    is supplied.
+    `text` directly. The in-memory path lets callers preview pending edits;
+    `ini_path` still tags every SrcLine's provenance and is not opened when
+    `text` is supplied.
     """
     sections, current = {}, None
 

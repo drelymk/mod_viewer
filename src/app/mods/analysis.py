@@ -46,7 +46,7 @@ class ParsedModAnalysis:
     texture_override_indexes: list = field(default_factory=list)
 
     def __iter__(self):
-        """Keep old six-value helper callers source-compatible."""
+        """Preserve six-value unpacking for ParsedModAnalysis callers."""
         yield self.groups
         yield self.toggles
         yield self.menu

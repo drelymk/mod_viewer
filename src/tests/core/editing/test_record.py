@@ -373,8 +373,8 @@ def test_record_resolves_original_targets_after_staged_toggle_insert():
 
     te.add_toggle(d, "New", "2", "new", ["0", "1"])
 
-    # The old second source line now lands on the first valid draw. A kind-only
-    # check would accept that neighboring draw and lose the real second target.
+    # Inserting a toggle shifts the second source line onto the first valid
+    # draw. A kind-only check would accept that neighbor and lose the target.
     assert d.lines[second_line - 1].text == "drawindexed = 100,0,0"
     report = re_.record_toggle(
         d, "KeyNew", {0: [first_line], 1: [second_line]}, refs)
@@ -394,8 +394,8 @@ def test_record_resolves_same_triple_by_draw_occurrence():
 
     te.add_toggle(d, "New", "2", "new", ["0", "1"])
 
-    # The old second source line now points at the first identical draw. The
-    # ordinal in the target identity must still select the second occurrence.
+    # Inserting a toggle shifts the second source line onto the first identical
+    # draw. The target identity's ordinal must still select the second occurrence.
     assert d.lines[second_line - 1].text == "drawindexed = 100,0,0"
     report = re_.record_toggle(
         d, "KeyNew", {0: [first_line], 1: [second_line]}, refs)

@@ -462,7 +462,7 @@ function intersects(left, right) {
 
 /** Apply only mesh categories affected by the final control-state diff. */
 export function refreshMeshes(options) {
-  // Keep direct low-level callers compatible with the former all-mesh API.
+  // Calls without options refresh visibility, textures, and shapes.
   const legacyRefresh = options === undefined;
   const { changedVariables = new Set(), force = {}, additionalMeshes = [] } = options || {};
   const changed = changedVariables instanceof Set ? changedVariables : new Set(changedVariables || []);

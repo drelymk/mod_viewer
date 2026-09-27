@@ -29,8 +29,7 @@ _MAX_ARCHIVE_MEMBERS = 100_000
 _MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
 _MAX_ARCHIVE_READ_BYTES = 2 * 1024 * 1024 * 1024
 
-# Keep the old names available for tests and compatibility with existing ZIP
-# limit tuning.
+# Preserve the ZIP limit constant names used by tests and existing tuning code.
 _MAX_ZIP_MEMBERS = _MAX_ARCHIVE_MEMBERS
 _MAX_ZIP_MEMBER_BYTES = _MAX_ARCHIVE_MEMBER_BYTES
 _MAX_ZIP_READ_BYTES = _MAX_ARCHIVE_READ_BYTES

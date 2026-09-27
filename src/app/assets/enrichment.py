@@ -47,8 +47,7 @@ class TextureSemanticEvidence:
     classification: str | None = None
 
 
-# Compatibility for callers that imported the old evidence name. The
-# enrichment path itself uses source-independent semantic evidence.
+# Preserve the AssetTextureEvidence import name for existing callers.
 AssetTextureEvidence = TextureSemanticEvidence
 
 
@@ -471,7 +470,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
 
     A not-found binding is published only when at least one ready index was
     queried.  With no configured or usable index, omitting it preserves the
-    legacy no-Asset presentation while the aggregate report explains why
+    no-Asset presentation while the aggregate report explains why
     matching was unavailable.
     """
     metadata_cache = metadata_cache if metadata_cache is not None else {}

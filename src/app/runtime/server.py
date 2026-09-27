@@ -494,8 +494,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             suffix = "png"
             source_id = requested_id[:-4]
         else:
-            # Extensionless URLs remain a PNG compatibility path for direct
-            # fixtures and older payloads during the transport migration.
+            # Extensionless texture URLs resolve as PNG for direct callers and fixtures.
             suffix = "png"
             source_id = requested_id
         if not source_id:

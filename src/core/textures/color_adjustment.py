@@ -77,8 +77,7 @@ def _normalize_tint(value, *, reject_invalid):
                            reject_invalid=reject_invalid)
         if strength is None:
             return _INVALID
-        # Legacy partial tint had no exact equivalent. Preserve an explicit
-        # positive tint selection, while zero remains the old disabled state.
+        # Positive strength selects the tint; nonpositive strength disables it.
         if strength <= 0.0:
             return None
     if raw_tint is None:

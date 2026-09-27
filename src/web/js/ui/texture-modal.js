@@ -1,7 +1,4 @@
-// Per-component "manage textures" popup: lists a component's shared texture
-// pool (viewer-only -- see the application payload's texture_pools table),
-// lets the user add an existing file from the mod folder
-// or remove an option. Changes persist in .mod_viewer.json, never in the ini.
+// Edit a component's shared texture pool; changes persist to viewer metadata, not INI files.
 
 import { addTexture } from '../mesh/mesh-factory.js';
 import { bindModalDismiss } from './modal-shell.js';
@@ -114,7 +111,7 @@ function render() {
             delete opt.normal_data;
             // Keep the clear authoritative against automatic component
             // propagation. The value is gone; this flag is only a
-            // viewer-side tombstone until the option is replaced.
+            // viewer-side tombstone until a new normal texture is assigned.
             opt.normal_map_manual = true;
             if (hadNormalData) opt.normal_data_manual = true;
           } else {
@@ -144,11 +141,8 @@ function render() {
   }
 }
 
-/** Open the popup for one component. `pool` is the shared texture_pools
- * array (same object reference every mesh in the component carries) --
- * mutated in place so add/remove is instantly reflected everywhere.
- * `onPoolChange` re-renders every open per-mesh texture list for this
- * component. */
+/** Open a component's shared texture pool. Mutate `pool` in place so every
+ * mesh sees changes; `onPoolChange` refreshes open per-mesh lists. */
 export function openTextureModal(componentName, pool, modPath, onPoolChange, texturePicker = null) {
   currentPool = pool;
   currentTitle = componentName;
@@ -162,9 +156,7 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange, tex
     const result = texturePicker ? await texturePicker(null) : await window.pywebview.api.pick_texture_file(modPath);
     if (!result) return;
     if (result.error) {
-      // Reuses the modal's own list area for feedback -- no separate error
-      // box exists here, unlike the toggle modal, since this is a much
-      // smaller, lower-stakes surface (view-only, nothing to lose on retry).
+      // This modal uses its list area for errors; it has no separate error region.
       return showError(result.error);
     }
     addTexture(result.tex_key, result.uri);

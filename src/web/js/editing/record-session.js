@@ -38,8 +38,8 @@ function sourceConditions(mesh, source) {
   if (Object.prototype.hasOwnProperty.call(source, 'conditions')) {
     return source.conditions || [];
   }
-  // Low-level/legacy payloads may have only one source and put its conditions
-  // on the mesh entry. Never use a merged mesh condition for multiple sources.
+  // A single-source payload may store conditions on the mesh entry. Never use
+  // merged mesh conditions when multiple sources contribute to that mesh.
   const sources = mesh.userData.sources || [];
   return sources.length === 1 ? mesh.userData.conditions || [] : [];
 }

@@ -149,9 +149,7 @@ def test_get_record_positions_uses_complete_cycle_but_reports_writable_vars(togg
 
 
 def _swap_positions(tmp, ini_rel):
-    """Stage the fixture's one real rewrite: swap the two positions' cycle
-    gating so position 0 shows the line that used to be position 1's, and
-    vice versa. Returns (ini_path, record_toggle's result dict)."""
+    """Swap the two positions' cycle gating and return the INI path and result."""
     line_100 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1) if "100,0,0" in line)
     line_200 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1) if "200,0,0" in line)
     ini_path = os.path.join(tmp, ini_rel)

@@ -1,7 +1,6 @@
-"""Compatibility facade for the read-only INI draw-analysis pipeline.
+"""Read-only INI analysis facade; focused modules provide the implementations.
 
-Section parsing, condition helpers, controls, and draw analysis retain their
-historical imports here while focused modules own their implementations.
+Existing imports remain available through this module.
 """
 
 from ..geometry.buffers import (
