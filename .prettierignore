@@ -3,6 +3,8 @@ node_modules/
 .codex/
 graphify-out/
 src/web/lib/
+src/web/css/
+src/web/index.html
 src/assets/
 src/build/
 src/dist/

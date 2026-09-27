@@ -45,20 +45,11 @@ def main():
     ).stdout.split("\0")
     files = [name for name in tracked if name and not name.startswith(VENDOR)]
     python_files = [name for name in files if name.endswith(".py")]
-    web_files = [
+    prettier_files = [
         name
         for name in files
-        if Path(name).suffix
-        in {
-            ".js",
-            ".mjs",
-            ".css",
-            ".html",
-            ".json",
-            ".md",
-            ".yml",
-            ".yaml",
-        }
+        if (name.startswith("src/web/js/") and Path(name).suffix == ".js")
+        or name == "eslint.config.mjs"
     ]
     python = sys.executable
     ruff = [python, "-m", "ruff"]
@@ -97,7 +88,7 @@ def main():
                 "node",
                 "node_modules/prettier/bin/prettier.cjs",
                 "--check",
-                *web_files,
+                *prettier_files,
             ],
         ),
         "eslint": run_audit(

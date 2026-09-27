@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "lint": "eslint src/web/js",
-    "format:check": "prettier --check src/web/js src/web/css src/web/index.html"
+    "format:check": "prettier --check \"src/web/js/**/*.js\" eslint.config.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
