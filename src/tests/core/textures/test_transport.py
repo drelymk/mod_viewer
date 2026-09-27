@@ -23,7 +23,7 @@ from core.ini.document import IniDocument
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.mod_source import SevenZipModSource, ZipModSource
 from core.sevenzip import SevenZipEntry
-from tests.support.dds_data import dx10_dds
+from tests.support.dds_data import write_bc7_dds
 
 
 def _write_geometry(root):
@@ -50,10 +50,6 @@ def _group(texture_names):
         "draws": [draw],
     }]
 
-
-def _write_bc7_dds(path, width=4, height=4):
-    payload = bytes(((width + 3) // 4) * ((height + 3) // 4) * 16)
-    path.write_bytes(dx10_dds(payload, width=width, height=height))
 
 def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
     _write_geometry(str(tmp_path))
@@ -264,7 +260,7 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
 
 def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_path):
     dds = tmp_path / "native.dds"
-    _write_bc7_dds(dds)
+    write_bc7_dds(dds)
     invalid = tmp_path / "unsupported.dds"
     invalid.write_bytes(b"not a DDS")
     publication = server.begin_texture_publication(str(tmp_path))
@@ -313,13 +309,13 @@ def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_pa
 
 def test_normal_roles_use_native_dds(tmp_path):
     dds = tmp_path / "shared.dds"
-    _write_bc7_dds(dds)
+    write_bc7_dds(dds)
     publication = server.begin_texture_publication(str(tmp_path))
 
     normal_map_url = publication.register(str(dds), "normal_map")
     normal_data_url = publication.register(str(dds), "normal_data")
     within_limit = tmp_path / "within-limit.dds"
-    _write_bc7_dds(within_limit, width=2049, height=4)
+    write_bc7_dds(within_limit, width=2049, height=4)
     within_limit_url = publication.register(str(within_limit))
 
     assert normal_map_url.endswith(".dds")
@@ -333,8 +329,8 @@ def test_normal_roles_use_native_dds(tmp_path):
 def test_model_dds_limit_is_independent_of_png_size(tmp_path):
     accepted = tmp_path / "accepted.dds"
     rejected = tmp_path / "rejected.dds"
-    _write_bc7_dds(accepted, width=8192, height=4)
-    _write_bc7_dds(rejected, width=8193, height=4)
+    write_bc7_dds(accepted, width=8192, height=4)
+    write_bc7_dds(rejected, width=8193, height=4)
     publication = server.begin_texture_publication(str(tmp_path))
     try:
         url = publication.register(str(accepted))
@@ -347,7 +343,7 @@ def test_model_dds_limit_is_independent_of_png_size(tmp_path):
 
 def test_menu_dds_publication_defers_png_render_until_requested(tmp_path):
     dds = tmp_path / "menu.dds"
-    _write_bc7_dds(dds)
+    write_bc7_dds(dds)
     publication = server.begin_texture_publication(str(tmp_path))
     try:
         with patch("app.runtime.server.render_texture_png",
@@ -374,7 +370,7 @@ def test_menu_dds_publication_defers_png_render_until_requested(tmp_path):
 def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_request(
         tmp_path):
     dds = tmp_path / "native.dds"
-    _write_bc7_dds(dds)
+    write_bc7_dds(dds)
     dds_bytes = dds.read_bytes()
     archive_path = tmp_path / "mod.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
@@ -430,7 +426,7 @@ def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_reque
 def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
         tmp_path, archive_suffix):
     dds = tmp_path / "native.dds"
-    _write_bc7_dds(dds)
+    write_bc7_dds(dds)
     dds_bytes = dds.read_bytes()
     archive_path = tmp_path / f"mod{archive_suffix}"
     archive_path.write_bytes(b"mock archive")

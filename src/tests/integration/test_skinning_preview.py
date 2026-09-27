@@ -11,7 +11,7 @@ from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.geometry.skinning import SkinningSource
 from core.ini.draw_groups import build_draw_groups
 from core.ini.sections import extract_resources, merge_sections
-from tests.support.skinning_data import gimi_four_influence, vertex_vg_remap
+from tests.support.skinning_data import write_gimi_skinning_mod, write_wwmi_remap_mod
 
 
 class _Access:
@@ -19,99 +19,8 @@ class _Access:
         return path
 
 
-def _write_mod(tmp_path):
-    ini = tmp_path / "mod.ini"
-    ini.write_text(
-        """[TextureOverrideComponent01Blend]
-ib = ResourceComponent01IB
-vb0 = ResourceComponent01Position
-vb1 = ResourceComponent01Blend
-vb2 = ResourceComponent01Texcoord
-drawindexed = 6, 0, 0
-
-[TextureOverrideComponent01Texcoord]
-vb1 = ResourceComponent01Texcoord
-
-[ResourceComponent01IB]
-filename = component01.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceComponent01Position]
-filename = component01.pos
-stride = 12
-
-[ResourceComponent01Blend]
-filename = component01.blend
-stride = 32
-
-[ResourceComponent01Texcoord]
-filename = component01.tc
-stride = 20
-""",
-        encoding="utf-8",
-    )
-    (tmp_path / "component01.ib").write_bytes(struct.pack(
-        "<6I", 2, 0, 1, 1, 3, 2))
-    (tmp_path / "component01.pos").write_bytes(b"".join(
-        struct.pack("<3f", float(i), 0., 0.) for i in range(4)))
-    (tmp_path / "component01.tc").write_bytes(b"\0" * 20 * 4)
-    (tmp_path / "component01.blend").write_bytes(
-        gimi_four_influence() * 4)
-    return ini
-
-
-def _write_wwmi_remap_mod(tmp_path):
-    ini = tmp_path / "wwmi.ini"
-    ini.write_text(
-        """[TextureOverrideComponent01Blend]
-ib = ResourceComponent01IB
-vb0 = ResourceComponent01Position
-vb1 = ResourceComponent01Blend
-vb2 = ResourceComponent01Texcoord
-run = CommandListRemap
-drawindexed = 3, 0, 0
-
-[CommandListRemap]
-cs-t35 = ref ResourceBlendRemapVertexVGBuffer
-
-[ResourceComponent01IB]
-filename = component01.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceComponent01Position]
-filename = component01.pos
-stride = 12
-
-[ResourceComponent01Blend]
-filename = component01.blend
-format = DXGI_FORMAT_R8_UINT
-stride = 16
-
-[ResourceComponent01Texcoord]
-filename = component01.tc
-stride = 20
-
-[ResourceBlendRemapVertexVGBuffer]
-filename = component01.vertex_vg
-format = DXGI_FORMAT_R16_UINT
-stride = 16
-""",
-        encoding="utf-8",
-    )
-    (tmp_path / "component01.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
-    (tmp_path / "component01.pos").write_bytes(b"".join(
-        struct.pack("<3f", float(i), 0., 0.) for i in range(3)))
-    (tmp_path / "component01.tc").write_bytes(b"\0" * 20 * 3)
-    (tmp_path / "component01.blend").write_bytes(b"".join(
-        bytes([3] * 8 + [255, 128, 0, 0, 0, 0, 0, 0])
-        for _ in range(3)))
-    (tmp_path / "component01.vertex_vg").write_bytes(
-        vertex_vg_remap((3, 259, 0, 0, 0, 0, 0, 0)) * 3)
-    return ini
-
-
 def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
-    ini = _write_mod(tmp_path)
+    ini = write_gimi_skinning_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
@@ -180,7 +89,7 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
 
 def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
         tmp_path, monkeypatch):
-    ini = _write_wwmi_remap_mod(tmp_path)
+    ini = write_wwmi_remap_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
@@ -238,7 +147,7 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
 
 def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
         tmp_path, monkeypatch):
-    ini = _write_mod(tmp_path)
+    ini = write_gimi_skinning_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()

@@ -38,3 +38,8 @@ def mode6_block(endpoints=((20, 110), (40, 140), (60, 170))):
     for pixel, index in enumerate(indices[1:], 1):
         bits = bc7.set_bits(bits, 68 + (pixel - 1) * 4, 4, index)
     return bits.to_bytes(16, "little")
+
+
+def write_bc7_dds(path, width=4, height=4):
+    payload = bytes(((width + 3) // 4) * ((height + 3) // 4) * 16)
+    path.write_bytes(dx10_dds(payload, width=width, height=height))

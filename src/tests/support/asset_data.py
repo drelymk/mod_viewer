@@ -47,7 +47,7 @@ def standard_asset_index(root, *, asset_type="GIMI", asset="Asset01",
                 "firstIndex": first_index, "indexCount": None,
                 "classification": classification, "componentOrdinal": 1,
             }], "metadata": metadata or f"{asset}/hash.json",
-            "componentName": "Body",
+            "componentName": "Component01",
         }]}],
         "byGeometryHash": {"10101010": [{"asset": 0, "geometry": 0}]},
     }

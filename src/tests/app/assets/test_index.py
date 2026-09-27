@@ -30,18 +30,6 @@ def _config(tmp_path, asset_entries=None):
     return filename
 
 
-def _write_json(filename, value):
-    write_json(Path(filename), value)
-
-
-def _gimi_root(tmp_path, name="gimi"):
-    return gimi_asset_root(tmp_path, name)
-
-
-def _wwmi_root(tmp_path, name="wwmi"):
-    return wwmi_asset_root(tmp_path, name)
-
-
 @pytest.mark.parametrize("value, expected", [
     ("A1A1A1A1", "a1a1a1a1"), ("0xa1a1a1a1", "a1a1a1a1"),
     ("not-a-hash", None), ("123", None),
@@ -51,19 +39,19 @@ def test_geometry_hash_normalization(value, expected):
 
 
 def test_invalid_cache_is_reported_without_rebuilding(tmp_path, monkeypatch):
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     config = _config(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     filename = index_path("GIMI", str(root))
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    _write_json(filename, {"version": 1, "type": "GIMI",
+    write_json(Path(filename), {"version": 1, "type": "GIMI",
                            "root": asset_folders.normalize_path(str(root))})
 
     assert index_status("GIMI", str(root)) == {"status": "invalid"}
 
 
 def test_gimi_index_merges_ranges_and_builds_reverse_lookup(tmp_path, monkeypatch):
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     (root / "Notes").mkdir()
     broken = root / "Broken"
     broken.mkdir()
@@ -97,7 +85,7 @@ def test_gimi_index_merges_ranges_and_builds_reverse_lookup(tmp_path, monkeypatc
 
 def test_index_cache_is_isolated_and_tracks_replacement_and_deletion(
         tmp_path, monkeypatch):
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     config = _config(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     index = build_index("GIMI", str(root))
@@ -149,7 +137,7 @@ def test_index_cache_does_not_fail_a_read_when_file_is_deleted(
         tmp_path, monkeypatch):
     from app.assets.index import save_index
 
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     config = _config(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     filename = save_index(build_index("GIMI", str(root)))
@@ -171,7 +159,7 @@ def test_zzmi_uses_optional_index_counts(tmp_path):
     root = tmp_path / "zzmi"
     asset01 = root / "Asset01"
     asset01.mkdir(parents=True)
-    _write_json(str(asset01 / "hash.json"), [{
+    write_json(asset01 / "hash.json", [{
         "ib": "11223344", "object_indexes": [0, 16],
     }])
 
@@ -191,9 +179,9 @@ def test_gimi_accepts_known_category_and_weapon_layouts(tmp_path):
     weapon.mkdir(parents=True)
     unknown.mkdir(parents=True)
     payload = [{"ib": "a1a1a1a1", "object_indexes": [0]}]
-    _write_json(str(player / "hash.json"), payload)
-    _write_json(str(weapon / "hash.json"), payload)
-    _write_json(str(unknown / "hash.json"), payload)
+    write_json(player / "hash.json", payload)
+    write_json(weapon / "hash.json", payload)
+    write_json(unknown / "hash.json", payload)
 
     index = build_index("GIMI", str(root))
 
@@ -206,11 +194,11 @@ def test_gimi_merges_immediate_nested_hash_metadata_into_parent_asset(tmp_path):
     asset = root / "PlayerCharacterData" / "Asset06"
     nested = asset / "Asset06Face"
     nested.mkdir(parents=True)
-    _write_json(str(asset / "hash.json"), [{
+    write_json(asset / "hash.json", [{
         "ib": "a1a1a1a1", "component_name": "Body",
         "object_indexes": [0],
     }])
-    _write_json(str(nested / "hash.json"), [{
+    write_json(nested / "hash.json", [{
         "ib": "abcdef12", "component_name": "Eye",
         "object_indexes": [0],
     }])
@@ -232,11 +220,11 @@ def test_gimi_preserves_nested_metadata_for_shared_geometry_hash(tmp_path):
     asset = root / "PlayerCharacterData" / "Asset01"
     nested = asset / "Face"
     nested.mkdir(parents=True)
-    _write_json(str(asset / "hash.json"), [{
+    write_json(asset / "hash.json", [{
         "ib": "abcdef12", "component_name": "Body",
         "object_indexes": [0],
     }])
-    _write_json(str(nested / "hash.json"), [{
+    write_json(nested / "hash.json", [{
         "ib": "abcdef12", "component_name": "Face",
         "object_indexes": [0],
     }])
@@ -254,14 +242,14 @@ def test_hash_index_rejects_arbitrary_nested_collection(tmp_path):
     root = tmp_path / "collection"
     asset = root / "UnrecognizedGroup" / "Asset01"
     asset.mkdir(parents=True)
-    _write_json(str(asset / "hash.json"), [{"ib": "a1a1a1a1"}])
+    write_json(asset / "hash.json", [{"ib": "a1a1a1a1"}])
 
     with pytest.raises(NoValidAssetsError, match="No valid assets"):
         build_index("GIMI", str(root))
 
 
 def test_wwmi_index_reads_metadata_and_records_detail_path(tmp_path):
-    root = _wwmi_root(tmp_path)
+    root = wwmi_asset_root(tmp_path)
 
     index = build_index("WWMI", str(root))
 
@@ -279,13 +267,13 @@ def test_wwmi_accepts_known_category_and_rejects_arbitrary_nested_root(
     root = tmp_path / "full-wwmi"
     asset01 = root / "PlayerCharacterData" / "Asset01"
     asset01.mkdir(parents=True)
-    _write_json(str(asset01 / "Metadata.json"), {
+    write_json(asset01 / "Metadata.json", {
         "vb0_hash": "abcdef12", "components": [{"index_offset": 0}]})
     assert build_index("WWMI", str(root))["stats"]["assetCount"] == 1
 
     invalid = tmp_path / "wwmi-collection" / "UnrecognizedGroup" / "Asset01"
     invalid.mkdir(parents=True)
-    _write_json(str(invalid / "Metadata.json"), {"vb0_hash": "abcdef12"})
+    write_json(invalid / "Metadata.json", {"vb0_hash": "abcdef12"})
     with pytest.raises(NoValidAssetsError, match="No valid assets"):
         build_index("WWMI", str(invalid.parents[1]))
 
@@ -293,7 +281,7 @@ def test_wwmi_accepts_known_category_and_rejects_arbitrary_nested_root(
 def test_index_retains_mesh_identity_labels(tmp_path):
     gimi_root = tmp_path / "labeled-gimi" / "PlayerCharacterData"
     gimi_root.mkdir(parents=True)
-    _write_json(str(gimi_root / "Asset01" / "hash.json"), [
+    write_json(gimi_root / "Asset01" / "hash.json", [
         {"ib": "a1a1a1a1", "component_name": "Body",
          "object_indexes": [0, 12],
          "object_classifications": ["body", "hair"]},
@@ -309,7 +297,7 @@ def test_index_retains_mesh_identity_labels(tmp_path):
     wwmi_root = tmp_path / "labeled-wwmi"
     asset01 = wwmi_root / "Asset01"
     asset01.mkdir(parents=True)
-    _write_json(str(asset01 / "Metadata.json"), {
+    write_json(asset01 / "Metadata.json", {
         "vb0_hash": "abcdef12", "components": [
             {"index_offset": 0, "name": "Body"},
             {"index_offset": 10},
@@ -327,7 +315,7 @@ def test_wwmi_object_layout_is_supported(tmp_path):
     root = tmp_path / "wwmi-objects"
     object_dir = root / "Asset01" / "a1a1a1a1"
     object_dir.mkdir(parents=True)
-    _write_json(str(object_dir / "Metadata.json"), {
+    write_json(object_dir / "Metadata.json", {
         "vb0_hash": "A1A1A1A1",
         "components": [{"index_offset": 4, "index_count": 20}],
     })
@@ -348,14 +336,14 @@ def test_individual_asset01_folder_gets_specific_error(
         tmp_path, asset_type, filename, payload):
     selected = tmp_path / "Asset01"
     selected.mkdir()
-    _write_json(str(selected / filename), payload)
+    write_json(selected / filename, payload)
 
     with pytest.raises(IndividualAssetError, match="individual character asset"):
         build_index(asset_type, str(selected))
 
 
 def test_index_builder_does_not_open_heavy_asset_files(tmp_path, monkeypatch):
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     for suffix in ("dds", "buf", "vb", "ib", "fmt"):
         (root / "Asset01" / f"payload.{suffix}").write_bytes(b"payload")
     real_open = builtins.open
@@ -373,7 +361,7 @@ def test_index_builder_does_not_open_heavy_asset_files(tmp_path, monkeypatch):
 def test_api_add_rebuild_and_delete_manage_index_transactionally(
         tmp_path, monkeypatch):
     config = _config(tmp_path)
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
     api._access.remember_asset_picker_selection(str(root))
@@ -417,7 +405,7 @@ def test_api_add_failure_leaves_config_and_index_unchanged(tmp_path, monkeypatch
 
 def test_api_config_failure_restores_new_index(tmp_path, monkeypatch):
     config = _config(tmp_path)
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
     normalized = asset_folders.normalize_path(str(root))
@@ -437,7 +425,7 @@ def test_api_config_failure_restores_new_index(tmp_path, monkeypatch):
 def test_api_edit_reindexes_same_root_without_changing_enabled_state(
         tmp_path, monkeypatch):
     config = _config(tmp_path)
-    root = _gimi_root(tmp_path)
+    root = gimi_asset_root(tmp_path)
     monkeypatch.setattr(paths, "config_path", lambda: config)
     api = ModViewerAPI()
     normalized = asset_folders.normalize_path(str(root))

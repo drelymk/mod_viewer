@@ -74,7 +74,7 @@ def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch)
 
     assert binding.status == "exact"
     assert binding.asset == "Asset01"
-    assert binding.component_name == "Body"
+    assert binding.component_name == "Component01"
     assert binding.classification == "B"
 
     entries[0]["enabled"] = False
@@ -492,7 +492,7 @@ def test_hash_only_geometry_resolves_component_but_not_range(tmp_path,
     assert binding.status == "exact"
     assert binding.component_status == "exact"
     assert binding.range_status == "unknown"
-    assert binding.component_name == "Body"
+    assert binding.component_name == "Component01"
 
 
 def test_hash_only_component_does_not_enable_object_texture_fallback(tmp_path,
