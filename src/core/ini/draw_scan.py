@@ -13,7 +13,6 @@ from .menu import extract_menu_var_names
 from .state import extract_state_rules
 from .toggles import extract_toggle_var_names
 from .texture_roles import (
-    TextureOverrideIndex,
     _collect_structural_slot_role_hints, _collect_texture_override_index,
     _effective_role_assignments, _legacy_texture_evidence,
     _semantic_texture_role,

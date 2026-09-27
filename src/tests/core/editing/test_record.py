@@ -20,8 +20,6 @@ import os
 import pytest
 
 
-from tests.support.corpus import sample_mods
-from core.ini.sections import sections_from_document
 from core.ini.document import IniDocument, IF, ENDIF, DRAW
 from core.ini import condition as ic
 from core.editing import toggle as te

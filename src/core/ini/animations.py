@@ -84,7 +84,7 @@ class _ExpressionParser:
     """Parse the deliberately small numeric language used by compute mods."""
 
     _TOKEN_RE = re.compile(
-        rf"\s*(?:(?P<number>(?:\d+(?:\.\d*)?|\.\d+))|"
+        r"\s*(?:(?P<number>(?:\d+(?:\.\d*)?|\.\d+))|"
         r"(?P<name>\$?[A-Za-z_]\w*)|"
         r"(?P<operator>[+*\-]))")
 

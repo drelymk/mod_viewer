@@ -15,6 +15,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    name: Check-only quality audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install development audit tools
+        run: |
+          python -m pip install -r requirements-quality.txt
+          npm ci --ignore-scripts
+      - name: Audit formatting and lint; enforce correctness and hygiene
+        run: python tools/quality_audit.py --base HEAD^
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-audit
+          path: .quality-reports/
+
   unit:
     name: Python, core, app, and integration tests
     runs-on: windows-latest

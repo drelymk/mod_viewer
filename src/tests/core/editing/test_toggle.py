@@ -18,12 +18,10 @@ untouched line as its next rewrite target forever. eliminate() now folds dead
 vars out of arithmetic too; test_real_mods_delete_toggle is what caught it.
 """
 
-import os
 
 import pytest
 
 
-from tests.support.corpus import sample_mods
 
 from core.ini.document import IniDocument, IF, ELIF
 from core.ini import condition as ic

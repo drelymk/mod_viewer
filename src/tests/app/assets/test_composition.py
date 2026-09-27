@@ -1,6 +1,5 @@
 """Coverage planning regressions for explicit original Asset filling."""
 
-from types import SimpleNamespace
 
 from app.assets import composition as asset_composition
 from app.assets import index as asset_index

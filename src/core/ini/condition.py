@@ -426,7 +426,7 @@ def render(node):
 
 def references(text, var):
     """True if the condition text reads `$var`. Returns False on a parse error,
-    so an unparseable condition is never assumed to depend on the variable."""
+    so an unparsable condition is never assumed to depend on the variable."""
     try:
         return var in parse(text).variables()
     except ConditionError:

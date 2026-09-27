@@ -435,16 +435,6 @@ export function setMeshTextureState(mesh, state, { render = true } = {}) {
   return textureChanged || colorChanged;
 }
 
-/** Colour for meshes with no texture, guessed from the component name. */
-function fallbackColor(name) {
-  const n = name.toLowerCase();
-  // if (n.includes('wing'))                          return 0xc8a2c8;
-  // if (n.includes('hair'))                          return 0xa0d8ef;
-  // if (n.includes('body') || n.includes('top'))     return 0xf5cba7;
-  // if (n.includes('leg')  || n.includes('bottom'))  return 0xf7dc6f;
-  // if (n.includes('belt') || n.includes('bag'))     return 0xadd8e6;
-  return 0xcccccc;
-}
 
 export function activateMeshTextures(mesh, {render = true} = {}) {
   mesh.userData.textureRequestsDeferred = false;
@@ -467,7 +457,7 @@ export function buildMesh(name, data, materialProfile = null, options = {}) {
     geo.computeVertexNormals();
   }
 
-  const fallback = fallbackColor(name);
+  const fallback = 0xcccccc;
   const mat = createGameMaterial(materialProfile, fallback,
     { hasUv: !!data.uv });
 

@@ -5,11 +5,10 @@ import io
 import struct
 import tempfile
 
-from core.ini import parser as ini_parser
-from core.ini.parser import build_draw_groups, extract_resources, merge_sections, parse_sections
+from core.ini.parser import build_draw_groups, extract_resources, merge_sections
 from core.textures import render_texture_png
-from tests.support.provenance import (DIFFUSE_NO_REF_INI, build_mesh_fixture,
-                                 geometry_values, texture_file, visible, write)
+from tests.support.provenance import (build_mesh_fixture,
+                                 texture_file, visible, write)
 
 AUXILIARY_MAPS_INI = """[Constants]
 global $detail = 0

@@ -111,7 +111,6 @@ def build_texture_options(group, registry):
 def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
     """Apply default and conditional role-aware texture bindings to an entry."""
     profile = registry.profile
-    mod_dir = registry.mod_dir
 
     asset_default = draw.asset_texture_defaults.get("diffuse") or {}
     default_key = registry.ensure(

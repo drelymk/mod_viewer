@@ -4,10 +4,8 @@ import os
 import struct
 import tempfile
 
-from tests.support.corpus import sample_mods
-from app.mods import loader as mod_loader
 from core.ini.parser import (_scan_sections_for_draws, build_draw_groups,
-                             extract_resources, merge_sections, parse_sections)
+                             extract_resources, merge_sections)
 from core.geometry.semantics import deduplicate_draws, build_mesh_semantics
 from core.textures import encode_texture_file
 from tests.support.provenance import (build_mesh_fixture, geometry_values, visible,

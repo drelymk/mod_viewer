@@ -1,0 +1,8 @@
+node_modules/
+.venv*/
+.codex/
+graphify-out/
+src/web/lib/
+src/assets/
+src/build/
+src/dist/

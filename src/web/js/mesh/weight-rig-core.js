@@ -1542,7 +1542,7 @@ function setRigComponentRootForSource(sourceKey, boneId) {
   }
   modelSkinningRig.structureRevision = ++rigRuntime.structureRevision;
   modelRigState.structureRevision = modelSkinningRig.structureRevision;
-  selectRigBoneInternal(sourceKey, id);
+  rigModelSession.selectJoint(jointId);
   rigPoseRuntime?.applyPose({request: false});
   notifyModelRigChanged();
   requestRender();

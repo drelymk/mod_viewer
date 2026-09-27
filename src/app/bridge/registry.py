@@ -211,7 +211,7 @@ class AssetFolderRegistry:
             try:
                 index = asset_index.load_index(entry["type"], entry["path"])
             except asset_index.AssetIndexError:
-                # The tree remains browseable while the registry panel reports
+                # The tree remains browsable while the registry panel reports
                 # an invalid cache. The index is still the only asset authority.
                 index = None
             return {"folders": asset_folders.list_subfolders(

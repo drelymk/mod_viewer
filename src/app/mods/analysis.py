@@ -256,8 +256,8 @@ def _gating_vars_from_groups(groups):
         for entry in group.get("draws", []):
             for clauses in entry.get("conditions", []):
                 found.update(clause["var"] for clause in clauses)
-            for field in _VARIANT_FIELDS:
-                for variant in entry.get(field, []):
+            for field_name in _VARIANT_FIELDS:
+                for variant in entry.get(field_name, []):
                     for clauses in variant.get("conditions", []):
                         found.update(clause["var"] for clause in clauses)
     return found

@@ -10,7 +10,6 @@ import os
 import tempfile
 
 
-from tests.support.corpus import active_ini_files
 from core.ini.document import (ASSIGN, BLANK, COMMENT, DRAW, ELIF, ELSE, ENDIF, IF,
                           SECTION, IniDocument)
 

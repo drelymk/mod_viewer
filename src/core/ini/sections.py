@@ -224,7 +224,7 @@ def extract_resources(sections):
             if   k == "filename": res["filename"] = v
             elif k == "stride":
                 try: res["stride"] = int(v)
-                except: pass
+                except ValueError: pass
             elif k == "format":   res["format"] = v
         if "filename" in res:
             resources[name] = res
