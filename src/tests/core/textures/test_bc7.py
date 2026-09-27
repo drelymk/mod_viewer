@@ -3,6 +3,7 @@
 import pytest
 
 from core.textures import bc7
+from tests.support.dds_data import mode6_block
 
 
 def _put(bits, start, count, value):
@@ -52,22 +53,6 @@ def _color_block(mode):
         bits = _put(bits, index_start, width, index)
         index_start += width
     assert index_start == 128
-    return bits.to_bytes(16, "little")
-
-
-def _mode6_block():
-    bits = 1 << 6
-    for channel, (low, high) in enumerate(((20, 110), (40, 140), (60, 170))):
-        bits = _put(bits, 7 + channel * 14, 7, low >> 1)
-        bits = _put(bits, 14 + channel * 14, 7, high >> 1)
-    bits = _put(bits, 49, 7, 0)
-    bits = _put(bits, 56, 7, 127)
-    bits = _put(bits, 63, 1, 0)
-    bits = _put(bits, 64, 1, 1)
-    indices = [0, 1, 2, 3] * 4
-    bits = _put(bits, 65, 3, indices[0])
-    for pixel, index in enumerate(indices[1:], 1):
-        bits = _put(bits, 68 + (pixel - 1) * 4, 4, index)
     return bits.to_bytes(16, "little")
 
 
@@ -145,7 +130,7 @@ def test_decode_and_recolor_supports_every_bc7_mode(
         mode, valid_width, valid_height):
     block = (_color_block(mode) if mode < 4 else
              _separate_block(mode, 1) if mode in {4, 5} else
-             _mode6_block() if mode == 6 else _mode7_block())
+             mode6_block() if mode == 6 else _mode7_block())
     source = bc7.decode_block(block)
     if mode < 4:
         assert all(pixel[3] == 255 for pixel in source)
@@ -388,7 +373,7 @@ def test_recolor_block_matches_reference_fitter(
     valid_width, valid_height = 2, 3
     block = (_color_block(mode) if mode < 4 else
              _separate_block(mode, 1) if mode in {4, 5} else
-             _mode6_block() if mode == 6 else _mode7_block())
+             mode6_block() if mode == 6 else _mode7_block())
     source = bc7.decode_block(block)
     target = tuple(
         (min(255, red + 31), max(0, green - 17), blue, alpha)

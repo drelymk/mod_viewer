@@ -22,9 +22,9 @@ def _config(tmp_path, *, mod_entries=None, asset_entries=None):
 def test_folder_access_preserves_picker_asymmetry_and_root_lifecycles(
         tmp_path, monkeypatch):
     mod_root = tmp_path / "mods"
-    mod_child = mod_root / "character"
+    mod_child = mod_root / "fixture-01"
     asset_root = tmp_path / "assets"
-    asset_child = asset_root / "character"
+    asset_child = asset_root / "fixture-01"
     mod_child.mkdir(parents=True)
     asset_child.mkdir(parents=True)
     config = _config(tmp_path)

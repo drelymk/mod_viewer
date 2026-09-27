@@ -97,20 +97,20 @@ format = R32_UINT
 
 
 def test_mesh_identity_uses_relative_ini_paths_not_ui_source_labels(tmp_path):
-    ini = """[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    ini = """[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = R32_UINT
-[ResourceBodyPosition]
-filename = body.buf
+[ResourceComponent01Position]
+filename = component01.buf
 stride = 12
-[ResourceBodyTexcoord]
-filename = body-uv.buf
+[ResourceComponent01Texcoord]
+filename = component01-uv.buf
 stride = 8
 """
 
@@ -156,11 +156,11 @@ stride = 8
 
 def test_source_qualified_identity_avoids_legacy_metadata_collision(tmp_path):
     groups = [{
-        "name": "Body", "display_name": "Body", "source": "A.ini",
-        "draws": [DrawCall(label="Body-1", count=100, start=0, base=0)],
+        "name": "Component01", "display_name": "Component01", "source": "A.ini",
+        "draws": [DrawCall(label="Component01-1", count=100, start=0, base=0)],
     }, {
-        "name": "Body_2", "display_name": "Body", "source": "B.ini",
-        "draws": [DrawCall(label="Body_2-1", count=100, start=0, base=0)],
+        "name": "Component01_2", "display_name": "Component01", "source": "B.ini",
+        "draws": [DrawCall(label="Component01_2-1", count=100, start=0, base=0)],
     }]
 
     result = build_mesh_semantics(groups, str(tmp_path))
@@ -175,22 +175,22 @@ def test_source_qualified_identity_avoids_legacy_metadata_collision(tmp_path):
 def test_document_projection_keeps_authoritative_text_and_source():
     path = os.path.join(tempfile.gettempdir(), "staged-refactor.ini")
     doc = IniDocument.from_string(
-        "[TextureOverrideBody]\n"
+        "[TextureOverrideComponent01]\n"
         "drawindexed = 3, 0, 0 ; inline comment\n",
         path=path)
     sections = sections_from_document(doc)
-    line = sections["TextureOverrideBody"][0]
+    line = sections["TextureOverrideComponent01"][0]
     assert (str(line) == "drawindexed = 3, 0, 0"), ("document projection uses the staged line text")
     assert (line.ini_path == path and line.line_no == 2), ("document projection retains one-based source provenance")
 
 
 def test_semantic_analysis_shares_one_canonical_scan():
-    sections = {"Constants": ["global $Body = 0"]}
+    sections = {"Constants": ["global $Component01 = 0"]}
     with patch("core.ini.analysis.canonical_var_names",
-               wraps=lambda value: {"body": "Body"}) as canonical:
+               wraps=lambda value: {"component01": "Component01"}) as canonical:
         analysis = analyze_ini(sections, resources=extract_resources(sections))
     assert (canonical.call_count == 1), ("one semantic analysis computes canonical variables once")
-    assert (analysis.canonical_vars == {"body": "Body"}), ("analysis exposes the shared canonical spelling map")
+    assert (analysis.canonical_vars == {"component01": "Component01"}), ("analysis exposes the shared canonical spelling map")
     assert (analysis.toggles == {} and analysis.menu == {} and analysis.draw_groups == []), ("one analysis handles control-free INIs without synthetic geometry")
 
 
@@ -208,6 +208,7 @@ def test_mod_analysis_reuses_control_discovery_for_compute(tmp_path):
 
 
 def test_geometry_blob_bypasses_base64_intermediate():
+    # Body is the production weak material hint exercised by this transport contract.
     with tempfile.TemporaryDirectory() as root:
         with open(os.path.join(root, "p.buf"), "wb") as fh:
             fh.write(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
@@ -273,7 +274,7 @@ def test_full_and_semantic_material_resolution_are_in_parity(tmp_path):
     from core.materials.game_profile import GameDetection
 
     parsed = mod_loader.ParsedModAnalysis(
-        groups=[{"name": "Body", "draws": [SimpleNamespace()]}],
+        groups=[{"name": "Component01", "draws": [SimpleNamespace()]}],
         toggles={}, menu={}, defaults={}, state_rules=[], present={},
         game=GameDetection(
             game="wuwa", runtime="rabbitfx", texture_api="rabbitfx",
@@ -281,11 +282,11 @@ def test_full_and_semantic_material_resolution_are_in_parity(tmp_path):
     )
     context = snapshot_context(
         str(tmp_path), [str(tmp_path / "Root.ini")], {}, {
-            "component_material_kinds": {"Root.ini": {"Body": "body"}},
+            "component_material_kinds": {"Root.ini": {"Component01": "body"}},
         })
 
     def semantic_meshes(*_args, **_kwargs):
-        return {"Body-1": {"source": "Root.ini", "component": "Body"}}
+        return {"Component01-1": {"source": "Root.ini", "component": "Component01"}}
 
     with patch.object(mod_loader, "analyze_mod_inis", return_value=parsed), \
             patch.object(mod_loader, "enrich_mod_analysis",
@@ -298,8 +299,8 @@ def test_full_and_semantic_material_resolution_are_in_parity(tmp_path):
         semantic_result = mod_loader.load_mesh_semantics(context)
         full_result = mod_loader.load_mod(context=context)
 
-    semantic_mesh = semantic_result["meshes"]["Body-1"]
-    full_mesh = full_result["meshes"]["Body-1"]
+    semantic_mesh = semantic_result["meshes"]["Component01-1"]
+    full_mesh = full_result["meshes"]["Component01-1"]
     for field in (
             "material_kind", "material_kind_reliable",
             "material_kind_reason", "material_kind_override",
@@ -369,130 +370,69 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         "existing.dds", "Components-0 t=candidate.dds"]
 
 
-def test_metadata_texture_migration_prefers_identity_key_and_rekeys_legacy(
-        tmp_path):
-    identity_key = (
-        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    payload = {"meshes": {"Body-1": {
-        "identity": {"version": 5, "key": identity_key},
-        "component": "Body", "drawindexed": [3, 0, 0],
-        "texture_options": [],
-    }}, "textures": {}}
-    data = {"textures": {
-        "Body::3,0,0": {
-            "tex_key": "legacy.png", "label": "Legacy", "manual": True,
-        },
-        identity_key: {
-            "tex_key": "canonical.png", "label": "Canonical", "manual": True,
-        },
-    }}
-
-    restored = metadata.hydrate_textures(str(tmp_path), payload, data)
-
-    assert set(restored) == {identity_key}
-    assert restored[identity_key]["label"] == "Canonical"
-    assert payload["meshes"]["Body-1"]["saved_texture_override"] == (
-        "diffuse::canonical.png")
+def _migration_payload(ambiguous=False):
+    meshes = {}
+    for ordinal in range(2 if ambiguous else 1):
+        key = (f'mesh:[5,"source-{ordinal + 1:02}.ini","Component01",null,null,'
+               '[3,0,0],[null,null,null,null,null,null,null]]')
+        meshes[f"component-{ordinal + 1:02}"] = {
+            "identity": {"version": 5, "key": key},
+            "component": "Component01", "drawindexed": [3, 0, 0],
+            "texture_options": [],
+        }
+    return {"meshes": meshes, "textures": {}}
 
 
-def test_metadata_texture_migration_reads_legacy_key_under_new_identity(
-        tmp_path):
-    identity_key = (
-        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    payload = {"meshes": {"Body-1": {
-        "identity": {"version": 5, "key": identity_key},
-        "component": "Body", "drawindexed": [3, 0, 0],
-        "texture_options": [],
-    }}, "textures": {}}
-    data = {"textures": {
-        "Body::3,0,0": {
-            "tex_key": "legacy.png", "label": "Legacy", "manual": True,
-        },
-    }}
-
-    restored = metadata.hydrate_textures(str(tmp_path), payload, data)
-
-    assert set(restored) == {identity_key}
-    assert restored[identity_key]["label"] == "Legacy"
+def _migration_value(kind, label):
+    if kind == "mesh_names":
+        return label
+    return {"tex_key": f"{label.lower()}.png", "label": label, "manual": True}
 
 
-def test_metadata_texture_migration_skips_ambiguous_legacy_key(tmp_path):
-    identity_a = (
-        'mesh:[5,"A.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    identity_b = (
-        'mesh:[5,"B.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    payload = {"meshes": {
-        "Body-1": {"identity": {"version": 5, "key": identity_a},
-                    "component": "Body", "drawindexed": [3, 0, 0],
-                    "texture_options": []},
-        "Body_2-1": {"identity": {"version": 5, "key": identity_b},
-                      "component": "Body", "drawindexed": [3, 0, 0],
-                      "texture_options": []},
-    }, "textures": {}}
-    data = {"textures": {"Body::3,0,0": {
-        "tex_key": "legacy.png", "label": "Legacy", "manual": True,
-    }}}
+def _hydrate_migration(tmp_path, kind, payload, data):
+    if kind == "mesh_names":
+        return metadata.hydrate_mesh_names(payload, data)
+    return metadata.hydrate_textures(str(tmp_path), payload, data)
 
-    restored = metadata.hydrate_textures(str(tmp_path), payload, data)
 
+@pytest.mark.parametrize("kind", ["textures", "mesh_names"])
+def test_metadata_migration_prefers_identity_key(tmp_path, kind):
+    payload = _migration_payload()
+    key = payload["meshes"]["component-01"]["identity"]["key"]
+    canonical = _migration_value(kind, "Canonical")
+    data = {kind: {"Component01::3,0,0": _migration_value(kind, "Legacy"),
+                   key: canonical}}
+    restored = _hydrate_migration(tmp_path, kind, payload, data)
+    assert set(restored) == {key}
+    if kind == "textures":
+        assert restored[key]["label"] == "Canonical"
+        assert payload["meshes"]["component-01"]["saved_texture_override"] == "diffuse::canonical.png"
+    else:
+        assert restored[key] == canonical
+
+
+@pytest.mark.parametrize("kind", ["textures", "mesh_names"])
+def test_metadata_migration_reads_compatible_legacy_key(tmp_path, kind):
+    payload = _migration_payload()
+    key = payload["meshes"]["component-01"]["identity"]["key"]
+    legacy = _migration_value(kind, "Legacy")
+    restored = _hydrate_migration(tmp_path, kind, payload,
+                                 {kind: {"Component01::3,0,0": legacy}})
+    assert set(restored) == {key}
+    if kind == "textures":
+        assert restored[key]["label"] == "Legacy"
+    else:
+        assert restored[key] == legacy
+
+
+@pytest.mark.parametrize("kind", ["textures", "mesh_names"])
+def test_metadata_migration_rejects_ambiguous_legacy_key(tmp_path, kind):
+    payload = _migration_payload(ambiguous=True)
+    restored = _hydrate_migration(tmp_path, kind, payload,
+        {kind: {"Component01::3,0,0": _migration_value(kind, "Legacy")}})
     assert restored == {}
-    assert "saved_texture_override" not in payload["meshes"]["Body-1"]
-    assert "saved_texture_override" not in payload["meshes"]["Body_2-1"]
-
-
-def test_metadata_mesh_name_migration_prefers_new_key_and_rekeys_legacy():
-    identity_key = (
-        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    payload = {"meshes": {"Body-1": {
-        "identity": {"version": 5, "key": identity_key},
-        "component": "Body", "drawindexed": [3, 0, 0],
-    }}}
-    data = {"mesh_names": {
-        "Body::3,0,0": "Legacy name",
-        identity_key: "Canonical name",
-    }}
-
-    assert metadata.hydrate_mesh_names(payload, data) == {
-        identity_key: "Canonical name",
-    }
-
-
-def test_metadata_mesh_name_migration_reads_legacy_key_under_new_identity():
-    identity_key = (
-        'mesh:[5,"Root.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    payload = {"meshes": {"Body-1": {
-        "identity": {"version": 5, "key": identity_key},
-        "component": "Body", "drawindexed": [3, 0, 0],
-    }}}
-    data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
-
-    assert metadata.hydrate_mesh_names(payload, data) == {
-        identity_key: "Legacy name",
-    }
-
-
-def test_metadata_mesh_name_migration_skips_ambiguous_legacy_key():
-    identity_a = (
-        'mesh:[5,"A.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    identity_b = (
-        'mesh:[5,"B.ini","Body",null,null,[3,0,0],'
-        '[null,null,null,null,null,null,null]]')
-    payload = {"meshes": {
-        "Body-1": {"identity": {"version": 5, "key": identity_a},
-                    "component": "Body", "drawindexed": [3, 0, 0]},
-        "Body_2-1": {"identity": {"version": 5, "key": identity_b},
-                      "component": "Body", "drawindexed": [3, 0, 0]},
-    }}
-    data = {"mesh_names": {"Body::3,0,0": "Legacy name"}}
-
-    assert metadata.hydrate_mesh_names(payload, data) == {}
+    assert all("saved_texture_override" not in mesh
+               for mesh in payload["meshes"].values())
 
 
 def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
@@ -503,8 +443,8 @@ def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
         (tmp_path / name).touch()
     condition = [{"var": "skin", "value": "1", "negate": False}]
     groups = [{
-        "name": "Body", "draws": [{
-            "label": "Body-1", "count": 3, "start": 0, "base": 0,
+        "name": "Component01", "draws": [{
+            "label": "Component01-1", "count": 3, "start": 0, "base": 0,
             "conditions": [],
             "texture_default_file": "base.png",
             "texture_assignments": [
@@ -523,7 +463,7 @@ def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
         "texcoord_file": "t.buf", "texcoord_stride": 8,
     }]
 
-    entry = build_mesh_semantics(groups, str(tmp_path), game_profile="wuwa")["Body-1"]
+    entry = build_mesh_semantics(groups, str(tmp_path), game_profile="wuwa")["Component01-1"]
 
     assert entry["tex_key"] == "diffuse::base.png"
     assert {variant["tex_key"] for variant in entry["texture_variants"]} == {
@@ -536,15 +476,15 @@ def test_mesh_semantics_include_conditional_texture_roles_without_geometry(
 
 
 def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
-    draw = DrawCall(label="Body-1")
+    draw = DrawCall(label="Component01-1")
     parsed = mod_analysis.ParsedModAnalysis(
-        groups=[{"name": "Body", "draws": [draw]}],
+        groups=[{"name": "Component01", "draws": [draw]}],
         toggles={}, menu={}, defaults={}, state_rules=[], present={},
         game=SimpleNamespace(game="genshin"),
     )
     binding = AssetComponentBinding(
         status="exact", component_status="exact", range_status="exact",
-        asset_type="GIMI", asset="Alice", component_name="Body",
+        asset_type="GIMI", asset="Asset01", component_name="Component01",
         first_index=10, index_count=20)
 
     def resolve(_groups, _game, _entries, *, availability):
@@ -561,13 +501,13 @@ def test_mesh_semantics_returns_asset_resolution_summary(tmp_path):
                          side_effect=resolve), \
             patch.object(mod_enrichment.asset_enrichment, "apply"), \
             patch.object(mod_loader, "build_mesh_semantics",
-                         return_value={"Body-1": {}}), \
+                         return_value={"Component01-1": {}}), \
             patch.object(mod_loader, "_assign_material_profiles",
                          return_value={}):
         result = mod_loader.load_mesh_semantics(context)
 
     assert result["meshes"] == {
-        "Body-1": {"material_kind_override": None}}
+        "Component01-1": {"material_kind_override": None}}
     assert result["asset_resolution"]["index_status"] == "ready"
     assert result["asset_resolution"]["exact_draws"] == 1
 
@@ -595,7 +535,7 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
         str(tmp_path), [str(tmp_path / "mod.ini")], {}, {})
     with patch.object(mod_controls, "analyze_mod_inis", return_value=parsed), \
             patch.object(mod_controls, "build_mesh_semantics", return_value={
-                "Body-1": {"conditions": [[{
+                "Component01-1": {"conditions": [[{
                     "var": "visible", "value": "1", "negate": False,
                 }]]},
                 "Broken-1": {"conditions": [[{
@@ -603,7 +543,7 @@ def test_control_semantics_filter_wired_toggles_to_displayed_meshes(
                 }]]},
             }):
         result = mod_loader.load_control_state(
-            context, active_mesh_keys={"Body-1"})
+            context, active_mesh_keys={"Component01-1"})
 
     assert set(result["controls"]["toggles"]) == {"KeyVisible"}
 
@@ -621,7 +561,7 @@ def test_combined_semantic_state_analyzes_and_builds_meshes_once(tmp_path):
         game=SimpleNamespace(game="unknown"),
     )
     mesh_semantics = {
-        "Body-1": {"conditions": [[{
+        "Component01-1": {"conditions": [[{
             "var": "visible", "value": "1", "negate": False,
         }]]},
     }
@@ -644,7 +584,7 @@ def test_combined_semantic_state_analyzes_and_builds_meshes_once(tmp_path):
             patch.object(mod_loader, "_assign_material_profiles",
                          return_value={}):
         result = mod_loader.load_semantic_state(
-            context, active_mesh_keys={"Body-1"})
+            context, active_mesh_keys={"Component01-1"})
 
     assert calls == {"analysis": 1, "mesh": 1}
     assert result["meshes"] == mesh_semantics
@@ -682,18 +622,18 @@ def test_present_state_read_uses_staged_documents_without_geometry(
     ini_path = os.path.join(root, "mod.ini")
     with open(ini_path, "w", encoding="utf-8") as fh:
         fh.write(
-            "[KeyOutfit]\n"
+            "[KeyInput01]\n"
             "key = 1\n"
             "type = cycle\n"
-            "$Outfit = 0,1\n"
-            "[TextureOverrideBody]\n"
-            "if $Outfit == 0\n"
+            "$Input01 = 0,1\n"
+            "[TextureOverrideComponent01]\n"
+            "if $Input01 == 0\n"
             "drawindexed = 3, 0, 0\n"
             "endif\n")
 
     edit_session.load_documents(root, [ini_path])
     added = present_api.add_present(
-        root, "ctrl p", "", {"mod.ini": {"Outfit": "0"}})
+        root, "ctrl p", "", {"mod.ini": {"Input01": "0"}})
     assert added.get("ok") is True
 
     api = ModViewerAPI()
@@ -729,17 +669,17 @@ def test_wuwa_publishes_one_intact_normal_data_source():
         with open(os.path.join(root, "i.buf"), "wb") as fh:
             fh.write(struct.pack("<3I", 0, 1, 2))
         group = [{
-            "name": "Body", "display_name": "Body",
+            "name": "Component01", "display_name": "Component01",
             "position_file": "p.buf", "texcoord_file": "t.buf",
             "position_stride": 12, "texcoord_stride": 8,
             "ib_file": "i.buf", "index_size": 4,
-            "draws": [{"label": "Body-1", "count": 3,
+            "draws": [{"label": "Component01-1", "count": 3,
                         "start": 0, "base": 0, "conditions": [],
                         "normal_map_default_file": "normal.png"}],
         }]
         built = build_mesh_result(group, root, geometry=GeometryBlob(),
                                   game_profile="wuwa")
-        entry = built.meshes["Body-1"]
+        entry = built.meshes["Component01-1"]
 
         assert entry["normal_data_key"] == "normal_data::normal.png"
         assert "normal_map_key" not in entry
@@ -762,12 +702,12 @@ def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
         tmp_path / "normal.png")
     Image.new("RGB", (1, 1), (128, 128, 128)).save(
         tmp_path / "shared.png")
-    data = {"textures": {"Body::3,0,0": {
+    data = {"textures": {"Component01::3,0,0": {
         "tex_key": "shared.png", "label": "Shared", "manual": True,
         **saved_normals,
     }}}
-    payload = {"meshes": {"Body-1": {
-        "component": "Body", "drawindexed": [3, 0, 0],
+    payload = {"meshes": {"Component01-1": {
+        "component": "Component01", "drawindexed": [3, 0, 0],
         "texture_options": [],
     }}, "textures": {}}
     registered = []
@@ -779,7 +719,7 @@ def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
     restored = metadata.hydrate_textures(
         str(tmp_path), payload, data, texture_source=register,
         texture_profile="wuwa")
-    migrated = restored["Body::3,0,0"]
+    migrated = restored["Component01::3,0,0"]
     assert migrated["normal_data"] == "normal_data::normal.png"
     assert "normal_map" not in migrated
     assert registered == ["diffuse", "normal_data"]
@@ -795,25 +735,25 @@ def test_wuwa_normal_data_tombstone_removes_ini_pool_value_on_hydration(
 
     Image.new("RGB", (1, 1), (128, 128, 128)).save(
         tmp_path / "shared.png")
-    data = {"textures": {"Body::3,0,0": {
+    data = {"textures": {"Component01::3,0,0": {
         "tex_key": "shared.png", "label": "Shared", "manual": True,
         "normal_data": None, "normal_data_manual": True,
     }}}
-    payload = {"meshes": {"Body-1": {
-        "component": "Body", "drawindexed": [3, 0, 0],
+    payload = {"meshes": {"Component01-1": {
+        "component": "Component01", "drawindexed": [3, 0, 0],
         "texture_options": [{
             "tex_key": "diffuse::shared.png", "file": "shared.png",
             "label": "Shared",
-            "normal_data": "normal_data::BodyNormal.dds",
+            "normal_data": "normal_data::Component01Normal.dds",
         }],
     }}, "textures": {}}
 
     restored = metadata.hydrate_textures(
         str(tmp_path), payload, data, texture_profile="wuwa")
-    assert payload["meshes"]["Body-1"]["texture_pool_id"] == "p0"
-    assert "texture_options" not in payload["meshes"]["Body-1"]
+    assert payload["meshes"]["Component01-1"]["texture_pool_id"] == "p0"
+    assert "texture_options" not in payload["meshes"]["Component01-1"]
     option = payload["texture_pools"]["p0"][0]
-    assert restored["Body::3,0,0"]["normal_data_manual"] is True
+    assert restored["Component01::3,0,0"]["normal_data_manual"] is True
     assert "normal_data" not in option
     assert option["normal_data_manual"] is True
 

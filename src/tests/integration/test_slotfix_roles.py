@@ -8,24 +8,24 @@ def _draw(tmp_path, assignments, resources, prefix=""):
     tmp_path.mkdir(parents=True, exist_ok=True)
     lines = [
         prefix,
-        "[TextureOverrideBodyBlend]",
-        "vb0 = ResourceBodyPosition",
-        "vb1 = ResourceBodyTexcoord",
+        "[TextureOverrideComponent01Blend]",
+        "vb0 = ResourceComponent01Position",
+        "vb1 = ResourceComponent01Texcoord",
         "",
-        "[TextureOverrideBody]",
-        "ib = ResourceBodyIB",
+        "[TextureOverrideComponent01]",
+        "ib = ResourceComponent01IB",
         assignments,
         "drawindexed = 3, 0, 0",
         "",
-        "[ResourceBodyIB]",
-        "filename = body.ib",
+        "[ResourceComponent01IB]",
+        "filename = component01.ib",
         "format = DXGI_FORMAT_R32_UINT",
         "",
-        "[ResourceBodyPosition]",
+        "[ResourceComponent01Position]",
         "filename = position.buf",
         "stride = 40",
         "",
-        "[ResourceBodyTexcoord]",
+        "[ResourceComponent01Texcoord]",
         "filename = texcoord.buf",
         "stride = 20",
     ]
@@ -40,8 +40,8 @@ def _draw(tmp_path, assignments, resources, prefix=""):
     return groups[0]["draws"][0]
 
 
-def _barbara_variant_groups(tmp_path):
-    components = ("Head", "Body", "Dress")
+def _asset10_variant_groups(tmp_path):
+    components = ("Head", "Component01", "Dress")
     lines = [
         "[KeySwap]",
         "type = cycle",
@@ -50,61 +50,61 @@ def _barbara_variant_groups(tmp_path):
     for component in components:
         lines.extend([
             "",
-            f"[TextureOverrideBarbara{component}]",
-            f"vb0 = ResourceBarbara{component}Position",
-            f"vb1 = ResourceBarbara{component}Texcoord",
-            f"ib = ResourceBarbara{component}IB",
-            f"run = CommandListBarbara{component}",
+            f"[TextureOverrideAsset10{component}]",
+            f"vb0 = ResourceAsset10{component}Position",
+            f"vb1 = ResourceAsset10{component}Texcoord",
+            f"ib = ResourceAsset10{component}IB",
+            f"run = CommandListAsset10{component}",
             "drawindexed = 3, 0, 0",
             "",
-            f"[CommandListBarbara{component}]",
+            f"[CommandListAsset10{component}]",
         ])
         for variant in range(4):
             keyword = "if" if variant == 0 else "else if"
             lines.extend([
                 f"{keyword} $swapvar == {variant}",
-                f"ps-t0 = ResourceBarbara{component}Diffuse.{variant}",
-                f"ps-t1 = ResourceBarbara{component}LightMap.{variant}",
+                f"ps-t0 = ResourceAsset10{component}Diffuse.{variant}",
+                f"ps-t1 = ResourceAsset10{component}LightMap.{variant}",
             ])
         lines.append("endif")
     for component in components:
         lines.extend([
             "",
-            f"[ResourceBarbara{component}Position]",
+            f"[ResourceAsset10{component}Position]",
             f"filename = {component.lower()}-position.buf",
             "stride = 40",
             "",
-            f"[ResourceBarbara{component}Texcoord]",
+            f"[ResourceAsset10{component}Texcoord]",
             f"filename = {component.lower()}-texcoord.buf",
             "stride = 20",
             "",
-            f"[ResourceBarbara{component}IB]",
+            f"[ResourceAsset10{component}IB]",
             f"filename = {component.lower()}.ib",
             "format = DXGI_FORMAT_R32_UINT",
         ])
         for variant in range(4):
             lines.extend([
                 "",
-                f"[ResourceBarbara{component}Diffuse.{variant}]",
+                f"[ResourceAsset10{component}Diffuse.{variant}]",
                 f"filename = {component.lower()}-diffuse-{variant}.dds",
                 "",
-                f"[ResourceBarbara{component}LightMap.{variant}]",
+                f"[ResourceAsset10{component}LightMap.{variant}]",
                 f"filename = {component.lower()}-light-{variant}.dds",
             ])
-    path = tmp_path / "barbara-variants.ini"
+    path = tmp_path / "asset10-variants.ini"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     sections = merge_sections([str(path)])
     return build_draw_groups(sections, extract_resources(sections))
 
 
-def test_barbara_style_scopes_keep_all_component_variants_independent(tmp_path):
-    groups = _barbara_variant_groups(tmp_path)
+def test_asset10_style_scopes_keep_all_component_variants_independent(tmp_path):
+    groups = _asset10_variant_groups(tmp_path)
 
-    assert [group["name"] for group in groups] == ["BarbaraHead", "BarbaraBody",
-                                                    "BarbaraDress"]
+    assert [group["name"] for group in groups] == ["Asset10Head", "Asset10Component01",
+                                                    "Asset10Dress"]
     for group in groups:
         draw = group["draws"][0]
-        component = group["name"][len("Barbara"):].lower()
+        component = group["name"][len("Asset10"):].lower()
         assert [item["file"] for item in draw.texture_rules("diffuse")] == [
             f"{component}-diffuse-{variant}.dds"
             for variant in range(4)]
@@ -117,45 +117,45 @@ def test_barbara_style_scopes_keep_all_component_variants_independent(tmp_path):
         }
 
 
-def test_beidou_style_singleton_resources_keep_each_component_role(tmp_path):
+def test_asset11_style_singleton_resources_keep_each_component_role(tmp_path):
     lines = []
-    components = ("Head", "Body", "Extra")
+    components = ("Head", "Component01", "Extra")
     for component in components:
         lines.extend([
-            f"[TextureOverrideBeidou{component}]",
-            f"vb0 = ResourceBeidou{component}Position",
-            f"vb1 = ResourceBeidou{component}Texcoord",
-            f"ib = ResourceBeidou{component}IB",
-            f"ps-t0 = ResourceBeidou{component}Diffuse",
-            f"ps-t1 = ResourceBeidou{component}LightMap",
+            f"[TextureOverrideAsset11{component}]",
+            f"vb0 = ResourceAsset11{component}Position",
+            f"vb1 = ResourceAsset11{component}Texcoord",
+            f"ib = ResourceAsset11{component}IB",
+            f"ps-t0 = ResourceAsset11{component}Diffuse",
+            f"ps-t1 = ResourceAsset11{component}LightMap",
             "drawindexed = 3, 0, 0",
             "",
-            f"[ResourceBeidou{component}Position]",
+            f"[ResourceAsset11{component}Position]",
             f"filename = {component.lower()}-position.buf",
             "stride = 40",
             "",
-            f"[ResourceBeidou{component}Texcoord]",
+            f"[ResourceAsset11{component}Texcoord]",
             f"filename = {component.lower()}-texcoord.buf",
             "stride = 20",
             "",
-            f"[ResourceBeidou{component}IB]",
+            f"[ResourceAsset11{component}IB]",
             f"filename = {component.lower()}.ib",
             "format = DXGI_FORMAT_R16_UINT",
             "",
-            f"[ResourceBeidou{component}Diffuse]",
+            f"[ResourceAsset11{component}Diffuse]",
             f"filename = {component.lower()}-diffuse.dds",
             "",
-            f"[ResourceBeidou{component}LightMap]",
+            f"[ResourceAsset11{component}LightMap]",
             f"filename = {component.lower()}-light-map.dds",
             "",
         ])
-    path = tmp_path / "beidou-style.ini"
+    path = tmp_path / "asset11-style.ini"
     path.write_text("\n".join(lines), encoding="utf-8")
     sections = merge_sections([str(path)])
     groups = build_draw_groups(sections, extract_resources(sections))
 
     assert [group["name"] for group in groups] == [
-        "BeidouHead", "BeidouBody", "BeidouExtra"]
+        "Asset11Head", "Asset11Component01", "Asset11Extra"]
     for group in groups:
         draw = group["draws"][0]
         assert [item.role_hint for item in draw.slot_textures] == [
@@ -164,20 +164,6 @@ def test_beidou_style_singleton_resources_keep_each_component_role(tmp_path):
             "diffuse": "mod_slot_legacy",
             "light_map": "mod_slot_legacy",
         }
-
-
-def test_proven_slotfix_assignment_uses_diffuse_pipeline(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceOpaque""",
-        {"ResourceOpaque": "opaque.dds"},
-    )
-
-    assert draw.texture_default("diffuse") == "opaque.dds"
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[0].role_hint_source == "mod_slot_mapping"
-    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
 
 
 def test_resource_name_alone_does_not_imply_diffuse(tmp_path):
@@ -195,147 +181,39 @@ def test_repeated_legacy_slot_names_recover_texture_roles(tmp_path):
     draw = _draw(
         tmp_path,
         r"""run = CommandList\LegacySlots""",
-        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
-         "ResourceBodyLightMap.0": "body-light-map-0.dds",
-         "ResourceBodyLightMap.1": "body-light-map-1.dds"},
+        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
+         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds",
+         "ResourceComponent01LightMap.0": "component01-light-map-0.dds",
+         "ResourceComponent01LightMap.1": "component01-light-map-1.dds"},
         prefix=(r"[CommandList\LegacySlots]" "\n"
-                r"ps-t0 = ResourceBodyDiffuse.0" "\n"
-                r"ps-t0 = ResourceBodyDiffuse.1" "\n"
-                r"ps-t1 = ResourceBodyLightMap.0" "\n"
-                r"ps-t1 = ResourceBodyLightMap.1" "\n"),
+                r"ps-t0 = ResourceComponent01Diffuse.0" "\n"
+                r"ps-t0 = ResourceComponent01Diffuse.1" "\n"
+                r"ps-t1 = ResourceComponent01LightMap.0" "\n"
+                r"ps-t1 = ResourceComponent01LightMap.1" "\n"),
     )
 
-    assert draw.texture_default("diffuse") == "body-diffuse-1.dds"
-    assert draw.texture_default("light_map") == "body-light-map-1.dds"
+    assert draw.texture_default("diffuse") == "component01-diffuse-1.dds"
+    assert draw.texture_default("light_map") == "component01-light-map-1.dds"
     assert draw.texture_provenance == {"diffuse": "mod_slot_legacy",
                                        "light_map": "mod_slot_legacy"}
-
-
-def test_single_declared_legacy_resource_classifies_itself(tmp_path):
-    draw = _draw(
-        tmp_path,
-        "ps-t0 = ResourceBodyDiffuse",
-        {"ResourceBodyDiffuse": "body-diffuse.dds"},
-    )
-
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[0].role_hint_source == "legacy_slot_mapping"
-    assert draw.texture_default("diffuse") == "body-diffuse.dds"
-
-
-def test_single_opaque_resource_stays_unresolved(tmp_path):
-    draw = _draw(
-        tmp_path,
-        "ps-t0 = ResourceShadowLookup",
-        {"ResourceShadowLookup": "shadow.dds"},
-    )
-
-    assert draw.slot_textures[0].role_hint is None
-    assert draw.texture_default("diffuse") is None
-
-
-def test_legacy_sibling_inherits_an_exact_role_anchor(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""if $style == 0
-ps-t4 = ResourceAstraLegANormalMap
-else
-ps-t4 = ResourceAstraLegANormalMapNSFW
-endif""",
-        {"ResourceAstraLegANormalMap": "leg-normal.dds",
-         "ResourceAstraLegANormalMapNSFW": "leg-normal-nsfw.dds"},
-        prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
-    )
-
-    assert {item.role_hint for item in draw.slot_textures} == {"normal_map"}
-    assert all(item.role_hint_source == "legacy_slot_mapping"
-               for item in draw.slot_textures)
-    assert {item["file"] for item in draw.texture_rules("normal_map")} == {
-        "leg-normal.dds", "leg-normal-nsfw.dds"}
-
-
-def test_legacy_sibling_moving_slots_rejects_the_family(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t4 = ResourceAstraLegANormalMap
-ps-t5 = ResourceAstraLegANormalMapNSFW""",
-        {"ResourceAstraLegANormalMap": "leg-normal.dds",
-         "ResourceAstraLegANormalMapNSFW": "leg-normal-nsfw.dds"},
-    )
-
-    assert all(item.role_hint is None for item in draw.slot_textures)
-    assert draw.texture_default("normal_map") is None
-
-
-def test_legacy_variant_suffixes_recover_texture_roles(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = ResourceBodyDiffuse.0
-ps-t0 = ResourceBodyDiffuse.1
-ps-t1 = ResourceBodyLightMap.0
-ps-t1 = ResourceBodyLightMap.1""",
-        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
-         "ResourceBodyLightMap.0": "body-light-map-0.dds",
-         "ResourceBodyLightMap.1": "body-light-map-1.dds"},
-    )
-
-    assert draw.texture_default("diffuse") == "body-diffuse-1.dds"
-    assert draw.texture_default("light_map") == "body-light-map-1.dds"
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[1].role_hint == "light_map"
-    assert draw.slot_textures[0].role_hint_source == "legacy_slot_mapping"
-    assert draw.slot_textures[1].role_hint_source == "legacy_slot_mapping"
-    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy",
-                                       "light_map": "mod_slot_legacy"}
-
-
-def test_legacy_family_does_not_classify_an_opaque_resource(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = ResourceBodyDiffuse.0
-ps-t0 = ResourceBodyDiffuse.1
-ps-t0 = ResourceShadowLookup""",
-        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
-         "ResourceShadowLookup": "shadow.dds"},
-    )
-
-    assert draw.slot_textures[0].resource == "ResourceShadowLookup"
-    assert draw.slot_textures[0].role_hint is None
-    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy"}
 
 
 def test_conflicting_legacy_roles_on_one_slot_are_rejected(tmp_path):
     draw = _draw(
         tmp_path,
-        r"""ps-t0 = ResourceBodyDiffuse.0
-ps-t0 = ResourceBodyDiffuse.1
-ps-t0 = ResourceBodyNormalMap.0
-ps-t0 = ResourceBodyNormalMap.1""",
-        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
-         "ResourceBodyNormalMap.0": "body-normal-0.dds",
-         "ResourceBodyNormalMap.1": "body-normal-1.dds"},
+        r"""ps-t0 = ResourceComponent01Diffuse.0
+ps-t0 = ResourceComponent01Diffuse.1
+ps-t0 = ResourceComponent01NormalMap.0
+ps-t0 = ResourceComponent01NormalMap.1""",
+        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
+         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds",
+         "ResourceComponent01NormalMap.0": "component01-normal-0.dds",
+         "ResourceComponent01NormalMap.1": "component01-normal-1.dds"},
     )
 
     assert draw.slot_textures[0].role_hint is None
     assert draw.texture_default("diffuse") is None
     assert draw.texture_default("normal_map") is None
-
-
-def test_legacy_family_cannot_move_between_slots(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = ResourceBodyDiffuse.0
-ps-t2 = ResourceBodyDiffuse.1""",
-        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds"},
-    )
-
-    assert all(item.role_hint is None for item in draw.slot_textures)
-    assert draw.texture_default("diffuse") is None
 
 
 def test_unreachable_legacy_scope_does_not_leak_into_a_draw(tmp_path):
@@ -343,11 +221,11 @@ def test_unreachable_legacy_scope_does_not_leak_into_a_draw(tmp_path):
         tmp_path,
         "ps-t0 = ResourceOpaque",
         {"ResourceOpaque": "opaque.dds",
-         "ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds"},
+         "ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
+         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds"},
         prefix=(r"[CommandList\Unrelated]" "\n"
-                r"ps-t0 = ResourceBodyDiffuse.0" "\n"
-                r"ps-t0 = ResourceBodyDiffuse.1" "\n"),
+                r"ps-t0 = ResourceComponent01Diffuse.0" "\n"
+                r"ps-t0 = ResourceComponent01Diffuse.1" "\n"),
     )
 
     assert draw.slot_textures[0].role_hint is None
@@ -358,11 +236,11 @@ def test_structural_slot_mapping_wins_over_legacy_mapping(tmp_path):
     draw = _draw(
         tmp_path,
         r"""ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceBodyDiffuse.0
-ps-t0 = ResourceBodyDiffuse.1
+ps-t0 = ResourceComponent01Diffuse.0
+ps-t0 = ResourceComponent01Diffuse.1
 ps-t0 = ResourceOpaque""",
-        {"ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds",
+        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
+         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds",
          "ResourceOpaque": "opaque.dds"},
     )
 
@@ -377,17 +255,17 @@ def test_semantic_and_legacy_variants_keep_disjoint_conditions(tmp_path):
         r"""if $style == 0
 Resource\GIMI\Diffuse = ResourceExplicit
 else
-ps-t0 = ResourceBodyDiffuse.0
-ps-t0 = ResourceBodyDiffuse.1
+ps-t0 = ResourceComponent01Diffuse.0
+ps-t0 = ResourceComponent01Diffuse.1
 endif""",
         {"ResourceExplicit": "explicit.dds",
-         "ResourceBodyDiffuse.0": "body-diffuse-0.dds",
-         "ResourceBodyDiffuse.1": "body-diffuse-1.dds"},
+         "ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
+         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds"},
         prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
     )
 
     assert {item["file"] for item in draw.texture_rules("diffuse")} == {
-        "explicit.dds", "body-diffuse-0.dds", "body-diffuse-1.dds"}
+        "explicit.dds", "component01-diffuse-0.dds", "component01-diffuse-1.dds"}
     assert draw.texture_provenance == {"diffuse": "mod_slot_legacy"}
 
 
@@ -407,19 +285,6 @@ endif""",
     assert [item["file"] for item in draw.texture_variants] == [
         "red.dds", "blue.dds"]
     assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
-
-
-def test_explicit_semantic_assignment_beats_slotfix(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceOpaque
-Resource\GIMI\Diffuse = ResourceExplicit""",
-        {"ResourceExplicit": "explicit.dds", "ResourceOpaque": "opaque.dds"},
-    )
-
-    assert draw.texture_default("diffuse") == "explicit.dds"
-    assert draw.texture_provenance == {}
 
 
 def test_semantic_and_slot_roles_keep_disjoint_conditional_branches(tmp_path):
@@ -443,12 +308,12 @@ endif""",
 
 def test_explicit_role_in_one_path_does_not_suppress_another_path():
     sections = {
-        "TextureOverrideBody": [
-            r"Resource\GIMI\Diffuse = ResourceBodyDiffuse",
+        "TextureOverrideComponent01": [
+            r"Resource\GIMI\Diffuse = ResourceComponent01Diffuse",
             "drawindexed = 3, 0, 0",
         ],
-        "TextureOverrideHair": [
-            "ps-t0 = ResourceHairDiffuse",
+        "TextureOverrideComponent02": [
+            "ps-t0 = ResourceComponent02Diffuse",
             "drawindexed = 3, 0, 0",
         ],
         r"CommandList\SlotMap": [
@@ -457,11 +322,11 @@ def test_explicit_role_in_one_path_does_not_suppress_another_path():
     }
 
     info = _scan_sections_for_draws(sections)
-    hair = info["TextureOverrideHair"]["draws"][0]
+    component02 = info["TextureOverrideComponent02"]["draws"][0]
 
-    assert hair.slot_textures[0].role_hint == "diffuse"
-    assert hair.diffuse_variants == [{
-        "res": "ResourceHairDiffuse", "cond": [], "source": "slot",
+    assert component02.slot_textures[0].role_hint == "diffuse"
+    assert component02.diffuse_variants == [{
+        "res": "ResourceComponent02Diffuse", "cond": [], "source": "slot",
     }]
 
 

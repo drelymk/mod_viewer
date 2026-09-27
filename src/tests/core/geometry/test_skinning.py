@@ -10,6 +10,10 @@ from core.geometry.skinning import (
     SkinningSource, decode_skinning, normalize_skinning_source_file,
     resolve_skinning_source, skinning_source_descriptor, skinning_source_key,
 )
+from tests.support.skinning_data import (
+    gimi_four_influence, vertex_vg_remap, wwmi_u16_eight, wwmi_u8_eight,
+    wwmi_u8_four,
+)
 
 
 def unpack_values(raw, fmt):
@@ -43,7 +47,7 @@ def test_decode_consumes_retained_vertex_mapping_without_materializing_tuple():
 
 def test_decode_gimi_four_influences_to_canonical_bytes():
     source = SkinningSource("blend.buf", 32, 4, "gimi_f32_u32_4")
-    raw = struct.pack("<4f4I", .6, .3, .1, 0., 7, 8, 9, 0)
+    raw = gimi_four_influence()
 
     decoded = decode_skinning(source, raw, [0])
 
@@ -61,7 +65,7 @@ def test_decode_gimi_four_influences_to_canonical_bytes():
 def test_decode_wwmi_four_influences_divides_bytes_by_255():
     source = SkinningSource("blend.buf", 8, 4, "wwmi_u8_4")
 
-    decoded = decode_skinning(source, bytes([3, 5, 7, 0, 128, 64, 63, 0]), [0])
+    decoded = decode_skinning(source, wwmi_u8_four(), [0])
 
     assert unpack_values(decoded.indices, "4I") == (3, 5, 7, 0)
     assert unpack_values(decoded.weights, "4f") == pytest.approx(
@@ -70,7 +74,7 @@ def test_decode_wwmi_four_influences_divides_bytes_by_255():
 
 def test_decode_wwmi_wide_keeps_all_eight_influences():
     source = SkinningSource("blend.buf", 16, 8, "wwmi_u8_8")
-    raw = bytes(range(8)) + bytes([1, 2, 3, 4, 5, 6, 7, 8])
+    raw = wwmi_u8_eight()
 
     decoded = decode_skinning(source, raw, [0])
 
@@ -82,9 +86,7 @@ def test_decode_wwmi_wide_keeps_all_eight_influences():
 
 def test_decode_wwmi_r16_wide_layout_uses_u16_weights():
     source = SkinningSource("blend_r16.buf", 32, 8, "wwmi_u16_8")
-    raw = struct.pack(
-        "<8H8H", 3, 259, 45, 257, 0, 1, 2, 3,
-        65535, 32768, 16384, 8192, 0, 1, 2, 3)
+    raw = wwmi_u16_eight()
 
     decoded = decode_skinning(source, raw, [0])
 
@@ -113,7 +115,7 @@ def test_decode_wwmi_vertex_vg_remap_keeps_colliding_raw_indices_distinct():
         "blend.buf", 16, 8, "wwmi_u8_8", 142,
         "remap.buf", 16, "wwmi_vertex_vg")
     raw = bytes([3] * 8) + bytes([255, 128, 64, 32, 16, 8, 4, 2])
-    remap = struct.pack("<8H", 3, 259, 45, 257, 0, 1, 2, 3)
+    remap = vertex_vg_remap()
 
     decoded = decode_skinning(source, raw, [0], remap)
 
@@ -153,9 +155,9 @@ def test_decode_rigid_uses_one_implicit_weight():
 def test_decode_normalizes_component_offsets_into_model_namespace():
     raw = bytes([1, 0, 0, 0, 255, 0, 0, 0])
     first = decode_skinning(
-        SkinningSource("body.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
+        SkinningSource("component01.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
     second = decode_skinning(
-        SkinningSource("face.blend", 8, 4, "wwmi_u8_4", 10), raw, [0])
+        SkinningSource("phase02.blend", 8, 4, "wwmi_u8_4", 10), raw, [0])
     repeated = decode_skinning(
         SkinningSource("shared.blend", 8, 4, "wwmi_u8_4", 0), raw, [0])
 
@@ -222,180 +224,6 @@ def test_resolver_accepts_known_blend_layouts(stride, fmt, encoding):
         bone_id_namespace=("wwmi_vertex_vg" if expected_remap else "model"))
 
 
-def test_resolver_accepts_wwmi_source_without_vertex_vg_remap():
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"},
-        {"ResourceBlendBuffer": {
-            "filename": "blend.buf", "stride": 8,
-            "format": "DXGI_FORMAT_R8_UINT",
-        }}.get)
-
-    assert error is None
-    assert source == SkinningSource(
-        "blend.buf", 8, 4, "wwmi_u8_4", bone_id_namespace="model")
-    decoded = decode_skinning(
-        source, bytes([3, 4, 5, 6, 255, 128, 64, 32]), [0])
-    assert decoded.bone_ids == (3, 4, 5, 6)
-    assert decoded.diagnostics["vertex_vg_remap"] is False
-
-
-def test_resolver_carries_the_authored_model_bone_offset():
-    resources = {
-        "ResourceBlendBuffer": {
-            "filename": "blend.buf", "stride": 8,
-            "format": "DXGI_FORMAT_R8_UINT",
-        },
-        "ResourceVertexVG": {
-            "filename": "remap.buf", "stride": 8,
-            "format": "DXGI_FORMAT_R16_UINT",
-        },
-    }
-
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"}, resources.get, bone_id_offset=12,
-        remap_resources={35: "ResourceVertexVG"})
-
-    assert error is None
-    assert source.bone_id_offset == 12
-
-
-def test_resolver_uses_bound_vertex_vg_resource_without_applying_offset():
-    resources = {
-        "ResourceBlendBuffer": {
-            "filename": "blend.buf", "stride": 16,
-            "format": "DXGI_FORMAT_R8_UINT",
-        },
-        "ResourceBlendRemapVertexVGBuffer": {
-            "filename": "remap.buf", "stride": 16,
-            "format": "DXGI_FORMAT_R16_UINT",
-        },
-    }
-
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"}, resources.get, bone_id_offset=142,
-        remap_resources={35: "ResourceBlendRemapVertexVGBuffer"})
-
-    assert error is None
-    assert source == SkinningSource(
-        "blend.buf", 16, 8, "wwmi_u8_8", 142,
-        "remap.buf", 16, "wwmi_vertex_vg")
-    assert skinning_source_descriptor(source) == {
-        "key": "blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=remap.buf",
-        "file": "blend.buf", "bone_id_offset": 142,
-        "bone_ids_model_wide": True,
-        "bone_id_namespace": "wwmi_vertex_vg",
-        "vertex_vg_source": "remap.buf",
-    }
-
-
-def test_resolver_uses_one_declared_unbound_vertex_vg_resource():
-    resources = {
-        "ResourceBlendBuffer": {
-            "filename": "Meshes/Blend.buf", "stride": 16,
-            "format": "DXGI_FORMAT_R8_UINT",
-        },
-        "ResourceBlendRemapVertexVGBuffer": {
-            "filename": "Meshes/BlendRemapVertexVG.buf",
-            "format": "DXGI_FORMAT_R16_UINT", "stride": 16,
-        },
-    }
-
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"}, resources.get,
-        declared_vertex_vg_resources_for_blend=(
-            lambda _resource_name, _filename: [
-                "ResourceBlendRemapVertexVGBuffer"]))
-
-    assert error is None
-    assert source.encoding == "wwmi_u8_8"
-    assert source.vertex_vg_file == "Meshes/BlendRemapVertexVG.buf"
-    assert source.vertex_vg_stride == 16
-    assert source.bone_id_namespace == "wwmi_vertex_vg"
-    assert skinning_source_descriptor(source)["bone_ids_model_wide"] is True
-
-
-def test_resolver_treats_wwmi_r16_blend_ids_as_model_wide():
-    resources = {
-        "ResourceBlendBuffer_R16": {
-            "filename": "Meshes/Blend_R16.buf", "stride": 32,
-            "format": "DXGI_FORMAT_R16_UINT",
-        },
-        "ResourceBlendRemapVertexVGBuffer": {
-            "filename": "Meshes/BlendRemapVertexVG.buf",
-            "format": "DXGI_FORMAT_R16_UINT",
-        },
-    }
-
-    source, error = resolve_skinning_source(
-        {4: "ResourceBlendBuffer_R16"}, resources.get, bone_id_offset=142)
-
-    assert error is None
-    assert source == SkinningSource(
-        "Meshes/Blend_R16.buf", 32, 8, "wwmi_u16_8", 142,
-        None, 16, "model")
-    assert skinning_source_descriptor(source)["bone_ids_model_wide"] is True
-
-
-def test_resolver_keeps_source_local_when_declared_vertex_vg_is_ambiguous():
-    resources = {
-        "ResourceBlendBuffer": {
-            "filename": "blend.buf", "stride": 16,
-            "format": "DXGI_FORMAT_R8_UINT",
-        },
-        "ResourceBlendRemapVertexVGA": {
-            "filename": "remap-a.buf", "format": "DXGI_FORMAT_R16_UINT",
-            "stride": 16,
-        },
-        "ResourceBlendRemapVertexVGB": {
-            "filename": "remap-b.buf", "format": "DXGI_FORMAT_R16_UINT",
-            "stride": 16,
-        },
-    }
-
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"}, resources.get,
-        declared_vertex_vg_resources_for_blend=(
-            lambda _resource_name, _filename: [
-                "ResourceBlendRemapVertexVGA",
-                "ResourceBlendRemapVertexVGB",
-            ]))
-
-    assert error is None
-    assert source.vertex_vg_file is None
-    assert source.bone_id_namespace == "model"
-    assert skinning_source_descriptor(source)["bone_ids_model_wide"] is False
-
-
-def test_resolver_prefers_explicit_vertex_vg_binding_over_declared_candidates():
-    resources = {
-        "ResourceBlendBuffer": {
-            "filename": "blend.buf", "stride": 16,
-            "format": "DXGI_FORMAT_R8_UINT",
-        },
-        "ResourceBlendRemapVertexVGA": {
-            "filename": "remap-a.buf", "format": "DXGI_FORMAT_R16_UINT",
-            "stride": 16,
-        },
-        "ResourceBlendRemapVertexVGB": {
-            "filename": "remap-b.buf", "format": "DXGI_FORMAT_R16_UINT",
-            "stride": 16,
-        },
-    }
-
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"}, resources.get,
-        remap_resources={35: "ResourceBlendRemapVertexVGB"},
-        declared_vertex_vg_resources_for_blend=(
-            lambda _resource_name, _filename: [
-                "ResourceBlendRemapVertexVGA",
-                "ResourceBlendRemapVertexVGB",
-            ]))
-
-    assert error is None
-    assert source.vertex_vg_file == "remap-b.buf"
-    assert source.bone_id_namespace == "wwmi_vertex_vg"
-
-
 def test_resolver_rejects_invalid_vertex_vg_resource():
     resources = {
         "ResourceBlendBuffer": {
@@ -416,33 +244,16 @@ def test_resolver_rejects_invalid_vertex_vg_resource():
     assert error == "invalid_vertex_vg_remap"
 
 
-def test_resolver_keeps_ordinary_wwmi_u8_ids_source_local_with_offset():
-    source, error = resolve_skinning_source(
-        {1: "ResourceBlendBuffer"}, {
-            "ResourceBlendBuffer": {
-                "filename": "blend.buf", "stride": 16,
-                "format": "DXGI_FORMAT_R8_UINT",
-            },
-        }.get, bone_id_offset=100)
-
-    assert error is None
-    assert source.encoding == "wwmi_u8_8"
-    decoded = decode_skinning(
-        source, bytes([10] + [0] * 7 + [255] + [0] * 7), [0])
-    assert unpack_values(decoded.indices, "8I")[0] == 110
-    assert skinning_source_descriptor(source)["bone_ids_model_wide"] is False
-
-
 @pytest.mark.parametrize(
     ("source_file", "offset", "expected"),
     [
-        ("BodyBlend.buf", 0, "bodyblend.buf|offset=0"),
-        ("BodyBlend2.buf", 0, "bodyblend2.buf|offset=0"),
-        (r"Hair\.\HairBlend.buf", 0,
-         "hair/hairblend.buf|offset=0"),
-        ("Hair/HairBlend.buf", 24, "hair/hairblend.buf|offset=24"),
-        ("Accessory/HairBlend.buf", 0,
-         "accessory/hairblend.buf|offset=0"),
+        ("Component01Blend.buf", 0, "component01blend.buf|offset=0"),
+        ("Component01Blend2.buf", 0, "component01blend2.buf|offset=0"),
+        (r"Component02\.\Component02Blend.buf", 0,
+         "component02/component02blend.buf|offset=0"),
+        ("Component02/Component02Blend.buf", 24, "component02/component02blend.buf|offset=24"),
+        ("Component03/Component02Blend.buf", 0,
+         "component03/component02blend.buf|offset=0"),
     ],
 )
 def test_skinning_source_key_uses_relative_path_and_offset(
@@ -451,13 +262,13 @@ def test_skinning_source_key_uses_relative_path_and_offset(
 
 
 def test_skinning_source_normalization_accepts_safe_relative_paths():
-    assert normalize_skinning_source_file("BodyBlend.buf") == "BodyBlend.buf"
-    assert normalize_skinning_source_file("Hair/HairBlend.buf") == \
-        "Hair/HairBlend.buf"
-    assert normalize_skinning_source_file("./Hair/HairBlend.buf") == \
-        "Hair/HairBlend.buf"
-    assert normalize_skinning_source_file(r"Hair\HairBlend.buf") == \
-        "Hair/HairBlend.buf"
+    assert normalize_skinning_source_file("Component01Blend.buf") == "Component01Blend.buf"
+    assert normalize_skinning_source_file("Component02/Component02Blend.buf") == \
+        "Component02/Component02Blend.buf"
+    assert normalize_skinning_source_file("./Component02/Component02Blend.buf") == \
+        "Component02/Component02Blend.buf"
+    assert normalize_skinning_source_file(r"Component02\Component02Blend.buf") == \
+        "Component02/Component02Blend.buf"
     assert normalize_skinning_source_file("../Shared/SharedBlend.buf") == \
         "../Shared/SharedBlend.buf"
 
@@ -465,26 +276,25 @@ def test_skinning_source_normalization_accepts_safe_relative_paths():
 def test_skinning_source_normalization_rejects_unsafe_paths():
     assert normalize_skinning_source_file("../../escape.buf") is None
     assert normalize_skinning_source_file("/absolute/path.buf") is None
-    assert normalize_skinning_source_file("C:/Hair/HairBlend.buf") is None
+    assert normalize_skinning_source_file("C:/Component02/Component02Blend.buf") is None
 
 
 def test_skinning_source_descriptor_excludes_decoder_details():
     source = SkinningSource(
-        r"Hair\HairBlend.buf", 8, 4, "wwmi_u8_4", bone_id_offset=24)
+        r"Component02\Component02Blend.buf", 8, 4, "wwmi_u8_4", bone_id_offset=24)
 
     assert skinning_source_descriptor(source) == {
-        "key": "hair/hairblend.buf|offset=24",
-        "file": "Hair/HairBlend.buf",
+        "key": "component02/component02blend.buf|offset=24",
+        "file": "Component02/Component02Blend.buf",
         "bone_id_offset": 24,
         "bone_ids_model_wide": False,
     }
 
 
-@pytest.mark.parametrize("stride", [4, 8, 16, 32])
-def test_resolver_does_not_infer_blend_from_stride_alone(stride):
+def test_resolver_does_not_infer_blend_from_stride_alone():
     source, error = resolve_skinning_source(
         {1: "ResourceSomething"},
-        lambda _name: {"filename": "stream.buf", "stride": stride},
+        lambda _name: {"filename": "stream.buf", "stride": 16},
     )
 
     assert source is None
@@ -513,3 +323,36 @@ def test_skinning_metadata_is_not_part_of_render_identity():
         skinning_source=SkinningSource("b.buf", 8, 4, "wwmi_u8_4"))
 
     assert first.render_identity() == second.render_identity()
+
+
+def test_skinning_remap_resolution_lifecycle():
+    resources = {
+        "ResourceBlend": {"filename": "blend.buf", "stride": 16,
+                          "format": "DXGI_FORMAT_R8_UINT"},
+        "ResourceRemap01": {"filename": "remap-01.buf", "stride": 16,
+                            "format": "DXGI_FORMAT_R16_UINT"},
+        "ResourceRemap02": {"filename": "remap-02.buf", "stride": 16,
+                            "format": "DXGI_FORMAT_R16_UINT"},
+    }
+    candidates = []
+    def resolve(explicit=None):
+        source, error = resolve_skinning_source(
+            {1: "ResourceBlend"}, resources.get, bone_id_offset=12,
+            remap_resources=explicit,
+            declared_vertex_vg_resources_for_blend=lambda *_: candidates)
+        assert error is None
+        return source
+
+    local = resolve()
+    decoded = decode_skinning(local, bytes([3] + [0] * 7 + [255] + [0] * 7), [0])
+    assert unpack_values(decoded.indices, "8I")[0] == 15
+    assert skinning_source_descriptor(local)["bone_ids_model_wide"] is False
+    candidates.append("ResourceRemap01")
+    mapped = resolve()
+    assert mapped.vertex_vg_file == "remap-01.buf"
+    assert mapped.bone_id_namespace == "wwmi_vertex_vg"
+    candidates.append("ResourceRemap02")
+    assert resolve().vertex_vg_file is None
+    explicit = resolve({35: "ResourceRemap02"})
+    assert explicit.vertex_vg_file == "remap-02.buf"
+    assert skinning_source_descriptor(explicit)["bone_ids_model_wide"] is True

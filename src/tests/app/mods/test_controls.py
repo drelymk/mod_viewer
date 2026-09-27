@@ -20,18 +20,18 @@ from app.mods.controls import build_toggle_panel
 def test_unwired_pending_sections_uses_full_staged_snapshot(tmp_path,
                                                           monkeypatch):
     menu_path = tmp_path / "nested" / "Menu.ini"
-    draw_path = tmp_path / "Body.ini"
+    draw_path = tmp_path / "Component01.ini"
     menu = IniDocument.from_string(
         "namespace = Controls\n"
         "[Constants]\nglobal persist $style = 0\n"
         "[KeyStyle]\ntype = cycle\n$style = 0,1\n",
         path=str(menu_path))
     draw = IniDocument.from_string(
-        "[TextureOverrideBody]\n"
+        "[TextureOverrideComponent01]\n"
         "ib = ResourceIB\nvb0 = ResourcePosition\n"
         "vb1 = ResourceTexcoord\n"
         "if $\\Controls\\style == 1\ndrawindexed = 3,0,0\nendif\n"
-        "[ResourceIB]\nfilename = body.ib\nformat = R32_UINT\n"
+        "[ResourceIB]\nfilename = component01.ib\nformat = R32_UINT\n"
         "[ResourcePosition]\nfilename = position.buf\nstride = 12\n"
         "[ResourceTexcoord]\nfilename = texcoord.buf\nstride = 8\n",
         path=str(draw_path))
@@ -89,10 +89,10 @@ $Style = 0,1,2
 [KeyUnused]
 type = cycle
 $Unused = 0,1
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
-ib = ResourceBodyIB
+ib = ResourceComponent01IB
 if $visible == 1
 drawindexed = 3,0,0
 endif
@@ -102,8 +102,8 @@ stride = 12
 [ResourceTexcoord]
 filename = texcoord.buf
 stride = 8
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = R32_UINT
 """
     path = tmp_path / "mod.ini"
@@ -111,7 +111,7 @@ format = R32_UINT
     original = path.read_bytes()
     (tmp_path / "position.buf").write_bytes(struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
     (tmp_path / "texcoord.buf").write_bytes(struct.pack("<6f", 0, 0, 1, 0, 0, 1))
-    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
+    (tmp_path / "component01.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
     context = snapshot_context(str(tmp_path), [str(path)])
     full = load_mod(context=context)
     assert not full.get("error")
@@ -162,7 +162,7 @@ def test_gating_variable_collection_covers_draw_and_variant_conditions():
     }
     expected = {"draw", "texture", "normal", "normal_data", "light", "material"}
 
-    assert _gating_vars({"Body-1": draw}) == expected
+    assert _gating_vars({"Component01-1": draw}) == expected
     assert _gating_vars_from_groups([{"draws": [draw]}]) == expected
 
 
@@ -218,7 +218,7 @@ def test_present_state_does_not_build_geometry(
         "[KeyModViewerPresent]\n"
         "key = p\n"
         "type = cycle\n"
-        "$Outfit = 0,1\n",
+        "$Input01 = 0,1\n",
         encoding="utf-8",
     )
     context = snapshot_context(str(tmp_path), [str(ini_path)])
@@ -238,14 +238,14 @@ def test_control_state_does_not_build_geometry(
         tmp_path, monkeypatch):
     parsed = ParsedModAnalysis(
         groups=[{"draws": [{"conditions": [[{
-            "var": "Outfit", "value": "1", "negate": False,
+            "var": "Input01", "value": "1", "negate": False,
         }]], "texture_variants": []}]}],
-        toggles={"KeyOutfit": {
-            "name": "Outfit", "key_display": "", "key": "",
+        toggles={"KeyInput01": {
+            "name": "Input01", "key_display": "", "key": "",
             "source": None, "ini_path": str(tmp_path / "mod.ini"),
-            "section": "KeyOutfit", "vars": {"Outfit": ["0", "1"]},
+            "section": "KeyInput01", "vars": {"Input01": ["0", "1"]},
         }},
-        menu={}, defaults={"Outfit": "0"}, state_rules=[], present={},
+        menu={}, defaults={"Input01": "0"}, state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
     )
     context = snapshot_context(str(tmp_path), [str(tmp_path / "mod.ini")])
@@ -256,13 +256,13 @@ def test_control_state_does_not_build_geometry(
 
     def build_semantics(*args, **kwargs):
         semantic_calls.append((args, kwargs))
-        return {"Body-1": {"conditions": [[{
-            "var": "Outfit", "value": "1", "negate": False,
+        return {"Component01-1": {"conditions": [[{
+            "var": "Input01", "value": "1", "negate": False,
         }]]}}
 
     monkeypatch.setattr("app.mods.controls.build_mesh_semantics", build_semantics)
 
-    result = load_control_state(context, active_mesh_keys={"Body-1"})
+    result = load_control_state(context, active_mesh_keys={"Component01-1"})
 
     assert semantic_calls
-    assert set(result["controls"]["toggles"]) == {"KeyOutfit"}
+    assert set(result["controls"]["toggles"]) == {"KeyInput01"}

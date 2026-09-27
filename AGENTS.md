@@ -41,6 +41,10 @@ Keep deterministic formatting, lint, and other mechanical checks in CI. Code rev
 
 ## Portable comments and tests
 
+- Committed synthetic test fixtures must use neutral generated identities and
+  data. Do not copy real mod, character, resource, creator, user, machine, path,
+  or corpus-specific identifiers unless an exact production identifier is
+  itself the contract being tested.
 - Code comments, docstrings, and test cases must not contain developer- or machine-specific information: real user/repository paths, usernames, hostnames, virtual-environment or tool-install locations, environment dumps, or local-only run results.
 - Use temporary directories, repository-relative fixtures, stable synthetic names, and generic skip messages instead. Absolute paths, loopback addresses, and other local-looking literals are allowed only when the test directly exercises that security or transport contract, and they must be generic fixtures rather than actual environment values.
 

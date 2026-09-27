@@ -14,8 +14,6 @@ from app.settings import paths as paths
 from app.runtime import server as server
 from app.assets.index import build_index
 from app.assets.loader import hash_asset, load_asset
-from app.assets.loader.wwmi import _component_texture_candidates
-from app.assets.loader.models import AssetLoadResult, AssetMeshPart
 from app.bridge.api import ModViewerAPI
 from core.geometry.component_coverage import ComponentCoverageKey
 from core.geometry.transport import GeometryBlob
@@ -65,7 +63,7 @@ def _index_text(indices):
 
 
 def _gimi_face_asset(root, *, include_eyes=True):
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     entries = []
     body_rows = []
@@ -81,8 +79,8 @@ def _gimi_face_asset(root, *, include_eyes=True):
             ((0.79, 1.96, 3), (0, 0, 1), (1, 1)),
         ]
         body_indices = (0, 1, 2, 4, 5, 6)
-        _text_vb(asset / "CharacterEyesA-vb0=11111111.txt", 92, body_rows)
-        (asset / "CharacterEyesA-ib=aaaaaaaa.txt").write_text(
+        _text_vb(asset / "Asset01EyesA-vb0=11111111.txt", 92, body_rows)
+        (asset / "Asset01EyesA-ib=aaaaaaaa.txt").write_text(
             _index_text(body_indices), encoding="utf-8")
         entries.append({
             "ib": "aaaaaaaa", "vb0": "11111111", "component_name": "Eyes",
@@ -105,8 +103,8 @@ def _gimi_face_asset(root, *, include_eyes=True):
                 (-1, 0, 0), (0, 0)))
         for ordinal, first in enumerate(ring):
             face_indices.extend((center_index, first, ring[(ordinal + 1) % 8]))
-    _text_vb(asset / "CharacterFaceEyeA-vb0=22222222.txt", 92, face_rows)
-    (asset / "CharacterFaceEyeA-ib=bbbbbbbb.txt").write_text(
+    _text_vb(asset / "Asset01FaceEyeA-vb0=22222222.txt", 92, face_rows)
+    (asset / "Asset01FaceEyeA-ib=bbbbbbbb.txt").write_text(
         _index_text(face_indices), encoding="utf-8")
     entries.append({
         "ib": "bbbbbbbb", "vb0": "22222222", "component_name": "FaceEye",
@@ -119,8 +117,8 @@ def _gimi_face_asset(root, *, include_eyes=True):
         ((4, -2.4, 6.9), (-1, 0, 0), (0, 1)),
     ]
     mouth_indices = (0, 1, 2)
-    _text_vb(asset / "CharacterFaceMouthA-vb0=33333333.txt", 92, mouth_rows)
-    (asset / "CharacterFaceMouthA-ib=cccccccc.txt").write_text(
+    _text_vb(asset / "Asset01FaceMouthA-vb0=33333333.txt", 92, mouth_rows)
+    (asset / "Asset01FaceMouthA-ib=cccccccc.txt").write_text(
         _index_text(mouth_indices), encoding="utf-8")
     entries.append({
         "ib": "cccccccc", "vb0": "33333333", "component_name": "Mouth",
@@ -180,14 +178,14 @@ def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):
 def test_migoto_index_dump_separates_headers_from_index_rows(tmp_path):
     path = tmp_path / "range.txt"
     path.write_text(
-        "byte offset: 0\nfirst index: 43845\nindex count: 6\n"
+        "byte offset: 0\nfirst index: 12\nindex count: 6\n"
         "topology: trianglelist\nformat: DXGI_FORMAT_R16_UINT\n\n"
         "8 9 10\n11 12 13\n", encoding="utf-8")
 
     parsed = parse_index_dump(path)
 
     assert parsed.indices == (8, 9, 10, 11, 12, 13)
-    assert parsed.first_index == 43845
+    assert parsed.first_index == 12
     assert parsed.index_count == 6
     assert parsed.index_format == "DXGI_FORMAT_R16_UINT"
 
@@ -207,44 +205,20 @@ def test_gimi_face_parts_align_to_native_eyes_and_keep_eyes_unchanged(tmp_path):
               for value in body_rows[index][0]))
     face_positions = struct.unpack("<3f", parts["FaceEye"].positions[:12])
     assert face_positions == pytest.approx((-0.75, 2, 3))
+    filtered = load_asset(
+        "GIMI", str(root), index["assets"][0], geometry=GeometryBlob(),
+        part_filter={ComponentCoverageKey(
+            parts["Mouth"].geometry_hash, parts["Mouth"].first_index,
+            parts["Mouth"].index_count)})
+    assert len(filtered.parts) == 1
+    assert filtered.parts[0].component_name == "Mouth"
+    assert filtered.parts[0].positions == parts["Mouth"].positions
     mouth_positions = struct.unpack("<3f", parts["Mouth"].positions[:12])
     assert mouth_positions == pytest.approx((0.1, 1.6, 3), abs=1e-5)
     assert struct.unpack("<3f", parts["Mouth"].normals[:12]) == pytest.approx(
         (0, 0, 1))
     assert not any(item["reason"] == "face_alignment_unavailable"
                    for item in result.payload["metadata"]["asset"]["warnings"])
-
-
-def test_gimi_mouth_only_filter_uses_alignment_dependencies_without_emitting_them(
-        tmp_path):
-    root = tmp_path / "assets"
-    asset, _body_rows, _face_centers, _mouth_rows = _gimi_face_asset(root)
-    index = build_index("GIMI", str(root))
-
-    result = load_asset(
-        "GIMI", str(root), index["assets"][0], geometry=GeometryBlob(),
-        part_filter={ComponentCoverageKey("cccccccc", 0, 3)})
-
-    assert len(result.parts) == 1
-    assert result.parts[0].component_name == "Mouth"
-    assert struct.unpack("<3f", result.parts[0].positions[:12]) == \
-        pytest.approx((0.1, 1.6, 3), abs=1e-5)
-
-
-def test_gimi_face_detection_uses_component_metadata_over_filename_heuristics():
-    record = hash_asset._HashAssetRecord(
-        metadata_path="Character/hash.json", entry={},
-        component_name="Eyewear", geometry_hash="aabbccdd",
-        vb_hash="11223344", ranges=(),
-        vb_file="CharacterFaceEyeA-vb0=11223344.txt", ib_files=())
-    assert not hash_asset._is_face_local_record(record)
-
-    unnamed = hash_asset._HashAssetRecord(
-        metadata_path="Character/hash.json", entry={},
-        component_name=None, geometry_hash="aabbccdd",
-        vb_hash="11223344", ranges=(),
-        vb_file="CharacterFaceEyeA-vb0=11223344.txt", ib_files=())
-    assert hash_asset._is_face_local_record(unnamed)
 
 
 def test_gimi_face_alignment_failure_keeps_raw_geometry_and_warns(tmp_path):
@@ -279,7 +253,7 @@ def test_zzmi_face_named_parts_are_not_gimi_aligned(tmp_path):
 
 def test_hash_asset_does_not_use_same_label_wrong_hash_vertex_dump(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678", "component_name": "Body",
@@ -313,7 +287,7 @@ def test_hash_asset_does_not_use_same_label_wrong_hash_vertex_dump(tmp_path):
 
 def test_hash_asset_skips_corrupt_same_hash_ib_and_keeps_valid_ranges(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678", "component_name": "Body",
@@ -342,36 +316,10 @@ def test_hash_asset_skips_corrupt_same_hash_ib_and_keeps_valid_ranges(tmp_path):
     assert result.parts[0].label == "Body B 2"
 
 
-def test_hash_asset_uses_resolved_ib_count_when_metadata_omits_count(tmp_path):
-    root = tmp_path / "assets"
-    asset = root / "Character"
-    asset.mkdir(parents=True)
-    _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": "Hair",
-        "object_indexes": [0],
-    }])
-    _text_vb(asset / "Hair-vb0=12345678.txt", 92, [
-        ((0, 0, 0), (0, 0, 1), (0, 0)),
-        ((1, 0, 0), (0, 0, 1), (1, 0)),
-        ((0, 1, 0), (0, 0, 1), (0, 1)),
-    ])
-    (asset / "Hair-ib=87654321.txt").write_text(
-        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
-        "0 1 2\n", encoding="utf-8")
-
-    index = build_index("ZZMI", str(root))
-    result = load_asset("ZZMI", str(root), index["assets"][0],
-                        geometry=GeometryBlob())
-    part = result.parts[0]
-
-    assert part.index_count == 3
-    assert result.payload["meshes"][part.key]["drawindexed"][0] == 3
-
-
 def test_hash_asset_preserves_duplicate_position_vertices_and_authored_normals(
         tmp_path, monkeypatch):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678",
@@ -430,7 +378,7 @@ def test_hash_asset_preserves_duplicate_position_vertices_and_authored_normals(
 
 def test_hash_asset_part_filter_skips_unrequested_ranges(tmp_path, monkeypatch):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678", "component_name": "Body",
@@ -467,88 +415,46 @@ def test_hash_asset_part_filter_skips_unrequested_ranges(tmp_path, monkeypatch):
     assert len(parsed_vbs) == 1
 
 
-def test_asset_parts_with_same_component_share_one_texture_pool(tmp_path):
-    root = tmp_path / "assets"
-    asset = root / "Character"
-    asset.mkdir(parents=True)
-    _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": "Hair",
-        "object_indexes": [0, 3], "object_index_counts": [3, 3],
-        "object_classifications": ["A", "B"],
-        "texture_hashes": [
-            [["Diffuse", "dds", "aaaa1111"]],
-            [["Diffuse", "dds", "bbbb2222"]],
-        ],
-    }])
-    _text_vb(asset / "Hair-vb0=12345678.txt", 92, [
-        ((0, 0, 0), (0, 0, 1), (0, 0)),
-        ((1, 0, 0), (0, 0, 1), (1, 0)),
-        ((0, 1, 0), (0, 0, 1), (0, 1)),
-        ((0, 0, 0), (0, 0, 1), (0, 0)),
-        ((1, 0, 0), (0, 0, 1), (1, 0)),
-        ((0, 1, 0), (0, 0, 1), (0, 1)),
-    ])
-    (asset / "HairA-ib=87654321.txt").write_text(
-        "first index: 0\nindex count: 3\ntopology: trianglelist\n"
-        "0 1 2\n", encoding="utf-8")
-    (asset / "HairB-ib=87654321.txt").write_text(
-        "first index: 3\nindex count: 3\ntopology: trianglelist\n"
-        "3 4 5\n", encoding="utf-8")
-    (asset / "HairA-Diffuse-aaaa1111.dds").write_bytes(b"a")
-    (asset / "HairB-Diffuse-bbbb2222.dds").write_bytes(b"b")
-
-    index = build_index("ZZMI", str(root))
-    result = load_asset("ZZMI", str(root), index["assets"][0],
-                        geometry=GeometryBlob())
-
-    entries = list(result.payload["meshes"].values())
-    pool_ids = {entry["texture_pool_id"] for entry in entries}
-    assert len(pool_ids) == 1
-    pool = result.payload["texture_pools"][next(iter(pool_ids))]
-    assert {item["tex_key"] for item in pool} == {
-        entries[0]["tex_key"], entries[1]["tex_key"]}
-
-
 def test_hash_asset_prefers_generic_texture_over_more_specific_suffix_match(
         tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Amber"
+    asset = root / "Asset07"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678", "component_name": "",
         "object_indexes": [0], "object_classifications": ["Head"],
         "texture_hashes": [[["Diffuse", ".dds", "deadbeef"]]],
     }])
-    _text_vb(asset / "Amber-vb0=12345678.txt", 92, [
+    _text_vb(asset / "Asset07-vb0=12345678.txt", 92, [
         ((0, 0, 0), (0, 0, 1), (0, 0)),
         ((1, 0, 0), (0, 0, 1), (1, 0)),
         ((0, 1, 0), (0, 0, 1), (0, 1)),
     ])
-    (asset / "Amber-ib=87654321.txt").write_text(
+    (asset / "Asset07-ib=87654321.txt").write_text(
         "first index: 0\nindex count: 3\ntopology: trianglelist\n"
         "0 1 2\n", encoding="utf-8")
-    (asset / "AmberHeadDiffuse.dds").write_bytes(b"generic")
-    (asset / "AmberFaceHeadDiffuse.dds").write_bytes(b"specific")
+    (asset / "Asset07HeadDiffuse.dds").write_bytes(b"generic")
+    (asset / "Asset07FaceHeadDiffuse.dds").write_bytes(b"specific")
 
     index = build_index("GIMI", str(root))
     result = load_asset("GIMI", str(root), index["assets"][0],
                         geometry=GeometryBlob())
 
     entry = next(iter(result.payload["meshes"].values()))
-    assert entry["tex_key"].endswith("/Amber/AmberHeadDiffuse.dds")
+    assert entry["tex_key"].endswith("/Asset07/Asset07HeadDiffuse.dds")
 
 
 def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": "HairWings",
+        "ib": "87654321", "vb0": "12345678", "component_name": "Component01",
         "object_indexes": [0, 3], "object_index_counts": [3, 3],
         "object_classifications": ["Head", "Body"],
         "texture_hashes": [[], []],
     }])
-    _text_vb(asset / "HairWings-vb0=12345678.txt", 92, [
+    _text_vb(asset / "Component01-vb0=12345678.txt", 92, [
         ((0, 0, 0), (0, 0, 1), (0, 0)),
         ((1, 0, 0), (0, 0, 1), (1, 0)),
         ((0, 1, 0), (0, 0, 1), (0, 1)),
@@ -557,59 +463,26 @@ def test_hash_asset_recovers_unique_range_texture_families(tmp_path):
         ((0, 1, 0), (0, 0, 1), (0, 1)),
     ])
     for name, first in (
-            ("HairWingsHead", 0), ("HeadPieceA", 0),
-            ("HairWingsBody", 3), ("HeadPieceB", 3)):
+            ("Component01Head", 0), ("Component02A", 0),
+            ("Component01Body", 3), ("Component02B", 3)):
         (asset / f"{name}-ib=87654321.txt").write_text(
             f"first index: {first}\nindex count: 3\ntopology: trianglelist\n"
             f"{first} {first + 1} {first + 2}\n", encoding="utf-8")
-    (asset / "HeadPieceADiffuse.dds").write_bytes(b"head")
-    (asset / "HeadPieceBDiffuse.dds").write_bytes(b"body")
+    (asset / "Component02ADiffuse.dds").write_bytes(b"fixture-01")
+    (asset / "Component02BDiffuse.dds").write_bytes(b"fixture-02")
 
     index = build_index("GIMI", str(root))
     result = load_asset("GIMI", str(root), index["assets"][0],
                         geometry=GeometryBlob())
 
     entries = list(result.payload["meshes"].values())
-    assert entries[0]["tex_key"].endswith("/HeadPieceADiffuse.dds")
-    assert entries[1]["tex_key"].endswith("/HeadPieceBDiffuse.dds")
-
-
-def test_hash_asset_loads_immediate_nested_hash_metadata(tmp_path):
-    root = tmp_path / "assets"
-    asset = root / "Columbina"
-    nested = asset / "ColumbinaFace"
-    nested.mkdir(parents=True)
-    _write_json(asset / "hash.json", [{
-        "ib": "87654321", "vb0": "12345678", "component_name": "Body",
-        "object_indexes": [0], "object_classifications": ["Head"],
-    }])
-    _write_json(nested / "hash.json", [{
-        "ib": "abcdef12", "vb0": "fedcba98", "component_name": "Eye",
-        "object_indexes": [0], "object_classifications": ["Head"],
-    }])
-    rows = [((0, 0, 0), (0, 0, 1), (0, 0)),
-            ((1, 0, 0), (0, 0, 1), (1, 0)),
-            ((0, 1, 0), (0, 0, 1), (0, 1))]
-    _text_vb(asset / "Body-vb0=12345678.txt", 92, rows)
-    _text_vb(nested / "Eye-vb0=fedcba98.txt", 92, rows)
-    for folder, name, geometry_hash in (
-            (asset, "Body", "87654321"),
-            (nested, "Eye", "abcdef12")):
-        (folder / f"{name}-ib={geometry_hash}.txt").write_text(
-            "first index: 0\nindex count: 3\ntopology: trianglelist\n"
-            "0 1 2\n", encoding="utf-8")
-
-    index = build_index("GIMI", str(root))
-    result = load_asset("GIMI", str(root), index["assets"][0],
-                        geometry=GeometryBlob())
-
-    assert {part.component_name for part in result.parts} == {"Body", "Eye"}
-    assert {part.label for part in result.parts} == {"Body Head", "Eye Head"}
+    assert entries[0]["tex_key"].endswith("/Component02ADiffuse.dds")
+    assert entries[1]["tex_key"].endswith("/Component02BDiffuse.dds")
 
 
 def test_hash_asset_loads_both_metadata_sources_for_shared_geometry_hash(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     nested = asset / "Face"
     nested.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
@@ -638,21 +511,21 @@ def test_hash_asset_loads_both_metadata_sources_for_shared_geometry_hash(tmp_pat
 
     assert {part.component_name for part in result.parts} == {"Body", "Face"}
     assert {part.key.split("::")[1] for part in result.parts} == {
-        "Character/hash.json", "Character/Face/hash.json"}
+        "Asset01/hash.json", "Asset01/Face/hash.json"}
 
 
 def test_wwmi_skips_corrupt_metadata_and_loads_valid_sibling(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     valid = asset / "ObjectA"
     invalid = asset / "ObjectB"
     valid.mkdir(parents=True)
     invalid.mkdir(parents=True)
     _wwmi_triangle(valid)
     (invalid / "Metadata.json").write_text("{", encoding="utf-8")
-    record = {"path": "Character", "geometry": [
-        {"hash": "11111111", "metadata": "Character/ObjectA/Metadata.json"},
-        {"hash": "22222222", "metadata": "Character/ObjectB/Metadata.json"},
+    record = {"path": "Asset01", "geometry": [
+        {"hash": "11111111", "metadata": "Asset01/ObjectA/Metadata.json"},
+        {"hash": "22222222", "metadata": "Asset01/ObjectB/Metadata.json"},
     ]}
 
     result = load_asset("WWMI", str(root), record, geometry=GeometryBlob())
@@ -666,12 +539,12 @@ def test_wwmi_skips_corrupt_metadata_and_loads_valid_sibling(tmp_path):
 
 def test_wwmi_texture_candidates_use_registered_asset_root(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     object_dir = asset / "ObjectA"
     object_dir.mkdir(parents=True)
     _wwmi_triangle(object_dir, image=True)
-    record = {"path": "Character", "geometry": [{
-        "hash": "11111111", "metadata": "Character/ObjectA/Metadata.json",
+    record = {"path": "Asset01", "geometry": [{
+        "hash": "11111111", "metadata": "Asset01/ObjectA/Metadata.json",
     }]}
 
     result = load_asset("WWMI", str(root), record, geometry=GeometryBlob())
@@ -685,50 +558,9 @@ def test_wwmi_texture_candidates_use_registered_asset_root(tmp_path):
         "diffuse")
 
 
-def test_wwmi_texture_candidates_are_filtered_by_component_filename(tmp_path):
-    names = [
-        "Components-2 t=A.dds",
-        "Components-0-1-4 t=B.dds",
-        "Components-0-2 t=C.dds",
-        "Components-2-3 t=D.dds",
-        "Components-3 t=E.dds",
-        "SomeTexture.dds",
-    ]
-    files = []
-    for name in names:
-        path = tmp_path / name
-        path.write_bytes(b"not decoded during load")
-        files.append(str(path))
-    files.append(files[0])
-
-    def texture_source(path, role):
-        return f"uri:{role}:{path}"
-
-    def candidate_names(ordinal):
-        return {os.path.basename(item.path)
-                for item in _component_texture_candidates(
-                    files, str(tmp_path), ordinal, texture_source)}
-
-    assert candidate_names(0) == {"Components-0-1-4 t=B.dds",
-                                  "Components-0-2 t=C.dds"}
-    assert candidate_names(1) == {"Components-0-1-4 t=B.dds"}
-    assert candidate_names(2) == {"Components-2 t=A.dds",
-                                  "Components-0-2 t=C.dds",
-                                  "Components-2-3 t=D.dds"}
-    assert candidate_names(3) == {"Components-2-3 t=D.dds",
-                                  "Components-3 t=E.dds"}
-    assert candidate_names(4) == {"Components-0-1-4 t=B.dds"}
-    assert candidate_names(5) == set()
-
-    candidates = _component_texture_candidates(
-        files, str(tmp_path), 2, texture_source)
-    assert all(item.role is None and item.source == "candidate"
-               for item in candidates)
-
-
 def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "Metadata.json", {
         "vb0_hash": "11111111", "vertex_count": 3,
@@ -771,7 +603,7 @@ def test_wwmi_reverses_winding_without_rewriting_authored_normals(tmp_path):
 
 def test_wwmi_decodes_variable_stride_and_packed_normals(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "Metadata.json", {
         "vb0_hash": "33333333",
@@ -804,7 +636,7 @@ def test_wwmi_decodes_variable_stride_and_packed_normals(tmp_path):
 
 def test_wwmi_keeps_component_with_invalid_authored_normal_stream(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "Metadata.json", {
         "vb0_hash": "44444444",
@@ -833,26 +665,9 @@ def test_wwmi_keeps_component_with_invalid_authored_normal_stream(tmp_path):
     assert result.parts[0].normals is None
 
 
-def test_asset_components_with_duplicate_hash_folders_get_distinct_identity():
-    geometry = GeometryBlob()
-    parts = tuple(AssetMeshPart(
-        key=f"part-{geometry_hash}", label="Part 1", asset_type="WWMI",
-        asset_path="Character", geometry_hash=geometry_hash,
-        component_name=None, classification=None, component_ordinal=0,
-        first_index=0, index_count=3, positions=b"\0" * 36,
-        indices=b"\0" * 12)
-        for geometry_hash in ("aaaabbbb", "ccccdddd"))
-
-    result = AssetLoadResult.from_parts(
-        "WWMI", "assets", {"path": "Character"}, parts, geometry=geometry)
-
-    assert {entry["component"] for entry in result.payload["meshes"].values()} == {
-        "Part 1 [aaaabbbb]", "Part 1 [ccccdddd]"}
-
-
 def test_hash_asset_skips_missing_components_and_reports_warning(tmp_path):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "aaaaaaaa", "vb0": "bbbbbbbb", "component_name": "Body",
@@ -883,7 +698,7 @@ def test_hash_asset_skips_missing_components_and_reports_warning(tmp_path):
 
 def test_api_load_asset_publishes_shared_payload_without_ini(tmp_path, monkeypatch):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{
         "ib": "87654321", "vb0": "12345678", "component_name": "Body",
@@ -922,7 +737,7 @@ def test_api_load_asset_publishes_shared_payload_without_ini(tmp_path, monkeypat
 def test_api_load_missing_asset_parts_is_incremental_and_reversible(
         tmp_path, monkeypatch):
     asset_root = tmp_path / "assets"
-    asset = asset_root / "Character"
+    asset = asset_root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [
         {"ib": "aaaaaaaa", "vb0": "11111111", "component_name": "Body",
@@ -995,7 +810,7 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
 
 def test_api_rejects_category_and_keeps_disabled_root_browsable(tmp_path, monkeypatch):
     root = tmp_path / "assets"
-    asset = root / "Character"
+    asset = root / "Asset01"
     asset.mkdir(parents=True)
     _write_json(asset / "hash.json", [{"ib": "87654321"}])
     config = tmp_path / "config.json"

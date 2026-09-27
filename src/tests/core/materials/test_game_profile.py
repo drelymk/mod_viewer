@@ -12,11 +12,11 @@ from core.textures.profiles import texture_profile_for
 
 def _classic_gimi_sections():
     return {
-        "TextureOverrideBodyPosition": ["vb0 = ResourceBodyPosition"],
-        "TextureOverrideBodyBlend": ["vb1 = ResourceBodyBlend"],
-        "TextureOverrideBodyTexcoord": ["vb0 = ResourceBodyTexcoord"],
-        "TextureOverrideBody": ["ps-t1 = ResourceBodyDiffuse"],
-        "ResourceBodyDiffuse": ["filename = body_diffuse.dds"],
+        "TextureOverrideComponent01Position": ["vb0 = ResourceComponent01Position"],
+        "TextureOverrideComponent01Blend": ["vb1 = ResourceComponent01Blend"],
+        "TextureOverrideComponent01Texcoord": ["vb0 = ResourceComponent01Texcoord"],
+        "TextureOverrideComponent01": ["ps-t1 = ResourceComponent01Diffuse"],
+        "ResourceComponent01Diffuse": ["filename = component01_diffuse.dds"],
     }
 
 
@@ -33,8 +33,8 @@ def test_wuwa_runtime_and_rabbitfx_api_are_separate():
 
 def test_zzz_draw_type_vb2_blend_and_zzmi_texture_namespace():
     detection = detect_game({
-        "TextureOverrideBody": ["if $DRAW_TYPE == 2", "checktextureoverride = ib"],
-        "TextureOverrideBodyBlend": ["vb2 = ResourceZZMIBlend"],
+        "TextureOverrideComponent01": ["if $DRAW_TYPE == 2", "checktextureoverride = ib"],
+        "TextureOverrideComponent01Blend": ["vb2 = ResourceZZMIBlend"],
         r"Resource\ZZMI\Diffuse": ["filename = diffuse.dds"],
     })
     assert (detection.game, detection.runtime, detection.texture_api) == (
@@ -47,23 +47,23 @@ def test_zzz_draw_type_vb2_blend_and_zzmi_texture_namespace():
     [
         (_classic_gimi_sections(), "gimi"),
         ({
-            "TextureOverrideBody": ["ps-t1 = ResourceBodyDiffuse"],
-            "ResourceBodyDiffuse": ["filename = body_diffuse.dds"],
+            "TextureOverrideComponent01": ["ps-t1 = ResourceComponent01Diffuse"],
+            "ResourceComponent01Diffuse": ["filename = component01_diffuse.dds"],
         }, "raw"),
         ({
             **_classic_gimi_sections(),
             r"CommandList\RabbitFX\SetTextures": [
-                r"Resource\RabbitFX\Diffuse = ref ResourceBodyDiffuse",
+                r"Resource\RabbitFX\Diffuse = ref ResourceComponent01Diffuse",
             ],
         }, "rabbitfx"),
         ({
             **_classic_gimi_sections(),
-            "TextureOverrideBody": ["ps-t1 = ResourceFoo"],
-            "ResourceFoo": ["filename = body_diffuse.dds"],
+            "TextureOverrideComponent01": ["ps-t1 = ResourceFoo"],
+            "ResourceFoo": ["filename = component01_diffuse.dds"],
         }, "raw"),
         ({
             **_classic_gimi_sections(),
-            "ResourceBodyDiffuse": ["format = rgba8"],
+            "ResourceComponent01Diffuse": ["format = rgba8"],
         }, "raw"),
     ],
 )
@@ -81,7 +81,7 @@ def test_classic_gimi_direct_texture_detection_is_conservative(
 
 def test_rabbitfx_settextures_maps_explicit_roles_case_insensitively():
     sections = {
-        "TextureOverrideBody": [r"run = commandlist\rabbitfx\settextures"],
+        "TextureOverrideComponent01": [r"run = commandlist\rabbitfx\settextures"],
         r"CommandList\RabbitFX\SetTextures": [
             r"Resource\RabbitFX\Diffuse = ref ResourceDiffuse",
             r"Resource\RabbitFX\Lightmap = ref ResourceLightmap",
@@ -90,7 +90,7 @@ def test_rabbitfx_settextures_maps_explicit_roles_case_insensitively():
         ],
     }
 
-    info = _scan_sections_for_draws(sections)["TextureOverrideBody"]
+    info = _scan_sections_for_draws(sections)["TextureOverrideComponent01"]
 
     assert info["diffuse"] == "ResourceDiffuse"
     assert info["aux_maps_at_end"]["light_map"]["variants"] == [{
@@ -127,9 +127,9 @@ def test_strong_runtime_evidence_beats_conflicting_weak_namespace():
 def test_srmi_markers_do_not_resolve_ambiguous_draw_type_as_zzz():
     detection = detect_game({
         "Constants": [r"global $namespace = SRMIv1"],
-        "TextureOverrideBody": [
+        "TextureOverrideComponent01": [
             "if DRAW_TYPE == 1",
-            "vb2 = ResourceBodyBlend",
+            "vb2 = ResourceComponent01Blend",
             r"Resource\SRMI\PositionBuffer = ref ResourcePosition",
             r"Resource\SRMI\BlendBuffer = ref ResourceBlend",
             r"$\SRMI\vertex_count = 123",
@@ -146,17 +146,17 @@ def test_resolved_texcoord_binding_does_not_inherit_blend_parent():
     from core.materials.game_profile import _binding_is_blend
 
     sections = {
-        "TextureOverrideBodyBlend": [
-            "vb1 = ResourceBodyTexcoord",
-            "vb2 = ResourceBodyBlend",
+        "TextureOverrideComponent01Blend": [
+            "vb1 = ResourceComponent01Texcoord",
+            "vb2 = ResourceComponent01Blend",
         ],
-        "ResourceBodyTexcoord": ["filename = texcoord.buf"],
-        "ResourceBodyBlend": ["filename = blend.buf"],
+        "ResourceComponent01Texcoord": ["filename = texcoord.buf"],
+        "ResourceComponent01Blend": ["filename = blend.buf"],
     }
     assert not _binding_is_blend(
-        "TextureOverrideBodyBlend", "ResourceBodyTexcoord", sections)
+        "TextureOverrideComponent01Blend", "ResourceComponent01Texcoord", sections)
     assert _binding_is_blend(
-        "TextureOverrideBodyBlend", "ResourceBodyBlend", sections)
+        "TextureOverrideComponent01Blend", "ResourceComponent01Blend", sections)
 
 
 

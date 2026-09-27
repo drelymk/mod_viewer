@@ -156,7 +156,7 @@ def test_list_subfolders_is_immediate_sorted_and_non_recursive(tmp_path):
     nested.mkdir()
     open(tmp_path / "root" / "file.txt", "w", encoding="utf-8").close()
     with zipfile.ZipFile(tmp_path / "root" / "packed.zip", "w") as archive:
-        archive.writestr("mod.ini", "[TextureOverrideBody]\n")
+        archive.writestr("mod.ini", "[TextureOverrideComponent01]\n")
     (tmp_path / "root" / "packed.7z").write_bytes(b"7z")
     (tmp_path / "root" / "packed.rar").write_bytes(b"rar")
     mod_folders.add_folder("Root", root, filename)
@@ -174,11 +174,11 @@ def test_list_subfolders_is_immediate_sorted_and_non_recursive(tmp_path):
 def test_containment_rejects_prefix_parent_and_other_drive():
     assert mod_folders.normalize_path("") == ""
     assert mod_folders.normalize_path("   ") == ""
-    assert mod_folders.is_within(r"X:\fixture\mods\Alice", r"X:\fixture\mods")
+    assert mod_folders.is_within(r"X:\fixture\mods\Asset01", r"X:\fixture\mods")
     assert mod_folders.is_within(r"X:\fixture\mods", r"X:\fixture\mods")
     assert not mod_folders.is_within(
         r"X:\fixture\mods-backup", r"X:\fixture\mods")
     assert not mod_folders.is_within(
         r"X:\fixture\other\mods", r"X:\fixture\mods")
     assert not mod_folders.is_within(
-        r"Y:\fixture\mods\Alice", r"X:\fixture\mods")
+        r"Y:\fixture\mods\Asset01", r"X:\fixture\mods")

@@ -11,6 +11,7 @@ from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.geometry.skinning import SkinningSource
 from core.ini.draw_groups import build_draw_groups
 from core.ini.sections import extract_resources, merge_sections
+from tests.support.skinning_data import write_gimi_skinning_mod, write_wwmi_remap_mod
 
 
 class _Access:
@@ -18,106 +19,13 @@ class _Access:
         return path
 
 
-def _write_mod(tmp_path):
-    ini = tmp_path / "mod.ini"
-    ini.write_text(
-        """[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
-drawindexed = 6, 0, 0
-
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
-
-[ResourceBodyIB]
-filename = body.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceBodyPosition]
-filename = body.pos
-stride = 12
-
-[ResourceBodyBlend]
-filename = body.blend
-stride = 32
-
-[ResourceBodyTexcoord]
-filename = body.tc
-stride = 20
-""",
-        encoding="utf-8",
-    )
-    (tmp_path / "body.ib").write_bytes(struct.pack(
-        "<6I", 2, 0, 1, 1, 3, 2))
-    (tmp_path / "body.pos").write_bytes(b"".join(
-        struct.pack("<3f", float(i), 0., 0.) for i in range(4)))
-    (tmp_path / "body.tc").write_bytes(b"\0" * 20 * 4)
-    (tmp_path / "body.blend").write_bytes(b"".join(
-        struct.pack("<4f4I", .6, .3, .1, 0., 7, 8, 9, 0)
-        for _ in range(4)))
-    return ini
-
-
-def _write_wwmi_remap_mod(tmp_path):
-    ini = tmp_path / "wwmi.ini"
-    ini.write_text(
-        """[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyBlend
-vb2 = ResourceBodyTexcoord
-run = CommandListRemap
-drawindexed = 3, 0, 0
-
-[CommandListRemap]
-cs-t35 = ref ResourceBlendRemapVertexVGBuffer
-
-[ResourceBodyIB]
-filename = body.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceBodyPosition]
-filename = body.pos
-stride = 12
-
-[ResourceBodyBlend]
-filename = body.blend
-format = DXGI_FORMAT_R8_UINT
-stride = 16
-
-[ResourceBodyTexcoord]
-filename = body.tc
-stride = 20
-
-[ResourceBlendRemapVertexVGBuffer]
-filename = body.vertex_vg
-format = DXGI_FORMAT_R16_UINT
-stride = 16
-""",
-        encoding="utf-8",
-    )
-    (tmp_path / "body.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
-    (tmp_path / "body.pos").write_bytes(b"".join(
-        struct.pack("<3f", float(i), 0., 0.) for i in range(3)))
-    (tmp_path / "body.tc").write_bytes(b"\0" * 20 * 3)
-    (tmp_path / "body.blend").write_bytes(b"".join(
-        bytes([3] * 8 + [255, 128, 0, 0, 0, 0, 0, 0])
-        for _ in range(3)))
-    (tmp_path / "body.vertex_vg").write_bytes(b"".join(
-        struct.pack("<8H", 3, 259, 0, 0, 0, 0, 0, 0)
-        for _ in range(3)))
-    return ini
-
-
 def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatch):
-    ini = _write_mod(tmp_path)
+    ini = write_gimi_skinning_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
     rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
-    entry = rendered.meshes["BodyBlend-1"]
+    entry = rendered.meshes["Component01Blend-1"]
     assert entry["skinning_available"] is True
     published = {}
 
@@ -149,7 +57,7 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     )
 
     result = preview.get_model_skinning_preview(str(tmp_path))
-    result_entry = result["meshes"]["BodyBlend-1"]
+    result_entry = result["meshes"]["Component01Blend-1"]
 
     position_length = entry["pos"]["length"]
     assert result["status"] == "ok"
@@ -168,9 +76,9 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     assert struct.unpack_from("<4I", published["blob"], 0) == (7, 8, 9, 0)
     assert struct.unpack_from("<4f", published["blob"], 4 * 4 * 4) == pytest.approx(
         (.6, .3, .1, 0.))
-    assert list(rendered.skinning_manifest["BodyBlend-1"].used_vertices) == [
+    assert list(rendered.skinning_manifest["Component01Blend-1"].used_vertices) == [
         0, 1, 2, 3]
-    assert result_entry["source"]["file"] == "body.blend"
+    assert result_entry["source"]["file"] == "component01.blend"
     assert preview._last_skinning_diagnostics[str(tmp_path)][
         "mapping_source"] == "loaded_model_manifest"
     assert preview._last_skinning_diagnostics[str(tmp_path)][
@@ -181,12 +89,12 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
 
 def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
         tmp_path, monkeypatch):
-    ini = _write_wwmi_remap_mod(tmp_path)
+    ini = write_wwmi_remap_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
     rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
-    assert rendered.meshes["BodyBlend-1"]["skinning_available"] is True
+    assert rendered.meshes["Component01Blend-1"]["skinning_available"] is True
     published = {}
 
     def publish(blob, *, replace=True):
@@ -212,7 +120,7 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
     )
 
     result = preview.get_model_skinning_preview(str(tmp_path))
-    entry = result["meshes"]["BodyBlend-1"]
+    entry = result["meshes"]["Component01Blend-1"]
 
     assert result["status"] == "ok"
     assert entry["bone_ids"] == [3, 259]
@@ -222,13 +130,13 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
     }
     assert entry["diagnostics"]["bone_id_namespace"] == "wwmi_vertex_vg"
     assert entry["diagnostics"]["vertex_vg_remap"] is True
-    assert entry["diagnostics"]["vertex_vg_source"] == "body.vertex_vg"
+    assert entry["diagnostics"]["vertex_vg_source"] == "component01.vertex_vg"
     assert entry["diagnostics"]["vertex_vg_truncated_vertices"] == 0
     assert entry["source"]["bone_id_namespace"] == "wwmi_vertex_vg"
     assert entry["source"]["bone_ids_model_wide"] is True
     manifest_source = rendered.skinning_manifest[
-        "BodyBlend-1"].skinning_source
-    assert manifest_source.vertex_vg_file == "body.vertex_vg"
+        "Component01Blend-1"].skinning_source
+    assert manifest_source.vertex_vg_file == "component01.vertex_vg"
     assert manifest_source.vertex_vg_stride == 16
     assert manifest_source.bone_id_namespace == "wwmi_vertex_vg"
     assert struct.unpack_from("<8I", published["blob"], 0) == (
@@ -239,7 +147,7 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
 
 def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
         tmp_path, monkeypatch):
-    ini = _write_mod(tmp_path)
+    ini = write_gimi_skinning_mod(tmp_path)
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
@@ -267,19 +175,19 @@ def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
     monkeypatch.setattr(
         preview, "_skinning_draws",
         lambda *_args, **_kwargs: (parsed, {
-            "BodyBlend-1": (draw, groups[0]),
+            "Component01Blend-1": (draw, groups[0]),
             "BrokenBlend-1": (broken, groups[0]),
             "Static-1": (static, groups[0]),
         }),
     )
     preview._active_mesh_keys[str(tmp_path)] = {
-        "BodyBlend-1", "BrokenBlend-1", "Static-1",
+        "Component01Blend-1", "BrokenBlend-1", "Static-1",
     }
 
     result = preview.get_model_skinning_preview(str(tmp_path))
 
     assert result["status"] == "partial"
-    assert result["meshes"]["BodyBlend-1"]["status"] == "ok"
+    assert result["meshes"]["Component01Blend-1"]["status"] == "ok"
     assert result["meshes"]["BrokenBlend-1"]["status"] == "error"
     assert "Static-1" not in result["meshes"]
     assert result["data"]["url"] == "/geometry/model-skin-test"

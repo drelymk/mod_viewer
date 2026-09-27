@@ -105,7 +105,7 @@ def test_authoritative_context_reuses_discovery_document_on_reopen(
     nested = tmp_path / "nested" / "Child.ini"
     nested.parent.mkdir()
     root.write_text(
-        "[TextureOverrideBody]\ndrawindexed = 3,0,0\n",
+        "[TextureOverrideComponent01]\ndrawindexed = 3,0,0\n",
         encoding="utf-8")
     nested.write_text("[Constants]\nglobal $style = 0\n",
                       encoding="utf-8")
@@ -144,7 +144,7 @@ def test_authoritative_context_reuses_discovery_document_on_reopen(
         assert Counter(loads) == {str(root): 1, str(nested): 1}
         assert reopened.ini.records[0].document is staged
         assert reopened.ini.records[0].sections[
-            "TextureOverrideBody"] == ["drawindexed = 6,0,0"]
+            "TextureOverrideComponent01"] == ["drawindexed = 6,0,0"]
     finally:
         edit_session.discard(folder)
 
@@ -155,7 +155,7 @@ def test_diagnostics_first_reuses_discovery_document_on_open(tmp_path,
     nested = tmp_path / "nested" / "Child.ini"
     nested.parent.mkdir()
     root.write_text(
-        "[TextureOverrideBody]\ndrawindexed = 3,0,0\n",
+        "[TextureOverrideComponent01]\ndrawindexed = 3,0,0\n",
         encoding="utf-8")
     nested.write_text("[Constants]\nglobal $style = 0\n",
                       encoding="utf-8")
@@ -222,7 +222,7 @@ def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
     context = _context()
     context.metadata = {
         "weight": {"selected_bones": [{
-            "source": "Hair\\HairBlend.buf", "bone_id_offset": 0,
+            "source": "Component02\\Component02Blend.buf", "bone_id_offset": 0,
             "bone_ids": [9, True, -1, 7, 9],
         }]},
     }
@@ -238,15 +238,15 @@ def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
 
     assert result["status"] == "error"
     assert result["saved_bones"] == [{
-        "source": "Hair/HairBlend.buf", "bone_id_offset": 0,
-        "source_key": "hair/hairblend.buf|offset=0",
+        "source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
+        "source_key": "component02/component02blend.buf|offset=0",
         "bone_ids": [7, 9],
     }]
 
 
 def test_single_and_bulk_skin_entries_share_source_descriptor():
     draw = SimpleNamespace(skinning_source=SkinningSource(
-        file=r"Hair\HairBlend.buf", stride=8, influence_count=4,
+        file=r"Component02\Component02Blend.buf", stride=8, influence_count=4,
         encoding="wwmi_u8_4", bone_id_offset=24))
     decoded = SimpleNamespace(
         indices=b"index", weights=b"weight", vertex_count=1,
@@ -256,8 +256,8 @@ def test_single_and_bulk_skin_entries_share_source_descriptor():
     bulk, _bulk_blob = ModPreview._skin_entry(decoded, draw, 11)
 
     assert single["source"] == bulk["source"] == {
-        "key": "hair/hairblend.buf|offset=24",
-        "file": "Hair/HairBlend.buf",
+        "key": "component02/component02blend.buf|offset=24",
+        "file": "Component02/Component02Blend.buf",
         "bone_id_offset": 24,
         "bone_ids_model_wide": False,
     }
@@ -268,7 +268,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     publication = _Publication(events)
     preview = ModPreview(_Access())
     context = _context()
-    manifest = {"Body-1": object()}
+    manifest = {"Component01-1": object()}
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _folder, **_kwargs: ("mod", {}, context))
@@ -278,7 +278,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     def load_model(**kwargs):
         kwargs["context"].skinning_manifest = manifest
         return {
-            "meshes": {"Body-1": {}},
+            "meshes": {"Component01-1": {}},
             "metadata": {"game": {"id": "genshin"}},
             "controls": {"present": {}},
         }
@@ -298,9 +298,9 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
 
     result = preview.load_mod("mod")
 
-    assert result["meshes"] == {"Body-1": {}}
+    assert result["meshes"] == {"Component01-1": {}}
     assert [event[0] for event in events] == ["profile", "publish", "commit"]
-    assert preview._active_mesh_keys == {"mod": {"Body-1"}}
+    assert preview._active_mesh_keys == {"mod": {"Component01-1"}}
     assert preview._skinning_manifests == {"mod": manifest}
 
 
@@ -322,7 +322,7 @@ def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
     def load_model(**kwargs):
         captured["context"] = kwargs["context"]
         return {
-            "meshes": {"Body-1": {}},
+            "meshes": {"Component01-1": {}},
             "metadata": {"game": {"id": "genshin"}},
             "controls": {"present": {}},
         }
@@ -396,8 +396,8 @@ def test_failed_load_discards_publication_and_clears_active_meshes(monkeypatch):
 def test_clear_loaded_model_releases_all_model_private_state():
     preview = ModPreview(_Access())
     preview._current_model_folder = "mod"
-    preview._active_mesh_keys["mod"] = {"Body-1"}
-    preview._skinning_manifests["mod"] = {"Body-1": object()}
+    preview._active_mesh_keys["mod"] = {"Component01-1"}
+    preview._skinning_manifests["mod"] = {"Component01-1": object()}
     preview._last_skinning_diagnostics["mod"] = {"total_seconds": 1}
 
     preview.clear_loaded_model()
@@ -517,7 +517,7 @@ def test_memory_diagnostics_report_resource_retention(monkeypatch):
 
 def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):
     preview = ModPreview(_Access())
-    preview._active_mesh_keys["mod"] = {"Body-1"}
+    preview._active_mesh_keys["mod"] = {"Component01-1"}
     captured = []
     monkeypatch.setattr(
         preview, "authoritative_context",
@@ -534,12 +534,12 @@ def test_semantic_control_read_reuses_active_mesh_keys(monkeypatch):
     result = preview.get_control_state("mod")
 
     assert result["controls"]["present"] == {}
-    assert captured[0][1]["active_mesh_keys"] == {"Body-1"}
+    assert captured[0][1]["active_mesh_keys"] == {"Component01-1"}
 
 
 def test_save_texture_color_forwards_complete_target_request(monkeypatch):
     preview = ModPreview(_Access())
-    preview._active_mesh_keys["mod"] = {"Body-1", "Body-2"}
+    preview._active_mesh_keys["mod"] = {"Component01-1", "Component01-2"}
     context = _context()
     captured = []
     monkeypatch.setattr(
@@ -548,36 +548,36 @@ def test_save_texture_color_forwards_complete_target_request(monkeypatch):
     monkeypatch.setattr(
         "app.bridge.mod_preview.save_texture_color",
         lambda *args, **kwargs: captured.append((args, kwargs)) or {
-            "status": "ok", "tex_key": "diffuse::body.dds",
+            "status": "ok", "tex_key": "diffuse::component01.dds",
             "saved_meshes": [{
-                "semantic_key": "Body-1", "metadata_key": "Body::one",
+                "semantic_key": "Component01-1", "metadata_key": "Component01::one",
             }],
         })
     targets = [{
-        "semantic_key": "Body-1", "metadata_key": "Body::one",
+        "semantic_key": "Component01-1", "metadata_key": "Component01::one",
         "adjustment": {"hue": 30},
     }]
     usage = [{
-        "semantic_key": "Body-1",
+        "semantic_key": "Component01-1",
         "texture_keys": {
-            "diffuse": "diffuse::body.dds", "normal_map": None,
+            "diffuse": "diffuse::component01.dds", "normal_map": None,
             "normal_data": None, "light_map": None,
             "material_map": None, "emission_map": None,
         },
     }]
     result = preview.save_texture_color(
-        "mod", "diffuse::body.dds", targets, usage)
+        "mod", "diffuse::component01.dds", targets, usage)
 
     assert result["status"] == "ok"
     assert captured[0][0] == (
-        context, {"Body-1", "Body-2"},
-        "diffuse::body.dds", targets, usage)
+        context, {"Component01-1", "Component01-2"},
+        "diffuse::component01.dds", targets, usage)
     assert captured[0][1] == {}
 
 
 def test_save_texture_color_forwards_progress_callback(monkeypatch):
     preview = ModPreview(_Access())
-    preview._active_mesh_keys["mod"] = {"Body-1"}
+    preview._active_mesh_keys["mod"] = {"Component01-1"}
     context = _context()
     callback = object()
     captured = []
@@ -591,6 +591,6 @@ def test_save_texture_color_forwards_progress_callback(monkeypatch):
         })
 
     preview.save_texture_color(
-        "mod", "diffuse::body.dds", [], [], progress_callback=callback)
+        "mod", "diffuse::component01.dds", [], [], progress_callback=callback)
 
     assert captured[0][1] == {"progress_callback": callback}

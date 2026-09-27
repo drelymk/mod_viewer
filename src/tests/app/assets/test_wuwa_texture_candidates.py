@@ -184,7 +184,7 @@ filename = Textures/Components-2 t=missing.dds
         [named], ["nested/custom_skin.png", "alternate/custom_skin.png"]]
 
     assets = tmp_path / "assets"
-    matched = assets / "Character"
+    matched = assets / "Asset01"
     matched.mkdir(parents=True)
     asset_file = matched / "Components-2 t=aaaaaaaa.dds"
     asset_file.write_bytes(b"synthetic asset")
@@ -195,9 +195,9 @@ filename = Textures/Components-2 t=missing.dds
     }), encoding="utf-8")
     binding = AssetComponentBinding(
         status="exact", component_status="exact", range_status="exact",
-        asset_type="WWMI", root=str(assets), asset="Character",
-        component_ordinal=2, metadata="Character/Metadata.json",
-        detail_metadata="Character/TextureUsage.json")
+        asset_type="WWMI", root=str(assets), asset="Asset01",
+        component_ordinal=2, metadata="Asset01/Metadata.json",
+        detail_metadata="Asset01/TextureUsage.json")
     context = SimpleNamespace(
         mod_dir=str(mod), source=source, dds_classification_cache={})
     parsed.game = SimpleNamespace(game="wuwa")

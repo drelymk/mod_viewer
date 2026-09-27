@@ -24,4 +24,4 @@ def test_resource_path_rejects_absolute_drive_and_empty_values(tmp_path):
 
 
 def test_resource_path_commonpath_rejects_incompatible_drives():
-    assert not _within(r"X:\fixture\mods\Alice", r"Y:\fixture\mods")
+    assert not _within(r"X:\fixture\mods\Asset01", r"Y:\fixture\mods")

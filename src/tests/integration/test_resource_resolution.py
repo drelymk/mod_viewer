@@ -18,14 +18,14 @@ def _traversal_mod(tmp, pos_filename):
     ini_text = f"""[Constants]
 global persist $swapvar = 0
 
-[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
 drawindexed = 100, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -37,7 +37,7 @@ filename = tc.buf
 stride = 20
 """
     path = write(tmp, "mod.ini", ini_text)
-    for buf in ("body.ib", "tc.buf"):
+    for buf in ("component01.ib", "tc.buf"):
         open(os.path.join(tmp, buf), "wb").write(b"\0" * 4096)
     secs = merge_sections([path])
     groups = build_draw_groups(secs, extract_resources(secs))
@@ -45,8 +45,8 @@ stride = 20
     return meshes
 
 
-SAME_IB_VB_STATE_INI = """[TextureOverrideBody]
-ib = ResourceBodyIB
+SAME_IB_VB_STATE_INI = """[TextureOverrideComponent01]
+ib = ResourceComponent01IB
 vb0 = ResourcePosA
 vb1 = ResourceTcA
 vb6 = ResourceUnsupported
@@ -57,8 +57,8 @@ drawindexed = 3, 0, 0
 vb0 = null
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePosA]
@@ -82,7 +82,7 @@ stride = 8
 def test_same_ib_draws_keep_vb_snapshots_and_null_does_not_inherit():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", SAME_IB_VB_STATE_INI)
-        open(os.path.join(tmp, "body.ib"), "wb").write(
+        open(os.path.join(tmp, "component01.ib"), "wb").write(
             struct.pack("<3I", 0, 1, 2))
         open(os.path.join(tmp, "pos-a.buf"), "wb").write(
             struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0))
@@ -93,7 +93,7 @@ def test_same_ib_draws_keep_vb_snapshots_and_null_does_not_inherit():
         open(os.path.join(tmp, "tc-b.buf"), "wb").write(texcoords)
 
         sections = merge_sections([path])
-        scanned = _scan_sections_for_draws(sections)["TextureOverrideBody"]
+        scanned = _scan_sections_for_draws(sections)["TextureOverrideComponent01"]
         assert scanned["draws"][0].vertex_resources[6] == (
             "ResourceUnsupported")
         assert scanned["draws"][2].vertex_resources[0] is None
@@ -103,9 +103,9 @@ def test_same_ib_draws_keep_vb_snapshots_and_null_does_not_inherit():
             "pos-a.buf", "pos-b.buf", None]
         meshes, geometry = build_mesh_fixture(groups, tmp)
 
-        assert list(meshes) == ["Body-1", "Body-2"]
-        first = geometry_values(geometry, meshes["Body-1"]["pos"])
-        second = geometry_values(geometry, meshes["Body-2"]["pos"])
+        assert list(meshes) == ["Component01-1", "Component01-2"]
+        first = geometry_values(geometry, meshes["Component01-1"]["pos"])
+        second = geometry_values(geometry, meshes["Component01-2"]["pos"])
         assert sorted(first[::3]) == [0, 0, 1]
         assert sorted(second[::3]) == [10, 10, 11]
 
@@ -128,56 +128,56 @@ def test_root_texture_picker_accepts_windows_case_variation():
               and result.get("file") == "RootDiffuse.png"), (f"root-level picked texture keeps role and source path ({result})")
 
 
-RUNTIME_POSITION_COPY_INI = """[TextureOverrideBodyBlend]
-vb0 = ResourceBodyPosition
+RUNTIME_POSITION_COPY_INI = """[TextureOverrideComponent01Blend]
+vb0 = ResourceComponent01Position
 
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideLegsBlend]
-vb0 = ResourceLegsPosition
+[TextureOverrideComponent03Blend]
+vb0 = ResourceComponent03Position
 
-[TextureOverrideLegsTexcoord]
-vb1 = ResourceLegsTexcoord
+[TextureOverrideComponent03Texcoord]
+vb1 = ResourceComponent03Texcoord
 
-[TextureOverrideLegsA]
-ib = ResourceLegsAIB
+[TextureOverrideComponent03A]
+ib = ResourceComponent03AIB
 drawindexed = 3, 0, 0
-ib = ResourceBodyAIB
-vb0 = ResourceBodyRuntimeSnapshot
-vb1 = ResourceBodyTexcoord
+ib = ResourceComponent01AIB
+vb0 = ResourceComponent01RuntimeSnapshot
+vb1 = ResourceComponent01Texcoord
 drawindexed = 3, 0, 0
 
 [Present]
-ResourceBodyPosition = copy ResourceBodyPositionBase
-ResourceLegsPosition = copy ResourceLegsPositionBase
+ResourceComponent01Position = copy ResourceComponent01PositionBase
+ResourceComponent03Position = copy ResourceComponent03PositionBase
 
-[ResourceBodyPosition]
-[ResourceLegsPosition]
-[ResourceBodyRuntimeSnapshot]
+[ResourceComponent01Position]
+[ResourceComponent03Position]
+[ResourceComponent01RuntimeSnapshot]
 
-[ResourceBodyPositionBase]
+[ResourceComponent01PositionBase]
 filename = bodyBase.buf
 stride = 40
 
-[ResourceLegsPositionBase]
-filename = legsBase.buf
+[ResourceComponent03PositionBase]
+filename = component03Base.buf
 stride = 40
 
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = bodyTc.buf
 stride = 20
 
-[ResourceLegsTexcoord]
-filename = legsTc.buf
+[ResourceComponent03Texcoord]
+filename = component03Tc.buf
 stride = 20
 
-[ResourceBodyAIB]
+[ResourceComponent01AIB]
 filename = bodyA.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceLegsAIB]
-filename = legsA.ib
+[ResourceComponent03AIB]
+filename = component03A.ib
 format = DXGI_FORMAT_R32_UINT
 """
 
@@ -193,50 +193,50 @@ def test_runtime_position_copy_resolution():
         if not groups:
             return
         group = groups[0]
-        assert (group["position_file"] == "legsBase.buf"), (f"group position follows the explicit Legs -> LegsBase copy "
+        assert (group["position_file"] == "component03Base.buf"), (f"group position follows the explicit Component03 -> Component03Base copy "
               f"(got {group['position_file']})")
-        assert (group["draws"][1].get("position_file") == "bodyBase.buf"), (f"reassigned Body draw follows the explicit Body -> BodyBase copy "
+        assert (group["draws"][1].get("position_file") == "bodyBase.buf"), (f"reassigned Component01 draw follows the explicit Component01 -> Component01Base copy "
               f"(got {group['draws'][1].get('position_file')})")
 
 
-LL_SKELETON_OUTPUT_INI = """[TextureOverrideBodyBlend]
-vb2 = ResourceBodyBlend
+LL_SKELETON_OUTPUT_INI = """[TextureOverrideComponent01Blend]
+vb2 = ResourceComponent01Blend
 
-[TextureOverrideBodyTexcoord]
-vb1 = ResourceBodyTexcoord
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
 
-[TextureOverrideBodyA]
-run = CommandListBodyA
+[TextureOverrideComponent01A]
+run = CommandListComponent01A
 
-[CommandListBodyA]
-ib = ResourceBodyAIB
-run = CommandListLLSkeletonSkin_Body
+[CommandListComponent01A]
+ib = ResourceComponent01AIB
+run = CommandListLLSkeletonSkin_Component01
 drawindexed = 3, 0, 0
 
-[CommandListLLSkeletonSkin_Body]
-cs-t1 = ref ResourceBodyPosition
-cs-t2 = ref ResourceBodyBlend
-cs-u0 = ref ResourceLLSkelOutput_Body
+[CommandListLLSkeletonSkin_Component01]
+cs-t1 = ref ResourceComponent01Position
+cs-t2 = ref ResourceComponent01Blend
+cs-u0 = ref ResourceLLSkelOutput_Component01
 cs-u0 = null
 cs-t1 = null
 cs-t2 = null
-vb0 = ref ResourceLLSkelOutput_Body
+vb0 = ref ResourceLLSkelOutput_Component01
 
-[ResourceBodyPosition]
+[ResourceComponent01Position]
 filename = bodyPosition.buf
 stride = 40
 
-[ResourceBodyBlend]
+[ResourceComponent01Blend]
 filename = bodyBlend.buf
 stride = 32
 
-[ResourceBodyTexcoord]
+[ResourceComponent01Texcoord]
 filename = bodyTexcoord.buf
 stride = 24
 
-[ResourceLLSkelOutput_Body]
+[ResourceLLSkelOutput_Component01]
 
-[ResourceBodyAIB]
+[ResourceComponent01AIB]
 filename = bodyA.ib
 format = DXGI_FORMAT_R32_UINT
 """
@@ -259,24 +259,24 @@ def test_ll_skeleton_compute_output_uses_rest_position():
 
 
 RUN_CHAIN_INI = """[Constants]
-global persist $naked = 0
+global persist $input02 = 0
 global persist $flag = 0
 
-[KeyNaked]
+[KeyInput02]
 key = n
 type = cycle
-$naked = 0,1
+$input02 = 0,1
 
 [KeyFlag]
 key = f
 type = cycle
 $flag = 0,1
 
-[TextureOverrideBodyBlend]
-ib = ResourceBodyIB
+[TextureOverrideComponent01Blend]
+ib = ResourceComponent01IB
 vb0 = ResourcePos
 vb1 = ResourceTc
-if $naked == 0
+if $input02 == 0
 drawindexed = 100, 0, 0
 run = CustomShaderOuter
 endif
@@ -289,8 +289,8 @@ if $flag == 0
 drawindexed = 50, 200, 0
 endif
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
 [ResourcePos]
@@ -318,25 +318,25 @@ def test_run_inlines_nested_commandlist_draws():
             (draw["occurrence"].section, draw["occurrence"].ordinal)
             for draw in draws
         } == {
-            ("TextureOverrideBodyBlend", 0),
+            ("TextureOverrideComponent01Blend", 0),
             ("CommandListTransparent", 0),
         }
 
         chained = by_count[50]
         assert chained["occurrence"].path == (
-            ("TextureOverrideBodyBlend", 0),
+            ("TextureOverrideComponent01Blend", 0),
             ("CustomShaderOuter", 0),
         )
-        assert (visible(chained["conditions"], {"naked": "0", "flag": "0"})), ("chained draw visible when both naked==0 and flag==0")
-        assert (not visible(chained["conditions"], {"naked": "1", "flag": "0"})), ("chained draw hidden when the caller's own gate (naked==0) fails")
-        assert (not visible(chained["conditions"], {"naked": "0", "flag": "1"})), ("chained draw hidden when the callee's own gate (flag==0) fails")
+        assert (visible(chained["conditions"], {"input02": "0", "flag": "0"})), ("chained draw visible when both input02==0 and flag==0")
+        assert (not visible(chained["conditions"], {"input02": "1", "flag": "0"})), ("chained draw hidden when the caller's own gate (input02==0) fails")
+        assert (not visible(chained["conditions"], {"input02": "0", "flag": "1"})), ("chained draw hidden when the callee's own gate (flag==0) fails")
 
 
 def test_repeated_commandlist_execution_has_distinct_occurrences(tmp_path):
-    ini = """[TextureOverrideBody]
-ib = ResourceBodyIB
-vb0 = ResourceBodyPosition
-vb1 = ResourceBodyTexcoord
+    ini = """[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
 Resource\\GIMI\\Diffuse = ResourceRed
 run = CommandListDraw
 Resource\\GIMI\\Diffuse = ResourceBlue
@@ -345,16 +345,16 @@ run = CommandListDraw
 [CommandListDraw]
 drawindexed = 3, 0, 0
 
-[ResourceBodyIB]
-filename = body.ib
+[ResourceComponent01IB]
+filename = component01.ib
 format = DXGI_FORMAT_R32_UINT
 
-[ResourceBodyPosition]
-filename = body.buf
+[ResourceComponent01Position]
+filename = component01.buf
 stride = 12
 
-[ResourceBodyTexcoord]
-filename = body-uv.buf
+[ResourceComponent01Texcoord]
+filename = component01-uv.buf
 stride = 8
 
 [ResourceRed]
@@ -373,8 +373,8 @@ filename = blue.dds
     assert [draw.texture_default("diffuse") for draw in draws] == [
         "red.dds", "blue.dds"]
     assert [draw.occurrence.path for draw in draws] == [
-        (("TextureOverrideBody", 0),),
-        (("TextureOverrideBody", 1),),
+        (("TextureOverrideComponent01", 0),),
+        (("TextureOverrideComponent01", 1),),
     ]
     assert len(deduplicate_draws(groups[0])) == 2
 

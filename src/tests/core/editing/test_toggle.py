@@ -42,7 +42,7 @@ key = 1
 type = cycle
 $swapvar = 0,1,2
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 hash = abc123
 if $swapvar == 0
 drawindexed = 100,0,0
@@ -81,15 +81,15 @@ def test_add_toggle_creates_complete_detection_and_cycle_plumbing():
     non_blank = [l.text for l in present.lines if l.text]
     assert (non_blank == ["post $active = 0"]), (f"post $active = 0 is the new [Present] section's only content line ({non_blank})")
 
-    body_sec = d.section("TextureOverrideBody")
-    texts = [l.text for l in body_sec.lines]
+    component01_sec = d.section("TextureOverrideComponent01")
+    texts = [l.text for l in component01_sec.lines]
     assert (texts[0] == "hash = abc123" and texts[1] == "$active = 1"), (f"$active = 1 planted right after the leading hash line, before the "
           f"if-block ({texts[:2]})")
 
     te.add_toggle(d, "Extra2", "3", "extravar2", ["0", "1"])
     assert len([l for l in d.section("Constants").lines if l.text == "global $active = 0"]) == 1
     assert len([l for l in d.section("Present").lines if l.text == "post $active = 0"]) == 1
-    assert len([l for l in body_sec.lines if l.text == "$active = 1"]) == 1
+    assert len([l for l in component01_sec.lines if l.text == "$active = 1"]) == 1
     assert d.section("KeyExtra2").lines[0].text == "condition = $active == 1"
     reparsed = IniDocument.from_string(d.to_string())
     assert reparsed.section("Present") is not None and reparsed.section("KeyExtra2") is not None
@@ -104,7 +104,7 @@ key = 1
 type = cycle
 $swapvar = 0,1,2
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 hash = abc123
 drawindexed = 100,0,0
 """)
@@ -113,8 +113,8 @@ drawindexed = 100,0,0
     assert (sec.lines[0].text == "condition = $object_detected == 1"), (f"reuses the existing $object_detected var ({sec.lines[0].text!r})")
     assert (d.section("Present") is None), ("no [Present] section is created when a detection var already exists")
     assert (te._constant_line(d, "active") is None), ("no $active is declared when $object_detected already exists")
-    body_sec = d.section("TextureOverrideBody")
-    non_blank = [l.text for l in body_sec.lines if l.text]
+    component01_sec = d.section("TextureOverrideComponent01")
+    non_blank = [l.text for l in component01_sec.lines if l.text]
     assert (non_blank == ["hash = abc123", "drawindexed = 100,0,0"]), (f"the TextureOverride section is left untouched ({non_blank})")
 
     d = doc("""[Constants]
@@ -204,7 +204,7 @@ key = 1
 type = cycle
 $swapvar = 0,1,2
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 hash = abc
 if $swapvar == 0
 drawindexed = 100,0,0
@@ -280,7 +280,7 @@ key = 2
 type = cycle
 $othervar = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 hash = abc
 if $swapvar == 0 && $othervar == 0
 drawindexed = 100,0,0
@@ -304,7 +304,7 @@ key = 1
 type = cycle
 $swapvar = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 hash = abc
 if $\Master\swapvar == 0 && $swapvar == 0
 drawindexed = 100,0,0
@@ -331,7 +331,7 @@ key = 1
 type = cycle
 $swapvar = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 hash = abc
 if $swapvar == 0
 drawindexed = 100,0,0

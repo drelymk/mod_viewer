@@ -32,7 +32,7 @@ def test_direct_asset_load_publishes_geometry_before_commit(monkeypatch):
     monkeypatch.setattr(
         preview, "_asset_selection",
         lambda _folder: ("asset", {"type": "GIMI", "path": "root"},
-                         {}, {"path": "Character"}),
+                         {}, {"path": "asset-01"}),
     )
     monkeypatch.setattr(
         "app.bridge.asset_preview.server.begin_texture_publication",
@@ -40,7 +40,7 @@ def test_direct_asset_load_publishes_geometry_before_commit(monkeypatch):
     monkeypatch.setattr(
         "app.bridge.asset_preview.asset_loader.load_asset",
         lambda *_args, **_kwargs: SimpleNamespace(
-            payload={"meshes": {"Body": {}}}),
+            payload={"meshes": {"Component01": {}}}),
     )
     monkeypatch.setattr(
         "app.bridge.asset_preview.server.publish_payload_geometry",
@@ -49,7 +49,7 @@ def test_direct_asset_load_publishes_geometry_before_commit(monkeypatch):
 
     result = preview.load_asset("asset")
 
-    assert result == {"meshes": {"Body": {}}}
+    assert result == {"meshes": {"Component01": {}}}
     assert [event[0] for event in events] == ["publish", "commit"]
 
 
@@ -62,7 +62,7 @@ def test_asset_fill_uses_non_replacing_publication(monkeypatch):
         status = "ready"
         asset_type = "GIMI"
         root = "asset-root"
-        asset = {"path": "Character"}
+        asset = {"path": "asset-01"}
         missing_parts = ("hair",)
 
         def to_dict(self):
@@ -79,7 +79,7 @@ def test_asset_fill_uses_non_replacing_publication(monkeypatch):
     monkeypatch.setattr(
         "app.bridge.asset_preview.build_asset_fill_payload",
         lambda *_args, **_kwargs: {"geometry": {"url": "/geometry/fill"},
-                                   "meshes": {"Hair": {}}},
+                                   "meshes": {"Component02": {}}},
     )
     published = []
     monkeypatch.setattr(

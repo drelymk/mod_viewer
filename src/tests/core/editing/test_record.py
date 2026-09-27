@@ -12,7 +12,7 @@ because guessing wrong here would silently change what a real mod shows.
 The synthetic fixtures above prove each rule in isolation; the corpus dry run
 at the bottom (test_real_mods_record_toggle) exercises the real distribution
 of real ini shapes to get honest safe-vs-refused numbers before the UI is
-built on top of this.
+built on input43 of this.
 """
 
 import os
@@ -76,7 +76,7 @@ key = 1
 type = cycle
 $swap = 0,1,2
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 drawindexed = 500,0,0
 """
 
@@ -88,7 +88,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 drawindexed = 100,0,0
 endif
@@ -103,7 +103,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 drawindexed = 100,0,0
 endif
@@ -133,7 +133,7 @@ key = 2
 type = cycle
 $b = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $a == 0
 run = CommandListShared
 endif
@@ -153,7 +153,7 @@ key = 1
 type = cycle
 $swap = 0,1,2
 
-[TextureOverrideBody2]
+[TextureOverrideComponent012]
 if $swap == 0
 drawindexed = 600,0,0
 elif $swap == 1
@@ -171,7 +171,7 @@ key = 1
 type = cycle
 $stage = 0,1,2,3
 
-[TextureOverrideBody3]
+[TextureOverrideComponent013]
 drawindexed = 900,0,0
 """
 
@@ -183,7 +183,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 drawindexed = 100,0,0
 else
@@ -199,7 +199,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0 && $DRAW_TYPE == 1
 drawindexed = 100,0,0
 elif $swap == 1
@@ -216,7 +216,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 if $other == 1
 drawindexed = 100,0,0
@@ -233,7 +233,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 if $other == 1
 drawindexed = 100,0,0
@@ -252,7 +252,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 ps-t0 = ResourceSomething
 drawindexed = 100,0,0
@@ -269,7 +269,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 drawindexed = 100,0,0
 elif $swap == 1
@@ -285,7 +285,7 @@ key = 1
 type = cycle
 $swap = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $swap == 0
 drawindexed = 100,0,0
 endif
@@ -302,7 +302,7 @@ type = cycle
 $upper = 0,1
 $tt = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 drawindexed = 999,0,0
 """
 
@@ -316,7 +316,7 @@ type = cycle
 $short = 0,1
 $long = 0,1,2
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 drawindexed = 999,0,-4
 """
 
@@ -330,7 +330,7 @@ type = cycle
 $upper = 0,1
 $tt = 0,1
 
-[TextureOverrideBody]
+[TextureOverrideComponent01]
 if $upper == 0
 drawindexed = 100,0,0
 elif $upper == 1
@@ -426,7 +426,7 @@ def test_record_refuses_path_owned_target_without_mutation():
     d = doc(COMMAND_LIST_RECORD)
     line = dline(d, "100,0,0")
     ref = target_refs(d, line.no + 1)[0]
-    ref["occurrence"]["path"] = [["TextureOverrideBody", 0]]
+    ref["occurrence"]["path"] = [["TextureOverrideComponent01", 0]]
     before = d.to_string()
 
     report = re_.record_toggle(
@@ -449,12 +449,12 @@ def test_record_accepts_repeated_commandlist_sources_conservatively():
     d = doc(COMMAND_LIST_RECORD)
     line = dline(d, "100,0,0")
     first = target_refs(d, line.no + 1)[0]
-    first["occurrence"]["path"] = [["TextureOverrideBody", 0]]
+    first["occurrence"]["path"] = [["TextureOverrideComponent01", 0]]
     second = {
         **first,
         "occurrence": {
             **first["occurrence"],
-            "path": [["TextureOverrideBody", 1]],
+            "path": [["TextureOverrideComponent01", 1]],
         },
     }
     before = d.to_string()
@@ -528,7 +528,7 @@ def test_bare_line_wrapped_when_partially_visible():
     assert (gate.kind == IF and gate.text == "if $swap == 1"), (f"new private if wraps the line at its one visible position ({gate.text})")
     assert (d.lines[dline(d, "500,0,0").no + 1].kind == ENDIF), ("endif follows immediately")
     reparsed = doc(d.to_string())
-    assert (reparsed.section("TextureOverrideBody") is not None), ("the rewritten document round-trips through from_string")
+    assert (reparsed.section("TextureOverrideComponent01") is not None), ("the rewritten document round-trips through from_string")
 
 
 
@@ -586,7 +586,7 @@ def test_elif_chain_value_reshuffle_matches_intent():
     }, target_refs(d, l600.no + 1, l700.no + 1, l800.no + 1))
     assert (report["chains_rewritten"] == 1 and report["skipped"] == []), (f"whole chain regenerated as one unit ({report})")
 
-    sec = d.section("TextureOverrideBody2")
+    sec = d.section("TextureOverrideComponent012")
     visible = {"0": [], "1": [], "2": []}
     cond = None
     for line in sec.lines:
@@ -601,7 +601,7 @@ def test_elif_chain_value_reshuffle_matches_intent():
                     visible[val].append(count)
     assert (visible == {"0": ["700"], "1": ["600"], "2": ["800"]}), (f"gating matches the intended swap exactly, not just the text ({visible})")
     reparsed = doc(d.to_string())
-    assert (reparsed.section("TextureOverrideBody2") is not None), ("round-trips through from_string")
+    assert (reparsed.section("TextureOverrideComponent012") is not None), ("round-trips through from_string")
 
 
 def test_bare_wrap_overlapping_another_vars_chain_refused():
@@ -695,7 +695,7 @@ def test_record_rewrite_produces_verifiable_contract():
     assert (set(verify) == {"swap"}), (f"verify is keyed by the rewritten var ({verify})")
     assert (verify["swap"]["values"] == ["0", "1", "2"]), (f"the var's own values list is included ({verify['swap']})")
     draws = verify["swap"]["draws"]
-    assert (all(dr["section"] == "TextureOverrideBody2" for dr in draws)), (f"every draw carries its own section name ({draws})")
+    assert (all(dr["section"] == "TextureOverrideComponent012" for dr in draws)), (f"every draw carries its own section name ({draws})")
     assert (_draws_by_key(draws) == {(600, 0, 0): [1], (700, 0, 0): [0], (800, 0, 0): [2]}), (f"every rewritten chain draw's exact recorded position set is present, keyed "
           f"by its own (count, start, base) identity rather than a line number that "
           f"chain regeneration can shift ({draws})")
@@ -708,11 +708,11 @@ def test_record_rewrite_produces_verifiable_contract():
         assert re_.verify_recording(path, report) == []
 
         wrong_report = {"verify": {"swap": {"values": ["0", "1", "2"], "draws": [
-            {"section": "TextureOverrideBody2", "count": 600, "start": 0, "base": 0,
+            {"section": "TextureOverrideComponent012", "count": 600, "start": 0, "base": 0,
              "positions": [0, 1]},
-            {"section": "TextureOverrideBody2", "count": 700, "start": 0, "base": 0,
+            {"section": "TextureOverrideComponent012", "count": 700, "start": 0, "base": 0,
              "positions": [0]},
-            {"section": "TextureOverrideBody2", "count": 800, "start": 0, "base": 0,
+            {"section": "TextureOverrideComponent012", "count": 800, "start": 0, "base": 0,
              "positions": [2]},
         ]}}}
         mismatches = re_.verify_recording(path, wrong_report)

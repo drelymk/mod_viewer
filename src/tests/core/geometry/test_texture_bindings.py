@@ -40,17 +40,17 @@ def test_zip_texture_registry_and_picker_read_member_bytes(tmp_path):
     Image.new("RGB", (1, 1), (20, 40, 60)).save(image_bytes, format="PNG")
     archive_path = tmp_path / "sample.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("Wrapped/textures/body.png", image_bytes.getvalue())
+        archive.writestr("Wrapped/textures/component01.png", image_bytes.getvalue())
 
     source = ZipModSource(archive_path)
-    texture_path = source.resolve_resource("textures/body.png")
+    texture_path = source.resolve_resource("textures/component01.png")
     registry = TextureRegistry(
         str(archive_path), texture_profile_for("genshin"), source=source)
 
-    assert registry.ensure(texture_path) == "diffuse::textures/body.png"
-    assert registry.sources["diffuse::textures/body.png"].startswith(
+    assert registry.ensure(texture_path) == "diffuse::textures/component01.png"
+    assert registry.sources["diffuse::textures/component01.png"].startswith(
         "data:image/png;base64,")
     selected = encode_texture_file(
         str(archive_path), texture_path, source=source)
-    assert selected["file"] == "textures/body.png"
+    assert selected["file"] == "textures/component01.png"
     assert selected["uri"].startswith("data:image/png;base64,")

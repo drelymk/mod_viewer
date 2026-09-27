@@ -67,11 +67,11 @@ def test_asset_registry_keeps_tree_browseable_when_index_is_invalid(monkeypatch)
             asset_index.AssetIndexError("invalid index")))
     monkeypatch.setattr(
         "app.bridge.registry.asset_folders.list_subfolders",
-        lambda *_args, **_kwargs: [{"name": "Character", "asset": True}])
+        lambda *_args, **_kwargs: [{"name": "asset-01", "asset": True}])
 
-    result = registry.list_asset_subfolders("asset-root/Character")
+    result = registry.list_asset_subfolders("asset-root/asset-01")
 
-    assert result == {"folders": [{"name": "Character", "asset": True}]}
+    assert result == {"folders": [{"name": "asset-01", "asset": True}]}
 
 
 def test_mod_registry_returns_exists_flag_and_narrowest_registered_root(
