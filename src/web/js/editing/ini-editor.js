@@ -35,8 +35,7 @@ const iniEditor = window.ace.edit(textEditor, {
 });
 iniEditor.session.setUseWorker(false);
 iniEditor.renderer.setScrollMargin(8, 8);
-iniEditor.textInput.getElement().setAttribute(
-  'aria-label', t('ini.fileContents'));
+iniEditor.textInput.getElement().setAttribute('aria-label', t('ini.fileContents'));
 
 function setEditorStatus(key, params = {}) {
   currentStatusKey = key;
@@ -74,7 +73,7 @@ export async function openIniEditor(iniName, line = 1) {
   if (!modPath || !iniName) return;
   const result = await window.pywebview.api.get_ini_text(modPath, iniName);
   if (result.error) {
-    await alertDialog(t('ini.couldNotOpen', {detail: result.error}));
+    await alertDialog(t('ini.couldNotOpen', { detail: result.error }));
     return;
   }
   currentIni = result.ini;
@@ -166,15 +165,19 @@ iniEditor.commands.addCommand({
 // Ace's search field first returns focus to the editor on Escape and only
 // hides itself on a later press. Close it in one press, while preventing that
 // same key event from also reaching the modal-level Escape handler.
-document.addEventListener('keydown', (event) => {
-  const search = textEditor.querySelector('.ace_search');
-  if (event.key === 'Escape' && search && getComputedStyle(search).display !== 'none') {
-    event.preventDefault();
-    event.stopPropagation();
-    iniEditor.searchBox.hide();
-    iniEditor.focus();
-  }
-}, true);
+document.addEventListener(
+  'keydown',
+  (event) => {
+    const search = textEditor.querySelector('.ace_search');
+    if (event.key === 'Escape' && search && getComputedStyle(search).display !== 'none') {
+      event.preventDefault();
+      event.stopPropagation();
+      iniEditor.searchBox.hide();
+      iniEditor.focus();
+    }
+  },
+  true,
+);
 $('ini-editor-backdrop').addEventListener('click', (event) => {
   if (event.target.id === 'ini-editor-backdrop') closeEditor();
 });
@@ -187,14 +190,17 @@ document.addEventListener('keydown', (event) => {
     if ($('ini-file-menu').classList.contains('show')) hideFileMenu();
     else if (!inAce && $('ini-editor-backdrop').classList.contains('show')) closeEditor();
   }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' &&
-      !inAce && $('ini-editor-backdrop').classList.contains('show')) {
+  if (
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === 's' &&
+    !inAce &&
+    $('ini-editor-backdrop').classList.contains('show')
+  ) {
     event.preventDefault();
     applyEditor();
   }
 });
 window.addEventListener(LANGUAGE_CHANGED, () => {
-  iniEditor.textInput.getElement().setAttribute(
-    'aria-label', t('ini.fileContents'));
+  iniEditor.textInput.getElement().setAttribute('aria-label', t('ini.fileContents'));
   if (currentStatusKey) setEditorStatus(currentStatusKey, currentStatusParams);
 });

@@ -1,0 +1,3 @@
+[codespell]
+ignore-words-list = te,currenty,abd,indicies
+skip = src/web/lib/*,src/web/js/i18n/locales/es.js,src/web/js/i18n/locales/ja.js,src/web/js/i18n/locales/ko.js,src/web/js/i18n/locales/ru.js,src/web/js/i18n/locales/zh-CN.js

@@ -1,7 +1,21 @@
 // WebGPU-native viewport post-processing for character AO and emission bloom.
 
 import * as THREE from 'three/webgpu';
-import { builtinAOContext, emissive, float, mix, mrt, normalView, output, packNormalToRGB, pass, sample, screenUV, uniform, unpackRGBToNormal } from 'three/tsl';
+import {
+  builtinAOContext,
+  emissive,
+  float,
+  mix,
+  mrt,
+  normalView,
+  output,
+  packNormalToRGB,
+  pass,
+  sample,
+  screenUV,
+  uniform,
+  unpackRGBToNormal,
+} from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { computeModelBounds } from './model-bounds.js';
@@ -19,14 +33,15 @@ const MIN_MODEL_SIZE = 0.001;
 const MIN_AO_RADIUS = MIN_MODEL_SIZE * AO_RADIUS_FACTOR;
 let nextPipelineId = 0;
 
-function finitePositive(value) { return Number.isFinite(value) && value > 0; }
+function finitePositive(value) {
+  return Number.isFinite(value) && value > 0;
+}
 function readUniformValue(node, fallback = 0) {
   return Number.isFinite(node?.value) ? node.value : fallback;
 }
 function readResolution(node) {
   const value = node?.value;
-  return value && Number.isFinite(value.x) && Number.isFinite(value.y)
-    ? [value.x, value.y] : null;
+  return value && Number.isFinite(value.x) && Number.isFinite(value.y) ? [value.x, value.y] : null;
 }
 
 /** Create the one viewport render pipeline used by the scene renderer. */
@@ -54,15 +69,13 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   prePass.setLayers(aoLayers);
   prePass.setMRT(mrt({ output: packNormalToRGB(normalView) }));
   prePass.getTexture('output').type = THREE.UnsignedByteType;
-  const prePassNormal = sample(uv =>
-    unpackRGBToNormal(prePass.getTextureNode().sample(uv)));
+  const prePassNormal = sample((uv) => unpackRGBToNormal(prePass.getTextureNode().sample(uv)));
   const aoPass = ao(prePass.getTextureNode('depth'), prePassNormal, camera);
   aoPass.resolutionScale = AO_RESOLUTION_SCALE;
   aoPass.samples.value = AO_SAMPLES;
   aoPass.useTemporalFiltering = false;
   const aoStrengthNode = uniform(0);
-  const effectiveAO = mix(
-    float(1), aoPass.getTextureNode().sample(screenUV).r, aoStrengthNode);
+  const effectiveAO = mix(float(1), aoPass.getTextureNode().sample(screenUV).r, aoStrengthNode);
 
   // Each output graph has only the work it needs: bloom-only deliberately has
   // no AO context, so it cannot schedule GTAO's depth/normal pre-pass.
@@ -72,16 +85,14 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   const bloomScenePass = pass(scene, camera);
   bloomScenePass.name = 'Viewport emission beauty pass';
   bloomScenePass.setMRT(mrt({ output, emissive }));
-  const bloomPass = bloom(bloomScenePass.getTextureNode('emissive'),
-    BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+  const bloomPass = bloom(bloomScenePass.getTextureNode('emissive'), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
   bloomPass.setResolutionScale(BLOOM_RESOLUTION_SCALE);
   const bloomOutput = bloomScenePass.getTextureNode('output').add(bloomPass);
   const aoBloomScenePass = pass(scene, camera);
   aoBloomScenePass.name = 'Viewport AO emission beauty pass';
   aoBloomScenePass.contextNode = builtinAOContext(effectiveAO);
   aoBloomScenePass.setMRT(mrt({ output, emissive }));
-  const aoBloomPass = bloom(aoBloomScenePass.getTextureNode('emissive'),
-    BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+  const aoBloomPass = bloom(aoBloomScenePass.getTextureNode('emissive'), BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
   aoBloomPass.setResolutionScale(BLOOM_RESOLUTION_SCALE);
   const aoBloomOutput = aoBloomScenePass.getTextureNode('output').add(aoBloomPass);
 
@@ -104,13 +115,14 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
 
   const isAmbientOcclusionEnabled = () => configuredStrength > 0;
   const shouldRenderAO = () => isAmbientOcclusionEnabled() && !suppressedByWireframe;
-  const shouldRenderBloom = () => bloomEnabled && bloomAvailable
-    && !bloomSuppressedByWireframe && !bloomSuppressedByDebug;
-  const renderMode = () => shouldRenderAO()
-    ? (shouldRenderBloom() ? 'ao-bloom' : 'ao')
-    : (shouldRenderBloom() ? 'bloom' : 'direct');
-  const effectiveStrength = () => shouldRenderAO() ? configuredStrength : 0;
-  const applyStrength = () => { aoStrengthNode.value = effectiveStrength(); };
+  const shouldRenderBloom = () =>
+    bloomEnabled && bloomAvailable && !bloomSuppressedByWireframe && !bloomSuppressedByDebug;
+  const renderMode = () =>
+    shouldRenderAO() ? (shouldRenderBloom() ? 'ao-bloom' : 'ao') : shouldRenderBloom() ? 'bloom' : 'direct';
+  const effectiveStrength = () => (shouldRenderAO() ? configuredStrength : 0);
+  const applyStrength = () => {
+    aoStrengthNode.value = effectiveStrength();
+  };
   function configureRenderGraph() {
     const next = renderMode();
     if (next === activeRenderMode) return false;
@@ -127,8 +139,7 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     if (bounds.isEmpty()) modelSize = MIN_MODEL_SIZE;
     else {
       const diagonal = bounds.getSize(new THREE.Vector3()).length();
-      modelSize = finitePositive(diagonal) ? Math.max(diagonal, MIN_MODEL_SIZE)
-        : MIN_MODEL_SIZE;
+      modelSize = finitePositive(diagonal) ? Math.max(diagonal, MIN_MODEL_SIZE) : MIN_MODEL_SIZE;
     }
     modelSizeDirty = false;
   }
@@ -142,21 +153,26 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     aoPass.radius.value = modelSize * AO_RADIUS_FACTOR;
     aoPass.thickness.value = aoPass.radius.value * AO_THICKNESS_RADIUS_RATIO;
   }
-  const invalidateGeometry = () => { modelSizeDirty = true; };
+  const invalidateGeometry = () => {
+    modelSizeDirty = true;
+  };
   function setMeshes(nextMeshes = []) {
     meshes = [...new Set(nextMeshes.filter(Boolean))];
     invalidateGeometry();
   }
   function adoptMeshes(nextMeshes = []) {
     const known = new Set(meshes);
-    const added = nextMeshes.filter(mesh => mesh && !known.has(mesh));
-    if (added.length) { meshes.push(...added); invalidateGeometry(); }
+    const added = nextMeshes.filter((mesh) => mesh && !known.has(mesh));
+    if (added.length) {
+      meshes.push(...added);
+      invalidateGeometry();
+    }
     return added;
   }
   function forgetMeshes(nextMeshes = []) {
     const removed = new Set(nextMeshes);
     const before = meshes.length;
-    meshes = meshes.filter(mesh => !removed.has(mesh));
+    meshes = meshes.filter((mesh) => !removed.has(mesh));
     if (meshes.length !== before) invalidateGeometry();
   }
   function reset() {
@@ -219,9 +235,14 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
         directRenderCount += 1;
       } else {
         renderPipeline.render();
-        if (mode === 'ao') { aoRenderCount += 1; aoOnlyRenderCount += 1; }
-        else if (mode === 'bloom') bloomOnlyRenderCount += 1;
-        else { aoRenderCount += 1; aoBloomRenderCount += 1; }
+        if (mode === 'ao') {
+          aoRenderCount += 1;
+          aoOnlyRenderCount += 1;
+        } else if (mode === 'bloom') bloomOnlyRenderCount += 1;
+        else {
+          aoRenderCount += 1;
+          aoBloomRenderCount += 1;
+        }
       }
     } finally {
       renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -231,26 +252,45 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   }
   function getDebugState() {
     return {
-      enabled: isAmbientOcclusionEnabled(), radiusFactor: AO_RADIUS_FACTOR,
-      strength: configuredStrength, effectiveStrength: effectiveStrength(),
-      suppressedByWireframe, bloomEnabled, bloomAvailable,
+      enabled: isAmbientOcclusionEnabled(),
+      radiusFactor: AO_RADIUS_FACTOR,
+      strength: configuredStrength,
+      effectiveStrength: effectiveStrength(),
+      suppressedByWireframe,
+      bloomEnabled,
+      bloomAvailable,
       bloomEffective: shouldRenderBloom(),
-      bloomSuppressedByWireframe, bloomSuppressedByDebug,
-      bloomStrength: BLOOM_STRENGTH, bloomRadius: BLOOM_RADIUS,
-      bloomThreshold: BLOOM_THRESHOLD, bloomResolutionScale: bloomPass.getResolutionScale(),
-      activeRenderMode, pipelineId, resolutionScale: aoPass.resolutionScale,
-      resolution: readResolution(aoPass.resolution), samples: readUniformValue(aoPass.samples),
-      radius: readUniformValue(aoPass.radius), thickness: readUniformValue(aoPass.thickness),
-      modelSize, renderCount, directRenderCount, aoRenderCount, aoOnlyRenderCount,
-      bloomOnlyRenderCount, aoBloomRenderCount, pipelineNeedsUpdate: renderPipeline.needsUpdate,
-      hasRenderPipeline: !!renderPipeline, hasPrePass: !!prePass, hasGTAO: !!aoPass,
+      bloomSuppressedByWireframe,
+      bloomSuppressedByDebug,
+      bloomStrength: BLOOM_STRENGTH,
+      bloomRadius: BLOOM_RADIUS,
+      bloomThreshold: BLOOM_THRESHOLD,
+      bloomResolutionScale: bloomPass.getResolutionScale(),
+      activeRenderMode,
+      pipelineId,
+      resolutionScale: aoPass.resolutionScale,
+      resolution: readResolution(aoPass.resolution),
+      samples: readUniformValue(aoPass.samples),
+      radius: readUniformValue(aoPass.radius),
+      thickness: readUniformValue(aoPass.thickness),
+      modelSize,
+      renderCount,
+      directRenderCount,
+      aoRenderCount,
+      aoOnlyRenderCount,
+      bloomOnlyRenderCount,
+      aoBloomRenderCount,
+      pipelineNeedsUpdate: renderPipeline.needsUpdate,
+      hasRenderPipeline: !!renderPipeline,
+      hasPrePass: !!prePass,
+      hasGTAO: !!aoPass,
       hasBloom: !!bloomPass && !!aoBloomPass,
       temporalFiltering: aoPass.useTemporalFiltering === true,
       prePassLayerMask: prePass.getLayers()?.mask ?? 0,
       prePassSamples: prePass.renderTarget?.samples ?? 0,
       prePassResolutionScale: prePass.getResolutionScale(),
-      beautyCameraIsSource: aoScenePass.camera === camera
-        && bloomScenePass.camera === camera && aoBloomScenePass.camera === camera,
+      beautyCameraIsSource:
+        aoScenePass.camera === camera && bloomScenePass.camera === camera && aoBloomScenePass.camera === camera,
       prePassCameraIsClone: prePass.camera !== camera,
       cameraCoordinateSystem: camera.coordinateSystem,
       rendererCoordinateSystem: renderer.coordinateSystem,
@@ -258,19 +298,34 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     };
   }
   function dispose() {
-    aoPass.dispose?.(); bloomPass.dispose?.(); aoBloomPass.dispose?.();
+    aoPass.dispose?.();
+    bloomPass.dispose?.();
+    aoBloomPass.dispose?.();
     renderPipeline.dispose?.();
-    prePass.renderTarget?.dispose?.(); aoScenePass.renderTarget?.dispose?.();
+    prePass.renderTarget?.dispose?.();
+    aoScenePass.renderTarget?.dispose?.();
     bloomScenePass.renderTarget?.dispose?.();
     aoBloomScenePass.renderTarget?.dispose?.();
   }
   updateSpatialParameters();
   applyStrength();
   return {
-    render, setMeshes, adoptMeshes, forgetMeshes, invalidateGeometry, reset,
-    getAmbientOcclusionStrength: () => configuredStrength, isAmbientOcclusionEnabled,
-    setAmbientOcclusionStrength, setAmbientOcclusionSuppressedByWireframe,
-    getBloomEnabled: () => bloomEnabled, setBloomEnabled, setBloomAvailable,
-    setBloomSuppressedByWireframe, setBloomSuppressedByDebug, getDebugState, dispose,
+    render,
+    setMeshes,
+    adoptMeshes,
+    forgetMeshes,
+    invalidateGeometry,
+    reset,
+    getAmbientOcclusionStrength: () => configuredStrength,
+    isAmbientOcclusionEnabled,
+    setAmbientOcclusionStrength,
+    setAmbientOcclusionSuppressedByWireframe,
+    getBloomEnabled: () => bloomEnabled,
+    setBloomEnabled,
+    setBloomAvailable,
+    setBloomSuppressedByWireframe,
+    setBloomSuppressedByDebug,
+    getDebugState,
+    dispose,
   };
 }

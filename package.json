@@ -1,0 +1,14 @@
+{
+  "name": "mod-viewer-quality",
+  "private": true,
+  "scripts": {
+    "lint": "eslint src/web/js",
+    "format:check": "prettier --check \"src/web/js/**/*.js\" eslint.config.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.11.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.9"
+  }
+}

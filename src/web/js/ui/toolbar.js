@@ -3,8 +3,12 @@
 import { activeMeshes } from '../mesh/visibility.js';
 import { ENVIRONMENT_PRESETS } from '../scene/environment.js';
 import {
-  getAmbientOcclusionStrength, getEnvironmentPreset, getKeyLightIntensity,
-  setAmbientOcclusionStrength, setEnvironmentPreset, setKeyLightIntensity,
+  getAmbientOcclusionStrength,
+  getEnvironmentPreset,
+  getKeyLightIntensity,
+  setAmbientOcclusionStrength,
+  setEnvironmentPreset,
+  setKeyLightIntensity,
 } from '../scene/scene.js';
 import { KEY_LIGHT_MAX_INTENSITY } from '../scene/key-light-controller.js';
 import { setTextureDisplayMode } from '../scene/render-modes.js';
@@ -21,8 +25,7 @@ function normalizeAmbientOcclusionLevel(value) {
 }
 
 function strengthToAmbientOcclusionLevel(value) {
-  return normalizeAmbientOcclusionLevel(
-    Number(value) / AO_MAX_STRENGTH * 100);
+  return normalizeAmbientOcclusionLevel((Number(value) / AO_MAX_STRENGTH) * 100);
 }
 
 function normalizeKeyLightLevel(value) {
@@ -32,8 +35,7 @@ function normalizeKeyLightLevel(value) {
 }
 
 function intensityToKeyLightLevel(value) {
-  return normalizeKeyLightLevel(
-    Number(value) / KEY_LIGHT_MAX_INTENSITY * 100);
+  return normalizeKeyLightLevel((Number(value) / KEY_LIGHT_MAX_INTENSITY) * 100);
 }
 
 export function initEnvironmentControl() {
@@ -46,8 +48,8 @@ export function initEnvironmentControl() {
     const name = t(`environment.preset.${id}`);
     icon.dataset.environment = id;
     button.dataset.environment = id;
-    button.setAttribute('aria-label', t('toolbar.environment', {name}));
-    button.title = t('toolbar.environmentTitle', {name});
+    button.setAttribute('aria-label', t('toolbar.environment', { name }));
+    button.title = t('toolbar.environmentTitle', { name });
   }
 
   function applyEnvironmentPreset(id) {
@@ -67,7 +69,7 @@ export function initEnvironmentControl() {
     if (!popover) return;
     closeHeaderPopovers('environment-popover');
     popover.replaceChildren();
-    Object.values(ENVIRONMENT_PRESETS).forEach(preset => {
+    Object.values(ENVIRONMENT_PRESETS).forEach((preset) => {
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'ui-popover-option';
@@ -91,11 +93,11 @@ export function initEnvironmentControl() {
     if (popover?.hidden === false) closePopover();
     else openPopover();
   });
-  document.addEventListener('click', event => {
+  document.addEventListener('click', (event) => {
     if (!popover || popover.hidden || event.target.closest('#environment-control, #environment-popover')) return;
     closePopover();
   });
-  document.addEventListener('keydown', event => {
+  document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closePopover();
   });
   window.addEventListener(LANGUAGE_CHANGED, () => {
@@ -117,7 +119,7 @@ export function initToolPopovers() {
   const aoValue = $('ao-value');
   const lightSlider = $('light-slider');
   const lightValue = $('light-value');
-  const close = popover => {
+  const close = (popover) => {
     if (!popover) return;
     popover.hidden = true;
   };
@@ -128,8 +130,7 @@ export function initToolPopovers() {
     const popoverRect = popover.getBoundingClientRect();
     const gutter = 8;
     const maxLeft = Math.max(gutter, window.innerWidth - popoverRect.width - gutter);
-    const desiredLeft = buttonRect.left
-      + (buttonRect.width - popoverRect.width) / 2;
+    const desiredLeft = buttonRect.left + (buttonRect.width - popoverRect.width) / 2;
     const left = Math.min(maxLeft, Math.max(gutter, desiredLeft));
     const top = Math.max(gutter, buttonRect.top - popoverRect.height - gutter);
     popover.style.left = `${left}px`;
@@ -145,7 +146,7 @@ export function initToolPopovers() {
     activeToolPopover = null;
   };
 
-  const updateAmbientOcclusionControl = value => {
+  const updateAmbientOcclusionControl = (value) => {
     const level = normalizeAmbientOcclusionLevel(value);
     if (aoSlider) aoSlider.value = String(level);
     if (aoValue) {
@@ -154,17 +155,16 @@ export function initToolPopovers() {
     }
     aoButton?.classList.toggle('active', level === 100);
     aoButton?.classList.toggle('partial', level > 0 && level < 100);
-    const label = t('render.ambientOcclusion', {level});
+    const label = t('render.ambientOcclusion', { level });
     aoButton?.setAttribute('aria-label', label);
     if (aoButton) aoButton.title = label;
     return level;
   };
 
-  const applyAmbientOcclusionLevel = value => {
+  const applyAmbientOcclusionLevel = (value) => {
     const level = normalizeAmbientOcclusionLevel(value);
-    setAmbientOcclusionStrength(level / 100 * AO_MAX_STRENGTH);
-    return updateAmbientOcclusionControl(
-      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+    setAmbientOcclusionStrength((level / 100) * AO_MAX_STRENGTH);
+    return updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   };
 
   function renderTextureOptions() {
@@ -201,7 +201,7 @@ export function initToolPopovers() {
     positionPopover(texturePopover, textureButton);
   }
 
-  const updateKeyLightControl = value => {
+  const updateKeyLightControl = (value) => {
     const level = normalizeKeyLightLevel(value);
     if (lightSlider) lightSlider.value = String(level);
     if (lightValue) {
@@ -211,19 +211,16 @@ export function initToolPopovers() {
     lightButton?.classList.toggle('active', level === 100);
     lightButton?.classList.toggle('partial', level > 0 && level < 100);
     lightButton?.classList.toggle('off', level === 0);
-    const label = level === 0
-      ? t('render.keyLightOff')
-      : `${t('render.keyLight')}: ${level}%`;
+    const label = level === 0 ? t('render.keyLightOff') : `${t('render.keyLight')}: ${level}%`;
     lightButton?.setAttribute('aria-label', label);
     if (lightButton) lightButton.title = label;
     return level;
   };
 
-  const applyKeyLightLevel = value => {
+  const applyKeyLightLevel = (value) => {
     const level = normalizeKeyLightLevel(value);
-    setKeyLightIntensity(level / 100 * KEY_LIGHT_MAX_INTENSITY);
-    return updateKeyLightControl(
-      intensityToKeyLightLevel(getKeyLightIntensity()));
+    setKeyLightIntensity((level / 100) * KEY_LIGHT_MAX_INTENSITY);
+    return updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
   };
 
   function toggleLightPopover() {
@@ -244,8 +241,7 @@ export function initToolPopovers() {
     const wasOpen = !aoPopover.hidden;
     closeAll();
     if (wasOpen) return;
-    updateAmbientOcclusionControl(
-      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+    updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
     aoPopover.hidden = false;
     aoButton?.setAttribute('aria-expanded', 'true');
     activeToolPopover = { popover: aoPopover, button: aoButton };
@@ -259,19 +255,17 @@ export function initToolPopovers() {
   textureButton?.setAttribute('aria-expanded', 'false');
   lightButton?.setAttribute('aria-expanded', 'false');
   aoButton?.setAttribute('aria-expanded', 'false');
-  updateAmbientOcclusionControl(
-    strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+  updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
   window.addEventListener(LANGUAGE_CHANGED, () => {
-    updateAmbientOcclusionControl(
-      strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+    updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
     updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
     if (texturePopover && !texturePopover.hidden) {
       closeAll();
       renderTextureOptions();
       texturePopover.hidden = false;
       textureButton?.setAttribute('aria-expanded', 'true');
-      activeToolPopover = {popover: texturePopover, button: textureButton};
+      activeToolPopover = { popover: texturePopover, button: textureButton };
       positionPopover(texturePopover, textureButton);
     }
   });
@@ -280,14 +274,13 @@ export function initToolPopovers() {
   aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);
   lightSlider?.addEventListener('input', () => applyKeyLightLevel(lightSlider.value));
   aoSlider?.addEventListener('input', () => applyAmbientOcclusionLevel(aoSlider.value));
-  document.addEventListener('click', event => {
-    if (event.target.closest(
-      '#texture-btn, #texture-popover, #light-btn, #light-popover, #ao-btn, #ao-popover')) {
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('#texture-btn, #texture-popover, #light-btn, #light-popover, #ao-btn, #ao-popover')) {
       return;
     }
     closeAll();
   });
-  document.addEventListener('keydown', event => {
+  document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeAll();
   });
   window.addEventListener('resize', () => {
@@ -296,8 +289,7 @@ export function initToolPopovers() {
     }
   });
 
-  return () => updateAmbientOcclusionControl(
-    strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+  return () => updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
 }
 
 export function initToolbarOverflow() {
@@ -308,22 +300,22 @@ export function initToolbarOverflow() {
     menu.hidden = true;
     button.setAttribute('aria-expanded', 'false');
   };
-  button.addEventListener('click', event => {
+  button.addEventListener('click', (event) => {
     event.stopPropagation();
     menu.hidden = !menu.hidden;
     button.setAttribute('aria-expanded', String(!menu.hidden));
   });
-  menu.addEventListener('click', event => {
+  menu.addEventListener('click', (event) => {
     const item = event.target.closest('[data-toolbar-target]');
     if (!item) return;
     const target = $(item.dataset.toolbarTarget);
     if (target && !target.disabled) target.click();
     close();
   });
-  document.addEventListener('click', event => {
+  document.addEventListener('click', (event) => {
     if (!event.target.closest('#toolbar-more, #toolbar-overflow')) close();
   });
-  document.addEventListener('keydown', event => {
+  document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') close();
   });
 }

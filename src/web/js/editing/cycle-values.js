@@ -7,5 +7,5 @@ export function cycleValueAt(variable, position) {
 }
 
 export function cyclePositionCount(variables) {
-  return Math.max(0, ...variables.map(variable => variable.values.length));
+  return Math.max(0, ...variables.map((variable) => variable.values.length));
 }

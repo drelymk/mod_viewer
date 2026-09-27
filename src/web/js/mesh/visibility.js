@@ -1,24 +1,36 @@
 // Compatibility facade coordinating control state, mesh state and current UI.
 
 import {
-  getControlState, getControlValue, replayControlStateRules,
-  changedControlVariables, resetControlState, setControlStateRules,
+  getControlState,
+  getControlValue,
+  replayControlStateRules,
+  changedControlVariables,
+  resetControlState,
+  setControlStateRules,
   setControlValue,
 } from '../editing/control-state.js';
+import { activeMeshes, refreshMeshes, resetMeshes, resetMeshVisibility } from './mesh-state.js';
 import {
-  activeMeshes, refreshMeshes, resetMeshes, resetMeshVisibility,
-} from './mesh-state.js';
-import {
-  toggleGlossyMode, toggleSmoothShadingMode, toggleTextureDisplayMode,
-  toggleToonShadingMode, toggleWireframeMode,
+  toggleGlossyMode,
+  toggleSmoothShadingMode,
+  toggleTextureDisplayMode,
+  toggleToonShadingMode,
+  toggleWireframeMode,
 } from '../scene/render-modes.js';
 import { clearViewSyncs, syncView, syncViews } from '../scene/view-sync.js';
 import { wakeAnimationRuntime } from './animation-runtime.js';
 
 export {
-  activeMeshes, addMesh, applyMeshVisibility, conditionsSatisfied,
-  dependenciesFor, invalidateControlDependencies, variablesFromConditions,
-  removeAssetFillMeshes, removeMesh, setManualTexOverride,
+  activeMeshes,
+  addMesh,
+  applyMeshVisibility,
+  conditionsSatisfied,
+  dependenciesFor,
+  invalidateControlDependencies,
+  variablesFromConditions,
+  removeAssetFillMeshes,
+  removeMesh,
+  setManualTexOverride,
   updateMeshSemantics,
 } from './mesh-state.js';
 export { changedControlVariables } from '../editing/control-state.js';
@@ -58,9 +70,7 @@ export function refreshAll({ force = {}, additionalMeshes = [] } = {}) {
   const result = refreshMeshes({
     changedVariables,
     additionalMeshes,
-    force: initialApplication
-      ? { visibility: true, textures: true, shapes: true }
-      : force,
+    force: initialApplication ? { visibility: true, textures: true, shapes: true } : force,
   });
   lastAppliedControlState = next;
   syncViews();

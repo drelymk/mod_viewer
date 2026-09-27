@@ -11,7 +11,6 @@ from core.textures.classifier import (DDSClassification, classification_cache_ke
                                  classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
 
-from . import folders as asset_folders
 from . import paths as asset_paths
 from . import textures as asset_textures
 

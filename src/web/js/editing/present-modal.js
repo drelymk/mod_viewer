@@ -12,19 +12,26 @@ function syncLabels() {
   if (!context) return;
   const editing = context.mode === 'edit';
   const completing = context.mode === 'complete';
-  $('pm-title').textContent = editing ? t('present.editTitle')
-    : (completing ? t('present.completeTitle') : t('present.addTitle'));
+  $('pm-title').textContent = editing
+    ? t('present.editTitle')
+    : completing
+      ? t('present.completeTitle')
+      : t('present.addTitle');
   $('pm-save').textContent = t('common.save');
 }
 
 export function presentSnapshots(present) {
   const state = getToggleState();
-  return Object.fromEntries((present.target_inis || []).map((target) => [
-    target.value,
-    Object.fromEntries((target.vars || [])
-      .filter((variable) => state[variable] !== undefined)
-      .map((variable) => [variable, state[variable]])),
-  ]));
+  return Object.fromEntries(
+    (present.target_inis || []).map((target) => [
+      target.value,
+      Object.fromEntries(
+        (target.vars || [])
+          .filter((variable) => state[variable] !== undefined)
+          .map((variable) => [variable, state[variable]]),
+      ),
+    ]),
+  );
 }
 
 function setError(message) {
@@ -42,8 +49,8 @@ export function openPresentModal({ mode, modPath, present, item, onSaved }) {
   const completing = mode === 'complete';
   item = context.item;
   syncLabels();
-  $('pm-key').value = (editing || completing) ? item.key_raw : '';
-  $('pm-back').value = (editing || completing) ? item.back : '';
+  $('pm-key').value = editing || completing ? item.key_raw : '';
+  $('pm-back').value = editing || completing ? item.back : '';
   setError('');
   $('present-modal-backdrop').classList.add('show');
   $('pm-key').focus();
@@ -58,18 +65,17 @@ async function submit(event) {
   try {
     const key = $('pm-key').value.trim();
     const back = $('pm-back').value.trim();
-    const result = context.mode === 'add' || context.mode === 'complete'
-      ? await window.pywebview.api.add_present(
-          context.modPath, key, back, presentSnapshots(context.present))
-      : await window.pywebview.api.edit_present(context.modPath, key, back);
+    const result =
+      context.mode === 'add' || context.mode === 'complete'
+        ? await window.pywebview.api.add_present(context.modPath, key, back, presentSnapshots(context.present))
+        : await window.pywebview.api.edit_present(context.modPath, key, back);
     if (result.error) {
       setError(result.error);
       return;
     }
     const saved = context.onSaved;
     const change = {
-      type: context.mode === 'add' ? 'add-key'
-        : context.mode === 'complete' ? 'complete-key' : 'edit-key',
+      type: context.mode === 'add' ? 'add-key' : context.mode === 'complete' ? 'complete-key' : 'edit-key',
       applySelection: false,
     };
     if (context.mode === 'add') change.selectedPosition = 0;

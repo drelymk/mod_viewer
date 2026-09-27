@@ -1,35 +1,25 @@
 import * as THREE from 'three';
-import {HUMANOID_CONTROL_DRIVER_IDS} from './humanoid-control-rig.js';
+import { HUMANOID_CONTROL_DRIVER_IDS } from './humanoid-control-rig.js';
 
 // The control rig owns the semantic topology. Mapped controls claim their
 // exact ModelJoints, unmapped controls get point-radius seeds, and remaining
 // ownership comes only from parent-to-child inheritance.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
-  {id: 'torso', role: 'torso', start: 'pelvis', end: 'chest'},
-  {id: 'neck', role: 'torso', start: 'chest', end: 'neck'},
-  {id: 'head', role: 'torso', start: 'neck', end: 'head'},
-  {id: 'left_chest_shoulder', role: 'left_arm', start: 'chest',
-    end: 'leftShoulder'},
-  {id: 'right_chest_shoulder', role: 'right_arm', start: 'chest',
-    end: 'rightShoulder'},
-  {id: 'left_upper_arm', role: 'left_arm', start: 'leftShoulder',
-    end: 'leftElbow'},
-  {id: 'left_lower_arm', role: 'left_arm', start: 'leftElbow',
-    end: 'leftHand'},
-  {id: 'right_upper_arm', role: 'right_arm', start: 'rightShoulder',
-    end: 'rightElbow'},
-  {id: 'right_lower_arm', role: 'right_arm', start: 'rightElbow',
-    end: 'rightHand'},
-  {id: 'left_pelvis_hip', role: 'left_leg', start: 'pelvis', end: 'leftHip'},
-  {id: 'right_pelvis_hip', role: 'right_leg', start: 'pelvis',
-    end: 'rightHip'},
-  {id: 'left_upper_leg', role: 'left_leg', start: 'leftHip', end: 'leftKnee'},
-  {id: 'left_lower_leg', role: 'left_leg', start: 'leftKnee',
-    end: 'leftFoot'},
-  {id: 'right_upper_leg', role: 'right_leg', start: 'rightHip',
-    end: 'rightKnee'},
-  {id: 'right_lower_leg', role: 'right_leg', start: 'rightKnee',
-    end: 'rightFoot'},
+  { id: 'torso', role: 'torso', start: 'pelvis', end: 'chest' },
+  { id: 'neck', role: 'torso', start: 'chest', end: 'neck' },
+  { id: 'head', role: 'torso', start: 'neck', end: 'head' },
+  { id: 'left_chest_shoulder', role: 'left_arm', start: 'chest', end: 'leftShoulder' },
+  { id: 'right_chest_shoulder', role: 'right_arm', start: 'chest', end: 'rightShoulder' },
+  { id: 'left_upper_arm', role: 'left_arm', start: 'leftShoulder', end: 'leftElbow' },
+  { id: 'left_lower_arm', role: 'left_arm', start: 'leftElbow', end: 'leftHand' },
+  { id: 'right_upper_arm', role: 'right_arm', start: 'rightShoulder', end: 'rightElbow' },
+  { id: 'right_lower_arm', role: 'right_arm', start: 'rightElbow', end: 'rightHand' },
+  { id: 'left_pelvis_hip', role: 'left_leg', start: 'pelvis', end: 'leftHip' },
+  { id: 'right_pelvis_hip', role: 'right_leg', start: 'pelvis', end: 'rightHip' },
+  { id: 'left_upper_leg', role: 'left_leg', start: 'leftHip', end: 'leftKnee' },
+  { id: 'left_lower_leg', role: 'left_leg', start: 'leftKnee', end: 'leftFoot' },
+  { id: 'right_upper_leg', role: 'right_leg', start: 'rightHip', end: 'rightKnee' },
+  { id: 'right_lower_leg', role: 'right_leg', start: 'rightKnee', end: 'rightFoot' },
 ]);
 
 const EPSILON = 1e-8;
@@ -61,18 +51,19 @@ function vector(value, fallback = [0, 0, 0]) {
 }
 
 function vectorFromCollection(collection, id) {
-  const value = collection instanceof Map
-    ? collection.get(id) ?? collection.get(String(id)) : collection?.[id];
+  const value = collection instanceof Map ? (collection.get(id) ?? collection.get(String(id))) : collection?.[id];
   return value === undefined ? null : vector(value);
 }
 
 function quaternion(value) {
   if (value?.isQuaternion) return value.clone().normalize();
-  const values = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? [...value].slice(0, 4).map(Number)
-    : [value?.x, value?.y, value?.z, value?.w].map(Number);
+  const values =
+    Array.isArray(value) || ArrayBuffer.isView(value)
+      ? [...value].slice(0, 4).map(Number)
+      : [value?.x, value?.y, value?.z, value?.w].map(Number);
   return values.length === 4 && values.every(Number.isFinite)
-    ? new THREE.Quaternion(...values).normalize() : new THREE.Quaternion();
+    ? new THREE.Quaternion(...values).normalize()
+    : new THREE.Quaternion();
 }
 
 function controlPoint(controlRig, key, posedControls = null) {
@@ -89,11 +80,9 @@ function frameForSegment(start, end, controlRig) {
   const forward = vector(semantic.forward, [0, 0, 1]).normalize();
   const right = vector(semantic.right, [1, 0, 0]).normalize();
   let z = forward.clone().addScaledVector(y, -forward.dot(y));
-  if (z.lengthSq() <= EPSILON) z = right.clone().addScaledVector(y,
-    -right.dot(y));
+  if (z.lengthSq() <= EPSILON) z = right.clone().addScaledVector(y, -right.dot(y));
   if (z.lengthSq() <= EPSILON) {
-    z = Math.abs(y.x) < .8
-      ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+    z = Math.abs(y.x) < 0.8 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
     z.addScaledVector(y, -z.dot(y));
   }
   z.normalize();
@@ -101,23 +90,23 @@ function frameForSegment(start, end, controlRig) {
   z = x.clone().cross(y).normalize();
   const matrix = new THREE.Matrix4().makeBasis(x, y, z);
   matrix.setPosition(start);
-  return {matrix, start: start.clone(), end: end.clone(), length};
+  return { matrix, start: start.clone(), end: end.clone(), length };
 }
 
 function restJointWorldMatrix(modelRig, jointId) {
   const id = numberId(jointId);
   const indexedJoint = id === null ? null : modelRig?.joints?.[id];
-  const joint = indexedJoint && Number(indexedJoint.jointId) === id
-    ? indexedJoint : modelRig?.joints?.find?.(item =>
-      Number(item?.jointId) === id);
+  const joint =
+    indexedJoint && Number(indexedJoint.jointId) === id
+      ? indexedJoint
+      : modelRig?.joints?.find?.((item) => Number(item?.jointId) === id);
   if (id === null || !joint) return null;
-  const pivot = vectorFromCollection(modelRig?.jointPivotByJointId, id)
-    || vector(joint.restPivot ?? joint.restCenter);
-  const rotation = modelRig?.restFrameByJointId instanceof Map
-    ? quaternion(modelRig.restFrameByJointId.get(id))
-    : quaternion(joint.restFrame);
-  const matrix = new THREE.Matrix4().compose(
-    pivot, rotation, new THREE.Vector3(1, 1, 1));
+  const pivot = vectorFromCollection(modelRig?.jointPivotByJointId, id) || vector(joint.restPivot ?? joint.restCenter);
+  const rotation =
+    modelRig?.restFrameByJointId instanceof Map
+      ? quaternion(modelRig.restFrameByJointId.get(id))
+      : quaternion(joint.restFrame);
+  const matrix = new THREE.Matrix4().compose(pivot, rotation, new THREE.Vector3(1, 1, 1));
   return matrix;
 }
 
@@ -125,11 +114,13 @@ function pointForJoint(modelRig, jointId) {
   const id = numberId(jointId);
   if (id === null) return null;
   const indexedJoint = modelRig?.joints?.[id];
-  const joint = indexedJoint && Number(indexedJoint.jointId) === id
-    ? indexedJoint : modelRig?.joints?.find?.(item =>
-      Number(item?.jointId) === id);
-  return vectorFromCollection(modelRig?.jointPivotByJointId, id)
-    || vector(joint?.restPivot ?? joint?.restCenter, [0, 0, 0]);
+  const joint =
+    indexedJoint && Number(indexedJoint.jointId) === id
+      ? indexedJoint
+      : modelRig?.joints?.find?.((item) => Number(item?.jointId) === id);
+  return (
+    vectorFromCollection(modelRig?.jointPivotByJointId, id) || vector(joint?.restPivot ?? joint?.restCenter, [0, 0, 0])
+  );
 }
 
 function directBindingFor(modelRig, jointId, driverMap, owner) {
@@ -152,20 +143,22 @@ function directBindingFor(modelRig, jointId, driverMap, owner) {
 }
 
 function allJointIds(modelRig) {
-  return (modelRig?.joints || []).map(joint => numberId(joint?.jointId))
-    .filter(Number.isInteger).sort((left, right) => left - right);
+  return (modelRig?.joints || [])
+    .map((joint) => numberId(joint?.jointId))
+    .filter(Number.isInteger)
+    .sort((left, right) => left - right);
 }
 
 function childIdsForComponent(component, jointId) {
   const children = collectionValue(component?.childrenById, numberId(jointId));
-  return (children || []).map(numberId).filter(Number.isInteger)
+  return (children || [])
+    .map(numberId)
+    .filter(Number.isInteger)
     .sort((left, right) => left - right);
 }
 
 function collectionValue(collection, id) {
-  return collection instanceof Map
-    ? collection.get(id) ?? collection.get(String(id))
-    : collection?.[id];
+  return collection instanceof Map ? (collection.get(id) ?? collection.get(String(id))) : collection?.[id];
 }
 
 function parentJointId(component, jointId) {
@@ -176,15 +169,14 @@ function parentJointId(component, jointId) {
 function mappedControlEntries(controlMappings) {
   if (!(controlMappings instanceof Map)) return [];
   const entries = [...controlMappings.entries()]
-    .filter(([key, mapping]) => CONTROL_ORDER.includes(
-      mapping?.controlKey || key))
+    .filter(([key, mapping]) => CONTROL_ORDER.includes(mapping?.controlKey || key))
     .map(([key, mapping]) => ({
       controlKey: mapping?.controlKey || key,
       jointId: numberId(mapping?.jointId),
-    })).sort((left, right) => CONTROL_ORDER.indexOf(left.controlKey)
-      - CONTROL_ORDER.indexOf(right.controlKey));
+    }))
+    .sort((left, right) => CONTROL_ORDER.indexOf(left.controlKey) - CONTROL_ORDER.indexOf(right.controlKey));
   const byJointId = new Map();
-  entries.forEach(entry => {
+  entries.forEach((entry) => {
     if (entry.jointId === null) return;
     const owners = byJointId.get(entry.jointId) || [];
     owners.push(entry);
@@ -195,8 +187,7 @@ function mappedControlEntries(controlMappings) {
     if (owners.length <= 1) return;
     invalidJointIds.add(jointId);
   });
-  return entries.filter(entry => entry.jointId !== null
-    && !invalidJointIds.has(entry.jointId));
+  return entries.filter((entry) => entry.jointId !== null && !invalidJointIds.has(entry.jointId));
 }
 
 function controlOrder(controlKey) {
@@ -204,8 +195,7 @@ function controlOrder(controlKey) {
   return index < 0 ? CONTROL_ORDER.length : index;
 }
 
-function pointJointCandidate(modelRig, controlRig, controlKey, jointId,
-    height) {
+function pointJointCandidate(modelRig, controlRig, controlKey, jointId, height) {
   const point = controlPoint(controlRig, controlKey);
   const joint = pointForJoint(modelRig, jointId);
   if (!joint) return null;
@@ -217,18 +207,14 @@ function pointJointCandidate(modelRig, controlRig, controlKey, jointId,
   };
 }
 
-function candidatesForControl(modelRig, controlRig, controlKey, jointIds,
-    height, radius) {
-  return jointIds.map(jointId => pointJointCandidate(
-    modelRig, controlRig, controlKey, jointId, height))
-    .filter(candidate => candidate
-      && candidate.distanceRatio <= radius + EPSILON)
-    .sort((left, right) => left.distanceRatio - right.distanceRatio
-      || left.jointId - right.jointId);
+function candidatesForControl(modelRig, controlRig, controlKey, jointIds, height, radius) {
+  return jointIds
+    .map((jointId) => pointJointCandidate(modelRig, controlRig, controlKey, jointId, height))
+    .filter((candidate) => candidate && candidate.distanceRatio <= radius + EPSILON)
+    .sort((left, right) => left.distanceRatio - right.distanceRatio || left.jointId - right.jointId);
 }
 
-function directOwnerFor(controlKey, source, bindingMethod, candidate = null,
-    anchorJointId = null) {
+function directOwnerFor(controlKey, source, bindingMethod, candidate = null, anchorJointId = null) {
   return {
     controlKey,
     source,
@@ -237,20 +223,17 @@ function directOwnerFor(controlKey, source, bindingMethod, candidate = null,
   };
 }
 
-function assignAutomaticAnchors({automaticControls, candidatesByControl,
-    directOwnerByJointId, controlState}) {
-  const nextCandidateByControl = new Map(
-    automaticControls.map(controlKey => [controlKey, 0]));
+function assignAutomaticAnchors({ automaticControls, candidatesByControl, directOwnerByJointId, controlState }) {
+  const nextCandidateByControl = new Map(automaticControls.map((controlKey) => [controlKey, 0]));
   let pending = [...automaticControls];
 
   while (pending.length) {
     const proposals = new Map();
     const nextPending = [];
-    pending.forEach(controlKey => {
+    pending.forEach((controlKey) => {
       const candidates = candidatesByControl.get(controlKey) || [];
       let index = nextCandidateByControl.get(controlKey) || 0;
-      while (index < candidates.length
-          && directOwnerByJointId.has(candidates[index].jointId)) index += 1;
+      while (index < candidates.length && directOwnerByJointId.has(candidates[index].jointId)) index += 1;
       nextCandidateByControl.set(controlKey, index);
       if (index >= candidates.length) {
         controlState.get(controlKey).source = 'unresolved';
@@ -265,54 +248,60 @@ function assignAutomaticAnchors({automaticControls, candidatesByControl,
     if (!proposals.size) break;
 
     proposals.forEach((jointProposals, jointId) => {
-      jointProposals.sort((left, right) => left.distanceRatio
-        - right.distanceRatio || controlOrder(left.controlKey)
-        - controlOrder(right.controlKey));
+      jointProposals.sort(
+        (left, right) =>
+          left.distanceRatio - right.distanceRatio || controlOrder(left.controlKey) - controlOrder(right.controlKey),
+      );
       const winner = jointProposals[0];
       if (!directOwnerByJointId.has(jointId)) {
         const state = controlState.get(winner.controlKey);
-        directOwnerByJointId.set(jointId, directOwnerFor(
-          winner.controlKey, 'automatic', 'automatic_control_mapping',
-          winner, null));
+        directOwnerByJointId.set(
+          jointId,
+          directOwnerFor(winner.controlKey, 'automatic', 'automatic_control_mapping', winner, null),
+        );
         state.source = 'automatic';
         state.anchorJointId = jointId;
         state.directSeedCount += 1;
         state.distanceRatio = winner.distanceRatio;
       }
-      nextCandidateByControl.set(winner.controlKey,
-        (nextCandidateByControl.get(winner.controlKey) || 0) + 1);
+      nextCandidateByControl.set(winner.controlKey, (nextCandidateByControl.get(winner.controlKey) || 0) + 1);
     });
-    pending = nextPending.filter(controlKey => {
+    pending = nextPending.filter((controlKey) => {
       const candidates = candidatesByControl.get(controlKey) || [];
-      return (nextCandidateByControl.get(controlKey) || 0) < candidates.length
-        && controlState.get(controlKey).anchorJointId === null;
+      return (
+        (nextCandidateByControl.get(controlKey) || 0) < candidates.length &&
+        controlState.get(controlKey).anchorJointId === null
+      );
     });
   }
 }
 
-function assignAutomaticExtraSeeds({automaticControls, candidatesByControl,
-    directOwnerByJointId, controlState}) {
+function assignAutomaticExtraSeeds({ automaticControls, candidatesByControl, directOwnerByJointId, controlState }) {
   const candidatesByJoint = new Map();
-  automaticControls.forEach(controlKey => {
-    (candidatesByControl.get(controlKey) || []).forEach(candidate => {
+  automaticControls.forEach((controlKey) => {
+    (candidatesByControl.get(controlKey) || []).forEach((candidate) => {
       const candidates = candidatesByJoint.get(candidate.jointId) || [];
       candidates.push(candidate);
       candidatesByJoint.set(candidate.jointId, candidates);
     });
   });
-  [...candidatesByJoint.keys()].sort((left, right) => left - right)
-    .forEach(jointId => {
+  [...candidatesByJoint.keys()]
+    .sort((left, right) => left - right)
+    .forEach((jointId) => {
       if (directOwnerByJointId.has(jointId)) return;
       const winner = (candidatesByJoint.get(jointId) || [])
-        .filter(candidate => !directOwnerByJointId.has(candidate.jointId))
-        .sort((left, right) => left.distanceRatio - right.distanceRatio
-          || controlOrder(left.controlKey) - controlOrder(right.controlKey))[0];
+        .filter((candidate) => !directOwnerByJointId.has(candidate.jointId))
+        .sort(
+          (left, right) =>
+            left.distanceRatio - right.distanceRatio || controlOrder(left.controlKey) - controlOrder(right.controlKey),
+        )[0];
       if (!winner) return;
       const state = controlState.get(winner.controlKey);
       if (!state || state.anchorJointId === null) return;
-      directOwnerByJointId.set(jointId, directOwnerFor(
-        winner.controlKey, 'automatic', 'automatic_control_mapping',
-        winner, state.anchorJointId));
+      directOwnerByJointId.set(
+        jointId,
+        directOwnerFor(winner.controlKey, 'automatic', 'automatic_control_mapping', winner, state.anchorJointId),
+      );
       state.directSeedCount += 1;
     });
 }
@@ -322,7 +311,7 @@ function inheritedOwners(modelRig, directOwnerByJointId) {
   const visited = new Set();
 
   function walk(component, jointId, parentOwner = null, parentId = null) {
-    const stack = [{jointId, parentOwner, parentId}];
+    const stack = [{ jointId, parentOwner, parentId }];
     while (stack.length) {
       const current = stack.pop();
       const id = numberId(current.jointId);
@@ -337,45 +326,42 @@ function inheritedOwners(modelRig, directOwnerByJointId) {
           inheritedFromJointId: numberId(current.parentId),
         });
       }
-      const nextParentOwner = owner ? {...owner} : null;
+      const nextParentOwner = owner ? { ...owner } : null;
       const children = childIdsForComponent(component, id);
       for (let index = children.length - 1; index >= 0; index -= 1) {
-        stack.push({jointId: children[index], parentOwner: nextParentOwner,
-          parentId: id});
+        stack.push({ jointId: children[index], parentOwner: nextParentOwner, parentId: id });
       }
     }
   }
 
-  (modelRig?.components || []).forEach(component => {
-    const nodeIds = (component?.nodeIds || []).map(numberId)
-      .filter(Number.isInteger).sort((left, right) => left - right);
+  (modelRig?.components || []).forEach((component) => {
+    const nodeIds = (component?.nodeIds || [])
+      .map(numberId)
+      .filter(Number.isInteger)
+      .sort((left, right) => left - right);
     const nodeSet = new Set(nodeIds);
-    const roots = nodeIds.filter(jointId => {
+    const roots = nodeIds.filter((jointId) => {
       const parent = parentJointId(component, jointId);
       return parent === null || !nodeSet.has(parent);
     });
     const rootId = numberId(component?.rootId);
     if (rootId !== null && nodeSet.has(rootId)) roots.unshift(rootId);
-    [...new Set(roots)].sort((left, right) => left - right)
-      .forEach(root => walk(component, root));
-    nodeIds.forEach(jointId => {
+    [...new Set(roots)].sort((left, right) => left - right).forEach((root) => walk(component, root));
+    nodeIds.forEach((jointId) => {
       if (visited.has(jointId)) return;
       const parent = parentJointId(component, jointId);
-      walk(component, jointId, parent === null
-        ? null : ownerByJointId.get(parent) || null, parent);
+      walk(component, jointId, parent === null ? null : ownerByJointId.get(parent) || null, parent);
     });
   });
   return ownerByJointId;
 }
 
-function ownershipDiagnostics(controlState, directOwnerByJointId,
-    ownerByJointId, unboundJointIds) {
+function ownershipDiagnostics(controlState, directOwnerByJointId, ownerByJointId, unboundJointIds) {
   const byControl = {};
   const inheritedCountByControl = new Map();
-  ownerByJointId.forEach(owner => {
+  ownerByJointId.forEach((owner) => {
     if (owner.bindingMethod !== 'inherited_control') return;
-    inheritedCountByControl.set(owner.controlKey,
-      (inheritedCountByControl.get(owner.controlKey) || 0) + 1);
+    inheritedCountByControl.set(owner.controlKey, (inheritedCountByControl.get(owner.controlKey) || 0) + 1);
   });
   let automaticControlCount = 0;
   let unresolvedControlCount = 0;
@@ -394,13 +380,12 @@ function ownershipDiagnostics(controlState, directOwnerByJointId,
     };
   });
   return {
-    mappedControlCount: [...controlState.values()]
-      .filter(state => state.source === 'mapped').length,
+    mappedControlCount: [...controlState.values()].filter((state) => state.source === 'mapped').length,
     automaticControlCount,
     unresolvedControlCount,
     directSeedCount: directOwnerByJointId.size,
-    inheritedJointCount: [...ownerByJointId.values()]
-      .filter(owner => owner.bindingMethod === 'inherited_control').length,
+    inheritedJointCount: [...ownerByJointId.values()].filter((owner) => owner.bindingMethod === 'inherited_control')
+      .length,
     unownedJointCount: unboundJointIds.length,
     bindingsByControl: byControl,
   };
@@ -415,70 +400,71 @@ function ownershipDiagnostics(controlState, directOwnerByJointId,
  */
 export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
   const result = new Map();
-  HUMANOID_DRIVER_SEGMENTS.forEach(segment => {
+  HUMANOID_DRIVER_SEGMENTS.forEach((segment) => {
     const start = controlPoint(controlRig, segment.start, posedControls);
     const end = controlPoint(controlRig, segment.end, posedControls);
     const frame = frameForSegment(start, end, controlRig);
-    if (frame) result.set(segment.id, {...segment, ...frame});
+    if (frame) result.set(segment.id, { ...segment, ...frame });
   });
   return result;
 }
 
 /** Build direct ModelJoint ownership and inherited deformation bindings. */
-export function buildHumanoidRigBinding({controlRig, modelRig,
-    controlMappings = null, options = {}} = {}) {
+export function buildHumanoidRigBinding({ controlRig, modelRig, controlMappings = null, options = {} } = {}) {
   const height = Math.max(Number(controlRig?.frame?.height) || 0, EPSILON);
   const drivers = buildHumanoidDriverFrames(controlRig);
   const pointDistanceRatio = Number.isFinite(Number(options.pointDistanceRatio))
     ? Math.max(0, Number(options.pointDistanceRatio))
     : DEFAULT_POINT_RADIUS_RATIO;
   const directOwnerByJointId = new Map();
-  const controlState = new Map(CONTROL_ORDER.map(controlKey => [controlKey, {
-    source: 'unresolved',
-    anchorJointId: null,
-    directSeedCount: 0,
-    distanceRatio: null,
-  }]));
+  const controlState = new Map(
+    CONTROL_ORDER.map((controlKey) => [
+      controlKey,
+      {
+        source: 'unresolved',
+        anchorJointId: null,
+        directSeedCount: 0,
+        distanceRatio: null,
+      },
+    ]),
+  );
   const mapped = mappedControlEntries(controlMappings);
 
   // Phase A: explicit mappings claim only their exact ModelJoint.
-  mapped.forEach(({controlKey, jointId}) => {
+  mapped.forEach(({ controlKey, jointId }) => {
     const driverId = HUMANOID_CONTROL_DRIVER_IDS[controlKey];
     if (!drivers.has(driverId) || !restJointWorldMatrix(modelRig, jointId)) {
       return;
     }
-    directOwnerByJointId.set(jointId, directOwnerFor(
-      controlKey, 'mapped', 'manual_control_mapping', null, jointId));
+    directOwnerByJointId.set(jointId, directOwnerFor(controlKey, 'mapped', 'manual_control_mapping', null, jointId));
     const state = controlState.get(controlKey);
     state.source = 'mapped';
     state.anchorJointId = jointId;
     state.directSeedCount += 1;
   });
 
-  const rejectedControlKeys = controlMappings?.rejectedControlKeys
-    instanceof Set ? controlMappings.rejectedControlKeys : new Set();
-  const automaticControls = CONTROL_ORDER.filter(controlKey =>
-    controlState.get(controlKey).anchorJointId === null
-      && !rejectedControlKeys.has(controlKey));
+  const rejectedControlKeys =
+    controlMappings?.rejectedControlKeys instanceof Set ? controlMappings.rejectedControlKeys : new Set();
+  const automaticControls = CONTROL_ORDER.filter(
+    (controlKey) => controlState.get(controlKey).anchorJointId === null && !rejectedControlKeys.has(controlKey),
+  );
 
   // Calculate one candidate table after mapped roots are reserved. Both
   // automatic phases reuse it, while later ownership checks exclude anchors
   // and earlier extra seeds from consideration.
-  const availableJointIds = allJointIds(modelRig)
-    .filter(jointId => !directOwnerByJointId.has(jointId));
-  const candidatesByControl = new Map(automaticControls.map(controlKey => [
-    controlKey,
-    candidatesForControl(modelRig, controlRig, controlKey,
-      availableJointIds, height, pointDistanceRatio),
-  ]));
+  const availableJointIds = allJointIds(modelRig).filter((jointId) => !directOwnerByJointId.has(jointId));
+  const candidatesByControl = new Map(
+    automaticControls.map((controlKey) => [
+      controlKey,
+      candidatesForControl(modelRig, controlRig, controlKey, availableJointIds, height, pointDistanceRatio),
+    ]),
+  );
 
   // Phase B: reserve one nearest point-to-point anchor per unmapped control.
-  assignAutomaticAnchors({automaticControls, candidatesByControl,
-    directOwnerByJointId, controlState});
+  assignAutomaticAnchors({ automaticControls, candidatesByControl, directOwnerByJointId, controlState });
 
   // Phase C: reserve all remaining in-radius joints before inheritance.
-  assignAutomaticExtraSeeds({automaticControls, candidatesByControl,
-    directOwnerByJointId, controlState});
+  assignAutomaticExtraSeeds({ automaticControls, candidatesByControl, directOwnerByJointId, controlState });
 
   // Phase D: propagate direct ownership through the actual ModelRig hierarchy.
   // Direct owners are boundaries; no path or geometry is invented here.
@@ -492,13 +478,12 @@ export function buildHumanoidRigBinding({controlRig, modelRig,
   });
 
   const allIds = allJointIds(modelRig);
-  const unboundJointIds = allIds.filter(id => !jointBindings.has(id));
+  const unboundJointIds = allIds.filter((id) => !jointBindings.has(id));
   return {
     version: 1,
     jointBindings,
     unboundJointIds,
-    diagnostics: ownershipDiagnostics(controlState,
-      directOwnerByJointId, ownerByJointId, unboundJointIds),
+    diagnostics: ownershipDiagnostics(controlState, directOwnerByJointId, ownerByJointId, unboundJointIds),
   };
 }
 
@@ -516,11 +501,10 @@ function matrixFrom(value) {
  * frame.  Children therefore receive a driver's motion exactly once even if
  * their ModelJoint parent is also directly bound.
  */
-export function buildHumanoidDriverBaseTransforms({binding, controlRig,
-    modelRig, posedControls = null} = {}) {
+export function buildHumanoidDriverBaseTransforms({ binding, controlRig, modelRig, posedControls = null } = {}) {
   const result = new Map();
   const driverWorldByJointId = new Map();
-  if (!binding || !modelRig) return {driverWorldByJointId, result};
+  if (!binding || !modelRig) return { driverWorldByJointId, result };
   const drivers = buildHumanoidDriverFrames(controlRig, posedControls);
   const apply = (jointId, driverId, localMatrix) => {
     const driver = drivers.get(driverId);
@@ -535,7 +519,7 @@ export function buildHumanoidDriverBaseTransforms({binding, controlRig,
       apply(jointId, entry.driverId, entry.localMatrix);
     });
   }
-  return {driverWorldByJointId, result};
+  return { driverWorldByJointId, result };
 }
 
-export {restJointWorldMatrix};
+export { restJointWorldMatrix };

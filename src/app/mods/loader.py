@@ -17,8 +17,8 @@ from core.mod_source import (
     ModSourceError, mod_source_for_path,
 )
 
-from app.mods.analysis import (ParsedModAnalysis, analyze_mod_inis,
-                               build_mod_ini_snapshot)
+from app.mods.analysis import ParsedModAnalysis  # noqa: F401
+from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from core.ini.snapshot import ModIniSnapshot
 from app.mods.controls import (
     _control_semantic_projection,
@@ -26,9 +26,9 @@ from app.mods.controls import (
     _gating_vars_from_mesh_semantics,
     build_menu_panel,
     build_toggle_panel,
-    load_control_state,
-    load_present_state,
-    unwired_pending_sections,
+    load_control_state,  # noqa: F401
+    load_present_state,  # noqa: F401
+    unwired_pending_sections,  # noqa: F401
 )
 from app.mods.enrichment import (
     _assign_material_profiles,

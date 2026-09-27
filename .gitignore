@@ -22,3 +22,8 @@ __pycache__/
 # Application assets
 src/asset-index/
 src/config.json
+
+# Development quality tools
+node_modules/
+.quality-reports/
+.ruff_cache/

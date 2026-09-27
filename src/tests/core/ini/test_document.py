@@ -10,7 +10,6 @@ import os
 import tempfile
 
 
-from tests.support.corpus import active_ini_files
 from core.ini.document import (ASSIGN, BLANK, COMMENT, DRAW, ELIF, ELSE, ENDIF, IF,
                           SECTION, IniDocument)
 
@@ -128,9 +127,9 @@ def test_save_atomic_and_backup():
         assert (fh.read()) == ("[A]\r\nx = 2\r\n"), ("saved content")
     with open(backup, encoding="utf-8", newline="") as fh:
         assert (fh.read()) == (original), ("backup holds original")
-    assert (backup.endswith(".BAK")) == (True), ("backup named *.BAK")
-    assert (".ini_" in os.path.basename(backup)) == (True), ("backup keeps .ini in name")
-    assert (os.path.exists(path + ".tmp")) == (False), ("no temp file left")
+    assert backup.endswith(".BAK"), "backup named *.BAK"
+    assert ".ini_" in os.path.basename(backup), "backup keeps .ini in name"
+    assert not os.path.exists(path + ".tmp"), "no temp file left"
 
     # A backup must never be picked up as a loadable mod ini.
     from core.ini.parser import find_inis
@@ -170,7 +169,7 @@ def test_find_inis_bounded_recursion():
     found = find_inis(d)
     assert (len(found)) == (10), ("recursive find_inis is capped at ten")
     assert (found[0]) == (root_ini), ("recursive find_inis retains the root anchor")
-    assert (any(os.path.basename(path) == "ignored.ini" for path in found)) == (False), ("recursive find_inis stops below depth two")
+    assert not any(os.path.basename(path) == "ignored.ini" for path in found), "recursive find_inis stops below depth two"
 
     library = tempfile.mkdtemp()
     direct = os.path.join(library, "notes.ini")
@@ -197,7 +196,7 @@ def test_structure_errors():
     ok = IniDocument.from_string(
         "[A]\r\nif $x == 1\r\ndrawindexed = 1,0,0\r\nelse\r\nendif\r\n")
     assert (ok.structure_errors()) == ([]), ("balanced section has no errors")
-    assert (ok.is_safe_to_rewrite("A")) == (True), ("balanced section is safe")
+    assert ok.is_safe_to_rewrite("A"), "balanced section is safe"
 
     # Real pattern from MasterCorinV1.ini: endif closes the block, then an
     # `else if` appears with nothing open.
@@ -207,7 +206,7 @@ def test_structure_errors():
     assert (problems) == (["elif without an open if", "endif without a matching if"]), ("orphan else-if reported")
     assert [p["reason"] for p in orphan.structure_errors()] == [
         "branch_without_if", "endif_without_if"]
-    assert (orphan.is_safe_to_rewrite("A")) == (False), ("orphan section not safe")
+    assert not orphan.is_safe_to_rewrite("A"), "orphan section not safe"
 
     unclosed = IniDocument.from_string("[A]\r\nif $x == 1\r\ndrawindexed = 1,0,0\r\n")
     assert ([p["problem"] for p in unclosed.structure_errors()]) == (["1 unclosed if"]), ("unclosed if reported")
@@ -220,13 +219,13 @@ def test_structure_errors():
     # A malformed section must not taint a healthy one in the same file.
     mixed = IniDocument.from_string(
         "[Bad]\r\nendif\r\n[Good]\r\nif $x == 1\r\nendif\r\n")
-    assert (mixed.is_safe_to_rewrite("Good")) == (True), ("errors are per-section")
-    assert (mixed.is_safe_to_rewrite("Bad")) == (False), ("bad section still flagged")
+    assert mixed.is_safe_to_rewrite("Good"), "errors are per-section"
+    assert not mixed.is_safe_to_rewrite("Bad"), "bad section still flagged"
 
     branch_order = IniDocument.from_string(
         "[A]\r\nif $x == 1\r\nelse\r\nelse\r\nelif $x == 2\r\nendif\r\n")
     assert ([p["problem"] for p in branch_order.structure_errors()]) == (["duplicate else", "elif after else"]), ("duplicate else and elif-after-else reported")
-    assert (branch_order.is_safe_to_rewrite("A")) == (False), ("invalid branch order is unsafe to rewrite")
+    assert not branch_order.is_safe_to_rewrite("A"), "invalid branch order is unsafe to rewrite"
 
 
 def test_syntax_errors():
@@ -259,4 +258,4 @@ def test_syntax_errors():
         "unmatched_close_parenthesis", "section_empty_name",
         "section_missing_closing_bracket", "section_trailing_content",
     }
-    assert (doc.is_safe_to_rewrite("Good")) == (False), ("condition syntax makes section unsafe")
+    assert not doc.is_safe_to_rewrite("Good"), "condition syntax makes section unsafe"

@@ -394,6 +394,21 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     assert page.evaluate('window.__rigPosition.array.every((value, i) => Math.abs(value-window.__rigBaseline[i]) < 1e-5)')
     restored_pixel = mesh_pixel(page)
     assert max(abs(a-b) for a,b in zip(baseline_pixel, restored_pixel)) < 15
+    assert page.evaluate("""() => {
+      const rig = window.__rigApi;
+      const selectedJointId = window.__rigJoint;
+      const before = rig.getModelRigState();
+      const originalRoot = before.model.components[0].rootId;
+      const revision = before.structureRevision;
+      if (!rig.setRigJointRoot(selectedJointId)) return false;
+      const changed = rig.getModelRigState();
+      const updated = changed.selectedJointId === selectedJointId
+        && changed.model.components[0].rootId === selectedJointId
+        && changed.structureRevision > revision
+        && rig.getModelWeightState().selectedBones.length === 0;
+      return updated && rig.setRigJointRoot(originalRoot)
+        && rig.getModelRigState().model.components[0].rootId === originalRoot;
+    }""")
     page.locator('.rig-clear-joint').click()
     assert page.locator('.rig-bone-select').input_value() == ''
     assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition')

@@ -43,7 +43,8 @@ export default {
   'environment.preset.outdoor': 'Exterior',
   'renderer.webgpuUnavailable': 'WebGPU no está disponible',
   'renderer.webgpuRequired': 'Esta versión de Mod Viewer requiere WebGPU.',
-  'renderer.failure': 'Esta versión de Mod Viewer requiere WebGPU. Actualiza el controlador gráfico o usa un navegador compatible con WebGPU{detail}',
+  'renderer.failure':
+    'Esta versión de Mod Viewer requiere WebGPU. Actualiza el controlador gráfico o usa un navegador compatible con WebGPU{detail}',
   'renderer.deviceLost': 'Se perdió el dispositivo WebGPU: {detail}',
   'renderer.unrecoverable': 'WebGPU informó de un error irrecuperable: {detail}',
   'gizmo.title': 'Arrastra para orbitar · Haz clic en un eje para ajustar · Desplázate para acercar',
@@ -86,12 +87,14 @@ export default {
   'folder.notFound': 'No se encontró la carpeta',
   'folder.editMod': 'Editar carpeta de MOD',
   'folder.addMod': 'Añadir carpeta de MOD',
-  'folder.removeMod': '¿Quitar «{name}» de las carpetas de MOD?\n\nSolo se quitará de Mod Viewer.\nLos archivos del disco no se eliminarán.',
+  'folder.removeMod':
+    '¿Quitar «{name}» de las carpetas de MOD?\n\nSolo se quitará de Mod Viewer.\nLos archivos del disco no se eliminarán.',
   'folder.enterModName': 'Introduce un nombre para la carpeta de MOD.',
   'folder.chooseBrowse': 'Elige una carpeta con Examinar.',
   'folder.editAsset': 'Editar carpeta de Asset',
   'folder.addAsset': 'Añadir carpeta de Asset',
-  'folder.removeAsset': '¿Quitar esta carpeta de Asset?\n\nSolo se quitará de Mod Viewer.\nLos archivos del disco no se eliminarán.',
+  'folder.removeAsset':
+    '¿Quitar esta carpeta de Asset?\n\nSolo se quitará de Mod Viewer.\nLos archivos del disco no se eliminarán.',
   'folder.buildingIndex': 'Creando índice…',
   'mesh.loadMissingParts': 'Cargar partes que faltan',
   'mesh.removeMissingParts': 'Quitar partes que faltan',
@@ -170,7 +173,8 @@ export default {
   'health.ambiguousDraws': 'Ambiguos: {count}',
   'health.notFoundDraws': 'No encontrados: {count}',
   'health.mixed': 'componente mixto',
-  'health.summary': '{errors} errores · {warnings} advertencias · {referenced} Assets referenciados · {inactive} solo inactivos · {viewer} solo del visor',
+  'health.summary':
+    '{errors} errores · {warnings} advertencias · {referenced} Assets referenciados · {inactive} solo inactivos · {viewer} solo del visor',
   'health.noIssues': 'No se encontraron problemas en el INI.',
   'health.noFilterIssues': 'Ningún problema coincide con este filtro.',
   'health.openAtLine': 'Haz doble clic para abrir este INI en la línea indicada',
@@ -205,12 +209,16 @@ export default {
   'errors.loadMissingAsset': 'No se pudieron cargar las partes de Asset que faltan:\n\n{detail}',
   'errors.removeMissingAsset': 'No se pudieron quitar las partes de Asset que faltan:\n\n{detail}',
   'errors.exportPartial': 'Archivos INI exportados: {saved}. Fallidos y aún pendientes: {failed}.\n\n{detail}',
-  'confirm.unsavedSwitch': 'Este MOD tiene cambios que no se han exportado.\n\nAbrir otra carpeta de MOD descartará los cambios. ¿Continuar?',
-  'confirm.unsavedAsset': 'Este MOD tiene cambios que no se han exportado.\n\nAbrir una previsualización de Asset descartará los cambios. ¿Continuar?',
-  'toggle.deleteConfirm': '¿Eliminar el toggle «{name}»?\n\nEsto solo deja el cambio pendiente: no se escribirá en el INI hasta pulsar Exportar.',
+  'confirm.unsavedSwitch':
+    'Este MOD tiene cambios que no se han exportado.\n\nAbrir otra carpeta de MOD descartará los cambios. ¿Continuar?',
+  'confirm.unsavedAsset':
+    'Este MOD tiene cambios que no se han exportado.\n\nAbrir una previsualización de Asset descartará los cambios. ¿Continuar?',
+  'toggle.deleteConfirm':
+    '¿Eliminar el toggle «{name}»?\n\nEsto solo deja el cambio pendiente: no se escribirá en el INI hasta pulsar Exportar.',
   'toggle.deleteError': 'No se pudo eliminar el toggle:\n\n{detail}',
   'toggle.deletedReview': 'Toggle eliminado, pero revisa estas líneas manualmente:\n\n{detail}',
-  'toggle.unwired': 'Aún no está conectado a ninguna malla: haz clic en ⏺ Record y marca o desmarca mallas en cada posición para asignar lo que muestra este toggle. La exportación seguirá desactivada hasta conectarlo o eliminarlo.',
+  'toggle.unwired':
+    'Aún no está conectado a ninguna malla: haz clic en ⏺ Record y marca o desmarca mallas en cada posición para asignar lo que muestra este toggle. La exportación seguirá desactivada hasta conectarlo o eliminarlo.',
   'toggle.edit': 'Editar toggle',
   'toggle.delete': 'Eliminar toggle',
   'toggle.record': 'Registrar las mallas que se muestran en cada posición',
@@ -219,7 +227,8 @@ export default {
   'toggle.noToggles': 'Aún no hay toggles. Haz clic en Añadir para crear uno.',
   'toggle.addTitle': 'Añadir toggle',
   'toggle.editTitle': 'Editar {name}',
-  'present.deleteKeyConfirm': '¿Eliminar la tecla PRESENT de todos los INI participantes?\n\nEsto solo deja el cambio pendiente; el INI no se escribirá hasta Exportar.',
+  'present.deleteKeyConfirm':
+    '¿Eliminar la tecla PRESENT de todos los INI participantes?\n\nEsto solo deja el cambio pendiente; el INI no se escribirá hasta Exportar.',
   'present.deleteError': 'No se pudo eliminar PRESENT:\n\n{detail}',
   'present.duplicateConfirm': 'Estos valores de variable son iguales a {labels}.\n\n¿Guardar de todos modos?',
   'present.editError': 'No se pudo {action} PRESENT:\n\n{detail}',
@@ -272,29 +281,38 @@ export default {
   'health.issueOpenOne': '{count} problema de diagnóstico del INI. Abrir diagnóstico',
   'health.issueOpenMany': '{count} problemas de diagnóstico del INI. Abrir diagnóstico',
   'diagnostics.issue.unexpected_key_statement': 'Declaración inesperada en [{section}]: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'El visor no puede reproducir esta forma de drawindexed como dibujo original; 3DMigoto podría aceptarla. Argumentos: {arguments}',
-  'diagnostics.issue.malformed_resource_reference': '{lhs} usa un prefijo de referencia de recurso no válido: {prefix}.',
-  'diagnostics.issue.missing_local_run_target': '{target} se ejecuta pero no está declarado en este INI; puede proporcionarlo el framework.',
-  'diagnostics.issue.duplicate_key_binding': '[{section}] y [{otherSection}] comparten la asignación de tecla {key} y podrían activarse a la vez.',
-  'diagnostics.issue.duplicate_section': 'La sección [{section}] está duplicada; 3DMigoto usa la primera definición (línea {firstLine}).',
+  'diagnostics.issue.unsupported_drawindexed_arguments':
+    'El visor no puede reproducir esta forma de drawindexed como dibujo original; 3DMigoto podría aceptarla. Argumentos: {arguments}',
+  'diagnostics.issue.malformed_resource_reference':
+    '{lhs} usa un prefijo de referencia de recurso no válido: {prefix}.',
+  'diagnostics.issue.missing_local_run_target':
+    '{target} se ejecuta pero no está declarado en este INI; puede proporcionarlo el framework.',
+  'diagnostics.issue.duplicate_key_binding':
+    '[{section}] y [{otherSection}] comparten la asignación de tecla {key} y podrían activarse a la vez.',
+  'diagnostics.issue.duplicate_section':
+    'La sección [{section}] está duplicada; 3DMigoto usa la primera definición (línea {firstLine}).',
   'diagnostics.issue.unknown_section': '[{section}] no es una sección reconocida de 3DMigoto.',
   'diagnostics.issue.statement_outside_section': 'Instrucción fuera de una sección: {source}',
   'diagnostics.issue.malformed_regular_statement': '[{section}] requiere una instrucción key=value: {source}',
   'diagnostics.issue.duplicate_section_key': '[{section}] repite {key} de la línea {firstLine}.',
-  'diagnostics.issue.missing_override_hash': 'A [{section}] le falta un hash {overrideType} o una opción de coincidencia válida.',
+  'diagnostics.issue.missing_override_hash':
+    'A [{section}] le falta un hash {overrideType} o una opción de coincidencia válida.',
   'diagnostics.issue.invalid_hash': '[{section}] tiene un hash {overrideType} no válido: {value}',
   'diagnostics.issue.missing_key_binding': '[{section}] no tiene una asignación key= o back=.',
   'diagnostics.issue.invalid_key_binding': '[{section}] tiene una asignación {bindingType} vacía.',
   'diagnostics.issue.invalid_run_target': '{targetDisplay} no es un destino de lista de comandos.',
-  'diagnostics.issue.hash_match_conflict': '[{section}] no puede combinar hash= con opciones de coincidencia de recursos.',
+  'diagnostics.issue.hash_match_conflict':
+    '[{section}] no puede combinar hash= con opciones de coincidencia de recursos.',
   'diagnostics.issue.undeclared_variable': '{variable} se asigna sin declaración.',
   'diagnostics.issue.malformed_condition_nesting': '{section}: {reason}',
   'diagnostics.issue.malformed_section_header': '{reason}',
   'diagnostics.issue.malformed_condition_syntax': '{reason}',
   'diagnostics.issue.unbalanced_condition_parentheses': '{reason}',
-  'diagnostics.issue.missing_resource_section': '{resource} está referenciado pero no tiene una sección de recursos en este INI.',
+  'diagnostics.issue.missing_resource_section':
+    '{resource} está referenciado pero no tiene una sección de recursos en este INI.',
   'diagnostics.issue.invalid_resource_stride': '{resource} tiene un stride no válido: {stride}.',
-  'diagnostics.issue.unsafe_resource_path': '{resource} usa un nombre de archivo fuera de la ruta de recursos permitida: {filename}.',
+  'diagnostics.issue.unsafe_resource_path':
+    '{resource} usa un nombre de archivo fuera de la ruta de recursos permitida: {filename}.',
   'diagnostics.issue.missing_resource_file': '{resource} hace referencia a un archivo que no existe: {filename}.',
   'diagnostics.issue.unused_resource_section': '{resource} no está referenciado en este INI.',
   'diagnostics.issue.unreadable_ini': 'No se pudo leer este INI como UTF-8: {detail}',
@@ -310,7 +328,8 @@ export default {
   'diagnostics.reason.elseif_not_allowed': "usa 'elif' o 'else if', no 'elseif'",
   'diagnostics.reason.condition_missing_expression': 'falta una expresión en la condición',
   'diagnostics.reason.else_if_missing_expression': 'falta una expresión en else if',
-  'diagnostics.reason.condition_keyword_missing_space': 'debe haber un espacio después de la palabra clave de condición',
+  'diagnostics.reason.condition_keyword_missing_space':
+    'debe haber un espacio después de la palabra clave de condición',
   'diagnostics.reason.else_if_missing_space': 'debe haber un espacio después de else if',
   'diagnostics.reason.unmatched_close_parenthesis': 'hay un ) sin un ( correspondiente',
   'diagnostics.reason.unclosed_parenthesis': '{count} ( sin cerrar',
@@ -482,7 +501,8 @@ export default {
   'texture.created': 'Creado',
   'texture.saveFailed': 'No se pudo guardar la textura.',
   'texture.conflictingMeshes': 'Mallas en conflicto: {meshes}.',
-  'texture.colorMetadataWarning': 'La textura se guardó, pero no se pudieron borrar sus metadatos de Color. Resuelve el error de escritura antes de volver a abrir el MOD.',
+  'texture.colorMetadataWarning':
+    'La textura se guardó, pero no se pudieron borrar sus metadatos de Color. Resuelve el error de escritura antes de volver a abrir el MOD.',
   'texture.saveProgress': 'Progreso del guardado de textura',
   'texture.noChangedMeshes': 'Ninguna malla editable con cambios usa este DDS.',
   'texture.blocks': '{completed} / {total} bloques',
@@ -497,13 +517,18 @@ export default {
   'toggle.reportAlwaysFalse': 'condición siempre falsa en la línea {line}',
   'toggle.reportAlwaysTrue': 'condición siempre verdadera en la línea {line}',
   'toggle.reportUnsafe': 'condición sin resolver en la línea {line}',
-  'toggle.orphanConfirm': '{error}\n\n¿Aplicar de todos modos? Las mallas que solo se muestran para un valor eliminado dejarán de ser accesibles mediante este toggle.',
-  'record.reason.commandPath': 'El draw se alcanza mediante una lista de comandos run=, pero esta variable no controla directamente esa sección. Edita manualmente la rama que realiza la llamada',
-  'record.reason.ambiguousNesting': 'el anidamiento if/elif/endif de esta sección es ambiguo (consulta los errores de estructura del INI); edita el INI directamente',
+  'toggle.orphanConfirm':
+    '{error}\n\n¿Aplicar de todos modos? Las mallas que solo se muestran para un valor eliminado dejarán de ser accesibles mediante este toggle.',
+  'record.reason.commandPath':
+    'El draw se alcanza mediante una lista de comandos run=, pero esta variable no controla directamente esa sección. Edita manualmente la rama que realiza la llamada',
+  'record.reason.ambiguousNesting':
+    'el anidamiento if/elif/endif de esta sección es ambiguo (consulta los errores de estructura del INI); edita el INI directamente',
   'record.reason.unsupported': '{detail}',
-  'record.reason.outerGate': 'esta variable condiciona la ejecución en un nivel de anidamiento exterior; edita directamente esta condición',
+  'record.reason.outerGate':
+    'esta variable condiciona la ejecución en un nivel de anidamiento exterior; edita directamente esta condición',
   'record.reason.multipleVariables': 'esta sesión de grabación apunta a más de una variable',
-  'record.reason.nestedRewrite': 'está dentro de una condición de otra variable que se está reescribiendo en este mismo guardado; edita directamente el INI para anidar esta condición',
+  'record.reason.nestedRewrite':
+    'está dentro de una condición de otra variable que se está reescribiendo en este mismo guardado; edita directamente el INI para anidar esta condición',
   'record.reason.sameValue': '{detail}',
   'inspector.materialKind.auto': 'Automático',
   'inspector.materialKind.body': 'Cuerpo',
@@ -569,7 +594,8 @@ export default {
   'model.assetPreview': 'Previsualización de Asset',
   'model.assetPreviewSeparator': 'Previsualización de Asset  —  {name}',
   'model.exportCompressedDetail': 'La exportación no está disponible para MOD comprimidos.',
-  'model.unwiredToggleDetail': 'El toggle añadido aún no está conectado a ninguna malla: usa Record (⏺) o elimínalo antes de exportar.',
+  'model.unwiredToggleDetail':
+    'El toggle añadido aún no está conectado a ninguna malla: usa Record (⏺) o elimínalo antes de exportar.',
   'semanticRefresh.drawMismatch': 'El conjunto de draws pendiente ya no coincide con el modelo mostrado.',
   'gizmo.toggle': 'Cambiar gizmo de navegación: {state}',
   'panel.collapseSource': 'Contraer {source}',
@@ -584,12 +610,14 @@ export default {
   'texture.reason.differentMod': 'La malla seleccionada pertenece a otro MOD.',
   'texture.reason.ddsRequired': 'Actualmente, guardar texturas requiere un origen DDS.',
   'texture.reason.unavailable': 'El guardado de texturas no está disponible.',
-  'texture.reason.metadataFailed': 'No se pudieron guardar los metadatos de Color pendientes. Se canceló el guardado de la textura.',
+  'texture.reason.metadataFailed':
+    'No se pudieron guardar los metadatos de Color pendientes. Se canceló el guardado de la textura.',
   'texture.reason.cancelled': 'Se canceló el guardado de la textura.',
   'texture.reason.saveFailed': 'No se pudo guardar la textura.',
   'texture.reason.refreshFailed': 'La textura se guardó, pero el visor no pudo actualizarla.',
   'texture.reason.readOnlySource': 'La textura de origen es de solo lectura.',
-  'texture.reason.staleMeshState': 'El estado de la malla seleccionada está desactualizado. Actualiza el modelo e inténtalo de nuevo.',
+  'texture.reason.staleMeshState':
+    'El estado de la malla seleccionada está desactualizado. Actualiza el modelo e inténtalo de nuevo.',
   'texture.reason.noUv': 'La malla no tiene coordenadas UV.',
   'texture.reason.readFailed': 'No se pudo leer la textura de origen.',
   'texture.reason.changedDuringSave': 'La textura de origen cambió mientras se guardaba.',
@@ -608,8 +636,10 @@ export default {
   'mesh.mergeLooseParts': 'Combinar mallas',
   'mesh.applyMeshChanges': 'Aplicar cambios de malla',
   'mesh.cancelMeshChanges': 'Cancelar cambios de malla',
-  'mesh.applyMeshChangesConfirm': '¿Aplicar los cambios de malla de este componente?\n\nEl nuevo diseño de malla se guardará en memoria. No se escribirá nada en el disco hasta Exportar.',
-  'mesh.cancelMeshChangesConfirm': '¿Cancelar los cambios de malla de este componente?\n\nSe descartarán todos los cambios de separación y combinación de malla no aplicados.',
+  'mesh.applyMeshChangesConfirm':
+    '¿Aplicar los cambios de malla de este componente?\n\nEl nuevo diseño de malla se guardará en memoria. No se escribirá nada en el disco hasta Exportar.',
+  'mesh.cancelMeshChangesConfirm':
+    '¿Cancelar los cambios de malla de este componente?\n\nSe descartarán todos los cambios de separación y combinación de malla no aplicados.',
   'mesh.applyMeshChangesHint': 'Aplicar los cambios de malla de este componente',
   'mesh.unappliedChangesDetail': 'Hay cambios de malla sin aplicar',
   'mesh.separate': 'Separar',

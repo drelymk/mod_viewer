@@ -242,11 +242,11 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
     new_lines = []
     for pos_set, lines in groups:
         if pos_set == all_positions:
-            new_lines.extend(l.raw for l in lines)
+            new_lines.extend(line.raw for line in lines)
         else:
             new_lines.append(
                 f"if {_or_expr(var, values, pos_set, all_positions)}")
-            new_lines.extend(l.raw for l in lines)
+            new_lines.extend(line.raw for line in lines)
             new_lines.append("endif")
 
     start, end = branches[0].no, endif_line.no + 1

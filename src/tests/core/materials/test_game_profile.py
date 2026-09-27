@@ -3,10 +3,8 @@
 import pytest
 
 from core.materials.game_profile import detect_game
-from core.ini.analysis import analyze_ini
 from core.ini.parser import _scan_sections_for_draws
 from core.materials.profiles import material_profile_for
-from core.ini.sections import parse_sections
 from core.textures.profiles import texture_profile_for
 
 

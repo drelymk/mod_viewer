@@ -32,9 +32,7 @@ export function getSkinningBaseMaterial(mesh) {
 }
 
 export function withSkinningBaseMaterial(mesh, operation) {
-  return skinning
-    ? skinning.withSkinningBaseMaterial(mesh, operation)
-    : operation();
+  return skinning ? skinning.withSkinningBaseMaterial(mesh, operation) : operation();
 }
 
 export function registerSkinningMesh(mesh) {

@@ -1,15 +1,10 @@
 // Viewer-only material display modes and their toolbar state.
 
 import { refreshMeshTexture, setTextureMode } from '../mesh/mesh-factory.js';
-import {
-  setGameMaterialRimEnabled, setGameMaterialToonEnabled,
-} from '../mesh/material-profile.js';
+import { setGameMaterialRimEnabled, setGameMaterialToonEnabled } from '../mesh/material-profile.js';
 import { setOutlineSuppressedByWireframe } from './outline-renderer.js';
 import { requestRender } from './render-scheduler.js';
-import {
-  setAmbientOcclusionSuppressedByWireframe,
-  setBloomSuppressedByWireframe,
-} from './scene.js';
+import { setAmbientOcclusionSuppressedByWireframe, setBloomSuppressedByWireframe } from './scene.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let wireframe = false;
@@ -28,32 +23,31 @@ function stateWord(value) {
 function updateRenderModeLabels() {
   const wireButton = document.getElementById('wire-btn');
   if (wireButton) {
-    const label = t('render.wireframe', {state: stateWord(wireframe)});
+    const label = t('render.wireframe', { state: stateWord(wireframe) });
     wireButton.title = label;
     wireButton.setAttribute('aria-label', label);
   }
   const outlineButton = document.getElementById('outline-btn');
   if (outlineButton) {
-    const label = t('render.outlines', {state: stateWord(
-      outlineButton.getAttribute('aria-pressed') === 'true')});
+    const label = t('render.outlines', { state: stateWord(outlineButton.getAttribute('aria-pressed') === 'true') });
     outlineButton.title = label;
     outlineButton.setAttribute('aria-label', label);
   }
   const glossyButton = document.getElementById('glossy-btn');
   if (glossyButton) {
-    const label = t('render.glossy', {state: stateWord(glossy)});
+    const label = t('render.glossy', { state: stateWord(glossy) });
     glossyButton.title = label;
     glossyButton.setAttribute('aria-label', label);
   }
   const toonButton = document.getElementById('toon-btn');
   if (toonButton) {
-    const label = t('render.toon', {state: stateWord(toonShading)});
+    const label = t('render.toon', { state: stateWord(toonShading) });
     toonButton.title = label;
     toonButton.setAttribute('aria-label', label);
   }
   const shadingButton = document.getElementById('shading-btn');
   if (shadingButton) {
-    const label = t('render.shading', {state: stateWord(smoothShading)});
+    const label = t('render.shading', { state: stateWord(smoothShading) });
     shadingButton.title = label;
     shadingButton.setAttribute('aria-label', label);
   }
@@ -70,7 +64,7 @@ window.addEventListener(LANGUAGE_CHANGED, updateRenderModeLabels);
 
 function setMeshRoughness(mesh, roughness) {
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  materials.forEach(material => {
+  materials.forEach((material) => {
     material.roughness = roughness;
   });
 }
@@ -80,7 +74,7 @@ export function initializeMeshRenderModes(mesh) {
   mesh.material.flatShading = !smoothShading;
   setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  materials.forEach(material => {
+  materials.forEach((material) => {
     setGameMaterialRimEnabled(material, !wireframe);
     setGameMaterialToonEnabled(material, toonShading);
   });
@@ -94,12 +88,12 @@ export function toggleWireframeMode(meshes) {
   const button = document.getElementById('wire-btn');
   button.classList.toggle('active', wireframe);
   button.setAttribute('aria-pressed', String(wireframe));
-  const label = t('render.wireframe', {state: stateWord(wireframe)});
+  const label = t('render.wireframe', { state: stateWord(wireframe) });
   button.title = label;
   button.setAttribute('aria-label', label);
-  meshes.forEach(mesh => {
+  meshes.forEach((mesh) => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => {
+    materials.forEach((material) => {
       material.wireframe = wireframe;
       setGameMaterialRimEnabled(material, !wireframe);
     });
@@ -112,12 +106,12 @@ export function toggleSmoothShadingMode(meshes) {
   const button = document.getElementById('shading-btn');
   button.classList.toggle('off', !smoothShading);
   button.setAttribute('aria-pressed', String(smoothShading));
-  const label = t('render.shading', {state: stateWord(smoothShading)});
+  const label = t('render.shading', { state: stateWord(smoothShading) });
   button.title = label;
   button.setAttribute('aria-label', label);
-  meshes.forEach(mesh => {
+  meshes.forEach((mesh) => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => {
+    materials.forEach((material) => {
       material.flatShading = !smoothShading;
       material.needsUpdate = true;
     });
@@ -133,11 +127,11 @@ export function toggleGlossyMode(meshes) {
   // leaves it looking enabled in both states because there is no glossy
   // `.active` rule.
   button.classList.toggle('off', !glossy);
-  const label = t('render.glossy', {state: stateWord(glossy)});
+  const label = t('render.glossy', { state: stateWord(glossy) });
   button.title = label;
   button.setAttribute('aria-label', label);
   button.setAttribute('aria-pressed', String(glossy));
-  meshes.forEach(mesh => {
+  meshes.forEach((mesh) => {
     setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
   });
   requestRender();
@@ -148,13 +142,13 @@ export function toggleToonShadingMode(meshes) {
   const button = document.getElementById('toon-btn');
   button.classList.toggle('active', toonShading);
   button.classList.toggle('off', !toonShading);
-  const label = t('render.toon', {state: stateWord(toonShading)});
+  const label = t('render.toon', { state: stateWord(toonShading) });
   button.title = label;
   button.setAttribute('aria-label', label);
   button.setAttribute('aria-pressed', String(toonShading));
-  meshes.forEach(mesh => {
+  meshes.forEach((mesh) => {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    materials.forEach(material => setGameMaterialToonEnabled(material, toonShading));
+    materials.forEach((material) => setGameMaterialToonEnabled(material, toonShading));
   });
   requestRender();
 }

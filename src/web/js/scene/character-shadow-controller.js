@@ -11,9 +11,7 @@ const SHADOW_OPACITY = 0.32;
 const SHADOW_REFERENCE_INTENSITY = 1.0;
 
 function finiteBox(box) {
-  return !box.isEmpty() && [
-    box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z,
-  ].every(Number.isFinite);
+  return !box.isEmpty() && [box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z].every(Number.isFinite);
 }
 
 function boxCorners(box) {
@@ -31,19 +29,17 @@ function sameVector(left, right) {
 }
 
 function shadowOpacityForIntensity(intensity) {
-  return SHADOW_OPACITY * THREE.MathUtils.clamp(
-    intensity / SHADOW_REFERENCE_INTENSITY, 0, 1);
+  return SHADOW_OPACITY * THREE.MathUtils.clamp(intensity / SHADOW_REFERENCE_INTENSITY, 0, 1);
 }
 
 export function createCharacterShadowController({ renderer, scene, light }) {
   const groundMaterial = new THREE.ShadowMaterial({
-    color: 0x000000, opacity: shadowOpacityForIntensity(light.intensity),
-    transparent: true, depthWrite: false,
+    color: 0x000000,
+    opacity: shadowOpacityForIntensity(light.intensity),
+    transparent: true,
+    depthWrite: false,
   });
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(1, 1),
-    groundMaterial,
-  );
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), groundMaterial);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   ground.castShadow = false;
@@ -91,7 +87,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
 
   function adoptMeshes(nextMeshes = []) {
     const known = new Set(meshes);
-    const added = nextMeshes.filter(mesh => mesh && !known.has(mesh));
+    const added = nextMeshes.filter((mesh) => mesh && !known.has(mesh));
     if (added.length) {
       meshes.push(...added);
       invalidateGeometry();
@@ -102,7 +98,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   function forgetMeshes(nextMeshes = []) {
     const removed = new Set(nextMeshes);
     const before = meshes.length;
-    meshes = meshes.filter(mesh => !removed.has(mesh));
+    meshes = meshes.filter((mesh) => !removed.has(mesh));
     if (meshes.length !== before) invalidateGeometry();
   }
 
@@ -138,8 +134,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     if (lightDirection.lengthSq() < 0.00000001) lightDirection.set(0, -1, 0);
     lightDirection.normalize();
     const casterCorners = boxCorners(casterBounds);
-    const footprint = projectGroundFootprint(
-      casterCorners, modelBounds.min.y, modelSize, lightDirection);
+    const footprint = projectGroundFootprint(casterCorners, modelBounds.min.y, modelSize, lightDirection);
     const footprintBox = new THREE.Box3().setFromPoints(footprint);
     const footprintSize = footprintBox.getSize(new THREE.Vector3());
     const groundMargin = Math.max(modelSize * FIT_MARGIN, MIN_SIZE);
@@ -150,7 +145,8 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     );
     ground.scale.set(
       Math.max(footprintSize.x + groundMargin * 2, MIN_SIZE),
-      Math.max(footprintSize.z + groundMargin * 2, MIN_SIZE), 1,
+      Math.max(footprintSize.z + groundMargin * 2, MIN_SIZE),
+      1,
     );
 
     const shadowCamera = light.shadow.camera;
@@ -161,7 +157,7 @@ export function createCharacterShadowController({ renderer, scene, light }) {
     if (Math.abs(lightDirection.dot(shadowCamera.up)) > 0.98) shadowCamera.up.set(0, 0, 1);
     shadowCamera.lookAt(light.target.position);
     shadowCamera.updateMatrixWorld(true);
-    const lightSpace = footprint.map(point => point.clone().applyMatrix4(shadowCamera.matrixWorldInverse));
+    const lightSpace = footprint.map((point) => point.clone().applyMatrix4(shadowCamera.matrixWorldInverse));
     const lightBox = new THREE.Box3().setFromPoints(lightSpace);
     if (!finiteBox(lightBox)) {
       groundAvailable = false;
@@ -191,8 +187,8 @@ export function createCharacterShadowController({ renderer, scene, light }) {
 
   function update() {
     groundMaterial.opacity = shadowOpacityForIntensity(light.intensity);
-    const changedLight = !sameVector(lastLightPosition, light.position)
-      || !sameVector(lastLightTarget, light.target.position);
+    const changedLight =
+      !sameVector(lastLightPosition, light.position) || !sameVector(lastLightTarget, light.target.position);
     if (changedLight) {
       lastLightPosition = light.position.clone();
       lastLightTarget = light.target.position.clone();
@@ -227,9 +223,13 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   }
 
   function getDebugState() {
-    const serialize = box => finiteBox(box) ? {
-      min: box.min.toArray(), max: box.max.toArray(),
-    } : null;
+    const serialize = (box) =>
+      finiteBox(box)
+        ? {
+            min: box.min.toArray(),
+            max: box.max.toArray(),
+          }
+        : null;
     return {
       meshCount: meshes.length,
       modelBounds: serialize(modelBounds),
@@ -242,8 +242,14 @@ export function createCharacterShadowController({ renderer, scene, light }) {
   }
 
   return {
-    setMeshes, adoptMeshes, forgetMeshes,
-    invalidateGeometry, invalidateVisibility, invalidateMap,
-    update, reset, getDebugState,
+    setMeshes,
+    adoptMeshes,
+    forgetMeshes,
+    invalidateGeometry,
+    invalidateVisibility,
+    invalidateMap,
+    update,
+    reset,
+    getDebugState,
   };
 }

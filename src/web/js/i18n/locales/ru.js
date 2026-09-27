@@ -43,7 +43,8 @@ export default {
   'environment.preset.outdoor': 'Улица',
   'renderer.webgpuUnavailable': 'WebGPU недоступен',
   'renderer.webgpuRequired': 'Этой версии Mod Viewer требуется WebGPU.',
-  'renderer.failure': 'Этой версии Mod Viewer требуется WebGPU. Обновите графический драйвер или используйте браузер с поддержкой WebGPU{detail}',
+  'renderer.failure':
+    'Этой версии Mod Viewer требуется WebGPU. Обновите графический драйвер или используйте браузер с поддержкой WebGPU{detail}',
   'renderer.deviceLost': 'Устройство WebGPU отключено: {detail}',
   'renderer.unrecoverable': 'WebGPU сообщил о неустранимой ошибке: {detail}',
   'gizmo.title': 'Перетаскивайте для вращения · нажимайте ось для привязки · прокручивайте для масштаба',
@@ -86,12 +87,14 @@ export default {
   'folder.notFound': 'Папка не найдена',
   'folder.editMod': 'Изменить папку MOD',
   'folder.addMod': 'Добавить папку MOD',
-  'folder.removeMod': 'Удалить «{name}» из папок MOD?\n\nПапка будет удалена только из Mod Viewer.\nФайлы на диске удалены не будут.',
+  'folder.removeMod':
+    'Удалить «{name}» из папок MOD?\n\nПапка будет удалена только из Mod Viewer.\nФайлы на диске удалены не будут.',
   'folder.enterModName': 'Введите название папки MOD.',
   'folder.chooseBrowse': 'Выберите папку с помощью кнопки «Обзор».',
   'folder.editAsset': 'Изменить папку ассетов',
   'folder.addAsset': 'Добавить папку ассетов',
-  'folder.removeAsset': 'Удалить эту папку ассетов?\n\nПапка будет удалена только из Mod Viewer.\nФайлы на диске удалены не будут.',
+  'folder.removeAsset':
+    'Удалить эту папку ассетов?\n\nПапка будет удалена только из Mod Viewer.\nФайлы на диске удалены не будут.',
   'folder.buildingIndex': 'Создание индекса…',
   'mesh.loadMissingParts': 'Загрузить недостающие части',
   'mesh.removeMissingParts': 'Удалить недостающие части',
@@ -170,7 +173,8 @@ export default {
   'health.ambiguousDraws': 'Неоднозначных: {count}',
   'health.notFoundDraws': 'Не найдено: {count}',
   'health.mixed': 'смешанный компонент',
-  'health.summary': 'ошибок: {errors} · предупреждений: {warnings} · связанных ассетов: {referenced} · только неактивных: {inactive} · только Mod Viewer: {viewer}',
+  'health.summary':
+    'ошибок: {errors} · предупреждений: {warnings} · связанных ассетов: {referenced} · только неактивных: {inactive} · только Mod Viewer: {viewer}',
   'health.noIssues': 'Проблем INI не найдено.',
   'health.noFilterIssues': 'Проблем по этому фильтру не найдено.',
   'health.openAtLine': 'Дважды щёлкните, чтобы открыть этот INI на указанной строке',
@@ -204,13 +208,18 @@ export default {
   'errors.assetFillDefault': 'Исходные части ассета не загружены.',
   'errors.loadMissingAsset': 'Не удалось загрузить недостающие части ассета:\n\n{detail}',
   'errors.removeMissingAsset': 'Не удалось удалить недостающие части ассета:\n\n{detail}',
-  'errors.exportPartial': 'Экспортировано файлов INI: {saved}. Не удалось экспортировать: {failed}. Они остаются ожидающими:\n\n{detail}',
-  'confirm.unsavedSwitch': 'В этом MOD есть неэкспортированные изменения.\n\nОткрытие другой папки MOD отменит их. Продолжить?',
-  'confirm.unsavedAsset': 'В этом MOD есть неэкспортированные изменения.\n\nОткрытие предпросмотра ассета отменит их. Продолжить?',
-  'toggle.deleteConfirm': 'Удалить переключатель «{name}»?\n\nИзменение будет только подготовлено — в INI оно попадёт после нажатия «Экспорт».',
+  'errors.exportPartial':
+    'Экспортировано файлов INI: {saved}. Не удалось экспортировать: {failed}. Они остаются ожидающими:\n\n{detail}',
+  'confirm.unsavedSwitch':
+    'В этом MOD есть неэкспортированные изменения.\n\nОткрытие другой папки MOD отменит их. Продолжить?',
+  'confirm.unsavedAsset':
+    'В этом MOD есть неэкспортированные изменения.\n\nОткрытие предпросмотра ассета отменит их. Продолжить?',
+  'toggle.deleteConfirm':
+    'Удалить переключатель «{name}»?\n\nИзменение будет только подготовлено — в INI оно попадёт после нажатия «Экспорт».',
   'toggle.deleteError': 'Не удалось удалить переключатель:\n\n{detail}',
   'toggle.deletedReview': 'Переключатель удалён, но проверьте эти строки вручную:\n\n{detail}',
-  'toggle.unwired': 'Пока не связан ни с одним мешем. Нажмите ⏺ Record и отмечайте меши для каждой позиции, чтобы указать содержимое переключателя. Экспорт будет отключён, пока переключатель не будет связан или удалён.',
+  'toggle.unwired':
+    'Пока не связан ни с одним мешем. Нажмите ⏺ Record и отмечайте меши для каждой позиции, чтобы указать содержимое переключателя. Экспорт будет отключён, пока переключатель не будет связан или удалён.',
   'toggle.edit': 'Изменить переключатель',
   'toggle.delete': 'Удалить переключатель',
   'toggle.record': 'Записать отображаемые меши для каждой позиции',
@@ -219,7 +228,8 @@ export default {
   'toggle.noToggles': 'Переключателей пока нет. Нажмите «Добавить», чтобы создать его.',
   'toggle.addTitle': 'Добавить переключатель',
   'toggle.editTitle': 'Изменить {name}',
-  'present.deleteKeyConfirm': 'Удалить клавишу PRESENT из всех участвующих INI?\n\nИзменение будет только подготовлено; INI не изменится до экспорта.',
+  'present.deleteKeyConfirm':
+    'Удалить клавишу PRESENT из всех участвующих INI?\n\nИзменение будет только подготовлено; INI не изменится до экспорта.',
   'present.deleteError': 'Не удалось удалить PRESENT:\n\n{detail}',
   'present.duplicateConfirm': 'Значения этих переменных совпадают с {labels}.\n\nВсё равно сохранить?',
   'present.editError': 'Не удалось {action} PRESENT:\n\n{detail}',
@@ -272,16 +282,21 @@ export default {
   'health.issueOpenOne': 'Проблема диагностики INI: {count}. Открыть диагностику',
   'health.issueOpenMany': 'Проблем диагностики INI: {count}. Открыть диагностику',
   'diagnostics.issue.unexpected_key_statement': 'Неожиданная инструкция в [{section}]: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'Просмотрщик пока не может воспроизвести эту форму drawindexed как исходный вызов; 3DMigoto может её принимать. Аргументы: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments':
+    'Просмотрщик пока не может воспроизвести эту форму drawindexed как исходный вызов; 3DMigoto может её принимать. Аргументы: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} использует недопустимый префикс ссылки на ресурс: {prefix}.',
-  'diagnostics.issue.missing_local_run_target': '{target} запускается, но не объявлен в этом INI; возможно, он предоставляется framework.',
-  'diagnostics.issue.duplicate_key_binding': '[{section}] и [{otherSection}] используют одну привязку клавиши {key} и могут сработать вместе.',
-  'diagnostics.issue.duplicate_section': 'Раздел [{section}] повторяется; 3DMigoto использует первое определение (строка {firstLine}).',
+  'diagnostics.issue.missing_local_run_target':
+    '{target} запускается, но не объявлен в этом INI; возможно, он предоставляется framework.',
+  'diagnostics.issue.duplicate_key_binding':
+    '[{section}] и [{otherSection}] используют одну привязку клавиши {key} и могут сработать вместе.',
+  'diagnostics.issue.duplicate_section':
+    'Раздел [{section}] повторяется; 3DMigoto использует первое определение (строка {firstLine}).',
   'diagnostics.issue.unknown_section': '[{section}] не является известным разделом 3DMigoto.',
   'diagnostics.issue.statement_outside_section': 'Инструкция вне раздела: {source}',
   'diagnostics.issue.malformed_regular_statement': 'В [{section}] нужна инструкция key=value: {source}',
   'diagnostics.issue.duplicate_section_key': 'В [{section}] повторяется {key} из строки {firstLine}.',
-  'diagnostics.issue.missing_override_hash': 'В [{section}] отсутствует хеш {overrideType} или допустимое условие совпадения.',
+  'diagnostics.issue.missing_override_hash':
+    'В [{section}] отсутствует хеш {overrideType} или допустимое условие совпадения.',
   'diagnostics.issue.invalid_hash': 'В [{section}] недопустимый хеш {overrideType}: {value}',
   'diagnostics.issue.missing_key_binding': 'В [{section}] нет привязки key= или back=.',
   'diagnostics.issue.invalid_key_binding': 'В [{section}] пустая привязка {bindingType}.',
@@ -437,7 +452,8 @@ export default {
   'weightRig.count.joint.one': 'суставов: {count}',
   'weightRig.count.joint.many': 'суставов: {count}',
   'record.startError': 'Не удалось начать запись:\n\n{detail}',
-  'record.noAutomaticVariable': 'У этого переключателя нет переменной, которую приложение может записать автоматически.',
+  'record.noAutomaticVariable':
+    'У этого переключателя нет переменной, которую приложение может записать автоматически.',
   'record.nextPosition': 'Следующая позиция',
   'record.cycleValue': 'Сменить значение',
   'record.position': 'Позиция {current} из {positions} — {values}',
@@ -482,7 +498,8 @@ export default {
   'texture.created': 'Создано',
   'texture.saveFailed': 'Не удалось сохранить текстуру.',
   'texture.conflictingMeshes': 'Конфликтующие меши: {meshes}.',
-  'texture.colorMetadataWarning': 'Текстура сохранена, но метаданные цвета удалить не удалось. Устраните ошибку записи метаданных перед повторным открытием MOD.',
+  'texture.colorMetadataWarning':
+    'Текстура сохранена, но метаданные цвета удалить не удалось. Устраните ошибку записи метаданных перед повторным открытием MOD.',
   'texture.saveProgress': 'Ход сохранения текстуры',
   'texture.noChangedMeshes': 'Ни один изменённый редактируемый меш не использует этот DDS.',
   'texture.blocks': 'Блоки: {completed} / {total}',
@@ -497,13 +514,17 @@ export default {
   'toggle.reportAlwaysFalse': 'условие всегда ложно в строке {line}',
   'toggle.reportAlwaysTrue': 'условие всегда истинно в строке {line}',
   'toggle.reportUnsafe': 'неразрешённое условие в строке {line}',
-  'toggle.orphanConfirm': '{error}\n\nПрименить всё равно? Меши, отображаемые только для удалённого значения, больше нельзя будет получить через этот переключатель.',
-  'record.reason.commandPath': 'draw выполняется через список команд run=, но эта секция не управляется напрямую данной переменной. Измените вызывающую ветвь вручную',
-  'record.reason.ambiguousNesting': 'вложенность if/elif/endif этой секции неоднозначна (см. ошибки структуры INI); измените INI напрямую',
+  'toggle.orphanConfirm':
+    '{error}\n\nПрименить всё равно? Меши, отображаемые только для удалённого значения, больше нельзя будет получить через этот переключатель.',
+  'record.reason.commandPath':
+    'draw выполняется через список команд run=, но эта секция не управляется напрямую данной переменной. Измените вызывающую ветвь вручную',
+  'record.reason.ambiguousNesting':
+    'вложенность if/elif/endif этой секции неоднозначна (см. ошибки структуры INI); измените INI напрямую',
   'record.reason.unsupported': '{detail}',
   'record.reason.outerGate': 'переменная ограничена внешним уровнем вложенности; измените это условие напрямую',
   'record.reason.multipleVariables': 'в этой записи задействовано несколько переменных',
-  'record.reason.nestedRewrite': 'находится внутри условия другой переменной, переписываемого в этом сохранении; измените INI напрямую, чтобы вложить условие',
+  'record.reason.nestedRewrite':
+    'находится внутри условия другой переменной, переписываемого в этом сохранении; измените INI напрямую, чтобы вложить условие',
   'record.reason.sameValue': '{detail}',
   'inspector.materialKind.auto': 'Авто',
   'inspector.materialKind.body': 'Тело',
@@ -569,7 +590,8 @@ export default {
   'model.assetPreview': 'Предпросмотр ассета',
   'model.assetPreviewSeparator': 'Предпросмотр ассета  —  {name}',
   'model.exportCompressedDetail': 'Экспорт недоступен для сжатых MOD.',
-  'model.unwiredToggleDetail': 'Добавленный переключатель ещё не связан с мешем. Выполните Record (⏺) или удалите его перед экспортом.',
+  'model.unwiredToggleDetail':
+    'Добавленный переключатель ещё не связан с мешем. Выполните Record (⏺) или удалите его перед экспортом.',
   'semanticRefresh.drawMismatch': 'Подготовленный набор draw больше не соответствует отображаемой модели.',
   'gizmo.toggle': 'Переключить гизмо навигации: {state}',
   'panel.collapseSource': 'Свернуть {source}',
@@ -608,8 +630,10 @@ export default {
   'mesh.mergeLooseParts': 'Объединить меши',
   'mesh.applyMeshChanges': 'Применить изменения меша',
   'mesh.cancelMeshChanges': 'Отменить изменения меша',
-  'mesh.applyMeshChangesConfirm': 'Применить изменения меша для этого компонента?\n\nНовая структура меша будет сохранена в памяти. До Export ничего не записывается на диск.',
-  'mesh.cancelMeshChangesConfirm': 'Отменить изменения меша для этого компонента?\n\nВсе неприменённые изменения разделения и объединения меша будут отброшены.',
+  'mesh.applyMeshChangesConfirm':
+    'Применить изменения меша для этого компонента?\n\nНовая структура меша будет сохранена в памяти. До Export ничего не записывается на диск.',
+  'mesh.cancelMeshChangesConfirm':
+    'Отменить изменения меша для этого компонента?\n\nВсе неприменённые изменения разделения и объединения меша будут отброшены.',
   'mesh.applyMeshChangesHint': 'Применить изменения меша для этого компонента',
   'mesh.unappliedChangesDetail': 'Есть неприменённые изменения меша',
   'mesh.separate': 'Отделить',

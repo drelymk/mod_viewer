@@ -10,9 +10,12 @@ def _format_key_combo(combo):
     mods, main = [], None
     for tok in combo.split():
         tl = tok.lower()
-        if tl.startswith("no_"): continue
-        if tl in ("ctrl", "shift", "alt"): mods.append(tl.capitalize())
-        else: main = tok
+        if tl.startswith("no_"):
+            continue
+        if tl in ("ctrl", "shift", "alt"):
+            mods.append(tl.capitalize())
+        else:
+            main = tok
     if main is None:
         return combo
     key_part = main.upper() if len(main) == 1 else main
@@ -35,19 +38,24 @@ def extract_toggle_keys(sections, var_prefix=None, source=None,
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     for name, lines in sections.items():
-        if not name.lower().startswith("key"): continue
+        if not name.lower().startswith("key"):
+            continue
         key_combo, back_combo, ktype, cvars = None, None, None, {}
         src = None
         for line in lines:
             if src is None:
                 src = line_source(line)
-            if "=" not in line: continue
+            if "=" not in line:
+                continue
             k, _, v = line.partition("=")
             k, v = k.strip(), v.strip()
             kl = k.lower()
-            if   kl == "key":  key_combo = v
-            elif kl == "back": back_combo = v
-            elif kl == "type": ktype = v.lower()
+            if kl == "key":
+                key_combo = v
+            elif kl == "back":
+                back_combo = v
+            elif kl == "type":
+                ktype = v.lower()
             elif k.startswith("$"):
                 var = k[1:].strip()
                 var = canon.get(var.lower(), var)

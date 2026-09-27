@@ -376,9 +376,9 @@ def edit_toggle(doc, section_name, *, new_name=None, key_combo=None,
             sec = find_cycle_section(doc, section_name)
 
     if back_combo is not None:
-        back_line = next((l for l in sec.lines
-                          if l.kind == ASSIGN
-                          and l.text.partition("=")[0].strip().lower() == "back"), None)
+        back_line = next((line for line in sec.lines
+                          if line.kind == ASSIGN
+                          and line.text.partition("=")[0].strip().lower() == "back"), None)
         if back_line:
             doc.replace_lines(back_line.no, back_line.no + 1, [f"back = {back_combo.strip()}"])
         elif back_combo.strip():
@@ -388,9 +388,9 @@ def edit_toggle(doc, section_name, *, new_name=None, key_combo=None,
     if var_values:
         for var, new_vals in var_values.items():
             sec = find_cycle_section(doc, section_name)
-            line = next(l for l in sec.lines
-                        if l.kind == ASSIGN and _VAR_ASSIGN_RE.match(l.text)
-                        and _VAR_ASSIGN_RE.match(l.text).group(1) == var)
+            line = next(line for line in sec.lines
+                        if line.kind == ASSIGN and _VAR_ASSIGN_RE.match(line.text)
+                        and _VAR_ASSIGN_RE.match(line.text).group(1) == var)
             values = [str(v).strip() for v in new_vals]
             doc.replace_lines(line.no, line.no + 1, [f"${var} = {','.join(values)}"])
 

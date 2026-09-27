@@ -1,7 +1,9 @@
 // Runtime material replacement and metadata state for an existing mesh.
 
 import {
-  captureGameMaterialViewerState, createGameMaterial, disposeGameMaterial,
+  captureGameMaterialViewerState,
+  createGameMaterial,
+  disposeGameMaterial,
   restoreGameMaterialViewerState,
 } from './material-profile.js';
 import { setMeshTextureState } from './mesh-factory.js';
@@ -44,39 +46,46 @@ export function updateMeshMaterialMetadata(mesh, metadata, profile) {
 }
 
 /** Replace one mesh material without replacing its mesh or geometry. */
-export function replaceMeshMaterial(
-    mesh, profile, metadata = {}, { render = true, disposeOld = true } = {}) {
+export function replaceMeshMaterial(mesh, profile, metadata = {}, { render = true, disposeOld = true } = {}) {
   const oldMaterial = mesh.material;
   const viewerState = captureGameMaterialViewerState(oldMaterial);
   const previousMetadata = Object.fromEntries(
-    MATERIAL_METADATA_FIELDS.map(([target]) => [target, mesh.userData[target]])
-      .concat([['materialProfile', mesh.userData.materialProfile]]));
+    MATERIAL_METADATA_FIELDS.map(([target]) => [target, mesh.userData[target]]).concat([
+      ['materialProfile', mesh.userData.materialProfile],
+    ]),
+  );
   const textureStateFields = [
-    'texKey', 'normalMapKey', 'normalDataKey', 'lightMapKey',
-    'materialMapKey', 'emissionMapKey',
+    'texKey',
+    'normalMapKey',
+    'normalDataKey',
+    'lightMapKey',
+    'materialMapKey',
+    'emissionMapKey',
   ];
-  const previousTextureState = Object.fromEntries(
-    textureStateFields.map(field => [field, mesh.userData[field]]));
-  const nextMaterial = createGameMaterial(
-    profile, mesh.userData.fallbackColor ?? 0xcccccc,
-    { hasUv: !!mesh.geometry?.attributes?.uv });
+  const previousTextureState = Object.fromEntries(textureStateFields.map((field) => [field, mesh.userData[field]]));
+  const nextMaterial = createGameMaterial(profile, mesh.userData.fallbackColor ?? 0xcccccc, {
+    hasUv: !!mesh.geometry?.attributes?.uv,
+  });
   try {
     mesh.material = nextMaterial;
     syncLoosePartMaterial(mesh);
     initializeMeshRenderModes(mesh);
     restoreGameMaterialViewerState(nextMaterial, viewerState);
     updateMeshMaterialMetadata(mesh, metadata, profile);
-    setMeshTextureState(mesh, {
-      diffuse: mesh.userData.texKey,
-      // The applied normal-map key is intentionally not authoritative when
-      // the new profile consumes packed normal data instead.
-      normal_map: mesh.userData.resolvedNormalMapKey,
-      normal_data: mesh.userData.normalDataKey
-        || mesh.userData.resolvedNormalDataKey,
-      light_map: mesh.userData.lightMapKey,
-      material_map: mesh.userData.materialMapKey,
-      emission_map: mesh.userData.emissionMapKey,
-    }, { render: false });
+    setMeshTextureState(
+      mesh,
+      {
+        diffuse: mesh.userData.texKey,
+        // The applied normal-map key is intentionally not authoritative when
+        // the new profile consumes packed normal data instead.
+        normal_map: mesh.userData.resolvedNormalMapKey,
+        normal_data: mesh.userData.normalDataKey || mesh.userData.resolvedNormalDataKey,
+        light_map: mesh.userData.lightMapKey,
+        material_map: mesh.userData.materialMapKey,
+        emission_map: mesh.userData.emissionMapKey,
+      },
+      { render: false },
+    );
   } catch (error) {
     mesh.material = oldMaterial;
     syncLoosePartMaterial(mesh);
@@ -95,5 +104,5 @@ export function replaceMeshMaterial(
     oldMaterial.dispose();
   }
   if (render) requestRender();
-  return disposeOld ? true : {material: nextMaterial, oldMaterial};
+  return disposeOld ? true : { material: nextMaterial, oldMaterial };
 }

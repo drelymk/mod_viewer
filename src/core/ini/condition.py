@@ -276,12 +276,18 @@ def _compare(left, op, right):
         a, b = left, right
     else:
         return None   # ordering comparison on non-numbers: don't guess
-    if op in ("==", "==="):  return a == b
-    if op in ("!=", "!=="):  return a != b
-    if op == "<":   return a < b
-    if op == ">":   return a > b
-    if op == "<=":  return a <= b
-    if op == ">=":  return a >= b
+    if op in ("==", "==="):
+        return a == b
+    if op in ("!=", "!=="):
+        return a != b
+    if op == "<":
+        return a < b
+    if op == ">":
+        return a > b
+    if op == "<=":
+        return a <= b
+    if op == ">=":
+        return a >= b
     return None
 
 
@@ -319,8 +325,10 @@ def _fold(node, leaf_fn):
 
     if isinstance(node, Not):
         inner = _fold(node.operand, leaf_fn)
-        if inner is TRUE:  return FALSE
-        if inner is FALSE: return TRUE
+        if inner is TRUE:
+            return FALSE
+        if inner is FALSE:
+            return TRUE
         return Not(inner)
 
     if isinstance(node, And):
@@ -426,7 +434,7 @@ def render(node):
 
 def references(text, var):
     """True if the condition text reads `$var`. Returns False on a parse error,
-    so an unparseable condition is never assumed to depend on the variable."""
+    so an unparsable condition is never assumed to depend on the variable."""
     try:
         return var in parse(text).variables()
     except ConditionError:
@@ -444,13 +452,13 @@ def find_comparisons(node, var):
 
     def walk(n):
         if isinstance(n, Cmp):
-            l, r = n.left, n.right
-            if isinstance(l, Operand) and l.is_var and l.var == var \
-                    and isinstance(r, Operand) and not r.is_var:
-                out.append((n.op, r.text))
-            elif isinstance(r, Operand) and r.is_var and r.var == var \
-                    and isinstance(l, Operand) and not l.is_var:
-                out.append((n.op, l.text))
+            left, right = n.left, n.right
+            if isinstance(left, Operand) and left.is_var and left.var == var \
+                    and isinstance(right, Operand) and not right.is_var:
+                out.append((n.op, right.text))
+            elif isinstance(right, Operand) and right.is_var and right.var == var \
+                    and isinstance(left, Operand) and not left.is_var:
+                out.append((n.op, left.text))
             return
         if isinstance(n, Not):
             walk(n.operand)

@@ -74,4 +74,3 @@ filename = diffuseX.dds
 
 
 IB_R16_INI = DIFFUSE_NO_REF_INI.replace("DXGI_FORMAT_R32_UINT", "DXGI_FORMAT_R16_UINT")
-

@@ -8,8 +8,14 @@
 // rest of the Toggle panel and Open Mod are disabled while recording.
 
 import {
-  activeMeshes, conditionsSatisfied, getToggleValue, setToggleValue,
-  applyMeshVisibility, syncCheckboxes, refreshAll, variablesFromConditions,
+  activeMeshes,
+  conditionsSatisfied,
+  getToggleValue,
+  setToggleValue,
+  applyMeshVisibility,
+  syncCheckboxes,
+  refreshAll,
+  variablesFromConditions,
 } from '../mesh/visibility.js';
 import { dnfSatisfied } from './control-state.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
@@ -17,7 +23,7 @@ import { alertDialog } from '../ui/dialogs.js';
 import { cycleValueAt } from './cycle-values.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
-let active = null;    // non-null while a session is in progress
+let active = null; // non-null while a session is in progress
 let starting = false; // true from the first click until active is set (or the attempt is abandoned)
 
 export function isRecording() {
@@ -41,23 +47,20 @@ function sourceConditions(mesh, source) {
   // Low-level/legacy payloads may have only one source and put its conditions
   // on the mesh entry. Never use a merged mesh condition for multiple sources.
   const sources = mesh.userData.sources || [];
-  return sources.length === 1 ? (mesh.userData.conditions || []) : [];
+  return sources.length === 1 ? mesh.userData.conditions || [] : [];
 }
 
 function sourceUsesVars(mesh, source, writableNames) {
   const used = variablesFromConditions(sourceConditions(mesh, source));
-  return [...used].some(variable => writableNames.has(variable));
+  return [...used].some((variable) => writableNames.has(variable));
 }
 
 function recordSourceConditions(mesh, source, recordVars) {
-  return sourceConditions(mesh, source).map(group =>
-    group.filter(condition => recordVars.has(condition.var)));
+  return sourceConditions(mesh, source).map((group) => group.filter((condition) => recordVars.has(condition.var)));
 }
 
 function sourceVisible(mesh, source, recordVars = null) {
-  const conditions = recordVars
-    ? recordSourceConditions(mesh, source, recordVars)
-    : sourceConditions(mesh, source);
+  const conditions = recordVars ? recordSourceConditions(mesh, source, recordVars) : sourceConditions(mesh, source);
   return dnfSatisfied(conditions);
 }
 
@@ -86,11 +89,11 @@ function applySnapshot(snap) {
 
 function positionLabel() {
   const { current, positions, previewVars } = active;
-  const values = previewVars
-    .map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`)
-    .join(', ');
+  const values = previewVars.map((v) => `${v.var.split('::').pop()}=${cycleValueAt(v, current)}`).join(', ');
   return t('record.position', {
-    current: current + 1, positions, values,
+    current: current + 1,
+    positions,
+    values,
   });
 }
 
@@ -108,7 +111,7 @@ export async function startRecordSession(info, ctx, ui) {
   try {
     const posInfo = await window.pywebview.api.get_record_positions(ctx.modPath, info.ini, info.section);
     if (posInfo.error) {
-      await alertDialog(t('record.startError', {detail: posInfo.error}));
+      await alertDialog(t('record.startError', { detail: posInfo.error }));
       return;
     }
     const previewVars = info.cycle_vars || info.vars;
@@ -118,14 +121,13 @@ export async function startRecordSession(info, ctx, ui) {
       return;
     }
 
-    const writableNames = new Set(writable.map(v => v.var));
-    const recordVars = new Set(previewVars.map(v => v.var));
+    const writableNames = new Set(writable.map((v) => v.var));
+    const recordVars = new Set(previewVars.map((v) => v.var));
     const initialSources = new Set();
     const initialSourceMeshes = new Map();
     for (const mesh of activeMeshes) {
       for (const source of mesh.userData.sources || []) {
-        if (source.ini !== info.ini
-            || !sourceUsesVars(mesh, source, writableNames)) continue;
+        if (source.ini !== info.ini || !sourceUsesVars(mesh, source, writableNames)) continue;
         initialSources.add(source);
         initialSourceMeshes.set(source, mesh);
       }
@@ -135,7 +137,8 @@ export async function startRecordSession(info, ctx, ui) {
     // it had when recording started (not just the writable ones — a namespaced
     // var in the same section is read-only but still affects visibility).
     const before = previewVars.map((v) => ({
-      var: v.var, value: getToggleValue(v.var),
+      var: v.var,
+      value: getToggleValue(v.var),
     }));
 
     // Pre-populate every position up front from the file's own current
@@ -157,9 +160,18 @@ export async function startRecordSession(info, ctx, ui) {
     }
 
     active = {
-      info, ctx, ui, previewVars, writableVars: writable,
-      positions: posInfo.positions, current: 0, snapshots, sourceSnapshots,
-      before, initialSources, touchedTargets: new Set(),
+      info,
+      ctx,
+      ui,
+      previewVars,
+      writableVars: writable,
+      positions: posInfo.positions,
+      current: 0,
+      snapshots,
+      sourceSnapshots,
+      before,
+      initialSources,
+      touchedTargets: new Set(),
     };
 
     for (const v of previewVars) setToggleValue(v.var, v.values[0]);
@@ -188,9 +200,11 @@ function enterRecordingUI() {
 
   document.getElementById('open-btn').disabled = true;
   ui.disableOthers();
-  window.dispatchEvent(new CustomEvent('mod-viewer-recording-state', {
-    detail: {recording: true},
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-recording-state', {
+      detail: { recording: true },
+    }),
+  );
 }
 
 function exitRecordingUI() {
@@ -209,9 +223,11 @@ function exitRecordingUI() {
   document.getElementById('open-btn').disabled = false;
   ui.enableOthers();
   active = null;
-  window.dispatchEvent(new CustomEvent('mod-viewer-recording-state', {
-    detail: {recording: false},
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-recording-state', {
+      detail: { recording: false },
+    }),
+  );
 }
 
 /** Snapshot the checkbox state the user actually left the current position
@@ -236,12 +252,18 @@ function advance() {
 function summarizeSkips(report) {
   const skipped = report.skipped || [];
   if (!skipped.length) return '';
-  const shown = skipped.slice(0, 10).map((s) => t('record.line', {
-    line: s.line ?? '?', reason: skipReason(s),
-  }));
-  if (skipped.length > shown.length) shown.push(t('record.more', {
-    count: skipped.length - shown.length,
-  }));
+  const shown = skipped.slice(0, 10).map((s) =>
+    t('record.line', {
+      line: s.line ?? '?',
+      reason: skipReason(s),
+    }),
+  );
+  if (skipped.length > shown.length)
+    shown.push(
+      t('record.more', {
+        count: skipped.length - shown.length,
+      }),
+    );
   return shown.join('\n');
 }
 
@@ -257,7 +279,7 @@ const SKIP_REASON_KEYS = Object.freeze({
 
 function skipReason(item) {
   const key = SKIP_REASON_KEYS[item?.reason_code];
-  return key ? t(key, item?.reason_params || {detail: item.reason}) : item?.reason;
+  return key ? t(key, item?.reason_params || { detail: item.reason }) : item?.reason;
 }
 
 function recordTargetRef(mesh, src) {
@@ -292,28 +314,30 @@ async function save() {
   for (let p = 0; p < snapshots.length; p++) {
     const lines = new Set();
     for (const [src, mesh] of targets) {
-      const visible = active.touchedTargets.has(mesh)
-        ? snapshots[p].get(mesh)
-        : active.sourceSnapshots[p].get(src);
+      const visible = active.touchedTargets.has(mesh) ? snapshots[p].get(mesh) : active.sourceSnapshots[p].get(src);
       if (!visible) continue;
       lines.add(src.line);
     }
     positionLines[p] = [...lines].sort((a, b) => a - b);
   }
-  const sortedTargetRefs = targetRefs.sort(
-    (a, b) => Number(a.line) - Number(b.line));
+  const sortedTargetRefs = targetRefs.sort((a, b) => Number(a.line) - Number(b.line));
 
   ui.saveBtn.disabled = true;
   try {
     const result = await window.pywebview.api.record_toggle(
-      ctx.modPath, info.ini, info.section, positionLines, sortedTargetRefs);
+      ctx.modPath,
+      info.ini,
+      info.section,
+      positionLines,
+      sortedTargetRefs,
+    );
     if (result.error) {
-      await alertDialog(t('record.saveError', {detail: result.error}));
+      await alertDialog(t('record.saveError', { detail: result.error }));
       return;
     }
     const summary = summarizeSkips(result.result || {});
     exitRecordingUI();
-    if (summary) await alertDialog(t('record.review', {detail: summary}));
+    if (summary) await alertDialog(t('record.review', { detail: summary }));
     if (ctx.onChange) await ctx.onChange({ type: 'record' });
   } finally {
     ui.saveBtn.disabled = false;

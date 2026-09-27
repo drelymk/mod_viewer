@@ -50,59 +50,63 @@ _PROFILE_STAGES = (
 
 _SUMMARY_TIMING_FIELDS = (
     ("backend.api_load_seconds", ("backend", "api_load_seconds")),
-    ("backend.authoritative_context_seconds",
-     ("backend", "authoritative_context_seconds")),
-    ("backend.analyze_mod_inis_seconds",
-     ("backend", "analyze_mod_inis_seconds")),
-    ("backend.asset_index_load_seconds",
-     ("backend", "asset_index_load_seconds")),
-    ("backend.asset_enrichment_seconds",
-     ("backend", "asset_enrichment_seconds")),
-    ("backend.build_mesh_result_seconds",
-     ("backend", "build_mesh_result_seconds")),
-    ("backend.pack_draw_geometry_seconds",
-     ("backend", "pack_draw_geometry_seconds")),
-    ("backend.prepare_draw_vertices_seconds",
-     ("backend", "prepare_draw_vertices_seconds")),
-    ("backend.index_decode_seconds",
-     ("backend", "index_decode_seconds")),
-    ("backend.decode_normals_seconds",
-     ("backend", "decode_normals_seconds")),
-    ("backend.build_shape_buffers_seconds",
-     ("backend", "build_shape_buffers_seconds")),
-    ("backend.pack_other_seconds",
-     ("backend", "pack_other_seconds")),
-    ("backend.metadata_hydrate_textures_seconds",
-     ("backend", "metadata_hydrate_textures_seconds")),
-    ("backend.geometry_publication_seconds",
-     ("backend", "geometry_publication_seconds")),
-    ("browser.browser_display_seconds",
-     ("browser", "browser_display_seconds")),
-    ("browser.bridge_load_mod_seconds",
-     ("browser", "bridge_load_mod_seconds")),
-    ("browser.payload_json_encode_probe_seconds",
-     ("browser", "payload_json_encode_probe_seconds")),
-    ("browser.playwright_bridge_remainder_seconds",
-     ("browser", "playwright_bridge_remainder_seconds")),
-    ("browser.geometry_fetch_arraybuffer_seconds",
-     ("browser", "geometry_fetch_arraybuffer_seconds")),
-    ("browser.geometry_http_seconds",
-     ("browser", "geometry_http_seconds")),
-    ("browser.build_mesh_panel_seconds",
-     ("browser", "build_mesh_panel_seconds")),
-    ("browser.control_panels_seconds",
-     ("browser", "control_panels_seconds")),
-    ("browser.refresh_all_seconds",
-     ("browser", "refresh_all_seconds")),
+    (
+        "backend.authoritative_context_seconds",
+        ("backend", "authoritative_context_seconds"),
+    ),
+    ("backend.analyze_mod_inis_seconds", ("backend", "analyze_mod_inis_seconds")),
+    ("backend.asset_index_load_seconds", ("backend", "asset_index_load_seconds")),
+    ("backend.asset_enrichment_seconds", ("backend", "asset_enrichment_seconds")),
+    ("backend.build_mesh_result_seconds", ("backend", "build_mesh_result_seconds")),
+    ("backend.pack_draw_geometry_seconds", ("backend", "pack_draw_geometry_seconds")),
+    (
+        "backend.prepare_draw_vertices_seconds",
+        ("backend", "prepare_draw_vertices_seconds"),
+    ),
+    ("backend.index_decode_seconds", ("backend", "index_decode_seconds")),
+    ("backend.decode_normals_seconds", ("backend", "decode_normals_seconds")),
+    ("backend.build_shape_buffers_seconds", ("backend", "build_shape_buffers_seconds")),
+    ("backend.pack_other_seconds", ("backend", "pack_other_seconds")),
+    (
+        "backend.metadata_hydrate_textures_seconds",
+        ("backend", "metadata_hydrate_textures_seconds"),
+    ),
+    (
+        "backend.geometry_publication_seconds",
+        ("backend", "geometry_publication_seconds"),
+    ),
+    ("browser.browser_display_seconds", ("browser", "browser_display_seconds")),
+    ("browser.bridge_load_mod_seconds", ("browser", "bridge_load_mod_seconds")),
+    (
+        "browser.payload_json_encode_probe_seconds",
+        ("browser", "payload_json_encode_probe_seconds"),
+    ),
+    (
+        "browser.playwright_bridge_remainder_seconds",
+        ("browser", "playwright_bridge_remainder_seconds"),
+    ),
+    (
+        "browser.geometry_fetch_arraybuffer_seconds",
+        ("browser", "geometry_fetch_arraybuffer_seconds"),
+    ),
+    ("browser.geometry_http_seconds", ("browser", "geometry_http_seconds")),
+    ("browser.build_mesh_panel_seconds", ("browser", "build_mesh_panel_seconds")),
+    ("browser.control_panels_seconds", ("browser", "control_panels_seconds")),
+    ("browser.refresh_all_seconds", ("browser", "refresh_all_seconds")),
     ("browser.fit_to_seconds", ("browser", "fit_to_seconds")),
-    ("browser.first_model_frame_seconds",
-     ("browser", "first_model_frame_seconds")),
+    ("browser.first_model_frame_seconds", ("browser", "first_model_frame_seconds")),
 )
 
 _SUMMARY_COUNTER_FIELDS = (
-    "asset_index_bytes", "raw_buffer_bytes_read", "final_geometry_bytes",
-    "structured_bridge_payload_bytes", "mesh_count", "draw_count",
-    "packed_vertices", "packed_indices", "shape_target_bytes",
+    "asset_index_bytes",
+    "raw_buffer_bytes_read",
+    "final_geometry_bytes",
+    "structured_bridge_payload_bytes",
+    "mesh_count",
+    "draw_count",
+    "packed_vertices",
+    "packed_indices",
+    "shape_target_bytes",
     "meshes_missing_authored_normals",
 )
 
@@ -116,11 +120,13 @@ class TextureProfiler:
 
     def __call__(self, stage, seconds, details):
         with self._lock:
-            self.events.append({
-                "stage": stage,
-                "seconds": seconds,
-                **details,
-            })
+            self.events.append(
+                {
+                    "stage": stage,
+                    "seconds": seconds,
+                    **details,
+                }
+            )
 
     def clear(self):
         with self._lock:
@@ -132,7 +138,8 @@ class TextureProfiler:
     def _identities(events, stage):
         return {
             (event.get("path"), event.get("role"), event.get("transform"))
-            for event in events if event["stage"] == stage
+            for event in events
+            if event["stage"] == stage
         }
 
     def summarize(self, events):
@@ -146,20 +153,15 @@ class TextureProfiler:
         encoded = [event for event in events if event["stage"] == "encoded"]
         return {
             "stage_seconds": {
-                stage: stage_seconds.get(stage, 0.0)
-                for stage in _PROFILE_STAGES
+                stage: stage_seconds.get(stage, 0.0) for stage in _PROFILE_STAGES
             },
             "stage_calls": {
-                stage: stage_calls.get(stage, 0)
-                for stage in _PROFILE_STAGES
+                stage: stage_calls.get(stage, 0) for stage in _PROFILE_STAGES
             },
-            "cache_hits": sum(event["stage"] == "cache_hit"
-                               for event in events),
-            "cache_misses": sum(event["stage"] == "cache_miss"
-                                 for event in events),
+            "cache_hits": sum(event["stage"] == "cache_hit" for event in events),
+            "cache_misses": sum(event["stage"] == "cache_miss" for event in events),
             "actually_rendered": len(self._identities(events, "encoded")),
-            "png_bytes_encoded": sum(event.get("bytes", 0)
-                                      for event in encoded),
+            "png_bytes_encoded": sum(event.get("bytes", 0) for event in encoded),
         }
 
 
@@ -179,6 +181,7 @@ class RenderConcurrencyProbe:
             finally:
                 with self._lock:
                     self.active -= 1
+
         return measured
 
 
@@ -214,8 +217,7 @@ def _install_load_instrumentation(timings, counters):
         setattr(module, name, measured)
         patches.append((module, name, original))
 
-    timing(mod_preview.ModPreview, "authoritative_context",
-           "authoritative_context")
+    timing(mod_preview.ModPreview, "authoritative_context", "authoritative_context")
     timing(mod_preview, "discover_ini_paths", "ini_discovery")
     timing(edit_session, "load_documents", "session_load")
     timing(metadata, "load", "metadata_load")
@@ -224,12 +226,10 @@ def _install_load_instrumentation(timings, counters):
     timing(mod_loader, "build_mesh_result", "build_mesh_result")
     timing(metadata, "hydrate_textures", "metadata_hydrate_textures")
     timing(server, "publish_payload_geometry", "geometry_publication")
-    timing(geometry_packing, "_prepare_draw_vertices",
-           "prepare_draw_vertices")
+    timing(geometry_packing, "_prepare_draw_vertices", "prepare_draw_vertices")
     timing(geometry_buffers.BufferStore, "indices", "index_decode")
     timing(geometry_packing, "decode_normals", "decode_normals")
-    timing(geometry_packing, "_build_shape_buffers",
-           "build_shape_buffers")
+    timing(geometry_packing, "_build_shape_buffers", "build_shape_buffers")
 
     original_index_load = asset_index.load_index
 
@@ -239,8 +239,7 @@ def _install_load_instrumentation(timings, counters):
         try:
             return original_index_load(*args, **kwargs)
         finally:
-            timings["asset_index_load"].append(
-                time.perf_counter() - started)
+            timings["asset_index_load"].append(time.perf_counter() - started)
             if os.path.isfile(filename):
                 counters["asset_index_bytes"] += os.path.getsize(filename)
                 counters["asset_index_files_read"] += 1
@@ -272,15 +271,15 @@ def _install_load_instrumentation(timings, counters):
                 counters["packed_vertices"] += len(result.positions) // 12
                 counters["packed_indices"] += len(result.indices) // 4
                 counters["shape_target_bytes"] += sum(
-                    len(target.positions)
-                    + len(target.low_positions or b"")
-                    for target in result.shape_targets)
+                    len(target.positions) + len(target.low_positions or b"")
+                    for target in result.shape_targets
+                )
                 counters["meshes_missing_authored_normals"] += int(
-                    result.normals is None)
+                    result.normals is None
+                )
             return result
         finally:
-            timings["pack_draw_geometry"].append(
-                time.perf_counter() - started)
+            timings["pack_draw_geometry"].append(time.perf_counter() - started)
 
     mesh_builder.pack_draw_geometry = measured_pack
     patches.append((mesh_builder, "pack_draw_geometry", original_pack))
@@ -334,8 +333,9 @@ class _ProcessSampler:
 
     def window(self, started, ended):
         with self._lock:
-            samples = [sample for sample in self._samples
-                       if started <= sample[0] <= ended]
+            samples = [
+                sample for sample in self._samples if started <= sample[0] <= ended
+            ]
         if len(samples) < 2:
             return {"peak_rss_mb": None, "average_cpu_percent": None}
         first = samples[0]
@@ -343,8 +343,7 @@ class _ProcessSampler:
         elapsed = max(last[0] - first[0], 0.000001)
         return {
             "peak_rss_mb": max(sample[1] for sample in samples) / (1024 * 1024),
-            "average_cpu_percent": max(
-                0.0, (last[2] - first[2]) / elapsed * 100.0),
+            "average_cpu_percent": max(0.0, (last[2] - first[2]) / elapsed * 100.0),
         }
 
 
@@ -375,6 +374,7 @@ def _psutil_snapshot():
 
 def _resource_snapshot():
     import resource
+
     usage = resource.getrusage(resource.RUSAGE_SELF)
     return usage.ru_maxrss * 1024, usage.ru_utime + usage.ru_stime
 
@@ -385,8 +385,7 @@ if os.name == "nt":
     _PROCESS_VM_READ = 0x0010
 
     class _FileTime(ctypes.Structure):
-        _fields_ = [("low", ctypes.wintypes.DWORD),
-                    ("high", ctypes.wintypes.DWORD)]
+        _fields_ = [("low", ctypes.wintypes.DWORD), ("high", ctypes.wintypes.DWORD)]
 
     class _ProcessEntry(ctypes.Structure):
         _fields_ = [
@@ -419,21 +418,32 @@ if os.name == "nt":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _psapi = ctypes.WinDLL("psapi", use_last_error=True)
     _kernel32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
-    _kernel32.Process32FirstW.argtypes = [ctypes.wintypes.HANDLE,
-                                          ctypes.POINTER(_ProcessEntry)]
-    _kernel32.Process32NextW.argtypes = [ctypes.wintypes.HANDLE,
-                                         ctypes.POINTER(_ProcessEntry)]
-    _kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD,
-                                      ctypes.wintypes.BOOL,
-                                      ctypes.wintypes.DWORD]
+    _kernel32.Process32FirstW.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(_ProcessEntry),
+    ]
+    _kernel32.Process32NextW.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(_ProcessEntry),
+    ]
+    _kernel32.OpenProcess.argtypes = [
+        ctypes.wintypes.DWORD,
+        ctypes.wintypes.BOOL,
+        ctypes.wintypes.DWORD,
+    ]
     _kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
     _kernel32.GetProcessTimes.argtypes = [
-        ctypes.wintypes.HANDLE, ctypes.POINTER(_FileTime),
-        ctypes.POINTER(_FileTime), ctypes.POINTER(_FileTime),
-        ctypes.POINTER(_FileTime)]
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(_FileTime),
+        ctypes.POINTER(_FileTime),
+        ctypes.POINTER(_FileTime),
+        ctypes.POINTER(_FileTime),
+    ]
     _psapi.GetProcessMemoryInfo.argtypes = [
-        ctypes.wintypes.HANDLE, ctypes.POINTER(_MemoryCounters),
-        ctypes.wintypes.DWORD]
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(_MemoryCounters),
+        ctypes.wintypes.DWORD,
+    ]
 
     def _windows_parent_map():
         snapshot = _kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
@@ -468,23 +478,28 @@ if os.name == "nt":
         cpu = 0.0
         for pid in pids:
             handle = _kernel32.OpenProcess(
-                _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_VM_READ,
-                False, pid)
+                _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_VM_READ, False, pid
+            )
             if not handle:
                 continue
             try:
                 counters = _MemoryCounters()
                 counters.cb = ctypes.sizeof(counters)
                 if _psapi.GetProcessMemoryInfo(
-                        handle, ctypes.byref(counters), counters.cb):
+                    handle, ctypes.byref(counters), counters.cb
+                ):
                     rss += counters.working_set
                 created = _FileTime()
                 exited = _FileTime()
                 kernel = _FileTime()
                 user = _FileTime()
                 if _kernel32.GetProcessTimes(
-                        handle, ctypes.byref(created), ctypes.byref(exited),
-                        ctypes.byref(kernel), ctypes.byref(user)):
+                    handle,
+                    ctypes.byref(created),
+                    ctypes.byref(exited),
+                    ctypes.byref(kernel),
+                    ctypes.byref(user),
+                ):
                     kernel_ticks = (kernel.high << 32) | kernel.low
                     user_ticks = (user.high << 32) | user.low
                     cpu += (kernel_ticks + user_ticks) / 10_000_000
@@ -492,12 +507,21 @@ if os.name == "nt":
                 _kernel32.CloseHandle(handle)
         return rss, cpu
 else:  # pragma: no cover - definitions are selected by platform
+
     def _windows_snapshot():
         return 0, 0.0
 
 
-def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
-                 browser_channel, render_probe):
+def _run_browser(
+    base_url,
+    api,
+    mod_path,
+    profiler,
+    sampler,
+    concurrency,
+    browser_channel,
+    render_probe,
+):
     from playwright.sync_api import sync_playwright
 
     requested_urls = set()
@@ -550,11 +574,14 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
         payload_holder["payload"] = result
         if isinstance(result, dict):
             serialization_started = time.perf_counter()
-            payload_holder["json_bytes"] = len(json.dumps(
-                result, ensure_ascii=False,
-                separators=(",", ":")).encode("utf-8"))
+            payload_holder["json_bytes"] = len(
+                json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+            )
             bridge_json_serialization_timings.append(
-                time.perf_counter() - serialization_started)
+                time.perf_counter() - serialization_started
+            )
         return result
 
     with sync_playwright() as playwright:
@@ -564,7 +591,8 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
             args=["--use-angle=swiftshader"],
         )
         context = browser.new_context(
-            viewport={"width": 1400, "height": 900}, bypass_csp=True)
+            viewport={"width": 1400, "height": 900}, bypass_csp=True
+        )
         page = context.new_page()
         page.set_default_timeout(180000)
         page.on("request", on_request)
@@ -588,7 +616,8 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
               get_asset_folders: async () => ({folders: []}),
               get_panel_opacity: async () => ({value: 58}),
             }};
-            """)
+            """
+        )
 
         navigation_started = time.perf_counter()
         page.goto(base_url, wait_until="load", timeout=180000)
@@ -600,15 +629,19 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
             page.wait_for_function(
                 "(window.modViewer && typeof window.modViewer.switchMod === 'function')"
                 " || document.getElementById('renderer-error')?.classList.contains('show')",
-                timeout=30000)
+                timeout=30000,
+            )
         except Exception as error:
             renderer_available = False
             bootstrap_error = (
-                f"{error}; page_errors={page_errors}; "
-                f"console_errors={console_errors}")
+                f"{error}; page_errors={page_errors}; console_errors={console_errors}"
+            )
         else:
-            renderer_available = bool(page.evaluate(
-                "window.modViewer && typeof window.modViewer.switchMod === 'function'"))
+            renderer_available = bool(
+                page.evaluate(
+                    "window.modViewer && typeof window.modViewer.switchMod === 'function'"
+                )
+            )
             if not renderer_available:
                 bootstrap_error = page.locator("#renderer-error").inner_text()
         frontend_started = time.perf_counter()
@@ -624,7 +657,8 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
                     timing: window.modViewer.getLoadBenchmark(),
                   };
                 }""",
-                mod_path)
+                mod_path,
+            )
         else:
             # Headless Edge can expose navigator.gpu while offering no usable
             # adapter. Keep the backend/bridge and CPU-side Three.js creation
@@ -659,7 +693,8 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
                     timing: benchmark.getLoadBenchmark(),
                   };
                 }""",
-                mod_path)
+                mod_path,
+            )
         frontend_elapsed = time.perf_counter() - frontend_started
         frontend = bridge_result.get("timing") or {}
         texture_started = frontend_started
@@ -674,89 +709,104 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
         # the benchmark does not close the client socket mid-response.
         page.wait_for_timeout(5000 if not renderer_available else 250)
         texture_finished = time.perf_counter()
-        resource_metrics = page.evaluate("""loadStart => performance
+        resource_metrics = page.evaluate(
+            """loadStart => performance
           .getEntriesByType('resource')
           .filter(entry => entry.name.includes('/texture/'))
           .map(entry => ({
             duration: entry.duration,
             response_end: entry.responseEnd - entry.startTime,
             elapsed_since_load: entry.responseEnd - loadStart,
-          }))""", frontend.get("started", 0))
+          }))""",
+            frontend.get("started", 0),
+        )
         response_elapsed = [
             entry["elapsed_since_load"] / 1000.0
             for entry in resource_metrics
             if entry["elapsed_since_load"] >= 0
         ]
-        active_meshes = (page.evaluate("window.modViewer.activeMeshes.length")
-                         if renderer_available else frontend.get(
-                             "active_meshes", 0))
+        active_meshes = (
+            page.evaluate("window.modViewer.activeMeshes.length")
+            if renderer_available
+            else frontend.get("active_meshes", 0)
+        )
         browser_result = {
             "navigation_seconds": navigation_seconds,
-            "browser_display_seconds": frontend.get(
-                "total_seconds", frontend_elapsed),
+            "browser_display_seconds": frontend.get("total_seconds", frontend_elapsed),
             "frontend": frontend,
             "frontend_evaluate_seconds": frontend_elapsed,
             "bridge_load_mod_seconds": frontend.get("stages", {}).get(
-                "bridge_load_mod"),
-            "geometry_fetch_arraybuffer_seconds": frontend.get(
-                "stages", {}).get("geometry_fetch_arraybuffer"),
+                "bridge_load_mod"
+            ),
+            "geometry_fetch_arraybuffer_seconds": frontend.get("stages", {}).get(
+                "geometry_fetch_arraybuffer"
+            ),
             "build_mesh_panel_seconds": frontend.get("stages", {}).get(
-                "build_mesh_panel"),
-            "control_panels_seconds": frontend.get("stages", {}).get(
-                "control_panels"),
-            "refresh_all_seconds": frontend.get("stages", {}).get(
-                "refresh_all"),
+                "build_mesh_panel"
+            ),
+            "control_panels_seconds": frontend.get("stages", {}).get("control_panels"),
+            "refresh_all_seconds": frontend.get("stages", {}).get("refresh_all"),
             "fit_to_seconds": frontend.get("stages", {}).get("fit_to"),
-            "first_model_frame_seconds": frontend.get(
-                "first_model_frame_seconds"),
+            "first_model_frame_seconds": frontend.get("first_model_frame_seconds"),
             "renderer_available": renderer_available,
             "renderer_bootstrap_error": bootstrap_error,
-            "benchmark_path": "switchMod" if renderer_available
-                else "displayMeshPayload_without_webgpu",
+            "benchmark_path": "switchMod"
+            if renderer_available
+            else "displayMeshPayload_without_webgpu",
             "bridge_callback_seconds": sum(bridge_callback_timings),
-            "payload_json_encode_probe_seconds": sum(
-                bridge_json_serialization_timings),
+            "payload_json_encode_probe_seconds": sum(bridge_json_serialization_timings),
             "playwright_bridge_remainder_seconds": max(
                 0.0,
                 frontend.get("stages", {}).get("bridge_load_mod", 0.0)
                 - sum(bridge_callback_timings)
-                - sum(bridge_json_serialization_timings)),
-            "first_texture_response_seconds": min(
-                response_elapsed, default=None),
-            "all_texture_responses_seconds": max(
-                response_elapsed, default=None),
+                - sum(bridge_json_serialization_timings),
+            ),
+            "first_texture_response_seconds": min(response_elapsed, default=None),
+            "all_texture_responses_seconds": max(response_elapsed, default=None),
             "requested_texture_sources": len(requested_urls),
             "texture_response_count": len(texture_responses),
-            "texture_statuses": sorted({
-                response["status"] for response in texture_responses}),
+            "texture_statuses": sorted(
+                {response["status"] for response in texture_responses}
+            ),
             "native_dds_request_count": sum(
                 response["url"].split("?", 1)[0].lower().endswith(".dds")
-                for response in texture_responses),
+                for response in texture_responses
+            ),
             "png_request_count": sum(
                 not response["url"].split("?", 1)[0].lower().endswith(".dds")
-                for response in texture_responses),
+                for response in texture_responses
+            ),
             "dds_bytes_served": sum(
-                response["bytes"] for response in texture_responses
-                if response["url"].split("?", 1)[0].lower().endswith(".dds")),
+                response["bytes"]
+                for response in texture_responses
+                if response["url"].split("?", 1)[0].lower().endswith(".dds")
+            ),
             "png_bytes_served": sum(
-                response["bytes"] for response in texture_responses
-                if not response["url"].split("?", 1)[0].lower().endswith(".dds")),
+                response["bytes"]
+                for response in texture_responses
+                if not response["url"].split("?", 1)[0].lower().endswith(".dds")
+            ),
             "texture_bytes_served": sum(
-                response["bytes"] for response in texture_responses),
+                response["bytes"] for response in texture_responses
+            ),
             "geometry_response_count": len(geometry_responses),
             "geometry_bytes_served": sum(
-                response["bytes"] for response in geometry_responses),
+                response["bytes"] for response in geometry_responses
+            ),
             "geometry_http_seconds": max(
-                (entry["response_end"] / 1000.0
-                 for entry in page.evaluate("""performance
+                (
+                    entry["response_end"] / 1000.0
+                    for entry in page.evaluate("""performance
                    .getEntriesByType('resource')
                    .filter(entry => entry.name.includes('/geometry/'))
-                   .map(entry => ({response_end: entry.responseEnd - entry.startTime}))""")),
-                default=0.0),
+                   .map(entry => ({response_end: entry.responseEnd - entry.startTime}))""")
+                ),
+                default=0.0,
+            ),
             "http_resource_max_seconds": max(
-                (entry["response_end"] / 1000.0
-                 for entry in resource_metrics),
-                default=0.0),
+                (entry["response_end"] / 1000.0 for entry in resource_metrics),
+                default=0.0,
+            ),
             "active_meshes": active_meshes,
             "page_errors": page_errors,
             "console_errors": console_errors,
@@ -764,7 +814,8 @@ def _run_browser(base_url, api, mod_path, profiler, sampler, concurrency,
         }
         if not bridge_result.get("loaded"):
             raise RuntimeError(
-                f"Frontend mod load failed: {frontend.get('error') or bridge_result}")
+                f"Frontend mod load failed: {frontend.get('error') or bridge_result}"
+            )
         context.close()
         browser.close()
 
@@ -798,8 +849,15 @@ def _run_once(mod_path, concurrency, browser_channel):
     try:
         base_url = server.start()
         browser, payload, backend_events = _run_browser(
-            base_url, api, mod_path, profiler, sampler, concurrency,
-            browser_channel, render_probe)
+            base_url,
+            api,
+            mod_path,
+            profiler,
+            sampler,
+            concurrency,
+            browser_channel,
+            render_probe,
+        )
     finally:
         server.render_texture_png = original_server_render
         textures.set_texture_profile_hook(old_hook)
@@ -812,13 +870,16 @@ def _run_once(mod_path, concurrency, browser_channel):
     publication = server.active_texture_publication(mod_path)
     sources = list(publication._sources.values()) if publication else []
     source_paths = {
-        os.path.normcase(os.path.abspath(source.path)) for source in sources}
+        os.path.normcase(os.path.abspath(source.path)) for source in sources
+    }
     backend_rendered = {
         (event.get("path"), event.get("role"))
-        for event in backend_events if event["stage"] == "encoded"
+        for event in backend_events
+        if event["stage"] == "encoded"
     }
     backend_model_rendered = {
-        identity for identity in backend_rendered
+        identity
+        for identity in backend_rendered
         if os.path.normcase(identity[0]) in source_paths
     }
 
@@ -826,30 +887,35 @@ def _run_once(mod_path, concurrency, browser_channel):
     profile = profiler.summarize(texture_events)
     browser["texture_profile"] = profile
     browser["actually_rendered"] = profile["actually_rendered"]
-    browser["profiled_texture_seconds"] = sum(
-        profile["stage_seconds"].values())
+    browser["profiled_texture_seconds"] = sum(profile["stage_seconds"].values())
 
     source_bytes = sum(
-        os.path.getsize(source.path) for source in sources
-        if os.path.isfile(source.path))
+        os.path.getsize(source.path)
+        for source in sources
+        if os.path.isfile(source.path)
+    )
     mesh_entries = [
-        entry for entry in payload.get("meshes", {}).values()
-        if isinstance(entry, dict) and not entry.get("error")]
+        entry
+        for entry in payload.get("meshes", {}).values()
+        if isinstance(entry, dict) and not entry.get("error")
+    ]
     component_groups = {
-        (entry.get("source"), entry.get("component"))
-        for entry in mesh_entries
+        (entry.get("source"), entry.get("component")) for entry in mesh_entries
     }
     texture_pools = payload.get("texture_pools", {})
     pool_option_count = sum(
-        len(pool) for pool in texture_pools.values()
-        if isinstance(pool, list))
-    payload_bytes = len(json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        len(pool) for pool in texture_pools.values() if isinstance(pool, list)
+    )
+    payload_bytes = len(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
     counters["mesh_count"] = len(mesh_entries)
     counters["draw_count"] = len(mesh_entries)
     counters["final_geometry_bytes"] = (
         (payload.get("geometry") or {}).get("length", 0)
-        if isinstance(payload.get("geometry"), dict) else 0)
+        if isinstance(payload.get("geometry"), dict)
+        else 0
+    )
     counters["structured_bridge_payload_bytes"] = payload_bytes
     pack_draw_geometry_seconds = sum(timings["pack_draw_geometry"])
     prepare_draw_vertices_seconds = sum(timings["prepare_draw_vertices"])
@@ -859,8 +925,7 @@ def _run_once(mod_path, concurrency, browser_channel):
         "concurrency": concurrency,
         "backend": {
             "api_load_seconds": browser.get("bridge_callback_seconds", 0.0),
-            "authoritative_context_seconds": sum(
-                timings["authoritative_context"]),
+            "authoritative_context_seconds": sum(timings["authoritative_context"]),
             "ini_discovery_seconds": sum(timings["ini_discovery"]),
             "session_load_seconds": sum(timings["session_load"]),
             "metadata_load_seconds": sum(timings["metadata_load"]),
@@ -878,17 +943,18 @@ def _run_once(mod_path, concurrency, browser_channel):
                 pack_draw_geometry_seconds
                 - prepare_draw_vertices_seconds
                 - decode_normals_seconds
-                - build_shape_buffers_seconds),
+                - build_shape_buffers_seconds,
+            ),
             "metadata_hydrate_textures_seconds": sum(
-                timings["metadata_hydrate_textures"]),
-            "geometry_publication_seconds": sum(
-                timings["geometry_publication"]),
+                timings["metadata_hydrate_textures"]
+            ),
+            "geometry_publication_seconds": sum(timings["geometry_publication"]),
             "registered_texture_sources": len(sources),
             "native_dds_sources": sum(source.native_dds for source in sources),
             "png_fallback_sources": sum(not source.native_dds for source in sources),
             "backend_model_texture_renders": len(backend_model_rendered),
             "backend_other_texture_renders": len(backend_rendered)
-                - len(backend_model_rendered),
+            - len(backend_model_rendered),
             **counters,
         },
         "assets": {
@@ -926,8 +992,7 @@ def _summarize_runs(runs, concurrency):
     timings = {}
     for label, path in _SUMMARY_TIMING_FIELDS:
         values = [
-            value for run in selected
-            if (value := _nested_value(run, path)) is not None
+            value for run in selected if (value := _nested_value(run, path)) is not None
         ]
         if values:
             timings[label] = _summary_stats(values)
@@ -935,7 +1000,8 @@ def _summarize_runs(runs, concurrency):
     counters = {}
     for field in _SUMMARY_COUNTER_FIELDS:
         values = [
-            value for run in selected
+            value
+            for run in selected
             if (value := run.get("backend", {}).get(field)) is not None
         ]
         if values:
@@ -951,14 +1017,21 @@ def _summarize_runs(runs, concurrency):
 def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mod_path", type=Path)
-    parser.add_argument("--concurrency", nargs="+", type=int,
-                        default=[1, 2, 4],
-                        help="semaphore sizes (default: 1 2 4)")
-    parser.add_argument("--repeats", type=int, default=1,
-                        help="isolated samples per semaphore size (default: 1)")
+    parser.add_argument(
+        "--concurrency",
+        nargs="+",
+        type=int,
+        default=[1, 2, 4],
+        help="semaphore sizes (default: 1 2 4)",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="isolated samples per semaphore size (default: 1)",
+    )
     parser.add_argument("--browser-channel", default="msedge")
-    parser.add_argument("--worker", action="store_true",
-                        help=argparse.SUPPRESS)
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--pretty", action="store_true")
     return parser.parse_args()
 
@@ -975,8 +1048,7 @@ def main():
 
     if args.worker:
         with contextlib.redirect_stdout(sys.stderr):
-            result = _run_once(
-                mod_path, args.concurrency[0], args.browser_channel)
+            result = _run_once(mod_path, args.concurrency[0], args.browser_channel)
         print(json.dumps(result, indent=2 if args.pretty else None))
         return
 
@@ -984,19 +1056,25 @@ def main():
     for concurrency in args.concurrency:
         for repeat in range(1, args.repeats + 1):
             command = [
-                sys.executable, str(Path(__file__).resolve()), mod_path,
-                "--worker", "--concurrency", str(concurrency),
-                "--browser-channel", args.browser_channel,
+                sys.executable,
+                str(Path(__file__).resolve()),
+                mod_path,
+                "--worker",
+                "--concurrency",
+                str(concurrency),
+                "--browser-channel",
+                args.browser_channel,
             ]
             completed = subprocess.run(
-                command, cwd=str(REPO_ROOT), text=True,
-                capture_output=True, timeout=600)
+                command, cwd=str(REPO_ROOT), text=True, capture_output=True, timeout=600
+            )
             if completed.stderr:
                 print(completed.stderr, file=sys.stderr, end="")
             if completed.returncode:
                 raise SystemExit(
                     f"benchmark worker failed for concurrency {concurrency}, "
-                    f"repeat {repeat}: {completed.stdout}")
+                    f"repeat {repeat}: {completed.stdout}"
+                )
             result = json.loads(completed.stdout)
             result["repeat"] = repeat
             runs.append(result)
@@ -1006,15 +1084,13 @@ def main():
         "repeats": args.repeats,
         "os_filesystem_cache_flushed": False,
         "notes": [
-            "Process isolation does not flush the operating system filesystem "
-            "cache.",
+            "Process isolation does not flush the operating system filesystem cache.",
             "Playwright bridge timings are harness estimates, not native "
             "pywebview/WebView2 measurements.",
         ],
         "runs": runs,
         "summary": [
-            _summarize_runs(runs, concurrency)
-            for concurrency in args.concurrency
+            _summarize_runs(runs, concurrency) for concurrency in args.concurrency
         ],
     }
     print(json.dumps(output, indent=2 if args.pretty else None))

@@ -4,10 +4,15 @@ import { confirmDialog } from '../ui/dialogs.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 
 function baseName(path) {
-  return String(path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+  return (
+    String(path || '')
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() || ''
+  );
 }
 
 function setTextError(element, message) {
@@ -38,17 +43,17 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     listElement: list,
     emptyElement: empty,
     errorElement: error,
-    listChildren: path => window.pywebview.api.list_subfolders(path),
-    onRootSelected: path => selectFolder(path),
-    onChildSelected: path => selectFolder(path),
-    onEdit: entry => openEditor('edit', entry),
-    onDelete: entry => removeFolder(entry),
-    renderLabel: entry => entry.name,
+    listChildren: (path) => window.pywebview.api.list_subfolders(path),
+    onRootSelected: (path) => selectFolder(path),
+    onChildSelected: (path) => selectFolder(path),
+    onEdit: (entry) => openEditor('edit', entry),
+    onDelete: (entry) => removeFolder(entry),
+    renderLabel: (entry) => entry.name,
     classPrefix: 'mod-folder',
   });
 
   function selectFolder(path) {
-    return Promise.resolve(switchMod(path)).then(loaded => {
+    return Promise.resolve(switchMod(path)).then((loaded) => {
       if (loaded) tree.setActivePath(path);
       return loaded;
     });
@@ -85,13 +90,12 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
 
   window.addEventListener(LANGUAGE_CHANGED, () => {
     if (!backdrop.classList.contains('show')) return;
-    title.textContent = editorMode === 'edit'
-      ? t('folder.editMod') : t('folder.addMod');
+    title.textContent = editorMode === 'edit' ? t('folder.editMod') : t('folder.addMod');
     save.textContent = editorMode === 'edit' ? t('common.save') : t('common.add');
   });
 
   async function removeFolder(entry) {
-    const confirmed = await confirmDialog(t('folder.removeMod', {name: entry.name}));
+    const confirmed = await confirmDialog(t('folder.removeMod', { name: entry.name }));
     if (!confirmed) return;
     const response = await window.pywebview.api.delete_mod_folder(entry.path);
     applyRegistryResponse(response);
@@ -99,7 +103,7 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
 
   add.addEventListener('click', openAddDialog);
   cancel.addEventListener('click', closeEditor);
-  backdrop.addEventListener('click', event => {
+  backdrop.addEventListener('click', (event) => {
     if (event.target === backdrop) closeEditor();
   });
   browse.addEventListener('click', async () => {
@@ -111,7 +115,7 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
       nameInput.value = baseName(picked);
     }
   });
-  form.addEventListener('submit', async event => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const name = nameInput.value.trim();
     const path = selectedPath || pathInput.value.trim();
@@ -125,9 +129,10 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     }
     save.disabled = true;
     try {
-      const response = editorMode === 'edit'
-        ? await window.pywebview.api.edit_mod_folder(originalPath, name, path)
-        : await window.pywebview.api.add_mod_folder(name, path);
+      const response =
+        editorMode === 'edit'
+          ? await window.pywebview.api.edit_mod_folder(originalPath, name, path)
+          : await window.pywebview.api.add_mod_folder(name, path);
       if (response?.error) {
         setTextError(modalError, response.error);
         return;
@@ -141,16 +146,17 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     }
   });
 
-  window.addEventListener('mod-viewer-mod-loaded', event => {
+  window.addEventListener('mod-viewer-mod-loaded', (event) => {
     tree.setActivePath(event.detail?.path);
   });
   window.addEventListener('mod-viewer-mod-load-started', () => {
     tree.setActivePath(null);
   });
 
-  window.pywebview.api.get_mod_folders()
+  window.pywebview.api
+    .get_mod_folders()
     .then(applyRegistryResponse)
-    .catch(caught => setTextError(error, caught.message || String(caught)));
+    .catch((caught) => setTextError(error, caught.message || String(caught)));
 
   return {
     refresh: () => window.pywebview.api.get_mod_folders().then(applyRegistryResponse),

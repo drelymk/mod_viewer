@@ -23,48 +23,56 @@ function clone(value) {
 }
 
 function finitePosition(value) {
-  const position = Array.isArray(value) || ArrayBuffer.isView(value)
-    ? [...value].slice(0, 3).map(Number)
-    : [value?.x, value?.y, value?.z].map(Number);
-  return position.length === 3 && position.every(Number.isFinite)
-    ? position : null;
+  const position =
+    Array.isArray(value) || ArrayBuffer.isView(value)
+      ? [...value].slice(0, 3).map(Number)
+      : [value?.x, value?.y, value?.z].map(Number);
+  return position.length === 3 && position.every(Number.isFinite) ? position : null;
 }
 
 function normalizeOverrides(value) {
   const raw = value?.humanoid_control_rig || value;
-  if (!raw || typeof raw !== 'object'
-      || Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION
-      || !raw.controls || typeof raw.controls !== 'object') return null;
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION ||
+    !raw.controls ||
+    typeof raw.controls !== 'object'
+  )
+    return null;
   const controls = {};
-  HUMANOID_CONTROL_KEYS.forEach(key => {
+  HUMANOID_CONTROL_KEYS.forEach((key) => {
     const entry = raw.controls[key];
     const semantic = entry?.semantic;
     if (!semantic || typeof semantic !== 'object') return;
-    const values = ['sideN', 'height01', 'depthN'].map(name =>
-      Number(semantic[name]));
+    const values = ['sideN', 'height01', 'depthN'].map((name) => Number(semantic[name]));
     if (!values.every(Number.isFinite)) return;
     controls[key] = {
       semantic: {
-        sideN: values[0], height01: values[1], depthN: values[2],
+        sideN: values[0],
+        height01: values[1],
+        depthN: values[2],
       },
     };
     if (Object.prototype.hasOwnProperty.call(entry, 'joint_id')) {
-      controls[key].joint_id = Number.isInteger(entry.joint_id)
-        && entry.joint_id >= 0 ? entry.joint_id : null;
+      controls[key].joint_id = Number.isInteger(entry.joint_id) && entry.joint_id >= 0 ? entry.joint_id : null;
     }
   });
-  const normalized = {version: HUMANOID_CONTROL_RIG_VERSION,
-    model_rig_builder_version: Number.isInteger(
-      raw.model_rig_builder_version) ? raw.model_rig_builder_version : null,
-    controls};
+  const normalized = {
+    version: HUMANOID_CONTROL_RIG_VERSION,
+    model_rig_builder_version: Number.isInteger(raw.model_rig_builder_version) ? raw.model_rig_builder_version : null,
+    controls,
+  };
   return normalized;
 }
 
 function sameSemantic(left, right, tolerance = 1e-7) {
-  return ['sideN', 'height01', 'depthN'].every(key =>
-    Number.isFinite(Number(left?.[key]))
-      && Number.isFinite(Number(right?.[key]))
-      && Math.abs(Number(left[key]) - Number(right[key])) <= tolerance);
+  return ['sideN', 'height01', 'depthN'].every(
+    (key) =>
+      Number.isFinite(Number(left?.[key])) &&
+      Number.isFinite(Number(right?.[key])) &&
+      Math.abs(Number(left[key]) - Number(right[key])) <= tolerance,
+  );
 }
 
 function mappingJointId(mapping) {
@@ -73,35 +81,51 @@ function mappingJointId(mapping) {
 }
 
 function jointFor(modelRig, jointId) {
-  return (modelRig?.joints || []).find(item =>
-    Number(item?.jointId) === Number(jointId)) || null;
+  return (modelRig?.joints || []).find((item) => Number(item?.jointId) === Number(jointId)) || null;
 }
 
 function currentModPath(getKnownMeshes) {
-  return [...(getKnownMeshes?.() || [])]
-    .find(mesh => mesh?.userData?.modPath)?.userData?.modPath || null;
+  return [...(getKnownMeshes?.() || [])].find((mesh) => mesh?.userData?.modPath)?.userData?.modPath || null;
 }
 
-export function createHumanoidRigEditSession({modelRigState, getModelRig, getAutomaticRig,
-    resetCurrentPoseForHumanoidRigEdit, setPhysicsSuspended,
-    resolveMappings, refreshHumanoidRig, getKnownMeshes, persist, clearPersist,
-    cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {
+export function createHumanoidRigEditSession({
+  getModelRig,
+  getAutomaticRig,
+  resetCurrentPoseForHumanoidRigEdit,
+  setPhysicsSuspended,
+  resolveMappings,
+  refreshHumanoidRig,
+  getKnownMeshes,
+  persist,
+  clearPersist,
+  cancelWeightPicking,
+  cancelRigPicking,
+  notifyChanged,
+  requestRender,
+} = {}) {
   let savedOverrides = null;
   let generation = 0;
   let writeQueue = Promise.resolve();
   let state = {
-    editing: false, saving: false, error: null, dirty: false,
-    selectedControlKey: null, carryingControlKey: null,
-    draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
+    editing: false,
+    saving: false,
+    error: null,
+    dirty: false,
+    selectedControlKey: null,
+    carryingControlKey: null,
+    draftRig: null,
+    baseRig: null,
+    mappedJointIdByControl: new Map(),
     baseMappedJointIdByControl: new Map(),
     carryBefore: null,
   };
 
-  function notify() { notifyChanged?.(); }
+  function notify() {
+    notifyChanged?.();
+  }
 
   function editSnapshot() {
-    const controls = state.editing && state.draftRig
-      ? clone(state.draftRig.controls || {}) : {};
+    const controls = state.editing && state.draftRig ? clone(state.draftRig.controls || {}) : {};
     return {
       editing: state.editing,
       saving: state.saving,
@@ -111,11 +135,10 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
       carryingControlKey: state.carryingControlKey,
       controls,
       mappedJointIdByControl: Object.fromEntries(
-        [...state.mappedJointIdByControl.entries()]
-          .map(([key, mapping]) => [key, Number(mapping?.jointId)])),
+        [...state.mappedJointIdByControl.entries()].map(([key, mapping]) => [key, Number(mapping?.jointId)]),
+      ),
       candidateJointId: state.candidateJointId ?? null,
-      hasSavedOverrides: !!(savedOverrides
-        && Object.keys(savedOverrides.controls || {}).length),
+      hasSavedOverrides: !!(savedOverrides && Object.keys(savedOverrides.controls || {}).length),
     };
   }
 
@@ -124,13 +147,17 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
       state.dirty = false;
       return;
     }
-    state.dirty = HUMANOID_CONTROL_KEYS.some(key => {
-      const draft = state.draftRig.controls?.[key];
-      const base = state.baseRig.controls?.[key];
-      return JSON.stringify(draft?.position) !== JSON.stringify(base?.position);
-    }) || HUMANOID_CONTROL_KEYS.some(key =>
-      mappingJointId(state.baseMappedJointIdByControl.get(key))
-        !== mappingJointId(state.mappedJointIdByControl.get(key)));
+    state.dirty =
+      HUMANOID_CONTROL_KEYS.some((key) => {
+        const draft = state.draftRig.controls?.[key];
+        const base = state.baseRig.controls?.[key];
+        return JSON.stringify(draft?.position) !== JSON.stringify(base?.position);
+      }) ||
+      HUMANOID_CONTROL_KEYS.some(
+        (key) =>
+          mappingJointId(state.baseMappedJointIdByControl.get(key)) !==
+          mappingJointId(state.mappedJointIdByControl.get(key)),
+      );
   }
 
   function setMetadata(metadata) {
@@ -140,25 +167,30 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     return editSnapshot();
   }
 
-  function getSavedOverrides() { return clone(savedOverrides); }
+  function getSavedOverrides() {
+    return clone(savedOverrides);
+  }
 
   function begin() {
     cancelWeightPicking?.();
     cancelRigPicking?.();
     setPhysicsSuspended?.(true);
-    resetCurrentPoseForHumanoidRigEdit?.({request: false});
+    resetCurrentPoseForHumanoidRigEdit?.({ request: false });
     const rig = getModelRig?.();
     if (!rig?.humanoidControlRig) {
       setPhysicsSuspended?.(false);
       state.error = 'The inferred Humanoid Rig is not loaded.';
       notify();
-      return {started: false, error: state.error};
+      return { started: false, error: state.error };
     }
-    const mappings = resolveMappings?.({savedOverrides, modelRig: rig})
-      || new Map();
+    const mappings = resolveMappings?.({ savedOverrides, modelRig: rig }) || new Map();
     state = {
-      editing: true, saving: false, error: null, dirty: false,
-      selectedControlKey: null, carryingControlKey: null,
+      editing: true,
+      saving: false,
+      error: null,
+      dirty: false,
+      selectedControlKey: null,
+      carryingControlKey: null,
       draftRig: clone(rig.humanoidControlRig),
       baseRig: clone(rig.humanoidControlRig),
       mappedJointIdByControl: mappings,
@@ -167,19 +199,18 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     };
     notify();
     requestRender?.();
-    return {started: true};
+    return { started: true };
   }
 
   function beginCarry(controlKey) {
-    if (!state.editing || !state.draftRig?.controls?.[controlKey]
-        || state.carryingControlKey) return false;
+    if (!state.editing || !state.draftRig?.controls?.[controlKey] || state.carryingControlKey) return false;
     const control = state.draftRig.controls[controlKey];
     const existing = state.mappedJointIdByControl.get(controlKey);
     state.selectedControlKey = controlKey;
     state.carryingControlKey = controlKey;
     state.carryBefore = {
       position: [...control.position],
-      mapping: existing ? {...existing} : null,
+      mapping: existing ? { ...existing } : null,
     };
     state.candidateJointId = existing?.jointId ?? null;
     notify();
@@ -187,11 +218,17 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     return true;
   }
 
-  function updateDraft(controlKey, position, {
-    candidateJointId = null, candidateDistance = Infinity,
-    mappedDistance = Infinity,
-    notifyState = true, request = true,
-  } = {}) {
+  function updateDraft(
+    controlKey,
+    position,
+    {
+      candidateJointId = null,
+      candidateDistance = Infinity,
+      mappedDistance = Infinity,
+      notifyState = true,
+      request = true,
+    } = {},
+  ) {
     if (!state.editing || state.carryingControlKey !== controlKey) return false;
     const freePosition = finitePosition(position);
     if (!freePosition) {
@@ -207,45 +244,51 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     const currentDistance = Number.isFinite(suppliedMappedDistance)
       ? suppliedMappedDistance
       : Number(candidateJointId) === Number(current?.jointId)
-        ? distance : Infinity;
+        ? distance
+        : Infinity;
     const currentJoint = current ? jointFor(modelRig, current.jointId) : null;
-    if (current && (!currentJoint || !Number.isFinite(currentDistance)
-        || currentDistance > JOINT_RELEASE_RADIUS_PX)) {
+    if (current && (!currentJoint || !Number.isFinite(currentDistance) || currentDistance > JOINT_RELEASE_RADIUS_PX)) {
       state.mappedJointIdByControl.delete(controlKey);
     }
-    const usedByOther = new Set([...state.mappedJointIdByControl.entries()]
-      .filter(([key]) => key !== controlKey)
-      .map(([, mapping]) => Number(mapping?.jointId)));
+    const usedByOther = new Set(
+      [...state.mappedJointIdByControl.entries()]
+        .filter(([key]) => key !== controlKey)
+        .map(([, mapping]) => Number(mapping?.jointId)),
+    );
     const candidate = jointFor(modelRig, candidateJointId);
     if (state.mappedJointIdByControl.has(controlKey)) {
-      const mappedJoint = jointFor(modelRig,
-        state.mappedJointIdByControl.get(controlKey)?.jointId);
+      const mappedJoint = jointFor(modelRig, state.mappedJointIdByControl.get(controlKey)?.jointId);
       const pivot = mappedJoint?.restPivot || mappedJoint?.restCenter;
       if (pivot) state.draftRig.controls[controlKey].position = finitePosition(pivot);
-      state.candidateJointId = candidate && Number.isFinite(distance)
-        && distance <= JOINT_ATTRACTION_RADIUS_PX ? Number(candidateJointId)
-        : state.mappedJointIdByControl.get(controlKey)?.jointId ?? null;
-    } else if (candidate && Number.isFinite(distance)
-        && distance <= JOINT_SNAP_RADIUS_PX
-        && !usedByOther.has(Number(candidateJointId))) {
+      state.candidateJointId =
+        candidate && Number.isFinite(distance) && distance <= JOINT_ATTRACTION_RADIUS_PX
+          ? Number(candidateJointId)
+          : (state.mappedJointIdByControl.get(controlKey)?.jointId ?? null);
+    } else if (
+      candidate &&
+      Number.isFinite(distance) &&
+      distance <= JOINT_SNAP_RADIUS_PX &&
+      !usedByOther.has(Number(candidateJointId))
+    ) {
       const mapping = {
-        controlKey, jointId: Number(candidateJointId),
+        controlKey,
+        jointId: Number(candidateJointId),
       };
       state.mappedJointIdByControl.set(controlKey, mapping);
-      state.draftRig.controls[controlKey].position = finitePosition(
-        candidate.restPivot || candidate.restCenter);
+      state.draftRig.controls[controlKey].position = finitePosition(candidate.restPivot || candidate.restCenter);
       state.candidateJointId = Number(candidateJointId);
     } else {
       state.draftRig.controls[controlKey].position = freePosition;
-      state.candidateJointId = candidate && Number.isFinite(distance)
-        && distance <= JOINT_ATTRACTION_RADIUS_PX ? Number(candidateJointId) : null;
+      state.candidateJointId =
+        candidate && Number.isFinite(distance) && distance <= JOINT_ATTRACTION_RADIUS_PX
+          ? Number(candidateJointId)
+          : null;
     }
-    const semantic = humanoidControlPositionToSemantic(
-      state.draftRig.controls[controlKey].position, state.draftRig);
+    const semantic = humanoidControlPositionToSemantic(state.draftRig.controls[controlKey].position, state.draftRig);
     if (semantic) state.draftRig.controls[controlKey].semantic = semantic;
-    state.draftRig.controls[controlKey].source =
-      state.mappedJointIdByControl.has(controlKey)
-        ? 'manual_model_joint' : 'manual_override';
+    state.draftRig.controls[controlKey].source = state.mappedJointIdByControl.has(controlKey)
+      ? 'manual_model_joint'
+      : 'manual_override';
     rebuildHumanoidControlPaths(state.draftRig);
     state.error = null;
     updateDirty();
@@ -270,10 +313,9 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     if (!key || !state.carryBefore) return false;
     state.draftRig.controls[key].position = [...state.carryBefore.position];
     if (state.carryBefore.mapping) {
-      state.mappedJointIdByControl.set(key, {...state.carryBefore.mapping});
+      state.mappedJointIdByControl.set(key, { ...state.carryBefore.mapping });
     } else state.mappedJointIdByControl.delete(key);
-    const semantic = humanoidControlPositionToSemantic(
-      state.draftRig.controls[key].position, state.draftRig);
+    const semantic = humanoidControlPositionToSemantic(state.draftRig.controls[key].position, state.draftRig);
     if (semantic) state.draftRig.controls[key].semantic = semantic;
     rebuildHumanoidControlPaths(state.draftRig);
     state.carryingControlKey = null;
@@ -290,7 +332,7 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     const modelRig = getModelRig?.();
     if (!automatic || !modelRig) throw new Error('The inferred Rig is not loaded.');
     const controls = {};
-    HUMANOID_CONTROL_KEYS.forEach(key => {
+    HUMANOID_CONTROL_KEYS.forEach((key) => {
       const draft = state.draftRig?.controls?.[key];
       const position = finitePosition(draft?.position);
       if (!position) throw new Error(`Invalid position for ${key}.`);
@@ -298,15 +340,14 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
       if (!semantic) throw new Error(`Invalid semantic position for ${key}.`);
       const mapping = state.mappedJointIdByControl.get(key);
       const joint = mapping ? jointFor(modelRig, mapping.jointId) : null;
-      const entry = {semantic};
+      const entry = { semantic };
       if (joint) {
         entry.joint_id = Number(joint.jointId);
       }
-      if (!sameSemantic(semantic, automatic.controls?.[key]?.semantic)
-          || entry.joint_id !== undefined) controls[key] = entry;
+      if (!sameSemantic(semantic, automatic.controls?.[key]?.semantic) || entry.joint_id !== undefined)
+        controls[key] = entry;
     });
-    return {version: HUMANOID_CONTROL_RIG_VERSION,
-      model_rig_builder_version: MODEL_RIG_BUILDER_VERSION, controls};
+    return { version: HUMANOID_CONTROL_RIG_VERSION, model_rig_builder_version: MODEL_RIG_BUILDER_VERSION, controls };
   }
 
   function queueWrite(operation) {
@@ -316,8 +357,7 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
   }
 
   async function save() {
-    if (!state.editing || state.saving) return {saved: false,
-      error: 'The Humanoid Rig is already being saved.'};
+    if (!state.editing || state.saving) return { saved: false, error: 'The Humanoid Rig is already being saved.' };
     const dirtyBeforeSave = state.dirty;
     state.saving = true;
     state.error = null;
@@ -336,70 +376,80 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
           return persist?.(path, value);
         }
         if (savedOverrides) return clearPersist?.(path);
-        return {saved: true};
+        return { saved: true };
       });
-      if (!result?.saved) throw new Error(result?.error
-        || 'The Humanoid Rig was not saved.');
-      if (requestGeneration !== generation) return {saved: true, stale: true};
+      if (!result?.saved) throw new Error(result?.error || 'The Humanoid Rig was not saved.');
+      if (requestGeneration !== generation) return { saved: true, stale: true };
       savedOverrides = Object.keys(value.controls).length ? value : null;
       if (dirtyBeforeSave) {
         await refreshHumanoidRig?.(savedOverrides);
       }
       state = {
-        editing: false, saving: false, error: null, dirty: false,
-        selectedControlKey: null, carryingControlKey: null,
-        draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
+        editing: false,
+        saving: false,
+        error: null,
+        dirty: false,
+        selectedControlKey: null,
+        carryingControlKey: null,
+        draftRig: null,
+        baseRig: null,
+        mappedJointIdByControl: new Map(),
         baseMappedJointIdByControl: new Map(),
         carryBefore: null,
       };
       setPhysicsSuspended?.(false);
       notify();
       requestRender?.();
-      return {saved: true, humanoid_control_rig: value};
+      return { saved: true, humanoid_control_rig: value };
     } catch (error) {
       state.saving = false;
       state.error = error instanceof Error ? error.message : String(error);
       notify();
       requestRender?.();
-      return {saved: false, error: state.error};
+      return { saved: false, error: state.error };
     }
   }
 
   async function reset() {
-    if (!savedOverrides) return {saved: false};
+    if (!savedOverrides) return { saved: false };
     const path = currentModPath(getKnownMeshes);
-    if (!path) return {saved: false, error: 'Humanoid Rig persistence is unavailable.'};
+    if (!path) return { saved: false, error: 'Humanoid Rig persistence is unavailable.' };
     const requestGeneration = generation;
     state.saving = true;
     state.error = null;
     notify();
     try {
       const result = await queueWrite(() => clearPersist?.(path));
-      if (!result?.saved) throw new Error(result?.error
-        || 'The Humanoid Rig was not reset.');
-      if (requestGeneration !== generation) return {saved: true, stale: true};
+      if (!result?.saved) throw new Error(result?.error || 'The Humanoid Rig was not reset.');
+      if (requestGeneration !== generation) return { saved: true, stale: true };
       savedOverrides = null;
       await refreshHumanoidRig?.(null);
       state.saving = false;
       state.error = null;
       notify();
       requestRender?.();
-      return {saved: true};
+      return { saved: true };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       state.saving = false;
       state.error = message;
       notify();
-      return {saved: false, error: message};
+      return { saved: false, error: message };
     }
   }
 
   function cancel() {
     if (!state.editing) return false;
     state = {
-      editing: false, saving: false, error: null, dirty: false,
-      selectedControlKey: null, carryingControlKey: null,
-      draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
+      editing: false,
+      saving: false,
+      error: null,
+      dirty: false,
+      selectedControlKey: null,
+      carryingControlKey: null,
+      draftRig: null,
+      baseRig: null,
+      mappedJointIdByControl: new Map(),
       baseMappedJointIdByControl: new Map(),
       carryBefore: null,
     };
@@ -414,9 +464,15 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
     writeQueue = Promise.resolve();
     savedOverrides = null;
     state = {
-      editing: false, saving: false, error: null, dirty: false,
-      selectedControlKey: null, carryingControlKey: null,
-      draftRig: null, baseRig: null, mappedJointIdByControl: new Map(),
+      editing: false,
+      saving: false,
+      error: null,
+      dirty: false,
+      selectedControlKey: null,
+      carryingControlKey: null,
+      draftRig: null,
+      baseRig: null,
+      mappedJointIdByControl: new Map(),
       baseMappedJointIdByControl: new Map(),
       carryBefore: null,
     };
@@ -424,8 +480,17 @@ export function createHumanoidRigEditSession({modelRigState, getModelRig, getAut
   }
 
   return {
-    snapshot: editSnapshot, setMetadata, getSavedOverrides,
-    begin, cancel, save, reset, beginCarry, updateDraft, finishCarry,
-    cancelCarry, resetSession,
+    snapshot: editSnapshot,
+    setMetadata,
+    getSavedOverrides,
+    begin,
+    cancel,
+    save,
+    reset,
+    beginCarry,
+    updateDraft,
+    finishCarry,
+    cancelCarry,
+    resetSession,
   };
 }

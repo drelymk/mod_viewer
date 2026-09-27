@@ -28,7 +28,6 @@ def test_repack_preserves_raw_triangle_bytes_and_nonzero_draw_base(index_size):
         original, len(prefix) // index_size, 12, index_size,
         [[3, 0], [2, 1]])
 
-    start = len(prefix)
     expected = prefix + triangles[3] + triangles[0] + triangles[2] + triangles[1] + suffix
     assert candidate == expected
     assert drawindexed_ranges(4, 23, parts) == (

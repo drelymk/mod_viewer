@@ -16,19 +16,32 @@ const RESOURCE_MISC_TEXTURECUBE = 0x4;
 const MAX_DIMENSION = 65536;
 
 const DXGI_FORMATS = new Map([
-  [71, 'bc1_unorm'], [72, 'bc1_srgb'],
-  [74, 'bc2_unorm'], [75, 'bc2_srgb'],
-  [77, 'bc3_unorm'], [78, 'bc3_srgb'],
-  [80, 'bc4_unorm'], [81, 'bc4_snorm'],
-  [83, 'bc5_unorm'], [84, 'bc5_snorm'],
-  [95, 'bc6h_ufloat'], [96, 'bc6h_float'],
-  [98, 'bc7_unorm'], [99, 'bc7_srgb'],
+  [71, 'bc1_unorm'],
+  [72, 'bc1_srgb'],
+  [74, 'bc2_unorm'],
+  [75, 'bc2_srgb'],
+  [77, 'bc3_unorm'],
+  [78, 'bc3_srgb'],
+  [80, 'bc4_unorm'],
+  [81, 'bc4_snorm'],
+  [83, 'bc5_unorm'],
+  [84, 'bc5_snorm'],
+  [95, 'bc6h_ufloat'],
+  [96, 'bc6h_float'],
+  [98, 'bc7_unorm'],
+  [99, 'bc7_srgb'],
 ]);
 
 const LEGACY_FORMATS = new Map([
-  ['DXT1', 'bc1_unorm'], ['DXT3', 'bc2_unorm'], ['DXT5', 'bc3_unorm'],
-  ['ATI1', 'bc4_unorm'], ['BC4U', 'bc4_unorm'], ['BC4S', 'bc4_snorm'],
-  ['ATI2', 'bc5_unorm'], ['BC5U', 'bc5_unorm'], ['BC5S', 'bc5_snorm'],
+  ['DXT1', 'bc1_unorm'],
+  ['DXT3', 'bc2_unorm'],
+  ['DXT5', 'bc3_unorm'],
+  ['ATI1', 'bc4_unorm'],
+  ['BC4U', 'bc4_unorm'],
+  ['BC4S', 'bc4_snorm'],
+  ['ATI2', 'bc5_unorm'],
+  ['BC5U', 'bc5_unorm'],
+  ['BC5S', 'bc5_snorm'],
 ]);
 
 const COMPRESSED_FORMATS = new Set(DXGI_FORMATS.values());
@@ -56,8 +69,11 @@ function fail(message) {
 
 function fourCC(view, offset) {
   return String.fromCharCode(
-    view.getUint8(offset), view.getUint8(offset + 1),
-    view.getUint8(offset + 2), view.getUint8(offset + 3));
+    view.getUint8(offset),
+    view.getUint8(offset + 1),
+    view.getUint8(offset + 2),
+    view.getUint8(offset + 3),
+  );
 }
 
 function mipCount(rawCount, width, height) {
@@ -69,8 +85,7 @@ function mipCount(rawCount, width, height) {
 }
 
 function readFormat(view) {
-  if (view.getUint32(4, true) !== HEADER_SIZE
-      || view.getUint32(76, true) !== PIXEL_FORMAT_SIZE) {
+  if (view.getUint32(4, true) !== HEADER_SIZE || view.getUint32(76, true) !== PIXEL_FORMAT_SIZE) {
     fail('invalid header size');
   }
   const width = view.getUint32(16, true);
@@ -78,8 +93,7 @@ function readFormat(view) {
   if (!width || !height || width > MAX_DIMENSION || height > MAX_DIMENSION) {
     fail('invalid dimensions');
   }
-  if (view.getUint32(24, true) > 1
-      || (view.getUint32(112, true) & (CAPS2_CUBEMAP | CAPS2_VOLUME))) {
+  if (view.getUint32(24, true) > 1 || view.getUint32(112, true) & (CAPS2_CUBEMAP | CAPS2_VOLUME)) {
     fail('only 2D non-cube textures are supported');
   }
   const mipCountValue = mipCount(view.getUint32(28, true), width, height);
@@ -92,9 +106,12 @@ function readFormat(view) {
     }
     const dxgi = view.getUint32(128, true);
     const format = DXGI_FORMATS.get(dxgi);
-    if (!format || view.getUint32(132, true) !== RESOURCE_DIMENSION_TEXTURE2D
-        || view.getUint32(140, true) !== 1
-        || (view.getUint32(136, true) & RESOURCE_MISC_TEXTURECUBE)) {
+    if (
+      !format ||
+      view.getUint32(132, true) !== RESOURCE_DIMENSION_TEXTURE2D ||
+      view.getUint32(140, true) !== 1 ||
+      view.getUint32(136, true) & RESOURCE_MISC_TEXTURECUBE
+    ) {
       fail('unsupported DX10 resource');
     }
     return { width, height, mipCount: mipCountValue, format, dataOffset: 148 };
@@ -103,19 +120,20 @@ function readFormat(view) {
   const legacyFormat = LEGACY_FORMATS.get(code);
   if (legacyFormat) {
     if (!(pixelFlags & DDPF_FOURCC)) fail('invalid compressed pixel format');
-    return { width, height, mipCount: mipCountValue,
-      format: legacyFormat, dataOffset: 128 };
+    return { width, height, mipCount: mipCountValue, format: legacyFormat, dataOffset: 128 };
   }
 
   if (!(pixelFlags & DDPF_RGB) || view.getUint32(88, true) !== 32) {
     fail('unsupported pixel format');
   }
-  const masks = [92, 96, 100, 104].map(offset => view.getUint32(offset, true));
+  const masks = [92, 96, 100, 104].map((offset) => view.getUint32(offset, true));
   const rgba = [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000];
   const bgra = [0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000];
   const format = masks.every((value, index) => value === rgba[index])
-    ? 'rgba8' : masks.every((value, index) => value === bgra[index])
-      ? 'bgra8' : null;
+    ? 'rgba8'
+    : masks.every((value, index) => value === bgra[index])
+      ? 'bgra8'
+      : null;
   if (!format) fail('unsupported 32-bit channel layout');
   return { width, height, mipCount: mipCountValue, format, dataOffset: 128 };
 }
@@ -139,8 +157,7 @@ function decodeUncompressed(bytes, offset, length, width, height, format) {
 }
 
 export function parseDDS(input) {
-  const bytes = input instanceof Uint8Array
-    ? input : input instanceof ArrayBuffer ? new Uint8Array(input) : null;
+  const bytes = input instanceof Uint8Array ? input : input instanceof ArrayBuffer ? new Uint8Array(input) : null;
   if (!bytes || bytes.byteLength < 128) fail('truncated file');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (view.getUint32(0, true) !== DDS_MAGIC) fail('invalid magic');
@@ -188,9 +205,7 @@ function setDDSOrientation(texture, compressed) {
 
 function applyParsedTexture(texture, parsed) {
   texture.mipmaps = parsed.mipmaps;
-  texture.image = parsed.compressed
-    ? { width: parsed.width, height: parsed.height }
-    : parsed.mipmaps[0];
+  texture.image = parsed.compressed ? { width: parsed.width, height: parsed.height } : parsed.mipmaps[0];
   texture.format = parsed.format;
   texture.generateMipmaps = false;
   // DDS payload rows use the opposite convention from TextureLoader's
@@ -198,33 +213,34 @@ function applyParsedTexture(texture, parsed) {
   // path, so express the same vertical inversion in the shared texture
   // transform instead of branching on material role or game.
   setDDSOrientation(texture, parsed.compressed);
-  texture.minFilter = parsed.mipCount === 1
-    ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
+  texture.minFilter = parsed.mipCount === 1 ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
   texture.isCompressedTexture = parsed.compressed;
   texture.isDataTexture = !parsed.compressed;
   texture.needsUpdate = true;
 }
 
 function fetchDDSIntoTexture(texture, url, onLoad, onError, shouldApply) {
-  return fetch(url, {cache: 'no-store'}).then(response => {
-    if (!response.ok) throw new Error(`DDS request failed (${response.status})`);
-    return response.arrayBuffer();
-  }).then(bytes => {
-    const parsed = parseDDS(bytes);
-    if (!shouldApply || shouldApply()) applyParsedTexture(texture, parsed);
-    onLoad?.(texture);
-    return texture;
-  }).catch(error => {
-    onError?.(error);
-    throw error;
-  });
+  return fetch(url, { cache: 'no-store' })
+    .then((response) => {
+      if (!response.ok) throw new Error(`DDS request failed (${response.status})`);
+      return response.arrayBuffer();
+    })
+    .then((bytes) => {
+      const parsed = parseDDS(bytes);
+      if (!shouldApply || shouldApply()) applyParsedTexture(texture, parsed);
+      onLoad?.(texture);
+      return texture;
+    })
+    .catch((error) => {
+      onError?.(error);
+      throw error;
+    });
 }
 
 export function loadDDSTexture(url, onLoad, onError) {
   // Return one stable object immediately.  The registry can bind this object
   // before the network request completes and a failed DDS can be evicted once.
-  const texture = new THREE.CompressedTexture(
-    [], 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  const texture = new THREE.CompressedTexture([], 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
   // The placeholder is bound before fetch resolves, so its matrix must carry
   // the eventual compressed-texture orientation when the material graph is
   // first compiled.
@@ -234,8 +250,6 @@ export function loadDDSTexture(url, onLoad, onError) {
 }
 
 /** Fetch a fresh DDS into an existing texture object. */
-export function reloadDDSTexture(
-    texture, url, onLoad, onError, shouldApply) {
-  return fetchDDSIntoTexture(
-    texture, url, onLoad, onError, shouldApply);
+export function reloadDDSTexture(texture, url, onLoad, onError, shouldApply) {
+  return fetchDDSIntoTexture(texture, url, onLoad, onError, shouldApply);
 }

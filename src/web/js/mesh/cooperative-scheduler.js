@@ -5,8 +5,7 @@
 const DEFAULT_BUDGET_MS = 8;
 
 function now() {
-  return typeof globalThis.performance?.now === 'function'
-    ? globalThis.performance.now() : Date.now();
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 
 export async function yieldToBrowser() {
@@ -14,13 +13,11 @@ export async function yieldToBrowser() {
     await globalThis.scheduler.yield();
     return;
   }
-  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-export function createWorkBudget({budgetMs = DEFAULT_BUDGET_MS,
-    onYield = null} = {}) {
-  const limit = Number.isFinite(Number(budgetMs)) && Number(budgetMs) > 0
-    ? Number(budgetMs) : DEFAULT_BUDGET_MS;
+export function createWorkBudget({ budgetMs = DEFAULT_BUDGET_MS, onYield = null } = {}) {
+  const limit = Number.isFinite(Number(budgetMs)) && Number(budgetMs) > 0 ? Number(budgetMs) : DEFAULT_BUDGET_MS;
   let startedAt = now();
   let largestChunkMs = 0;
   let yieldCount = 0;
@@ -36,7 +33,7 @@ export function createWorkBudget({budgetMs = DEFAULT_BUDGET_MS,
       startedAt = now();
     },
     getStats() {
-      return {largestChunkMs, yieldCount};
+      return { largestChunkMs, yieldCount };
     },
   };
 }

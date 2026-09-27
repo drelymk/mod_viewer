@@ -2,11 +2,7 @@
 // coordinates cross-feature lifecycle through the core module.
 
 import * as THREE from 'three';
-import {
-  applyWeightedNormalDeformationInto,
-  applyWeightedTransformDeformationInto,
-} from './weight-deformation.js';
-import {buildSelectedWeightMask} from './weight-selection.js';
+import { applyWeightedNormalDeformationInto, applyWeightedTransformDeformationInto } from './weight-deformation.js';
 import {
   buildInfluenceNodes as buildRigInfluenceNodes,
   buildInfluenceNodesCooperative as buildRigInfluenceNodesCooperative,
@@ -17,14 +13,13 @@ import {
   inspectSurfaceTopology,
   inspectSurfaceTopologyCooperative,
 } from './weight-rig.js';
-import {EMPTY_ACTIVE_VERTICES} from './weight-runtime.js';
-import {createWorkBudget} from './cooperative-scheduler.js';
-import {resumeAnimatedMesh} from './animation-runtime.js';
-import {syncLoosePartMaterial} from './loose-parts.js';
+import { EMPTY_ACTIVE_VERTICES } from './weight-runtime.js';
+import { createWorkBudget } from './cooperative-scheduler.js';
+import { resumeAnimatedMesh } from './animation-runtime.js';
+import { syncLoosePartMaterial } from './loose-parts.js';
 
 function clockNow() {
-  return typeof globalThis.performance?.now === 'function'
-    ? globalThis.performance.now() : Date.now();
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
@@ -32,10 +27,15 @@ function typedView(buffer, descriptor, Type, typeName) {
   }
   const offset = Number(descriptor.offset);
   const length = Number(descriptor.length);
-  if (!Number.isInteger(offset) || !Number.isInteger(length)
-      || offset < 0 || length < 0 || offset % Type.BYTES_PER_ELEMENT
-      || length % Type.BYTES_PER_ELEMENT
-      || offset + length > buffer.byteLength) {
+  if (
+    !Number.isInteger(offset) ||
+    !Number.isInteger(length) ||
+    offset < 0 ||
+    length < 0 ||
+    offset % Type.BYTES_PER_ELEMENT ||
+    length % Type.BYTES_PER_ELEMENT ||
+    offset + length > buffer.byteLength
+  ) {
     throw new Error('Skin data has an invalid binary range.');
   }
   return new Type(buffer, offset, length / Type.BYTES_PER_ELEMENT);
@@ -54,17 +54,26 @@ function buildBoneIds(indices, weights, influenceCount) {
 }
 
 export function createSkinningRuntime({
-    states, knownMeshes, stateFor, modelWeightState,
-    modelWeightSnapshot, selectionMapFromEntries, sourceSelectionEntries,
-    setSelectedBones, syncPhysicsToSelection, refreshModelWeightSummary,
-    refreshSelectedWeightMask, eligibleSkinningMesh,
-    getGeneration, notifyModelWeightChanged, requestRender, invalidateShadow,
-  } = {}) {
+  states,
+  knownMeshes,
+  stateFor,
+  modelWeightState,
+  modelWeightSnapshot,
+  selectionMapFromEntries,
+  sourceSelectionEntries,
+  setSelectedBones,
+  syncPhysicsToSelection,
+  refreshModelWeightSummary,
+  refreshSelectedWeightMask,
+  eligibleSkinningMesh,
+  getGeneration,
+  notifyModelWeightChanged,
+  requestRender,
+} = {}) {
   const cooperativeGraphInFlight = new WeakMap();
 
   function markFinalBoundsDirty(mesh, state) {
-    if (state.preDeformationFrustumCulled === null
-        || state.preDeformationFrustumCulled === undefined) {
+    if (state.preDeformationFrustumCulled === null || state.preDeformationFrustumCulled === undefined) {
       state.preDeformationFrustumCulled = mesh.frustumCulled;
     }
     mesh.frustumCulled = false;
@@ -82,8 +91,7 @@ export function createSkinningRuntime({
       position.array[offset] = state.baselinePositions[offset];
       position.array[offset + 1] = state.baselinePositions[offset + 1];
       position.array[offset + 2] = state.baselinePositions[offset + 2];
-      if (normal && state.baselineNormals
-          && offset + 2 < state.baselineNormals.length) {
+      if (normal && state.baselineNormals && offset + 2 < state.baselineNormals.length) {
         normal.array[offset] = state.baselineNormals[offset];
         normal.array[offset + 1] = state.baselineNormals[offset + 1];
         normal.array[offset + 2] = state.baselineNormals[offset + 2];
@@ -108,18 +116,19 @@ export function createSkinningRuntime({
     const physicsVertices = state.physicsEnabled
       ? state.physicsActiveVertices || EMPTY_ACTIVE_VERTICES
       : EMPTY_ACTIVE_VERTICES;
-    if (state.combinedPoseVerticesRef === poseVertices
-        && state.combinedPhysicsVerticesRef === physicsVertices
-        && state.combinedActiveVertices) {
+    if (
+      state.combinedPoseVerticesRef === poseVertices &&
+      state.combinedPhysicsVerticesRef === physicsVertices &&
+      state.combinedActiveVertices
+    ) {
       return state.combinedActiveVertices;
     }
     const values = new Set();
-    poseVertices.forEach(vertex => values.add(Number(vertex)));
-    physicsVertices.forEach(vertex => values.add(Number(vertex)));
+    poseVertices.forEach((vertex) => values.add(Number(vertex)));
+    physicsVertices.forEach((vertex) => values.add(Number(vertex)));
     state.combinedPoseVerticesRef = poseVertices;
     state.combinedPhysicsVerticesRef = physicsVertices;
-    state.combinedActiveVertices = Uint32Array.from([...values].sort(
-      (left, right) => left - right));
+    state.combinedActiveVertices = Uint32Array.from([...values].sort((left, right) => left - right));
     return state.combinedActiveVertices;
   }
 
@@ -128,8 +137,7 @@ export function createSkinningRuntime({
     mesh.geometry.computeBoundingBox();
     mesh.geometry.computeBoundingSphere();
     state.finalBoundsDirty = false;
-    if (state.preDeformationFrustumCulled !== null
-        && state.preDeformationFrustumCulled !== undefined) {
+    if (state.preDeformationFrustumCulled !== null && state.preDeformationFrustumCulled !== undefined) {
       mesh.frustumCulled = state.preDeformationFrustumCulled;
       state.preDeformationFrustumCulled = null;
     }
@@ -149,24 +157,27 @@ export function createSkinningRuntime({
     }
   }
 
-  function applyDeformation(mesh, state, {
-      request = true, invalidateShadow = true, skipHidden = false,
-      composedTransforms = null, composedRotations = null,
-    } = {}) {
+  function applyDeformation(
+    mesh,
+    state,
+    {
+      request = true,
+      invalidateShadow = true,
+      skipHidden = false,
+      composedTransforms = null,
+      composedRotations = null,
+    } = {},
+  ) {
     if (!state.loaded || !state.baselinePositions) return false;
     if (skipHidden && !mesh.visible) return false;
-    const physicsActive = state.deformationMode === 'physics'
-      && state.physicsEnabled && composedTransforms && composedRotations;
+    const physicsActive =
+      state.deformationMode === 'physics' && state.physicsEnabled && composedTransforms && composedRotations;
     const position = mesh.geometry.attributes.position;
-    const finalTransforms = physicsActive
-      ? composedTransforms : state.poseTransforms;
-    const finalRotations = physicsActive
-      ? composedRotations : state.poseRotations;
-    const previousVertices = state.combinedActiveVertices
-      || EMPTY_ACTIVE_VERTICES;
+    const finalTransforms = physicsActive ? composedTransforms : state.poseTransforms;
+    const finalRotations = physicsActive ? composedRotations : state.poseRotations;
+    const previousVertices = state.combinedActiveVertices || EMPTY_ACTIVE_VERTICES;
     const activeVertices = combinedActiveVerticesForState(state);
-    const takingOwnership = Boolean(
-      activeVertices.length || state.deformationMode || state.physicsEnabled);
+    const takingOwnership = Boolean(activeVertices.length || state.deformationMode || state.physicsEnabled);
     const wasSuspended = mesh.userData.animationSuspended === true;
     if (takingOwnership && mesh.userData.animationSuspended !== true) {
       // Animation may have written a baked frame since the last deformation
@@ -174,8 +185,7 @@ export function createSkinningRuntime({
       // the first pose does not mix two unrelated vertex spaces.
       position.array.set(state.baselinePositions);
       const normal = mesh.geometry.attributes.normal;
-      if (normal && state.baselineNormals
-          && normal.array.length === state.baselineNormals.length) {
+      if (normal && state.baselineNormals && normal.array.length === state.baselineNormals.length) {
         normal.array.set(state.baselineNormals);
         normal.needsUpdate = true;
       }
@@ -187,15 +197,25 @@ export function createSkinningRuntime({
     let deformedVertices = 0;
     if (activeVertices.length && finalTransforms) {
       deformedVertices = applyWeightedTransformDeformationInto(
-        position.array, state.baselinePositions, state.indices, state.weights,
-        state.influenceCount, finalTransforms, activeVertices);
+        position.array,
+        state.baselinePositions,
+        state.indices,
+        state.weights,
+        state.influenceCount,
+        finalTransforms,
+        activeVertices,
+      );
       const normal = mesh.geometry.attributes.normal;
-      if (normal && state.baselineNormals
-          && normal.array.length === state.baselineNormals.length
-          && finalRotations) {
+      if (normal && state.baselineNormals && normal.array.length === state.baselineNormals.length && finalRotations) {
         applyWeightedNormalDeformationInto(
-          normal.array, state.baselineNormals, state.indices, state.weights,
-          state.influenceCount, finalRotations, activeVertices);
+          normal.array,
+          state.baselineNormals,
+          state.indices,
+          state.weights,
+          state.influenceCount,
+          finalRotations,
+          activeVertices,
+        );
         normal.needsUpdate = true;
       }
     }
@@ -211,17 +231,15 @@ export function createSkinningRuntime({
       resumedAnimation = resumeAnimatedMesh(mesh);
       if (resumedAnimation) {
         state.finalBoundsDirty = false;
-        if (state.preDeformationFrustumCulled !== null
-            && state.preDeformationFrustumCulled !== undefined) {
+        if (state.preDeformationFrustumCulled !== null && state.preDeformationFrustumCulled !== undefined) {
           mesh.frustumCulled = state.preDeformationFrustumCulled;
           state.preDeformationFrustumCulled = null;
         }
       }
     }
     if (invalidateShadow && changed && !resumedAnimation) {
-      invalidateShadow({request});
-    }
-    else if (request && changed && !resumedAnimation) requestRender();
+      invalidateShadow({ request });
+    } else if (request && changed && !resumedAnimation) requestRender();
     return changed;
   }
 
@@ -229,15 +247,11 @@ export function createSkinningRuntime({
     const position = mesh.geometry?.attributes?.position;
     if (!position) throw new Error('The selected mesh has no position data.');
     const normal = mesh.geometry?.attributes?.normal;
-    if (!state.baselinePositions
-        || state.baselinePositions.length !== position.array.length) {
-      state.baselinePositions = new Float32Array(
-        restAttributeArray(mesh, 'position', position.array));
+    if (!state.baselinePositions || state.baselinePositions.length !== position.array.length) {
+      state.baselinePositions = new Float32Array(restAttributeArray(mesh, 'position', position.array));
     }
-    if (normal && (!state.baselineNormals
-        || state.baselineNormals.length !== normal.array.length)) {
-      state.baselineNormals = new Float32Array(
-        restAttributeArray(mesh, 'normal', normal.array));
+    if (normal && (!state.baselineNormals || state.baselineNormals.length !== normal.array.length)) {
+      state.baselineNormals = new Float32Array(restAttributeArray(mesh, 'normal', normal.array));
     } else if (!normal) {
       state.baselineNormals = null;
     }
@@ -246,15 +260,14 @@ export function createSkinningRuntime({
 
   function finalizeRigMeshPreparation(state) {
     if (!state.centerByBoneId) {
-      state.centerByBoneId = new Map(state.influenceNodes.map(node => [
-        node.boneId, node.weightedCenter]));
+      state.centerByBoneId = new Map(state.influenceNodes.map((node) => [node.boneId, node.weightedCenter]));
     }
   }
 
-  function vertexInfluenceGraphResult(nodes, relationships, radius,
-      requestedEvidenceMode, evidenceMode, measure) {
+  function vertexInfluenceGraphResult(nodes, relationships, radius, requestedEvidenceMode, evidenceMode, measure) {
     return {
-      nodes, relationships,
+      nodes,
+      relationships,
       boundingSphereRadius: Number.isFinite(radius) && radius > 0 ? radius : null,
       evidenceMode,
       triangleCount: measure?.triangleCount || 0,
@@ -264,47 +277,54 @@ export function createSkinningRuntime({
       totalSurfaceArea: measure?.totalSurfaceArea || 0,
       measuredVertexCount: measure?.measuredVertexCount || 0,
       zeroMeasureVertexCount: measure?.zeroMeasureVertexCount || 0,
-      fallbackReason: requestedEvidenceMode === 'surface'
-        && evidenceMode === 'vertex' ? 'surface_evidence_unavailable'
-        : requestedEvidenceMode === 'vertex' && measure
-          && !measure.surfaceEvidenceAvailable
-          ? 'surface_evidence_unavailable' : null,
+      fallbackReason:
+        requestedEvidenceMode === 'surface' && evidenceMode === 'vertex'
+          ? 'surface_evidence_unavailable'
+          : requestedEvidenceMode === 'vertex' && measure && !measure.surfaceEvidenceAvailable
+            ? 'surface_evidence_unavailable'
+            : null,
     };
   }
 
-  function buildInfluenceGraph(mesh, state, requestedEvidenceMode = 'vertex',
-      surfaceEvidence = null) {
+  function buildInfluenceGraph(mesh, state, requestedEvidenceMode = 'vertex', surfaceEvidence = null) {
     ensureRigMeshPrepared(mesh, state);
     if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
     const radius = Number(mesh.geometry.boundingSphere?.radius);
     const rawNodes = state.influenceNodes;
-    const measure = surfaceEvidence || (requestedEvidenceMode === 'surface'
-      ? inspectSurfaceTopology(
-        state.baselinePositions, mesh.geometry?.index?.array || null) : null);
-    const evidenceMode = requestedEvidenceMode === 'surface'
-      && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
+    const measure =
+      surfaceEvidence ||
+      (requestedEvidenceMode === 'surface'
+        ? inspectSurfaceTopology(state.baselinePositions, mesh.geometry?.index?.array || null)
+        : null);
+    const evidenceMode =
+      requestedEvidenceMode === 'surface' && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
     if (evidenceMode === 'surface') {
       return buildSurfaceInfluenceGraph(
-        state.baselinePositions, mesh.geometry?.index?.array || null,
-        state.indices, state.weights, state.influenceCount, state.boneIds,
-        Number.isFinite(radius) && radius > 0 ? radius : null);
+        state.baselinePositions,
+        mesh.geometry?.index?.array || null,
+        state.indices,
+        state.weights,
+        state.influenceCount,
+        state.boneIds,
+        Number.isFinite(radius) && radius > 0 ? radius : null,
+      );
     }
     const relationships = buildRigInfluenceRelationships(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, rawNodes,
-      Number.isFinite(radius) && radius > 0 ? radius : null, {});
-    return vertexInfluenceGraphResult(
-      rawNodes, relationships, radius, requestedEvidenceMode,
-      evidenceMode, measure);
+      state.baselinePositions,
+      state.indices,
+      state.weights,
+      state.influenceCount,
+      rawNodes,
+      Number.isFinite(radius) && radius > 0 ? radius : null,
+      {},
+    );
+    return vertexInfluenceGraphResult(rawNodes, relationships, radius, requestedEvidenceMode, evidenceMode, measure);
   }
 
-  function ensureInfluenceGraph(mesh, state, evidenceMode = 'vertex',
-      surfaceEvidence = null) {
+  function ensureInfluenceGraph(mesh, state, evidenceMode = 'vertex', surfaceEvidence = null) {
     ensureRigMeshPrepared(mesh, state);
-    if (!state.influenceGraph
-        || state.influenceGraph.evidenceMode !== evidenceMode) {
-      state.influenceGraph = buildInfluenceGraph(
-        mesh, state, evidenceMode, surfaceEvidence);
+    if (!state.influenceGraph || state.influenceGraph.evidenceMode !== evidenceMode) {
+      state.influenceGraph = buildInfluenceGraph(mesh, state, evidenceMode, surfaceEvidence);
     }
     return state.influenceGraph;
   }
@@ -314,38 +334,51 @@ export function createSkinningRuntime({
     prepareRigMeshBase(mesh, state);
     if (!state.influenceNodes) {
       state.influenceNodes = buildRigInfluenceNodes(
-        state.baselinePositions, state.indices, state.weights,
-        state.influenceCount, state.boneIds);
+        state.baselinePositions,
+        state.indices,
+        state.weights,
+        state.influenceCount,
+        state.boneIds,
+      );
     }
     finalizeRigMeshPreparation(state);
     return true;
   }
 
   function normalizeWeightBoneStats(stats) {
-    return Object.fromEntries(Object.entries(stats || {}).flatMap(
-      ([rawBoneId, rawEntry]) => {
+    return Object.fromEntries(
+      Object.entries(stats || {}).flatMap(([rawBoneId, rawEntry]) => {
         const boneId = Number(rawBoneId);
-        const affectedVertexCount = Number(
-          rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
-        const totalWeight = Number(
-          rawEntry?.totalWeight ?? rawEntry?.total_weight);
-        if (!Number.isFinite(boneId) || !Number.isFinite(affectedVertexCount)
-            || affectedVertexCount < 0 || !Number.isFinite(totalWeight)) {
+        const affectedVertexCount = Number(rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
+        const totalWeight = Number(rawEntry?.totalWeight ?? rawEntry?.total_weight);
+        if (
+          !Number.isFinite(boneId) ||
+          !Number.isFinite(affectedVertexCount) ||
+          affectedVertexCount < 0 ||
+          !Number.isFinite(totalWeight)
+        ) {
           return [];
         }
-        return [[String(boneId), {affectedVertexCount, totalWeight}]];
-      }));
+        return [[String(boneId), { affectedVertexCount, totalWeight }]];
+      }),
+    );
   }
 
   function sourceDescriptorForEntry(entry) {
     const source = entry?.source;
-    if (source && typeof source === 'object'
-        && typeof source.key === 'string' && source.key
-        && typeof source.file === 'string' && source.file) {
+    if (
+      source &&
+      typeof source === 'object' &&
+      typeof source.key === 'string' &&
+      source.key &&
+      typeof source.file === 'string' &&
+      source.file
+    ) {
       const offset = Number(source.bone_id_offset);
       if (Number.isInteger(offset) && offset >= 0) {
         return {
-          sourceKey: source.key, sourceFile: source.file,
+          sourceKey: source.key,
+          sourceFile: source.file,
           boneIdOffset: offset,
           boneIdsModelWide: source.bone_ids_model_wide === true,
         };
@@ -354,11 +387,10 @@ export function createSkinningRuntime({
     return null;
   }
 
-  function installSkinningEntry(mesh, entry, buffer, {refreshSelection = true} = {}) {
+  function installSkinningEntry(mesh, entry, buffer, { refreshSelection = true } = {}) {
     const state = stateFor(mesh);
     const source = sourceDescriptorForEntry(entry);
-    if (!source) throw new Error(
-      'The skin-weight source identity is unavailable for this draw.');
+    if (!source) throw new Error('The skin-weight source identity is unavailable for this draw.');
     state.skinningSourceKey = source.sourceKey;
     state.skinningSourceFile = source.sourceFile;
     state.skinningBoneOffset = source.boneIdOffset;
@@ -367,10 +399,14 @@ export function createSkinningRuntime({
     const weights = typedView(buffer, entry.data?.weights, Float32Array, 'f32');
     const position = mesh.geometry?.attributes?.position;
     const influenceCount = Number(entry.influence_count);
-    if (!position || !Number.isInteger(influenceCount) || influenceCount <= 0
-        || position.count !== Number(entry.vertex_count)
-        || indices.length !== position.count * influenceCount
-        || weights.length !== position.count * influenceCount) {
+    if (
+      !position ||
+      !Number.isInteger(influenceCount) ||
+      influenceCount <= 0 ||
+      position.count !== Number(entry.vertex_count) ||
+      indices.length !== position.count * influenceCount ||
+      weights.length !== position.count * influenceCount
+    ) {
       throw new Error('Skin data does not match rendered vertices.');
     }
     state.originalMaterial = mesh.material;
@@ -383,8 +419,10 @@ export function createSkinningRuntime({
     state.weights = weights;
     state.influenceCount = influenceCount;
     state.boneIds = Array.isArray(entry.bone_ids)
-      ? [...entry.bone_ids].map(Number).filter(Number.isFinite)
-        .sort((left, right) => left - right)
+      ? [...entry.bone_ids]
+          .map(Number)
+          .filter(Number.isFinite)
+          .sort((left, right) => left - right)
       : buildBoneIds(indices, weights, influenceCount);
     state.encoding = entry.encoding || null;
     state.diagnostics = entry.diagnostics || null;
@@ -409,15 +447,22 @@ export function createSkinningRuntime({
     return true;
   }
 
-  async function ensureRigMeshPreparedCooperative(mesh, state, {
-      budget = createWorkBudget(), isCurrent = () => true,
-  } = {}) {
+  async function ensureRigMeshPreparedCooperative(
+    mesh,
+    state,
+    { budget = createWorkBudget(), isCurrent = () => true } = {},
+  ) {
     if (!state?.loaded || !isCurrent()) return false;
     prepareRigMeshBase(mesh, state);
     if (!state.influenceNodes) {
       const nodes = await buildRigInfluenceNodesCooperative(
-        state.baselinePositions, state.indices, state.weights,
-        state.influenceCount, state.boneIds, {budget, isCurrent});
+        state.baselinePositions,
+        state.indices,
+        state.weights,
+        state.influenceCount,
+        state.boneIds,
+        { budget, isCurrent },
+      );
       if (!nodes || !state.loaded || !isCurrent()) return false;
       state.influenceNodes = nodes;
     }
@@ -425,43 +470,65 @@ export function createSkinningRuntime({
     return isCurrent() && state.loaded;
   }
 
-  async function buildInfluenceGraphCooperative(mesh, state,
-      requestedEvidenceMode = 'vertex', surfaceEvidence = null, {
-        budget = createWorkBudget(), isCurrent = () => true,
-      } = {}) {
-    if (!(await ensureRigMeshPreparedCooperative(mesh, state,
-      {budget, isCurrent}))) return null;
+  async function buildInfluenceGraphCooperative(
+    mesh,
+    state,
+    requestedEvidenceMode = 'vertex',
+    surfaceEvidence = null,
+    { budget = createWorkBudget(), isCurrent = () => true } = {},
+  ) {
+    if (!(await ensureRigMeshPreparedCooperative(mesh, state, { budget, isCurrent }))) return null;
     if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
     const radius = Number(mesh.geometry.boundingSphere?.radius);
     let measure = surfaceEvidence;
     if (!measure && requestedEvidenceMode === 'surface') {
-      measure = await inspectSurfaceTopologyCooperative(
-        state.baselinePositions, mesh.geometry?.index?.array || null,
-        {budget, isCurrent});
+      measure = await inspectSurfaceTopologyCooperative(state.baselinePositions, mesh.geometry?.index?.array || null, {
+        budget,
+        isCurrent,
+      });
       if (!measure) return null;
     }
-    const evidenceMode = requestedEvidenceMode === 'surface'
-      && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
+    const evidenceMode =
+      requestedEvidenceMode === 'surface' && measure?.surfaceEvidenceAvailable ? 'surface' : 'vertex';
     if (evidenceMode === 'surface') {
       return buildSurfaceInfluenceGraphCooperative(
-        state.baselinePositions, mesh.geometry?.index?.array || null,
-        state.indices, state.weights, state.influenceCount, state.boneIds,
+        state.baselinePositions,
+        mesh.geometry?.index?.array || null,
+        state.indices,
+        state.weights,
+        state.influenceCount,
+        state.boneIds,
         Number.isFinite(radius) && radius > 0 ? radius : null,
-        {budget, isCurrent});
+        { budget, isCurrent },
+      );
     }
     const relationships = await buildRigInfluenceRelationshipsCooperative(
-      state.baselinePositions, state.indices, state.weights,
-      state.influenceCount, state.influenceNodes,
+      state.baselinePositions,
+      state.indices,
+      state.weights,
+      state.influenceCount,
+      state.influenceNodes,
       Number.isFinite(radius) && radius > 0 ? radius : null,
-      {budget, isCurrent});
+      { budget, isCurrent },
+    );
     if (!relationships || !isCurrent()) return null;
     return vertexInfluenceGraphResult(
-      state.influenceNodes, relationships, radius, requestedEvidenceMode,
-      evidenceMode, measure);
+      state.influenceNodes,
+      relationships,
+      radius,
+      requestedEvidenceMode,
+      evidenceMode,
+      measure,
+    );
   }
 
-  async function ensureInfluenceGraphCooperative(mesh, state,
-      evidenceMode = 'vertex', surfaceEvidence = null, options = {}) {
+  async function ensureInfluenceGraphCooperative(
+    mesh,
+    state,
+    evidenceMode = 'vertex',
+    surfaceEvidence = null,
+    options = {},
+  ) {
     if (!state?.loaded) return null;
     if (state.influenceGraph?.evidenceMode === evidenceMode) {
       return state.influenceGraph;
@@ -474,11 +541,9 @@ export function createSkinningRuntime({
     const key = String(evidenceMode);
     const pending = pendingByMode.get(key);
     if (pending) return pending;
-    const promise = buildInfluenceGraphCooperative(
-      mesh, state, evidenceMode, surfaceEvidence, options)
-      .then(graph => {
-        if (graph && state.loaded && (!options.isCurrent
-            || options.isCurrent())) state.influenceGraph = graph;
+    const promise = buildInfluenceGraphCooperative(mesh, state, evidenceMode, surfaceEvidence, options)
+      .then((graph) => {
+        if (graph && state.loaded && (!options.isCurrent || options.isCurrent())) state.influenceGraph = graph;
         return graph;
       })
       .finally(() => {
@@ -490,8 +555,7 @@ export function createSkinningRuntime({
   }
 
   function setModelWeightLoadError(error) {
-    modelWeightState.error = error instanceof Error
-      ? error.message : String(error);
+    modelWeightState.error = error instanceof Error ? error.message : String(error);
     modelWeightState.loaded = false;
     modelWeightState.noWeights = false;
   }
@@ -505,21 +569,23 @@ export function createSkinningRuntime({
     modelWeightState.performance = performance;
     const deferPhysicsSync = () => {
       const readyGeneration = generation;
-      const afterPaint = typeof requestAnimationFrame === 'function'
-        ? requestAnimationFrame : callback => setTimeout(callback, 0);
-      afterPaint(() => setTimeout(() => {
-        if (readyGeneration !== getGeneration() || !modelWeightState.loaded) {
-          return;
-        }
-        syncPhysicsToSelection();
-      }, 0));
+      const afterPaint =
+        typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
+      afterPaint(() =>
+        setTimeout(() => {
+          if (readyGeneration !== getGeneration() || !modelWeightState.loaded) {
+            return;
+          }
+          syncPhysicsToSelection();
+        }, 0),
+      );
     };
     const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
     if (!meshes.length) {
       modelWeightState.loaded = true;
       modelWeightState.noWeights = true;
       modelWeightState.savedSelectionApplied = true;
-      refreshModelWeightSummary({refreshStats: true});
+      refreshModelWeightSummary({ refreshStats: true });
       deferPhysicsSync();
       notifyModelWeightChanged();
       return Promise.resolve(modelWeightSnapshot());
@@ -536,10 +602,8 @@ export function createSkinningRuntime({
       }
       const preview = await api(folderPath);
       if (generation !== getGeneration()) return modelWeightSnapshot();
-      modelWeightState.savedBonesBySource = selectionMapFromEntries(
-        preview?.saved_bones);
-      const bufferResponse = preview?.data?.url
-        ? await fetch(preview.data.url, {cache: 'no-store'}) : null;
+      modelWeightState.savedBonesBySource = selectionMapFromEntries(preview?.saved_bones);
+      const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
       if (bufferResponse && !bufferResponse.ok) {
         throw new Error(`Skin data download failed (${bufferResponse.status}).`);
       }
@@ -560,7 +624,7 @@ export function createSkinningRuntime({
           continue;
         }
         try {
-          installSkinningEntry(mesh, entry, buffer, {refreshSelection: false});
+          installSkinningEntry(mesh, entry, buffer, { refreshSelection: false });
         } catch (error) {
           state.error = error instanceof Error ? error.message : String(error);
           state.loaded = false;
@@ -569,7 +633,7 @@ export function createSkinningRuntime({
       }
       if (generation !== getGeneration()) return modelWeightSnapshot();
       modelWeightState.loaded = true;
-      refreshModelWeightSummary({refreshStats: true});
+      refreshModelWeightSummary({ refreshStats: true });
       performance.basicInstallMs = clockNow() - installStartedAt;
       performance.weightReadyMs = clockNow() - loadStartedAt;
       Object.assign(performance, installBudget.getStats());
@@ -580,10 +644,10 @@ export function createSkinningRuntime({
       notifyModelWeightChanged();
       if (!modelWeightState.savedSelectionApplied) {
         modelWeightState.savedSelectionApplied = true;
-        setSelectedBones(sourceSelectionEntries(
-          modelWeightState.savedBonesBySource), {
-            syncPhysics: false, refreshMasks: false,
-          });
+        setSelectedBones(sourceSelectionEntries(modelWeightState.savedBonesBySource), {
+          syncPhysics: false,
+          refreshMasks: false,
+        });
         await restoreSelectedWeightMasks(generation);
         deferPhysicsSync();
       } else {
@@ -591,15 +655,14 @@ export function createSkinningRuntime({
         deferPhysicsSync();
         notifyModelWeightChanged();
       }
-      performance.selectedMaskRestoreMs = clockNow() - loadStartedAt
-        - performance.weightReadyMs;
+      performance.selectedMaskRestoreMs = clockNow() - loadStartedAt - performance.weightReadyMs;
       return modelWeightSnapshot();
     })();
     return modelWeightState.promise
-      .catch(error => {
+      .catch((error) => {
         if (generation === getGeneration()) {
           setModelWeightLoadError(error);
-          refreshModelWeightSummary({refreshStats: true});
+          refreshModelWeightSummary({ refreshStats: true });
           notifyModelWeightChanged();
         }
         return modelWeightSnapshot();
@@ -623,8 +686,7 @@ export function createSkinningRuntime({
     const count = Math.floor(state.indices.length / state.influenceCount);
     const colors = new Float32Array(count * 3);
     for (let vertex = 0; vertex < count; vertex += 1) {
-      const value = Math.max(0, Math.min(1,
-        Number(selectedMask[vertex]) || 0));
+      const value = Math.max(0, Math.min(1, Number(selectedMask[vertex]) || 0));
       const offset = vertex * 3;
       colors[offset] = value;
       colors[offset + 1] = Math.min(1, value * 2);
@@ -634,7 +696,8 @@ export function createSkinningRuntime({
     mesh.geometry.attributes.color.needsUpdate = true;
     if (!state.debugMaterial) {
       state.debugMaterial = new THREE.MeshBasicMaterial({
-        vertexColors: true, side: THREE.DoubleSide,
+        vertexColors: true,
+        side: THREE.DoubleSide,
       });
     }
     mesh.material = state.debugMaterial;
@@ -653,13 +716,12 @@ export function createSkinningRuntime({
   }
 
   function updateModelWeightHeatmap(changedSourceKeys = null) {
-    knownMeshes.forEach(mesh => {
+    knownMeshes.forEach((mesh) => {
       const state = states.get(mesh);
       if (!state?.loaded) return;
-      if (changedSourceKeys
-          && !changedSourceKeys.has(state.skinningSourceKey)) return;
+      if (changedSourceKeys && !changedSourceKeys.has(state.skinningSourceKey)) return;
       const mask = state.selectedWeightMask;
-      if (modelWeightState.heatmapEnabled && mask?.some(value => value > 0)) {
+      if (modelWeightState.heatmapEnabled && mask?.some((value) => value > 0)) {
         state.heatmapMode = 'bone';
         updateHeatmap(mesh, state, mask);
       } else if (state.heatmapMode) {
@@ -670,15 +732,13 @@ export function createSkinningRuntime({
 
   function getSkinningBaseMaterial(mesh) {
     const state = states.get(mesh);
-    return state ? (state.originalMaterial || mesh.material)
-      : mesh?.material;
+    return state ? state.originalMaterial || mesh.material : mesh?.material;
   }
 
   function withSkinningBaseMaterial(mesh, operation) {
     const state = states.get(mesh);
     if (!state) return operation();
-    const heatmapActive = state.heatmapMode && state.debugMaterial
-      && mesh.material === state.debugMaterial;
+    const heatmapActive = state.heatmapMode && state.debugMaterial && mesh.material === state.debugMaterial;
     const displayedMaterial = mesh.material;
     if (heatmapActive) {
       mesh.material = state.originalMaterial || mesh.material;
@@ -696,16 +756,13 @@ export function createSkinningRuntime({
     }
   }
 
-  function rebaseAfterShapeChange(mesh, {
-      positions = null, normals = null,
-  } = {}) {
+  function rebaseAfterShapeChange(mesh, { positions = null, normals = null } = {}) {
     const state = states.get(mesh);
     const position = mesh?.geometry?.attributes?.position;
     if (!state?.loaded || !position) return false;
     const shapedPositions = positions || new Float32Array(position.array);
     const normal = mesh.geometry.attributes.normal;
-    const shapedNormals = normals
-      || (normal ? new Float32Array(normal.array) : null);
+    const shapedNormals = normals || (normal ? new Float32Array(normal.array) : null);
     state.poseTransforms = null;
     state.poseRotations = new Map();
     state.poseActiveVertices = null;
@@ -741,13 +798,23 @@ export function createSkinningRuntime({
   }
 
   return {
-    applyDeformation, buildInfluenceGraph, ensureInfluenceGraph,
-    buildInfluenceGraphCooperative, ensureInfluenceGraphCooperative,
-    ensureRigMeshPrepared, ensureRigMeshPreparedCooperative,
-    finalizeDeformationGeometry, forEachRigMesh,
-    getSkinningState: mesh => states.get(mesh) || null,
-    getSkinningBaseMaterial, withSkinningBaseMaterial,
-    installSkinningEntry, loadModelWeights, markFinalBoundsDirty,
-    rebaseAfterShapeChange, updateModelWeightHeatmap, disposeMesh,
+    applyDeformation,
+    buildInfluenceGraph,
+    ensureInfluenceGraph,
+    buildInfluenceGraphCooperative,
+    ensureInfluenceGraphCooperative,
+    ensureRigMeshPrepared,
+    ensureRigMeshPreparedCooperative,
+    finalizeDeformationGeometry,
+    forEachRigMesh,
+    getSkinningState: (mesh) => states.get(mesh) || null,
+    getSkinningBaseMaterial,
+    withSkinningBaseMaterial,
+    installSkinningEntry,
+    loadModelWeights,
+    markFinalBoundsDirty,
+    rebaseAfterShapeChange,
+    updateModelWeightHeatmap,
+    disposeMesh,
   };
 }

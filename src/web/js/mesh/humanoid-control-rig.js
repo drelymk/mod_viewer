@@ -13,45 +13,76 @@ import {
   buildProportionalHumanoidRig,
   semanticAxesFrame,
 } from './humanoid-proportional-template.js';
-import {MODEL_RIG_BUILDER_VERSION} from './model-rig-persistence.js';
+import { MODEL_RIG_BUILDER_VERSION } from './model-rig-persistence.js';
 
 const EPSILON = 1e-8;
 export const HUMANOID_CONTROL_RIG_VERSION = 2;
-export {MODEL_RIG_BUILDER_VERSION};
+export { MODEL_RIG_BUILDER_VERSION };
 const DEFAULT_MAX_POINT_COUNT = 160000;
 const FOOT_SIDE_MIN = 0.025;
 const FOOT_DEPTH_BAND_MAX_HEIGHT = 0.02;
-const FOOT_DEPTH_FROM_BACK_FRACTION = 0.30;
+const FOOT_DEPTH_FROM_BACK_FRACTION = 0.3;
 const CONTROL_KEYS = Object.freeze([
-  'chest', 'pelvis', 'neck', 'head',
-  'leftShoulder', 'leftElbow', 'leftHand',
-  'rightShoulder', 'rightElbow', 'rightHand',
-  'leftHip', 'leftKnee', 'leftFoot',
-  'rightHip', 'rightKnee', 'rightFoot',
+  'chest',
+  'pelvis',
+  'neck',
+  'head',
+  'leftShoulder',
+  'leftElbow',
+  'leftHand',
+  'rightShoulder',
+  'rightElbow',
+  'rightHand',
+  'leftHip',
+  'leftKnee',
+  'leftFoot',
+  'rightHip',
+  'rightKnee',
+  'rightFoot',
 ]);
 const CONTROL_DRIVER_IDS = Object.freeze({
-  chest: 'torso', pelvis: 'torso',
-  neck: 'neck', head: 'head',
-  leftShoulder: 'left_upper_arm', leftElbow: 'left_lower_arm',
-  leftHand: 'left_lower_arm', rightShoulder: 'right_upper_arm',
-  rightElbow: 'right_lower_arm', rightHand: 'right_lower_arm',
-  leftHip: 'left_upper_leg', leftKnee: 'left_lower_leg',
-  leftFoot: 'left_lower_leg', rightHip: 'right_upper_leg',
-  rightKnee: 'right_lower_leg', rightFoot: 'right_lower_leg',
+  chest: 'torso',
+  pelvis: 'torso',
+  neck: 'neck',
+  head: 'head',
+  leftShoulder: 'left_upper_arm',
+  leftElbow: 'left_lower_arm',
+  leftHand: 'left_lower_arm',
+  rightShoulder: 'right_upper_arm',
+  rightElbow: 'right_lower_arm',
+  rightHand: 'right_lower_arm',
+  leftHip: 'left_upper_leg',
+  leftKnee: 'left_lower_leg',
+  leftFoot: 'left_lower_leg',
+  rightHip: 'right_upper_leg',
+  rightKnee: 'right_lower_leg',
+  rightFoot: 'right_lower_leg',
 });
 const TEMPLATE_PRIORS = Object.freeze({
   ...DEFAULT_HUMANOID_PROPORTIONS,
   vertical: Object.freeze({
-    neck: 0.82, head: 0.91, chest: 0.685, pelvis: 0.55, knee: 0.2925,
+    neck: 0.82,
+    head: 0.91,
+    chest: 0.685,
+    pelvis: 0.55,
+    knee: 0.2925,
     foot: 0.035,
   }),
 });
 
 const CONTROL_LIMB_ROLES = Object.freeze({
-  leftShoulder: 'left_arm', leftElbow: 'left_arm', leftHand: 'left_arm',
-  rightShoulder: 'right_arm', rightElbow: 'right_arm', rightHand: 'right_arm',
-  leftHip: 'left_leg', leftKnee: 'left_leg', leftFoot: 'left_leg',
-  rightHip: 'right_leg', rightKnee: 'right_leg', rightFoot: 'right_leg',
+  leftShoulder: 'left_arm',
+  leftElbow: 'left_arm',
+  leftHand: 'left_arm',
+  rightShoulder: 'right_arm',
+  rightElbow: 'right_arm',
+  rightHand: 'right_arm',
+  leftHip: 'left_leg',
+  leftKnee: 'left_leg',
+  leftFoot: 'left_leg',
+  rightHip: 'right_leg',
+  rightKnee: 'right_leg',
+  rightFoot: 'right_leg',
 });
 
 function finiteNumber(value, fallback = 0) {
@@ -60,23 +91,21 @@ function finiteNumber(value, fallback = 0) {
 }
 
 function vector3(value, fallback = [0, 0, 0]) {
-  if (value?.isVector3) return [finiteNumber(value.x), finiteNumber(value.y),
-    finiteNumber(value.z)];
+  if (value?.isVector3) return [finiteNumber(value.x), finiteNumber(value.y), finiteNumber(value.z)];
   if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-    return [0, 1, 2].map(index => finiteNumber(value[index], fallback[index]));
+    return [0, 1, 2].map((index) => finiteNumber(value[index], fallback[index]));
   }
   if (value && typeof value === 'object') {
-    return [finiteNumber(value.x, fallback[0]), finiteNumber(value.y, fallback[1]),
-      finiteNumber(value.z, fallback[2])];
+    return [finiteNumber(value.x, fallback[0]), finiteNumber(value.y, fallback[1]), finiteNumber(value.z, fallback[2])];
   }
   return [...fallback];
 }
 
 function quaternion4(value) {
-  if (value?.isQuaternion) return [finiteNumber(value.x), finiteNumber(value.y),
-    finiteNumber(value.z), finiteNumber(value.w, 1)];
+  if (value?.isQuaternion)
+    return [finiteNumber(value.x), finiteNumber(value.y), finiteNumber(value.z), finiteNumber(value.w, 1)];
   if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-    const result = [0, 1, 2, 3].map(index => Number(value[index]));
+    const result = [0, 1, 2, 3].map((index) => Number(value[index]));
     if (result.every(Number.isFinite)) return result;
   }
   if (value && typeof value === 'object') {
@@ -84,10 +113,6 @@ function quaternion4(value) {
     if (result.every(Number.isFinite)) return result;
   }
   return [0, 0, 0, 1];
-}
-
-function length(value) {
-  return Math.hypot(value[0], value[1], value[2]);
 }
 
 function dot(left, right) {
@@ -99,7 +124,7 @@ function add(left, right) {
 }
 
 function scale(value, amount) {
-  return value.map(component => component * amount);
+  return value.map((component) => component * amount);
 }
 
 function clamp(value, low, high) {
@@ -129,18 +154,21 @@ function transformedPoint(point, matrix) {
   const z = point[2];
   const w = e[3] * x + e[7] * y + e[11] * z + e[15];
   const divisor = Math.abs(w) > EPSILON ? w : 1;
-  return [(e[0] * x + e[4] * y + e[8] * z + e[12]) / divisor,
+  return [
+    (e[0] * x + e[4] * y + e[8] * z + e[12]) / divisor,
     (e[1] * x + e[5] * y + e[9] * z + e[13]) / divisor,
-    (e[2] * x + e[6] * y + e[10] * z + e[14]) / divisor];
+    (e[2] * x + e[6] * y + e[10] * z + e[14]) / divisor,
+  ];
 }
 
 function positionsForMesh(mesh) {
   if (mesh?.userData?.assetFill === true) return null;
-  const rest = mesh?.userData?.humanoidRestPositions
-    || mesh?.userData?.basePositions || mesh?.geometry?.attributes?.position?.array;
+  const rest =
+    mesh?.userData?.humanoidRestPositions ||
+    mesh?.userData?.basePositions ||
+    mesh?.geometry?.attributes?.position?.array;
   if (!rest || rest.length < 3) return null;
-  const matrix = mesh?.userData?.humanoidRestMatrix?.isMatrix4
-    ? mesh.userData.humanoidRestMatrix : null;
+  const matrix = mesh?.userData?.humanoidRestMatrix?.isMatrix4 ? mesh.userData.humanoidRestMatrix : null;
   const points = [];
   for (let index = 0; index + 2 < rest.length; index += 3) {
     const point = [Number(rest[index]), Number(rest[index + 1]), Number(rest[index + 2])];
@@ -151,15 +179,17 @@ function positionsForMesh(mesh) {
 
 function semanticPoints(meshes, frame) {
   const result = [];
-  (meshes || []).forEach(mesh => {
+  (meshes || []).forEach((mesh) => {
     const points = positionsForMesh(mesh);
     if (!points) return;
-    points.forEach(point => result.push({
-      point,
-      side: dot(point, frame.right),
-      height: dot(point, frame.up),
-      depth: dot(point, frame.forward),
-    }));
+    points.forEach((point) =>
+      result.push({
+        point,
+        side: dot(point, frame.right),
+        height: dot(point, frame.up),
+        depth: dot(point, frame.forward),
+      }),
+    );
   });
   return result;
 }
@@ -177,23 +207,23 @@ function downsamplePoints(points, maximum) {
 function minMax(values) {
   let min = Infinity;
   let max = -Infinity;
-  values.forEach(value => {
+  values.forEach((value) => {
     if (value < min) min = value;
     if (value > max) max = value;
   });
-  return {min, max};
+  return { min, max };
 }
 
 function boundsFor(points) {
-  const sideBounds = minMax(points.map(item => item.side));
-  const heightBounds = minMax(points.map(item => item.height));
-  const depthBounds = minMax(points.map(item => item.depth));
+  const sideBounds = minMax(points.map((item) => item.side));
+  const heightBounds = minMax(points.map((item) => item.height));
+  const depthBounds = minMax(points.map((item) => item.depth));
   return {
     lowHeight: heightBounds.min,
     highHeight: heightBounds.max,
     height: Math.max(heightBounds.max - heightBounds.min, 0),
-    sideCenter: median(points.map(item => item.side)),
-    depthCenter: median(points.map(item => item.depth)),
+    sideCenter: median(points.map((item) => item.side)),
+    depthCenter: median(points.map((item) => item.depth)),
     minSide: sideBounds.min,
     maxSide: sideBounds.max,
     minDepth: depthBounds.min,
@@ -213,20 +243,27 @@ function normalizedPoint(item, bounds) {
 // This is the Foot geometry lookup. It supplies only side/height anchors;
 // the separate bottom-band measurement below supplies the shared depth.
 function fitFoot(points, side) {
-  const lower = points.filter(item => item.y <= 0.1 && side * item.x > FOOT_SIDE_MIN);
+  const lower = points.filter((item) => item.y <= 0.1 && side * item.x > FOOT_SIDE_MIN);
   if (!lower.length) return null;
-  const stableTop = quantile(lower.map(item => item.y), 0.62);
-  const stable = lower.filter(item => item.y <= stableTop);
+  const stableTop = quantile(
+    lower.map((item) => item.y),
+    0.62,
+  );
+  const stable = lower.filter((item) => item.y <= stableTop);
   return {
-    x: median(stable.map(item => item.x)),
-    y: median(stable.map(item => item.y)),
-    z: median(stable.map(item => item.z)),
+    x: median(stable.map((item) => item.x)),
+    y: median(stable.map((item) => item.y)),
+    z: median(stable.map((item) => item.z)),
     support: stable.length,
   };
 }
 
-function fallbackFootDepth(sliceCenters = [], rejectedSliceCount = 0,
-    reason = 'foot_depth_unavailable', diagnostics = {}) {
+function fallbackFootDepth(
+  sliceCenters = [],
+  rejectedSliceCount = 0,
+  reason = 'foot_depth_unavailable',
+  diagnostics = {},
+) {
   return {
     depthN: 0,
     support: 0,
@@ -244,15 +281,14 @@ function footDepthEnvelope(depths) {
   if (!depths.length) return null;
   let backDepth = Infinity;
   let frontDepth = -Infinity;
-  depths.forEach(depth => {
+  depths.forEach((depth) => {
     if (depth < backDepth) backDepth = depth;
     if (depth > frontDepth) frontDepth = depth;
   });
   return {
     backDepth,
     frontDepth,
-    center: backDepth + (frontDepth - backDepth)
-      * FOOT_DEPTH_FROM_BACK_FRACTION,
+    center: backDepth + (frontDepth - backDepth) * FOOT_DEPTH_FROM_BACK_FRACTION,
     thickness: Math.max(0, frontDepth - backDepth),
     support: depths.length,
   };
@@ -260,30 +296,39 @@ function footDepthEnvelope(depths) {
 
 /** Estimate the common depth plane from the occupied sole band of both Feet. */
 export function estimateFootDepth(points = []) {
-  const depths = {left: [], right: []};
+  const depths = { left: [], right: [] };
   for (const point of points || []) {
     const x = Number(point?.x);
     const y = Number(point?.y);
     const z = Number(point?.z);
-    if (![x, y, z].every(Number.isFinite)
-        || y < 0 || y > FOOT_DEPTH_BAND_MAX_HEIGHT
-        || Math.abs(x) <= FOOT_SIDE_MIN) continue;
+    if (![x, y, z].every(Number.isFinite) || y < 0 || y > FOOT_DEPTH_BAND_MAX_HEIGHT || Math.abs(x) <= FOOT_SIDE_MIN)
+      continue;
     depths[x < 0 ? 'left' : 'right'].push(z);
   }
 
   const left = footDepthEnvelope(depths.left);
   const right = footDepthEnvelope(depths.right);
   const sliceCenters = [
-    {side: 'left', heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
+    {
+      side: 'left',
+      heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
       height01: FOOT_DEPTH_BAND_MAX_HEIGHT * 0.5,
-      backDepth: left?.backDepth ?? null, frontDepth: left?.frontDepth ?? null,
-      center: left?.center ?? null, thickness: left?.thickness ?? null,
-      support: left?.support || 0},
-    {side: 'right', heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
+      backDepth: left?.backDepth ?? null,
+      frontDepth: left?.frontDepth ?? null,
+      center: left?.center ?? null,
+      thickness: left?.thickness ?? null,
+      support: left?.support || 0,
+    },
+    {
+      side: 'right',
+      heightRange: [0, FOOT_DEPTH_BAND_MAX_HEIGHT],
       height01: FOOT_DEPTH_BAND_MAX_HEIGHT * 0.5,
-      backDepth: right?.backDepth ?? null, frontDepth: right?.frontDepth ?? null,
-      center: right?.center ?? null, thickness: right?.thickness ?? null,
-      support: right?.support || 0},
+      backDepth: right?.backDepth ?? null,
+      frontDepth: right?.frontDepth ?? null,
+      center: right?.center ?? null,
+      thickness: right?.thickness ?? null,
+      support: right?.support || 0,
+    },
   ];
   const diagnostics = {
     method: 'bottom_foot_band',
@@ -292,8 +337,12 @@ export function estimateFootDepth(points = []) {
     fromBackFraction: FOOT_DEPTH_FROM_BACK_FRACTION,
   };
   if (!left || !right) {
-    return fallbackFootDepth(sliceCenters, 2 - [left, right].filter(Boolean).length,
-      'foot_depth_unavailable', diagnostics);
+    return fallbackFootDepth(
+      sliceCenters,
+      2 - [left, right].filter(Boolean).length,
+      'foot_depth_unavailable',
+      diagnostics,
+    );
   }
   return {
     depthN: (left.center + right.center) * 0.5,
@@ -312,8 +361,7 @@ function pointToWorld(point, bounds, frame) {
   const side = bounds.sideCenter + point.x * bounds.height;
   const height = bounds.lowHeight + point.y * bounds.height;
   const depth = bounds.depthCenter + point.z * bounds.height;
-  return add(add(scale(frame.right, side), scale(frame.up, height)),
-    scale(frame.forward, depth));
+  return add(add(scale(frame.right, side), scale(frame.up, height)), scale(frame.forward, depth));
 }
 
 function worldToSemantic(point, bounds, frame) {
@@ -341,15 +389,14 @@ function rigBounds(rig) {
 export function semanticToHumanoidControlPosition(semantic, rig) {
   const bounds = rigBounds(rig);
   if (!bounds || !semantic || typeof semantic !== 'object') return null;
-  const values = [semantic.sideN, semantic.height01, semantic.depthN]
-    .map(Number);
+  const values = [semantic.sideN, semantic.height01, semantic.depthN].map(Number);
   if (!values.every(Number.isFinite)) return null;
   const frame = semanticAxesFrame({
     up: rig.frame?.up,
     right: rig.frame?.right,
     forward: rig.frame?.forward,
   });
-  return pointToWorld({x: values[0], y: values[1], z: values[2]}, bounds, frame);
+  return pointToWorld({ x: values[0], y: values[1], z: values[2] }, bounds, frame);
 }
 
 /** Convert a model-space control position into normalized semantic data. */
@@ -362,16 +409,14 @@ export function humanoidControlPositionToSemantic(position, rig) {
     forward: rig.frame?.forward,
   });
   const result = worldToSemantic(position, bounds, frame);
-  return Object.fromEntries(Object.entries(result).map(([key, value]) => [
-    key, finiteNumber(value),
-  ]));
+  return Object.fromEntries(Object.entries(result).map(([key, value]) => [key, finiteNumber(value)]));
 }
 
 /** Rebuild the fixed humanoid paths after a control position changes. */
 export function rebuildHumanoidControlPaths(rig) {
   if (!rig) return rig;
   const controls = rig.controls || {};
-  const point = key => vector3(controls[key]?.position || controls[key]);
+  const point = (key) => vector3(controls[key]?.position || controls[key]);
   rig.paths = {
     torso: ['pelvis', 'chest', 'neck', 'head'].map(point),
     leftArm: ['leftShoulder', 'leftElbow', 'leftHand'].map(point),
@@ -383,9 +428,11 @@ export function rebuildHumanoidControlPaths(rig) {
 }
 
 function validSemantic(value) {
-  return value && typeof value === 'object'
-    && ['sideN', 'height01', 'depthN'].every(key =>
-      typeof value[key] === 'number' && Number.isFinite(value[key]));
+  return (
+    value &&
+    typeof value === 'object' &&
+    ['sideN', 'height01', 'depthN'].every((key) => typeof value[key] === 'number' && Number.isFinite(value[key]))
+  );
 }
 
 function cloneControlRig(rig) {
@@ -393,7 +440,7 @@ function cloneControlRig(rig) {
 }
 
 /** Resolve saved ModelJoint IDs without guessing replacements. */
-export function resolveHumanoidControlMappings({savedOverrides, modelRig} = {}) {
+export function resolveHumanoidControlMappings({ savedOverrides, modelRig } = {}) {
   const result = new Map();
   const rejectedControlKeys = new Set();
   result.rejectedControlKeys = rejectedControlKeys;
@@ -401,10 +448,9 @@ export function resolveHumanoidControlMappings({savedOverrides, modelRig} = {}) 
   if (!controls || typeof controls !== 'object') return result;
   const builderVersion = savedOverrides?.model_rig_builder_version;
   const usedJoints = new Set();
-  CONTROL_KEYS.forEach(controlKey => {
+  CONTROL_KEYS.forEach((controlKey) => {
     const raw = controls[controlKey];
-    if (!raw || typeof raw !== 'object'
-        || !Object.prototype.hasOwnProperty.call(raw, 'joint_id')) return;
+    if (!raw || typeof raw !== 'object' || !Object.prototype.hasOwnProperty.call(raw, 'joint_id')) return;
     // An explicit ID is only meaningful for the ModelRig builder that wrote
     // it. Missing or stale provenance rejects the mapping and disables the
     // proximity fallback for this control.
@@ -421,29 +467,35 @@ export function resolveHumanoidControlMappings({savedOverrides, modelRig} = {}) 
       rejectedControlKeys.add(controlKey);
       return;
     }
-    const joint = (modelRig?.joints || []).find(item =>
-      Number(item?.jointId) === jointId);
+    const joint = (modelRig?.joints || []).find((item) => Number(item?.jointId) === jointId);
     if (!joint) {
       rejectedControlKeys.add(controlKey);
       return;
     }
     usedJoints.add(jointId);
-    result.set(controlKey, {controlKey, jointId});
+    result.set(controlKey, { controlKey, jointId });
   });
   return result;
 }
 
 /** Apply semantic manual overrides while retaining the automatic rig. */
-export function applyHumanoidControlRigOverrides({automaticRig,
-    savedOverrides, modelRig, resolvedMappings = null} = {}) {
+export function applyHumanoidControlRigOverrides({
+  automaticRig,
+  savedOverrides,
+  modelRig,
+  resolvedMappings = null,
+} = {}) {
   const result = cloneControlRig(automaticRig);
   if (!result) return result;
-  const mappings = resolvedMappings || resolveHumanoidControlMappings({
-    savedOverrides, modelRig,
-  });
+  const mappings =
+    resolvedMappings ||
+    resolveHumanoidControlMappings({
+      savedOverrides,
+      modelRig,
+    });
   const overrides = savedOverrides?.controls;
   if (overrides && typeof overrides === 'object') {
-    CONTROL_KEYS.forEach(controlKey => {
+    CONTROL_KEYS.forEach((controlKey) => {
       const override = overrides[controlKey];
       if (!override || typeof override !== 'object') return;
       const control = result.controls[controlKey];
@@ -452,15 +504,14 @@ export function applyHumanoidControlRigOverrides({automaticRig,
       const position = semanticToHumanoidControlPosition(semantic, result);
       if (validSemantic(semantic) && position) {
         control.position = position;
-        control.semantic = {...semantic};
+        control.semantic = { ...semantic };
         control.source = 'manual_override';
         control.fitted = true;
       }
     });
   }
   mappings.forEach((mapping, controlKey) => {
-    const joint = (modelRig?.joints || []).find(item =>
-      Number(item?.jointId) === mapping.jointId);
+    const joint = (modelRig?.joints || []).find((item) => Number(item?.jointId) === mapping.jointId);
     const pivot = joint?.restPivot || joint?.restCenter;
     if (!pivot || !result.controls[controlKey]) return;
     result.controls[controlKey].position = vector3(pivot);
@@ -478,26 +529,28 @@ export function applyHumanoidControlOverrides(options = {}) {
 
 export function validateHumanoidControlOverrides(value) {
   const raw = value?.humanoid_control_rig || value;
-  if (!raw || typeof raw !== 'object'
-      || Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION
-      || !raw.controls || typeof raw.controls !== 'object') {
-    return {valid: false, error: 'Invalid humanoid control-rig metadata.'};
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    Number(raw.version) !== HUMANOID_CONTROL_RIG_VERSION ||
+    !raw.controls ||
+    typeof raw.controls !== 'object'
+  ) {
+    return { valid: false, error: 'Invalid humanoid control-rig metadata.' };
   }
-  const unknown = Object.keys(raw.controls)
-    .filter(key => !CONTROL_KEYS.includes(key));
+  const unknown = Object.keys(raw.controls).filter((key) => !CONTROL_KEYS.includes(key));
   if (unknown.length) {
-    return {valid: false, error: 'Unknown humanoid control key.'};
+    return { valid: false, error: 'Unknown humanoid control key.' };
   }
   for (const entry of Object.values(raw.controls)) {
     if (!validSemantic(entry?.semantic)) {
-      return {valid: false, error: 'Invalid humanoid semantic coordinates.'};
+      return { valid: false, error: 'Invalid humanoid semantic coordinates.' };
     }
-    if (entry.joint_id !== undefined
-        && (!Number.isInteger(entry.joint_id) || entry.joint_id < 0)) {
-      return {valid: false, error: 'Invalid humanoid joint ID.'};
+    if (entry.joint_id !== undefined && (!Number.isInteger(entry.joint_id) || entry.joint_id < 0)) {
+      return { valid: false, error: 'Invalid humanoid joint ID.' };
     }
   }
-  return {valid: true, error: null};
+  return { valid: true, error: null };
 }
 
 function fallbackPoint(key) {
@@ -505,39 +558,53 @@ function fallbackPoint(key) {
   const foot = 0.02 + p.footLift;
   const hip = foot + p.legLength;
   const neck = hip + p.hipToNeckLength;
-  const head = neck + .10;
+  const head = neck + 0.1;
   const chest = hip + p.hipToNeckLength * p.chestFraction;
   const shoulder = p.shoulderHalfWidth;
-  const angle = p.armDropAngleDeg * Math.PI / 180;
+  const angle = (p.armDropAngleDeg * Math.PI) / 180;
   const armSide = p.armLength * Math.cos(angle);
   const armDrop = p.armLength * Math.sin(angle);
   const elbowSide = shoulder + armSide * p.elbowFraction;
   const elbowHeight = neck - armDrop * p.elbowFraction;
   const values = {
-    chest: [0, chest], pelvis: [0, hip], neck: [0, neck], head: [0, head],
-    leftShoulder: [-shoulder, neck], leftElbow: [-elbowSide, elbowHeight],
-    leftHand: [-shoulder - armSide, neck - armDrop], rightShoulder: [shoulder, neck],
-    rightElbow: [elbowSide, elbowHeight], rightHand: [shoulder + armSide, neck - armDrop],
-    leftHip: [-0.1, hip], leftKnee: [-0.1,
-      foot + p.legLength * finiteNumber(p.kneeFraction, 0.5)],
-    leftFoot: [-0.1, foot], rightHip: [0.1, hip],
+    chest: [0, chest],
+    pelvis: [0, hip],
+    neck: [0, neck],
+    head: [0, head],
+    leftShoulder: [-shoulder, neck],
+    leftElbow: [-elbowSide, elbowHeight],
+    leftHand: [-shoulder - armSide, neck - armDrop],
+    rightShoulder: [shoulder, neck],
+    rightElbow: [elbowSide, elbowHeight],
+    rightHand: [shoulder + armSide, neck - armDrop],
+    leftHip: [-0.1, hip],
+    leftKnee: [-0.1, foot + p.legLength * finiteNumber(p.kneeFraction, 0.5)],
+    leftFoot: [-0.1, foot],
+    rightHip: [0.1, hip],
     rightKnee: [0.1, foot + p.legLength * finiteNumber(p.kneeFraction, 0.5)],
     rightFoot: [0.1, foot],
   };
   const value = values[key] || [0, 0.5];
-  return {x: value[0], y: value[1], z: 0};
+  return { x: value[0], y: value[1], z: 0 };
 }
 
 function emptyRig(frame, diagnostics = {}, reason = 'no_rest_geometry', available = false) {
-  const controls = Object.fromEntries(CONTROL_KEYS.map(key => {
-    const point = fallbackPoint(key);
-    return [key, {
-      position: [0, 0, 0],
-      semantic: {sideN: point.x, height01: point.y, depthN: point.z},
-      confidence: 'deterministic', source: 'proportional_template', fitted: false,
-      support: 0,
-    }];
-  }));
+  const controls = Object.fromEntries(
+    CONTROL_KEYS.map((key) => {
+      const point = fallbackPoint(key);
+      return [
+        key,
+        {
+          position: [0, 0, 0],
+          semantic: { sideN: point.x, height01: point.y, depthN: point.z },
+          confidence: 'deterministic',
+          source: 'proportional_template',
+          fitted: false,
+          support: 0,
+        },
+      ];
+    }),
+  );
   return {
     version: 1,
     source: 'proportional_template',
@@ -546,11 +613,17 @@ function emptyRig(frame, diagnostics = {}, reason = 'no_rest_geometry', availabl
     accepted: false,
     confidence: 'deterministic',
     confidenceByRegion: {},
-    frame: {up: [...frame.up], right: [...frame.right], forward: [...frame.forward],
-      lowHeight: 0, highHeight: 0, height: 0},
+    frame: {
+      up: [...frame.up],
+      right: [...frame.right],
+      forward: [...frame.forward],
+      lowHeight: 0,
+      highHeight: 0,
+      height: 0,
+    },
     controls,
-    paths: {torso: [], leftArm: [], rightArm: [], leftLeg: [], rightLeg: []},
-    diagnostics: {...diagnostics, mode: 'proportional_template', failureReasons: [reason]},
+    paths: { torso: [], leftArm: [], rightArm: [], leftLeg: [], rightLeg: [] },
+    diagnostics: { ...diagnostics, mode: 'proportional_template', failureReasons: [reason] },
   };
 }
 
@@ -570,17 +643,14 @@ function buildControl(template, key, bounds, frame, supports) {
   };
 }
 
-function proportionalDiagnostics(template, bounds, frame, supports, base,
-    detectedFeet, skeletonDepth) {
+function proportionalDiagnostics(template, bounds, frame, supports, base, detectedFeet, skeletonDepth) {
   const p = template.proportions;
-  const detectedLeft = vector3(
-    detectedFeet?.left || template.detectedLeftFoot || template.leftFoot);
-  const detectedRight = vector3(
-    detectedFeet?.right || template.detectedRightFoot || template.rightFoot);
+  const detectedLeft = vector3(detectedFeet?.left || template.detectedLeftFoot || template.leftFoot);
+  const detectedRight = vector3(detectedFeet?.right || template.detectedRightFoot || template.rightFoot);
   return {
     ...base,
     mode: 'proportional_template',
-    semanticAxes: {up: [...frame.up], right: [...frame.right], forward: [...frame.forward]},
+    semanticAxes: { up: [...frame.up], right: [...frame.right], forward: [...frame.forward] },
     semanticSpans: {
       up: bounds.height,
       right: bounds.maxSide - bounds.minSide,
@@ -603,17 +673,18 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
       support: finiteNumber(skeletonDepth?.support),
       validSliceCount: finiteNumber(skeletonDepth?.validSliceCount),
       rejectedSliceCount: finiteNumber(skeletonDepth?.rejectedSliceCount),
-      sliceCenters: Array.isArray(skeletonDepth?.sliceCenters)
-        ? [...skeletonDepth.sliceCenters] : [],
+      sliceCenters: Array.isArray(skeletonDepth?.sliceCenters) ? [...skeletonDepth.sliceCenters] : [],
       spread: finiteNumber(skeletonDepth?.spread),
       fallbackUsed: skeletonDepth?.fallbackUsed === true,
       reason: skeletonDepth?.reason || null,
       diagnostics: skeletonDepth?.diagnostics || {},
     },
-    controlDepthN: Object.fromEntries(CONTROL_KEYS.map(key => [key,
-      worldToSemantic(template[key], bounds, frame).depthN])),
+    controlDepthN: Object.fromEntries(
+      CONTROL_KEYS.map((key) => [key, worldToSemantic(template[key], bounds, frame).depthN]),
+    ),
     templatePoints: {
-      neck: vector3(template.neck), head: vector3(template.head),
+      neck: vector3(template.neck),
+      head: vector3(template.head),
     },
     proportionalTemplate: {
       characterHeight: template.characterHeight,
@@ -638,11 +709,10 @@ function proportionalDiagnostics(template, bounds, frame, supports, base,
 }
 
 /** Fit a deterministic proportional scaffold on the detected Foot plane. */
-export function buildHumanoidControlRig({meshes = [], axes, orientationState, options = {}} = {}) {
+export function buildHumanoidControlRig({ meshes = [], axes, orientationState, options = {} } = {}) {
   const started = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   const frame = semanticAxesFrame(axes);
-  const orientationReady = orientationState
-    ? orientationState.orientationInitialized === true : true;
+  const orientationReady = orientationState ? orientationState.orientationInitialized === true : true;
   const baseOrientation = quaternion4(orientationState?.baseOrientation);
   const baseDiagnostics = {
     orientationReady,
@@ -654,30 +724,30 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     skeletonDepth: fallbackFootDepth(),
   };
   if (orientationState && !orientationReady) {
-    return emptyRig(frame, {...baseDiagnostics, fitRuntimeMs: 0},
-      'orientation_not_ready', false);
+    return emptyRig(frame, { ...baseDiagnostics, fitRuntimeMs: 0 }, 'orientation_not_ready', false);
   }
 
   const projected = semanticPoints(meshes, frame);
   baseDiagnostics.pointCount = projected.length;
-  if (!projected.length) return emptyRig(frame,
-    {...baseDiagnostics, fitRuntimeMs: 0}, 'no_rest_geometry', false);
+  if (!projected.length) return emptyRig(frame, { ...baseDiagnostics, fitRuntimeMs: 0 }, 'no_rest_geometry', false);
 
-  const maximum = Math.max(1, Math.floor(finiteNumber(
-    options.maxPointCount, DEFAULT_MAX_POINT_COUNT)));
+  const maximum = Math.max(1, Math.floor(finiteNumber(options.maxPointCount, DEFAULT_MAX_POINT_COUNT)));
   const workingPoints = downsamplePoints(projected, maximum);
   baseDiagnostics.sampledPointCount = workingPoints.length;
   const bounds = boundsFor(workingPoints);
   if (!(bounds.height > EPSILON)) {
-    return emptyRig(frame, {...baseDiagnostics, fitRuntimeMs: 0},
-      'invalid_character_height', false);
+    return emptyRig(frame, { ...baseDiagnostics, fitRuntimeMs: 0 }, 'invalid_character_height', false);
   }
-  const normalized = workingPoints.map(item => normalizedPoint(item, bounds));
+  const normalized = workingPoints.map((item) => normalizedPoint(item, bounds));
   const leftFootN = fitFoot(normalized, -1);
   const rightFootN = fitFoot(normalized, 1);
   if (!leftFootN || !rightFootN) {
-    return emptyRig(frame, {...baseDiagnostics, characterHeight: bounds.height,
-      fitRuntimeMs: 0}, 'feet_not_found', false);
+    return emptyRig(
+      frame,
+      { ...baseDiagnostics, characterHeight: bounds.height, fitRuntimeMs: 0 },
+      'feet_not_found',
+      false,
+    );
   }
 
   const skeletonDepth = estimateFootDepth(normalized);
@@ -685,8 +755,8 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
   const detectedRightFoot = pointToWorld(rightFootN, bounds, frame);
   // From this point onward the mesh is intentionally out of the pipeline.
   // Preserve Foot side/height while placing both Feet on the sole-derived plane.
-  const leftFoot = pointToWorld({...leftFootN, z: skeletonDepth.depthN}, bounds, frame);
-  const rightFoot = pointToWorld({...rightFootN, z: skeletonDepth.depthN}, bounds, frame);
+  const leftFoot = pointToWorld({ ...leftFootN, z: skeletonDepth.depthN }, bounds, frame);
+  const rightFoot = pointToWorld({ ...rightFootN, z: skeletonDepth.depthN }, bounds, frame);
   const template = buildProportionalHumanoidRig({
     characterHeight: bounds.height,
     leftFoot,
@@ -696,30 +766,42 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     proportions: options.proportions || DEFAULT_HUMANOID_PROPORTIONS,
   });
   if (!template) {
-    return emptyRig(frame, {...baseDiagnostics, characterHeight: bounds.height,
-      fitRuntimeMs: 0}, 'invalid_proportional_template', false);
+    return emptyRig(
+      frame,
+      { ...baseDiagnostics, characterHeight: bounds.height, fitRuntimeMs: 0 },
+      'invalid_proportional_template',
+      false,
+    );
   }
 
-  const supports = {leftFoot: leftFootN.support, rightFoot: rightFootN.support};
-  const controls = Object.fromEntries(CONTROL_KEYS.map(key => [key,
-    buildControl(template, key, bounds, frame, supports)]));
+  const supports = { leftFoot: leftFootN.support, rightFoot: rightFootN.support };
+  const controls = Object.fromEntries(
+    CONTROL_KEYS.map((key) => [key, buildControl(template, key, bounds, frame, supports)]),
+  );
   const paths = {
-    torso: ['pelvis', 'chest', 'neck', 'head'].map(key => controls[key].position),
+    torso: ['pelvis', 'chest', 'neck', 'head'].map((key) => controls[key].position),
     leftArm: pathFor(template, 'leftShoulder', 'leftElbow', 'leftHand'),
     rightArm: pathFor(template, 'rightShoulder', 'rightElbow', 'rightHand'),
     leftLeg: pathFor(template, 'leftHip', 'leftKnee', 'leftFoot'),
     rightLeg: pathFor(template, 'rightHip', 'rightKnee', 'rightFoot'),
   };
-  const runtime = (typeof performance !== 'undefined' && performance.now
-    ? performance.now() : Date.now()) - started;
+  const runtime = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) - started;
   const bodyDepth = bounds.depthCenter + skeletonDepth.depthN * bounds.height;
-  const diagnostics = proportionalDiagnostics(template, bounds, frame, supports, {
-    ...baseDiagnostics,
-    characterHeight: bounds.height,
-    bodyDepth,
-    bodyDepthN: skeletonDepth.depthN,
-    fitRuntimeMs: Math.max(0, runtime),
-  }, {left: detectedLeftFoot, right: detectedRightFoot}, skeletonDepth);
+  const diagnostics = proportionalDiagnostics(
+    template,
+    bounds,
+    frame,
+    supports,
+    {
+      ...baseDiagnostics,
+      characterHeight: bounds.height,
+      bodyDepth,
+      bodyDepthN: skeletonDepth.depthN,
+      fitRuntimeMs: Math.max(0, runtime),
+    },
+    { left: detectedLeftFoot, right: detectedRightFoot },
+    skeletonDepth,
+  );
   return serializeHumanoidControlRig({
     version: 1,
     source: 'proportional_template',
@@ -728,17 +810,25 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
     accepted: true,
     confidence: 'deterministic',
     confidenceByRegion: {
-      torso: 'deterministic', head: 'deterministic', arms: 'deterministic',
+      torso: 'deterministic',
+      head: 'deterministic',
+      arms: 'deterministic',
       legs: 'deterministic',
       overall: 'deterministic',
     },
     frame: {
-      up: [...frame.up], right: [...frame.right], forward: [...frame.forward],
-      lowHeight: bounds.lowHeight, highHeight: bounds.highHeight, height: bounds.height,
-      sideCenter: bounds.sideCenter, depthCenter: bounds.depthCenter,
-      bodyDepth, bodyDepthN: skeletonDepth.depthN,
+      up: [...frame.up],
+      right: [...frame.right],
+      forward: [...frame.forward],
+      lowHeight: bounds.lowHeight,
+      highHeight: bounds.highHeight,
+      height: bounds.height,
+      sideCenter: bounds.sideCenter,
+      depthCenter: bounds.depthCenter,
+      bodyDepth,
+      bodyDepthN: skeletonDepth.depthN,
     },
-    template: {...template.proportions, characterHeight: template.characterHeight},
+    template: { ...template.proportions, characterHeight: template.characterHeight },
     controls,
     paths,
     diagnostics,
@@ -749,17 +839,22 @@ export function buildHumanoidControlRig({meshes = [], axes, orientationState, op
 export function serializeHumanoidControlRig(rig) {
   if (!rig) return null;
   const result = JSON.parse(JSON.stringify(rig));
-  result.controls = Object.fromEntries(CONTROL_KEYS.map(key => {
-    const control = result.controls?.[key] || {};
-    return [key, {
-      position: vector3(control.position),
-      semantic: {...(control.semantic || {})},
-      confidence: control.confidence || result.confidence || 'deterministic',
-      source: control.source || result.source || 'proportional_template',
-      fitted: control.fitted !== false,
-      support: finiteNumber(control.support, 0),
-    }];
-  }));
+  result.controls = Object.fromEntries(
+    CONTROL_KEYS.map((key) => {
+      const control = result.controls?.[key] || {};
+      return [
+        key,
+        {
+          position: vector3(control.position),
+          semantic: { ...(control.semantic || {}) },
+          confidence: control.confidence || result.confidence || 'deterministic',
+          source: control.source || result.source || 'proportional_template',
+          fitted: control.fitted !== false,
+          support: finiteNumber(control.support, 0),
+        },
+      ];
+    }),
+  );
   return result;
 }
 
@@ -767,4 +862,4 @@ export const HUMANOID_CONTROL_KEYS = CONTROL_KEYS;
 export const HUMANOID_CONTROL_DRIVER_IDS = CONTROL_DRIVER_IDS;
 export const HUMANOID_TEMPLATE_PRIORS = TEMPLATE_PRIORS;
 export const HUMANOID_CONTROL_LIMB_ROLES = CONTROL_LIMB_ROLES;
-export {DEFAULT_HUMANOID_PROPORTIONS, buildProportionalHumanoidRig};
+export { DEFAULT_HUMANOID_PROPORTIONS, buildProportionalHumanoidRig };

@@ -18,7 +18,7 @@ let currentAssetResolution = null;
 function diagnosticReason(issue) {
   const key = issue?.reason ? `diagnostics.reason.${issue.reason}` : '';
   if (key && Object.hasOwn(LOCALES.en, key)) {
-    return t(key, {count: issue.count});
+    return t(key, { count: issue.count });
   }
   return issue?.problem || issue?.message || '';
 }
@@ -62,7 +62,7 @@ function locationText(issue) {
   const parts = [];
   if (issue.ini) parts.push(issue.ini);
   if (issue.section) parts.push(`[${issue.section}]`);
-  if (issue.line) parts.push(t('health.line', {line: issue.line}));
+  if (issue.line) parts.push(t('health.line', { line: issue.line }));
   return parts.join(' · ');
 }
 
@@ -75,26 +75,28 @@ function renderAssetResolution() {
   }
   const exact = Number(summary.exact_draws) || 0;
   const total = Number(summary.total_draws) || 0;
-  const parts = summary.index_status === 'unavailable'
-    ? [t('health.assetIndexUnavailable')]
-    : summary.index_status === 'partial'
-      ? [t('health.assetIndexesAvailable', {
-        ready: summary.ready_roots || 0,
-        configured: summary.configured_roots || 0,
-      })]
-      : [t('health.assetDrawsExact', {exact, total})];
+  const parts =
+    summary.index_status === 'unavailable'
+      ? [t('health.assetIndexUnavailable')]
+      : summary.index_status === 'partial'
+        ? [
+            t('health.assetIndexesAvailable', {
+              ready: summary.ready_roots || 0,
+              configured: summary.configured_roots || 0,
+            }),
+          ]
+        : [t('health.assetDrawsExact', { exact, total })];
   for (const [key, label] of [
     ['partial_draws', 'health.partialDraws'],
     ['ambiguous_draws', 'health.ambiguousDraws'],
     ['unmatched_draws', 'health.notFoundDraws'],
   ]) {
     const count = Number(summary[key]) || 0;
-    if (count) parts.push(t(label, {count}));
+    if (count) parts.push(t(label, { count }));
   }
-  const components = Array.isArray(summary.components)
-    ? summary.components : [];
-  const mixed = components.filter(item => item.status === 'mixed').length;
-  if (mixed) parts.push(t('health.mixedComponents', {count: mixed}));
+  const components = Array.isArray(summary.components) ? summary.components : [];
+  const mixed = components.filter((item) => item.status === 'mixed').length;
+  if (mixed) parts.push(t('health.mixedComponents', { count: mixed }));
   node.textContent = parts.join(' · ');
   node.hidden = false;
 }
@@ -104,8 +106,10 @@ function renderReport() {
   const summary = report.summary || {};
   const files = report.files || {};
   $('health-summary').textContent = t('health.summary', {
-    errors: summary.errors || 0, warnings: summary.warnings || 0,
-    referenced: files.referenced || 0, inactive: files.inactive_only || 0,
+    errors: summary.errors || 0,
+    warnings: summary.warnings || 0,
+    referenced: files.referenced || 0,
+    inactive: files.inactive_only || 0,
     viewer: files.viewer_only || 0,
   });
   renderAssetResolution();
@@ -116,9 +120,7 @@ function renderReport() {
   if (!issues.length) {
     const empty = document.createElement('div');
     empty.className = 'health-empty';
-    empty.textContent = currentFilter === 'all'
-      ? t('health.noIssues')
-      : t('health.noFilterIssues');
+    empty.textContent = currentFilter === 'all' ? t('health.noIssues') : t('health.noFilterIssues');
     list.appendChild(empty);
     return;
   }
@@ -167,7 +169,7 @@ function renderReport() {
       if (Array.isArray(issue.files) && issue.files.length) {
         const detail = document.createElement('div');
         detail.className = 'health-detail';
-        detail.textContent = t('health.files', {files: issue.files.join(', ')});
+        detail.textContent = t('health.files', { files: issue.files.join(', ') });
         body.appendChild(detail);
       }
       if (issue.source) {
@@ -194,12 +196,21 @@ export function setHealthReport(report, assetResolution = undefined) {
   button.classList.toggle('warning', !!report && count > 0 && errors === 0);
   button.classList.toggle('error', errors > 0);
   $('health-count').textContent = String(count);
-  button.title = !report ? (reportLoader ? t('health.run') : t('health.open'))
-    : count ? t(count === 1 ? 'health.issueOne' : 'health.issueMany', {count})
+  button.title = !report
+    ? reportLoader
+      ? t('health.run')
+      : t('health.open')
+    : count
+      ? t(count === 1 ? 'health.issueOne' : 'health.issueMany', { count })
       : t('health.noIssues');
-  button.setAttribute('aria-label', !report
-    ? (reportLoader ? t('health.run') : t('health.open'))
-    : t(count === 1 ? 'health.issueOpenOne' : 'health.issueOpenMany', {count}));
+  button.setAttribute(
+    'aria-label',
+    !report
+      ? reportLoader
+        ? t('health.run')
+        : t('health.open')
+      : t(count === 1 ? 'health.issueOpenOne' : 'health.issueOpenMany', { count }),
+  );
   if ($('health-modal-backdrop').classList.contains('show')) renderReport();
 }
 
@@ -225,7 +236,7 @@ function fallbackReport(message = t('health.incomplete')) {
 // Run diagnostics without opening the modal. Loads are tied to the current
 // loader generation so a slower report for the previous mod cannot overwrite
 // the badge after the user switches folders.
-export function refreshHealthReport({force = false} = {}) {
+export function refreshHealthReport({ force = false } = {}) {
   const loader = reportLoader;
   const generation = reportGeneration;
   if (!loader) return Promise.resolve(null);
@@ -241,17 +252,14 @@ export function refreshHealthReport({force = false} = {}) {
     button.title = t('health.running');
     try {
       const report = await loader();
-      if (generation !== reportGeneration || loader !== reportLoader
-          || requestId !== healthRequestId) return null;
+      if (generation !== reportGeneration || loader !== reportLoader || requestId !== healthRequestId) return null;
       const normalized = report && !report.error ? report : fallbackReport();
       setHealthReport(normalized);
       return normalized;
     } catch (error) {
-      if (generation !== reportGeneration || loader !== reportLoader
-          || requestId !== healthRequestId) return null;
+      if (generation !== reportGeneration || loader !== reportLoader || requestId !== healthRequestId) return null;
       const detail = error?.message ? `: ${error.message}` : '';
-      const fallback = fallbackReport(
-        t('health.incomplete', {detail}));
+      const fallback = fallbackReport(t('health.incomplete', { detail }));
       setHealthReport(fallback);
       return fallback;
     } finally {
@@ -298,7 +306,7 @@ bindModalDismiss({
 });
 
 function refreshAfterTextureSave() {
-  void refreshHealthReport({force: true});
+  void refreshHealthReport({ force: true });
 }
 
 window.addEventListener('mod-viewer-texture-baked', refreshAfterTextureSave);

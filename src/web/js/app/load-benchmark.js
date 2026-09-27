@@ -12,7 +12,7 @@ function snapshot(state) {
   if (!state) return null;
   return {
     ...state,
-    stages: {...state.stages},
+    stages: { ...state.stages },
   };
 }
 
@@ -65,8 +65,7 @@ export function measureAsyncLoadStage(name, operation) {
 function scheduleFirstModelFrame(state) {
   requestAnimationFrame(() => {
     if (current !== state) return;
-    state.first_model_frame_seconds = Math.max(
-      0, performance.now() - state.started) / 1000;
+    state.first_model_frame_seconds = Math.max(0, performance.now() - state.started) / 1000;
   });
 }
 
@@ -75,8 +74,7 @@ export function finishLoadBenchmark(fields = {}) {
   const state = current;
   current.finished = true;
   current.finished_at = performance.now();
-  current.total_seconds = Math.max(
-    0, current.finished_at - current.started) / 1000;
+  current.total_seconds = Math.max(0, current.finished_at - current.started) / 1000;
   Object.assign(current, fields);
   if (fields.success === true) scheduleFirstModelFrame(state);
   return snapshot(current);

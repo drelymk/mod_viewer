@@ -43,7 +43,8 @@ export default {
   'environment.preset.outdoor': '屋外',
   'renderer.webgpuUnavailable': 'WebGPUを利用できません',
   'renderer.webgpuRequired': 'このバージョンのMod ViewerにはWebGPUが必要です。',
-  'renderer.failure': 'このバージョンのMod ViewerにはWebGPUが必要です。グラフィックドライバーを更新するか、WebGPU対応ブラウザーを使用してください{detail}',
+  'renderer.failure':
+    'このバージョンのMod ViewerにはWebGPUが必要です。グラフィックドライバーを更新するか、WebGPU対応ブラウザーを使用してください{detail}',
   'renderer.deviceLost': 'WebGPUデバイスが失われました：{detail}',
   'renderer.unrecoverable': 'WebGPUで回復不能なエラーが発生しました：{detail}',
   'gizmo.title': 'ドラッグで回転・軸をクリックしてスナップ・スクロールでズーム',
@@ -86,12 +87,14 @@ export default {
   'folder.notFound': 'フォルダーが見つかりません',
   'folder.editMod': 'MODフォルダーを編集',
   'folder.addMod': 'MODフォルダーを追加',
-  'folder.removeMod': '「{name}」をMODフォルダーから削除しますか？\n\nMod Viewerからのみ削除します。\nディスク上のファイルは削除されません。',
+  'folder.removeMod':
+    '「{name}」をMODフォルダーから削除しますか？\n\nMod Viewerからのみ削除します。\nディスク上のファイルは削除されません。',
   'folder.enterModName': 'MODフォルダー名を入力してください。',
   'folder.chooseBrowse': '「参照」でフォルダーを選択してください。',
   'folder.editAsset': 'アセットフォルダーを編集',
   'folder.addAsset': 'アセットフォルダーを追加',
-  'folder.removeAsset': 'このアセットフォルダーを削除しますか？\n\nMod Viewerからのみ削除します。\nディスク上のファイルは削除されません。',
+  'folder.removeAsset':
+    'このアセットフォルダーを削除しますか？\n\nMod Viewerからのみ削除します。\nディスク上のファイルは削除されません。',
   'folder.buildingIndex': 'インデックスを作成中…',
   'mesh.loadMissingParts': '不足部分を読み込む',
   'mesh.removeMissingParts': '不足部分を削除',
@@ -170,7 +173,8 @@ export default {
   'health.ambiguousDraws': '曖昧：{count}',
   'health.notFoundDraws': '未検出：{count}',
   'health.mixed': '混合コンポーネント',
-  'health.summary': 'エラー{errors}・警告{warnings}・参照アセット{referenced}・非アクティブのみ{inactive}・ビューワーのみ{viewer}',
+  'health.summary':
+    'エラー{errors}・警告{warnings}・参照アセット{referenced}・非アクティブのみ{inactive}・ビューワーのみ{viewer}',
   'health.noIssues': 'INIの問題は見つかりませんでした。',
   'health.noFilterIssues': 'このフィルターに一致する問題はありません。',
   'health.openAtLine': '報告された行でこのINIを開くにはダブルクリックしてください',
@@ -205,12 +209,16 @@ export default {
   'errors.loadMissingAsset': '不足しているアセット部分を読み込めませんでした：\n\n{detail}',
   'errors.removeMissingAsset': '不足しているアセット部分を削除できませんでした：\n\n{detail}',
   'errors.exportPartial': 'INIファイルを{saved}個エクスポートしましたが、{failed}個は失敗して保留中です：\n\n{detail}',
-  'confirm.unsavedSwitch': 'このMODには未エクスポートの変更があります。\n\n別のMODフォルダーを開くと変更は破棄されます。続行しますか？',
-  'confirm.unsavedAsset': 'このMODには未エクスポートの変更があります。\n\nアセットプレビューを開くと変更は破棄されます。続行しますか？',
-  'toggle.deleteConfirm': '切り替え「{name}」を削除しますか？\n\nこれは変更を一時保存するだけで、ExportをクリックするまでINIには書き込まれません。',
+  'confirm.unsavedSwitch':
+    'このMODには未エクスポートの変更があります。\n\n別のMODフォルダーを開くと変更は破棄されます。続行しますか？',
+  'confirm.unsavedAsset':
+    'このMODには未エクスポートの変更があります。\n\nアセットプレビューを開くと変更は破棄されます。続行しますか？',
+  'toggle.deleteConfirm':
+    '切り替え「{name}」を削除しますか？\n\nこれは変更を一時保存するだけで、ExportをクリックするまでINIには書き込まれません。',
   'toggle.deleteError': '切り替えを削除できませんでした：\n\n{detail}',
   'toggle.deletedReview': '切り替えを削除しましたが、次の行を手動で確認してください：\n\n{detail}',
-  'toggle.unwired': 'まだメッシュに接続されていません。下の⏺ Recordをクリックし、各位置でメッシュを選択／解除してこの切り替えの表示対象を割り当ててください。Exportは接続するか削除するまで無効です。',
+  'toggle.unwired':
+    'まだメッシュに接続されていません。下の⏺ Recordをクリックし、各位置でメッシュを選択／解除してこの切り替えの表示対象を割り当ててください。Exportは接続するか削除するまで無効です。',
   'toggle.edit': '切り替えを編集',
   'toggle.delete': '切り替えを削除',
   'toggle.record': '各位置で表示するメッシュを記録',
@@ -219,7 +227,8 @@ export default {
   'toggle.noToggles': '切り替えはまだありません。「追加」をクリックして作成してください。',
   'toggle.addTitle': '切り替えを追加',
   'toggle.editTitle': '{name}を編集',
-  'present.deleteKeyConfirm': '参加しているすべてのINIからPRESENTキーを削除しますか？\n\nこれは変更を一時保存するだけで、ExportするまでINIには書き込まれません。',
+  'present.deleteKeyConfirm':
+    '参加しているすべてのINIからPRESENTキーを削除しますか？\n\nこれは変更を一時保存するだけで、ExportするまでINIには書き込まれません。',
   'present.deleteError': 'PRESENTを削除できませんでした：\n\n{detail}',
   'present.duplicateConfirm': 'これらの変数値は{labels}と同じです。\n\n保存しますか？',
   'present.editError': 'PRESENTを{action}できませんでした：\n\n{detail}',
@@ -272,11 +281,16 @@ export default {
   'health.issueOpenOne': 'INI診断の問題{count}件。診断を開く',
   'health.issueOpenMany': 'INI診断の問題{count}件。診断を開く',
   'diagnostics.issue.unexpected_key_statement': '[{section}]内の予期しないステートメント：{source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'ビューワーはこのdrawindexed形式を元の描画として再現できません。3DMigotoでは有効な場合があります。引数：{arguments}',
-  'diagnostics.issue.malformed_resource_reference': '{lhs}が無効なリソース参照プレフィックスを使用しています：{prefix}。',
-  'diagnostics.issue.missing_local_run_target': '{target}は実行されますが、このINIで宣言されていません。フレームワークから提供されている可能性があります。',
-  'diagnostics.issue.duplicate_key_binding': '[{section}]と[{otherSection}]がキー割り当て{key}を共有しており、同時に有効になる可能性があります。',
-  'diagnostics.issue.duplicate_section': 'セクション[{section}]が重複しています。3DMigotoは{firstLine}行目の最初の定義だけを使用します。',
+  'diagnostics.issue.unsupported_drawindexed_arguments':
+    'ビューワーはこのdrawindexed形式を元の描画として再現できません。3DMigotoでは有効な場合があります。引数：{arguments}',
+  'diagnostics.issue.malformed_resource_reference':
+    '{lhs}が無効なリソース参照プレフィックスを使用しています：{prefix}。',
+  'diagnostics.issue.missing_local_run_target':
+    '{target}は実行されますが、このINIで宣言されていません。フレームワークから提供されている可能性があります。',
+  'diagnostics.issue.duplicate_key_binding':
+    '[{section}]と[{otherSection}]がキー割り当て{key}を共有しており、同時に有効になる可能性があります。',
+  'diagnostics.issue.duplicate_section':
+    'セクション[{section}]が重複しています。3DMigotoは{firstLine}行目の最初の定義だけを使用します。',
   'diagnostics.issue.unknown_section': '[{section}]は認識される3DMigotoセクションではありません。',
   'diagnostics.issue.statement_outside_section': 'セクション外の文：{source}',
   'diagnostics.issue.malformed_regular_statement': '[{section}]にはkey=value形式が必要です：{source}',
@@ -292,9 +306,11 @@ export default {
   'diagnostics.issue.malformed_section_header': '{reason}',
   'diagnostics.issue.malformed_condition_syntax': '{reason}',
   'diagnostics.issue.unbalanced_condition_parentheses': '{reason}',
-  'diagnostics.issue.missing_resource_section': '{resource}が参照されていますが、このINIにリソースセクションがありません。',
+  'diagnostics.issue.missing_resource_section':
+    '{resource}が参照されていますが、このINIにリソースセクションがありません。',
   'diagnostics.issue.invalid_resource_stride': '{resource}のstrideが無効です：{stride}。',
-  'diagnostics.issue.unsafe_resource_path': '{resource}が許可されたリソースパス外のファイル名を使用しています：{filename}。',
+  'diagnostics.issue.unsafe_resource_path':
+    '{resource}が許可されたリソースパス外のファイル名を使用しています：{filename}。',
   'diagnostics.issue.missing_resource_file': '{resource}が存在しないファイルを参照しています：{filename}。',
   'diagnostics.issue.unused_resource_section': '{resource}はこのINIで参照されていません。',
   'diagnostics.issue.unreadable_ini': 'このINIをUTF-8として読み込めませんでした：{detail}',
@@ -482,7 +498,8 @@ export default {
   'texture.created': '作成日時',
   'texture.saveFailed': 'テクスチャの保存に失敗しました。',
   'texture.conflictingMeshes': '競合するメッシュ：{meshes}。',
-  'texture.colorMetadataWarning': 'テクスチャは保存されましたが、カラーのメタデータを消去できませんでした。MODを再び開く前にメタデータの書き込みエラーを解決してください。',
+  'texture.colorMetadataWarning':
+    'テクスチャは保存されましたが、カラーのメタデータを消去できませんでした。MODを再び開く前にメタデータの書き込みエラーを解決してください。',
   'texture.saveProgress': 'テクスチャ保存の進行状況',
   'texture.noChangedMeshes': '変更済みで編集可能なメッシュはこのDDSを使用していません。',
   'texture.blocks': '{completed} / {total}ブロック',
@@ -497,13 +514,17 @@ export default {
   'toggle.reportAlwaysFalse': '行{line}の常にfalseになるゲート',
   'toggle.reportAlwaysTrue': '行{line}の常にtrueになるゲート',
   'toggle.reportUnsafe': '行{line}の解決できないゲート',
-  'toggle.orphanConfirm': '{error}\n\nそれでも適用しますか？削除された値だけで表示されるメッシュは、この切り替えから到達できなくなります。',
-  'record.reason.commandPath': 'drawはrun=コマンドリスト経由で実行されますが、この変数が直接制御するセクションではありません。呼び出し元の分岐を手動で編集してください',
-  'record.reason.ambiguousNesting': 'このセクションのif/elif/endifのネストが曖昧です（INI構造エラーを参照）。INIを直接編集してください',
+  'toggle.orphanConfirm':
+    '{error}\n\nそれでも適用しますか？削除された値だけで表示されるメッシュは、この切り替えから到達できなくなります。',
+  'record.reason.commandPath':
+    'drawはrun=コマンドリスト経由で実行されますが、この変数が直接制御するセクションではありません。呼び出し元の分岐を手動で編集してください',
+  'record.reason.ambiguousNesting':
+    'このセクションのif/elif/endifのネストが曖昧です（INI構造エラーを参照）。INIを直接編集してください',
   'record.reason.unsupported': '{detail}',
   'record.reason.outerGate': '外側のネストレベルでこの変数によりゲートされています。この条件を手動で編集してください',
   'record.reason.multipleVariables': 'この記録セッションで複数の変数が対象になっています',
-  'record.reason.nestedRewrite': 'この保存で書き換え中の別の変数ゲート内にあります。この条件をネストするにはINIを直接編集してください',
+  'record.reason.nestedRewrite':
+    'この保存で書き換え中の別の変数ゲート内にあります。この条件をネストするにはINIを直接編集してください',
   'record.reason.sameValue': '{detail}',
   'inspector.materialKind.auto': '自動',
   'inspector.materialKind.body': '体',
@@ -569,7 +590,8 @@ export default {
   'model.assetPreview': 'アセットプレビュー',
   'model.assetPreviewSeparator': 'アセットプレビュー  —  {name}',
   'model.exportCompressedDetail': '圧縮MODではエクスポートを利用できません。',
-  'model.unwiredToggleDetail': '新しく追加した切り替えはまだメッシュに接続されていません。Exportする前にRecord（⏺）するか削除してください。',
+  'model.unwiredToggleDetail':
+    '新しく追加した切り替えはまだメッシュに接続されていません。Exportする前にRecord（⏺）するか削除してください。',
   'semanticRefresh.drawMismatch': '一時保存したドローセットが表示中のモデルと一致しなくなりました。',
   'gizmo.toggle': 'ナビゲーションギズモを切り替え：{state}',
   'panel.collapseSource': '{source}を折りたたむ',
@@ -584,7 +606,8 @@ export default {
   'texture.reason.differentMod': '選択したメッシュは別のMODに属しています。',
   'texture.reason.ddsRequired': 'テクスチャ保存には現在DDSソースが必要です。',
   'texture.reason.unavailable': 'テクスチャ保存を利用できません。',
-  'texture.reason.metadataFailed': '保留中のカラーのメタデータを保存できませんでした。テクスチャ保存をキャンセルしました。',
+  'texture.reason.metadataFailed':
+    '保留中のカラーのメタデータを保存できませんでした。テクスチャ保存をキャンセルしました。',
   'texture.reason.cancelled': 'テクスチャ保存をキャンセルしました。',
   'texture.reason.saveFailed': 'テクスチャの保存に失敗しました。',
   'texture.reason.refreshFailed': 'テクスチャは保存されましたが、ビューワーを更新できませんでした。',
@@ -608,8 +631,10 @@ export default {
   'mesh.mergeLooseParts': 'メッシュを結合',
   'mesh.applyMeshChanges': 'メッシュ変更を適用',
   'mesh.cancelMeshChanges': 'メッシュ変更をキャンセル',
-  'mesh.applyMeshChangesConfirm': 'このコンポーネントのメッシュ変更を適用しますか？\n\n新しいメッシュレイアウトはメモリにステージされます。Exportするまでディスクには書き込まれません。',
-  'mesh.cancelMeshChangesConfirm': 'このコンポーネントのメッシュ変更をキャンセルしますか？\n\n適用していないメッシュの分離と結合の変更はすべて破棄されます。',
+  'mesh.applyMeshChangesConfirm':
+    'このコンポーネントのメッシュ変更を適用しますか？\n\n新しいメッシュレイアウトはメモリにステージされます。Exportするまでディスクには書き込まれません。',
+  'mesh.cancelMeshChangesConfirm':
+    'このコンポーネントのメッシュ変更をキャンセルしますか？\n\n適用していないメッシュの分離と結合の変更はすべて破棄されます。',
   'mesh.applyMeshChangesHint': 'このコンポーネントのメッシュ変更を適用',
   'mesh.unappliedChangesDetail': '未適用のメッシュ変更があります',
   'mesh.separate': '分離',

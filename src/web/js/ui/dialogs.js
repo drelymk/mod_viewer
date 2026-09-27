@@ -13,10 +13,10 @@ function syncActiveLabels() {
   const button = $('dialog-ok');
   button.textContent = activeRange
     ? t(activeRange.okKey || 'common.ok')
-    : activeHasInput ? t('common.yes') : t('common.ok');
-  button.dataset.i18n = activeRange
-    ? activeRange.okKey || 'common.ok'
-    : activeHasInput ? 'common.yes' : 'dialog.ok';
+    : activeHasInput
+      ? t('common.yes')
+      : t('common.ok');
+  button.dataset.i18n = activeRange ? activeRange.okKey || 'common.ok' : activeHasInput ? 'common.yes' : 'dialog.ok';
 }
 
 function close(result) {
@@ -88,19 +88,20 @@ export function confirmDialog(message) {
 
 /** Confirm with an editable name; resolves the trimmed name or null. */
 export function inputConfirmDialog(message, value) {
-  return open(message, { cancelable: true, inputValue: value })
-    .then((confirmed) => confirmed ? $('dialog-input').value.trim() : null);
+  return open(message, { cancelable: true, inputValue: value }).then((confirmed) =>
+    confirmed ? $('dialog-input').value.trim() : null,
+  );
 }
 
 /** Confirm with a bounded numeric range; resolves the number or null. */
-export function rangeInputDialog(message, {
-  label, rangeText = '', value = 0, min = 0, max = 1, step = 1,
-  okKey = 'common.ok',
-} = {}) {
+export function rangeInputDialog(
+  message,
+  { label, rangeText = '', value = 0, min = 0, max = 1, step = 1, okKey = 'common.ok' } = {},
+) {
   return open(message, {
     cancelable: true,
-    range: {label, rangeText, value, min, max, step, okKey},
-  }).then(result => typeof result === 'number' ? result : null);
+    range: { label, rangeText, value, min, max, step, okKey },
+  }).then((result) => (typeof result === 'number' ? result : null));
 }
 
 $('dialog-ok').addEventListener('click', confirmActive);

@@ -1,11 +1,11 @@
 // Owns model pose validation, transform construction and deformation.
 
 import * as THREE from 'three';
-import {buildHumanoidDriverBaseTransforms} from './humanoid-rig-binding.js';
-import {weightRigStatus} from './weight-rig-status.js';
-import {buildForestTransformsFromLocalRotations} from './weight-deformation.js';
-import {buildSelectedWeightMask} from './weight-selection.js';
-import {activePoseJointIds} from './weight-runtime.js';
+import { buildHumanoidDriverBaseTransforms } from './humanoid-rig-binding.js';
+import { weightRigStatus } from './weight-rig-status.js';
+import { buildForestTransformsFromLocalRotations } from './weight-deformation.js';
+import { buildSelectedWeightMask } from './weight-selection.js';
+import { activePoseJointIds } from './weight-runtime.js';
 
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 
@@ -17,8 +17,7 @@ function strictQuaternion(value) {
       : [value?.x, value?.y, value?.z, value?.w].map(Number);
   if (values.length !== 4 || !values.every(Number.isFinite)) return null;
   const quaternion = new THREE.Quaternion(...values);
-  if (!Number.isFinite(quaternion.lengthSq())
-      || quaternion.lengthSq() <= 1e-12) return null;
+  if (!Number.isFinite(quaternion.lengthSq()) || quaternion.lengthSq() <= 1e-12) return null;
   return quaternion.normalize();
 }
 
@@ -27,12 +26,25 @@ function rotationEntries(rotationsByJointId) {
   return Object.entries(rotationsByJointId || {});
 }
 
-export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
-    skinningRuntime, physicsRuntime, modelPhysicsSession,
-    getModelTransformState, invalidateShadow, quaternionIsIdentity,
-    getModelJointId, hasActivePhysics,
-    setComponentRoot, resetModelPose,
-    notifyChanged, notifyPoseChanged, requestRender, rigPresetState} = {}) {
+export function createRigPoseRuntime({
+  state,
+  getRig,
+  sourceSkinningRigs,
+  skinningRuntime,
+  physicsRuntime,
+  modelPhysicsSession,
+  getModelTransformState,
+  invalidateShadow,
+  quaternionIsIdentity,
+  getModelJointId,
+  hasActivePhysics,
+  setComponentRoot,
+  resetModelPose,
+  notifyChanged,
+  notifyPoseChanged,
+  requestRender,
+  rigPresetState,
+} = {}) {
   function jointForId(jointId) {
     const id = Number(jointId);
     const rig = getRig();
@@ -42,8 +54,7 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
   function componentForJoint(jointId, rig = getRig()) {
     const id = Number(jointId);
     const componentId = rig?.componentByJointId?.get?.(id);
-    return Number.isInteger(Number(componentId))
-      ? rig?.components?.[Number(componentId)] || null : null;
+    return Number.isInteger(Number(componentId)) ? rig?.components?.[Number(componentId)] || null : null;
   }
 
   function sourceRigForKey(sourceKeyValue) {
@@ -56,13 +67,11 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
 
   function buildModelPoseTransforms() {
     const rig = getRig();
-    const manualTransforms = buildForestTransformsFromLocalRotations(
-      rig.inferredForest, rig.centerByJointId, {
-        getQuaternion: jointId => rig.poseRotationByJointId.get(
-          jointId) || new THREE.Quaternion(),
-        jointPivotByBoneId: rig.jointPivotByJointId,
-        transformCache: rig.poseTransformCache,
-      });
+    const manualTransforms = buildForestTransformsFromLocalRotations(rig.inferredForest, rig.centerByJointId, {
+      getQuaternion: (jointId) => rig.poseRotationByJointId.get(jointId) || new THREE.Quaternion(),
+      jointPivotByBoneId: rig.jointPivotByJointId,
+      transformCache: rig.poseTransformCache,
+    });
     const driverLayer = buildHumanoidDriverBaseTransforms({
       binding: rig.humanoidBinding,
       controlRig: rig.humanoidControlRig,
@@ -81,8 +90,7 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     rig.poseTransforms = composed;
     rig.poseRotations.clear();
     composed.forEach((matrix, jointId) => {
-      rig.poseRotations.set(jointId,
-        new THREE.Quaternion().setFromRotationMatrix(matrix).normalize());
+      rig.poseRotations.set(jointId, new THREE.Quaternion().setFromRotationMatrix(matrix).normalize());
     });
   }
 
@@ -102,10 +110,8 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
   }
 
   function syncDerivedSourcePose(sourceRig, modelRig, affectedJointIds) {
-    const transforms = modelRig.sourceTransformAliases.get(sourceRig.sourceKey)
-      || new Map();
-    const rotations = modelRig.sourceRotationAliases.get(sourceRig.sourceKey)
-      || new Map();
+    const transforms = modelRig.sourceTransformAliases.get(sourceRig.sourceKey) || new Map();
+    const rotations = modelRig.sourceRotationAliases.get(sourceRig.sourceKey) || new Map();
     const manualTransforms = modelRig.manualPoseTransforms || new Map();
     const affectedBoneIds = new Set();
     transforms.clear();
@@ -113,20 +119,16 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     sourceRig.poseRotationByBoneId.clear();
     for (const boneId of sourceRig.boneIds || []) {
       const jointId = getModelJointId(sourceRig.sourceKey, boneId);
-      const quaternion = Number.isInteger(jointId)
-        ? modelRig.poseRotationByJointId.get(jointId) : null;
+      const quaternion = Number.isInteger(jointId) ? modelRig.poseRotationByJointId.get(jointId) : null;
       if (quaternion && !quaternionIsIdentity(quaternion)) {
         sourceRig.poseRotationByBoneId.set(Number(boneId), quaternion.clone());
       }
-      const manual = Number.isInteger(jointId)
-        ? manualTransforms.get(jointId) : null;
-      const modelTransform = Number.isInteger(jointId)
-        ? modelRig.poseTransforms.get(jointId) : null;
+      const manual = Number.isInteger(jointId) ? manualTransforms.get(jointId) : null;
+      const modelTransform = Number.isInteger(jointId) ? modelRig.poseTransforms.get(jointId) : null;
       const transform = modelTransform || manual;
       if (transform) {
         transforms.set(Number(boneId), transform);
-        rotations.set(Number(boneId),
-          new THREE.Quaternion().setFromRotationMatrix(transform).normalize());
+        rotations.set(Number(boneId), new THREE.Quaternion().setFromRotationMatrix(transform).normalize());
       }
       if (Number.isInteger(jointId) && affectedJointIds.has(jointId)) {
         affectedBoneIds.add(Number(boneId));
@@ -143,8 +145,11 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
 
   function poseVerticesForState(stateForMesh, affectedBoneIds) {
     const mask = buildSelectedWeightMask(
-      stateForMesh.indices, stateForMesh.weights, stateForMesh.influenceCount,
-      affectedBoneIds);
+      stateForMesh.indices,
+      stateForMesh.weights,
+      stateForMesh.influenceCount,
+      affectedBoneIds,
+    );
     const vertices = [];
     mask.forEach((weight, vertex) => {
       if (weight > 0) vertices.push(vertex);
@@ -155,14 +160,13 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
   function finalizeSourcePoseBounds(rig) {
     let finalized = false;
     physicsRuntime.forEachRigMesh(rig, (mesh, stateForMesh) => {
-      finalized = skinningRuntime.finalizeDeformationGeometry(mesh, stateForMesh)
-        || finalized;
+      finalized = skinningRuntime.finalizeDeformationGeometry(mesh, stateForMesh) || finalized;
     });
-    if (finalized) invalidateShadow({request: false});
+    if (finalized) invalidateShadow({ request: false });
     return finalized;
   }
 
-  function applyPose({request = true, dragging = false} = {}) {
+  function applyPose({ request = true, dragging = false } = {}) {
     const rig = getRig();
     if (!rig) return false;
     buildModelPoseTransforms();
@@ -172,30 +176,24 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
       driverTransforms: rig.humanoidDriverTransforms,
       quaternionIsIdentity,
     });
-    const poseJointKey = posedJointIds.sort((left, right) => left - right)
-      .join(',');
-    const affectedJointIds = rig.poseActiveJointKey === poseJointKey
-      ? rig.poseAffectedJointIds : modelPoseDescendantIds(rig, posedJointIds);
+    const poseJointKey = posedJointIds.sort((left, right) => left - right).join(',');
+    const affectedJointIds =
+      rig.poseActiveJointKey === poseJointKey ? rig.poseAffectedJointIds : modelPoseDescendantIds(rig, posedJointIds);
     const affectedSetChanged = rig.poseActiveJointKey !== poseJointKey;
     let changed = false;
     for (const sourceRig of rig.sourceRigs || []) {
-      const affectedBoneIds = syncDerivedSourcePose(
-        sourceRig, rig, affectedJointIds);
-      const transformsByBoneId = rig.sourceTransformAliases.get(
-        sourceRig.sourceKey) || new Map();
-      const rotationsByBoneId = rig.sourceRotationAliases.get(
-        sourceRig.sourceKey) || new Map();
+      const affectedBoneIds = syncDerivedSourcePose(sourceRig, rig, affectedJointIds);
+      const transformsByBoneId = rig.sourceTransformAliases.get(sourceRig.sourceKey) || new Map();
+      const rotationsByBoneId = rig.sourceRotationAliases.get(sourceRig.sourceKey) || new Map();
       physicsRuntime.forEachRigMesh(sourceRig, (mesh, stateForMesh) => {
         const previousBoneKey = rig.poseSourceBoneIdsByMesh.get(mesh) || '';
-        const boneKey = [...affectedBoneIds].sort(
-          (left, right) => left - right).join(',');
-        const activeVertices = !affectedSetChanged
-            && previousBoneKey === boneKey
-            && rig.poseActiveVerticesByMesh.has(mesh)
-          ? rig.poseActiveVerticesByMesh.get(mesh)
-          : affectedBoneIds.size
-            ? poseVerticesForState(stateForMesh, affectedBoneIds)
-            : new Uint32Array();
+        const boneKey = [...affectedBoneIds].sort((left, right) => left - right).join(',');
+        const activeVertices =
+          !affectedSetChanged && previousBoneKey === boneKey && rig.poseActiveVerticesByMesh.has(mesh)
+            ? rig.poseActiveVerticesByMesh.get(mesh)
+            : affectedBoneIds.size
+              ? poseVerticesForState(stateForMesh, affectedBoneIds)
+              : new Uint32Array();
         stateForMesh.poseActiveVertices = activeVertices;
         stateForMesh.poseTransforms = transformsByBoneId;
         stateForMesh.poseRotations = rotationsByBoneId;
@@ -205,21 +203,25 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
       const physicsRig = sourceRig.physicsRig;
       if (physicsRig?.physicsState) {
         physicsRuntime.refreshParticipantDerivedState(
-          [...physicsRig.meshes][0], physicsRig,
-          modelPhysicsSession.getSettings());
-        changed = physicsRuntime.applySourceDeformation(physicsRig,
-          {visibleOnly: false}) || changed;
+          [...physicsRig.meshes][0],
+          physicsRig,
+          modelPhysicsSession.getSettings(),
+        );
+        changed = physicsRuntime.applySourceDeformation(physicsRig, { visibleOnly: false }) || changed;
       } else {
         physicsRuntime.forEachRigMesh(sourceRig, (mesh, stateForMesh) => {
-          changed = skinningRuntime.applyDeformation(mesh, stateForMesh, {
-            request: false, invalidateShadow: false, skipHidden: false,
-          }) || changed;
+          changed =
+            skinningRuntime.applyDeformation(mesh, stateForMesh, {
+              request: false,
+              invalidateShadow: false,
+              skipHidden: false,
+            }) || changed;
         });
       }
     }
     rig.poseAffectedJointIds = affectedJointIds;
     rig.poseActiveJointKey = poseJointKey;
-    if (changed) invalidateShadow({request: false});
+    if (changed) invalidateShadow({ request: false });
     if (!dragging && !hasActivePhysics()) {
       for (const sourceRig of rig.sourceRigs || []) finalizeSourcePoseBounds(sourceRig);
     }
@@ -252,27 +254,30 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
           stateForMesh.combinedPoseVerticesRef = null;
           stateForMesh.combinedPhysicsVerticesRef = null;
           skinningRuntime.applyDeformation(mesh, stateForMesh, {
-            request: false, invalidateShadow: false, skipHidden: false,
+            request: false,
+            invalidateShadow: false,
+            skipHidden: false,
           });
         });
       } else {
         physicsRuntime.syncRigParticipantState(physicsRig);
-        physicsRuntime.applySourceDeformation(physicsRig, {visibleOnly: false});
+        physicsRuntime.applySourceDeformation(physicsRig, { visibleOnly: false });
       }
     }
     if (!suspended && hasActivePhysics()) modelPhysicsSession.wake();
     return suspended;
   }
 
-  function resetForHumanoidEdit({request = false} = {}) {
+  function resetForHumanoidEdit({ request = false } = {}) {
     const rig = getRig();
     if (!rig) return false;
-    const hadPose = rig.poseRotationByJointId.size > 0
-      || Object.keys(state.humanoidPose || {}).length > 0
-      || rig.poseActiveJointKey !== '';
+    const hadPose =
+      rig.poseRotationByJointId.size > 0 ||
+      Object.keys(state.humanoidPose || {}).length > 0 ||
+      rig.poseActiveJointKey !== '';
     rig.poseRotationByJointId.clear();
     state.humanoidPose = {};
-    const changed = applyPose({request});
+    const changed = applyPose({ request });
     rig.poseActiveVerticesByMesh.clear();
     rig.poseSourceBoneIdsByMesh.clear();
     rig.poseTransformCache.clear();
@@ -282,14 +287,13 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     return changed || hadPose;
   }
 
-  function clearManualPose({request = false} = {}) {
+  function clearManualPose({ request = false } = {}) {
     const rig = getRig();
     if (!rig) return false;
-    const hadPose = rig.poseRotationByJointId.size > 0
-      || rig.poseActiveJointKey !== '';
+    const hadPose = rig.poseRotationByJointId.size > 0 || rig.poseActiveJointKey !== '';
     rig.poseRotationByJointId.clear();
     if (!hadPose) return false;
-    const changed = applyPose({request});
+    const changed = applyPose({ request });
     rig.poseActiveVerticesByMesh.clear();
     rig.poseSourceBoneIdsByMesh.clear();
     return changed || hadPose;
@@ -302,26 +306,22 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     const cache = rig.poseFrameCache.get(id);
     const component = componentForJoint(id, rig);
     const parent = component?.parentById?.[id];
-    const parentId = parent === null || parent === undefined
-      ? null : Number(parent);
-    const parentRotation = parentId === null ? new THREE.Quaternion()
-      : rig.poseRotations.get(parentId)?.clone() || new THREE.Quaternion();
-    const boneRotation = rig.poseRotations.get(id)?.clone()
-      || new THREE.Quaternion();
-    const restRotation = rig.restFrameByJointId.get(id)?.clone()
-      || new THREE.Quaternion();
+    const parentId = parent === null || parent === undefined ? null : Number(parent);
+    const parentRotation =
+      parentId === null ? new THREE.Quaternion() : rig.poseRotations.get(parentId)?.clone() || new THREE.Quaternion();
+    const boneRotation = rig.poseRotations.get(id)?.clone() || new THREE.Quaternion();
+    const restRotation = rig.restFrameByJointId.get(id)?.clone() || new THREE.Quaternion();
     return {
-      pivot: (cache?.pivot || new THREE.Vector3(...(
-        rig.jointPivotByJointId.get(id) || joint.restPivot || [0, 0, 0])))
-        .toArray(),
-      center: (cache?.center || new THREE.Vector3(...(
-        rig.centerByJointId.get(id) || joint.restCenter || [0, 0, 0])))
-        .toArray(),
+      pivot: (
+        cache?.pivot || new THREE.Vector3(...(rig.jointPivotByJointId.get(id) || joint.restPivot || [0, 0, 0]))
+      ).toArray(),
+      center: (
+        cache?.center || new THREE.Vector3(...(rig.centerByJointId.get(id) || joint.restCenter || [0, 0, 0]))
+      ).toArray(),
       parentRotation: parentRotation.normalize().toArray(),
       boneRotation: boneRotation.normalize().toArray(),
       restRotation: restRotation.normalize().toArray(),
-      gizmoRotation: boneRotation.clone().multiply(restRotation).normalize()
-        .toArray(),
+      gizmoRotation: boneRotation.clone().multiply(restRotation).normalize().toArray(),
     };
   }
 
@@ -334,23 +334,19 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
       const jointId = Number(rawId);
       const joint = jointForId(jointId);
       const component = componentForJoint(jointId);
-      if (!Number.isInteger(jointId) || !joint || !component
-          || seen.has(jointId)) {
-        state.pickStatus = weightRigStatus(
-          'weightRig.status.couldNotApplyRigPose');
+      if (!Number.isInteger(jointId) || !joint || !component || seen.has(jointId)) {
+        state.pickStatus = weightRigStatus('weightRig.status.couldNotApplyRigPose');
         notifyChanged();
         return false;
       }
       if (Number(component.rootId) === jointId) {
-        state.pickStatus = weightRigStatus(
-          'weightRig.status.rootCannotRotate');
+        state.pickStatus = weightRigStatus('weightRig.status.rootCannotRotate');
         notifyChanged();
         return false;
       }
       const quaternion = strictQuaternion(value);
       if (!quaternion) {
-        state.pickStatus = weightRigStatus(
-          'weightRig.status.couldNotApplyRigPose');
+        state.pickStatus = weightRigStatus('weightRig.status.couldNotApplyRigPose');
         notifyChanged();
         return false;
       }
@@ -362,21 +358,25 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     updates.forEach(([jointId, quaternion]) => {
       rig.poseRotationByJointId.set(jointId, quaternion);
     });
-    const selectedId = options?.selectedJointId === null
-      || options?.selectedJointId === undefined
-      ? null : Number(options.selectedJointId);
+    const selectedId =
+      options?.selectedJointId === null || options?.selectedJointId === undefined
+        ? null
+        : Number(options.selectedJointId);
     if (Number.isInteger(selectedId) && jointForId(selectedId)) {
       state.selectedJointId = selectedId;
     }
     const dragging = options?.dragging === true;
-    applyPose({dragging});
+    applyPose({ dragging });
     state.pickStatus = '';
     if (dragging) {
       const selectedJoint = jointForId(state.selectedJointId);
       const member = representativeMember(selectedJoint);
-      if (member) notifyPoseChanged(
-        sourceRigForKey(member.sourceKey), member.boneId,
-        updates.map(([id]) => id));
+      if (member)
+        notifyPoseChanged(
+          sourceRigForKey(member.sourceKey),
+          member.boneId,
+          updates.map(([id]) => id),
+        );
       else notifyChanged();
     } else {
       notifyChanged();
@@ -388,25 +388,28 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     const joint = jointForId(jointId);
     const member = representativeMember(joint);
     const sourceRig = member && sourceRigForKey(member.sourceKey);
-    const sourceComponent = sourceRig?.inferredForest?.components?.[
-      sourceRig?.inferredForest?.componentByBoneId?.[member?.boneId]];
-    const resolvedJointId = member && getModelJointId(
-      member.sourceKey, member.boneId);
+    const sourceComponent =
+      sourceRig?.inferredForest?.components?.[sourceRig?.inferredForest?.componentByBoneId?.[member?.boneId]];
+    const resolvedJointId = member && getModelJointId(member.sourceKey, member.boneId);
     const componentId = Number(componentForJoint(resolvedJointId)?.componentId);
-    const modelComponent = Number.isInteger(componentId)
-      ? getRig()?.components?.[componentId] : null;
-    if (!sourceRig || !sourceComponent || !Number.isInteger(resolvedJointId)
-        || !modelComponent || !sourceRig.boneIds.includes(Number(member.boneId))) {
+    const modelComponent = Number.isInteger(componentId) ? getRig()?.components?.[componentId] : null;
+    if (
+      !sourceRig ||
+      !sourceComponent ||
+      !Number.isInteger(resolvedJointId) ||
+      !modelComponent ||
+      !sourceRig.boneIds.includes(Number(member.boneId))
+    ) {
       return false;
     }
     if (Number(modelComponent.rootId) === resolvedJointId) {
-      state.pickStatus = weightRigStatus(
-        'weightRig.status.rootCannotRotate');
+      state.pickStatus = weightRigStatus('weightRig.status.rootCannotRotate');
       notifyChanged();
       return false;
     }
     return setRotations(new Map([[resolvedJointId, quaternion]]), {
-      ...options, selectedJointId: resolvedJointId,
+      ...options,
+      selectedJointId: resolvedJointId,
     });
   }
 
@@ -419,8 +422,8 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
       const rig = sourceRigForKey(member.sourceKey);
       const id = Number(member.boneId);
       const resolvedJointId = getModelJointId(member.sourceKey, id);
-      if (!rig || !Number.isInteger(id) || !rig.boneIds.includes(id)
-          || !Number.isInteger(resolvedJointId)) return false;
+      if (!rig || !Number.isInteger(id) || !rig.boneIds.includes(id) || !Number.isInteger(resolvedJointId))
+        return false;
       if (!hasActivePhysics()) {
         for (const sourceRig of getRig()?.sourceRigs || []) {
           finalizeSourcePoseBounds(sourceRig);
@@ -437,17 +440,15 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
       const rig = sourceRigForKey(member.sourceKey);
       const id = Number(member.boneId);
       const resolvedJointId = getModelJointId(member.sourceKey, id);
-      if (!rig || !rig.boneIds.includes(id)
-          || !Number.isInteger(resolvedJointId)) return false;
+      if (!rig || !rig.boneIds.includes(id) || !Number.isInteger(resolvedJointId)) return false;
       getRig()?.poseRotationByJointId.delete(resolvedJointId);
       applyPose();
       notifyChanged();
       return true;
     },
     resetPose() {
-      const changed = resetModelPose({request: false});
-      const presetWasSelected = rigPresetState.selectedPresetId !== null
-        || rigPresetState.lastApplyResult !== null;
+      const changed = resetModelPose({ request: false });
+      const presetWasSelected = rigPresetState.selectedPresetId !== null || rigPresetState.lastApplyResult !== null;
       rigPresetState.selectedPresetId = null;
       rigPresetState.lastApplyResult = null;
       state.pickStatus = '';
@@ -464,9 +465,7 @@ export function createRigPoseRuntime({state, getRig, sourceSkinningRigs,
     clearManualPose,
     setRotation,
     setStatus(message = '') {
-      state.pickStatus = message && typeof message === 'object'
-        && message.messageKey
-        ? message : String(message || '');
+      state.pickStatus = message && typeof message === 'object' && message.messageKey ? message : String(message || '');
       notifyChanged();
       return state.pickStatus;
     },

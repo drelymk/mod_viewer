@@ -23,13 +23,20 @@ function guardHolds(when) {
   const cur = getToggleValue(when.var);
   if (cur === undefined) return false;
   switch (when.op) {
-    case '==': return cur === when.value;
-    case '!=': return cur !== when.value;
-    case '>':  return Number(cur) >  Number(when.value);
-    case '<':  return Number(cur) <  Number(when.value);
-    case '>=': return Number(cur) >= Number(when.value);
-    case '<=': return Number(cur) <= Number(when.value);
-    default:   return false;
+    case '==':
+      return cur === when.value;
+    case '!=':
+      return cur !== when.value;
+    case '>':
+      return Number(cur) > Number(when.value);
+    case '<':
+      return Number(cur) < Number(when.value);
+    case '>=':
+      return Number(cur) >= Number(when.value);
+    case '<=':
+      return Number(cur) <= Number(when.value);
+    default:
+      return false;
   }
 }
 
@@ -55,7 +62,8 @@ function buildMenuItem(info) {
   btn.appendChild(createIcon('cycle'));
   const syncLabel = () => {
     btn.title = t('menu.cycle', {
-      variable: displayName(info.var), slot: info.slot,
+      variable: displayName(info.var),
+      slot: info.slot,
     });
   };
   syncLabel();
@@ -90,10 +98,13 @@ function buildMenuItem(info) {
   });
 
   item.append(btn, nameSpan, valSpan);
-  return { item, sync: () => {
-    syncLabel();
-    valSpan.textContent = getToggleValue(info.var);
-  } };
+  return {
+    item,
+    sync: () => {
+      syncLabel();
+      valSpan.textContent = getToggleValue(info.var);
+    },
+  };
 }
 
 function buildShapeSlider(info) {
@@ -124,12 +135,15 @@ function buildShapeSlider(info) {
     refreshAll();
   });
   item.append(nameSpan, input, valSpan);
-  return { item, sync: () => {
-    const value = getToggleValue(info.var);
-    if (value === undefined) return;
-    input.value = value;
-    valSpan.textContent = Number(input.value).toFixed(2);
-  } };
+  return {
+    item,
+    sync: () => {
+      const value = getToggleValue(info.var);
+      if (value === undefined) return;
+      input.value = value;
+      valSpan.textContent = Number(input.value).toFixed(2);
+    },
+  };
 }
 
 // Cycling one slot can change another slot's variable via a mutual-exclusion
@@ -149,23 +163,27 @@ export function buildMenuPanel(menu) {
   const list = document.getElementById('menu-list');
   const panel = document.getElementById('menu-panel');
   imageObserver?.disconnect();
-  imageObserver = typeof IntersectionObserver === 'function'
-    ? new IntersectionObserver((entries, observer) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const img = entry.target;
-        if (img.isConnected && img.dataset.menuSrc) {
-          img.src = img.dataset.menuSrc;
-          delete img.dataset.menuSrc;
-        }
-        observer.unobserve(img);
-      }
-    }, { rootMargin: '80px' })
-    : null;
+  imageObserver =
+    typeof IntersectionObserver === 'function'
+      ? new IntersectionObserver(
+          (entries, observer) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              const img = entry.target;
+              if (img.isConnected && img.dataset.menuSrc) {
+                img.src = img.dataset.menuSrc;
+                delete img.dataset.menuSrc;
+              }
+              observer.unobserve(img);
+            }
+          },
+          { rootMargin: '80px' },
+        )
+      : null;
   list.innerHTML = '';
   syncers = [];
   registerViewSync('menu-panel', () => {
-    syncers.forEach(sync => sync());
+    syncers.forEach((sync) => sync());
   });
 
   const keys = Object.keys(menu || {});
@@ -176,7 +194,7 @@ export function buildMenuPanel(menu) {
   panel.style.display = 'block';
   // `image_slot` also counts authored-but-empty placeholder textures. Those
   // cells stay blank and clickable, and still belong to the mod's image grid.
-  const imaged = keys.filter(key => menu[key].image || menu[key].image_slot).length;
+  const imaged = keys.filter((key) => menu[key].image || menu[key].image_slot).length;
   list.classList.toggle('image-layout', imaged >= 2 && imaged / keys.length >= 0.6);
 
   // Register every menu variable before the first refresh. Derived [Present]
@@ -195,14 +213,11 @@ export function buildMenuPanel(menu) {
   const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
-    const container = (multiSource && src) ? buildSourceSection(src, list) : list;
+    const container = multiSource && src ? buildSourceSection(src, list) : list;
     for (const key of bySource[src]) {
-      const { item, sync } = menu[key].kind === 'shape_slider'
-        ? buildShapeSlider(menu[key])
-        : buildMenuItem(menu[key]);
+      const { item, sync } = menu[key].kind === 'shape_slider' ? buildShapeSlider(menu[key]) : buildMenuItem(menu[key]);
       syncers.push(sync);
       container.appendChild(item);
     }
   }
-
 }

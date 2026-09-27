@@ -1,12 +1,8 @@
 """Shape-slider discovery cases with explicit regression fixtures."""
 
-from .test_menu import _by_slot, sections
-from core.ini.menu import extract_menu_toggles
+from .test_menu import sections
 from core.ini.shapes import extract_shape_sliders
-from core.ini.state import extract_state_rules
-from core.ini.parser import (build_draw_groups, extract_resources,
-                             gating_var_names)
-from app.mods.controls import build_menu_panel
+from core.ini.parser import extract_resources
 
 
 

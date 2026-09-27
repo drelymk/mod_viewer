@@ -3,22 +3,32 @@
 // per component, one checkbox per draw call within it.
 
 import { hasTexture } from '../mesh/mesh-factory.js';
+import { applyMeshVisibility, conditionsSatisfied, setManualTexOverride } from '../mesh/mesh-state.js';
 import {
-  applyMeshVisibility, conditionsSatisfied,
-  setManualTexOverride,
-} from '../mesh/mesh-state.js';
-import {
-  clearTextureRunGroups, recomputeTextureRuns,
-  registerTextureRunGroup, unregisterTextureRunGroup, saveTextureState,
+  clearTextureRunGroups,
+  recomputeTextureRuns,
+  registerTextureRunGroup,
+  unregisterTextureRunGroup,
+  saveTextureState,
 } from '../mesh/mesh-texture-state.js';
 import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import {
-  addMeshesToSelection, applyFaceSelection, beginFaceSelection,
-  canEditMesh, cancelFaceSelection, clearSelection, getActiveMeshEditSource,
-  getFaceSelection, getMeshEditSource, getSelectedFaceTriangles, getSelectedMeshes,
-  isMeshSelected, selectMesh, toggleMeshSelection,
+  addMeshesToSelection,
+  applyFaceSelection,
+  beginFaceSelection,
+  canEditMesh,
+  cancelFaceSelection,
+  clearSelection,
+  getActiveMeshEditSource,
+  getFaceSelection,
+  getMeshEditSource,
+  getSelectedFaceTriangles,
+  getSelectedMeshes,
+  isMeshSelected,
+  selectMesh,
+  toggleMeshSelection,
 } from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
@@ -31,8 +41,14 @@ import { requestRender } from '../scene/render-scheduler.js';
 import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
 import { alertDialog, confirmDialog, rangeInputDialog } from '../ui/dialogs.js';
 import {
-  MAX_LOOSE_PART_TOLERANCE, canMergeLooseParts, getLoosePartSource,
-  clearLooseParts, getLooseParts, isLoosePart, mergeLooseParts, separateLooseParts,
+  MAX_LOOSE_PART_TOLERANCE,
+  canMergeLooseParts,
+  getLoosePartSource,
+  clearLooseParts,
+  getLooseParts,
+  isLoosePart,
+  mergeLooseParts,
+  separateLooseParts,
 } from '../mesh/loose-parts.js';
 
 let groupsUI = [];
@@ -64,8 +80,7 @@ function saveComponentMaterialKind(modPath, source, component, kind) {
   if (!modPath || !window.pywebview?.api?.save_component_material_kind) {
     return Promise.resolve({ saved: false });
   }
-  return window.pywebview.api.save_component_material_kind(
-    modPath, source, component, kind);
+  return window.pywebview.api.save_component_material_kind(modPath, source, component, kind);
 }
 
 function closeMeshContextMenu() {
@@ -84,9 +99,7 @@ function positionMeshContextMenu(menu, event) {
   requestAnimationFrame(() => {
     if (menu.hidden) return;
     const maxLeft = Math.max(4, window.innerWidth - menu.offsetWidth - 4);
-    const maxTop = Math.max(
-      bounds.top + 4, Math.min(window.innerHeight, bounds.bottom)
-        - menu.offsetHeight - 4);
+    const maxTop = Math.max(bounds.top + 4, Math.min(window.innerHeight, bounds.bottom) - menu.offsetHeight - 4);
     menu.style.left = `${Math.min(Math.max(4, left), maxLeft)}px`;
     menu.style.top = `${Math.min(Math.max(bounds.top + 4, top), maxTop)}px`;
   });
@@ -96,7 +109,7 @@ function panelRowsInRange(list, startY, currentY) {
   const top = Math.min(startY, currentY);
   const bottom = Math.max(startY, currentY);
   const meshes = [];
-  list.querySelectorAll('.draw-item').forEach(row => {
+  list.querySelectorAll('.draw-item').forEach((row) => {
     if (!row.isConnected) return;
     const rect = row.getBoundingClientRect();
     if (rect.height <= 0 || rect.bottom < top || rect.top > bottom) return;
@@ -107,13 +120,12 @@ function panelRowsInRange(list, startY, currentY) {
 }
 
 function isPanelSelectionInteractiveTarget(target) {
-  return target instanceof Element
-    && !!target.closest('button, input, select, textarea, a, [contenteditable="true"]');
+  return target instanceof Element && !!target.closest('button, input, select, textarea, a, [contenteditable="true"]');
 }
 
 function onPanelPointerDown(event) {
-  if (event.button !== 0 || !event.ctrlKey || event.defaultPrevented
-      || isPanelSelectionInteractiveTarget(event.target)) return;
+  if (event.button !== 0 || !event.ctrlKey || event.defaultPrevented || isPanelSelectionInteractiveTarget(event.target))
+    return;
   const row = event.target.closest?.('.draw-item');
   if (!row || !row.isConnected) return;
   panelSelectionDrag = {
@@ -127,15 +139,13 @@ function onPanelPointerDown(event) {
 function onPanelPointerMove(event) {
   const gesture = panelSelectionDrag;
   if (!gesture || event.pointerId !== gesture.pointerId) return;
-  if (!gesture.dragging
-      && Math.abs(event.clientY - gesture.startY) <= PANEL_SELECTION_THRESHOLD) {
+  if (!gesture.dragging && Math.abs(event.clientY - gesture.startY) <= PANEL_SELECTION_THRESHOLD) {
     return;
   }
   gesture.dragging = true;
   event.preventDefault();
   event.stopPropagation();
-  addMeshesToSelection(panelRowsInRange(
-    gesture.list, gesture.startY, event.clientY));
+  addMeshesToSelection(panelRowsInRange(gesture.list, gesture.startY, event.clientY));
 }
 
 function finishPanelPointerGesture(event) {
@@ -226,10 +236,10 @@ function ensureMeshContextMenu() {
     void cancelComponentMeshChanges(descriptor);
   });
   if (!meshContextListenersInstalled) {
-    document.addEventListener('pointerdown', event => {
+    document.addEventListener('pointerdown', (event) => {
       if (!meshContextMenu?.contains(event.target)) closeMeshContextMenu();
     });
-    document.addEventListener('keydown', event => {
+    document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') closeMeshContextMenu();
     });
     meshContextListenersInstalled = true;
@@ -262,8 +272,7 @@ function openMeshContextMenu(event, mesh) {
     const targetCount = Array.isArray(mesh.userData?.loosePartTriangles)
       ? mesh.userData.loosePartTriangles.length
       : Math.floor(Number(selectionState.source.geometry?.index?.count || 0) / 3);
-    actions.applySelection.disabled = !isTarget
-      || selectedCount === 0 || selectedCount >= targetCount;
+    actions.applySelection.disabled = !isTarget || selectedCount === 0 || selectedCount >= targetCount;
     actions.cancelSelection.disabled = !isTarget;
     showMeshContextMenuIfActionsVisible(menu, event);
     return;
@@ -271,43 +280,46 @@ function openMeshContextMenu(event, mesh) {
   const source = getMeshEditSource(mesh);
   const descriptor = componentForMesh(source) || mesh.userData?.componentDescriptor;
   const activeSource = getActiveMeshEditSource();
-  const locked = descriptor?.meshEditState === 'applied'
-    || descriptor?.meshEditWritable === false
-    || descriptor?.meshEditApplying === true;
+  const locked =
+    descriptor?.meshEditState === 'applied' ||
+    descriptor?.meshEditWritable === false ||
+    descriptor?.meshEditApplying === true;
   const selectedMeshes = getSelectedMeshes();
-  const selectedSource = selectedMeshes.length
-    ? getMeshEditSource(selectedMeshes[0]) : null;
-  const mergeVisible = !!activeSource && selectedMeshes.length >= 2
-    && selectedSource === activeSource
-    && canMergeLooseParts(selectedMeshes);
+  const selectedSource = selectedMeshes.length ? getMeshEditSource(selectedMeshes[0]) : null;
+  const mergeVisible =
+    !!activeSource &&
+    selectedMeshes.length >= 2 &&
+    selectedSource === activeSource &&
+    canMergeLooseParts(selectedMeshes);
   const sameSource = !activeSource || activeSource === source;
   const activePart = !!activeSource && sameSource && isLoosePart(mesh);
   const unrelatedMesh = !!activeSource && !sameSource;
   const cleanSource = !activeSource && !isLoosePart(mesh);
   actions.separate.hidden = !(cleanSource || unrelatedMesh);
-  actions.separateSelection.hidden = !!mergeVisible
-    || !(cleanSource || activePart || unrelatedMesh);
+  actions.separateSelection.hidden = !!mergeVisible || !(cleanSource || activePart || unrelatedMesh);
   actions.merge.hidden = !mergeVisible;
   actions.applySelection.hidden = true;
   actions.cancelSelection.hidden = true;
   actions.apply.hidden = true;
   actions.cancel.hidden = true;
   actions.separate.disabled = locked || !sameSource || isLoosePart(mesh);
-  actions.separateSelection.disabled = locked || !sameSource
-    || (!!activeSource && !activePart);
+  actions.separateSelection.disabled = locked || !sameSource || (!!activeSource && !activePart);
   actions.merge.disabled = locked;
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
-window.addEventListener('mod-viewer-face-selection-contextmenu', event => {
+window.addEventListener('mod-viewer-face-selection-contextmenu', (event) => {
   const detail = event.detail;
   if (!detail?.mesh) return;
-  openMeshContextMenu({
-    clientX: detail.clientX,
-    clientY: detail.clientY,
-    preventDefault() {},
-    stopPropagation() {},
-  }, detail.mesh);
+  openMeshContextMenu(
+    {
+      clientX: detail.clientX,
+      clientY: detail.clientY,
+      preventDefault() {},
+      stopPropagation() {},
+    },
+    detail.mesh,
+  );
 });
 
 function openComponentContextMenu(event, descriptor) {
@@ -326,23 +338,21 @@ function openComponentContextMenu(event, descriptor) {
   actions.applySelection.hidden = true;
   actions.cancelSelection.hidden = true;
   const faceSelection = getFaceSelection();
-  const faceSelectionOwnsComponent = faceSelection
-    && componentForMesh(faceSelection.source) === descriptor;
+  const faceSelectionOwnsComponent = faceSelection && componentForMesh(faceSelection.source) === descriptor;
   const edited = descriptor.meshEditState === 'edited';
   actions.apply.hidden = !edited;
   actions.cancel.hidden = !edited;
-  const disabled = descriptor.meshEditApplying === true
-    || !descriptor.meshEditWritable || faceSelectionOwnsComponent;
+  const disabled = descriptor.meshEditApplying === true || !descriptor.meshEditWritable || faceSelectionOwnsComponent;
   actions.apply.disabled = disabled;
   actions.cancel.disabled = disabled;
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
 function showMeshContextMenuIfActionsVisible(menu, event) {
-  const hasVisibleAction = Array.from(
-    menu.querySelectorAll('button, [role="menuitem"]')).some(action =>
-    !action.hidden && getComputedStyle(action).display !== 'none'
-      && getComputedStyle(action).visibility !== 'hidden');
+  const hasVisibleAction = Array.from(menu.querySelectorAll('button, [role="menuitem"]')).some(
+    (action) =>
+      !action.hidden && getComputedStyle(action).display !== 'none' && getComputedStyle(action).visibility !== 'hidden',
+  );
   if (!hasVisibleAction) {
     menu.hidden = true;
     return;
@@ -359,8 +369,8 @@ function syncMeshPanel() {
       binding?.syncStateIndicator?.();
       binding?.syncTextureSelection?.();
     });
-    const any = group.itemCbs.some(control => control.checked);
-    const all = group.itemCbs.every(control => control.checked);
+    const any = group.itemCbs.some((control) => control.checked);
+    const all = group.itemCbs.every((control) => control.checked);
     group.masterCb.checked = all;
     group.masterCb.indeterminate = any && !all;
   }
@@ -376,8 +386,7 @@ function syncMeshPanel() {
 function groupByComponent(names, meshes) {
   const grouped = {};
   for (const name of names) {
-    const explicit = meshes[name]?.identity?.component
-      || meshes[name]?.component;
+    const explicit = meshes[name]?.identity?.component || meshes[name]?.component;
     let key = explicit;
     if (!key) {
       const m = name.match(/^(.+)-\d+$/);
@@ -394,7 +403,7 @@ function automaticTextureBoundaryIdentity(mesh) {
   if (!defaultKey && !variantKeys.length) return null;
   return JSON.stringify({
     defaultKey: defaultKey || null,
-    variants: variantKeys.map(variant => ({
+    variants: variantKeys.map((variant) => ({
       conditions: variant?.conditions || [],
       tex_key: variant?.tex_key || null,
     })),
@@ -415,11 +424,10 @@ function recomputeAutomaticTextureBoundaries(groupMeshes) {
 
 /** Rebuild authored texture-run boundaries after an in-place semantic update. */
 export function refreshAutomaticTextureBoundaries() {
-  groupsUI.forEach(group => recomputeAutomaticTextureBoundaries(group.itemObjs));
+  groupsUI.forEach((group) => recomputeAutomaticTextureBoundaries(group.itemObjs));
 }
 
-function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
-                          componentDescriptor = null) {
+function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, componentDescriptor = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
 
@@ -429,9 +437,10 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
   chevron.setAttribute('aria-expanded', 'true');
   const syncLabels = () => {
     const collapsed = itemsWrap.classList.contains('collapsed');
-    chevron.setAttribute('aria-label', t(
-      collapsed ? 'mesh.expandComponent' : 'mesh.collapseComponent',
-      {name: groupName}));
+    chevron.setAttribute(
+      'aria-label',
+      t(collapsed ? 'mesh.expandComponent' : 'mesh.collapseComponent', { name: groupName }),
+    );
   };
   syncLabels();
   chevron.setAttribute('aria-controls', itemsWrap.id);
@@ -458,7 +467,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     editBadge.title = t('toolbar.edited');
   };
   hdr.appendChild(editBadge);
-  nameSpan.addEventListener('click', event => {
+  nameSpan.addEventListener('click', (event) => {
     event.stopPropagation();
     onComponentSelected?.();
   });
@@ -470,7 +479,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     itemsWrap.classList.toggle('collapsed', collapsed);
     syncLabels();
   };
-  chevron.addEventListener('click', event => {
+  chevron.addEventListener('click', (event) => {
     event.stopPropagation();
     toggleItems();
   });
@@ -479,8 +488,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
     onComponentSelected?.();
   });
   if (componentDescriptor) {
-    hdr.addEventListener('contextmenu', event =>
-      openComponentContextMenu(event, componentDescriptor));
+    hdr.addEventListener('contextmenu', (event) => openComponentContextMenu(event, componentDescriptor));
   }
 
   syncEditState();
@@ -493,9 +501,15 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null,
  * Returns `{wrap, rebuildTexList}` -- the caller collects `rebuildTexList`
  * alongside every other mesh in the component so the "manage textures"
  * popup can refresh them all after an add/remove (see buildMeshPanel). */
-function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
-                      {labelOverride = null, onContextMenu = null,
-                        includeInGroup = true} = {}) {
+function buildDrawRow(
+  name,
+  groupName,
+  entry,
+  mesh,
+  itemCbs,
+  masterCb,
+  { labelOverride = null, onContextMenu = null, includeInGroup = true } = {},
+) {
   const row = document.createElement('div');
   row.className = 'draw-item';
   const loosePart = isLoosePart(mesh);
@@ -512,7 +526,7 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
     if (loosePart) {
       mesh.userData.manualVisible = nextVisible;
       mesh.userData.manuallyToggled = true;
-      applyMeshVisibility(mesh, {notify: false});
+      applyMeshVisibility(mesh, { notify: false });
       updateStateIndicator(mesh);
       return;
     }
@@ -522,20 +536,17 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
     noteRecordMeshEdit(mesh);
     applyMeshVisibility(mesh);
     updateStateIndicator(mesh);
-    const any = itemCbs.some(c => c.checked);
-    const all = itemCbs.every(c => c.checked);
+    const any = itemCbs.some((c) => c.checked);
+    const all = itemCbs.every((c) => c.checked);
     masterCb.indeterminate = any && !all;
     masterCb.checked = all;
   });
   if (!loosePart && includeInGroup) itemCbs.push(cb);
 
-  const label = entry.drawindexed
-    ? entry.drawindexed.join(', ')
-    : '#' + name.slice(groupName.length + 1);
+  const label = entry.drawindexed ? entry.drawindexed.join(', ') : '#' + name.slice(groupName.length + 1);
   const labelSpan = document.createElement('span');
   labelSpan.className = 'mesh-name';
-  const displayLabel = labelOverride || mesh.userData.loosePartLabel
-    || mesh.userData.displayName || label;
+  const displayLabel = labelOverride || mesh.userData.loosePartLabel || mesh.userData.displayName || label;
   labelSpan.textContent = displayLabel;
   row.append(cb, labelSpan);
   const updateStateIndicator = (m) => {
@@ -581,8 +592,8 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
       }
     };
 
-    input.addEventListener('click', event => event.stopPropagation());
-    input.addEventListener('dblclick', event => event.stopPropagation());
+    input.addEventListener('click', (event) => event.stopPropagation());
+    input.addEventListener('dblclick', (event) => event.stopPropagation());
     input.addEventListener('keydown', (event) => {
       event.stopPropagation();
       if (event.key === 'Enter') {
@@ -610,34 +621,39 @@ function buildDrawRow(name, groupName, entry, mesh, itemCbs, masterCb,
     else selectMesh(mesh);
   });
   if (onContextMenu) {
-    row.addEventListener('contextmenu', event => onContextMenu(event, mesh));
+    row.addEventListener('contextmenu', (event) => onContextMenu(event, mesh));
   }
 
   const wrap = document.createElement('div');
   wrap.className = 'draw-item-wrap';
   wrap.append(row);
-  return {wrap, cb};
+  return { wrap, cb };
 }
 
 function buildPartRows(source, context) {
   return getLooseParts(source).map((part, index) => {
-    const {wrap} = buildDrawRow(
+    const { wrap } = buildDrawRow(
       `${context.name}::loose-part-${index + 1}`,
       context.groupName,
       context.entry,
       part,
       [],
       null,
-      {labelOverride: part.userData.loosePartLabel, includeInGroup: false,
-        onContextMenu: isRecording() ? null : openMeshContextMenu});
+      {
+        labelOverride: part.userData.loosePartLabel,
+        includeInGroup: false,
+        onContextMenu: isRecording() ? null : openMeshContextMenu,
+      },
+    );
     registerInspectorMesh(part, context.inspectorRecord);
     return wrap;
   });
 }
 
 function connectedPartWraps(source) {
-  return getLooseParts(source).map(part =>
-    getMeshView(part)?.row?.closest('.draw-item-wrap')).filter(Boolean);
+  return getLooseParts(source)
+    .map((part) => getMeshView(part)?.row?.closest('.draw-item-wrap'))
+    .filter(Boolean);
 }
 
 function showLoosePartRows(source) {
@@ -651,17 +667,21 @@ function showLoosePartRows(source) {
 
 function restoreSourceRow(source, oldPartWraps = connectedPartWraps(source)) {
   const context = meshPanelContexts.get(source);
-  const group = groupsUI.find(candidate => candidate.itemObjs.includes(source));
+  const group = groupsUI.find((candidate) => candidate.itemObjs.includes(source));
   const sourceIndex = group?.itemObjs.indexOf(source) ?? -1;
   if (!context || !group || sourceIndex < 0 || !oldPartWraps.length) return false;
-  const {wrap, cb} = buildDrawRow(
-    context.name, context.groupName, context.entry, source,
-    group.itemCbs, group.masterCb,
-    {includeInGroup: false,
-      onContextMenu: isRecording() ? null : openMeshContextMenu});
+  const { wrap, cb } = buildDrawRow(
+    context.name,
+    context.groupName,
+    context.entry,
+    source,
+    group.itemCbs,
+    group.masterCb,
+    { includeInGroup: false, onContextMenu: isRecording() ? null : openMeshContextMenu },
+  );
   group.itemCbs[sourceIndex] = cb;
   oldPartWraps[0].replaceWith(wrap);
-  oldPartWraps.slice(1).forEach(partWrap => partWrap.remove());
+  oldPartWraps.slice(1).forEach((partWrap) => partWrap.remove());
   return true;
 }
 
@@ -670,7 +690,7 @@ function showRecordingSourceRows() {
   let selectionCleared = false;
   let partsChanged = false;
   for (const group of groupsUI) {
-    group.itemObjs.forEach(source => {
+    group.itemObjs.forEach((source) => {
       const context = meshPanelContexts.get(source);
       const partWraps = connectedPartWraps(source);
       if (!context || !partWraps.length) return;
@@ -686,22 +706,22 @@ function showRecordingSourceRows() {
       restoreSourceRow(source, partWraps);
     });
   }
-  if (partsChanged) invalidateCharacterShadowVisibility({request: false});
+  if (partsChanged) invalidateCharacterShadowVisibility({ request: false });
   requestRender();
 }
 
 function restoreLoosePartRows() {
   let selectionCleared = false;
   for (const group of groupsUI) {
-    group.itemObjs.forEach(source => {
+    group.itemObjs.forEach((source) => {
       const parts = getLooseParts(source);
       if (!parts.length) return;
       if (!selectionCleared) {
         clearSelection();
         selectionCleared = true;
       }
-      parts.forEach(part => {
-        applyMeshVisibility(part, {notify: false, render: false});
+      parts.forEach((part) => {
+        applyMeshVisibility(part, { notify: false, render: false });
       });
       showLoosePartRows(source);
     });
@@ -717,9 +737,11 @@ function setComponentMeshEditState(descriptor, state) {
   if (!descriptor || descriptor.meshEditState === state) return;
   descriptor.meshEditState = state;
   descriptor.syncEditState?.();
-  window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-state', {
-    detail: { component: descriptor, state },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-mesh-edit-state', {
+      detail: { component: descriptor, state },
+    }),
+  );
 }
 
 function markComponentMeshEdited(descriptor) {
@@ -729,38 +751,43 @@ function markComponentMeshEdited(descriptor) {
 }
 
 export function hasUnappliedMeshChanges() {
-  return groupsUI.some(group =>
-    group.componentDescriptor?.meshEditState === 'edited');
+  return groupsUI.some((group) => group.componentDescriptor?.meshEditState === 'edited');
 }
 
 async function applyComponentMeshChanges(descriptor) {
-  if (!descriptor || descriptor.meshEditState !== 'edited'
-      || !descriptor.meshEditWritable || !descriptor.modPath) return false;
+  if (!descriptor || descriptor.meshEditState !== 'edited' || !descriptor.meshEditWritable || !descriptor.modPath)
+    return false;
   const activeSource = getActiveMeshEditSource();
   const context = meshPanelContexts.get(activeSource);
   const faceSelection = getFaceSelection();
-  if (!activeSource || componentForMesh(activeSource) !== descriptor
-      || !context || !getLooseParts(activeSource).length
-      || (faceSelection && componentForMesh(faceSelection.source) === descriptor)) {
+  if (
+    !activeSource ||
+    componentForMesh(activeSource) !== descriptor ||
+    !context ||
+    !getLooseParts(activeSource).length ||
+    (faceSelection && componentForMesh(faceSelection.source) === descriptor)
+  ) {
     return false;
   }
-  if (!await confirmDialog(t('mesh.applyMeshChangesConfirm'))) return false;
-  if (descriptor.meshEditApplying || descriptor.meshEditState !== 'edited'
-      || getActiveMeshEditSource() !== activeSource
-      || !getLooseParts(activeSource).length) return false;
+  if (!(await confirmDialog(t('mesh.applyMeshChangesConfirm')))) return false;
+  if (
+    descriptor.meshEditApplying ||
+    descriptor.meshEditState !== 'edited' ||
+    getActiveMeshEditSource() !== activeSource ||
+    !getLooseParts(activeSource).length
+  )
+    return false;
   const request = {
     component: descriptor.component,
     mesh: {
       key: context.entry.identity?.key,
       sources: context.entry.sources || [],
-      parts: getLooseParts(activeSource).map(part =>
-        [...(part.userData.loosePartTriangles || [])]),
+      parts: getLooseParts(activeSource).map((part) => [...(part.userData.loosePartTriangles || [])]),
     },
   };
   descriptor.meshEditApplying = true;
   try {
-    const result = await window.pywebview.api.apply_component_mesh_changes(
-      descriptor.modPath, request);
+    const result = await window.pywebview.api.apply_component_mesh_changes(descriptor.modPath, request);
     if (!result || result.error || result.ok === false) {
       throw new Error(result?.error || t('mesh.applyMeshChangesHint'));
     }
@@ -776,22 +803,35 @@ async function applyComponentMeshChanges(descriptor) {
 }
 
 async function cancelComponentMeshChanges(descriptor) {
-  if (!descriptor || descriptor.meshEditState !== 'edited'
-      || !descriptor.meshEditWritable || descriptor.meshEditApplying) return false;
+  if (
+    !descriptor ||
+    descriptor.meshEditState !== 'edited' ||
+    !descriptor.meshEditWritable ||
+    descriptor.meshEditApplying
+  )
+    return false;
   const activeSource = getActiveMeshEditSource();
   const faceSelection = getFaceSelection();
-  if (!activeSource || componentForMesh(activeSource) !== descriptor
-      || (faceSelection && componentForMesh(faceSelection.source) === descriptor)
-      || !getLooseParts(activeSource).length) return false;
-  if (!await confirmDialog(t('mesh.cancelMeshChangesConfirm'))) return false;
-  if (descriptor.meshEditApplying || descriptor.meshEditState !== 'edited'
-      || getActiveMeshEditSource() !== activeSource) return false;
+  if (
+    !activeSource ||
+    componentForMesh(activeSource) !== descriptor ||
+    (faceSelection && componentForMesh(faceSelection.source) === descriptor) ||
+    !getLooseParts(activeSource).length
+  )
+    return false;
+  if (!(await confirmDialog(t('mesh.cancelMeshChangesConfirm')))) return false;
+  if (
+    descriptor.meshEditApplying ||
+    descriptor.meshEditState !== 'edited' ||
+    getActiveMeshEditSource() !== activeSource
+  )
+    return false;
   const oldPartWraps = connectedPartWraps(activeSource);
   clearSelection();
   clearLooseParts(activeSource);
   if (!restoreSourceRow(activeSource, oldPartWraps)) return false;
   setComponentMeshEditState(descriptor, 'clean');
-  invalidateCharacterShadowVisibility({request: false});
+  invalidateCharacterShadowVisibility({ request: false });
   requestRender();
   return true;
 }
@@ -799,8 +839,12 @@ async function cancelComponentMeshChanges(descriptor) {
 async function separateMeshRow(source) {
   if (isRecording()) return false;
   const descriptor = componentForMesh(source);
-  if (descriptor?.meshEditState === 'applied' || !canEditMesh(source)
-      || descriptor?.meshEditWritable === false || descriptor?.meshEditApplying) {
+  if (
+    descriptor?.meshEditState === 'applied' ||
+    !canEditMesh(source) ||
+    descriptor?.meshEditWritable === false ||
+    descriptor?.meshEditApplying
+  ) {
     return false;
   }
   const context = meshPanelContexts.get(source);
@@ -819,7 +863,8 @@ async function separateMeshRow(source) {
   if (tolerance === null || isRecording()) return false;
   if (!canEditMesh(source) || descriptor?.meshEditApplying) return false;
   const parts = separateLooseParts(source, {
-    label: meshRowLabel(source, context), tolerance,
+    label: meshRowLabel(source, context),
+    tolerance,
   });
   if (parts.length <= 1) return false;
   if (getActiveMeshEditSource() && getActiveMeshEditSource() !== source) {
@@ -840,31 +885,31 @@ function applyCurrentFaceSelection() {
   if (!context) return false;
   const oldPartWraps = connectedPartWraps(state.source);
   const sourceWrap = meshRowWrap(state.source);
-  const result = applyFaceSelection({label: meshRowLabel(state.source, context)});
+  const result = applyFaceSelection({ label: meshRowLabel(state.source, context) });
   if (!result) return false;
   if (oldPartWraps.length) {
     oldPartWraps[0].replaceWith(...buildPartRows(state.source, context));
-    oldPartWraps.slice(1).forEach(partWrap => partWrap.remove());
+    oldPartWraps.slice(1).forEach((partWrap) => partWrap.remove());
   } else if (sourceWrap?.isConnected) {
     sourceWrap.replaceWith(...buildPartRows(state.source, context));
   }
   markComponentMeshEdited(componentForMesh(state.source));
   selectMesh(result.selected);
-  invalidateCharacterShadowVisibility({request: false});
+  invalidateCharacterShadowVisibility({ request: false });
   requestRender();
   return true;
 }
 
 function replaceRowsAfterLoosePartMerge(source, oldPartWraps, result) {
   const context = meshPanelContexts.get(source);
-  const group = groupsUI.find(candidate => candidate.itemObjs.includes(source));
+  const group = groupsUI.find((candidate) => candidate.itemObjs.includes(source));
   if (!context || !group || !oldPartWraps.length) return false;
   if (result.full) {
     return restoreSourceRow(source, oldPartWraps);
   } else {
     oldPartWraps[0].replaceWith(...buildPartRows(source, context));
   }
-  oldPartWraps.slice(1).forEach(partWrap => partWrap.remove());
+  oldPartWraps.slice(1).forEach((partWrap) => partWrap.remove());
   return true;
 }
 
@@ -890,7 +935,7 @@ function mergeSelectedLooseParts() {
   } else {
     markComponentMeshEdited(descriptor);
   }
-  invalidateCharacterShadowVisibility({request: false});
+  invalidateCharacterShadowVisibility({ request: false });
   requestRender();
   return true;
 }
@@ -899,8 +944,7 @@ function mergeSelectedLooseParts() {
  * through to the per-component texture popup, which needs it to open the
  * native file picker rooted at the mod folder. */
 export function buildMeshPanel(meshes, liveMeshes, modPath, options = {}) {
-  return appendMeshPanel(meshes, liveMeshes, modPath,
-    {...options, replace: true});
+  return appendMeshPanel(meshes, liveMeshes, modPath, { ...options, replace: true });
 }
 
 export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
@@ -920,45 +964,52 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const canPersistMetadata = options.canPersistMetadata !== false;
   const texturePicker = options.texturePicker || null;
 
-  const validNames = Object.keys(meshes).filter(name => !meshes[name]?.error);
+  const validNames = Object.keys(meshes).filter((name) => !meshes[name]?.error);
   const bySource = groupKeysBySource(meshes, validNames);
   const sources = Object.keys(bySource);
   const multiSource = usesSourceSections(bySource);
 
   for (const src of sources) {
-    const container = (multiSource && src) ? buildSourceSection(src, list, {
-      headerClass: 'mesh-src-hdr', itemsClass: 'mesh-src-items',
-    }) : list;
-    const sourceHeader = container === list
-      ? null : container.previousElementSibling;
+    const container =
+      multiSource && src
+        ? buildSourceSection(src, list, {
+            headerClass: 'mesh-src-hdr',
+            itemsClass: 'mesh-src-items',
+          })
+        : list;
+    const sourceHeader = container === list ? null : container.previousElementSibling;
 
     for (const [groupName, names] of Object.entries(groupByComponent(bySource[src], meshes))) {
       const itemsWrap = document.createElement('div');
       itemsWrap.className = 'group-items';
       itemsWrap.id = `mesh-group-${++meshSectionId}`;
 
-      const poolIds = new Set(names.map(name => meshes[name].texture_pool_id)
-        .filter(Boolean));
+      const poolIds = new Set(names.map((name) => meshes[name].texture_pool_id).filter(Boolean));
       if (poolIds.size > 1) {
         throw new Error(`Component ${groupName} has multiple texture pools`);
       }
       const poolId = poolIds.values().next().value;
       const texturePool = poolId ? texturePools[poolId] || [] : [];
-      const componentKind = names
-        .map(n => meshes[n].material_kind_override)
-        .find(Boolean) || null;
-      const componentIdentity = names
-        .map(n => meshes[n].identity?.component || meshes[n].component)
-        .find(Boolean) || null;
+      const componentKind = names.map((n) => meshes[n].material_kind_override).find(Boolean) || null;
+      const componentIdentity =
+        names.map((n) => meshes[n].identity?.component || meshes[n].component).find(Boolean) || null;
 
-      const itemCbs = [], itemObjs = [];
+      const itemCbs = [],
+        itemObjs = [];
       const componentDescriptor = {
-        type: 'component', component: groupName, source: src,
-        meshes: itemObjs, texturePool, modPath,
-        meshEditState: 'clean', meshEditApplying: false,
+        type: 'component',
+        component: groupName,
+        source: src,
+        meshes: itemObjs,
+        texturePool,
+        modPath,
+        meshEditState: 'clean',
+        meshEditApplying: false,
       };
       const assetSummary = summarizeAssetBindings(
-        names.map(name => meshes[name]), options.assetResolution);
+        names.map((name) => meshes[name]),
+        options.assetResolution,
+      );
       componentDescriptor.assetSummary = assetSummary;
       componentDescriptor.assetResolution = options.assetResolution || null;
       let materialKind = componentKind;
@@ -966,27 +1017,28 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       const canPersist = !readOnlySource && canPersistMetadata && !!modPath;
       const canEdit = !readOnlySource && !!componentIdentity && !!modPath;
       componentDescriptor.meshEditWritable = !meshEditReadOnly && canEdit;
-      const setMaterialKind = async kind => {
+      const setMaterialKind = async (kind) => {
         if (!canEdit || materialKindInFlight) return false;
         if (!canPersist) {
           // Compressed mods have no writable metadata sidecar. Keep this
           // viewer-only choice in mesh state so the control remains useful,
           // while the read-only source still prevents persistence/export.
           materialKind = kind === 'auto' ? null : kind;
-          itemObjs.forEach(mesh => {
+          itemObjs.forEach((mesh) => {
             mesh.userData.materialKindOverride = materialKind;
           });
           notifyMeshStateChanged(itemObjs);
-          window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
-            detail: { component: componentDescriptor, reason: 'material-kind' },
-          }));
+          window.dispatchEvent(
+            new CustomEvent('mod-viewer-inspector-refresh', {
+              detail: { component: componentDescriptor, reason: 'material-kind' },
+            }),
+          );
           return true;
         }
         const previousKind = materialKind;
         materialKindInFlight = true;
         try {
-          const result = await saveComponentMaterialKind(
-            modPath, src, componentIdentity, kind);
+          const result = await saveComponentMaterialKind(modPath, src, componentIdentity, kind);
           if (result?.error || result?.saved === false) {
             throw new Error(result?.error || 'material kind was not saved');
           }
@@ -1018,26 +1070,25 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         saveTextureState(modPath);
         return true;
       };
-      const getTextureOverride = mesh => ({
+      const getTextureOverride = (mesh) => ({
         value: mesh.userData.manualTexOverride,
-        automatic: mesh.userData.manualTexOverride === undefined
-          && !mesh.userData.textureHighlightDisabled,
+        automatic: mesh.userData.manualTexOverride === undefined && !mesh.userData.textureHighlightDisabled,
         resolved: mesh.userData.resolvedTexKey || null,
       });
       const onPoolChange = () => {
         recomputeTextureRuns(itemObjs);
         notifyMeshStateChanged(itemObjs);
-        window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
-          detail: { component: componentDescriptor, reason: 'pool' },
-        }));
+        window.dispatchEvent(
+          new CustomEvent('mod-viewer-inspector-refresh', {
+            detail: { component: componentDescriptor, reason: 'pool' },
+          }),
+        );
         saveTextureState(modPath);
       };
       Object.assign(componentDescriptor, {
-        getMaterialKind: () => itemObjs[0]?.userData.materialKindOverride
-          || materialKind,
+        getMaterialKind: () => itemObjs[0]?.userData.materialKindOverride || materialKind,
         setMaterialKind: canEdit ? setMaterialKind : undefined,
-        openTextureManager: () => openTextureModal(
-          groupName, texturePool, modPath, onPoolChange, texturePicker),
+        openTextureManager: () => openTextureModal(groupName, texturePool, modPath, onPoolChange, texturePicker),
         getTextureOverride,
         setTextureOverride,
         applyMeshChanges: () => applyComponentMeshChanges(componentDescriptor),
@@ -1045,23 +1096,28 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       });
 
       const { hdr, masterCb, syncLabels, syncEditState } = buildGroupHeader(
-        groupName, itemsWrap,
-        () => window.dispatchEvent(new CustomEvent('mod-viewer-component-selected', {
-          detail: { component: componentDescriptor },
-        })), componentDescriptor);
+        groupName,
+        itemsWrap,
+        () =>
+          window.dispatchEvent(
+            new CustomEvent('mod-viewer-component-selected', {
+              detail: { component: componentDescriptor },
+            }),
+          ),
+        componentDescriptor,
+      );
       componentDescriptor.header = hdr;
       componentDescriptor.syncEditState = syncEditState;
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
-        const entry = meshes[name];
         const mesh = liveMeshes?.get?.(name) || liveMeshes?.[name];
         if (!mesh) throw new Error(`Missing live mesh for ${name}`);
         mesh.userData.componentDescriptor = componentDescriptor;
         itemObjs.push(mesh);
-        const { wrap } = buildDrawRow(
-          name, groupName, meshes[name], mesh, itemCbs, masterCb,
-          {onContextMenu: isRecording() ? null : openMeshContextMenu});
+        const { wrap } = buildDrawRow(name, groupName, meshes[name], mesh, itemCbs, masterCb, {
+          onContextMenu: isRecording() ? null : openMeshContextMenu,
+        });
         itemsWrap.appendChild(wrap);
         const inspectorRecord = {
           component: componentDescriptor,
@@ -1070,7 +1126,10 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
         };
         registerInspectorMesh(mesh, inspectorRecord);
         meshPanelContexts.set(mesh, {
-          name, groupName, entry: meshes[name], inspectorRecord,
+          name,
+          groupName,
+          entry: meshes[name],
+          inspectorRecord,
         });
       }
       recomputeAutomaticTextureBoundaries(itemObjs);
@@ -1092,14 +1151,16 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       });
 
       groupsUI.push({
-        masterCb, itemCbs, itemObjs,
+        masterCb,
+        itemCbs,
+        itemObjs,
         componentDescriptor,
         header: componentDescriptor.header,
         itemsWrap,
         sourceContainer: container === list ? null : container,
         sourceHeader,
         syncLabels,
-        assetFill: names.every(name => meshes[name]?.asset_fill === true),
+        assetFill: names.every((name) => meshes[name]?.asset_fill === true),
         assetResolution: options.assetResolution || null,
       });
     }
@@ -1115,14 +1176,14 @@ window.addEventListener(LANGUAGE_CHANGED, () => {
       action.textContent = t(action.dataset.i18n);
     });
   }
-  groupsUI.forEach(group => {
+  groupsUI.forEach((group) => {
     group.syncLabels?.();
-    group.itemObjs.forEach(mesh => getMeshView(mesh)?.syncStateIndicator?.());
+    group.itemObjs.forEach((mesh) => getMeshView(mesh)?.syncStateIndicator?.());
     group.componentDescriptor.syncEditState?.();
   });
 });
 
-window.addEventListener('mod-viewer-recording-state', event => {
+window.addEventListener('mod-viewer-recording-state', (event) => {
   if (event.detail?.recording) showRecordingSourceRows();
   else restoreLoosePartRows();
 });
@@ -1130,24 +1191,23 @@ window.addEventListener('mod-viewer-recording-state', event => {
 export function removeAssetFillMeshPanel(targetMeshes = null) {
   closeMeshContextMenu();
   const target = targetMeshes === null ? null : new Set(targetMeshes);
-  const groups = groupsUI.filter(group => group.assetFill
-    && (!target || group.itemObjs.some(mesh => target.has(mesh))));
+  const groups = groupsUI.filter(
+    (group) => group.assetFill && (!target || group.itemObjs.some((mesh) => target.has(mesh))),
+  );
   if (!groups.length) return [];
   clearSelection();
   const removed = [];
   for (const group of groups) {
-    const members = target
-      ? group.itemObjs.filter(mesh => target.has(mesh))
-      : [...group.itemObjs];
-    members.forEach(mesh => {
+    const members = target ? group.itemObjs.filter((mesh) => target.has(mesh)) : [...group.itemObjs];
+    members.forEach((mesh) => {
       const rowWraps = new Set();
       const sourceWrap = meshRowWrap(mesh);
       if (sourceWrap) rowWraps.add(sourceWrap);
-      getLooseParts(mesh).forEach(part => {
+      getLooseParts(mesh).forEach((part) => {
         const partWrap = getMeshView(part)?.row?.closest('.draw-item-wrap');
         if (partWrap) rowWraps.add(partWrap);
       });
-      rowWraps.forEach(rowWrap => rowWrap.remove());
+      rowWraps.forEach((rowWrap) => rowWrap.remove());
       removed.push(mesh);
       const index = group.itemObjs.indexOf(mesh);
       if (index >= 0) {
@@ -1163,16 +1223,18 @@ export function removeAssetFillMeshPanel(targetMeshes = null) {
       recomputeTextureRuns(group.itemObjs);
     }
   }
-  groupsUI = groupsUI.filter(group => !group.assetFill || group.itemObjs.length);
-  for (const source of new Set(groups.map(group => group.sourceContainer).filter(Boolean))) {
+  groupsUI = groupsUI.filter((group) => !group.assetFill || group.itemObjs.length);
+  for (const source of new Set(groups.map((group) => group.sourceContainer).filter(Boolean))) {
     if (!source.children.length) {
       source.previousElementSibling?.remove();
       source.remove();
     }
   }
-  window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
-    detail: { component: null, reason: 'asset-fill-removed' },
-  }));
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-inspector-refresh', {
+      detail: { component: null, reason: 'asset-fill-removed' },
+    }),
+  );
   return removed;
 }
 
@@ -1184,14 +1246,17 @@ export function refreshMeshAssetDiagnostics(assetResolution = undefined) {
       group.componentDescriptor.assetResolution = assetResolution;
     }
     const summary = summarizeAssetBindings(
-      group.itemObjs.map(mesh => mesh.userData.assetEntry),
-      group.assetResolution);
+      group.itemObjs.map((mesh) => mesh.userData.assetEntry),
+      group.assetResolution,
+    );
     group.componentDescriptor.assetSummary = summary;
-    window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {
-      detail: {
-        component: group.componentDescriptor,
-        reason: 'asset',
-      },
-    }));
+    window.dispatchEvent(
+      new CustomEvent('mod-viewer-inspector-refresh', {
+        detail: {
+          component: group.componentDescriptor,
+          reason: 'asset',
+        },
+      }),
+    );
   }
 }

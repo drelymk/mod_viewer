@@ -6,7 +6,10 @@ without menu discovery every condition on them is treated as untracked (=
 always satisfied) and the viewer shows every variant at once.
 """
 
-import base64, io, os, tempfile
+import base64
+import io
+import os
+import tempfile
 
 import pytest
 

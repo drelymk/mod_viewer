@@ -18,12 +18,10 @@ untouched line as its next rewrite target forever. eliminate() now folds dead
 vars out of arithmetic too; test_real_mods_delete_toggle is what caught it.
 """
 
-import os
 
 import pytest
 
 
-from tests.support.corpus import sample_mods
 
 from core.ini.document import IniDocument, IF, ELIF
 from core.ini import condition as ic
@@ -78,18 +76,18 @@ def test_add_toggle_creates_complete_detection_and_cycle_plumbing():
 
     present = d.section("Present")
     assert (present is not None), ("[Present] section created from scratch")
-    non_blank = [l.text for l in present.lines if l.text]
+    non_blank = [line.text for line in present.lines if line.text]
     assert (non_blank == ["post $active = 0"]), (f"post $active = 0 is the new [Present] section's only content line ({non_blank})")
 
     component01_sec = d.section("TextureOverrideComponent01")
-    texts = [l.text for l in component01_sec.lines]
+    texts = [line.text for line in component01_sec.lines]
     assert (texts[0] == "hash = abc123" and texts[1] == "$active = 1"), (f"$active = 1 planted right after the leading hash line, before the "
           f"if-block ({texts[:2]})")
 
     te.add_toggle(d, "Extra2", "3", "extravar2", ["0", "1"])
-    assert len([l for l in d.section("Constants").lines if l.text == "global $active = 0"]) == 1
-    assert len([l for l in d.section("Present").lines if l.text == "post $active = 0"]) == 1
-    assert len([l for l in component01_sec.lines if l.text == "$active = 1"]) == 1
+    assert len([line for line in d.section("Constants").lines if line.text == "global $active = 0"]) == 1
+    assert len([line for line in d.section("Present").lines if line.text == "post $active = 0"]) == 1
+    assert len([line for line in component01_sec.lines if line.text == "$active = 1"]) == 1
     assert d.section("KeyExtra2").lines[0].text == "condition = $active == 1"
     reparsed = IniDocument.from_string(d.to_string())
     assert reparsed.section("Present") is not None and reparsed.section("KeyExtra2") is not None
@@ -114,7 +112,7 @@ drawindexed = 100,0,0
     assert (d.section("Present") is None), ("no [Present] section is created when a detection var already exists")
     assert (te._constant_line(d, "active") is None), ("no $active is declared when $object_detected already exists")
     component01_sec = d.section("TextureOverrideComponent01")
-    non_blank = [l.text for l in component01_sec.lines if l.text]
+    non_blank = [line.text for line in component01_sec.lines if line.text]
     assert (non_blank == ["hash = abc123", "drawindexed = 100,0,0"]), (f"the TextureOverride section is left untouched ({non_blank})")
 
     d = doc("""[Constants]
@@ -135,9 +133,9 @@ hash = 222
 hash = 333
 """)
     te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
-    first = [l.text for l in d.section("TextureOverrideFirst").lines if l.text]
-    second = [l.text for l in d.section("TextureOverrideSecond").lines if l.text]
-    third = [l.text for l in d.section("TextureOverrideThird").lines if l.text]
+    first = [line.text for line in d.section("TextureOverrideFirst").lines if line.text]
+    second = [line.text for line in d.section("TextureOverrideSecond").lines if line.text]
+    third = [line.text for line in d.section("TextureOverrideThird").lines if line.text]
     assert (first == ["hash = 111", "$active = 1"]), (f"first override marked ({first})")
     assert (second == ["hash = 222", "$active = 1"]), (f"second override marked ({second})")
     assert (third == ["hash = 333"]), (f"third override left untouched ({third})")
@@ -146,7 +144,7 @@ hash = 333
     te.add_toggle(d, "Extra", "2", "extravar", ["0", "1"])
     present_secs = [s for s in d.sections if s.name == "Present"]
     assert (len(present_secs) == 1), ("no duplicate [Present] section created")
-    texts = [l.text for l in present_secs[0].lines if l.text]
+    texts = [line.text for line in present_secs[0].lines if line.text]
     assert (texts == ["run = CommandListUnrelated", "post $active = 0"]), (f"post $active = 0 appended after the existing content ({texts})")
 
 
@@ -291,7 +289,7 @@ endif
           f"({report['vars_removed']})")
     assert (te._constant_line(d, "othervar") is not None), ("othervar's Constants line survives")
     assert (d.section("KeyOther") is not None), ("KeyOther section untouched")
-    gate = next(l for l in d.lines if l.kind in (IF, ELIF))
+    gate = next(line for line in d.lines if line.kind in (IF, ELIF))
     assert (gate.text == "if $othervar == 0"), (f"gate keeps the surviving var and drops the dead one ({gate.text})")
 
 
@@ -311,7 +309,7 @@ drawindexed = 100,0,0
 endif
 """)
     te.delete_toggle(d, "KeySwap")
-    gate = next(l for l in d.lines if l.kind in (IF, ELIF))
+    gate = next(line for line in d.lines if line.kind in (IF, ELIF))
     assert (gate.text == r"if $\Master\swapvar == 0"), (f"the namespaced var survives, only the local var's clause is "
           f"eliminated ({gate.text})")
 
@@ -342,7 +340,7 @@ endif
     report = te.delete_toggle(d, "KeySwap")
     assert (len(report["unsafe_gates"]) == 1), (f"the ambiguous gate is reported as unsafe, not rewritten ({report})")
     assert (report["gates_rewritten"] == 0), ("the unsafe gate was not counted as rewritten")
-    gate = next(l for l in d.lines if l.kind == IF)
+    gate = next(line for line in d.lines if line.kind == IF)
     assert ("swapvar" in gate.text), ("the unsafe gate is left completely untouched")
 
 

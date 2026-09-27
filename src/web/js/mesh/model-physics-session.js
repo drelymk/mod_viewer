@@ -18,18 +18,14 @@ export const DEFAULT_MODEL_PHYSICS_SETTINGS = Object.freeze({
 });
 
 function vector(value, fallback = ZERO_VECTOR) {
-  const values = Array.isArray(value) ? value : [
-    value?.x, value?.y, value?.z,
-  ];
+  const values = Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
   if (values.length < 3) return [...fallback];
   const result = values.slice(0, 3).map(Number);
   return result.every(Number.isFinite) ? result : [...fallback];
 }
 
 function finiteVector(value) {
-  const values = Array.isArray(value) ? value : [
-    value?.x, value?.y, value?.z,
-  ];
+  const values = Array.isArray(value) ? value : [value?.x, value?.y, value?.z];
   if (values.length < 3) return null;
   const result = values.slice(0, 3).map(Number);
   return result.every(Number.isFinite) ? result : null;
@@ -44,26 +40,19 @@ function vectorLength(value) {
 }
 
 function quaternion(value) {
-  const values = Array.isArray(value) ? value : [
-    value?.x, value?.y, value?.z, value?.w,
-  ];
+  const values = Array.isArray(value) ? value : [value?.x, value?.y, value?.z, value?.w];
   if (values.length < 4) return null;
   const result = values.slice(0, 4).map(Number);
   const length = Math.hypot(...result);
-  return result.every(Number.isFinite) && length > 1e-12
-    ? result.map(component => component / length) : null;
+  return result.every(Number.isFinite) && length > 1e-12 ? result.map((component) => component / length) : null;
 }
 
 function quaternionMultiply(left, right) {
   return [
-    left[3] * right[0] + left[0] * right[3]
-      + left[1] * right[2] - left[2] * right[1],
-    left[3] * right[1] - left[0] * right[2]
-      + left[1] * right[3] + left[2] * right[0],
-    left[3] * right[2] + left[0] * right[1]
-      - left[1] * right[0] + left[2] * right[3],
-    left[3] * right[3] - left[0] * right[0]
-      - left[1] * right[1] - left[2] * right[2],
+    left[3] * right[0] + left[0] * right[3] + left[1] * right[2] - left[2] * right[1],
+    left[3] * right[1] - left[0] * right[2] + left[1] * right[3] + left[2] * right[0],
+    left[3] * right[2] + left[0] * right[1] - left[1] * right[0] + left[2] * right[3],
+    left[3] * right[3] - left[0] * right[0] - left[1] * right[1] - left[2] * right[2],
   ];
 }
 
@@ -79,13 +68,12 @@ export function shortestModelRotationVector(previousValue, currentValue) {
   let delta = quaternionMultiply(quaternionInverse(previous), current);
   const length = Math.hypot(...delta);
   if (!Number.isFinite(length) || length <= 1e-12) return [0, 0, 0];
-  delta = delta.map(component => component / length);
-  if (delta[3] < 0) delta = delta.map(component => -component);
+  delta = delta.map((component) => component / length);
+  if (delta[3] < 0) delta = delta.map((component) => -component);
   const vectorLength = Math.hypot(delta[0], delta[1], delta[2]);
   if (vectorLength <= 1e-12) return [0, 0, 0];
-  const angle = 2 * Math.atan2(vectorLength,
-    Math.max(-1, Math.min(1, delta[3])));
-  return delta.slice(0, 3).map(component => component * angle / vectorLength);
+  const angle = 2 * Math.atan2(vectorLength, Math.max(-1, Math.min(1, delta[3])));
+  return delta.slice(0, 3).map((component) => (component * angle) / vectorLength);
 }
 
 function transform(value) {
@@ -106,7 +94,7 @@ function clamp(value, minimum, maximum) {
 }
 
 function normalizedSettings(previous, patch = {}) {
-  const next = {...previous};
+  const next = { ...previous };
   if (Object.hasOwn(patch, 'frequencyHz')) {
     const value = Number(patch.frequencyHz);
     if (Number.isFinite(value)) next.frequencyHz = clamp(value, 0.1, 10);
@@ -146,7 +134,7 @@ export function createModelPhysicsSession({
   let enabled = false;
   let suspended = false;
   let generation = 0;
-  let settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
+  let settings = { ...DEFAULT_MODEL_PHYSICS_SETTINGS };
   let previousModelOrientation = null;
   let previousModelTranslation = [...ZERO_VECTOR];
   let rootLinearVelocityWorld = [...ZERO_VECTOR];
@@ -202,13 +190,12 @@ export function createModelPhysicsSession({
   }
 
   function needsSimulation() {
-    return enabled && !suspended && participants.size > 0
-      && (!settled || virtualActive);
+    return enabled && !suspended && participants.size > 0 && (!settled || virtualActive);
   }
 
   function schedule() {
     if (frameId !== null || !needsSimulation() || !requestFrame) return;
-    frameId = requestFrame(timestamp => {
+    frameId = requestFrame((timestamp) => {
       frameId = null;
       advance(timestamp);
       if (needsSimulation()) schedule();
@@ -233,7 +220,7 @@ export function createModelPhysicsSession({
   function getState() {
     let failedCount = 0;
     let unavailableCount = 0;
-    statuses.forEach(status => {
+    statuses.forEach((status) => {
       if (status.kind === 'failed') failedCount += 1;
       if (status.kind === 'unavailable') unavailableCount += 1;
     });
@@ -243,8 +230,9 @@ export function createModelPhysicsSession({
       generation,
       participantCount: participants.size,
       participatingMeshCount: [...participants.values()].reduce(
-        (count, participant) => count + Number(
-          participant.getMeshCount?.() ?? (participant.mesh ? 1 : 0)), 0),
+        (count, participant) => count + Number(participant.getMeshCount?.() ?? (participant.mesh ? 1 : 0)),
+        0,
+      ),
       unavailableCount,
       failedCount,
       frequencyHz: settings.frequencyHz,
@@ -256,8 +244,7 @@ export function createModelPhysicsSession({
       gravityScale: settings.gravityScale,
       constraintsEnabled: settings.constraintsEnabled,
       maxBendDegrees: settings.maxBendDegrees,
-      previousModelOrientation: previousModelOrientation
-        ? [...previousModelOrientation] : null,
+      previousModelOrientation: previousModelOrientation ? [...previousModelOrientation] : null,
       previousModelTranslation: [...previousModelTranslation],
       rootLinearVelocityWorld: [...rootLinearVelocityWorld],
       virtualLinearVelocityWorld: [...virtualLinearVelocityWorld],
@@ -289,7 +276,7 @@ export function createModelPhysicsSession({
   function disable() {
     generation += 1;
     cancelScheduledFrame();
-    participants.forEach(participant => participant.onSessionDetached?.());
+    participants.forEach((participant) => participant.onSessionDetached?.());
     participants.clear();
     statuses.clear();
     enabled = false;
@@ -307,7 +294,7 @@ export function createModelPhysicsSession({
   }
 
   function destroy() {
-    settings = {...DEFAULT_MODEL_PHYSICS_SETTINGS};
+    settings = { ...DEFAULT_MODEL_PHYSICS_SETTINGS };
     disable();
   }
 
@@ -346,7 +333,7 @@ export function createModelPhysicsSession({
 
   function markUnavailable(mesh, reason = 'unavailable') {
     if (!enabled || participants.has(participantKey(mesh))) return;
-    statuses.set(mesh, {kind: 'unavailable', reason});
+    statuses.set(mesh, { kind: 'unavailable', reason });
     notify();
   }
 
@@ -369,17 +356,15 @@ export function createModelPhysicsSession({
 
   function setSettings(patch) {
     const next = normalizedSettings(settings, patch);
-    const changedSettings = Object.keys(next).some(key =>
-      !Object.is(next[key], settings[key]));
+    const changedSettings = Object.keys(next).some((key) => !Object.is(next[key], settings[key]));
     settings = next;
     if (changedSettings) {
-      participants.forEach(participant =>
-        participant.onSettingsChanged?.(settings));
+      participants.forEach((participant) => participant.onSettingsChanged?.(settings));
       settled = false;
       schedule();
       notify();
     }
-    return {...settings};
+    return { ...settings };
   }
 
   function setSuspended(value) {
@@ -405,42 +390,36 @@ export function createModelPhysicsSession({
     }
     const previousOrientation = [...previousModelOrientation];
     const previousTranslation = [...previousModelTranslation];
-    const rotationVector = shortestModelRotationVector(
-      previousOrientation, current.orientation);
-    const translationDeltaWorld = vectorSubtract(
-      current.translation, previousTranslation);
+    const rotationVector = shortestModelRotationVector(previousOrientation, current.orientation);
+    const translationDeltaWorld = vectorSubtract(current.translation, previousTranslation);
     const velocity = finiteVector(detail?.kinematics?.linearVelocityWorld);
     const hasVelocity = velocity !== null;
-    const deltaLinearVelocityWorld = hasVelocity
-      ? vectorSubtract(velocity, rootLinearVelocityWorld) : null;
+    const deltaLinearVelocityWorld = hasVelocity ? vectorSubtract(velocity, rootLinearVelocityWorld) : null;
     previousModelOrientation = [...current.orientation];
     previousModelTranslation = [...current.translation];
     if (hasVelocity) rootLinearVelocityWorld = velocity;
     if (!enabled || suspended || participants.size === 0) return false;
     let changedParticipant = false;
-    participants.forEach(participant => {
+    participants.forEach((participant) => {
       const changedByParticipant = participant.onModelMotion?.({
         rotationVector: [...rotationVector],
         translationDeltaWorld: [...translationDeltaWorld],
         linearVelocityWorld: hasVelocity ? [...velocity] : null,
-        deltaLinearVelocityWorld: hasVelocity
-          ? [...deltaLinearVelocityWorld] : null,
+        deltaLinearVelocityWorld: hasVelocity ? [...deltaLinearVelocityWorld] : null,
         previousModelOrientation: previousOrientation,
         modelOrientation: [...current.orientation],
         settings,
       });
       changedParticipant = changedByParticipant || changedParticipant;
     });
-    if (changedParticipant || changed(rotationVector)
-        || changed(translationDeltaWorld) || hasVelocity) wake();
+    if (changedParticipant || changed(rotationVector) || changed(translationDeltaWorld) || hasVelocity) wake();
     return changedParticipant;
   }
 
   function handleVirtualMotion(detail) {
     if (!enabled || suspended) return false;
     const current = vector(detail?.normalizedLinearVelocityWorld);
-    const deltaVelocityWorld = vectorSubtract(
-      current, virtualLinearVelocityWorld);
+    const deltaVelocityWorld = vectorSubtract(current, virtualLinearVelocityWorld);
     virtualLinearVelocityWorld = [...current];
     virtualActive = detail?.active === true;
     if (participants.size === 0) {
@@ -448,13 +427,12 @@ export function createModelPhysicsSession({
       return false;
     }
     let changedParticipant = false;
-    participants.forEach(participant => {
+    participants.forEach((participant) => {
       const changedByParticipant = participant.onVirtualMotion?.({
         velocityWorld: [...current],
         deltaVelocityWorld: [...deltaVelocityWorld],
         active: virtualActive,
-        modelOrientation: previousModelOrientation
-          ? [...previousModelOrientation] : null,
+        modelOrientation: previousModelOrientation ? [...previousModelOrientation] : null,
         settings,
       });
       changedParticipant = changedByParticipant || changedParticipant;
@@ -468,7 +446,7 @@ export function createModelPhysicsSession({
     if (!enabled || suspended) return false;
     const changedMeshes = Array.isArray(meshes) ? meshes : [meshes];
     const visibleParticipants = [];
-    participants.forEach(participant => {
+    participants.forEach((participant) => {
       if (participant.onMeshStateChanged) {
         if (participant.onMeshStateChanged(changedMeshes)) {
           visibleParticipants.push(participant);
@@ -476,32 +454,35 @@ export function createModelPhysicsSession({
         return;
       }
       const mesh = participant.mesh;
-      if (!changedMeshes.includes(mesh)
-          || participant.isVisible?.() === false) return;
-      if (participant.deform?.({
-        request: false, invalidateShadow: false, skipHidden: false,
-      })) visibleParticipants.push(participant);
+      if (!changedMeshes.includes(mesh) || participant.isVisible?.() === false) return;
+      if (
+        participant.deform?.({
+          request: false,
+          invalidateShadow: false,
+          skipHidden: false,
+        })
+      )
+        visibleParticipants.push(participant);
     });
     if (!visibleParticipants.length) return false;
-    onFrame?.({visibleParticipants, steps: 0});
+    onFrame?.({ visibleParticipants, steps: 0 });
     return true;
   }
 
-  function reset(modelTransform, {settingsPatch = null} = {}) {
+  function reset(modelTransform, { settingsPatch = null } = {}) {
     if (settingsPatch) settings = normalizedSettings(settings, settingsPatch);
     if (!enabled) {
       if (settingsPatch) notify();
       return !!settingsPatch;
     }
-    participants.forEach(participant => participant.reset?.(settings));
+    participants.forEach((participant) => participant.reset?.(settings));
     accumulator = 0;
     lastTimestamp = null;
     rootLinearVelocityWorld = [...ZERO_VECTOR];
     virtualLinearVelocityWorld = [...ZERO_VECTOR];
     virtualActive = false;
     setReference(modelTransform);
-    settled = !virtualActive && [...participants.values()].every(participant =>
-      participant.isSettled?.() !== false);
+    settled = !virtualActive && [...participants.values()].every((participant) => participant.isSettled?.() !== false);
     cancelScheduledFrame();
     notify();
     if (!settled) schedule();
@@ -516,34 +497,33 @@ export function createModelPhysicsSession({
       lastTimestamp = currentTimestamp;
       return;
     }
-    const elapsed = clamp(
-      (currentTimestamp - lastTimestamp) / 1000,
-      0, MODEL_PHYSICS_MAX_FRAME_DELTA);
+    const elapsed = clamp((currentTimestamp - lastTimestamp) / 1000, 0, MODEL_PHYSICS_MAX_FRAME_DELTA);
     lastTimestamp = currentTimestamp;
     accumulator += elapsed;
     let steps = 0;
-    while (accumulator >= MODEL_PHYSICS_STEP
-        && steps < MODEL_PHYSICS_MAX_SUBSTEPS) {
-      participants.forEach(participant =>
-        participant.step?.(MODEL_PHYSICS_STEP, settings));
+    while (accumulator >= MODEL_PHYSICS_STEP && steps < MODEL_PHYSICS_MAX_SUBSTEPS) {
+      participants.forEach((participant) => participant.step?.(MODEL_PHYSICS_STEP, settings));
       accumulator -= MODEL_PHYSICS_STEP;
       steps += 1;
     }
-    if (steps === MODEL_PHYSICS_MAX_SUBSTEPS
-        && accumulator >= MODEL_PHYSICS_STEP) {
+    if (steps === MODEL_PHYSICS_MAX_SUBSTEPS && accumulator >= MODEL_PHYSICS_STEP) {
       accumulator = MODEL_PHYSICS_STEP;
     }
     if (!steps) return;
 
-    participants.forEach(participant =>
-      participant.updateSettled?.(settings));
+    participants.forEach((participant) => participant.updateSettled?.(settings));
 
     const visibleParticipants = [];
-    participants.forEach(participant => {
+    participants.forEach((participant) => {
       if (participant.isVisible?.() === false) return;
-      if (participant.deform?.({
-        request: false, invalidateShadow: false, skipHidden: true,
-      })) visibleParticipants.push(participant);
+      if (
+        participant.deform?.({
+          request: false,
+          invalidateShadow: false,
+          skipHidden: true,
+        })
+      )
+        visibleParticipants.push(participant);
     });
     if (visibleParticipants.length) {
       onFrame?.({
@@ -552,10 +532,9 @@ export function createModelPhysicsSession({
         timestamp: currentTimestamp,
       });
     }
-    settled = !virtualActive && [...participants.values()].every(participant =>
-      participant.isSettled?.() !== false);
+    settled = !virtualActive && [...participants.values()].every((participant) => participant.isSettled?.() !== false);
     if (settled) {
-      participants.forEach(participant => participant.onSettled?.());
+      participants.forEach((participant) => participant.onSettled?.());
       lastTimestamp = null;
       cancelScheduledFrame();
     }
@@ -572,9 +551,9 @@ export function createModelPhysicsSession({
     markFailed,
     clearStatus,
     setSettings,
-    getSettings: () => ({...settings}),
+    getSettings: () => ({ ...settings }),
     getState,
-    getParticipant: mesh => participants.get(resolvedParticipantKey(mesh)) || null,
+    getParticipant: (mesh) => participants.get(resolvedParticipantKey(mesh)) || null,
     handleModelTransform,
     handleVirtualMotion,
     handleMeshStateChanged,

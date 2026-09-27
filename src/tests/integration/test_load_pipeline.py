@@ -1,7 +1,6 @@
 """Focused checks for the load pipeline's cross-module contracts."""
 
 import os
-import json
 import struct
 import tempfile
 import base64
@@ -29,7 +28,6 @@ from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_payload, build_mesh_result,
                                build_mesh_semantics)
-from core.textures import encode_texture_file
 from tests.support_snapshot import snapshot_context
 
 

@@ -43,7 +43,8 @@ export default {
   'environment.preset.outdoor': 'Outdoor',
   'renderer.webgpuUnavailable': 'WebGPU unavailable',
   'renderer.webgpuRequired': 'WebGPU is required by this version of Mod Viewer.',
-  'renderer.failure': 'WebGPU is required by this version of Mod Viewer. Update your graphics driver or use a browser with WebGPU support{detail}',
+  'renderer.failure':
+    'WebGPU is required by this version of Mod Viewer. Update your graphics driver or use a browser with WebGPU support{detail}',
   'renderer.deviceLost': 'WebGPU device lost: {detail}',
   'renderer.unrecoverable': 'WebGPU reported an unrecoverable error: {detail}',
   'gizmo.title': 'Drag to orbit · Click an axis to snap · Scroll to zoom',
@@ -86,12 +87,14 @@ export default {
   'folder.notFound': 'Folder not found',
   'folder.editMod': 'Edit Mod Folder',
   'folder.addMod': 'Add Mod Folder',
-  'folder.removeMod': 'Remove "{name}" from Mod Folders?\n\nThis only removes it from Mod Viewer.\nFiles on disk will not be deleted.',
+  'folder.removeMod':
+    'Remove "{name}" from Mod Folders?\n\nThis only removes it from Mod Viewer.\nFiles on disk will not be deleted.',
   'folder.enterModName': 'Enter a Mod Folder name.',
   'folder.chooseBrowse': 'Choose a folder with Browse.',
   'folder.editAsset': 'Edit Asset Folder',
   'folder.addAsset': 'Add Asset Folder',
-  'folder.removeAsset': 'Remove this Asset Folder?\n\nThis only removes it from Mod Viewer.\nFiles on disk will not be deleted.',
+  'folder.removeAsset':
+    'Remove this Asset Folder?\n\nThis only removes it from Mod Viewer.\nFiles on disk will not be deleted.',
   'folder.buildingIndex': 'Building index…',
   'mesh.loadMissingParts': 'Load missing parts',
   'mesh.removeMissingParts': 'Remove missing parts',
@@ -170,7 +173,8 @@ export default {
   'health.ambiguousDraws': 'Ambiguous: {count}',
   'health.notFoundDraws': 'Not found: {count}',
   'health.mixed': 'mixed component',
-  'health.summary': '{errors} errors · {warnings} warnings · {referenced} referenced assets · {inactive} inactive-only · {viewer} viewer-only',
+  'health.summary':
+    '{errors} errors · {warnings} warnings · {referenced} referenced assets · {inactive} inactive-only · {viewer} viewer-only',
   'health.noIssues': 'No INI issues found.',
   'health.noFilterIssues': 'No issues match this filter.',
   'health.openAtLine': 'Double-click to open this INI at the reported line',
@@ -205,12 +209,16 @@ export default {
   'errors.loadMissingAsset': 'Could not load missing Asset parts:\n\n{detail}',
   'errors.removeMissingAsset': 'Could not remove missing Asset parts:\n\n{detail}',
   'errors.exportPartial': '{saved} ini file(s) exported, but {failed} failed and are still pending:\n\n{detail}',
-  'confirm.unsavedSwitch': 'This mod has unsaved changes that haven\'t been exported.\n\nOpening a different mod folder will discard them. Continue?',
-  'confirm.unsavedAsset': 'This mod has unsaved changes that haven\'t been exported.\n\nOpening an Asset preview will discard them. Continue?',
-  'toggle.deleteConfirm': 'Delete toggle "{name}"?\n\nThis only stages the change — nothing is written to the ini file until you click Export.',
+  'confirm.unsavedSwitch':
+    "This mod has unsaved changes that haven't been exported.\n\nOpening a different mod folder will discard them. Continue?",
+  'confirm.unsavedAsset':
+    "This mod has unsaved changes that haven't been exported.\n\nOpening an Asset preview will discard them. Continue?",
+  'toggle.deleteConfirm':
+    'Delete toggle "{name}"?\n\nThis only stages the change — nothing is written to the ini file until you click Export.',
   'toggle.deleteError': 'Could not delete toggle:\n\n{detail}',
   'toggle.deletedReview': 'Toggle deleted, but review these lines by hand:\n\n{detail}',
-  'toggle.unwired': 'Not wired to any mesh yet — click ⏺ Record below and check/uncheck meshes at each position to assign what this toggle shows. Export is disabled until this toggle is wired (or deleted).',
+  'toggle.unwired':
+    'Not wired to any mesh yet — click ⏺ Record below and check/uncheck meshes at each position to assign what this toggle shows. Export is disabled until this toggle is wired (or deleted).',
   'toggle.edit': 'Edit toggle',
   'toggle.delete': 'Delete toggle',
   'toggle.record': 'Record which meshes show at each position',
@@ -219,7 +227,8 @@ export default {
   'toggle.noToggles': 'No toggles yet — click Add to create one.',
   'toggle.addTitle': 'Add Toggle',
   'toggle.editTitle': 'Edit {name}',
-  'present.deleteKeyConfirm': 'Delete the PRESENT key from every participating INI?\n\nThis only stages the change; the INI is not written until Export.',
+  'present.deleteKeyConfirm':
+    'Delete the PRESENT key from every participating INI?\n\nThis only stages the change; the INI is not written until Export.',
   'present.deleteError': 'Could not delete PRESENT:\n\n{detail}',
   'present.duplicateConfirm': 'These variable values are the same as {labels}.\n\nSave anyway?',
   'present.editError': 'Could not {action} present:\n\n{detail}',
@@ -272,11 +281,15 @@ export default {
   'health.issueOpenOne': '{count} INI diagnostic issue. Open diagnostics',
   'health.issueOpenMany': '{count} INI diagnostic issues. Open diagnostics',
   'diagnostics.issue.unexpected_key_statement': 'Unexpected statement in [{section}]: {source}',
-  'diagnostics.issue.unsupported_drawindexed_arguments': 'The viewer cannot currently reconstruct this drawindexed form as an authored draw; 3DMigoto may accept it. Arguments: {arguments}',
+  'diagnostics.issue.unsupported_drawindexed_arguments':
+    'The viewer cannot currently reconstruct this drawindexed form as an authored draw; 3DMigoto may accept it. Arguments: {arguments}',
   'diagnostics.issue.malformed_resource_reference': '{lhs} uses an invalid resource reference prefix: {prefix}.',
-  'diagnostics.issue.missing_local_run_target': '{target} is run but is not declared in this INI; it may be supplied by the framework.',
-  'diagnostics.issue.duplicate_key_binding': '[{section}] and [{otherSection}] share the key binding {key} and may activate together.',
-  'diagnostics.issue.duplicate_section': 'Duplicate section [{section}]; 3DMigoto uses the first occurrence (line {firstLine}).',
+  'diagnostics.issue.missing_local_run_target':
+    '{target} is run but is not declared in this INI; it may be supplied by the framework.',
+  'diagnostics.issue.duplicate_key_binding':
+    '[{section}] and [{otherSection}] share the key binding {key} and may activate together.',
+  'diagnostics.issue.duplicate_section':
+    'Duplicate section [{section}]; 3DMigoto uses the first occurrence (line {firstLine}).',
   'diagnostics.issue.unknown_section': '[{section}] is not a recognized 3DMigoto section.',
   'diagnostics.issue.statement_outside_section': 'Statement outside a section: {source}',
   'diagnostics.issue.malformed_regular_statement': '[{section}] requires a key=value statement: {source}',
@@ -482,7 +495,8 @@ export default {
   'texture.created': 'Created',
   'texture.saveFailed': 'Texture save failed.',
   'texture.conflictingMeshes': 'Conflicting meshes: {meshes}.',
-  'texture.colorMetadataWarning': 'The texture was saved, but its Color metadata could not be cleared. Resolve the metadata write failure before reopening the mod.',
+  'texture.colorMetadataWarning':
+    'The texture was saved, but its Color metadata could not be cleared. Resolve the metadata write failure before reopening the mod.',
   'texture.saveProgress': 'Texture save progress',
   'texture.noChangedMeshes': 'No changed, editable meshes use this DDS.',
   'texture.blocks': '{completed} / {total} blocks',
@@ -497,13 +511,17 @@ export default {
   'toggle.reportAlwaysFalse': 'always-false gate at line {line}',
   'toggle.reportAlwaysTrue': 'always-true gate at line {line}',
   'toggle.reportUnsafe': 'unresolved gate at line {line}',
-  'toggle.orphanConfirm': '{error}\n\nApply anyway? Meshes only shown for a removed value will no longer be reachable through this toggle.',
-  'record.reason.commandPath': 'draw is reached through a run= command-list execution path without a physical owner for this variable; edit the caller branch manually',
-  'record.reason.ambiguousNesting': 'this section\'s if/elif/endif nesting is ambiguous (see INI structure errors); edit the ini directly',
+  'toggle.orphanConfirm':
+    '{error}\n\nApply anyway? Meshes only shown for a removed value will no longer be reachable through this toggle.',
+  'record.reason.commandPath':
+    'draw is reached through a run= command-list execution path without a physical owner for this variable; edit the caller branch manually',
+  'record.reason.ambiguousNesting':
+    "this section's if/elif/endif nesting is ambiguous (see INI structure errors); edit the ini directly",
   'record.reason.unsupported': '{detail}',
   'record.reason.outerGate': 'gated by this variable at an outer nesting level; edit the ini directly',
   'record.reason.multipleVariables': 'targeted by more than one variable in this recording session',
-  'record.reason.nestedRewrite': 'sits inside another variable\'s gate being rewritten in this same save; edit the ini directly to nest this condition',
+  'record.reason.nestedRewrite':
+    "sits inside another variable's gate being rewritten in this same save; edit the ini directly to nest this condition",
   'record.reason.sameValue': '{detail}',
   'inspector.materialKind.auto': 'Auto',
   'inspector.materialKind.body': 'Body',
@@ -569,7 +587,8 @@ export default {
   'model.assetPreview': 'Asset Preview',
   'model.assetPreviewSeparator': 'Asset Preview  —  {name}',
   'model.exportCompressedDetail': 'Export is unavailable for compressed mods.',
-  'model.unwiredToggleDetail': 'A newly-added toggle isn\'t wired to any mesh yet — Record (⏺) or delete it before exporting.',
+  'model.unwiredToggleDetail':
+    "A newly-added toggle isn't wired to any mesh yet — Record (⏺) or delete it before exporting.",
   'semanticRefresh.drawMismatch': 'The staged draw set no longer matches the displayed model.',
   'gizmo.toggle': 'Toggle navigation gizmo: {state}',
   'panel.collapseSource': 'Collapse {source}',
@@ -608,8 +627,10 @@ export default {
   'mesh.mergeLooseParts': 'Merge Meshes',
   'mesh.applyMeshChanges': 'Apply Mesh Changes',
   'mesh.cancelMeshChanges': 'Cancel Mesh Changes',
-  'mesh.applyMeshChangesConfirm': 'Apply mesh changes for this component?\n\nThe new mesh layout will be staged in memory. Nothing is written to disk until Export.',
-  'mesh.cancelMeshChangesConfirm': 'Cancel mesh changes for this component?\n\nAll unapplied mesh separation and merge changes for this component will be discarded.',
+  'mesh.applyMeshChangesConfirm':
+    'Apply mesh changes for this component?\n\nThe new mesh layout will be staged in memory. Nothing is written to disk until Export.',
+  'mesh.cancelMeshChangesConfirm':
+    'Cancel mesh changes for this component?\n\nAll unapplied mesh separation and merge changes for this component will be discarded.',
   'mesh.applyMeshChangesHint': 'Apply mesh changes for this component',
   'mesh.unappliedChangesDetail': 'There are unapplied mesh changes',
   'mesh.separate': 'Separate',

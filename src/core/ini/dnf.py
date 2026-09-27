@@ -383,10 +383,12 @@ def build_bool_alias_map(sections, *, toggle_keys=None, menu=None, var_prefix=No
         for raw in lines:
             line = raw.split(";")[0].strip()
             m = _ASSIGN_BOOL_RE.match(line)
-            if not m: continue
+            if not m:
+                continue
             alias, rhs = m.group(1), m.group(2).strip()
             # Only boolean expressions are aliases; `$swapvar = 0` is a value init.
-            if not any(op in rhs for op in ("==", "!=", "<", ">")): continue
+            if not any(op in rhs for op in ("==", "!=", "<", ">")):
+                continue
             if alias not in raw_defs:
                 raw_defs[alias] = rhs
 

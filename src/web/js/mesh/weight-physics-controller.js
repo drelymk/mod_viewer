@@ -1,12 +1,24 @@
 // Weight-tab physics session. This module owns both the panel controls and
 // the participant lifecycle used by the model weight session.
 
-export function createWeightPhysicsCoordinator({modelPhysicsSession,
-    modelWeightState, states, knownMeshes, sourcePhysicsRigs,
-    selectedBoneCount, eligibleSkinningMesh, createSourcePhysicsRig,
-    createSourcePhysicsParticipant, getModelTransformState,
-    invalidateCharacterShadowGeometry, notifyModelRigChanged, requestRender,
-    defaults, getGeneration = () => 0, setRigLoading = () => {}} = {}) {
+export function createWeightPhysicsCoordinator({
+  modelPhysicsSession,
+  modelWeightState,
+  states,
+  knownMeshes,
+  sourcePhysicsRigs,
+  selectedBoneCount,
+  eligibleSkinningMesh,
+  createSourcePhysicsRig,
+  createSourcePhysicsParticipant,
+  getModelTransformState,
+  invalidateCharacterShadowGeometry,
+  notifyModelRigChanged,
+  requestRender,
+  defaults,
+  getGeneration = () => 0,
+  setRigLoading = () => {},
+} = {}) {
   let participantSyncToken = 0;
 
   function disable() {
@@ -49,9 +61,8 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
     }
     const syncToken = ++participantSyncToken;
     const generation = getGeneration();
-    const isCurrent = () => syncToken === participantSyncToken
-      && generation === getGeneration()
-      && modelPhysicsSession.getState().enabled;
+    const isCurrent = () =>
+      syncToken === participantSyncToken && generation === getGeneration() && modelPhysicsSession.getState().enabled;
     const affected = changedSourceKeys
       ? new Set(changedSourceKeys)
       : new Set([...groups.keys(), ...sourcePhysicsRigs.keys()]);
@@ -63,8 +74,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
     }
 
     for (const sourceKey of [...sourcePhysicsRigs.keys()]) {
-      if (!groups.has(sourceKey)
-          || !modelWeightState.selectedBonesBySource.has(sourceKey)) {
+      if (!groups.has(sourceKey) || !modelWeightState.selectedBonesBySource.has(sourceKey)) {
         modelPhysicsSession.detach(sourceKey);
         sourcePhysicsRigs.delete(sourceKey);
       }
@@ -74,7 +84,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
     for (const [sourceKey, members] of groups) {
       if (!isCurrent()) return false;
       const selected = modelWeightState.selectedBonesBySource.get(sourceKey);
-      members.forEach(mesh => {
+      members.forEach((mesh) => {
         const state = states.get(mesh);
         if (state) {
           state.physicsParticipantStatus = 'not-selected';
@@ -88,11 +98,9 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
         try {
           const requestedRig = createSourcePhysicsRig(sourceKey, members, {
             generation,
-            isCurrent: () => generation === getGeneration()
-              && syncToken === participantSyncToken,
+            isCurrent: () => generation === getGeneration() && syncToken === participantSyncToken,
           });
-          rig = typeof requestedRig?.then === 'function'
-            ? await requestedRig : requestedRig;
+          rig = typeof requestedRig?.then === 'function' ? await requestedRig : requestedRig;
         } finally {
           setRigLoading(false);
         }
@@ -101,13 +109,12 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
       sourcePhysicsRigs.set(sourceKey, rig);
       if (!rig.physicsForest) continue;
       if (!modelPhysicsSession.getParticipant(sourceKey)) {
-        attached = modelPhysicsSession.attach(
-          createSourcePhysicsParticipant(rig)) || attached;
+        attached = modelPhysicsSession.attach(createSourcePhysicsParticipant(rig)) || attached;
       }
     }
     if (attached) {
       modelPhysicsSession.wake();
-      invalidateCharacterShadowGeometry({request: false});
+      invalidateCharacterShadowGeometry({ request: false });
       requestRender();
     }
     notifyModelRigChanged();
@@ -115,8 +122,7 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
   }
 
   function syncToSelection(changedSourceKeys = null) {
-    const shouldEnable = modelWeightState.loaded
-      && selectedBoneCount(modelWeightState.selectedBonesBySource) > 0;
+    const shouldEnable = modelWeightState.loaded && selectedBoneCount(modelWeightState.selectedBonesBySource) > 0;
     const enabled = modelPhysicsSession.getState().enabled;
     if (!shouldEnable) {
       if (enabled) disable();
@@ -146,33 +152,33 @@ export function createWeightPhysicsCoordinator({modelPhysicsSession,
     });
   }
 
-  return {disable, syncParticipants, syncToSelection, reset};
+  return { disable, syncParticipants, syncToSelection, reset };
 }
 
-export function createWeightPhysicsController({modelPhysicsSession, reset} = {}) {
+export function createWeightPhysicsController({ modelPhysicsSession, reset } = {}) {
   const setNumber = (key, value) => {
     const next = Number(value);
     if (!Number.isFinite(next)) return false;
-    modelPhysicsSession.setSettings({[key]: next});
+    modelPhysicsSession.setSettings({ [key]: next });
     return true;
   };
   return {
     getState: () => modelPhysicsSession.getState(),
     reset,
-    setFrequency: value => setNumber('frequencyHz', value),
-    setDamping: value => setNumber('dampingRatio', value),
-    setMotionStrength: value => setNumber('angularResponse', value),
-    setLinearMotionStrength: value => setNumber('translationResponse', value),
-    setContinuousLinearResponse: value => setNumber('velocityResponse', value),
+    setFrequency: (value) => setNumber('frequencyHz', value),
+    setDamping: (value) => setNumber('dampingRatio', value),
+    setMotionStrength: (value) => setNumber('angularResponse', value),
+    setLinearMotionStrength: (value) => setNumber('translationResponse', value),
+    setContinuousLinearResponse: (value) => setNumber('velocityResponse', value),
     setGravityEnabled(enabled) {
-      modelPhysicsSession.setSettings({gravityEnabled: !!enabled});
+      modelPhysicsSession.setSettings({ gravityEnabled: !!enabled });
       return !!enabled;
     },
-    setGravityScale: value => setNumber('gravityScale', value),
+    setGravityScale: (value) => setNumber('gravityScale', value),
     setConstraintsEnabled(enabled) {
-      modelPhysicsSession.setSettings({constraintsEnabled: !!enabled});
+      modelPhysicsSession.setSettings({ constraintsEnabled: !!enabled });
       return !!enabled;
     },
-    setMaxBendDegrees: value => setNumber('maxBendDegrees', value),
+    setMaxBendDegrees: (value) => setNumber('maxBendDegrees', value),
   };
 }

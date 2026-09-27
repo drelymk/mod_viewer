@@ -337,12 +337,18 @@ def pack_draw_geometry(
     for output_index, vertex_index in enumerate(used):
         x, y, z, u, v = prepared.decoded_vertices[vertex_index]
         position_struct.pack_into(pos_bytes, output_index * 12, x, y, z)
-        if x < bounds_min[0]: bounds_min[0] = x
-        if y < bounds_min[1]: bounds_min[1] = y
-        if z < bounds_min[2]: bounds_min[2] = z
-        if x > bounds_max[0]: bounds_max[0] = x
-        if y > bounds_max[1]: bounds_max[1] = y
-        if z > bounds_max[2]: bounds_max[2] = z
+        if x < bounds_min[0]:
+            bounds_min[0] = x
+        if y < bounds_min[1]:
+            bounds_min[1] = y
+        if z < bounds_min[2]:
+            bounds_min[2] = z
+        if x > bounds_max[0]:
+            bounds_max[0] = x
+        if y > bounds_max[1]:
+            bounds_max[1] = y
+        if z > bounds_max[2]:
+            bounds_max[2] = z
         for item in shape_buffers:
             shape = item.shape
             if item.sparse:
@@ -461,12 +467,18 @@ def _pack_animation_positions(data, stride, used_vertices):
             return None
         if not direct:
             struct.pack_into("<fff", output, output_index * 12, x, y, z)
-        if x < bounds_min[0]: bounds_min[0] = x
-        if y < bounds_min[1]: bounds_min[1] = y
-        if z < bounds_min[2]: bounds_min[2] = z
-        if x > bounds_max[0]: bounds_max[0] = x
-        if y > bounds_max[1]: bounds_max[1] = y
-        if z > bounds_max[2]: bounds_max[2] = z
+        if x < bounds_min[0]:
+            bounds_min[0] = x
+        if y < bounds_min[1]:
+            bounds_min[1] = y
+        if z < bounds_min[2]:
+            bounds_min[2] = z
+        if x > bounds_max[0]:
+            bounds_max[0] = x
+        if y > bounds_max[1]:
+            bounds_max[1] = y
+        if z > bounds_max[2]:
+            bounds_max[2] = z
     return bytes(output), tuple(bounds_min), tuple(bounds_max)
 
 
