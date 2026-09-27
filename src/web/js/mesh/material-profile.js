@@ -618,13 +618,8 @@ class WuwaLightingModel extends ThreePhysicalLightingModel {
   }
 }
 
-/**
- * Approximate HoyoToon's near-binary body metal route.  A is routing data,
- * not Three.js metalness: the authored value is shaped with a low exponent
- * and then passed through a scale/bias saturate before it selects the
- * physical fallback for the not-yet-implemented matcap path.
- */
-/** Numeric companion used by regression probes for the authored route curve. */
+/** Map HoyoToon's packed body-metal route (A) to the physical-specular fallback weight. */
+/** Evaluate the authored route curve for CPU-side checks. */
 export function wuwaMetalRouteValue(value) {
   const raw = Math.min(Math.max(Number(value), 0), 1);
   const shaped = raw > 0.00000003 ? Math.pow(raw, 0.1) : 0;

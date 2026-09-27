@@ -1,40 +1,8 @@
-"""Record mode: assign which meshes are visible at each cycle position of a
-`[Key...]` toggle, and rewrite the ini's `if`/`elif`/`endif` gates to match.
+"""Rewrite toggle-controlled draw visibility for Record mode.
 
-A cycle toggle steps through positions 0..N-1; at each position every var the
-section cycles uses its value at that row. If its list is shorter than the
-section's longest list, 3Dmigoto keeps its final value for the remaining rows.
-The caller (the frontend, which already has the mesh payload's `conditions`)
-decides both the explicit set of drawindexed *sources* owned by the recording
-and, per position, which of those sources should be visible. Each source
-carries its originating ini, original line number, and stable
-section/occurrence/drawindexed identity; this module resolves that identity
-against the authoritative staged document.
-
-This is deliberately conservative: only a well-defined "safe pattern" is
-rewritten automatically; everything else is refused and reported rather than
-guessed at. A chain is safe to regenerate only if:
-
-    - it has no `else` branch (ambiguous to invert without full DNF work);
-    - every branch's condition reads exactly `{var}` and nothing else;
-    - no branch contains a nested `if` of its own;
-    - every non-blank/comment line in every branch is a `drawindexed` line
-      with recorded data for it;
-    - `IniDocument.is_safe_to_rewrite` agrees the section's nesting isn't
-      already ambiguous.
-
-A safe chain is regenerated wholesale (its whole `if`..`endif` span replaced
-in one splice) rather than edited branch-by-branch, since `elif` branches
-are mutually exclusive and evaluated in order -- surgically OR-ing a value
-into one branch can silently do nothing if an earlier sibling already
-claims it.
-
-A drawindexed line whose entire ancestor chain never references this var at
-all gets a brand-new private `if <expr> ... endif` nested directly around
-just that line -- this is what lets a previously-unrelated or freshly-added
-mesh become gated by a toggle for the first time. If the var is referenced
-only through some outer (non-immediate) ancestor, this module declines to
-guess and reports it instead.
+Only unambiguous structures are rewritten; unsupported or ambiguous cases are
+reported without guessing. Draw targets resolve by stable section, occurrence,
+and draw tuple identity rather than submitted line numbers.
 """
 
 import re
@@ -50,9 +18,7 @@ _COND_RE = re.compile(r"^(if|else\s+if|elif)\s+(.*)$", re.I)
 
 
 class _Unsupported(Exception):
-    """Internal signal: this chain/line can't be safely recorded. Always
-    caught within this module and turned into a `skipped` report entry —
-    never propagated to callers."""
+    """Signal that a chain cannot be rewritten safely; callers report it as skipped."""
 
 
 def _skip(report, var, line, reason, code=None, params=None):
@@ -69,18 +35,12 @@ def _split_cond(line):
 
 
 def _refs(doc, line, var):
-    """True if a branch-open line's own condition reads `var`. An `else` has
-    no condition of its own, but is implicitly gated by the negation of every
-    earlier sibling in its own chain — so treat it as referencing `var`
-    whenever any if/elif before it in that chain does.
+    """Whether this branch is gated by `var`.
 
-    Without this, a value recorded against a line inside an `else` branch
-    would fall through to the "bare line" path and get wrapped in a
-    brand-new `if $var == ...`, nested *inside* an else whose entry condition
-    already implies `$var` took some other value — producing an unreachable,
-    permanently-hidden line instead of the refusal this case actually needs
-    (the whole chain, else included, must be rewritten atomically or not at
-    all; see `_chain_of`'s own else check)."""
+    An `else` inherits its earlier sibling conditions, so treat it as a
+    reference when an earlier `if`/`elif` in the same chain reads `var`.
+    Otherwise a new inner wrapper could make the draw unreachable.
+    """
     if line.kind == ELSE:
         try:
             leader = _chain_leader(doc, line)
@@ -111,9 +71,7 @@ def _ancestors(doc, line):
 def _existing_owners(doc, line, writable_names):
     """Return selected writable vars already gating ``line``.
 
-    Record must preserve an existing owner in a multi-variable Key section;
-    a co-driven variable that merely has the same cycle length must not also
-    be offered a bare-wrap claim for that line.
+    A co-driven variable with the same cycle length is not an owner.
     """
     owners = set()
     for ancestor in _ancestors(doc, line):
@@ -258,23 +216,10 @@ def _regenerate_chain(doc, var, values, branches, endif_line, desired, all_posit
 
 def _analyze_var(doc, var, values, desired, report, unsafe_sections,
                  max_positions, target_owners=None, target_paths=None):
-    """Everything this var's recorded data implies, without mutating `doc`.
+    """Analyze one variable's edits without mutating `doc`.
 
-    Returns (chain_edits, bare_edits, verified):
-      chain_edits  [(start, end_exclusive, new_lines), ...] -- whole if/elif/
-                   endif spans to regenerate.
-      bare_edits   {line_no: expr} -- single lines with no var-referencing
-                   ancestor at all, needing a brand-new private wrap.
-      verified     {line_no: [position, ...]} -- lines whose desired
-                   visibility is provably driven by this var alone (no outer
-                   ancestor of its own), for record_toggle's post-save
-                   self-check (see verify_recording). A chain or bare wrap
-                   nested inside some other untouched ancestor condition
-                   ends up gated by `ancestor AND our_expr`, not var alone,
-                   so it's excluded here even though the rewrite itself is
-                   still correct.
-
-    Anything refused is appended to `report["skipped"]`.
+    Return chain edits, bare-line wraps, and lines whose visibility is
+    controlled by this variable alone. Refused targets are added to `report`.
     """
     all_positions = frozenset(range(max_positions))
     target_owners = target_owners or {}
@@ -341,10 +286,8 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
             continue
         if edit is not None:
             chain_edits.append(edit)
-        # A chain nested inside some OUTER, untouched ancestor (whatever it
-        # references) ends up gated by that outer condition AND this
-        # chain's own regenerated expression -- not var alone -- so only a
-        # top-level chain (no ancestors of its own) is safe to verify below.
+        # An untouched outer condition still affects visibility, so only a
+        # top-level chain can be verified against this variable alone.
         if not _ancestors(doc, leader):
             for ln in leader_lines.get(leader_no, []):
                 verified[ln] = sorted(desired[ln])
@@ -367,17 +310,10 @@ def _analyze_var(doc, var, values, desired, report, unsafe_sections,
 
 
 def writable_cycle_vars(doc, section_name):
-    """(writable, max_positions) for a cycle section: the subset of its vars
-    this module can actually rewrite, and how many positions a caller must
-    supply data for.
+    """Return writable local vars and the full cycle length for this section.
 
-    Namespaced/master vars are cross-ini and read-only, so they're excluded
-    from the returned write set. They still participate in the section's
-    cycle, however, so `max_positions` covers every co-driven variable. The
-    recorder must preview that complete tuple while only rewriting locals.
-
-    Raises ToggleEditError if the section isn't a cycle toggle with at least
-    one writable variable.
+    Namespaced vars are read-only but still contribute to the position count.
+    Raise ToggleEditError if the section has no writable variable.
     """
     sec = te.find_cycle_section(doc, section_name)
     cvars = te.cycle_vars(sec, include_read_only=True)
@@ -390,30 +326,13 @@ def writable_cycle_vars(doc, section_name):
 
 def record_toggle(doc, section_name, position_lines, target_lines,
                   target_ini=None):
-    """Rewrite `doc`'s gates for an explicit Record target scope.
+    """Rewrite draw visibility for an explicit Record scope.
 
-    `target_lines` is the complete set of target mappings owned by this
-    recording, including draws hidden at every position. Each mapping has the
-    shape ``{"ini": relative ini path, "line": 1-based source line,
-    "section": section name, "occurrence": {"section", "ordinal", "path"},
-    "drawindexed": [count, start, base]}``. The line is only a hint for the
-    current staged document; the occurrence and drawindexed tuple are the
-    stable identity used to resolve it after earlier staged edits have shifted
-    lines.
-    `position_lines` is {position (0-based, possibly a JSON string key): [ini
-    line number (1-based), ...]} and may contain only visible target lines.
-    Every reachable position should be present, even one that just repeats
-    what's already on disk -- a position missing from the input is
-    indistinguishable from "not visible there". See `writable_cycle_vars` for
-    how many positions that is.
+    Resolve targets by stable draw identity because staged edits can make
+    submitted line numbers stale. `position_lines` lists visible targets and
+    must include every reachable cycle position.
 
-    Returns {"vars_updated": [...], "chains_rewritten": N, "wraps_added": N,
-    "skipped": [{"var", "line", "reason"}, ...], "verify": {var: {"values":
-    [...], "draws": [{"section", "count", "start", "base", "positions":
-    [...]}, ...]}}}. "verify" is the post-save self-check's ground truth
-    (see verify_recording), keyed by each draw's own (section, count,
-    start, base) identity rather than line number, since a chain
-    regeneration can shift line numbers.
+    The report includes rewritten draws for independent verification.
     """
     writable, max_positions = writable_cycle_vars(doc, section_name)
     target_line_map = _resolve_target_refs(doc, target_lines, target_ini)
@@ -454,9 +373,7 @@ def record_toggle(doc, section_name, position_lines, target_lines,
                     "an explicit Record target")
             normalized_visible[pos].append(line_no)
 
-    # Initialize every explicit target first so a line hidden at every
-    # position remains a real editing input rather than disappearing from the
-    # desired map.
+    # Include targets hidden at every position so Record can add their first gate.
     desired = {line_no: set() for line_no in target_numbers}
     for pos, line_nos in normalized_visible.items():
         for line_no in line_nos:
@@ -486,11 +403,8 @@ def record_toggle(doc, section_name, position_lines, target_lines,
 
     final_edits = list(all_chain_edits)
     report["chains_rewritten"] = len(all_chain_edits)
-    # (var, line_no) pairs whose *bare-wrap* claim was refused here — scoped
-    # per-var (not a flat set of lines) because a refused claim from one var
-    # must never disqualify a *different* var's own, separately-successful
-    # chain rewrite of that same physical line. Existing selected-variable
-    # owners normally prevent those competing claims before this pass.
+    # Track refusals per variable so one failed wrap cannot suppress another
+    # variable's successful rewrite of the same line.
     refused = set()
     for line_no, claims in all_bare_claims.items():
         if len(claims) > 1:
@@ -500,11 +414,8 @@ def record_toggle(doc, section_name, position_lines, target_lines,
             refused.update((v, line_no) for v, _ in claims)
             continue
         var, expr = claims[0]
-        # A bare line for this var can still sit inside a *different* var's
-        # chain that's being regenerated in the same pass (legitimate nested
-        # multi-var gating) — that chain edit's span was already computed
-        # against the untouched document, so splicing both would corrupt it.
-        # Leave the chain edit alone and refuse only this narrower wrap.
+        # Both edits use original line offsets; reject a wrap inside another
+        # variable's chain to avoid overlapping splices.
         if any(start <= line_no < end for start, end, _ in all_chain_edits):
             _skip(report, var, line_no + 1,
                   "sits inside another variable's gate being rewritten in this "
@@ -516,13 +427,8 @@ def record_toggle(doc, section_name, position_lines, target_lines,
         final_edits.append((line.no, line.no + 1, [f"if {expr}", line.raw, "endif"]))
         report["wraps_added"] += 1
 
-    # Every (var, line) whose desired visibility genuinely ended up encoded
-    # above — i.e. still present once anything refused (inside _analyze_var,
-    # or in the bare-claim pass just above) is excluded — is fair game for
-    # verify_recording's post-save self-check. Captured as each draw's own
-    # (section, count, start, base) identity, *before* final_edits below can
-    # shift anything, since that identity (unlike a line number) survives a
-    # rewrite and is what a fresh re-parse can still find the draw by.
+    # Keep successfully encoded targets for verification; draw identity stays
+    # stable when the edits shift line numbers.
     report["verify"] = {}
     for var, (values, verified) in per_var_verify.items():
         draws = []
@@ -538,12 +444,8 @@ def record_toggle(doc, section_name, position_lines, target_lines,
         if draws:
             report["verify"][var] = {"values": values, "draws": draws}
 
-    # Bottom-to-top: every edit here only ever shifts lines *after* it, so
-    # applying the lowest (latest) edit first keeps every not-yet-applied
-    # edit's line numbers valid. No two edit spans can overlap: two chains
-    # can't nest or interleave (a safe chain's body may not contain a nested
-    # if), and a bare wrap that would land inside a chain edit was just
-    # refused above.
+    # Apply later spans first to preserve earlier offsets; safe spans do not
+    # overlap, and wraps inside regenerated chains were refused above.
     for start, end, new_lines in sorted(final_edits, key=lambda e: -e[0]):
         doc.replace_lines(start, end, new_lines)
 
@@ -566,11 +468,7 @@ _DRAW_RE = re.compile(
 
 
 def _draw_key(doc, line_no):
-    """(section_name, count, start, base) identity for a DRAW line — stable
-    across a rewrite even when regenerating a chain shifts the line number
-    itself (unlike the line number, the drawindexed args never change).
-    None if the line isn't a recognizable drawindexed line inside a section.
-    """
+    """Return a draw identity that remains stable when rewrites shift line numbers."""
     if not 0 <= line_no < len(doc.lines):
         return None
     line = doc.lines[line_no]
@@ -667,13 +565,10 @@ def _target_path(ref):
 
 
 def _resolve_target_refs(doc, target_lines, target_ini=None):
-    """Resolve submitted source lines to the current staged draw lines.
+    """Resolve submitted targets by stable identity, refusing missing or ambiguous draws.
 
-    A line number from a mesh payload can be stale after Add/Edit inserts text
-    before the draw. The section and literal drawindexed tuple identify the
-    authored draw across that shift. Missing or ambiguous identities are fatal:
-    silently skipping one target could let another stale line land on a
-    neighboring draw and produce a partial, incorrect recording.
+    Payload line numbers can become stale after edits; silently skipping a
+    target could record visibility against the wrong draw.
     """
     resolved = {}
     used_current = {}
@@ -744,14 +639,10 @@ def _dnf_satisfied(conds, bindings):
 
 
 def verify_recording(path, report, text=None, document=None):
-    """Project the current document and confirm it shows the gating
-    recorded in `report["verify"]`. Returns a list of mismatch dicts, empty
-    if every recorded draw's freshly re-parsed gating matches.
+    """Reparse the current document and return mismatches against recorded visibility.
 
-    `document`, when supplied, is the authoritative staged document. The
-    `text` fallback is converted to an ``IniDocument`` rather than sent
-    through the lossy text parser; without either, the saved document is
-    loaded losslessly from `path`.
+    Prefer the authoritative staged document or lossless text; otherwise load
+    the saved document from `path`.
     """
     verify = report.get("verify") or {}
     if not verify:

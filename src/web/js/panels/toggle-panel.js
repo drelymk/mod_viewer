@@ -1,10 +1,5 @@
-// The Toggle panel (right): cycle-type ini [Key...] sections that gate mesh
-// visibility.
-//
-// Keyed by key section rather than by variable, because one section can cycle
-// several variables at once and 3DMigoto advances them all on a single
-// keypress — so they share a cycle position rather than each stepping
-// independently.
+// Toggle panel for cycle-type [Key...] sections. One section may drive several
+// variables, which share a cycle position.
 
 import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.js';
 import { openToggleModal } from '../editing/toggle-modal.js';
@@ -21,11 +16,7 @@ function displayName(variable) {
   return variable.split('::').pop();
 }
 
-/** Resolve a key section's shared cycle position from all variables it drives.
- * A single variable may repeat a value at several positions (for example
- * Dress=1,0,0), so looking up only the first variable with indexOf() can get
- * permanently stuck on the first duplicate.  Prefer the position we last
- * applied when the complete tuple itself is duplicated. */
+/** Resolve the shared position from all vars, preferring the last match for duplicate tuples. */
 function findCyclePosition(vars, positions, preferred = -1) {
   const matches = (position) => vars.every((v) => cycleValueAt(v, position) === getToggleValue(v.var));
   if (preferred >= 0 && preferred < positions && matches(preferred)) return preferred;
@@ -57,9 +48,7 @@ document.getElementById('toggle-add-btn').addEventListener('click', () => {
   openToggleModal({ mode: 'add', modPath: currentCtx.modPath, onSaved: currentCtx.onChange });
 });
 
-/** Disable/enable every button in the panel except `exceptItem`'s own, plus
- * the header's Add button — used while a recording session is in progress on
- * one item, so nothing else can reload or edit out from under its snapshots. */
+/** Disable other controls while one toggle is being recorded. */
 function setOthersEnabled(enabled, exceptItem) {
   document.getElementById('toggle-add-btn').disabled = !enabled;
   document.querySelectorAll('#toggle-list button').forEach((btn) => {
@@ -250,18 +239,7 @@ function buildToggleItem(info, ctx) {
   return item;
 }
 
-/**
- * Build the panel from the structured controls.toggles model.
- *
- * Entries carry a `source` (ini tag) when the mod folder has multiple inis —
- * same-named keys are grouped under a collapsible per-ini sub-section instead
- * of lengthening every toggle's display name with a prefix.
- *
- * `ctx` carries what the add/edit/delete actions need: `modPath` (which edit
- * session to update) and `onChange` (called after a successful staged change
- * to refresh the model and controls). The panel is shown whenever a mod
- * is loaded — even with zero toggles — since "Add" must stay reachable.
- */
+/** Render structured toggle data, grouping duplicate keys by source INI. */
 export function buildTogglePanel(toggles, ctx = {}) {
   currentCtx = { modPath: ctx.modPath || null, onChange: ctx.onChange || null };
 

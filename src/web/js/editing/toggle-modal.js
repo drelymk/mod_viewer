@@ -1,10 +1,5 @@
-// Add/Edit toggle modal — the only authoring UI for cycle toggles.
-//
-// Talks to the write-path API in app/bridge/toggle.py (exposed as
-// window.pywebview.api.*). Only supports the "cycle" toggle type, matching
-// the backend: adding a toggle always creates exactly one variable, and
-// editing can only change an *existing* var's value list, never add or
-// remove one (see toggle_editor.add_toggle / edit_toggle).
+// Add/edit modal for cycle toggles. Add creates one variable; edit changes
+// the values of variables already in the selected key section.
 
 import { confirmDialog } from '../ui/dialogs.js';
 import { bindModalDismiss, setModalError } from '../ui/modal-shell.js';
@@ -80,13 +75,7 @@ async function populateIniPicker(modPath, selected, editable) {
   field.style.display = editable && inis.length <= 1 ? 'none' : '';
 }
 
-/**
- * Open the modal in 'add' or 'edit' mode.
- *   add:  { mode: 'add', modPath, onSaved }
- *   edit: { mode: 'edit', modPath, info, onSaved }  — info is a controls.toggles
- *         payload entry (needs .ini, .section, .name); the real field values
- *         are read from the authoritative edit session via get_toggle_details.
- */
+/** Open for add or edit; edit values come from the authoritative session. */
 export async function openToggleModal({ mode, modPath, info, onSaved: cb }) {
   currentMode = mode;
   currentModPath = modPath;
@@ -173,9 +162,8 @@ async function handleSubmit(evt) {
   try {
     let result = currentMode === 'add' ? await submitAdd() : await submitEdit(false);
 
-    // Shrinking a cycle's values can orphan meshes still gated on a removed
-    // value — toggle_editor refuses by default; offer to force it, since
-    // resolving that mesh's visibility is squarely the user's call.
+    // Removing a still-gated value can change mesh visibility, so require
+    // explicit confirmation before forcing the edit.
     if (result.error && currentMode === 'edit' && result.error_code === 'orphan_existing_gates') {
       const proceed = await confirmDialog(t('toggle.orphanConfirm', { error: result.error }));
       if (proceed) result = await submitEdit(true);
@@ -188,10 +176,6 @@ async function handleSubmit(evt) {
 
     const changeType = currentMode === 'add' ? 'add' : 'edit';
     closeModal();
-    // A brand-new toggle now appears in the list right away (see
-    // mod_loader.build_toggle_panel's "wired" flag) with a ⚠ badge instead of
-    // a one-off alert — its ⏺ Record button already works with zero prior
-    // gating, so there's nothing further the user needs telling here.
     if (onSaved) await onSaved({ type: changeType });
   } catch (e) {
     setError(String(e));

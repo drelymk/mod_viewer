@@ -1,29 +1,6 @@
-"""Add/edit/delete 3DMigoto toggles in place on a single ini file.
+"""Create, edit, and delete cycle toggles in an in-memory ``IniDocument``.
 
-A "toggle" is three coupled pieces, edited together so the UI's "one
-toggle" never drifts from what's on disk:
-
-    1. `[KeyFoo]` -- the cycle section (`key = ...`, `type = cycle`, `$var = 0,1,2`)
-    2. `$var` declaration in `[Constants]` (`global persist $var = 0`)
-    3. `if $var == N ... endif` gates around `drawindexed` lines elsewhere
-
-Every function here takes an already-loaded IniDocument and mutates it in
-memory; callers call `.save()` themselves, which keeps this testable
-without touching disk.
-
-A brand-new `[KeyFoo]` section also gets a `condition = ...` line so its key
-binding is inert until the object it belongs to is on screen -- real
-WWMI/GIMI mods hand-author exactly this pattern. See
-`_existing_detection_var`/`_mark_active_in_overrides` for how the detection
-var (`$object_detected` or `$active`) is chosen or built from scratch.
-
-Deleting a toggle never restructures if/elif/endif chains or removes a
-`drawindexed` line -- it only rewrites the *condition text* of lines that
-reference the deleted variable, via ic.eliminate(). A branch whose condition
-collapses entirely becomes `1` (always taken) or `0` (never taken), per
-ordinary De Morgan logic (`if !$v` -> `0`, plain `if $v` -> `1`); both are
-reported back from delete_toggle() since a now-unreachable branch is worth a
-UI warning.
+Callers own transaction and export; gate rewrites preserve branch structure.
 """
 
 import re
@@ -107,8 +84,7 @@ def _var_declared_elsewhere(doc, var, exclude_section):
 
 
 def _find_key_lines(sec):
-    """Every `key = …` line in a section, in file order (3DMigoto allows more
-    than one, binding alternate combos to the same cycle)."""
+    """Return all `key =` bindings in source order; 3DMigoto allows several per section."""
     out = []
     for line in sec.lines:
         if line.kind != ASSIGN:
@@ -125,13 +101,9 @@ def add_toggle(doc, name, key_combo, var, values, default=None, back_combo=None)
     """Create a new cycle toggle: a `[Key<name>]` section plus a `$var`
     declaration in `[Constants]` (added only if not already declared).
 
-    A fresh toggle gates nothing by itself -- Record mode is what assigns
-    meshes to its values. The new section also gets a `condition = ...`
-    line so its key binding is inert until the object it belongs to is on
-    screen (see module docstring for the priority order and what gets
-    built if this ini has neither `$object_detected` nor `$active` yet).
-    The new section is inserted right after `[Constants]`, not at the end
-    of the file. Returns the new section's name.
+    Record assigns draws to its values. The section condition uses this INI's
+    detection variable so the key is active only for its object. Insert it
+    after `[Constants]` and return the new section name.
     """
     section_name = _norm_section_name(name)
     if doc.section(section_name) is not None:
@@ -215,9 +187,7 @@ def _existing_detection_var(doc):
 
 
 def _append_after_last_content_line(doc, sec, text):
-    """Insert `text` as a new line at the end of `sec`'s body, after its last
-    non-blank line — not at `sec.end`, which would land after any trailing
-    blank lines and butt straight up against the next section header."""
+    """Insert after the last nonblank line so trailing blanks remain between sections."""
     at = sec.header_no + 1
     for line in sec.lines:
         if line.kind != BLANK:
@@ -240,11 +210,9 @@ def _ensure_present_reset(doc, var):
     """Add `post $var = 0` to `[Present]` (creating the section right after
     [Constants], if it doesn't exist yet).
 
-    `post` defers the assignment until after the rest of this frame's
-    Present command list has run, so anything reading `$var` earlier in the
-    same block still sees this frame's value; only the *next* frame starts
-    from 0 unless a TextureOverride section (_mark_active_in_overrides)
-    sets it back to 1 first."""
+    `post` runs after the current Present command list, so the current frame
+    keeps its value and the next starts at 0 unless a TextureOverride sets it
+    back to 1."""
     sec = doc.section("Present")
     if sec is None:
         const = doc.section("Constants")
@@ -265,13 +233,7 @@ def _texture_override_sections(doc):
 
 
 def _mark_active_in_overrides(doc, var):
-    """Insert `$var = 1` into the first (and second, if present)
-    `[TextureOverride*]` section -- the hand-authored convention real
-    WWMI/GIMI mods use to flip the detection flag from inside a section
-    3DMigoto only invokes while this mod's geometry is being drawn. Landed
-    after the section's leading plain assignments and before its first
-    nested if/elif/else/endif block, so it fires regardless of which inner
-    branch a given draw call takes."""
+    """Set the detection var in up to two TextureOverride sections before nested conditions."""
     sections = _texture_override_sections(doc)[:2]
     # Bottom-up: inserting into a later section never shifts line numbers
     # for sections above it.
@@ -314,19 +276,10 @@ def edit_toggle(doc, section_name, *, new_name=None, key_combo=None,
                  back_combo=None, var_values=None, allow_value_conflicts=False):
     """Edit fields of an existing cycle toggle in place.
 
-    `var_values` is an optional {var: [new values...]}; only vars present in
-    it are changed, replacing each one's cycle list wholesale. Shrinking a
-    cycle so a still-gated value disappears raises ToggleEditError (with the
-    conflicts) unless `allow_value_conflicts=True` -- resolving what happens
-    to that value's meshes is the caller's job (record mode owns
-    reassignment). If the var's `[Constants]` default is a value this edit
-    removes, it's rewritten to the new first value instead of being left
-    pointing at a value the cycle no longer has.
-
-    All fields are validated up front, before any line is touched, so a
-    ToggleEditError always leaves the document exactly as it was.
-
-    Returns the (possibly renamed) section name.
+    `var_values` replaces selected cycle lists. Removing a value still used
+    by a gate is rejected unless `allow_value_conflicts=True`; a removed
+    default is reset to the new first value. Validate all fields before edits
+    and return the possibly renamed section.
     """
     sec = find_cycle_section(doc, section_name)
     existing_vars = cycle_vars(sec)
@@ -426,34 +379,11 @@ def _rebuild_condition_line(line, keyword, new_expr):
 
 
 def _strip_vars_from_gates(doc, dead_vars):
-    """Rewrite every if/elif condition in the document that references any of
-    `dead_vars`, via ic.eliminate(). Never touches branch structure or line
-    count -- see module docstring.
+    """Simplify gates that reference deleted vars without changing branch structure.
 
-    Skips any section IniDocument.structure_errors() flags as having
-    ambiguous if/elif/endif nesting: with a stray or missing endif, which
-    branch a gate actually controls is already unclear, so rewriting one
-    there risks guessing wrong. Left untouched and reported instead.
-
-    Targets are collected in a single upfront pass rather than rescanned
-    from scratch after each rewrite: replacing one line with exactly one
-    line never shifts any other line's index, and eliminate() fully resolves
-    a condition's dead-var references in one call, so no line needs
-    revisiting. (A prior rescan-every-time version was quadratic.)
-
-    Returns a dict:
-        rewritten     total lines rewritten (to `1`, `0`, or a simplified
-                      expression with the dead var's clauses removed)
-        always_false  [(section, line_no_1based), ...] rewritten to the
-                      literal `0` -- these branches are now permanently
-                      unreachable (see ic.eliminate() for why this can
-                      legitimately happen, e.g. `if !$v`), worth a UI warning.
-        always_true   [(section, line_no_1based), ...] rewritten to the
-                      literal `1` -- these branches (and whatever they draw)
-                      are now permanently shown instead of only for one cycle
-                      value, equally worth flagging to the user.
-        unsafe        [(section, line_no_1based), ...] left untouched because
-                      their section's nesting was ambiguous.
+    Refuse sections with ambiguous nesting. Collect targets once because
+    one-line rewrites preserve line numbers. The report identifies rewritten,
+    constant-result, and unsafe gates.
     """
     targets = []
     unsafe = []
@@ -503,31 +433,11 @@ def _strip_vars_from_gates(doc, dead_vars):
 
 
 def delete_toggle(doc, section_name):
-    """Remove a cycle toggle entirely: its `[Key...]` section, its `$var`
-    declaration(s) in `[Constants]` (unless another Key section in this same
-    file still cycles them), and every reference to those vars in the file's
-    `if`/`elif` gates -- via ic.eliminate() rather than restructured away.
+    """Remove a toggle, unused local variable declarations, and references in gates.
 
-    Namespaced (cross-file) variables are never touched even if declared
-    here, since they belong to another file and are read-only.
-
-    Returns {"section": name, "vars_removed": [...], "gates_rewritten": N,
-    "always_false_gates": [(section, line_no_1based), ...],
-    "always_true_gates": [(section, line_no_1based), ...],
-    "unsafe_gates": [(section, line_no_1based), ...]}.
-
-    `always_false_gates` lists branches that became permanently unreachable
-    (e.g. a `!$v` gate) -- the mesh(es) they used to draw are now hidden for
-    good, the one outcome of a delete worth surfacing to the user.
-
-    `always_true_gates` lists branches that became permanently reachable
-    (e.g. a plain `$v` gate) -- the mesh(es) they draw are now always shown
-    instead of only for one cycle value, equally worth surfacing.
-
-    `unsafe_gates` lists leftover references to a removed var that couldn't
-    be rewritten because their section's if/elif/endif nesting is ambiguous;
-    those still declare `$var` nowhere, so 3DMigoto treats it as always 0,
-    but the caller/UI should warn rather than silently leave it dangling.
+    Namespaced vars and vars used by another Key section remain untouched.
+    The report flags gates that became constant or could not be rewritten
+    safely because their section has ambiguous nesting.
     """
     sec = find_cycle_section(doc, section_name)
     my_vars = [v for v in cycle_vars(sec) if not ic.is_namespaced(v)]

@@ -1,9 +1,8 @@
 import * as THREE from 'three';
 import { HUMANOID_CONTROL_DRIVER_IDS } from './humanoid-control-rig.js';
 
-// The control rig owns the semantic topology. Mapped controls claim their
-// exact ModelJoints, unmapped controls get point-radius seeds, and remaining
-// ownership comes only from parent-to-child inheritance.
+// The control rig owns semantic topology; mapped joints, point seeds, and
+// parent inheritance determine deformation ownership.
 export const HUMANOID_DRIVER_SEGMENTS = Object.freeze([
   { id: 'torso', role: 'torso', start: 'pelvis', end: 'chest' },
   { id: 'neck', role: 'torso', start: 'chest', end: 'neck' },
@@ -391,13 +390,7 @@ function ownershipDiagnostics(controlState, directOwnerByJointId, ownerByJointId
   };
 }
 
-/**
- * Build the viewer-owned primary skeleton's driver frames.
- *
- * `posedControls` is optional.  Omitting it returns authored rest frames;
- * passing it is how the runtime evaluates a humanoid pose without changing
- * the fitted control rig or ModelJoint rest data.
- */
+/** Build rest frames by default, or evaluate the supplied humanoid pose. */
 export function buildHumanoidDriverFrames(controlRig, posedControls = null) {
   const result = new Map();
   HUMANOID_DRIVER_SEGMENTS.forEach((segment) => {
@@ -495,12 +488,7 @@ function matrixFrom(value) {
   return new THREE.Matrix4();
 }
 
-/**
- * Evaluate absolute body-driver targets and convert them to skinning deltas.
- * Every result is an absolute target composed with the inverse authored rest
- * frame.  Children therefore receive a driver's motion exactly once even if
- * their ModelJoint parent is also directly bound.
- */
+/** Convert absolute targets to authored-rest deltas so child joints do not receive parent motion twice. */
 export function buildHumanoidDriverBaseTransforms({ binding, controlRig, modelRig, posedControls = null } = {}) {
   const result = new Map();
   const driverWorldByJointId = new Map();

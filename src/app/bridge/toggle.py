@@ -1,16 +1,7 @@
-"""Toggle authoring: add/edit/delete a cycle toggle, staged in memory until
-the user clicks Export.
+"""Bridge cycle-toggle CRUD and Record operations.
 
-Thin orchestration over app.session.edit (pending-edits cache),
-core.ini.document (load/save-with-backup) and core.editing.toggle (the actual CRUD, which only ever
-mutates an in-memory IniDocument). app.bridge.api is just the pywebview bridge,
-app.mods.loader is the read-only payload builder, and this module is the write
-path.
-
-Every public function here returns a plain dict, never raises, so it's safe
-to call across the JS bridge (an uncaught exception there surfaces as an
-opaque rejection). A ToggleEditError becomes {"error": "..."}; anything
-unexpected becomes {"error": "<full traceback>"} for debugging.
+Edits stay staged in the session until Export. Public functions return error
+dictionaries across the JS bridge and log unexpected failures.
 """
 
 import os
@@ -63,8 +54,7 @@ def _ini_path(mod_dir, ini_rel):
 
 
 def _last_assign(sec, key_name):
-    """The value of the last `key_name = ...` line in a section, or "" —
-    mirrors edit_toggle's own "last one wins" convention for key/back."""
+    """Return the last matching assignment, or an empty string."""
     value = ""
     for line in sec.lines:
         k, sep, v = line.text.partition("=")
@@ -74,10 +64,7 @@ def _last_assign(sec, key_name):
 
 
 def list_source_inis(mod_dir):
-    """[{value, label}] for every ini file directly in mod_dir — the choices
-    offered when adding a new toggle to a multi-ini ("AllInOne") mod. Lists
-    every ini regardless of whether it has any toggles yet, unlike deriving
-    the list from an already-loaded payload."""
+    """List source INIs for the add-toggle selector, including files without existing toggles."""
     paths = edit_session.document_paths(mod_dir)
     source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
     paths = paths or discover_ini_paths(mod_dir, source=source)
@@ -91,11 +78,7 @@ def list_source_inis(mod_dir):
 
 
 def get_toggle_details(mod_dir, ini_rel, section_name):
-    """Ground-truth {name, key, back, vars: {var: [values]}} for an existing
-    toggle — from the pending in-memory edit if staged this session, else
-    read fresh from disk. Used to pre-fill the Edit form with real
-    (un-namespaced) variable names.
-    """
+    """Read toggle details from staged state when available; otherwise read from disk."""
     try:
         path = _ini_path(mod_dir, ini_rel)
         doc = edit_session.peek(mod_dir, path)
@@ -111,14 +94,9 @@ def get_toggle_details(mod_dir, ini_rel, section_name):
 
 
 def _run(mod_dir, ini_rel, fn, on_commit=None):
-    """Stage fn(doc)'s mutation into this ini's pending edit, without
-    writing to disk. Shared by add/edit/delete below. A raised
-    ToggleEditError (or any other exception) rolls the ini back to exactly
-    what it was before this call.
+    """Run one mutation in a session transaction.
 
-    `on_commit(path, result)`, if given, runs right after a successful
-    commit — used to update edit_session's "newly added, not yet wired"
-    tracking (mark_added/rename_added/mark_removed).
+    Roll back on errors and update new-toggle tracking only after commit.
     """
     try:
         path = _ini_path(mod_dir, ini_rel)
@@ -159,11 +137,7 @@ def delete_toggle(mod_dir, ini_rel, section_name):
                 on_commit=lambda path, result: edit_session.mark_removed(mod_dir, path, section_name))
 
 
-# -- export / discard (Phase 6) --------------------------------------------
-#
-# Every add/edit/delete/record_toggle call above only ever mutates the
-# pending in-memory session (app/session/edit.py) -- nothing reaches disk
-# until one of these is called.
+# -- export / discard -------------------------------------------------------
 
 def has_pending_changes(mod_dir):
     """True if mod_dir has at least one staged, not-yet-exported edit."""
@@ -171,14 +145,7 @@ def has_pending_changes(mod_dir):
 
 
 def export_changes(mod_dir):
-    """Write every pending edit for mod_dir to disk: one timestamped backup
-    per changed ini, best-effort so one failure doesn't block the rest. See
-    edit_session.export.
-
-    Refuses up front (returns {"error": ..., "unwired": {ini: [section,
-    ...]}}, writes nothing) if a toggle added this session still isn't
-    wired to any mesh — Record it (or delete it) first.
-    """
+    """Export pending edits, refusing while a newly added toggle is unwired."""
     source = edit_session.source_for(mod_dir) or mod_source_for_path(mod_dir)
     if source.read_only:
         return {"error": "Export is unavailable for compressed mods."}
@@ -204,25 +171,10 @@ def discard_changes(mod_dir):
     return {"ok": True}
 
 
-# -- record mode (Phase 4) -------------------------------------------------
-#
-# The frontend already holds the full mesh payload (conditions + source
-# identities) and the Toggle panel model, so it derives per-position visibility
-# and the position_lines/target_lines maps to send back entirely on its own. This layer only
-# answers "how many positions do you need to record" up front (get_record_
-# positions) and applies the recorded result (record_toggle) — it never
-# computes visibility itself.
+# -- record mode ------------------------------------------------------------
 
 def get_record_positions(mod_dir, ini_rel, section_name):
-    """{"ok": True, "positions": N, "vars": [var, ...]}: how many cycle
-    positions a Record-mode session for this section must supply, and which
-    of its variables are actually writable (namespaced/master vars are
-    read-only and excluded from ``vars``). The position count still includes
-    every co-driven variable so Record can preview the complete tuple. Call
-    this before starting a session rather than reusing the toggle panel's own
-    cycle length, which can disagree.
-    Reads the pending in-memory edit if one is staged this session.
-    """
+    """Return the full cycle length and writable vars for Record using staged state when present."""
     try:
         path = _ini_path(mod_dir, ini_rel)
         doc = edit_session.peek(mod_dir, path)
@@ -235,19 +187,7 @@ def get_record_positions(mod_dir, ini_rel, section_name):
 
 
 def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
-    """Rewrite section_name's gates from an explicit Record scope.
-
-    ``target_lines`` owns every draw source intentionally included in the
-    recording. Each target includes its ini, source line, section, draw
-    occurrence, and literal ``drawindexed`` triple so the core can resolve
-    stale line numbers against the staged document. ``position_lines`` contains only the owned lines
-    visible at each position. Stages the result like add/edit/delete above, then
-    immediately re-checks the mutated text against what was recorded
-    (record_editor.verify_recording). On any mismatch the pending edit is
-    rolled back and {"error": ...} is returned instead of {"ok": True, ...}.
-    Returns record_editor.record_toggle's report dict
-    (vars_updated/chains_rewritten/wraps_added/skipped) under "result".
-    """
+    """Stage a Record rewrite and verify it; roll back if verification fails."""
     try:
         path = _ini_path(mod_dir, ini_rel)
         with edit_session.transaction(mod_dir, [path]) as transaction:

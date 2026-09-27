@@ -72,7 +72,7 @@ def test_condition_reduce(source, bindings, expected):
 
 
 
-# â”€â”€ eliminate() â€” used by toggle_editor's delete path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -- eliminate() -------------------------------------------------------------
 
 def elim(src, dead_vars):
     return ic.render(ic.eliminate(ic.parse(src), dead_vars))
@@ -92,15 +92,7 @@ def test_condition_eliminate(source, dead_vars, expected):
 
 
 def test_eliminate_dead_var_inside_arithmetic():
-    """Regression: a dead var buried inside arithmetic on a Cmp operand (or as
-    a bare arithmetic condition) used to be invisible to eliminate() â€” it only
-    checked for a bare `Operand` on either side of a Cmp, so `$img_x` inside
-    `cursor_x < $img_x + $norm_width` was never substituted away. references()
-    still says the line depends on the dead var (it recurses through Arith),
-    so _strip_vars_from_gates kept re-selecting the same untouched line as its
-    next rewrite target forever â€” a real, corpus-confirmed infinite loop
-    (found via a mouse-drag [Present] script section in a real WuWa mod),
-    not a hypothetical one."""
+    """Regression coverage for dead variables inside arithmetic expressions."""
     assert (elim("$v + 1 == 2", ["v"]) == TRUE), ("dead var inside arithmetic on the left of == folds to TRUE")
     assert (elim("2 == $v + 1", ["v"]) == TRUE), ("dead var inside arithmetic on the right of == folds to TRUE")
     assert (elim("$other == $v + 1", ["v"]) == TRUE), ("a live var mixed with a dead one in arithmetic still folds "
