@@ -1,40 +1,7 @@
-"""app/bridge/toggle.py's app-layer wiring: record mode (get_record_positions/
-record_toggle) plus the staged-edit session it now shares with add/edit/
-delete_toggle (app/session/edit.py) and export_changes/discard_changes/
-has_pending_changes.
+"""Test staged toggle operations, Record rollback, and Export behavior.
 
-Since the "make changes in app not affect the ini file until Export" feature,
-every mutating call here only ever touches an in-memory IniDocument cached in
-app/session/edit.py â€” nothing reaches a real ini file until export_changes()
-is called, which is also the one place a timestamped backup is made (once per
-changed ini, however many edits accumulated into it). This file's tests
-therefore check, for every mutation:
-  - the real file on disk is untouched immediately after the call;
-  - the pending state is visible via has_pending_changes/get_toggle_details/
-    get_record_positions (which must prefer a same-session pending edit over
-    stale disk content â€” see edit_session.peek);
-  - a rejected call (raised ToggleEditError, or record_toggle's own post
-    -rewrite verify mismatch) never leaves a partial mutation sitting in the
-    session, whether this was the ini's first pending edit or one on input43 of
-    an already-pending doc;
-  - export_changes writes exactly once per ini regardless of how many edits
-    were staged against it, and clears the pending state afterwards;
-  - discard_changes drops everything pending without writing anything.
-
-Also covered: export_changes refuses outright (no backup, nothing written)
-while a toggle added via add_toggle this session still doesn't gate any
-mesh â€” and proceeds normally again once that toggle is either wired via
-record_toggle or removed via delete_toggle (see app.mods.loader.
-unwired_pending_sections / app.session.edit.new_sections_for).
-
-core.editing.record is exercised in-memory (no disk I/O, no session) by
-tests.core.editing.test_record; this file instead checks the app layer on input43 of it:
-resolving ini_rel to a path, staging via edit_session, and turning
-ToggleEditError into a plain {"error": ...} rather than raising across the JS
-bridge. It's also the only place that exercises get_record_positions. A
-[Key...] section's writable variables can have a shorter values list than a
-co-driven namespaced variable. Record therefore previews the complete cycle
-while reporting only the variables it may safely rewrite.
+The bridge tests also check that Record uses the full co-driven cycle length
+while rewriting only writable variables.
 """
 
 import glob
@@ -49,10 +16,8 @@ from core.ini.document import IniDocument
 from core.editing import record as record_editor
 
 
-# A section with one writable var (2 values) and one namespaced var declared
-# alongside it with a *longer* values list â€” syntactically legal ini, and
-# exactly the shape that would make a lead-variable-driven position count
-# wrong (see module docstring).
+# The local variable has two values; its co-driven namespaced variable has four.
+# Record previews all positions but rewrites only the local variable.
 FIXTURE = """[Constants]
 global persist $Upper = 0
 
@@ -71,13 +36,8 @@ drawindexed = 200,0,0
 endif
 """
 
-# Like FIXTURE, but with real Resource/TextureOverride declarations so
-# mod_loader.unwired_pending_sections (build_draw_groups under the hood) can
-# actually resolve a draw group and tell whether a var gates it â€” FIXTURE
-# above is deliberately minimal for tests that only exercise toggle_editor/
-# record_editor's direct in-memory line splicing and never need that. No
-# buffer file needs to exist on disk for this -- build_draw_groups only needs
-# each Resource section's `filename =` line to be declared.
+# Resource declarations let staged-session checks resolve the draw group.
+# Filename entries suffice; no buffer file is needed.
 WIRABLE_FIXTURE = """[Constants]
 global persist $Upper = 0
 
@@ -189,9 +149,7 @@ def test_get_record_positions_uses_complete_cycle_but_reports_writable_vars(togg
 
 
 def _swap_positions(tmp, ini_rel):
-    """Stage the fixture's one real rewrite: swap the two positions' cycle
-    gating so position 0 shows the line that used to be position 1's, and
-    vice versa. Returns (ini_path, record_toggle's result dict)."""
+    """Swap the two positions' cycle gating and return the INI path and result."""
     line_100 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1) if "100,0,0" in line)
     line_200 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1) if "200,0,0" in line)
     ini_path = os.path.join(tmp, ini_rel)
@@ -344,20 +302,11 @@ def test_stale_record_target_rolls_back_without_pending_changes(toggle_mod):
 
 
 def test_record_toggle_rolls_back_pending_on_verify_mismatch(toggle_mod):
-    """If verify_recording ever reports a mismatch -- the self-check this
-    whole feature exists for -- record_toggle must discard the just-staged
-    pending edit and return a clean {"error": ...}, never silently leave a
-    mod showing the wrong meshes, staged or not. Forced with a monkeypatch
-    rather than trying to engineer a real record_editor bug:
-    test_record_editor.py's own corpus dry run already proves
-    verify_recording doesn't false-positive on a genuine rewrite, so this
-    test only needs to prove the *plumbing* in toggle_api.record_toggle
-    reacts correctly when it does fire."""
+    """A verification mismatch must roll back the staged edit and return an error."""
     from core.editing import record as record_editor
     forced = [{"var": "fake", "reason": "forced mismatch for this test"}]
     real_verify = record_editor.verify_recording
-    # verify_recording now takes an optional text= kwarg (in-memory preview);
-    # the replacement must accept it too or the call below raises TypeError.
+    # Accept the optional text argument used for staged verification.
     record_editor.verify_recording = lambda path, report, text=None: forced
     try:
         tmp, ini_path = toggle_mod

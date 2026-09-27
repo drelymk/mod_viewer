@@ -1,23 +1,7 @@
-"""Lossless, line-preserving model of a 3DMigoto ini file.
+"""Lossless, line-preserving model of a 3DMigoto INI.
 
-`core.ini.parser` is the read/analysis path: it strips comments, blank lines and
-indentation, merges sections across files, and discards line numbers — good
-for analysis, useless for writing.
-
-This module is the write path: every source line is kept verbatim with a
-structural index layered on top, so edits apply as line splices and every
-untouched line survives byte-for-byte. Real mod inis are inconsistent enough
-(mixed CRLF/LF within one file, missing trailing newline, occasional BOM)
-that each line must carry its own terminator rather than the file having one
-global setting — otherwise a save would rewrite lines nobody touched.
-
-Typical use:
-
-    doc = IniDocument.load(path)
-    for sec in doc.sections:
-        ...inspect sec.lines...
-    doc.replace_lines(start, end, ["if $x == 1", "endif"])
-    doc.save()          # backs up first, writes atomically
+Each source line is retained verbatim with structure layered on top, so splices
+preserve untouched text, BOM, mixed line endings, and final-newline state.
 """
 
 import os
@@ -241,17 +225,10 @@ class IniDocument:
     def structure_errors(self):
         """Report ambiguous if/elif/else/endif nesting and branch order.
 
-        Roughly 5% of real mod files contain at least one such section: a
-        stray `endif` that closes an already-closed block, an `else if` with
-        no open `if`, or an `if` that is never closed. 3DMigoto tolerates
-        these, so they are not load errors — but they make the intended
-        structure ambiguous, and rewriting a gate inside one could change
-        which draws are conditional.
+        3DMigoto tolerates malformed nesting, but gate rewrites should refuse
+        these sections because their intended draw visibility is unclear.
 
-        Returns [{section, line, problem, reason, count?}]; callers that
-        rewrite gates should refuse to touch any section named here. ``reason``
-        is a stable machine-readable classification; ``problem`` remains the
-        human-readable compatibility field.
+        Return problem and reason classifications for each affected section.
         """
         problems = []
         for sec in self.sections:
@@ -447,14 +424,7 @@ class IniDocument:
         return replacement
 
     def _fix_terminators(self):
-        """Maintain two invariants after a splice.
-
-        1. Only the final line may lack a terminator — otherwise two lines
-           would fuse into one.
-        2. Whether the *file* ends with a newline is a property of the file,
-           not of whichever line is currently last. 798 of 5,524 real inis end
-           without one; appending to such a file must not silently add it.
-        """
+        """Keep interior lines terminated and preserve the original final-newline state."""
         if not self.lines:
             return
         default = self._default_eol()
@@ -480,22 +450,14 @@ class IniDocument:
         return self.to_string().encode("utf-8")
 
     def backup_path(self, when=None):
-        """`mod.ini` -> `mod.ini_2026-08-01 20-43-09.BAK`.
-
-        find_inis() only accepts names ending in `.ini`, so a `.BAK` is never
-        re-loaded by the app — and 3DMigoto ignores it too.
-        """
+        """Return a timestamped sibling backup path that INI discovery will not reload."""
         stamp = (when or datetime.now()).strftime("%Y-%m-%d %H-%M-%S")
         return f"{self.path}_{stamp}.BAK"
 
     def save(self, backup=True):
-        """Write the document back, atomically, after backing it up.
+        """Write atomically after backing up, using a same-directory temporary file.
 
-        Returns the backup path, or None when no backup was taken.
-
-        The temp file is written in the same directory so os.replace is a true
-        atomic rename (it is not atomic across volumes); an interrupted save
-        therefore leaves the original intact rather than truncated.
+        Return the backup path, or None when no backup was taken.
         """
         made = None
         if backup and os.path.exists(self.path):

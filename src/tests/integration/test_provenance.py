@@ -243,13 +243,7 @@ stride = 20
 
 
 def test_cross_ini_component_collision_recovered():
-    """Two sibling inis each define their own [TextureOverrideComponent0] for
-    an unrelated draw. Before the fix, build_draw_groups' `seen` dict was
-    reset per ini call, so both produced the identical label "Component0" and
-    the second ini's mesh silently overwrote the first's in the final flat
-    payload -- total, silent geometry loss with no error. analyze_mod_inis now
-    threads one shared `seen` dict across the whole folder, so both survive
-    under distinct payload keys."""
+    """Sibling INIs with matching component names must retain separate draw entries."""
     with tempfile.TemporaryDirectory() as tmp:
         _fixture(tmp, "BellyDancer_mod.ini", COMPONENT0_INI)
         _fixture(tmp, "Component02Pin_mod.ini", COMPONENT0_INI)

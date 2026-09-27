@@ -1,6 +1,4 @@
-// The MESHES panel (left): in multi-ini mods, one collapsible section per
-// source ini (mirroring the Toggle panel); within each, one collapsible group
-// per component, one checkbox per draw call within it.
+// MESHES lists draw calls grouped by source INI and component.
 
 import { hasTexture } from '../mesh/mesh-factory.js';
 import { applyMeshVisibility, conditionsSatisfied, setManualTexOverride } from '../mesh/mesh-state.js';
@@ -376,13 +374,7 @@ function syncMeshPanel() {
   }
 }
 
-/** Group mesh names by their clean, never-disambiguated component name
- * (see core/geometry/mesh_builder.py's `component` field) — falls back to parsing the
- * dict key itself (stripping a trailing "-N" draw index) for the rare case
- * a payload entry lacks it. Using the explicit field (rather than the key)
- * means a cross-ini name collision's internal "_2" uniqueness suffix (see
- * core/ini/parser.py's build_draw_groups) never leaks into the displayed
- * group header — the per-source section above it already disambiguates. */
+/** Prefer the explicit component field so parser collision suffixes stay out of labels. */
 function groupByComponent(names, meshes) {
   const grouped = {};
   for (const name of names) {
@@ -495,12 +487,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
   return { hdr, masterCb, syncLabels, syncEditState };
 }
 
-/** "count, start, base" from the ini's own drawindexed line — falls back to
- * the old bare "#N" numbering for the rare draw with no such line at all
- * (whole index buffer read unconditionally; see mesh_builder.build_mesh_payload).
- * Returns `{wrap, rebuildTexList}` -- the caller collects `rebuildTexList`
- * alongside every other mesh in the component so the "manage textures"
- * popup can refresh them all after an add/remove (see buildMeshPanel). */
+/** Display authored drawindexed arguments, or the synthetic number if absent. */
 function buildDrawRow(
   name,
   groupName,
@@ -940,9 +927,7 @@ function mergeSelectedLooseParts() {
   return true;
 }
 
-/** Build the panel for already-constructed live meshes. `modPath` is threaded
- * through to the per-component texture popup, which needs it to open the
- * native file picker rooted at the mod folder. */
+/** Build the panel for live meshes. */
 export function buildMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   return appendMeshPanel(meshes, liveMeshes, modPath, { ...options, replace: true });
 }
@@ -1020,9 +1005,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       const setMaterialKind = async (kind) => {
         if (!canEdit || materialKindInFlight) return false;
         if (!canPersist) {
-          // Compressed mods have no writable metadata sidecar. Keep this
-          // viewer-only choice in mesh state so the control remains useful,
-          // while the read-only source still prevents persistence/export.
+          // Compressed mods cannot persist metadata; keep this choice in viewer state.
           materialKind = kind === 'auto' ? null : kind;
           itemObjs.forEach((mesh) => {
             mesh.userData.materialKindOverride = materialKind;

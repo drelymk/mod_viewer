@@ -1,14 +1,7 @@
-"""Parse, partially evaluate and re-render 3DMigoto `if` conditions.
+"""Parse, partially evaluate, and render 3DMigoto conditions.
 
-Unlike core.ini.parser's DNF form (good for "is this mesh visible?" but lossy for
-writing), this keeps a condition as a syntax tree that renders back to text,
-so removing one variable leaves the rest of the expression exactly as
-written. Deleting a toggle needs that: `if $swapvar == 1 && $DRAW_TYPE == 1`
-must become `if $DRAW_TYPE == 1`, not be rebuilt from scratch.
-
-    node = parse("$v == 1 && $other == 2")
-    reduce(node, {"v": "1"})   ->  node rendering as "$other == 2"
-    reduce(node, {"v": "0"})   ->  FALSE
+Unlike the DNF analysis parser, this syntax tree preserves expression
+structure so targeted edits leave unrelated condition text intact.
 """
 
 import re
@@ -388,22 +381,10 @@ def reduce(node, bindings):
 
 
 def eliminate(node, dead_vars):
-    """Fold away every clause reading any of `dead_vars`, treating it as
-    always-satisfied — used when a toggle is deleted and whatever it used to
-    gate should become unconditional.
+    """Fold away clauses that read dead vars by treating each affected leaf as true.
 
-    A Cmp/Arith leaf counts as reading a dead var if either side's full
-    variable set (recursing through Arith/Paren) intersects `dead_vars`, not
-    just a bare `$dead_var` operand — otherwise a condition like
-    `cursor_x < $img_x + $norm_width` would never be recognised as
-    referencing `$img_x`, causing an infinite rewrite loop. Each such leaf
-    folds only to TRUE.
-
-    That doesn't extend to the whole tree: `!$v` still inverts that TRUE to
-    FALSE via ordinary And/Or/Not algebra, so `if !$v` becomes `if 0` once
-    `$v` is deleted — one of two mutually-exclusive branches must "win", and
-    a FALSE result at the top level is a real, expected outcome callers must
-    handle, not restructured away (out of scope here; see toggle_editor.py).
+    Outer negation can produce a legitimate false result, such as `if !$v`
+    becoming `if 0`.
     """
     dead = set(dead_vars)
 

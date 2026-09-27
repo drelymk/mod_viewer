@@ -1249,7 +1249,7 @@ function runEquivalencePasses(candidates, evidenceByKey, unionFind) {
     }
     // A source root is not an identity signal. Strong cross-source evidence
     // may seed a root-to-internal match, while the close geometric lane keeps
-    // conservative old behavior for ordinary source-local matches.
+    // conservative matching for ordinary source-local matches.
     if (!candidate.strongCrossEvidence && !candidate.geometrySeed) {
       diagnostics.push(
         diagnosticCandidate(

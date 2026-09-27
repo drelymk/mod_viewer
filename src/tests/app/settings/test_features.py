@@ -1,29 +1,4 @@
-"""Build-time feature flags (which optional UI actions a *built* exe
-exposes), split across two seams that this file tests separately:
-
-  - build.py's resolve_features(ini_path): reads features.ini at BUILD time
-    and resolves it to the four feature booleans. This is now
-    the only place that ever parses the ini file. write_baked_features()/
-    clean_baked_features() round-trip those booleans through a tiny
-    generated module (app/settings/_baked_features.py) so PyInstaller compiles them
-    into the exe like ordinary code, instead of bundling features.ini itself
-    as a loose, end-user-editable file (see build.py's module docstring-ish
-    comments near BAKED_FEATURES_MODULE for the full rationale).
-
-  - app/settings/features.py's get_features(): read at RUNTIME. Always all-True in a
-    source checkout (paths.is_frozen()), regardless of any baked module
-    present, so flags meant for a distributed build do not hide source
-    features. When frozen, it imports app.settings._baked_features and reads
-    its baked constants, falling back to True for a flag if the
-    module or the constant is missing (a broken/skipped bake should never
-    silently hide a feature nobody deliberately disabled).
-
-Frozen-mode runtime tests inject a fake app.settings._baked_features module straight
-into sys.modules rather than invoking the packaging toolchain. Importing it
-through the normal submodule path exercises the same runtime contract, and
-paths.is_frozen is monkeypatched the same way test_toggle_api.py monkeypatches
-record_editor.verify_recording.
-"""
+"""Test build-time feature resolution and frozen versus source runtime behavior."""
 
 import os
 import sys

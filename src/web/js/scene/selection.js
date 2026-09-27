@@ -1,8 +1,5 @@
-// Mesh <-> MESHES-panel-row selection: clicking a mesh in the 3D view
-// highlights it and scrolls its row into view (expanding any collapsed
-// group/source section it's hiding inside), and clicking a row does the same
-// in reverse. Ctrl adds or toggles meshes, while Ctrl-drag selects visible
-// targets whose current screen-space geometry crosses the rectangle.
+// Synchronize viewport and MESHES-row selection, expanding collapsed ancestors as needed.
+// Ctrl toggles selection; Ctrl-drag selects visible geometry inside a rectangle.
 
 import * as THREE from 'three/webgpu';
 import { camera, controls, renderer } from './scene.js';

@@ -1,5 +1,4 @@
-// Selection-aware details panel. Mesh creation remains owned by mesh-panel;
-// this module presents material and texture state for the selected item.
+// Selection-aware panel for material, texture, and color editing.
 
 import { getRightDockTab, isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';

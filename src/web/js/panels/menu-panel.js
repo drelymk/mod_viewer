@@ -1,9 +1,4 @@
-// The Menu panel (right, under Toggle): the slots of a mod's own in-game
-// clickable menu — mods that drive their meshes from an on-screen menu
-// instead of [Key...] bindings (see core/ini/menu.py).
-//
-// Read-only: slots can be cycled to preview what they show, but nothing here
-// edits, records or exports.
+// Read-only preview of in-game menu slots that drive meshes without [Key...] bindings.
 
 import { refreshAll, setToggleValue, getToggleValue } from '../mesh/visibility.js';
 import { registerViewSync, syncView } from '../scene/view-sync.js';

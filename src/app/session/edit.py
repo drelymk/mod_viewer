@@ -1,34 +1,8 @@
-"""Authoritative in-memory INI versions for the currently open mod.
+"""Authoritative in-memory INI session for the currently open mod.
 
-Every active INI is loaded here once. The text editor, toggle authoring and
-Record mode all read and mutate these same documents. Nothing touches a real
-INI until the user clicks Export; mod_loader.load_mod always layers the
-in-memory versions over disk, including versions that are currently clean.
-
-The app has exactly one window and one mod open at a time, so a single
-module-level slot is enough: opening a different mod folder just doesn't
-match the existing session's `mod_dir`, and is treated as empty (see
-`has_pending`/`overrides_for`). The caller (app.bridge.api, driven by the
-frontend's confirm-before-switching-mods flow) decides when to drop a
-mismatched session, via `discard()`.
-
-Typical flow, one edit action (add/edit/delete/record_toggle in
-app/bridge/toggle.py):
-
-    with transaction(mod_dir, [ini_path]) as edit:
-        result = <mutate edit.document(ini_path) in place>
-
-Transactions make each action atomic: a rejected edit always leaves every
-document and any requested session metadata exactly as it was before that
-action started.
-
-Separately, `mark_added`/`rename_added`/`mark_removed`/`new_sections_for`
-track which [Key...] sections were freshly created by add_toggle this
-session and haven't been exported yet — so a just-added, not-yet-wired
-toggle can still show in the Toggle panel (and keep Export disabled)
-without also surfacing every other already-on-disk, never-gating
-[Key...] section (e.g. a $menu/$skin utility key). See
-mod_loader.build_toggle_panel/unwired_pending_sections.
+Edits remain staged until Export, and transactions make each operation atomic.
+New-toggle tracking keeps unwired additions visible and blocks Export until
+they are wired or removed.
 """
 
 import hashlib
@@ -272,13 +246,7 @@ def _clone_ib_edits(records):
 
 
 def load_documents(mod_dir, ini_paths, *, source=None, documents=None):
-    """Load every active INI into the authoritative in-memory session.
-
-    Re-loading the same mod never re-reads disk: text edits and toggle edits
-    must continue operating on the exact same documents until Export,
-    Discard, a mod switch, or application restart. A new mod replaces the old
-    session; the frontend confirms before allowing that switch when dirty.
-    """
+    """Load active INIs into the session, preserving staged docs on same-mod reloads."""
     sess = _get_or_create(mod_dir, source=source)
     added = False
     for path in ini_paths:
@@ -392,11 +360,7 @@ def editable_text(doc):
 
 
 def update_text(mod_dir, ini_name, text):
-    """Replace one loaded document from editor text and update dirty state.
-
-    Existing per-line terminators are reused positionally by IniDocument, so
-    opening and applying an unchanged CRLF/mixed-EOL file is a true no-op.
-    """
+    """Replace loaded document text and update dirty state, preserving line endings by position."""
     key, doc = document(mod_dir, ini_name)
     normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
     if normalized == editable_text(doc):
@@ -412,18 +376,13 @@ def update_text(mod_dir, ini_name, text):
 
 
 def mark_added(mod_dir, ini_path, section_name):
-    """Record that `section_name` was just created by add_toggle and
-    doesn't gate anything yet — the only way an unwired [Key...] section is
-    allowed to surface in the Toggle panel or block Export (see
-    mod_loader.build_toggle_panel / unwired_pending_sections).
-    """
+    """Track a newly added toggle until it is wired, renamed, removed, or exported."""
     sess = _get_or_create(mod_dir)
     sess.new_sections.setdefault(_key(mod_dir, ini_path), set()).add(section_name)
 
 
 def rename_added(mod_dir, ini_path, old_name, new_name):
-    """Keep a tracked not-yet-wired section's name in sync with a rename
-    from edit_toggle (which returns the possibly-changed section name)."""
+    """Keep a tracked new toggle in sync with its renamed section."""
     if old_name == new_name or not _same_mod(mod_dir):
         return
     names = _session.new_sections.get(_key(mod_dir, ini_path))
@@ -442,10 +401,7 @@ def mark_removed(mod_dir, ini_path, section_name):
 
 
 def new_sections_for(mod_dir):
-    """{ini basename: {section name, ...}} for every toggle added via
-    add_toggle this session and not yet exported (see mark_added). Doesn't
-    mean "still unwired" — callers re-derive wired-ness fresh each time.
-    """
+    """Return toggles added this session and not yet exported; wiring is derived separately."""
     if not _same_mod(mod_dir):
         return {}
     return {k: set(v) for k, v in _session.new_sections.items() if v}
@@ -523,12 +479,9 @@ def discard(mod_dir):
 
 
 def export(mod_dir):
-    """Save every pending doc for mod_dir to disk (one timestamped backup
-    per ini, however many edits accumulated). Best-effort per ini: one
-    failing save doesn't block the others and stays pending for retry.
+    """Save pending docs with one timestamped backup per INI.
 
-    Returns {"saved": [ini basename, ...], "failed": [{"ini": ..., "error":
-    ...}, ...]}.
+    Failures stay pending while other documents continue.
     """
     if not _same_mod(mod_dir):
         return {"saved": [], "failed": []}

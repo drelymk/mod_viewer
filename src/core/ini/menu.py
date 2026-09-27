@@ -202,7 +202,7 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
             continue
         incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
         if incr and incr.group(1) == lhs:
-            var, values = lhs, ["0", "1"]   # replaced below once the wrap is seen
+            var, values = lhs, ["0", "1"]   # Placeholder until the wrap count is known.
             cycle_kind = "increment"
             finite = False
             if guard and guard["var"] == lhs and guard["op"] in ("<", "<="):

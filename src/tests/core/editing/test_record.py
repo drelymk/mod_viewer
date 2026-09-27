@@ -1,19 +1,4 @@
-"""Tests for record mode: rewrite if/elif/endif gates from recorded
-per-position visibility (see core.editing.record's module docstring for the exact
-safe-pattern rules these tests exercise).
-
-Every refusal case here is a *designed* boundary of the conservative
-approach, not a bug: record_editor deliberately regenerates a whole
-if/elif/endif chain only when it can prove the chain is "clean" (single var,
-no mixing, no nesting, complete recorded data for every drawindexed line in
-it) and otherwise reports exactly what's blocking it rather than guessing â€”
-because guessing wrong here would silently change what a real mod shows.
-
-The synthetic fixtures above prove each rule in isolation; the corpus dry run
-at the bottom (test_real_mods_record_toggle) exercises the real distribution
-of real ini shapes to get honest safe-vs-refused numbers before the UI is
-built on input43 of this.
-"""
+"""Test Record rewrites, stable draw identity, and refusals for unsafe INI shapes."""
 
 import os
 
@@ -388,8 +373,8 @@ def test_record_resolves_original_targets_after_staged_toggle_insert():
 
     te.add_toggle(d, "New", "2", "new", ["0", "1"])
 
-    # The old second source line now lands on the first valid draw. A kind-only
-    # check would accept that neighboring draw and lose the real second target.
+    # Inserting a toggle shifts the second source line onto the first valid
+    # draw. A kind-only check would accept that neighbor and lose the target.
     assert d.lines[second_line - 1].text == "drawindexed = 100,0,0"
     report = re_.record_toggle(
         d, "KeyNew", {0: [first_line], 1: [second_line]}, refs)
@@ -409,8 +394,8 @@ def test_record_resolves_same_triple_by_draw_occurrence():
 
     te.add_toggle(d, "New", "2", "new", ["0", "1"])
 
-    # The old second source line now points at the first identical draw. The
-    # ordinal in the target identity must still select the second occurrence.
+    # Inserting a toggle shifts the second source line onto the first identical
+    # draw. The target identity's ordinal must still select the second occurrence.
     assert d.lines[second_line - 1].text == "drawindexed = 100,0,0"
     report = re_.record_toggle(
         d, "KeyNew", {0: [first_line], 1: [second_line]}, refs)
@@ -659,27 +644,11 @@ def test_record_refuses_unsafe_shape(case):
     _assert_refusal_case(case)
 
 
-# â”€â”€ post-save self-check (report["verify"] / verify_recording) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-#
-# record_toggle proves its rewrite correct only in-memory; verify_recording
-# is the runtime safety net that re-derives visibility from a fresh,
-# independent re-parse of whatever actually landed on disk (app/
-# toggle_api.record_toggle calls it after every real save). These tests
-# cover both halves: that record_toggle's own report["verify"] field names
-# exactly the draws it actually rewrote (never a refused one, from either
-# _analyze_var or the later bare-claim pass), and that verify_recording
-# correctly confirms a genuine match and correctly flags a genuine mismatch.
-#
-# "verify" identifies each draw by its own (section, count, start, base)
-# triple rather than by line number: regenerating a chain with 2+ distinct
-# desired position-sets emits one standalone if/endif block per group, which
-# shifts the line numbers of every draw after the first shifted one â€” but a
-# draw's own drawindexed args never change, so that's what both this report
-# and verify_recording's fresh re-parse key on instead.
+# -- verification report ------------------------------------------------------
+# Stable draw identity is used because regenerating a chain can shift source lines.
 
 def _draws_by_key(draws):
-    """{(count, start, base): positions} from a report["verify"][var]["draws"]
-    list â€” order-independent, so tests don't have to assume insertion order."""
+    """Map draw tuples to verified positions, independent of report order."""
     return {(d["count"], d["start"], d["base"]): d["positions"] for d in draws}
 
 
@@ -752,25 +721,11 @@ def test_verify_report_excludes_lines_refused_for_any_reason():
 
 
 
-# â”€â”€ real-mod corpus dry run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# Real recorded per-position visibility only exists once a live recording
-# session produces it â€” so this reconstructs a plausible stand-in from each
-# real toggle's *existing* gating: for every position, every other toggle var
-# is pinned at its declared default (as if only this one toggle were being
-# cycled, matching a real recording session) and each drawindexed line's
-# current DNF condition (via core.ini.parser._scan_sections_for_draws â€” the same
-# condition-tracking pass build_draw_groups itself uses, proven across the
-# whole corpus by tests.core.ini.test_condition.test_corpus) decides whether it counts
-# as visible there. Feeding that back into record_toggle exercises the real
-# distribution of real ini shapes, not just the fixtures above.
+# -- corpus check -------------------------------------------------------------
+# Existing gates supply visibility with other toggle vars held at defaults.
 
 def _dnf_visible(conds, bindings):
-    """True if a _scan_sections_for_draws DNF (conds) is satisfied given
-    `bindings` ({var: value string}); [] means unconditional. Every var that
-    can appear in a toggle-var clause is always bound here (its own
-    section's position, or every other toggle var's own default), so there
-    is no "unknown var" case to worry about, unlike build_draw_groups' own
-    fail-open default."""
+    """Evaluate draw conditions with one toggle at its tested value, others at defaults."""
     if conds == []:
         return True
     return any(all((bindings.get(c["var"]) == c["value"]) != c["negate"] for c in group)

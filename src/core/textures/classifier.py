@@ -12,8 +12,8 @@ from .pipeline import load_texture_image
 class DDSClassification:
     """Structural evidence available without mod or game naming schemes.
 
-    ``role`` remains as a compatibility field for genuinely strong normal-map
-    evidence and older callers. Color analysis intentionally does not assign
+    ``role`` remains for strong normal-map evidence and existing callers.
+    Color analysis intentionally does not assign
     ``diffuse``; a contextual resolver must combine it with association
     evidence before choosing that semantic role.
     """
@@ -33,13 +33,12 @@ def is_color_candidate(classification):
     if classification.role == "normal_map":
         return False
     if classification.role == "diffuse":
-        # Compatibility with older test doubles/callers. Production analysis
-        # no longer emits this role for color images.
+        # Accept adapters that still provide ``diffuse``; production analysis
+        # classifies color candidates by score.
         return classification.confidence in {"medium", "high"}
     if classification.texture_class not in {"color", "effect"}:
         return False
-    # A zero score denotes a legacy four-field DDSClassification constructed
-    # by an adapter. Its class/confidence fields remain authoritative.
+    # Four-field callers get the default zero score; use class/confidence.
     if classification.color_score == 0:
         return classification.confidence in {"medium", "high"}
     return classification.color_score >= 0.35

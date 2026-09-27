@@ -16,7 +16,7 @@ function clampSpeed(x, y) {
   return [x * scale, y * scale];
 }
 
-/** Owns only the RMB gesture used to feed virtual physics motion. */
+/** Owns only the RMB gesture for virtual physics motion. */
 export function createPhysicsDragController({ canvas, camera, controls, onMotion } = {}) {
   let enabled = false;
   let pointer = null;

@@ -1,22 +1,4 @@
-"""Tests for toggle CRUD: add/edit/delete a cycle toggle in place.
-
-A "toggle" is three coupled pieces (see toggle_editor's module docstring): the
-[KeyFoo] cycle section, its $var declaration in [Constants], and every
-if/elif gate elsewhere that reads $var. These tests check that add/edit/
-delete keep the three in lockstep, that every ToggleEditError leaves the
-document completely untouched (so a caller never has to guess whether a
-rejected edit did anything), and â€” via a corpus-wide dry run â€” that
-delete_toggle never corrupts a real mod's condition syntax, drops a live gate
-silently, or hangs.
-
-That last property used to fail for real files: eliminate() only recognised a
-dead variable as a bare `$var` operand on either side of a comparison, so a
-condition like `cursor_x < $img_x + $norm_width` (a dead var buried inside
-arithmetic) was invisible to it. references() still (correctly) said the line
-depended on the dead var, so _strip_vars_from_gates kept re-selecting the same
-untouched line as its next rewrite target forever. eliminate() now folds dead
-vars out of arithmetic too; test_real_mods_delete_toggle is what caught it.
-"""
+"""Test toggle CRUD, validation atomicity, and safe gate removal."""
 
 
 import pytest
@@ -346,13 +328,8 @@ endif
 
 
 
-# â”€â”€ corpus-wide dry run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-#
-# Simulates delete_toggle against every real cycle toggle in a sample of real
-# mod inis, never writing to disk. This is what caught the eliminate() /
-# arithmetic bug described in the module docstring: a synthetic fixture would
-# never have produced `cursor_x < $img_x + $norm_width`, but the real corpus
-# did on the very first large sample.
+# -- corpus check -------------------------------------------------------------
+# Check gate removal across available INIs without writing changes to disk.
 
 def _line_parses(line):
     split = te._split_condition_line(line)

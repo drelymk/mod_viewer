@@ -1,12 +1,5 @@
-// Standalone proportional geometry scaffold retained for compatibility tests.
-// This is the viewer-owned primary humanoid pose skeleton. ModelJoint
-// topology is consumed later by humanoid-rig-binding.js as a deformation
-// carrier and never defines the control topology.
-//
-// Geometry is used only for orientation, model height, Foot side/height
-// anchors, and one central character depth plane. All anatomical proportions
-// remain deterministic; no mesh point is consulted after those inputs are
-// established.
+// Viewer-owned primary humanoid control rig. Geometry sets orientation, height,
+// foot anchors, and depth; ModelJoint topology is used only for deformation bindings.
 
 import {
   DEFAULT_HUMANOID_PROPORTIONS,

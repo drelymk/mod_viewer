@@ -1,11 +1,5 @@
-// Record mode: assign which meshes are visible at each cycle position of a
-// toggle, then stage a rewrite of the INI gates to match.
-//
-// Repurposes the toggle's own MESHES panel and cycle button rather than a
-// modal: cycling the same ⟳ button steps through positions, and the
-// checkboxes already on screen are the "visible here" input, pre-populated
-// from what's already on disk. Only one session can run at a time -- the
-// rest of the Toggle panel and Open Mod are disabled while recording.
+// Record captures per-position mesh visibility and stages the matching INI
+// gate rewrite. Only one session can run at a time.
 
 import {
   activeMeshes,
@@ -44,8 +38,8 @@ function sourceConditions(mesh, source) {
   if (Object.prototype.hasOwnProperty.call(source, 'conditions')) {
     return source.conditions || [];
   }
-  // Low-level/legacy payloads may have only one source and put its conditions
-  // on the mesh entry. Never use a merged mesh condition for multiple sources.
+  // A single-source payload may store conditions on the mesh entry. Never use
+  // merged mesh conditions when multiple sources contribute to that mesh.
   const sources = mesh.userData.sources || [];
   return sources.length === 1 ? mesh.userData.conditions || [] : [];
 }
@@ -64,11 +58,7 @@ function sourceVisible(mesh, source, recordVars = null) {
   return dnfSatisfied(conditions);
 }
 
-/** {mesh -> visible} exactly as currently shown — the pre-population for
- * whatever position toggleState currently reflects. A gated mesh is
- * re-evaluated against the (possibly overridden) toggle state; an ungated
- * one keeps its own manual on/off choice untouched, since no position of
- * this toggle has any say over it. */
+/** Snapshot visibility: re-evaluate gated meshes, but preserve manual state for ungated ones. */
 function snapshotVisibility() {
   const snap = new Map();
   for (const mesh of activeMeshes) {
@@ -97,13 +87,7 @@ function positionLabel() {
   });
 }
 
-/**
- * Start recording `info` (a controls.toggles entry). `ctx` is the same
- * {modPath, onChange} the panel already threads through to add/edit/delete.
- * `ui` is the set of DOM handles toggle-panel.js built for this item:
- * {item, row, cycleBtn, valSpan, recordBtn, editBtn, deleteBtn, recordRow,
- * saveBtn, cancelBtn, describe, disableOthers, enableOthers}.
- */
+/** Start a Record session for one Toggle panel item. */
 export async function startRecordSession(info, ctx, ui) {
   if (active || starting) return;
   starting = true;
@@ -133,17 +117,13 @@ export async function startRecordSession(info, ctx, ui) {
       }
     }
 
-    // Undo target for Cancel: every var this section drives, at whatever value
-    // it had when recording started (not just the writable ones — a namespaced
-    // var in the same section is read-only but still affects visibility).
+    // Cancel restores every co-driven value, including read-only namespaced vars.
     const before = previewVars.map((v) => ({
       var: v.var,
       value: getToggleValue(v.var),
     }));
 
-    // Pre-populate every position up front from the file's own current
-    // combined visibility, never a partial map — an unvisited position must
-    // still default to matching what's already on disk.
+    // Initialize every position from file state so untouched positions remain unchanged.
     const snapshots = [];
     const sourceSnapshots = [];
     for (let p = 0; p < posInfo.positions; p++) {
@@ -151,9 +131,7 @@ export async function startRecordSession(info, ctx, ui) {
       snapshots.push(snapshotVisibility());
       const sourceSnap = new Map();
       for (const [source, mesh] of initialSourceMeshes) {
-        // An untouched source should contribute only the selected key's own
-        // visibility gate. Unrelated outer conditions describe the current
-        // scene, not what this Record session is authoring.
+        // Record only this key's gate; unrelated ancestors describe the current scene.
         sourceSnap.set(source, sourceVisible(mesh, source, recordVars));
       }
       sourceSnapshots.push(sourceSnap);
@@ -230,9 +208,7 @@ function exitRecordingUI() {
   );
 }
 
-/** Snapshot the checkbox state the user actually left the current position
- * in, before moving off it (Save also calls this, for whatever position it
- * was called while sitting on). */
+/** Capture the current checkbox state before advancing or saving. */
 function captureCurrent() {
   const snap = new Map();
   for (const mesh of activeMeshes) snap.set(mesh, mesh.visible);
@@ -307,9 +283,7 @@ async function save() {
   }
   const targetRefs = [...targets].map(([src, mesh]) => recordTargetRef(mesh, src));
 
-  // Only visible target meshes contribute their source lines at a position.
-  // A source in some other file is untouched by editing this one, so it is
-  // never part of this section's target scope.
+  // Scope recorded lines to the selected source INI.
   const positionLines = {};
   for (let p = 0; p < snapshots.length; p++) {
     const lines = new Set();
