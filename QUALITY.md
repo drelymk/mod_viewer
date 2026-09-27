@@ -1,9 +1,9 @@
 # Quality audits
 
-Install the pinned development tools with Python 3.12 and Node.js 24:
+Install the development and quality tools with Python 3.12 and Node.js 24:
 
 ```sh
-python -m pip install -r requirements-quality.txt
+python -m pip install -r requirements-dev.txt
 npm ci --ignore-scripts
 python tools/quality_audit.py
 ```
@@ -15,16 +15,17 @@ on temporary copies.
 
 | Tool             | Scope and purpose                                                              | CI policy                 |
 | ---------------- | ------------------------------------------------------------------------------ | ------------------------- |
-| Ruff             | Lint all tracked Python; format-check Python tools                            | Reject findings           |
+| Ruff             | Lint all tracked Python; format-check normalized Python tooling under `tools/` | Reject findings           |
 | Prettier         | `src/web/js/**/*.js` and `eslint.config.mjs`                                   | Reject formatting changes |
 | ESLint           | JavaScript correctness under `src/web/js`                                     | Reject errors and warnings |
 | codespell        | Common spelling errors in authored text                                       | Reject findings           |
 | pre-commit-hooks | Whitespace, final newlines, line endings, conflict markers, JSON and YAML      | Reject findings           |
 
 CSS and `src/web/index.html` retain their compact authored layout and receive
-the whole-tree hygiene checks. The Ruff formatter check stays on Python tooling;
-full-tree Python formatting would create a large rewrite of existing compact
-code. Ruff lint still covers every tracked Python file.
+the whole-tree hygiene checks. Ruff formatting is checked only for the Python
+tooling under `tools/` that has been normalized; application, core, and test
+Python retain their existing compact formatting. Ruff lint still covers every
+tracked Python file.
 
 Compatibility imports in `app/mods/loader.py` and `core/ini/parser.py` have
 local F401 annotations; `tests/web/conftest.py` uses them for pytest fixture
