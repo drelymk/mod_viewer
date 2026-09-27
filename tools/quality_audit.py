@@ -32,7 +32,6 @@ def run_audit(output, name, command, *, cwd=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=".quality-reports")
-    parser.add_argument("--base", help="Git ref to check for whitespace errors")
     args = parser.parse_args()
     output = (ROOT / args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -45,6 +44,7 @@ def main():
     ).stdout.split("\0")
     files = [name for name in tracked if name and not name.startswith(VENDOR)]
     python_files = [name for name in files if name.endswith(".py")]
+    ruff_format_files = [name for name in python_files if name.startswith("tools/")]
     prettier_files = [
         name
         for name in files
@@ -78,7 +78,7 @@ def main():
                 "ruff.toml",
                 "--no-cache",
                 "--check",
-                *python_files,
+                *ruff_format_files,
             ],
         ),
         "prettier": run_audit(
@@ -97,35 +97,17 @@ def main():
             [
                 *eslint,
                 "src/web/js",
+                "--max-warnings=0",
                 "--format=json",
             ],
         ),
     }
     failures = {
         "audit-tool-errors": int(any(status > 1 for status in audits.values())),
-        "python-correctness": run_audit(
-            output,
-            "python-correctness",
-            [
-                *ruff,
-                "check",
-                "--config",
-                "ruff.toml",
-                "--no-cache",
-                "--select=F821,F822,F823,E9",
-                *python_files,
-            ],
-        ),
-        "javascript-correctness": run_audit(
-            output,
-            "javascript-correctness",
-            [
-                *eslint,
-                "src/web/js",
-                "--rule=no-unused-vars:off",
-                "--rule=no-useless-assignment:off",
-            ],
-        ),
+        "python-lint": int(audits["ruff-lint"] != 0),
+        "python-format": int(audits["ruff-format"] != 0),
+        "web-format": int(audits["prettier"] != 0),
+        "javascript-lint": int(audits["eslint"] != 0),
     }
     text_files = []
     for name in files:
@@ -189,10 +171,6 @@ def main():
                     ],
                     cwd=copies,
                 )
-    diff = ["git", "diff", "--check"]
-    if args.base:
-        diff.append(args.base)
-    failures["diff-check"] = run_audit(output, "diff-check", diff)
     (output / "summary.json").write_text(
         json.dumps({"audits": audits, "required_checks": failures}, indent=2) + "\n",
         encoding="utf-8",

@@ -5,7 +5,4 @@ line-length = 88
 select = ["E4", "E7", "E9", "F"]
 
 [lint.per-file-ignores]
-"src/app/mods/loader.py" = ["F401"]
 "src/build.py" = ["E402"]
-"src/core/ini/parser.py" = ["F401"]
-"src/tests/web/conftest.py" = ["F401"]

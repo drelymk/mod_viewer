@@ -1,5 +1,5 @@
 struct VertexAttributes { float3 position; float3 normal; float4 tangent; };
-struct BlendAttributes { float4 weights; int4 indices; };
+struct BlendAttributes { float4 weights; int4 indicies; };
 struct PoseAttributes { float3 S; float3 T; float4 QR; float4 QD; };
 RWStructuredBuffer<VertexAttributes> rw_buffer : register(u5);
 StructuredBuffer<VertexAttributes> base : register(t50);
@@ -14,7 +14,7 @@ void main(uint3 threadID : SV_DispatchThreadID) {
   BlendAttributes b = blend[i];
   VertexAttributes v = base[i];
   float time = frac(TIME);
-  PoseAttributes p = pose[b.indices.x];
+  PoseAttributes p = pose[b.indicies.x];
   float4 qr = normalize(p.QR);
   float4 qd = p.QD;
   float sign = dot(qr, qr);

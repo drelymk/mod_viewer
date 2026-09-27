@@ -5,42 +5,36 @@ Install the pinned development tools with Python 3.12 and Node.js 24:
 ```sh
 python -m pip install -r requirements-quality.txt
 npm ci --ignore-scripts
-python tools/quality_audit.py --base origin/main
+python tools/quality_audit.py
 ```
 
-The runner audits tracked, authored files. Vendored JavaScript is excluded.
-Reports go to `.quality-reports/`, which is ignored by Git. CI uploads the same
-reports as the `quality-audit` artifact. No audit rewrites source files; the
-standard whitespace and final-newline fixers operate on temporary copies.
+The audit checks tracked authored files and excludes vendored JavaScript. Reports
+go to `.quality-reports/`, which is ignored by Git; CI uploads them as the
+`quality-audit` artifact. Checks do not rewrite source files. Hygiene fixers run
+on temporary copies.
 
-## Checks and remaining findings
+| Tool             | Scope and purpose                                                              | CI policy                 |
+| ---------------- | ------------------------------------------------------------------------------ | ------------------------- |
+| Ruff             | Lint all tracked Python; format-check Python tools                            | Reject findings           |
+| Prettier         | `src/web/js/**/*.js` and `eslint.config.mjs`                                   | Reject formatting changes |
+| ESLint           | JavaScript correctness under `src/web/js`                                     | Reject errors and warnings |
+| codespell        | Common spelling errors in authored text                                       | Reject findings           |
+| pre-commit-hooks | Whitespace, final newlines, line endings, conflict markers, JSON and YAML      | Reject findings           |
 
-| Tool             | Check                                                                      | CI policy                                                                                                         |
-| ---------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Ruff             | Python lint and formatting                                                 | Reject syntax errors, undefined names and invalid exports; retain the full lint and formatting reports for review |
-| Prettier         | JS, CSS, HTML, JSON, YAML and Markdown formatting                          | Report formatting differences without rewriting files                                                             |
-| ESLint           | Recommended browser-module rules                                           | Reject correctness errors; report unused variables and redundant assignments for review                           |
-| pre-commit-hooks | Whitespace, final newlines, mixed endings, conflict markers, JSON and YAML | Reject findings                                                                                                   |
-| codespell        | Common misspellings                                                        | Reject findings after documented terminology exclusions                                                           |
-| Git              | Whitespace errors relative to the supplied base                            | Reject findings                                                                                                   |
+CSS and `src/web/index.html` retain their compact authored layout and receive
+the whole-tree hygiene checks. The Ruff formatter check stays on Python tooling;
+full-tree Python formatting would create a large rewrite of existing compact
+code. Ruff lint still covers every tracked Python file.
 
-Formatting adoption remains an audit: existing compact Python expressions and
-JavaScript layouts differ extensively from the formatter output. Review those
-conventions before applying a repository-wide formatting change. Tool/config
-errors fail CI even when the corresponding formatting audit is informational.
+Compatibility imports in `app/mods/loader.py` and `core/ini/parser.py` have
+local F401 annotations; `tests/web/conftest.py` uses them for pytest fixture
+registration. `src/build.py` keeps its narrow E402 exception because it adjusts
+`sys.path` before an import that depends on that change.
 
-Targeted Ruff ignores preserve intentional import behavior: `core/ini/parser.py`
-and `app/mods/loader.py` expose compatibility APIs, while `tests/web/conftest.py`
-registers imported pytest fixtures. `src/build.py` adjusts `sys.path` before an
-import that must follow that adjustment. These exceptions are limited to those
-files and rules.
+The codespell exclusions are `te` (the toggle-editing alias), `currentY` (a
+coordinate variable), `abD` (a vector dot product), and `indicies` (the field
+spelling used by the external HLSL format fixture). Non-English locale catalogs
+are outside the English spelling check.
 
-The spelling exclusions are `te` (the toggle-editing module alias), `currentY`
-(a coordinate variable), and `abD` (a vector dot product). Non-English locale
-catalogs are outside the English spelling check; the English catalog is checked.
-
-The cleanup corrects a verified rig-root regression: changing a component root
-called an undefined helper after mutating the forest. Selection now uses the
-existing model-joint session and resolved joint ID. The existing browser rig
-lifecycle covers changing and restoring that root without changing Weight
-selection. Browser and WebGPU tests remain excluded from GitHub Actions.
+Browser UI and WebGPU tests remain excluded from GitHub Actions. The normal CI
+test job runs the unit, core, app and integration suite.
