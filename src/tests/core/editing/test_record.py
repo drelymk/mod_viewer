@@ -33,7 +33,7 @@ def doc(text):
 def dline(d, needle):
     """The one Line whose raw text contains `needle` â€” avoids hand-counting
     line numbers in the fixtures below."""
-    hits = [l for l in d.lines if needle in l.raw]
+    hits = [line for line in d.lines if needle in line.raw]
     assert len(hits) == 1, f"expected exactly one line containing {needle!r}, found {len(hits)}"
     return hits[0]
 

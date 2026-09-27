@@ -59,7 +59,7 @@ export function authoredTriangleOrdinal(mesh, faceIndex) {
     const triangle = Number(partTriangles[face]);
     return Number.isInteger(triangle) && triangle >= 0 ? triangle : null;
   }
-  const {index, position, drawStart, entryCount} = geometryRange(mesh);
+  const {drawStart, entryCount} = geometryRange(mesh);
   if (face * 3 + 2 >= entryCount) return null;
   return Math.floor((drawStart + face * 3) / 3);
 }

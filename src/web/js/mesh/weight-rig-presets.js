@@ -16,7 +16,7 @@ function signatureValue(value) {
         || parsed.some(item => typeof item !== 'string' || !item)) {
       return null;
     }
-  } catch (_error) {
+  } catch {
     return null;
   }
   return value;

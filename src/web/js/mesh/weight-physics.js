@@ -540,11 +540,10 @@ function projectJointToLimit(joint, limitRadians = MAX_LOCAL_ANGLE) {
 
 export function applyPhysicsJointLimits(
     physicsState, jointLimitByBoneId = null) {
-  let changed = false;
   physicsState?.joints?.forEach((joint, boneId) => {
     const limit = hasLimitForBone(jointLimitByBoneId, boneId)
       ? limitForBone(jointLimitByBoneId, boneId) : MAX_LOCAL_ANGLE;
-    if (projectJointToLimit(joint, limit)) changed = true;
+    projectJointToLimit(joint, limit);
   });
   return physicsState;
 }

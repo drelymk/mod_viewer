@@ -111,7 +111,7 @@ export function pruneSelectedRelationshipEdges(
 }
 
 export function createWeightPhysicsRuntime({
-  states, sourcePhysicsRigs, getModelSkinningRig,
+  states, getModelSkinningRig,
   applyDeformation, finalizePhysicsGeometry, markFinalBoundsDirty,
 }) {
   const modelPhysicsSession = createModelPhysicsSession({

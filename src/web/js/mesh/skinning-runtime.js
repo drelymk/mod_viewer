@@ -6,7 +6,6 @@ import {
   applyWeightedNormalDeformationInto,
   applyWeightedTransformDeformationInto,
 } from './weight-deformation.js';
-import {buildSelectedWeightMask} from './weight-selection.js';
 import {
   buildInfluenceNodes as buildRigInfluenceNodes,
   buildInfluenceNodesCooperative as buildRigInfluenceNodesCooperative,
@@ -58,7 +57,7 @@ export function createSkinningRuntime({
     modelWeightSnapshot, selectionMapFromEntries, sourceSelectionEntries,
     setSelectedBones, syncPhysicsToSelection, refreshModelWeightSummary,
     refreshSelectedWeightMask, eligibleSkinningMesh,
-    getGeneration, notifyModelWeightChanged, requestRender, invalidateShadow,
+    getGeneration, notifyModelWeightChanged, requestRender,
   } = {}) {
   const cooperativeGraphInFlight = new WeakMap();
 

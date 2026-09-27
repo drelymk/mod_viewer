@@ -37,7 +37,8 @@ co-driven namespaced variable. Record therefore previews the complete cycle
 while reporting only the variables it may safely rewrite.
 """
 
-import glob, os
+import glob
+import os
 
 import pytest
 
@@ -191,8 +192,8 @@ def _swap_positions(tmp, ini_rel):
     """Stage the fixture's one real rewrite: swap the two positions' cycle
     gating so position 0 shows the line that used to be position 1's, and
     vice versa. Returns (ini_path, record_toggle's result dict)."""
-    line_100 = next(i for i, l in enumerate(FIXTURE.splitlines(), 1) if "100,0,0" in l)
-    line_200 = next(i for i, l in enumerate(FIXTURE.splitlines(), 1) if "200,0,0" in l)
+    line_100 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1) if "100,0,0" in line)
+    line_200 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1) if "200,0,0" in line)
     ini_path = os.path.join(tmp, ini_rel)
     result = toggle_api.record_toggle(
         tmp, ini_rel, "KeyUpper",
@@ -265,8 +266,8 @@ def test_new_toggle_blocks_export_until_recorded(wirable_mod, monkeypatch):
     with open(ini_path, encoding="utf-8") as fh:
         assert fh.read() == WIRABLE_FIXTURE
 
-    line_100 = next(i for i, l in enumerate(WIRABLE_FIXTURE.splitlines(), 1)
-                    if "100,0,0" in l)
+    line_100 = next(i for i, line in enumerate(WIRABLE_FIXTURE.splitlines(), 1)
+                    if "100,0,0" in line)
     record_result = toggle_api.record_toggle(
         tmp, ini_rel, "KeyExtra", {0: [line_100], 1: []},
         _target_refs(WIRABLE_FIXTURE, line_100))
@@ -311,8 +312,8 @@ def test_record_after_add_resolves_original_mesh_source_lines(api_root):
 
 def test_record_bridge_stages_target_hidden_at_every_position(toggle_mod):
     tmp, ini_path = toggle_mod
-    line_100 = next(i for i, l in enumerate(FIXTURE.splitlines(), 1)
-                    if "100,0,0" in l)
+    line_100 = next(i for i, line in enumerate(FIXTURE.splitlines(), 1)
+                    if "100,0,0" in line)
 
     result = toggle_api.record_toggle(
         tmp, "mod.ini", "KeyUpper",

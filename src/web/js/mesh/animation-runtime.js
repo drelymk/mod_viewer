@@ -660,7 +660,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     installAnimationBounds(mesh, geometry.bounds);
     schedule();
     return true;
-  } catch (error) {
+  } catch {
     return false;
   }
 }

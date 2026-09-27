@@ -23,7 +23,6 @@ import {
   disposeSkinningExperiment, getSkinningBaseMaterial,
   destroyModelPhysicsSession, registerSkinningMesh,
   refreshSkinningAfterShapeChange,
-  unregisterSkinningMesh,
   withSkinningBaseMaterial,
 } from './weight-rig-feature.js';
 

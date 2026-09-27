@@ -213,7 +213,7 @@ function integratePolygonLinearWeight(vertices, side) {
 }
 
 function integrateMinimumLinearWeight(
-    points, leftWeights, rightWeights, area) {
+    points, leftWeights, rightWeights) {
   const vertices = points.map((position, index) => ({
     position,
     leftWeight: leftWeights[index],
@@ -418,7 +418,7 @@ function createSurfaceGraphAccumulator(
           && cornerWeights[index].has(boneB)).length;
         relationship.sharedMeasure += sample.area;
         relationship.minOverlap += integrateMinimumLinearWeight(
-          sample.points, weightsA, weightsB, sample.area);
+          sample.points, weightsA, weightsB);
         relationship.productOverlap += productOverlap;
         relationship.jointWeightTotal += productOverlap;
         relationship.jointX += jointMoment[0];
@@ -1172,9 +1172,8 @@ export function buildInferredRigForest(graph, options = {}) {
     const nodeSet = new Set(nodeIdsForComponent);
     const componentEdges = tree.edges.filter(edge =>
       nodeSet.has(Number(edge.boneA)) && nodeSet.has(Number(edge.boneB)));
-    let rootId = null;
-    if (rootOverrides instanceof Map) rootId = Number(rootOverrides.get(componentId));
-    else rootId = Number(rootOverrides?.[componentId]);
+    let rootId = Number(rootOverrides instanceof Map
+      ? rootOverrides.get(componentId) : rootOverrides?.[componentId]);
     if (!nodeSet.has(rootId)) rootId = chooseRoot(
       nodeIdsForComponent, nodes, componentEdges);
     const orientation = orientTree(componentEdges, rootId);

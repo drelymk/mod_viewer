@@ -362,16 +362,16 @@ export function hydrateModelRig(data, sourceRigs = []) {
 
 /** Select the persisted ModelRig when it is valid, otherwise build one. */
 export async function loadOrBuildModelRig({load, hydrate, build} = {}) {
-  let saved = null;
+  let saved;
   try {
     saved = await load?.();
-  } catch (_error) {
+  } catch {
     saved = null;
   }
-  let restored = null;
+  let restored;
   try {
     restored = saved ? hydrate?.(saved) : null;
-  } catch (_error) {
+  } catch {
     restored = null;
   }
   if (restored) return {modelRig: restored, hydratedFromCache: true};

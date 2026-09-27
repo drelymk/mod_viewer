@@ -82,7 +82,7 @@ function currentModPath(getKnownMeshes) {
     .find(mesh => mesh?.userData?.modPath)?.userData?.modPath || null;
 }
 
-export function createHumanoidRigEditSession({modelRigState, getModelRig, getAutomaticRig,
+export function createHumanoidRigEditSession({getModelRig, getAutomaticRig,
     resetCurrentPoseForHumanoidRigEdit, setPhysicsSuspended,
     resolveMappings, refreshHumanoidRig, getKnownMeshes, persist, clearPersist,
     cancelWeightPicking, cancelRigPicking, notifyChanged, requestRender} = {}) {

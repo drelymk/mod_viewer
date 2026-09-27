@@ -29,10 +29,11 @@ JavaScript layouts differ extensively from the formatter output. Review those
 conventions before applying a repository-wide formatting change. Tool/config
 errors fail CI even when the corresponding formatting audit is informational.
 
-Unused-import reports also need context. `core/ini/parser.py` and several loader
-imports preserve compatibility APIs, while `tests/web/conftest.py` registers
-imported pytest fixtures. Keep those exports and fixtures. The audit deliberately
-retains these findings instead of deleting code based only on a linter warning.
+Targeted Ruff ignores preserve intentional import behavior: `core/ini/parser.py`
+and `app/mods/loader.py` expose compatibility APIs, while `tests/web/conftest.py`
+registers imported pytest fixtures. `src/build.py` adjusts `sys.path` before an
+import that must follow that adjustment. These exceptions are limited to those
+files and rules.
 
 The spelling exclusions are `te` (the toggle-editing module alias), `currentY`
 (a coordinate variable), and `abD` (a vector dot product). Non-English locale

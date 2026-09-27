@@ -5,7 +5,6 @@
 import * as THREE from 'three/webgpu';
 import {
   HUMANOID_CONTROL_PICK_RADIUS,
-  JOINT_ATTRACTION_RADIUS_PX,
 } from '../mesh/humanoid-rig-edit-session.js';
 import {
   HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES,
@@ -458,8 +457,6 @@ export function createRigOverlayController({
   let humanoidCarryPointerId = null;
   let humanoidNavigationGesture = false;
   let humanoidLeftRotateBlocked = false;
-  let humanoidCandidateJointId = null;
-  let humanoidCandidateScreen = null;
   let pickPointer = null;
   let pickCandidateCache = [];
   let pickCandidateCount = 0;
@@ -1100,9 +1097,6 @@ export function createRigOverlayController({
       notifyState: false,
       request: false,
     });
-    humanoidCandidateJointId = candidate && candidate.distance
-      <= JOINT_ATTRACTION_RADIUS_PX ? candidate.jointId : null;
-    humanoidCandidateScreen = candidate?.screen || null;
     syncAfterEditCallback();
     return true;
   }
@@ -1115,8 +1109,6 @@ export function createRigOverlayController({
     humanoidCarryOffset.set(0, 0, 0);
     humanoidCarryPointerId = null;
     humanoidNavigationGesture = false;
-    humanoidCandidateJointId = null;
-    humanoidCandidateScreen = null;
     invalidateHumanoidJointCandidates();
     setArcballHumanoidCarryState(false);
     setPickCursor('');
@@ -1132,8 +1124,6 @@ export function createRigOverlayController({
     humanoidCarryOffset.set(0, 0, 0);
     humanoidCarryPointerId = null;
     humanoidNavigationGesture = false;
-    humanoidCandidateJointId = null;
-    humanoidCandidateScreen = null;
     invalidateHumanoidJointCandidates();
     setArcballHumanoidCarryState(false);
     setPickCursor('');
@@ -1814,16 +1804,12 @@ export function createRigOverlayController({
       humanoidCarryOffset.set(0, 0, 0);
       humanoidCarryPointerId = null;
       humanoidNavigationGesture = false;
-      humanoidCandidateJointId = null;
-      humanoidCandidateScreen = null;
       setArcballHumanoidCarryState(false);
       setPickCursor('');
     }
     if (wasHumanoidEditing && !humanoidEditing) {
       if (humanoidCarryControlKey) cancelHumanoidCarry();
       hoveredControlKey = null;
-      humanoidCandidateJointId = null;
-      humanoidCandidateScreen = null;
       setPickCursor('');
     }
     if (humanoidEditing && !humanoidCarryControlKey) {

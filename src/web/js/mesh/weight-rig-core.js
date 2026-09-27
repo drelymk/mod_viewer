@@ -25,8 +25,6 @@ import {
   serializeBoneSelection,
 } from './weight-selection.js';
 import {
-  buildInfluenceNodes as buildRigInfluenceNodes,
-  buildInfluenceRelationships as buildRigInfluenceRelationships,
   buildInferredRigForest,
   jointPivotMap,
 } from './weight-rig.js';
@@ -102,8 +100,8 @@ let rigSourceSession = null;
 let weightModelSession = null;
 let weightPickingSession = null;
 let rigPresetSession = null;
-let humanoidPoseRuntime = null;
-let weightPhysicsController = null;
+let humanoidPoseRuntime;
+let weightPhysicsController;
 let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
@@ -125,7 +123,6 @@ function invalidateHumanoidDetection() {
 
 const physicsRuntime = createWeightPhysicsRuntime({
   states,
-  sourcePhysicsRigs,
   getModelSkinningRig: () => modelSkinningRig,
   applyDeformation: (...args) => skinningRuntime?.applyDeformation(...args),
   finalizePhysicsGeometry: (...args) =>
@@ -180,7 +177,6 @@ skinningRuntime = createSkinningRuntime({
   getGeneration: () => modelWeightGeneration,
   notifyModelWeightChanged,
   requestRender,
-  invalidateShadow: invalidateCharacterShadowGeometry,
 });
 
 rigSourceSession = createRigSourceSession({
@@ -280,7 +276,6 @@ humanoidPoseRuntime = createHumanoidPoseRuntime({
 });
 
 humanoidRigEditSession = createHumanoidRigEditSession({
-  modelRigState,
   getModelRig: () => modelSkinningRig,
   getAutomaticRig: () => modelSkinningRig?.humanoidAutomaticControlRig,
   resetCurrentPoseForHumanoidRigEdit: (...args) =>
@@ -876,7 +871,7 @@ function buildAllSourceSkinningRigsCooperatively(options) {
         modelRigState.performance.sourceRigPreparationMs =
           clockNow() - startedAt;
         const stats = (result || []).map(rig => rig.__cooperativeStats || {});
-        const timings = (result || []).map((rig, index) => {
+        const timings = (result || []).map(rig => {
           const timing = rig.__cooperativeTimings;
           const stat = rig.__cooperativeStats || {};
           return timing ? {
@@ -1071,7 +1066,7 @@ async function loadPersistedModelRig() {
   if (!path || typeof api?.load_model_rig !== 'function') return null;
   try {
     return await api.load_model_rig(path);
-  } catch (_error) {
+  } catch {
     // An unreadable cache is equivalent to a cache miss. The normal
     // reconciliation path remains the source of truth.
     return null;
@@ -1085,7 +1080,7 @@ async function savePersistedModelRig(value) {
   try {
     const result = await api.save_model_rig(path, value);
     return result?.saved === true;
-  } catch (_error) {
+  } catch {
     return false;
   }
 }
@@ -1358,10 +1353,6 @@ function refreshSourcePhysicsRig(rig, members) {
   rig.selectionKey = selectedIds.join(',');
   rig.physicsCenterByBoneId = rig.physicsForest?.centers || rig.centerByBoneId;
   return rig;
-}
-
-function disablePhysicsSession() {
-  return physicsCoordinator?.disable() || false;
 }
 
 function resetModelPose({request = true} = {}) {

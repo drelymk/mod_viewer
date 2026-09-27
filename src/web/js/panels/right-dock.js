@@ -57,7 +57,7 @@ export function setRightDockTab(tab, {persist = true, userInitiated = false} = {
   openTab = tab;
   if (userInitiated) userHasChosenDockState = true;
   if (persist) {
-    try { localStorage.setItem(STORAGE_KEY, tab); } catch (_) { /* private mode */ }
+    try { localStorage.setItem(STORAGE_KEY, tab); } catch { /* private mode */ }
   }
   renderRightDock();
   return true;
@@ -71,7 +71,7 @@ export function toggleRightDockTab(tab) {
   } else {
     selectedTab = tab;
     openTab = tab;
-    try { localStorage.setItem(STORAGE_KEY, tab); } catch (_) { /* private mode */ }
+    try { localStorage.setItem(STORAGE_KEY, tab); } catch { /* private mode */ }
   }
   renderRightDock();
   return true;
@@ -105,7 +105,7 @@ export function initRightDock() {
         selectedTab = migrated;
         if (migrated !== stored) localStorage.setItem(STORAGE_KEY, migrated);
       }
-    } catch (_) { /* private mode */ }
+    } catch { /* private mode */ }
     ready = true;
   }
   renderRightDock();

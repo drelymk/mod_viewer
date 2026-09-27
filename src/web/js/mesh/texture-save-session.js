@@ -247,7 +247,7 @@ async function synchronizeCommittedSave(state, result) {
         try {
           persistCurrentMeshColorAdjustment(mesh);
           await flushMeshColorAdjustmentPersistence(mesh);
-        } catch (_metadataError) {
+        } catch {
           unresolvedFailedTargets += 1;
         }
       }
@@ -262,7 +262,7 @@ async function synchronizeCommittedSave(state, result) {
         persistCurrentMeshColorAdjustment(mesh);
       }
       await flushMeshColorAdjustmentPersistence(mesh);
-    } catch (_metadataError) {
+    } catch {
       unresolvedFailedTargets += 1;
     }
   }
@@ -334,7 +334,7 @@ export function createTextureSaveSession({
     try {
       await Promise.all((job.state.targets || []).map(target =>
         flushMeshColorAdjustmentPersistence(target.mesh)));
-    } catch (_persistenceError) {
+    } catch {
       saving = false;
       activeSaveRequestId = null;
       onError({
@@ -363,7 +363,7 @@ export function createTextureSaveSession({
         job.state.modPath, job.state.texKey,
         textureSaveTargetsPayload(job.state), job.state.textureUsage,
         requestId);
-    } catch (_requestError) {
+    } catch {
       result = {status: 'error', error_code: 'texture_save_failed'};
     }
     if (result?.status !== 'ok') {
@@ -375,7 +375,7 @@ export function createTextureSaveSession({
     onRefreshing();
     try {
       await synchronizeCommittedSave(job.state, result);
-    } catch (_refreshError) {
+    } catch {
       onError({
         status: 'error',
         error_code: 'texture_refresh_failed',

@@ -131,14 +131,16 @@ def parse_sections(ini_path, text=None):
     def feed(line_no, raw):
         nonlocal current
         line = raw.strip()
-        if not line or line.startswith(";"): return
+        if not line or line.startswith(";"):
+            return
         # ';' is a legitimate 3DMigoto key binding, so it must not be
         # treated as an inline comment on key/back lines — e.g.
         # "key = no_ctrl no_Shift no_alt ;" binds the semicolon key.
         lhs = line.split("=", 1)[0].strip().lower()
         if lhs not in ("key", "back"):
             line = line.split(";")[0].strip()
-        if not line: return
+        if not line:
+            return
         if line.startswith("[") and line.endswith("]"):
             current = line[1:-1].strip()
             sections.setdefault(current, [])
@@ -215,17 +217,24 @@ def extract_resources(sections):
             "key", "constants")
     resources = {}
     for name, lines in sections.items():
-        if name.lower().startswith(skip): continue
+        if name.lower().startswith(skip):
+            continue
         res = {}
         for line in lines:
-            if "=" not in line: continue
+            if "=" not in line:
+                continue
             k, _, v = line.partition("=")
-            k = k.strip().lower(); v = v.strip()
-            if   k == "filename": res["filename"] = v
+            k = k.strip().lower()
+            v = v.strip()
+            if k == "filename":
+                res["filename"] = v
             elif k == "stride":
-                try: res["stride"] = int(v)
-                except ValueError: pass
-            elif k == "format":   res["format"] = v
+                try:
+                    res["stride"] = int(v)
+                except ValueError:
+                    pass
+            elif k == "format":
+                res["format"] = v
         if "filename" in res:
             resources[name] = res
     return ResourceTable(resources)

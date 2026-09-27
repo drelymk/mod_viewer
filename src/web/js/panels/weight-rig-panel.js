@@ -1057,7 +1057,7 @@ export function initWeightRigPanel() {
     syncRigOptions(event.detail);
     syncStatus();
   });
-  window.addEventListener('mod-viewer-model-rig-pose-changed', event => {
+  window.addEventListener('mod-viewer-model-rig-pose-changed', () => {
     if (latestRigState) syncRigOptions(latestRigState);
   });
   window.addEventListener(LANGUAGE_CHANGED, () => {

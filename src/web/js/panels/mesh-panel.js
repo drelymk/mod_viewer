@@ -1054,7 +1054,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
       container.append(hdr, itemsWrap);
 
       for (const name of names) {
-        const entry = meshes[name];
         const mesh = liveMeshes?.get?.(name) || liveMeshes?.[name];
         if (!mesh) throw new Error(`Missing live mesh for ${name}`);
         mesh.userData.componentDescriptor = componentDescriptor;

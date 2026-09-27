@@ -25,7 +25,10 @@ paths.is_frozen is monkeypatched the same way test_toggle_api.py monkeypatches
 record_editor.verify_recording.
 """
 
-import os, sys, tempfile, types
+import os
+import sys
+import tempfile
+import types
 
 import pytest
 

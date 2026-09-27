@@ -88,11 +88,11 @@ export function initPanelCollapse(panel, contentId) {
     chevron.setAttribute('aria-label', t(
       collapsed ? 'panel.expandPanel' : 'panel.collapsePanel', {name}));
     if (persist) {
-      try { localStorage.setItem(storageKey, String(collapsed)); } catch (_) { /* private mode */ }
+      try { localStorage.setItem(storageKey, String(collapsed)); } catch { /* private mode */ }
     }
   };
   let initiallyCollapsed = false;
-  try { initiallyCollapsed = localStorage.getItem(storageKey) === 'true'; } catch (_) { /* private mode */ }
+  try { initiallyCollapsed = localStorage.getItem(storageKey) === 'true'; } catch { /* private mode */ }
   chevron.setAttribute('aria-controls', contentId);
   setCollapsed(initiallyCollapsed, false);
   const toggle = (event) => {

@@ -86,10 +86,6 @@ function quaternion4(value) {
   return [0, 0, 0, 1];
 }
 
-function length(value) {
-  return Math.hypot(value[0], value[1], value[2]);
-}
-
 function dot(left, right) {
   return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
