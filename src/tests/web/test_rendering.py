@@ -355,10 +355,11 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
 
 
 def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(viewer):
-    payload, weights = weighted_payload()
+    payload, weights = weighted_payload(include_ineligible=True)
     page = viewer({'fixture-01': payload, 'fixture-weights': weights})
     open_model(page, 'fixture-01')
-    wait_loaded(page)
+    wait_loaded(page, 2)
+    page.evaluate('window.modViewer.activeMeshes[1].visible = false')
     assert bridge_calls(page, 'weights') == []
     page.evaluate("""() => {
       window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([

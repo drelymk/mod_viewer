@@ -760,10 +760,6 @@ export function createWeightPhysicsRuntime({
           state.physicsParticipantStatus = 'failed';
           state.physicsParticipantError = state.error;
           modelPhysicsSession.markFailed(mesh, state.error);
-        } else {
-          state.physicsParticipantStatus = 'unavailable';
-          state.physicsParticipantError = 'skinning-unavailable';
-          modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
         }
         continue;
       }
