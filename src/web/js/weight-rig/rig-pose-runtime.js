@@ -2,11 +2,15 @@
 
 import * as THREE from 'three';
 import { buildHumanoidDriverBaseTransforms } from './humanoid-rig-binding.js';
+import { buildInferredRigRestFrames, rebuildModelRestFrames } from './weight-rig-frames.js';
+import { orientModelRigForest } from './weight-rig-reconcile.js';
+import { buildJointSignatureIndex } from './weight-rig-presets.js';
 import { weightRigStatus } from './weight-rig-status.js';
 import { buildForestTransformsFromLocalRotations } from './weight-deformation.js';
 import { buildSelectedWeightMask } from './weight-selection.js';
 import { activePoseJointIds, RIG_LIMB_ROLES } from './weight-runtime.js';
 import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from './humanoid-control-rig.js';
+import { buildInferredRigForest, jointPivotMap } from './weight-rig.js';
 
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 
@@ -27,6 +31,42 @@ function rotationEntries(rotationsByJointId) {
   return Object.entries(rotationsByJointId || {});
 }
 
+export function rebuildSourceRigRestFrames(rig, nextStructureRevision = () => (rig.structureRevision || 0) + 1) {
+  const frames = buildInferredRigRestFrames(rig.inferredForest, rig.centerByBoneId, rig.jointPivotByBoneId);
+  rig.restFrameByBoneId = frames.frameByBoneId;
+  rig.restDirectionByBoneId = frames.directionByBoneId;
+  rig.restFrameEvidenceByBoneId = frames.evidenceByBoneId;
+  rig.continuationChildByBoneId = frames.continuationChildByBoneId;
+  rig.poseFrameCache?.clear();
+  rig.structureRevision = nextStructureRevision();
+  return frames;
+}
+
+export function cloneModelComponent(component) {
+  return {
+    componentId: component.componentId,
+    rootId: component.rootId,
+    nodeIds: [...(component.nodeIds || [])],
+    parentById: { ...(component.parentById || {}) },
+    childrenById: Object.fromEntries(
+      Object.entries(component.childrenById || {}).map(([id, children]) => [id, [...children]]),
+    ),
+    depthById: { ...(component.depthById || {}) },
+    maxDepth: component.maxDepth,
+    edges: (component.edges || []).map((edge) => ({ ...edge })),
+  };
+}
+
+export function cloneSourceForest(forest) {
+  return {
+    ...forest,
+    components: (forest?.components || []).map(cloneModelComponent),
+    componentByBoneId: { ...(forest?.componentByBoneId || {}) },
+    edges: (forest?.edges || []).map((edge) => ({ ...edge })),
+    nodeIds: [...(forest?.nodeIds || [])],
+  };
+}
+
 export function createRigPoseRuntime({
   state,
   getRig,
@@ -39,16 +79,17 @@ export function createRigPoseRuntime({
   quaternionIsIdentity,
   getModelJointId,
   hasActivePhysics,
-  setComponentRoot,
-  resetModelPose,
+  nextStructureRevision,
   notifyChanged,
   notifyPoseChanged,
   requestRender,
-  rigPresetState,
   getPrimaryLimb,
   solveControlIk,
   mergeLimbPose,
 } = {}) {
+  const allocateStructureRevision =
+    typeof nextStructureRevision === 'function' ? nextStructureRevision : () => (getRig()?.structureRevision || 0) + 1;
+
   function jointForId(jointId) {
     const id = Number(jointId);
     const rig = getRig();
@@ -63,6 +104,121 @@ export function createRigPoseRuntime({
 
   function sourceRigForKey(sourceKeyValue) {
     return sourceSkinningRigs?.get(String(sourceKeyValue)) || null;
+  }
+
+  function sourceComponentForBone(rig, boneId) {
+    const componentId = rig?.inferredForest?.componentByBoneId?.[boneId];
+    return Number.isInteger(Number(componentId))
+      ? rig?.inferredForest?.components?.[Number(componentId)] || null
+      : null;
+  }
+
+  function clearSourcePose(rig) {
+    rig?.poseRotationByBoneId?.clear();
+    rig?.poseTransforms?.clear();
+    rig?.poseRotations?.clear();
+    rig?.poseTransformCache?.clear();
+    rig?.poseFrameCache?.clear();
+  }
+
+  function restoreDefaultSourceRigOrientation(rig) {
+    if (!rig?.defaultInferredForest) return false;
+    rig.inferredForest = cloneSourceForest(rig.defaultInferredForest);
+    rig.jointPivotByBoneId = new Map([...rig.defaultJointPivotByBoneId].map(([boneId, pivot]) => [boneId, [...pivot]]));
+    rig.poseRootOverrides = new Map();
+    rebuildSourceRigRestFrames(rig, allocateStructureRevision);
+    return true;
+  }
+
+  function restoreDefaultSourceRigOrientations() {
+    return (getRig()?.sourceRigs || []).map(restoreDefaultSourceRigOrientation).some(Boolean);
+  }
+
+  function defaultRootOverrides(rig) {
+    return new Map(
+      (rig.defaultComponents || []).map((component) => [Number(component.componentId), Number(component.rootId)]),
+    );
+  }
+
+  function installModelForest(rig, forest, { restoreDefaults = false } = {}) {
+    rig.components = forest.components;
+    rig.componentByJointId = forest.componentByJointId;
+    rig.inferredForest = {
+      components: forest.components,
+      componentByBoneId: forest.componentByJointId,
+    };
+    rebuildModelRestFrames(rig, forest);
+    if (restoreDefaults) {
+      rig.jointPivotByJointId = new Map(
+        [...rig.defaultJointPivotByJointId].map(([jointId, pivot]) => [jointId, [...pivot]]),
+      );
+      rig.restFrameByJointId = new Map(
+        [...rig.defaultRestFrameByJointId].map(([jointId, frame]) => [jointId, frame.clone()]),
+      );
+      rig.restDirectionByJointId = new Map(
+        [...rig.defaultRestDirectionByJointId].map(([jointId, direction]) => [
+          jointId,
+          direction ? [...direction] : null,
+        ]),
+      );
+      rig.restContinuationChildByJointId = new Map(rig.defaultRestContinuationChildByJointId);
+      (rig.joints || []).forEach((joint) => {
+        const jointId = Number(joint.jointId);
+        const pivot = rig.defaultJointPivotByJointId.get(jointId);
+        const frame = rig.defaultRestFrameByJointId.get(jointId);
+        const direction = rig.defaultRestDirectionByJointId.get(jointId);
+        if (pivot) joint.restPivot = [...pivot];
+        if (frame) joint.restFrame = frame.toArray();
+        if (direction) joint.restDirection = [...direction];
+      });
+    }
+    rig.poseTransformCache.clear();
+    rig.poseFrameCache.clear();
+    rig.poseActiveJointKey = null;
+    rig.poseAffectedJointIds = new Set();
+  }
+
+  function applyRootSignatures(rig, signatures = [], { restoreDefaults = false, updateRevision = true } = {}) {
+    const oldRoots = new Map(
+      (rig.components || []).map((component) => [Number(component.componentId), Number(component.rootId)]),
+    );
+    const overrides = defaultRootOverrides(rig);
+    const usedComponents = new Set();
+    const appliedRoots = [];
+    const skipped = [];
+    const signatureIndex = buildJointSignatureIndex(rig);
+    for (const signature of signatures) {
+      const jointId = signatureIndex.resolvedBySignature.get(signature);
+      if (!Number.isInteger(jointId) || signatureIndex.ambiguousSignatures.has(signature)) {
+        skipped.push({ type: 'root', jointSignature: signature, reason: 'root_not_found' });
+        continue;
+      }
+      const componentId = rig.defaultComponentByJointId.get(jointId);
+      if (!Number.isInteger(Number(componentId))) {
+        skipped.push({ type: 'root', jointSignature: signature, reason: 'root_not_found' });
+        continue;
+      }
+      if (usedComponents.has(Number(componentId))) {
+        skipped.push({ type: 'root', jointSignature: signature, reason: 'duplicate_root_entry' });
+        continue;
+      }
+      usedComponents.add(Number(componentId));
+      overrides.set(Number(componentId), jointId);
+      appliedRoots.push(signature);
+    }
+    const forest = orientModelRigForest(rig.joints, rig.edges, overrides);
+    const newRoots = new Map(
+      (forest.components || []).map((component) => [Number(component.componentId), Number(component.rootId)]),
+    );
+    const rootChanged = [...new Set([...oldRoots.keys(), ...newRoots.keys()])].some(
+      (componentId) => oldRoots.get(componentId) !== newRoots.get(componentId),
+    );
+    installModelForest(rig, forest, { restoreDefaults });
+    if (updateRevision && rootChanged) {
+      rig.structureRevision = allocateStructureRevision();
+      state.structureRevision = rig.structureRevision;
+    }
+    return { forest, overrides, appliedRoots, skipped, rootChanged };
   }
 
   function setActiveLimbRole(role) {
@@ -480,6 +636,121 @@ export function createRigPoseRuntime({
     });
   }
 
+  function resetPose({ request = true } = {}) {
+    const rig = getRig();
+    if (!rig) return false;
+    rig.poseRotationByJointId.clear();
+    state.humanoidPose = {};
+    restoreDefaultSourceRigOrientations();
+    applyRootSignatures(rig, [], { restoreDefaults: true });
+    state.explicitRootSignatures.clear();
+    const changed = applyPose({ request });
+    rig.poseActiveVerticesByMesh.clear();
+    rig.poseSourceBoneIdsByMesh.clear();
+    state.pickStatus = '';
+    return changed;
+  }
+
+  function applyResolvedPreset(resolvedPreset, options = {}) {
+    const rig = getRig();
+    if (!rig || !state.loaded || !resolvedPreset?.success) return null;
+
+    restoreDefaultSourceRigOrientations();
+    const rootRestore = applyRootSignatures(
+      rig,
+      (resolvedPreset.roots || []).map((root) => root.jointSignature).filter(Boolean),
+    );
+    const currentJointIndex = buildJointSignatureIndex(rig).resolvedBySignature;
+    state.explicitRootSignatures = new Set(
+      rootRestore.appliedRoots.filter((signature) => {
+        const jointId = currentJointIndex.get(signature);
+        const componentId = rig.defaultComponentByJointId.get(jointId);
+        return (
+          Number.isInteger(Number(componentId)) && rig.defaultRootIdByComponent.get(Number(componentId)) !== jointId
+        );
+      }),
+    );
+
+    rig.poseRotationByJointId.clear();
+    for (const entry of resolvedPreset.joints || []) {
+      const rotation = entry.rotation;
+      if (!Array.isArray(rotation) || rotation.length !== 4 || rotation.some((value) => !Number.isFinite(value)))
+        continue;
+      rig.poseRotationByJointId.set(Number(entry.jointId), strictQuaternion(rotation));
+    }
+    const changed = applyPose({ request: false, dragging: false });
+    const skipped = [...(resolvedPreset.skipped || []), ...rootRestore.skipped];
+    const result = {
+      success: true,
+      preset: resolvedPreset.preset,
+      appliedJointCount: resolvedPreset.joints?.length || 0,
+      skippedJointCount: resolvedPreset.skippedJointCount || 0,
+      appliedRootCount: rootRestore.appliedRoots.length,
+      skippedRootCount: (resolvedPreset.skippedRootCount || 0) + rootRestore.skipped.length,
+      skipped,
+      changed,
+      ...(options?.presetId ? { presetId: options.presetId } : {}),
+    };
+    state.pickStatus = '';
+    requestRender();
+    return result;
+  }
+
+  function setRoot(jointId) {
+    const member = representativeMember(jointForId(jointId));
+    const sourceRig = member && sourceRigForKey(member.sourceKey);
+    const id = Number(member?.boneId);
+    const component = sourceComponentForBone(sourceRig, id);
+    const rig = getRig();
+    if (!sourceRig || !component || !component.nodeIds.includes(id) || !rig) {
+      return false;
+    }
+    const resolvedJointId = getModelJointId(member.sourceKey, id);
+    if (!Number.isInteger(resolvedJointId)) return false;
+
+    clearManualPose({ request: false });
+    clearSourcePose(sourceRig);
+    const overrides = new Map(sourceRig.inferredForest.components.map((item) => [item.componentId, item.rootId]));
+    overrides.set(component.componentId, id);
+    sourceRig.inferredForest = buildInferredRigForest(sourceRig.influenceGraph, {
+      rootOverrides: overrides,
+    });
+    sourceRig.jointPivotByBoneId = jointPivotMap(sourceRig.inferredForest, sourceRig.influenceGraph.relationships);
+    rebuildSourceRigRestFrames(sourceRig, allocateStructureRevision);
+    sourceRig.poseRootOverrides = overrides;
+
+    const signature = rig.joints[resolvedJointId]?.signature;
+    const targetComponentId = rig.defaultComponentByJointId.get(resolvedJointId);
+    const currentIndex = buildJointSignatureIndex(rig).resolvedBySignature;
+    const desiredRootSignatures = [...state.explicitRootSignatures].filter((existingSignature) => {
+      const existingJointId = currentIndex.get(existingSignature);
+      const existingComponentId = rig.defaultComponentByJointId.get(existingJointId);
+      return Number(existingComponentId) !== Number(targetComponentId);
+    });
+    if (signature && rig.defaultRootIdByComponent.get(Number(targetComponentId)) !== resolvedJointId) {
+      desiredRootSignatures.push(signature);
+    }
+    const rootRestore = applyRootSignatures(rig, desiredRootSignatures);
+    const defaultComponentId = rig.defaultComponentByJointId.get(resolvedJointId);
+    const appliedSignatures = new Set(rootRestore.appliedRoots);
+    state.explicitRootSignatures = new Set(
+      rootRestore.appliedRoots.filter((appliedSignature) => {
+        const appliedJointId = currentIndex.get(appliedSignature);
+        const appliedComponentId = rig.defaultComponentByJointId.get(appliedJointId);
+        return rig.defaultRootIdByComponent.get(Number(appliedComponentId)) !== appliedJointId;
+      }),
+    );
+    if (signature && Number(defaultComponentId) === Number(targetComponentId) && !appliedSignatures.has(signature)) {
+      state.explicitRootSignatures.delete(signature);
+    }
+    state.selectedJointId = resolvedJointId;
+    state.pickStatus = '';
+    applyPose({ request: false });
+    notifyChanged();
+    requestRender();
+    return true;
+  }
+
   return {
     getFrame,
     applyPose,
@@ -513,20 +784,10 @@ export function createRigPoseRuntime({
       notifyChanged();
       return true;
     },
-    resetPose() {
-      const changed = resetModelPose({ request: false });
-      const presetWasSelected = rigPresetState.selectedPresetId !== null || rigPresetState.lastApplyResult !== null;
-      rigPresetState.selectedPresetId = null;
-      rigPresetState.lastApplyResult = null;
-      state.pickStatus = '';
-      notifyChanged();
-      requestRender();
-      return changed || presetWasSelected;
-    },
-    setRoot(jointId) {
-      const member = representativeMember(jointForId(jointId));
-      return member ? setComponentRoot(member.sourceKey, member.boneId) : false;
-    },
+    resetPose,
+    applyResolvedPreset,
+    applyRootSignatures,
+    setRoot,
     setHumanoidEditPhysicsSuspended,
     resetForHumanoidEdit,
     clearManualPose,
