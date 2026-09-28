@@ -15,7 +15,6 @@ import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-
 import { hydrateModelRig, loadOrBuildModelRig, serializeModelRig } from './model-rig-persistence.js';
 import { GRAVITY_WORLD_DIRECTION } from './weight-physics.js';
 import {
-  buildSelectedWeightMask,
   normalizeBoneSelection,
   normalizeSelectedBoneIds,
   selectedBoneCount,
@@ -36,7 +35,6 @@ import {
   createRigRuntimeState,
   createWeightRuntimeState,
   matrixIsIdentity,
-  EMPTY_ACTIVE_VERTICES,
   RIG_LIMB_ROLES,
   RIG_ROTATION_SNAP_DEGREES,
 } from './weight-runtime.js';
@@ -160,17 +158,6 @@ skinningRuntime = createSkinningRuntime({
   states,
   knownMeshes,
   stateFor,
-  modelWeightState,
-  modelWeightSnapshot,
-  selectionMapFromEntries,
-  sourceSelectionEntries,
-  setSelectedBones: (...args) => weightModelSession?.setSelectedBones(...args),
-  syncPhysicsToSelection,
-  refreshModelWeightSummary: (...args) => weightModelSession?.refreshModelWeightSummary(...args),
-  refreshSelectedWeightMask,
-  eligibleSkinningMesh,
-  getGeneration: () => modelWeightGeneration,
-  notifyModelWeightChanged,
   requestRender,
 });
 
@@ -189,7 +176,6 @@ rigSourceSession = createRigSourceSession({
 
 weightPickingSession = createWeightPickingSession({
   modelWeightState,
-  modelRigState,
   states,
   knownMeshes,
   canvas: renderer.domElement,
@@ -197,7 +183,6 @@ weightPickingSession = createWeightPickingSession({
   controls,
   notifyChanged: notifyModelWeightChanged,
   requestRender,
-  cancelRigPicking: (...args) => rigModelSession?.cancelJointPicking(...args),
 });
 
 rigPresetSession = createRigPresetSession({
@@ -213,19 +198,20 @@ rigPresetSession = createRigPresetSession({
 weightModelSession = createWeightModelSession({
   modelWeightState,
   states,
+  stateFor,
   knownMeshes,
   modelWeightSnapshot,
   selectionMapFromEntries,
   sourceSelectionEntries,
-  refreshSelectedWeightMask,
+  refreshSelectedWeightMask: (...args) => skinningRuntime.refreshSelectedWeightMask(...args),
   updateModelWeightHeatmap: (...args) => skinningRuntime.updateModelWeightHeatmap(...args),
+  installSkinningEntry: (...args) => skinningRuntime.installSkinningEntry(...args),
   syncPhysicsToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
   notifyChanged: () => notifyModelWeightChanged(),
   requestRender,
   getGeneration: () => modelWeightGeneration,
-  ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
 });
 
 rigPoseRuntime = createRigPoseRuntime({
@@ -275,7 +261,7 @@ rigModelSession = createRigModelSession({
   state: modelRigState,
   modelWeightState,
   getGeneration: () => modelWeightGeneration,
-  ensureModelWeightsLoaded: () => skinningRuntime.loadModelWeights(),
+  ensureModelWeightsLoaded: () => weightModelSession.ensureLoaded(),
   buildAllSourceSkinningRigs,
   buildAllSourceSkinningRigsCooperatively,
   buildModelSkinningRig,
@@ -283,7 +269,6 @@ rigModelSession = createRigModelSession({
   getSnapshot: () => rigSnapshot(),
   notifyChanged: notifyModelRigChanged,
   requestRender,
-  cancelWeightPicking: (...args) => weightPickingSession?.cancel(...args),
   getModelJointId: (sourceKey, boneId) => modelJointIdForSourceBone(sourceKey, boneId),
   pickFromSurface: ({ clientX, clientY } = {}) => {
     const intersection = raycastModelAtClientPoint({
@@ -299,6 +284,16 @@ rigModelSession = createRigModelSession({
   rotationSnapValues: RIG_ROTATION_SNAP_DEGREES,
 });
 
+function beginWeightModelPicking(...args) {
+  rigModelSession?.cancelJointPicking();
+  return weightPickingSession?.begin(...args) || false;
+}
+
+function beginRigJointPicking(...args) {
+  weightPickingSession?.cancel();
+  return rigModelSession?.beginJointPicking(...args) || false;
+}
+
 export const weightRigApi = Object.freeze({
   getModelWeightState: weightModelSession.getState,
   ensureModelWeightsLoaded: weightModelSession.ensureLoaded,
@@ -309,14 +304,14 @@ export const weightRigApi = Object.freeze({
   saveModelWeightSelection: weightModelSession.saveSelection,
   setModelWeightHeatmap: weightModelSession.setHeatmap,
 
-  beginWeightModelPicking: weightPickingSession.begin,
+  beginWeightModelPicking,
   cancelWeightModelPicking: weightPickingSession.cancel,
   setWeightPickerViewMode: weightPickingSession.setViewMode,
   sampleModelSkinningAtIntersection: weightPickingSession.sampleAtIntersection,
 
   getModelRigState: rigModelSession.getState,
   ensureModelRigLoaded: rigModelSession.ensureLoaded,
-  beginRigJointPicking: rigModelSession.beginJointPicking,
+  beginRigJointPicking,
   cancelRigJointPicking: rigModelSession.cancelJointPicking,
   clearRigJointSelection: rigModelSession.clearJointSelection,
   selectRigJoint: rigModelSession.selectJoint,
@@ -673,25 +668,6 @@ function eligibleSkinningMesh(mesh) {
   );
 }
 
-function refreshSelectedWeightMask(mesh, state) {
-  if (!state?.loaded) return null;
-  const selected = modelWeightState.selectedBonesBySource.get(state.skinningSourceKey) || new Set();
-  if (!selected.size) {
-    state.selectedWeightMask = null;
-    state.physicsActiveVertices = EMPTY_ACTIVE_VERTICES;
-    state.combinedPhysicsVerticesRef = null;
-    state.combinedActiveVertices = null;
-    return null;
-  }
-  state.selectedWeightMask = buildSelectedWeightMask(state.indices, state.weights, state.influenceCount, selected);
-  const activeVertices = [];
-  state.selectedWeightMask.forEach((weight, vertex) => {
-    if (weight > 0) activeVertices.push(vertex);
-  });
-  state.physicsActiveVertices = Uint32Array.from(activeVertices);
-  return state.selectedWeightMask;
-}
-
 function resetRigPose() {
   const presetWasSelected = rigPresetSession?.clearApplicationState?.() || false;
   const changed = rigPoseRuntime?.resetPose({ request: false }) || false;
@@ -724,6 +700,7 @@ export function registerWeightRigMesh(mesh) {
   const wasKnown = knownMeshes.has(mesh);
   knownMeshes.add(mesh);
   if (!wasKnown) invalidateHumanoidDetection();
+  if (modelWeightState.loaded) weightModelSession?.refreshModelWeightSummary({ refreshStats: true });
   if (!modelPhysicsSession.getState().enabled) return;
   const state = stateFor(mesh);
   if (!eligibleSkinningMesh(mesh)) {
@@ -820,7 +797,7 @@ export function refreshWeightRigAfterShapeChange(mesh) {
     modelPhysicsSession.wake();
   }
   if (state.heatmapMode) {
-    skinningRuntime.updateModelWeightHeatmap(new Set([sourceKey]));
+    skinningRuntime.updateModelWeightHeatmap(new Set([sourceKey]), modelWeightState.heatmapEnabled);
   }
   return rebased;
 }
@@ -1095,7 +1072,7 @@ async function buildModelSkinningRig(
     performance.modelRigCacheSaved = await savePersistedModelRig(persistedModelRig);
   }
   buildPrimaryHumanoidRig(rig);
-  skinningRuntime.updateModelWeightHeatmap();
+  skinningRuntime.updateModelWeightHeatmap(null, modelWeightState.heatmapEnabled);
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId =
     Number.isInteger(previousSelectedJointId) && joints[previousSelectedJointId] ? previousSelectedJointId : null;

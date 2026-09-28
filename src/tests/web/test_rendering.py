@@ -372,6 +372,69 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     }""")
     page.wait_for_function('window.__rigApi.getModelRigState().loaded && window.__rigApi.getModelRigState().model?.joints.length > 1')
     assert bridge_calls(page, 'weights') == [['fixture-01']]
+    picking = page.evaluate("""() => {
+      const rig = window.__rigApi;
+      const weightStarted = rig.beginWeightModelPicking();
+      const weightActive = rig.getModelWeightState().picking;
+      const rigStarted = rig.beginRigJointPicking({type: 'selected-joint'});
+      const rigCancelledWeight = !rig.getModelWeightState().picking;
+      const rigActive = rig.getModelRigState().jointPickIntent?.type === 'selected-joint';
+      const weightStartedAgain = rig.beginWeightModelPicking();
+      const weightActiveAgain = rig.getModelWeightState().picking;
+      const weightCancelledRig = !rig.getModelRigState().jointPickIntent;
+      rig.cancelWeightModelPicking();
+      return {
+        weightStarted,
+        weightActive,
+        rigStarted,
+        rigCancelledWeight,
+        rigActive,
+        weightStartedAgain,
+        weightActiveAgain,
+        weightCancelledRig,
+      };
+    }""")
+    assert picking == {
+        'weightStarted': True,
+        'weightActive': True,
+        'rigStarted': True,
+        'rigCancelledWeight': True,
+        'rigActive': True,
+        'weightStartedAgain': True,
+        'weightActiveAgain': True,
+        'weightCancelledRig': True,
+    }
+    selection = page.evaluate("""() => {
+      const rig = window.__rigApi;
+      const source = rig.getModelWeightState().sources[0];
+      const first = source.availableBoneIds[0];
+      const second = source.availableBoneIds[1];
+      const entry = boneIds => [{
+        source: source.file,
+        sourceKey: source.key,
+        boneIdOffset: source.boneIdOffset,
+        boneIds,
+      }];
+      rig.setSelectedBones(entry([first]));
+      const selected = rig.getModelWeightState().selectedBones[0]?.boneIds;
+      rig.setSelectedBones(entry([second]));
+      const changed = rig.getModelWeightState().selectedBones[0]?.boneIds;
+      rig.loadSavedBoneSelection();
+      const reloaded = rig.getModelWeightState().selectedBones;
+      rig.clearSelectedBones();
+      return {
+        selected,
+        changed,
+        reloaded,
+        cleared: rig.getModelWeightState().selectedBones,
+      };
+    }""")
+    assert selection == {
+        'selected': [0],
+        'changed': [1],
+        'reloaded': [],
+        'cleared': [],
+    }
     api_result = page.evaluate("""() => {
       const rig = window.__rigApi;
       const controlRig = rig.getModelRigState().humanoidControlRig;

@@ -483,7 +483,6 @@ export function createRigModelSession({
   getSnapshot,
   notifyChanged,
   requestRender,
-  cancelWeightPicking,
   pickFromSurface,
   getModelJointId,
   rotationSnapValues,
@@ -593,7 +592,6 @@ export function createRigModelSession({
     if (state.jointPickIntent && state.jointPickIntent.type === next.type) {
       return cancelJointPicking();
     }
-    cancelWeightPicking?.();
     state.jointPickIntent = next;
     state.pickStatus = weightRigStatus('weightRig.status.pickRigJoint');
     notifyChanged();
