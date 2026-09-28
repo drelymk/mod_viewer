@@ -12,7 +12,6 @@ import {
 import { requestRender } from '../scene/render-scheduler.js';
 import { rebuildModelRestFrames } from './weight-rig-frames.js';
 import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
-import { weightRigStatus } from './weight-rig-status.js';
 import { hydrateModelRig, loadOrBuildModelRig, serializeModelRig } from './model-rig-persistence.js';
 import { GRAVITY_WORLD_DIRECTION } from './weight-physics.js';
 import {
