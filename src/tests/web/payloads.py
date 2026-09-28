@@ -114,7 +114,7 @@ def weighted_payload(include_ineligible=False, include_second_member=False, incl
         preview_meshes['mesh-02'] = {
             'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [4, 5],
             'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
-            'data': {'indices': {'offset': 0, 'length': 24, 'type': 'u32'},
+            'data': {'indices': {'offset': offset, 'length': 24, 'type': 'u32'},
                      'weights': {'offset': offset + 24, 'length': 24, 'type': 'f32'}},
         }
     preview = {'status': 'ok', '_fixture_blob': bytes(blob), 'meshes': preview_meshes}
