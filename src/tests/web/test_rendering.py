@@ -414,22 +414,46 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
       rig.setBoneSelected(source.key, first, false);
       rig.setBoneSelected(source.key, second, true);
       const changed = rig.getModelWeightState().selectedBones[0]?.boneIds;
-      rig.loadSavedBoneSelection();
-      const reloaded = rig.getModelWeightState().selectedBones;
-      rig.clearSelectedBones();
       return {
         selected,
         changed,
-        reloaded,
-        cleared: rig.getModelWeightState().selectedBones,
+        physicsEnabled: rig.getModelPhysicsState().enabled,
       };
     }""")
     assert selection == {
         'selected': [0],
         'changed': [1],
-        'reloaded': [],
-        'cleared': [],
+        'physicsEnabled': True,
     }
+    page.wait_for_function('window.__rigApi.getModelPhysicsState().participantCount > 0')
+    physics_active = page.evaluate("""() => {
+      const state = window.__rigApi.getModelPhysicsState();
+      return {enabled: state.enabled, participantCount: state.participantCount};
+    }""")
+    assert physics_active['enabled'] is True
+    assert physics_active['participantCount'] > 0
+    cleared = page.evaluate("""() => {
+      const rig = window.__rigApi;
+      rig.clearSelectedBones();
+      const physics = rig.getModelPhysicsState();
+      return {
+        selected: rig.getModelWeightState().selectedBones,
+        physicsEnabled: physics.enabled,
+        participantCount: physics.participantCount,
+      };
+    }""")
+    assert cleared == {'selected': [], 'physicsEnabled': False, 'participantCount': 0}
+    reloaded = page.evaluate("""() => {
+      const rig = window.__rigApi;
+      rig.loadSavedBoneSelection();
+      const physics = rig.getModelPhysicsState();
+      return {
+        selected: rig.getModelWeightState().selectedBones,
+        physicsEnabled: physics.enabled,
+        participantCount: physics.participantCount,
+      };
+    }""")
+    assert reloaded == {'selected': [], 'physicsEnabled': False, 'participantCount': 0}
     api_result = page.evaluate("""() => {
       const rig = window.__rigApi;
       const controlRig = rig.getModelRigState().humanoidControlRig;

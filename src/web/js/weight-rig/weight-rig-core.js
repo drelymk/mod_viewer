@@ -13,7 +13,6 @@ import { requestRender } from '../scene/render-scheduler.js';
 import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
 import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
 import { hydrateModelRig, loadOrBuildModelRig, serializeModelRig } from './model-rig-persistence.js';
-import { GRAVITY_WORLD_DIRECTION } from './weight-physics.js';
 import {
   normalizeBoneSelection,
   normalizeSelectedBoneIds,
@@ -21,13 +20,11 @@ import {
   serializeBoneSelection,
 } from './weight-selection.js';
 import { raycastModelAtClientPoint } from '../scene/model-picking.js';
-import { DEFAULT_MODEL_PHYSICS_SETTINGS } from './model-physics-session.js';
 import { createWeightPhysicsRuntime } from './weight-physics-runtime.js';
 import { modelRigSnapshot } from './weight-rig-snapshots.js';
 import { buildJointSignatureIndex, resolveRigPreset } from './weight-rig-presets.js';
 import { createRigPresetSession } from './rig-preset-session.js';
 import { createWeightModelSession, createWeightPickingSession } from './weight-model-session.js';
-import { createWeightPhysicsCoordinator } from './weight-physics-coordinator.js';
 import { createSkinningRuntime } from './skinning-runtime.js';
 import { createRigModelSession, createRigSourceSession } from './rig-model-session.js';
 import { createRigPoseRuntime } from './rig-pose-runtime.js';
@@ -66,13 +63,11 @@ function humanoidSemanticAxes({ requireReady = false } = {}) {
 }
 const rigRuntime = createRigRuntimeState();
 const { modelRigState, rigPresetState } = rigRuntime;
-const sourcePhysicsRigs = new Map();
 const sourceSkinningRigs = new Map();
 let modelSkinningRig = null;
 let skinningRuntime = null;
 let rigModelSession = null;
 let rigPoseRuntime = null;
-let physicsCoordinator = null;
 let rigSourceSession = null;
 let weightModelSession = null;
 let weightPickingSession = null;
@@ -122,37 +117,22 @@ function cloneSourceForest(forest) {
 
 const physicsRuntime = createWeightPhysicsRuntime({
   states,
+  knownMeshes,
+  modelWeightState,
+  selectedBoneCount,
+  eligibleSkinningMesh,
+  getSourceSkinningRig: (sourceKey) => sourceSkinningRigs.get(sourceKey),
+  ensureSourceSkinningRig,
+  ensureSourceSkinningRigCooperatively,
+  getModelTransformState,
+  notifyModelRigChanged,
+  getGeneration: () => modelWeightGeneration,
   getModelSkinningRig: () => modelSkinningRig,
   applyDeformation: (...args) => skinningRuntime?.applyDeformation(...args),
   finalizePhysicsGeometry: (...args) => skinningRuntime?.finalizeDeformationGeometry(...args),
   markFinalBoundsDirty: (...args) => skinningRuntime?.markFinalBoundsDirty(...args),
 });
-const { modelPhysicsSession, buildSelectedPhysicsForest, createSourcePhysicsParticipant } = physicsRuntime;
-
-physicsCoordinator = createWeightPhysicsCoordinator({
-  modelPhysicsSession,
-  modelWeightState,
-  states,
-  knownMeshes,
-  sourcePhysicsRigs,
-  selectedBoneCount,
-  eligibleSkinningMesh,
-  createSourcePhysicsRig,
-  createSourcePhysicsParticipant,
-  getModelTransformState,
-  invalidateCharacterShadowGeometry,
-  notifyModelRigChanged,
-  requestRender,
-  defaults: DEFAULT_MODEL_PHYSICS_SETTINGS,
-  getGeneration: () => modelWeightGeneration,
-  setRigLoading: (loading) => {
-    if (modelRigState.loaded && !loading) return;
-    if (!loading && modelRigState.promise) return;
-    if (modelRigState.loading === !!loading) return;
-    modelRigState.loading = !!loading;
-    notifyModelRigChanged();
-  },
-});
+const { modelPhysicsSession } = physicsRuntime;
 
 skinningRuntime = createSkinningRuntime({
   states,
@@ -206,7 +186,7 @@ weightModelSession = createWeightModelSession({
   refreshSelectedWeightMask: (...args) => skinningRuntime.refreshSelectedWeightMask(...args),
   updateModelWeightHeatmap: (...args) => skinningRuntime.updateModelWeightHeatmap(...args),
   installSkinningEntry: (...args) => skinningRuntime.installSkinningEntry(...args),
-  syncPhysicsToSelection,
+  syncPhysicsToSelection: physicsRuntime.syncToSelection,
   serializeBoneSelection,
   eligibleSkinningMesh,
   notifyChanged: () => notifyModelWeightChanged(),
@@ -225,7 +205,7 @@ rigPoseRuntime = createRigPoseRuntime({
   invalidateShadow: invalidateCharacterShadowGeometry,
   quaternionIsIdentity,
   getModelJointId: modelJointIdForSourceBone,
-  hasActivePhysics: modelRigHasActivePhysics,
+  hasActivePhysics: physicsRuntime.hasActivePhysics,
   cloneForest: cloneSourceForest,
   nextStructureRevision: () => ++rigRuntime.structureRevision,
   notifyChanged: notifyModelRigChanged,
@@ -265,7 +245,7 @@ rigModelSession = createRigModelSession({
   buildAllSourceSkinningRigs,
   buildAllSourceSkinningRigsCooperatively,
   buildModelSkinningRig,
-  syncPhysicsToSelection,
+  syncPhysicsToSelection: physicsRuntime.syncToSelection,
   getSnapshot: () => rigSnapshot(),
   notifyChanged: notifyModelRigChanged,
   requestRender,
@@ -347,17 +327,17 @@ export const weightRigApi = Object.freeze({
   renameRigPosePreset: rigPresetSession.rename,
   deleteRigPosePreset: rigPresetSession.remove,
 
-  getModelPhysicsState: physicsCoordinator.getState,
-  resetModelPhysics: physicsCoordinator.reset,
-  setPhysicsFrequency: physicsCoordinator.setFrequency,
-  setPhysicsDamping: physicsCoordinator.setDamping,
-  setPhysicsMotionStrength: physicsCoordinator.setMotionStrength,
-  setPhysicsLinearMotionStrength: physicsCoordinator.setLinearMotionStrength,
-  setPhysicsContinuousLinearResponse: physicsCoordinator.setContinuousLinearResponse,
-  setPhysicsGravityEnabled: physicsCoordinator.setGravityEnabled,
-  setPhysicsGravityScale: physicsCoordinator.setGravityScale,
-  setPhysicsConstraintsEnabled: physicsCoordinator.setConstraintsEnabled,
-  setPhysicsMaxBendDegrees: physicsCoordinator.setMaxBendDegrees,
+  getModelPhysicsState: physicsRuntime.getState,
+  resetModelPhysics: physicsRuntime.reset,
+  setPhysicsFrequency: physicsRuntime.setFrequency,
+  setPhysicsDamping: physicsRuntime.setDamping,
+  setPhysicsMotionStrength: physicsRuntime.setMotionStrength,
+  setPhysicsLinearMotionStrength: physicsRuntime.setLinearMotionStrength,
+  setPhysicsContinuousLinearResponse: physicsRuntime.setContinuousLinearResponse,
+  setPhysicsGravityEnabled: physicsRuntime.setGravityEnabled,
+  setPhysicsGravityScale: physicsRuntime.setGravityScale,
+  setPhysicsConstraintsEnabled: physicsRuntime.setConstraintsEnabled,
+  setPhysicsMaxBendDegrees: physicsRuntime.setMaxBendDegrees,
 });
 
 export { skinningRuntime as weightRigSkinningRuntime };
@@ -554,7 +534,7 @@ function rigSnapshot() {
     structureRevision: modelRigState.structureRevision,
     selectedJointId: modelRigState.selectedJointId,
     selectedHumanoidControlKey: modelRigState.selectedHumanoidControlKey || null,
-    physicsActive: modelRigHasActivePhysics(),
+    physicsActive: physicsRuntime.hasActivePhysics(),
     rotationSnapDegrees: modelRigState.rotationSnapDegrees,
     ik: ikSnapshot(),
     pickStatus: modelRigState.pickStatus,
@@ -679,7 +659,6 @@ function resetModelWeightState() {
   rigPresetSession?.reset();
   humanoidRigEditSession?.resetSession();
   weightPickingSession?.reset();
-  sourcePhysicsRigs.clear();
   sourceSkinningRigs.clear();
   rigSourceSession?.reset?.();
   modelSkinningRig = null;
@@ -697,14 +676,14 @@ export function registerWeightRigMesh(mesh) {
   knownMeshes.add(mesh);
   if (!wasKnown) invalidateHumanoidDetection();
   if (modelWeightState.loaded) weightModelSession?.refreshModelWeightSummary({ refreshStats: true });
-  if (!modelPhysicsSession.getState().enabled) return;
+  if (!physicsRuntime.getState().enabled) return;
   const state = stateFor(mesh);
   if (!eligibleSkinningMesh(mesh)) {
     state.physicsParticipantStatus = 'unavailable';
-    modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
+    physicsRuntime.markUnavailable(mesh, 'skinning-unavailable');
     return;
   }
-  if (state.loaded) syncPhysicsParticipants();
+  if (state.loaded) physicsRuntime.syncParticipants();
 }
 
 export function unregisterWeightRigMesh(mesh) {
@@ -715,13 +694,12 @@ export function unregisterWeightRigMesh(mesh) {
   if (wasKnown) invalidateHumanoidDetection();
   const sourceKey = states.get(mesh)?.skinningSourceKey;
   if (sourceKey) {
-    modelPhysicsSession.detach(sourceKey);
-    sourcePhysicsRigs.delete(sourceKey);
+    physicsRuntime.invalidateSource(sourceKey);
     sourceSkinningRigs.delete(sourceKey);
   }
   weightModelSession?.refreshModelWeightSummary({ refreshStats: true });
-  if (sourceKey && modelPhysicsSession.getState().enabled) {
-    syncPhysicsParticipants(new Set([sourceKey]));
+  if (sourceKey && physicsRuntime.getState().enabled) {
+    physicsRuntime.syncParticipants(new Set([sourceKey]));
   }
   if (modelRigState.loaded) {
     const generation = modelWeightGeneration;
@@ -763,10 +741,7 @@ export function refreshWeightRigAfterShapeChange(mesh) {
   const shapedPositions = new Float32Array(position.array);
   const normal = mesh.geometry.attributes.normal;
   const shapedNormals = normal ? new Float32Array(normal.array) : null;
-  const participant = sourceKey ? modelPhysicsSession.getParticipant(sourceKey) : null;
-  const wasPhysicsEnabled = !!participant || state.physicsEnabled;
-  if (participant) modelPhysicsSession.detach(sourceKey);
-  if (sourceKey) sourcePhysicsRigs.delete(sourceKey);
+  const wasPhysicsEnabled = physicsRuntime.invalidateSource(sourceKey) || state.physicsEnabled;
   if (sourceKey) sourceSkinningRigs.delete(sourceKey);
   if (modelSkinningRig) rigPoseRuntime?.resetPose({ request: false });
   rigModelSession?.invalidateLoad();
@@ -788,9 +763,9 @@ export function refreshWeightRigAfterShapeChange(mesh) {
     positions: shapedPositions,
     normals: shapedNormals,
   });
-  if (wasPhysicsEnabled && modelPhysicsSession.getState().enabled && sourceKey) {
-    syncPhysicsParticipants(new Set([sourceKey]));
-    modelPhysicsSession.wake();
+  if (wasPhysicsEnabled && physicsRuntime.getState().enabled && sourceKey) {
+    physicsRuntime.syncParticipants(new Set([sourceKey]));
+    physicsRuntime.wake();
   }
   if (state.heatmapMode) {
     skinningRuntime.updateModelWeightHeatmap(new Set([sourceKey]), modelWeightState.heatmapEnabled);
@@ -801,7 +776,7 @@ export function refreshWeightRigAfterShapeChange(mesh) {
 export function disposeWeightRigMesh(mesh, { preserveRegistration = false } = {}) {
   if (preserveRegistration) {
     const sourceKey = states.get(mesh)?.skinningSourceKey;
-    if (sourceKey) modelPhysicsSession.detach(sourceKey);
+    if (sourceKey) physicsRuntime.detachSource(sourceKey);
   } else {
     unregisterWeightRigMesh(mesh);
   }
@@ -809,7 +784,7 @@ export function disposeWeightRigMesh(mesh, { preserveRegistration = false } = {}
 }
 
 export function destroyWeightRigModel() {
-  modelPhysicsSession.destroy();
+  physicsRuntime.destroy();
   for (const mesh of knownMeshes) skinningRuntime.disposeMesh(mesh);
   knownMeshes.clear();
   resetModelWeightState();
@@ -862,10 +837,6 @@ function buildAllSourceSkinningRigsCooperatively(options) {
 
 function modelJointIdForSourceBone(sourceKeyValue, boneId) {
   return modelSkinningRig?.sourceBoneToModelJointId?.get(sourceBoneKey(sourceKeyValue, boneId));
-}
-
-function modelRigHasActivePhysics() {
-  return !!modelSkinningRig?.sourceRigs?.some((sourceRig) => sourceRig.physicsRig?.physicsState);
 }
 
 function updateModelPoseFrameCache(rig, transforms) {
@@ -1120,88 +1091,6 @@ function applySavedHumanoidRig(rig, savedOverrides = null) {
   rig.humanoidOrientationRevision = Number(orientationState?.modelOrientationRevision) || 0;
   modelRigState.humanoidControlRig = controlRig;
   modelRigState.humanoidStructureRevision = rig.structureRevision;
-}
-
-function sourceMembersMatch(rig, members) {
-  return rig?.meshes?.size === members.length && members.every((mesh) => rig.meshes.has(mesh));
-}
-
-function buildSourcePhysicsRig(sourceKey, members, skinRig) {
-  const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
-  const rig = {
-    key: sourceKey,
-    sourceKey,
-    sourceFile: descriptor?.sourceFile || '',
-    boneIdOffset: descriptor?.boneIdOffset ?? 0,
-    meshes: new Set(members),
-    influenceGraph: null,
-    centerByBoneId: null,
-    physicsCenterByBoneId: null,
-    physicsForest: null,
-    selectionKey: '',
-    physicsState: null,
-    physicsSettled: true,
-    physicsJointLimits: null,
-    physicsConstraintDiagnostics: null,
-    physicsGravityAccelerations: null,
-    physicsGravityDiagnostics: null,
-    physicsGravityLocal: [...GRAVITY_WORLD_DIRECTION],
-    physicsBaseCenterByBoneId: null,
-    physicsTargetByBoneId: null,
-    physicsEquilibriumByBoneId: null,
-    composedTransformCache: new Map(),
-    composedTransforms: new Map(),
-    composedRotations: new Map(),
-    basePoseRevision: -1,
-    skinRig,
-  };
-  skinRig.physicsRig = rig;
-  refreshSourcePhysicsRig(rig, members);
-  return rig;
-}
-
-function createSourcePhysicsRig(sourceKey, members, options = {}) {
-  const cached = sourceSkinningRigs.get(sourceKey);
-  if (cached && sourceMembersMatch(cached, members)) {
-    // A prepared source rig is safe to consume synchronously. This preserves
-    // immediate participant updates while first-time preparation remains
-    // cooperative below.
-    return buildSourcePhysicsRig(sourceKey, members, cached);
-  }
-  return (async () => {
-    const skinRig = await ensureSourceSkinningRigCooperatively(sourceKey, members, options);
-    if (!skinRig) return null;
-    return buildSourcePhysicsRig(sourceKey, members, skinRig);
-  })();
-}
-
-function refreshSourcePhysicsRig(rig, members) {
-  rig.meshes = new Set(members);
-  rig.composedTransformsDirty = true;
-  rig.skinRig = ensureSourceSkinningRig(rig.sourceKey, members);
-  rig.skinRig.physicsRig = rig;
-  rig.influenceGraph = rig.skinRig.influenceGraph;
-  rig.centerByBoneId = new Map((rig.influenceGraph.nodes || []).map((node) => [node.boneId, node.weightedCenter]));
-  const selected = modelWeightState.selectedBonesBySource.get(rig.sourceKey) || new Set();
-  rig.physicsForest = buildSelectedPhysicsForest(
-    rig.influenceGraph,
-    rig.centerByBoneId,
-    (rig.influenceGraph.nodes || []).map((node) => node.boneId),
-    selected,
-  );
-  const selectedIds = rig.physicsForest?.selectedBoneIds || [];
-  rig.selectionKey = selectedIds.join(',');
-  rig.physicsCenterByBoneId = rig.physicsForest?.centers || rig.centerByBoneId;
-  return rig;
-}
-
-function syncPhysicsParticipants(...args) {
-  const result = physicsCoordinator?.syncParticipants(...args);
-  return result?.catch?.(() => false) || result;
-}
-
-function syncPhysicsToSelection(...args) {
-  return physicsCoordinator?.syncToSelection(...args) || false;
 }
 
 function handleModelTransformChanged(event) {

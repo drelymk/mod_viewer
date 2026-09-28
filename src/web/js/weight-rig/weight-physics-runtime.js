@@ -1,5 +1,5 @@
-// Runtime-owned Physics adapters. Numerical solver algorithms remain in
-// weight-physics.js so the session lifecycle does not become another barrel.
+// Owns source Physics rigs, participants, settings and deformation adapters.
+// Numerical solver algorithms remain in weight-physics.js.
 
 import * as THREE from 'three';
 import {
@@ -9,8 +9,11 @@ import {
 } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { composeBasePoseWithPhysicsOffsets } from './weight-deformation.js';
-import { createModelPhysicsSession } from './model-physics-session.js';
-import { MODEL_PHYSICS_STEP } from './model-physics-session.js';
+import {
+  createModelPhysicsSession,
+  DEFAULT_MODEL_PHYSICS_SETTINGS,
+  MODEL_PHYSICS_STEP,
+} from './model-physics-session.js';
 import {
   GRAVITY_WORLD_DIRECTION,
   applyReferenceFrameAngularDelta,
@@ -113,11 +116,24 @@ export function pruneSelectedRelationshipEdges(treeEdges, relationships = [], se
 
 export function createWeightPhysicsRuntime({
   states,
+  knownMeshes,
+  modelWeightState,
+  selectedBoneCount,
+  eligibleSkinningMesh,
+  getSourceSkinningRig,
+  ensureSourceSkinningRig,
+  ensureSourceSkinningRigCooperatively,
+  getModelTransformState,
+  notifyModelRigChanged,
+  getGeneration = () => 0,
   getModelSkinningRig,
   applyDeformation,
   finalizePhysicsGeometry,
   markFinalBoundsDirty,
 }) {
+  const sourcePhysicsRigs = new Map();
+  let participantSyncToken = 0;
+
   const modelPhysicsSession = createModelPhysicsSession({
     onInputOwnershipChanged: (enabled) => setPhysicsInteractionEnabled(enabled),
     onFrame: ({ visibleParticipants }) => {
@@ -648,6 +664,242 @@ export function createWeightPhysicsRuntime({
     };
   }
 
+  function sourceMembersMatch(rig, members) {
+    return rig?.meshes?.size === members.length && members.every((mesh) => rig.meshes.has(mesh));
+  }
+
+  function buildSourcePhysicsRig(sourceKey, members, skinRig) {
+    const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
+    const rig = {
+      key: sourceKey,
+      sourceKey,
+      sourceFile: descriptor?.sourceFile || '',
+      boneIdOffset: descriptor?.boneIdOffset ?? 0,
+      meshes: new Set(members),
+      influenceGraph: null,
+      centerByBoneId: null,
+      physicsCenterByBoneId: null,
+      physicsForest: null,
+      selectionKey: '',
+      physicsState: null,
+      physicsSettled: true,
+      physicsJointLimits: null,
+      physicsConstraintDiagnostics: null,
+      physicsGravityAccelerations: null,
+      physicsGravityDiagnostics: null,
+      physicsGravityLocal: [...GRAVITY_WORLD_DIRECTION],
+      physicsBaseCenterByBoneId: null,
+      physicsTargetByBoneId: null,
+      physicsEquilibriumByBoneId: null,
+      composedTransformCache: new Map(),
+      composedTransforms: new Map(),
+      composedRotations: new Map(),
+      basePoseRevision: -1,
+      skinRig,
+    };
+    skinRig.physicsRig = rig;
+    refreshSourcePhysicsRig(rig, members);
+    return rig;
+  }
+
+  function createSourcePhysicsRig(sourceKey, members, options = {}) {
+    const cached = getSourceSkinningRig?.(sourceKey);
+    if (cached && sourceMembersMatch(cached, members)) {
+      // A prepared source rig is safe to consume synchronously. This preserves
+      // immediate participant updates while first-time preparation remains
+      // cooperative below.
+      return buildSourcePhysicsRig(sourceKey, members, cached);
+    }
+    return (async () => {
+      const skinRig = await ensureSourceSkinningRigCooperatively(sourceKey, members, options);
+      if (!skinRig) return null;
+      return buildSourcePhysicsRig(sourceKey, members, skinRig);
+    })();
+  }
+
+  function refreshSourcePhysicsRig(rig, members) {
+    rig.meshes = new Set(members);
+    rig.composedTransformsDirty = true;
+    rig.skinRig = ensureSourceSkinningRig(rig.sourceKey, members);
+    if (!rig.skinRig) return null;
+    rig.skinRig.physicsRig = rig;
+    rig.influenceGraph = rig.skinRig.influenceGraph;
+    rig.centerByBoneId = new Map((rig.influenceGraph.nodes || []).map((node) => [node.boneId, node.weightedCenter]));
+    const selected = modelWeightState.selectedBonesBySource.get(rig.sourceKey) || new Set();
+    rig.physicsForest = buildSelectedPhysicsForest(
+      rig.influenceGraph,
+      rig.centerByBoneId,
+      (rig.influenceGraph.nodes || []).map((node) => node.boneId),
+      selected,
+    );
+    const selectedIds = rig.physicsForest?.selectedBoneIds || [];
+    rig.selectionKey = selectedIds.join(',');
+    rig.physicsCenterByBoneId = rig.physicsForest?.centers || rig.centerByBoneId;
+    return rig;
+  }
+
+  function disable() {
+    if (!modelPhysicsSession.getState().enabled) return false;
+    participantSyncToken += 1;
+    modelPhysicsSession.disable();
+    notifyModelRigChanged?.();
+    return true;
+  }
+
+  async function syncParticipants(changedSourceKeys = null) {
+    if (!modelPhysicsSession.getState().enabled) return false;
+    if (!selectedBoneCount(modelWeightState.selectedBonesBySource)) {
+      disable();
+      return false;
+    }
+    const groups = new Map();
+    for (const mesh of knownMeshes) {
+      const state = states.get(mesh);
+      if (!eligibleSkinningMesh(mesh)) {
+        if (state?.error) {
+          state.physicsParticipantStatus = 'failed';
+          state.physicsParticipantError = state.error;
+          modelPhysicsSession.markFailed(mesh, state.error);
+        } else {
+          state.physicsParticipantStatus = 'unavailable';
+          state.physicsParticipantError = 'skinning-unavailable';
+          modelPhysicsSession.markUnavailable(mesh, 'skinning-unavailable');
+        }
+        continue;
+      }
+      if (!state?.loaded || !state.skinningSourceKey) {
+        if (state?.error) {
+          state.physicsParticipantStatus = 'failed';
+          state.physicsParticipantError = state.error;
+          modelPhysicsSession.markFailed(mesh, state.error);
+        }
+        continue;
+      }
+      modelPhysicsSession.clearStatus(mesh);
+      const members = groups.get(state.skinningSourceKey) || [];
+      members.push(mesh);
+      groups.set(state.skinningSourceKey, members);
+    }
+    const syncToken = ++participantSyncToken;
+    const generation = getGeneration();
+    const isCurrent = () =>
+      syncToken === participantSyncToken && generation === getGeneration() && modelPhysicsSession.getState().enabled;
+    const affected = changedSourceKeys
+      ? new Set(changedSourceKeys)
+      : new Set([...groups.keys(), ...sourcePhysicsRigs.keys()]);
+    for (const sourceKey of affected) {
+      if (modelPhysicsSession.getParticipant(sourceKey)) modelPhysicsSession.detach(sourceKey);
+      sourcePhysicsRigs.delete(sourceKey);
+    }
+
+    for (const sourceKey of [...sourcePhysicsRigs.keys()]) {
+      if (!groups.has(sourceKey) || !modelWeightState.selectedBonesBySource.has(sourceKey)) {
+        modelPhysicsSession.detach(sourceKey);
+        sourcePhysicsRigs.delete(sourceKey);
+      }
+    }
+
+    let attached = false;
+    for (const [sourceKey, members] of groups) {
+      if (!isCurrent()) return false;
+      const selected = modelWeightState.selectedBonesBySource.get(sourceKey);
+      members.forEach((mesh) => {
+        const state = states.get(mesh);
+        if (state) {
+          state.physicsParticipantStatus = 'not-selected';
+          state.physicsParticipantError = null;
+        }
+      });
+      if (!selected?.size) continue;
+      let rig = sourcePhysicsRigs.get(sourceKey);
+      if (!rig) {
+        try {
+          const requestedRig = createSourcePhysicsRig(sourceKey, members, {
+            generation,
+            isCurrent: () => generation === getGeneration() && syncToken === participantSyncToken,
+          });
+          rig = typeof requestedRig?.then === 'function' ? await requestedRig : requestedRig;
+        } catch (error) {
+          members.forEach((mesh) => {
+            const state = states.get(mesh);
+            if (state) {
+              state.physicsParticipantStatus = 'failed';
+              state.physicsParticipantError = error instanceof Error ? error.message : String(error);
+            }
+            modelPhysicsSession.markFailed(mesh, error);
+          });
+          continue;
+        }
+      }
+      if (!rig || !isCurrent()) return false;
+      sourcePhysicsRigs.set(sourceKey, rig);
+      if (!rig.physicsForest) continue;
+      if (!modelPhysicsSession.getParticipant(sourceKey)) {
+        attached = modelPhysicsSession.attach(createSourcePhysicsParticipant(rig)) || attached;
+      }
+    }
+    if (attached) {
+      modelPhysicsSession.wake();
+      invalidateCharacterShadowGeometry({ request: false });
+      requestRender();
+    }
+    notifyModelRigChanged?.();
+    return true;
+  }
+
+  function syncToSelection(changedSourceKeys = null) {
+    const shouldEnable = modelWeightState.loaded && selectedBoneCount(modelWeightState.selectedBonesBySource) > 0;
+    const enabled = modelPhysicsSession.getState().enabled;
+    if (!shouldEnable) {
+      if (enabled) disable();
+      return false;
+    }
+    if (!enabled) modelPhysicsSession.enable(getModelTransformState?.());
+    void syncParticipants(changedSourceKeys).catch(() => false);
+    return true;
+  }
+
+  function reset() {
+    const physicsDefaults = DEFAULT_MODEL_PHYSICS_SETTINGS;
+    return modelPhysicsSession.reset(getModelTransformState?.(), {
+      settingsPatch: { ...physicsDefaults },
+    });
+  }
+
+  const setNumber = (key, value) => {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return false;
+    modelPhysicsSession.setSettings({ [key]: next });
+    return true;
+  };
+
+  function invalidateSource(sourceKey) {
+    if (!sourceKey) return false;
+    const hadParticipant = !!modelPhysicsSession.getParticipant(sourceKey);
+    if (hadParticipant) modelPhysicsSession.detach(sourceKey);
+    sourcePhysicsRigs.delete(sourceKey);
+    return hadParticipant;
+  }
+
+  function detachSource(sourceKey) {
+    if (!sourceKey) return false;
+    return modelPhysicsSession.detach(sourceKey);
+  }
+
+  function markUnavailable(mesh, reason = 'skinning-unavailable') {
+    modelPhysicsSession.markUnavailable(mesh, reason);
+  }
+
+  function destroy() {
+    participantSyncToken += 1;
+    sourcePhysicsRigs.clear();
+    modelPhysicsSession.destroy();
+  }
+
+  function hasActivePhysics() {
+    return !!getModelSkinningRig?.()?.sourceRigs?.some((sourceRig) => sourceRig.physicsRig?.physicsState);
+  }
+
   return {
     modelPhysicsSession,
     buildSelectedPhysicsForest,
@@ -657,5 +909,30 @@ export function createWeightPhysicsRuntime({
     applySourceDeformation,
     syncRigParticipantState,
     createSourcePhysicsParticipant,
+    syncParticipants,
+    syncToSelection,
+    invalidateSource,
+    detachSource,
+    markUnavailable,
+    destroy,
+    hasActivePhysics,
+    reset,
+    getState: () => modelPhysicsSession.getState(),
+    wake: () => modelPhysicsSession.wake(),
+    setFrequency: (value) => setNumber('frequencyHz', value),
+    setDamping: (value) => setNumber('dampingRatio', value),
+    setMotionStrength: (value) => setNumber('angularResponse', value),
+    setLinearMotionStrength: (value) => setNumber('translationResponse', value),
+    setContinuousLinearResponse: (value) => setNumber('velocityResponse', value),
+    setGravityEnabled(enabled) {
+      modelPhysicsSession.setSettings({ gravityEnabled: !!enabled });
+      return !!enabled;
+    },
+    setGravityScale: (value) => setNumber('gravityScale', value),
+    setConstraintsEnabled(enabled) {
+      modelPhysicsSession.setSettings({ constraintsEnabled: !!enabled });
+      return !!enabled;
+    },
+    setMaxBendDegrees: (value) => setNumber('maxBendDegrees', value),
   };
 }
