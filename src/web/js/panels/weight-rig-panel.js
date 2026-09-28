@@ -1,7 +1,7 @@
 // Unified Weight/Rig controls. The panel owns one stable DOM tree for both
 // domains while keeping Weight and Rig picking lifecycles separate.
 
-import { weightRigApi } from '../mesh/weight-rig-core.js';
+import { weightRigApi } from '../weight-rig/weight-rig-core.js';
 const {
   beginWeightModelPicking,
   cancelWeightModelPicking,
@@ -44,7 +44,7 @@ const {
   renameRigPosePreset,
   saveRigPosePreset,
 } = weightRigApi;
-import { HUMANOID_CONTROL_KEYS } from '../mesh/humanoid-control-rig.js';
+import { HUMANOID_CONTROL_KEYS } from '../weight-rig/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 import { LANGUAGE_CHANGED, applyTranslations, getLocale, t } from '../i18n/index.js';
 

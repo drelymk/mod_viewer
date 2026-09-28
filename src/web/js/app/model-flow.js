@@ -18,7 +18,7 @@ import { buildPresentPanel } from '../panels/present-panel.js';
 import { alertDialog, confirmDialog } from '../ui/dialogs.js';
 import { setGeometryBlob } from '../textures/decode.js';
 import { refreshHealthReport, setAssetResolution, setHealthLoader, setHealthReport } from '../panels/health-report.js';
-import { setPendingHumanoidRigMetadata, setPendingRigMetadata } from '../mesh/weight-rig-feature.js';
+import { setPendingHumanoidRigMetadata, setPendingRigMetadata } from '../weight-rig/weight-rig-feature.js';
 import { setIniEditorContext } from '../editing/ini-editor.js';
 import { setOutlineSuppressedByDebug } from '../scene/outline-renderer.js';
 import { beginLoadBenchmark, finishLoadBenchmark, measureAsyncLoadStage, measureLoadStage } from './load-benchmark.js';

@@ -362,13 +362,13 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     assert bridge_calls(page, 'weights') == []
     page.locator('#weight-rig-tab').click()
     page.evaluate("""async () => {
-      const {weightRigApi} = await import('./js/mesh/weight-rig-core.js');
+      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
       window.__rigApi = weightRigApi;
     }""")
     page.wait_for_function('window.__rigApi.getModelRigState().loaded && window.__rigApi.getModelRigState().model?.joints.length > 1')
     assert bridge_calls(page, 'weights') == [['fixture-01']]
     result = page.evaluate("""async () => {
-      const {weightRigApi: rig} = await import('./js/mesh/weight-rig-core.js');
+      const {weightRigApi: rig} = await import('./js/weight-rig/weight-rig-core.js');
       const model = rig.getModelRigState().model;
       const joint = model.components[0].nodeIds.find(id => id !== model.components[0].rootId);
       window.__rigJoint = joint;
@@ -382,7 +382,7 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     baseline_pixel = mesh_pixel(page)
     assert page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
-      const {weightRigApi: rig} = await import('./js/mesh/weight-rig-core.js');
+      const {weightRigApi: rig} = await import('./js/weight-rig/weight-rig-core.js');
       const changed = rig.setRigJointRotation(window.__rigJoint,
         new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), Math.PI / 2), {dragging: true});
       rig.finishRigJointPose(window.__rigJoint);

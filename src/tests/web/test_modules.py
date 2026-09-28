@@ -95,7 +95,7 @@ def test_loose_partition_merge_and_cleanup_preserve_authored_triangle_identity(m
 
 def test_weight_selection_keeps_equal_bone_ids_scoped_to_exact_sources(module_page):
     result = module_page.evaluate("""async () => {
-      const weights = await import('./js/mesh/weight-selection.js');
+      const weights = await import('./js/weight-rig/weight-selection.js');
       const selection = weights.normalizeBoneSelection([
         {source: 'folder-01/stream.buf', bone_id_offset: 0, bone_ids: [2, 2, 4]},
         {source: 'folder-02/stream.buf', bone_id_offset: 0, bone_ids: [2]},

@@ -15,8 +15,8 @@ import {
 } from './weight-rig.js';
 import { EMPTY_ACTIVE_VERTICES } from './weight-runtime.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
-import { resumeAnimatedMesh } from './animation-runtime.js';
-import { syncLoosePartMaterial } from './loose-parts.js';
+import { resumeAnimatedMesh } from '../mesh/animation-runtime.js';
+import { syncLoosePartMaterial } from '../mesh/loose-parts.js';
 
 function clockNow() {
   return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
