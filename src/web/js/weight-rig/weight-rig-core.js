@@ -540,8 +540,8 @@ function rigSnapshot() {
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSession?.snapshot() || null,
     humanoidRigEdit: humanoidRigEditSession?.snapshot(),
-    humanoidControlRig: humanoidControlRigSnapshot(),
-    model: modelRigSnapshotForState(),
+    humanoidControlRig: modelRigState.loaded ? humanoidControlRigSnapshot() : null,
+    model: modelRigState.loaded ? modelRigSnapshotForState() : null,
   };
 }
 
@@ -701,7 +701,7 @@ export function unregisterWeightRigMesh(mesh) {
   if (sourceKey && physicsRuntime.getState().enabled) {
     physicsRuntime.syncParticipants(new Set([sourceKey]));
   }
-  if (modelRigState.loaded) void rigModelSession?.rebuild();
+  if (rigModelSession?.isActive()) void rigModelSession.rebuild();
   notifyModelRigChanged();
   notifyModelWeightChanged();
 }

@@ -599,8 +599,12 @@ export function createRigModelSession({
     return startLoad();
   }
 
+  function isActive() {
+    return Boolean(state.loaded || state.loading || state.promise);
+  }
+
   function rebuild() {
-    if (!state.loaded) return Promise.resolve(getSnapshot());
+    if (!isActive()) return Promise.resolve(getSnapshot());
     invalidate();
     return startLoad();
   }
@@ -672,6 +676,7 @@ export function createRigModelSession({
     getState,
     invalidate,
     ensureLoaded,
+    isActive,
     rebuild,
     beginJointPicking,
     cancelJointPicking,

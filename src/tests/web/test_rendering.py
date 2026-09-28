@@ -585,12 +585,12 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     assert bridge_calls(page, 'export') == []
 
 
-def test_weight_rig_unregister_rebuilds_without_removed_source(viewer):
-    payload, weights = weighted_payload(include_second_member=True)
+def test_weight_rig_overlapping_unregister_rebuilds_using_final_membership(viewer):
+    payload, weights = weighted_payload(include_third_member=True)
     page = viewer({'fixture-01': payload, 'fixture-weights': weights})
     open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
-    page.evaluate('window.modViewer.activeMeshes[1].visible = false')
+    wait_loaded(page, 3)
+    page.evaluate('window.modViewer.activeMeshes.slice(1).forEach(mesh => { mesh.visible = false; })')
     page.evaluate("""() => {
       window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
         -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
@@ -617,15 +617,23 @@ def test_weight_rig_unregister_rebuilds_without_removed_source(viewer):
       const {unregisterWeightRigMesh} = await import('./js/weight-rig/weight-rig-core.js');
       unregisterWeightRigMesh(window.modViewer.activeMeshes[1]);
       const state = window.__rigApi.getModelRigState();
-      return {loaded: state.loaded, loading: state.loading};
+      return {loaded: state.loaded, loading: state.loading, model: state.model};
     }""")
-    assert rebuilding == {'loaded': False, 'loading': True}
+    assert rebuilding == {'loaded': False, 'loading': True, 'model': None}
+    overlapping = page.evaluate("""async () => {
+      const {unregisterWeightRigMesh} = await import('./js/weight-rig/weight-rig-core.js');
+      unregisterWeightRigMesh(window.modViewer.activeMeshes[2]);
+      const state = window.__rigApi.getModelRigState();
+      return {loaded: state.loaded, loading: state.loading, model: state.model};
+    }""")
+    assert overlapping == {'loaded': False, 'loading': True, 'model': None}
     page.wait_for_function('window.__rigApi.getModelRigState().loaded && !window.__rigApi.getModelRigState().loading')
     rebuilt = page.evaluate("""() => {
       const state = window.__rigApi.getModelRigState();
       return {loaded: state.loaded, joints: state.model?.joints.length || 0};
     }""")
     assert rebuilt['loaded'] is True
+    assert rebuilt['joints'] == 2
     assert rebuilt['joints'] < initial['joints']
 
 
