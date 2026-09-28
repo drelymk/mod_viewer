@@ -583,3 +583,100 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition')
     assert bridge_calls(page, 'weights') == [['fixture-01']]
     assert bridge_calls(page, 'export') == []
+
+
+def test_weight_rig_unregister_rebuilds_without_removed_source(viewer):
+    payload, weights = weighted_payload(include_second_member=True)
+    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    page.evaluate('window.modViewer.activeMeshes[1].visible = false')
+    page.evaluate("""() => {
+      window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
+        -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
+      ]);
+    }""")
+    page.locator('#weight-rig-tab').click()
+    page.evaluate("""async () => {
+      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
+      window.__rigApi = weightRigApi;
+    }""")
+    page.wait_for_function("""() => {
+      const weight = window.__rigApi.getModelWeightState();
+      const rig = window.__rigApi.getModelRigState();
+      return weight.loaded && weight.sources.length > 0 && rig.loaded && rig.model?.joints.length > 2;
+    }""")
+    initial = page.evaluate("""() => {
+      const state = window.__rigApi.getModelRigState();
+      return {loaded: state.loaded, loading: state.loading, joints: state.model?.joints.length || 0};
+    }""")
+    assert initial['loaded'] is True
+    assert initial['joints'] > 2
+
+    rebuilding = page.evaluate("""async () => {
+      const {unregisterWeightRigMesh} = await import('./js/weight-rig/weight-rig-core.js');
+      unregisterWeightRigMesh(window.modViewer.activeMeshes[1]);
+      const state = window.__rigApi.getModelRigState();
+      return {loaded: state.loaded, loading: state.loading};
+    }""")
+    assert rebuilding == {'loaded': False, 'loading': True}
+    page.wait_for_function('window.__rigApi.getModelRigState().loaded && !window.__rigApi.getModelRigState().loading')
+    rebuilt = page.evaluate("""() => {
+      const state = window.__rigApi.getModelRigState();
+      return {loaded: state.loaded, joints: state.model?.joints.length || 0};
+    }""")
+    assert rebuilt['loaded'] is True
+    assert rebuilt['joints'] < initial['joints']
+
+
+def test_weight_rig_shape_change_invalidates_and_rebuilds_preserving_root(viewer):
+    payload, weights = weighted_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh['shape_targets'] = [{'var': 'shape01', 'pos': append_stream(payload, 'f', [0, 0, 0, 2, 0, 0, 0, 2, 0])}]
+    payload['state']['defaults'] = {'shape01': '0'}
+    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.evaluate("""() => {
+      window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
+        -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
+      ]);
+    }""")
+    page.locator('#weight-rig-tab').click()
+    page.evaluate("""async () => {
+      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
+      window.__rigApi = weightRigApi;
+    }""")
+    page.wait_for_function("""() => {
+      const weight = window.__rigApi.getModelWeightState();
+      const rig = window.__rigApi.getModelRigState();
+      return weight.loaded && weight.sources.length > 0 && rig.loaded && rig.model?.joints.length > 1;
+    }""")
+    selected = page.evaluate("""() => {
+      const rig = window.__rigApi;
+      const component = rig.getModelRigState().model.components[0];
+      const joint = component.nodeIds.find(id => id !== component.rootId);
+      return {joint, selected: rig.setRigJointRoot(joint)};
+    }""")
+    assert selected['selected'] is True
+
+    invalidated = page.evaluate("""async () => {
+      const {setControlValue} = await import('./js/editing/control-state.js');
+      const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+      setControlValue('shape01', '1');
+      refreshMeshes({force: {shapes: true}});
+      const state = window.__rigApi.getModelRigState();
+      return {loaded: state.loaded, loading: state.loading, model: state.model};
+    }""")
+    assert invalidated == {'loaded': False, 'loading': False, 'model': None}
+
+    rebuilt = page.evaluate("""async () => {
+      await window.__rigApi.ensureModelRigLoaded();
+      const state = window.__rigApi.getModelRigState();
+      return {
+        loaded: state.loaded,
+        root: state.model.components[0].rootId,
+        selectedRoot: window.__rigApi.getModelRigState().selectedJointId,
+      };
+    }""")
+    assert rebuilt == {'loaded': True, 'root': selected['joint'], 'selectedRoot': None}
