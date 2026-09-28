@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { buildHumanoidDriverBaseTransforms } from './humanoid-rig-binding.js';
-import { buildInferredRigRestFrames, rebuildModelRestFrames } from './weight-rig-frames.js';
+import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
 import { orientModelRigForest } from './weight-rig-reconcile.js';
 import { buildJointSignatureIndex } from './weight-rig-presets.js';
 import { weightRigStatus } from './weight-rig-status.js';
@@ -31,42 +31,6 @@ function rotationEntries(rotationsByJointId) {
   return Object.entries(rotationsByJointId || {});
 }
 
-export function rebuildSourceRigRestFrames(rig, nextStructureRevision = () => (rig.structureRevision || 0) + 1) {
-  const frames = buildInferredRigRestFrames(rig.inferredForest, rig.centerByBoneId, rig.jointPivotByBoneId);
-  rig.restFrameByBoneId = frames.frameByBoneId;
-  rig.restDirectionByBoneId = frames.directionByBoneId;
-  rig.restFrameEvidenceByBoneId = frames.evidenceByBoneId;
-  rig.continuationChildByBoneId = frames.continuationChildByBoneId;
-  rig.poseFrameCache?.clear();
-  rig.structureRevision = nextStructureRevision();
-  return frames;
-}
-
-export function cloneModelComponent(component) {
-  return {
-    componentId: component.componentId,
-    rootId: component.rootId,
-    nodeIds: [...(component.nodeIds || [])],
-    parentById: { ...(component.parentById || {}) },
-    childrenById: Object.fromEntries(
-      Object.entries(component.childrenById || {}).map(([id, children]) => [id, [...children]]),
-    ),
-    depthById: { ...(component.depthById || {}) },
-    maxDepth: component.maxDepth,
-    edges: (component.edges || []).map((edge) => ({ ...edge })),
-  };
-}
-
-export function cloneSourceForest(forest) {
-  return {
-    ...forest,
-    components: (forest?.components || []).map(cloneModelComponent),
-    componentByBoneId: { ...(forest?.componentByBoneId || {}) },
-    edges: (forest?.edges || []).map((edge) => ({ ...edge })),
-    nodeIds: [...(forest?.nodeIds || [])],
-  };
-}
-
 export function createRigPoseRuntime({
   state,
   getRig,
@@ -79,6 +43,7 @@ export function createRigPoseRuntime({
   quaternionIsIdentity,
   getModelJointId,
   hasActivePhysics,
+  cloneForest,
   nextStructureRevision,
   notifyChanged,
   notifyPoseChanged,
@@ -123,7 +88,7 @@ export function createRigPoseRuntime({
 
   function restoreDefaultSourceRigOrientation(rig) {
     if (!rig?.defaultInferredForest) return false;
-    rig.inferredForest = cloneSourceForest(rig.defaultInferredForest);
+    rig.inferredForest = cloneForest(rig.defaultInferredForest);
     rig.jointPivotByBoneId = new Map([...rig.defaultJointPivotByBoneId].map(([boneId, pivot]) => [boneId, [...pivot]]));
     rig.poseRootOverrides = new Map();
     rebuildSourceRigRestFrames(rig, allocateStructureRevision);

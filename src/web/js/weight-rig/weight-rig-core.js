@@ -10,7 +10,7 @@ import {
   renderer,
 } from '../scene/scene.js';
 import { requestRender } from '../scene/render-scheduler.js';
-import { rebuildModelRestFrames } from './weight-rig-frames.js';
+import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
 import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
 import { hydrateModelRig, loadOrBuildModelRig, serializeModelRig } from './model-rig-persistence.js';
 import { GRAVITY_WORLD_DIRECTION } from './weight-physics.js';
@@ -31,12 +31,7 @@ import { createWeightModelSession, createWeightPickingSession } from './weight-m
 import { createWeightPhysicsCoordinator } from './weight-physics-coordinator.js';
 import { createSkinningRuntime } from './skinning-runtime.js';
 import { createRigModelSession, createRigSourceSession } from './rig-model-session.js';
-import {
-  cloneModelComponent,
-  cloneSourceForest,
-  createRigPoseRuntime,
-  rebuildSourceRigRestFrames,
-} from './rig-pose-runtime.js';
+import { createRigPoseRuntime } from './rig-pose-runtime.js';
 import {
   createRigRuntimeState,
   createWeightRuntimeState,
@@ -100,6 +95,31 @@ function invalidateHumanoidDetection() {
   modelRigState.humanoidControlRig = null;
   modelRigState.humanoidPose = {};
   modelRigState.humanoidStructureRevision = null;
+}
+
+function cloneModelComponent(component) {
+  return {
+    componentId: component.componentId,
+    rootId: component.rootId,
+    nodeIds: [...(component.nodeIds || [])],
+    parentById: { ...(component.parentById || {}) },
+    childrenById: Object.fromEntries(
+      Object.entries(component.childrenById || {}).map(([id, children]) => [id, [...children]]),
+    ),
+    depthById: { ...(component.depthById || {}) },
+    maxDepth: component.maxDepth,
+    edges: (component.edges || []).map((edge) => ({ ...edge })),
+  };
+}
+
+function cloneSourceForest(forest) {
+  return {
+    ...forest,
+    components: (forest?.components || []).map(cloneModelComponent),
+    componentByBoneId: { ...(forest?.componentByBoneId || {}) },
+    edges: (forest?.edges || []).map((edge) => ({ ...edge })),
+    nodeIds: [...(forest?.nodeIds || [])],
+  };
 }
 
 const physicsRuntime = createWeightPhysicsRuntime({
@@ -220,6 +240,7 @@ rigPoseRuntime = createRigPoseRuntime({
   quaternionIsIdentity,
   getModelJointId: modelJointIdForSourceBone,
   hasActivePhysics: modelRigHasActivePhysics,
+  cloneForest: cloneSourceForest,
   nextStructureRevision: () => ++rigRuntime.structureRevision,
   notifyChanged: notifyModelRigChanged,
   notifyPoseChanged: notifyModelRigPoseChanged,
