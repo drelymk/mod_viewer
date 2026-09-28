@@ -85,8 +85,8 @@ def split_color_dds():
     return bytes(header) + struct.pack('<HHI', 0xf800, 0x001f, 0x55550000)
 
 
-def weighted_payload():
-    payload = model_payload()
+def weighted_payload(include_ineligible=False):
+    payload = model_payload(2 if include_ineligible else 1)
     payload['meshes']['mesh-00']['skinning_available'] = True
     blob = struct.pack('<6I6f', 0, 1, 0, 1, 1, 1, 0.8, 0.2, 0.8, 0.2, 1, 0)
     preview = {'status': 'ok', '_fixture_blob': blob, 'meshes': {'mesh-00': {
