@@ -5,7 +5,8 @@ import { buildHumanoidDriverBaseTransforms } from './humanoid-rig-binding.js';
 import { weightRigStatus } from './weight-rig-status.js';
 import { buildForestTransformsFromLocalRotations } from './weight-deformation.js';
 import { buildSelectedWeightMask } from './weight-selection.js';
-import { activePoseJointIds } from './weight-runtime.js';
+import { activePoseJointIds, RIG_LIMB_ROLES } from './weight-runtime.js';
+import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from './humanoid-control-rig.js';
 
 const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 
@@ -44,6 +45,9 @@ export function createRigPoseRuntime({
   notifyPoseChanged,
   requestRender,
   rigPresetState,
+  getPrimaryLimb,
+  solveControlIk,
+  mergeLimbPose,
 } = {}) {
   function jointForId(jointId) {
     const id = Number(jointId);
@@ -59,6 +63,69 @@ export function createRigPoseRuntime({
 
   function sourceRigForKey(sourceKeyValue) {
     return sourceSkinningRigs?.get(String(sourceKeyValue)) || null;
+  }
+
+  function setActiveLimbRole(role) {
+    const next = RIG_LIMB_ROLES.includes(role) ? role : null;
+    if (!next || state.activeLimbRole === next) return next || false;
+    state.activeLimbRole = next;
+    notifyChanged();
+    requestRender();
+    return next;
+  }
+
+  function setIkEnabled(enabled) {
+    const wasEnabled = state.ikEnabled === true;
+    const validationRole = enabled && !wasEnabled ? 'left_arm' : state.activeLimbRole;
+    const primary = getPrimaryLimb(validationRole);
+    if (enabled && !primary.available) {
+      state.ikEnabled = false;
+      notifyChanged();
+      requestRender();
+      return false;
+    }
+    const next = !!enabled && primary.available;
+    if (state.ikEnabled === next) return next;
+    state.ikEnabled = next;
+    if (next && !wasEnabled) {
+      state.activeLimbRole = 'left_arm';
+      state.selectedHumanoidControlKey = 'leftHand';
+    }
+    notifyChanged();
+    requestRender();
+    return next;
+  }
+
+  function selectControl(controlKey) {
+    if (!state.ikEnabled || !HUMANOID_CONTROL_KEYS.includes(controlKey)) return false;
+    const role = HUMANOID_CONTROL_LIMB_ROLES[controlKey] || null;
+    const changed = state.selectedHumanoidControlKey !== controlKey || (role && state.activeLimbRole !== role);
+    state.selectedHumanoidControlKey = controlKey;
+    if (role) state.activeLimbRole = role;
+    if (changed) {
+      notifyChanged();
+      requestRender();
+    }
+    return true;
+  }
+
+  function solveTarget(target, options = {}) {
+    const rig = getRig();
+    const primary = getPrimaryLimb();
+    if (!rig?.humanoidControlRig?.accepted || !state.ikEnabled || !primary.available) return false;
+    const previousPose = state.humanoidPose || {};
+    const solved = solveControlIk({
+      controlRig: rig.humanoidControlRig,
+      posedControls: previousPose,
+      role: primary.role,
+      target,
+      bendSign: primary.bendSign,
+    });
+    if (!solved.positions) return solved;
+    state.humanoidPose = mergeLimbPose(previousPose, solved.positions, primary.keys);
+    const applied = applyPose({ dragging: options?.dragging === true });
+    if (!options?.dragging) notifyChanged();
+    return { ...solved, applied, controlRig: 'humanoid' };
   }
 
   function representativeMember(joint) {
@@ -464,6 +531,10 @@ export function createRigPoseRuntime({
     resetForHumanoidEdit,
     clearManualPose,
     setRotation,
+    setActiveLimbRole,
+    setIkEnabled,
+    selectControl,
+    solveTarget,
     setStatus(message = '') {
       state.pickStatus = message && typeof message === 'object' && message.messageKey ? message : String(message || '');
       notifyChanged();

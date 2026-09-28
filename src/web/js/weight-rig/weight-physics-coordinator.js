@@ -152,10 +152,6 @@ export function createWeightPhysicsCoordinator({
     });
   }
 
-  return { disable, syncParticipants, syncToSelection, reset };
-}
-
-export function createWeightPhysicsController({ modelPhysicsSession, reset } = {}) {
   const setNumber = (key, value) => {
     const next = Number(value);
     if (!Number.isFinite(next)) return false;
@@ -163,6 +159,9 @@ export function createWeightPhysicsController({ modelPhysicsSession, reset } = {
     return true;
   };
   return {
+    disable,
+    syncParticipants,
+    syncToSelection,
     getState: () => modelPhysicsSession.getState(),
     reset,
     setFrequency: (value) => setNumber('frequencyHz', value),

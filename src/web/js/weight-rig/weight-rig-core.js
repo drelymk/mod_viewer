@@ -30,8 +30,7 @@ import { modelRigSnapshot } from './weight-rig-snapshots.js';
 import { buildJointSignatureIndex, resolveRigPreset } from './weight-rig-presets.js';
 import { createRigPresetSession } from './rig-preset-session.js';
 import { createWeightModelSession, createWeightPickingSession } from './weight-model-session.js';
-import { createWeightPhysicsController, createWeightPhysicsCoordinator } from './weight-physics-controller.js';
-import { createHumanoidPoseRuntime } from './humanoid-pose-runtime.js';
+import { createWeightPhysicsCoordinator } from './weight-physics-coordinator.js';
 import { createSkinningRuntime } from './skinning-runtime.js';
 import { createRigModelSession, createRigSourceSession } from './rig-model-session.js';
 import { createRigPoseRuntime } from './rig-pose-runtime.js';
@@ -82,8 +81,6 @@ let rigSourceSession = null;
 let weightModelSession = null;
 let weightPickingSession = null;
 let rigPresetSession = null;
-let humanoidPoseRuntime;
-let weightPhysicsController;
 let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
@@ -167,11 +164,6 @@ rigSourceSession = createRigSourceSession({
   cloneForest: cloneSourceForest,
 });
 
-weightPhysicsController = createWeightPhysicsController({
-  modelPhysicsSession,
-  reset: () => physicsCoordinator.reset(),
-});
-
 weightPickingSession = createWeightPickingSession({
   modelWeightState,
   modelRigState,
@@ -231,17 +223,9 @@ rigPoseRuntime = createRigPoseRuntime({
   notifyPoseChanged: notifyModelRigPoseChanged,
   requestRender,
   rigPresetState,
-});
-
-humanoidPoseRuntime = createHumanoidPoseRuntime({
-  modelRigState,
-  getModelRig: () => modelSkinningRig,
   getPrimaryLimb: (role) => primaryHumanoidLimb(role),
   solveControlIk: solveHumanoidControlIk,
   mergeLimbPose: mergeHumanoidLimbPose,
-  applyPose: (options) => rigPoseRuntime?.applyPose(options) || false,
-  notifyChanged: () => notifyModelRigChanged(),
-  requestRender,
 });
 
 humanoidRigEditSession = createHumanoidRigEditSession({
@@ -327,10 +311,10 @@ export const weightRigApi = Object.freeze({
   setRigJointRotation: rigPoseRuntime.setRotation,
   setRigPoseControlStatus: rigPoseRuntime.setStatus,
 
-  setRigActiveLimbRole: humanoidPoseRuntime.setActiveLimbRole,
-  setRigIkEnabled: humanoidPoseRuntime.setIkEnabled,
-  selectHumanoidControl: humanoidPoseRuntime.selectControl,
-  solveRigIkTarget: humanoidPoseRuntime.solveTarget,
+  setRigActiveLimbRole: rigPoseRuntime.setActiveLimbRole,
+  setRigIkEnabled: rigPoseRuntime.setIkEnabled,
+  selectHumanoidControl: rigPoseRuntime.selectControl,
+  solveRigIkTarget: rigPoseRuntime.solveTarget,
 
   getHumanoidRigEditSnapshot: humanoidRigEditSession.snapshot,
   setHumanoidRigMetadata: humanoidRigEditSession.setMetadata,
@@ -350,17 +334,17 @@ export const weightRigApi = Object.freeze({
   renameRigPosePreset: rigPresetSession.rename,
   deleteRigPosePreset: rigPresetSession.remove,
 
-  getModelPhysicsState: weightPhysicsController.getState,
-  resetModelPhysics: weightPhysicsController.reset,
-  setPhysicsFrequency: weightPhysicsController.setFrequency,
-  setPhysicsDamping: weightPhysicsController.setDamping,
-  setPhysicsMotionStrength: weightPhysicsController.setMotionStrength,
-  setPhysicsLinearMotionStrength: weightPhysicsController.setLinearMotionStrength,
-  setPhysicsContinuousLinearResponse: weightPhysicsController.setContinuousLinearResponse,
-  setPhysicsGravityEnabled: weightPhysicsController.setGravityEnabled,
-  setPhysicsGravityScale: weightPhysicsController.setGravityScale,
-  setPhysicsConstraintsEnabled: weightPhysicsController.setConstraintsEnabled,
-  setPhysicsMaxBendDegrees: weightPhysicsController.setMaxBendDegrees,
+  getModelPhysicsState: physicsCoordinator.getState,
+  resetModelPhysics: physicsCoordinator.reset,
+  setPhysicsFrequency: physicsCoordinator.setFrequency,
+  setPhysicsDamping: physicsCoordinator.setDamping,
+  setPhysicsMotionStrength: physicsCoordinator.setMotionStrength,
+  setPhysicsLinearMotionStrength: physicsCoordinator.setLinearMotionStrength,
+  setPhysicsContinuousLinearResponse: physicsCoordinator.setContinuousLinearResponse,
+  setPhysicsGravityEnabled: physicsCoordinator.setGravityEnabled,
+  setPhysicsGravityScale: physicsCoordinator.setGravityScale,
+  setPhysicsConstraintsEnabled: physicsCoordinator.setConstraintsEnabled,
+  setPhysicsMaxBendDegrees: physicsCoordinator.setMaxBendDegrees,
 });
 
 export { skinningRuntime as weightRigSkinningRuntime };

@@ -3,8 +3,8 @@
 // geometry owned entirely by the Rig panel.
 
 import * as THREE from 'three/webgpu';
-import { HUMANOID_CONTROL_PICK_RADIUS } from '../mesh/humanoid-rig-edit-session.js';
-import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from '../mesh/humanoid-control-rig.js';
+import { HUMANOID_CONTROL_PICK_RADIUS } from '../weight-rig/humanoid-rig-edit-session.js';
+import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from '../weight-rig/humanoid-control-rig.js';
 import {
   isRigJointPickingActive,
   isRigTransformInteractionActive,
