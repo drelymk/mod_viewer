@@ -237,6 +237,17 @@ export function buildInferredRigRestFrames(forest, centerByBoneId, jointPivotByB
   return result;
 }
 
+export function rebuildSourceRigRestFrames(rig, nextStructureRevision = () => (rig.structureRevision || 0) + 1) {
+  const frames = buildInferredRigRestFrames(rig.inferredForest, rig.centerByBoneId, rig.jointPivotByBoneId);
+  rig.restFrameByBoneId = frames.frameByBoneId;
+  rig.restDirectionByBoneId = frames.directionByBoneId;
+  rig.restFrameEvidenceByBoneId = frames.evidenceByBoneId;
+  rig.continuationChildByBoneId = frames.continuationChildByBoneId;
+  rig.poseFrameCache?.clear();
+  rig.structureRevision = nextStructureRevision();
+  return frames;
+}
+
 function modelJointPairKey(left, right) {
   const a = Number(left);
   const b = Number(right);

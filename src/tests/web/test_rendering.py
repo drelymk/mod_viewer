@@ -449,6 +449,52 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
       return updated && rig.setRigJointRoot(originalRoot)
         && rig.getModelRigState().model.components[0].rootId === originalRoot;
     }""")
+    preset_result = page.evaluate("""async () => {
+      const rig = window.__rigApi;
+      const api = window.pywebview.api;
+      const component = rig.getModelRigState().model.components[0];
+      const originalRoot = component.rootId;
+      const presetRoot = component.nodeIds.find(id => id !== originalRoot);
+      if (!Number.isInteger(presetRoot) || !rig.setRigJointRoot(presetRoot)) return {error: 'root'};
+      if (!rig.setRigJointRotation(originalRoot, [0, 0, Math.SQRT1_2, Math.SQRT1_2])) return {error: 'rotation'};
+      rig.finishRigJointPose(originalRoot);
+      let captured = null;
+      const previousSave = api.save_rig_pose_preset;
+      api.save_rig_pose_preset = async (path, preset) => {
+        captured = preset;
+        return {saved: true, presets: [preset]};
+      };
+      const saved = await rig.saveRigPosePreset('Root and Joint');
+      api.save_rig_pose_preset = previousSave;
+      if (!saved.saved || !captured) return {error: 'save'};
+      const reset = rig.resetRigPose();
+      const applied = rig.applyRigPosePresetById(captured.id);
+      const after = rig.getModelRigState();
+      return {
+        saved: saved.saved,
+        hasJoint: captured.joints.length === 1,
+        hasRoot: captured.roots.length === 1,
+        reset,
+        success: applied.success,
+        appliedJointCount: applied.appliedJointCount,
+        appliedRootCount: applied.appliedRootCount,
+        rootRestored: after.model.components[0].rootId === presetRoot,
+        poseRestored: Object.hasOwn(after.model.poseRotationByJointId, String(originalRoot)),
+        lastApplySucceeded: after.rigPresets.lastApplyResult?.success === true,
+      };
+    }""")
+    assert preset_result == {
+        'saved': True,
+        'hasJoint': True,
+        'hasRoot': True,
+        'reset': True,
+        'success': True,
+        'appliedJointCount': 1,
+        'appliedRootCount': 1,
+        'rootRestored': True,
+        'poseRestored': True,
+        'lastApplySucceeded': True,
+    }
     page.locator('.rig-clear-joint').click()
     assert page.locator('.rig-bone-select').input_value() == ''
     assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition')

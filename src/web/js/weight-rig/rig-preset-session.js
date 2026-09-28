@@ -3,8 +3,9 @@
 
 import { rigPresetSnapshot } from './weight-rig-snapshots.js';
 import { createRigPreset, normalizeRigPreset, serializeRigPose, validateRigPresetName } from './weight-rig-presets.js';
+import { weightRigStatus } from './weight-rig-status.js';
 
-function unavailableRigPresetResult(reason, preset = null) {
+function presetFailureResult(reason, preset = null, overrides = {}) {
   return {
     success: false,
     preset,
@@ -13,7 +14,12 @@ function unavailableRigPresetResult(reason, preset = null) {
     appliedRootCount: 0,
     skippedRootCount: 0,
     skipped: [{ type: 'preset', reason }],
+    ...overrides,
   };
+}
+
+function unavailableRigPresetResult(reason, preset = null) {
+  return presetFailureResult(reason, preset);
 }
 
 export function createRigPresetSession({
@@ -96,10 +102,53 @@ export function createRigPresetSession({
       notify();
       return result;
     }
+    const rig = getModelRig();
+    const rigState = getModelRigState();
+    if (!rig || !rigState?.loaded) {
+      const result = unavailableRigPresetResult('rig_not_loaded');
+      state.lastApplyResult = result;
+      notify();
+      return result;
+    }
     state.selectedPresetId = preset.id;
-    return applyResolvedPreset(resolveRigPreset(getModelRig(), preset), {
+    const resolved = resolveRigPreset(rig, preset);
+    if (!resolved?.success) {
+      state.lastApplyResult = resolved || unavailableRigPresetResult('invalid_preset');
+      rigState.pickStatus = weightRigStatus('weightRig.status.invalidSavedPose');
+      notify();
+      return state.lastApplyResult;
+    }
+    if (!(resolved.joints?.length || 0) && !(resolved.roots?.length || 0)) {
+      const result = presetFailureResult('no_matches', resolved.preset, {
+        skippedJointCount: resolved.skippedJointCount || 0,
+        skippedRootCount: resolved.skippedRootCount || 0,
+        skipped: [...(resolved.skipped || [])],
+        failureReason: 'no_matches',
+      });
+      state.lastApplyResult = result;
+      rigState.pickStatus = weightRigStatus(
+        resolved.skipped?.length ? 'weightRig.status.noMatchingJoints' : 'weightRig.status.invalidSavedPose',
+      );
+      notify();
+      return result;
+    }
+    const result = applyResolvedPreset(resolved, {
       presetId: preset.id,
     });
+    state.lastApplyResult = result;
+    notify();
+    return result;
+  }
+
+  function clearApplicationState() {
+    const changed = state.selectedPresetId !== null || state.lastApplyResult !== null;
+    state.selectedPresetId = null;
+    state.lastApplyResult = null;
+    return changed;
+  }
+
+  function clearLastApplyResult() {
+    state.lastApplyResult = null;
   }
 
   function save(name) {
@@ -192,6 +241,8 @@ export function createRigPresetSession({
     snapshot,
     setMetadata,
     applyById,
+    clearApplicationState,
+    clearLastApplyResult,
     save,
     rename,
     remove,
