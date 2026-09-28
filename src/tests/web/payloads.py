@@ -85,14 +85,37 @@ def split_color_dds():
     return bytes(header) + struct.pack('<HHI', 0xf800, 0x001f, 0x55550000)
 
 
-def weighted_payload(include_ineligible=False):
-    payload = model_payload(2 if include_ineligible else 1)
+def weighted_payload(include_ineligible=False, include_second_member=False, include_third_member=False):
+    payload = model_payload(
+        3 if include_third_member else 2 if include_ineligible or include_second_member else 1
+    )
     payload['meshes']['mesh-00']['skinning_available'] = True
-    blob = struct.pack('<6I6f', 0, 1, 0, 1, 1, 1, 0.8, 0.2, 0.8, 0.2, 1, 0)
-    preview = {'status': 'ok', '_fixture_blob': blob, 'meshes': {'mesh-00': {
+    blob = bytearray(struct.pack('<6I6f', 0, 1, 0, 1, 1, 1, 0.8, 0.2, 0.8, 0.2, 1, 0))
+    preview_meshes = {'mesh-00': {
         'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [0, 1],
         'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
         'data': {'indices': {'offset': 0, 'length': 24, 'type': 'u32'},
                  'weights': {'offset': 24, 'length': 24, 'type': 'f32'}},
-    }}}
+    }}
+    if include_second_member or include_third_member:
+        payload['meshes']['mesh-01']['skinning_available'] = True
+        offset = len(blob)
+        blob.extend(struct.pack('<6I6f', 2, 3, 2, 3, 3, 2, 0.7, 0.3, 0.7, 0.3, 0.6, 0.4))
+        preview_meshes['mesh-01'] = {
+            'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [2, 3],
+            'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
+            'data': {'indices': {'offset': offset, 'length': 24, 'type': 'u32'},
+                     'weights': {'offset': offset + 24, 'length': 24, 'type': 'f32'}},
+        }
+    if include_third_member:
+        payload['meshes']['mesh-02']['skinning_available'] = True
+        offset = len(blob)
+        blob.extend(struct.pack('<6I6f', 4, 5, 4, 5, 5, 4, 0.65, 0.35, 0.65, 0.35, 0.55, 0.45))
+        preview_meshes['mesh-02'] = {
+            'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [4, 5],
+            'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
+            'data': {'indices': {'offset': offset, 'length': 24, 'type': 'u32'},
+                     'weights': {'offset': offset + 24, 'length': 24, 'type': 'f32'}},
+        }
+    preview = {'status': 'ok', '_fixture_blob': bytes(blob), 'meshes': preview_meshes}
     return payload, preview

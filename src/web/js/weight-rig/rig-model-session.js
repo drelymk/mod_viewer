@@ -529,54 +529,62 @@ export function createRigModelSession({
     };
   }
 
-  function invalidateLoad() {
+  function invalidate() {
+    const changed = Boolean(
+      loadToken ||
+      state.promise ||
+      state.loading ||
+      state.loaded ||
+      state.error ||
+      state.jointPickIntent ||
+      state.pickStatus,
+    );
     loadToken = null;
     state.promise = null;
     state.loading = false;
+    state.loaded = false;
+    state.error = null;
+    state.jointPickIntent = null;
+    state.pickStatus = '';
+    if (changed) {
+      notifyChanged();
+      requestRender();
+    }
+    return changed;
   }
 
-  function ensureLoaded() {
-    if (state.loaded) return Promise.resolve(getSnapshot());
+  function startLoad() {
     if (state.promise) return state.promise;
     const generation = getGeneration();
     const token = {};
     loadToken = token;
     state.loading = true;
+    state.loaded = false;
     state.error = null;
     state.pickStatus = '';
     notifyChanged();
-    const promise = ensureModelWeightsLoaded()
-      .then(async () => {
-        if (generation !== getGeneration() || loadToken !== token) {
-          return getSnapshot();
-        }
-        if (modelWeightState.error) throw new Error(modelWeightState.error);
-        const sourceRigs = await buildAllSourceSkinningRigsCooperatively({
-          generation,
-          isCurrent: () => generation === getGeneration() && loadToken === token,
-        });
-        if (!sourceRigs || generation !== getGeneration() || loadToken !== token) return getSnapshot();
-        const built = await buildModelSkinningRig(sourceRigs, {
-          generation,
-          isCurrent: () => generation === getGeneration() && loadToken === token,
-        });
-        if (!built || generation !== getGeneration() || loadToken !== token) {
-          return getSnapshot();
-        }
-        state.loaded = true;
-        syncPhysicsToSelection?.();
-        return getSnapshot();
-      })
+
+    const isCurrent = () => generation === getGeneration() && loadToken === token;
+    const promise = (async () => {
+      if (!modelWeightState.loaded) await ensureModelWeightsLoaded();
+      if (!isCurrent()) return getSnapshot();
+      if (modelWeightState.error) throw new Error(modelWeightState.error);
+      const sourceRigs = await buildAllSourceSkinningRigsCooperatively({ generation, isCurrent });
+      if (!sourceRigs || !isCurrent()) return getSnapshot();
+      const built = await buildModelSkinningRig(sourceRigs, { generation, isCurrent });
+      if (!built || !isCurrent()) return getSnapshot();
+      state.loaded = true;
+      syncPhysicsToSelection?.();
+      return getSnapshot();
+    })()
       .catch((error) => {
-        if (generation !== getGeneration() || loadToken !== token) {
-          return getSnapshot();
-        }
+        if (!isCurrent()) return getSnapshot();
         state.error = error instanceof Error ? error.message : String(error);
         state.loaded = false;
         return getSnapshot();
       })
       .finally(() => {
-        if (generation !== getGeneration() || loadToken !== token) return;
+        if (!isCurrent()) return;
         state.loading = false;
         state.promise = null;
         loadToken = null;
@@ -584,6 +592,21 @@ export function createRigModelSession({
       });
     state.promise = promise;
     return promise;
+  }
+
+  function ensureLoaded() {
+    if (state.loaded) return Promise.resolve(getSnapshot());
+    return startLoad();
+  }
+
+  function isActive() {
+    return Boolean(state.loaded || state.loading || state.promise);
+  }
+
+  function rebuild() {
+    if (!isActive()) return Promise.resolve(getSnapshot());
+    invalidate();
+    return startLoad();
   }
 
   function beginJointPicking(intent = {}) {
@@ -651,8 +674,10 @@ export function createRigModelSession({
 
   return {
     getState,
-    invalidateLoad,
+    invalidate,
     ensureLoaded,
+    isActive,
+    rebuild,
     beginJointPicking,
     cancelJointPicking,
     handleJointPicked,

@@ -540,8 +540,8 @@ function rigSnapshot() {
     pickStatus: modelRigState.pickStatus,
     rigPresets: rigPresetSession?.snapshot() || null,
     humanoidRigEdit: humanoidRigEditSession?.snapshot(),
-    humanoidControlRig: humanoidControlRigSnapshot(),
-    model: modelRigSnapshotForState(),
+    humanoidControlRig: modelRigState.loaded ? humanoidControlRigSnapshot() : null,
+    model: modelRigState.loaded ? modelRigSnapshotForState() : null,
   };
 }
 
@@ -701,31 +701,7 @@ export function unregisterWeightRigMesh(mesh) {
   if (sourceKey && physicsRuntime.getState().enabled) {
     physicsRuntime.syncParticipants(new Set([sourceKey]));
   }
-  if (modelRigState.loaded) {
-    const generation = modelWeightGeneration;
-    modelRigState.loading = true;
-    notifyModelRigChanged();
-    const buildSources =
-      buildAllSourceSkinningRigsCooperatively || (() => Promise.resolve(buildAllSourceSkinningRigs()));
-    void buildSources({
-      generation,
-      isCurrent: () => generation === modelWeightGeneration,
-    })
-      .then((sourceRigs) => {
-        if (!sourceRigs || generation !== modelWeightGeneration) return null;
-        return buildModelSkinningRig(sourceRigs, {
-          generation,
-          isCurrent: () => generation === modelWeightGeneration,
-        });
-      })
-      .catch(() => null)
-      .then((built) => {
-        if (generation !== modelWeightGeneration) return;
-        modelRigState.loading = false;
-        if (built) modelRigState.loaded = true;
-        notifyModelRigChanged();
-      });
-  }
+  if (rigModelSession?.isActive()) void rigModelSession.rebuild();
   notifyModelRigChanged();
   notifyModelWeightChanged();
 }
@@ -744,20 +720,15 @@ export function refreshWeightRigAfterShapeChange(mesh) {
   const wasPhysicsEnabled = physicsRuntime.invalidateSource(sourceKey) || state.physicsEnabled;
   if (sourceKey) sourceSkinningRigs.delete(sourceKey);
   if (modelSkinningRig) rigPoseRuntime?.resetPose({ request: false });
-  rigModelSession?.invalidateLoad();
-  modelRigState.promise = null;
-  modelRigState.loading = false;
-  modelRigState.loaded = false;
+  rigModelSession?.invalidate();
   modelSkinningRig = null;
   modelRigState.selectedJointId = null;
   modelRigState.structureRevision = 0;
-  modelRigState.jointPickIntent = null;
   modelRigState.ikEnabled = false;
   modelRigState.activeLimbRole = 'left_arm';
   modelRigState.selectedHumanoidControlKey = null;
   modelRigState.explicitRootSignatures = preservedRootSignatures;
   rigPresetSession?.clearLastApplyResult?.();
-  modelRigState.pickStatus = '';
   notifyModelRigChanged();
   const rebased = skinningRuntime.rebaseAfterShapeChange(mesh, {
     positions: shapedPositions,
