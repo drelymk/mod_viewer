@@ -1,5 +1,5 @@
-// Weight-model session. This owns the product-facing selection, picking-view
-// and heatmap state while the coordinator supplies shared mesh algorithms.
+// Owns model-wide Weight loading, state and selection. SkinningRuntime
+// supplies per-mesh installation and deformation mechanics.
 
 import * as THREE from 'three';
 import { createWeightPickController } from '../scene/weight-pick-controller.js';
@@ -244,7 +244,7 @@ export function createWeightModelSession({
           continue;
         }
         try {
-          const installed = installSkinningEntry(mesh, entry, buffer, { refreshSelection: false });
+          const installed = installSkinningEntry(mesh, entry, buffer);
           modelWeightState.sourceDescriptors.set(installed.source.sourceKey, installed.source);
         } catch (error) {
           state.error = error instanceof Error ? error.message : String(error);

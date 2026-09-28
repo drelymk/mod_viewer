@@ -390,7 +390,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     return state.selectedWeightMask;
   }
 
-  function installSkinningEntry(mesh, entry, buffer, { refreshSelection = true, selectedBoneIds = [] } = {}) {
+  function installSkinningEntry(mesh, entry, buffer) {
     const state = stateFor(mesh);
     const source = sourceDescriptorForEntry(entry);
     if (!source) throw new Error('The skin-weight source identity is unavailable for this draw.');
@@ -431,7 +431,6 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     state.weightBoneStats = normalizeWeightBoneStats(entry.weight_stats);
     state.loaded = true;
     state.error = null;
-    if (refreshSelection) refreshSelectedWeightMask(mesh, state, selectedBoneIds);
     return { state, source };
   }
 

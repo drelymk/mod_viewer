@@ -297,7 +297,6 @@ function beginRigJointPicking(...args) {
 export const weightRigApi = Object.freeze({
   getModelWeightState: weightModelSession.getState,
   ensureModelWeightsLoaded: weightModelSession.ensureLoaded,
-  setSelectedBones: weightModelSession.setSelectedBones,
   setBoneSelected: weightModelSession.setBoneSelected,
   clearSelectedBones: weightModelSession.clearSelectedBones,
   loadSavedBoneSelection: weightModelSession.loadSavedBoneSelection,
@@ -307,7 +306,6 @@ export const weightRigApi = Object.freeze({
   beginWeightModelPicking,
   cancelWeightModelPicking: weightPickingSession.cancel,
   setWeightPickerViewMode: weightPickingSession.setViewMode,
-  sampleModelSkinningAtIntersection: weightPickingSession.sampleAtIntersection,
 
   getModelRigState: rigModelSession.getState,
   ensureModelRigLoaded: rigModelSession.ensureLoaded,
@@ -316,7 +314,6 @@ export const weightRigApi = Object.freeze({
   clearRigJointSelection: rigModelSession.clearJointSelection,
   selectRigJoint: rigModelSession.selectJoint,
   handleRigJointPicked: rigModelSession.handleJointPicked,
-  modelJointFromSkinningSample: rigModelSession.modelJointFromSkinningSample,
   pickRigJointFromModelSurface: rigModelSession.pickJointFromSurface,
   setRigRotationSnapDegrees: rigModelSession.setRotationSnapDegrees,
 
@@ -344,7 +341,6 @@ export const weightRigApi = Object.freeze({
   finishHumanoidControlCarry: humanoidRigEditSession.finishCarry,
   cancelHumanoidControlCarry: humanoidRigEditSession.cancelCarry,
 
-  getRigPresetSnapshot: rigPresetSession.snapshot,
   setRigMetadata: rigPresetSession.setMetadata,
   applyRigPosePresetById: rigPresetSession.applyById,
   saveRigPosePreset: rigPresetSession.save,

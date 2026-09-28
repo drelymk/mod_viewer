@@ -409,15 +409,10 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
       const source = rig.getModelWeightState().sources[0];
       const first = source.availableBoneIds[0];
       const second = source.availableBoneIds[1];
-      const entry = boneIds => [{
-        source: source.file,
-        sourceKey: source.key,
-        boneIdOffset: source.boneIdOffset,
-        boneIds,
-      }];
-      rig.setSelectedBones(entry([first]));
+      rig.setBoneSelected(source.key, first, true);
       const selected = rig.getModelWeightState().selectedBones[0]?.boneIds;
-      rig.setSelectedBones(entry([second]));
+      rig.setBoneSelected(source.key, first, false);
+      rig.setBoneSelected(source.key, second, true);
       const changed = rig.getModelWeightState().selectedBones[0]?.boneIds;
       rig.loadSavedBoneSelection();
       const reloaded = rig.getModelWeightState().selectedBones;
