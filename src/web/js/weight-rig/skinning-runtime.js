@@ -1,5 +1,5 @@
-// Owns model-wide skin data and geometry operations. Weight/Rig composition
-// coordinates cross-feature lifecycle through the core module.
+// Owns per-mesh skin data and geometry operations. Weight-model composition
+// owns model-wide loading, summary and selection lifecycle.
 
 import * as THREE from 'three';
 import { applyWeightedNormalDeformationInto, applyWeightedTransformDeformationInto } from './weight-deformation.js';
@@ -13,14 +13,12 @@ import {
   inspectSurfaceTopology,
   inspectSurfaceTopologyCooperative,
 } from './weight-rig.js';
+import { buildSelectedWeightMask } from './weight-selection.js';
 import { EMPTY_ACTIVE_VERTICES } from './weight-runtime.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
 import { resumeAnimatedMesh } from '../mesh/animation-runtime.js';
 import { syncLoosePartMaterial } from '../mesh/loose-parts.js';
 
-function clockNow() {
-  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
-}
 function typedView(buffer, descriptor, Type, typeName) {
   if (!descriptor || descriptor.type !== typeName) {
     throw new Error('Skin data has an unsupported binary layout.');
@@ -53,23 +51,7 @@ function buildBoneIds(indices, weights, influenceCount) {
   return [...result].sort((left, right) => left - right);
 }
 
-export function createSkinningRuntime({
-  states,
-  knownMeshes,
-  stateFor,
-  modelWeightState,
-  modelWeightSnapshot,
-  selectionMapFromEntries,
-  sourceSelectionEntries,
-  setSelectedBones,
-  syncPhysicsToSelection,
-  refreshModelWeightSummary,
-  refreshSelectedWeightMask,
-  eligibleSkinningMesh,
-  getGeneration,
-  notifyModelWeightChanged,
-  requestRender,
-} = {}) {
+export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRender } = {}) {
   const cooperativeGraphInFlight = new WeakMap();
 
   function markFinalBoundsDirty(mesh, state) {
@@ -387,14 +369,34 @@ export function createSkinningRuntime({
     return null;
   }
 
-  function installSkinningEntry(mesh, entry, buffer, { refreshSelection = true } = {}) {
+  function refreshSelectedWeightMask(mesh, state, selectedBoneIds = []) {
+    if (!state?.loaded) return null;
+    const selected = new Set(selectedBoneIds || []);
+    if (!selected.size) {
+      state.selectedWeightMask = null;
+      state.physicsActiveVertices = EMPTY_ACTIVE_VERTICES;
+      state.combinedPhysicsVerticesRef = null;
+      state.combinedActiveVertices = null;
+      return null;
+    }
+    state.selectedWeightMask = buildSelectedWeightMask(state.indices, state.weights, state.influenceCount, selected);
+    const activeVertices = [];
+    state.selectedWeightMask.forEach((weight, vertex) => {
+      if (weight > 0) activeVertices.push(vertex);
+    });
+    state.physicsActiveVertices = Uint32Array.from(activeVertices);
+    state.combinedPhysicsVerticesRef = null;
+    state.combinedActiveVertices = null;
+    return state.selectedWeightMask;
+  }
+
+  function installSkinningEntry(mesh, entry, buffer) {
     const state = stateFor(mesh);
     const source = sourceDescriptorForEntry(entry);
     if (!source) throw new Error('The skin-weight source identity is unavailable for this draw.');
     state.skinningSourceKey = source.sourceKey;
     state.skinningSourceFile = source.sourceFile;
     state.skinningBoneOffset = source.boneIdOffset;
-    modelWeightState.sourceDescriptors.set(source.sourceKey, source);
     const indices = typedView(buffer, entry.data?.indices, Uint32Array, 'u32');
     const weights = typedView(buffer, entry.data?.weights, Float32Array, 'f32');
     const position = mesh.geometry?.attributes?.position;
@@ -429,22 +431,7 @@ export function createSkinningRuntime({
     state.weightBoneStats = normalizeWeightBoneStats(entry.weight_stats);
     state.loaded = true;
     state.error = null;
-    if (refreshSelection) refreshSelectedWeightMask(mesh, state);
-    return state;
-  }
-
-  async function restoreSelectedWeightMasks(generation) {
-    const budget = createWorkBudget();
-    for (const mesh of knownMeshes) {
-      if (generation !== getGeneration()) return false;
-      const state = states.get(mesh);
-      if (state?.loaded) refreshSelectedWeightMask(mesh, state);
-      await budget.checkpoint();
-    }
-    if (generation !== getGeneration()) return false;
-    if (modelWeightState.heatmapEnabled) updateModelWeightHeatmap();
-    notifyModelWeightChanged();
-    return true;
+    return { state, source };
   }
 
   async function ensureRigMeshPreparedCooperative(
@@ -554,129 +541,6 @@ export function createSkinningRuntime({
     return promise;
   }
 
-  function setModelWeightLoadError(error) {
-    modelWeightState.error = error instanceof Error ? error.message : String(error);
-    modelWeightState.loaded = false;
-    modelWeightState.noWeights = false;
-  }
-
-  function loadModelWeights() {
-    if (modelWeightState.loaded) return Promise.resolve(modelWeightSnapshot());
-    if (modelWeightState.promise) return modelWeightState.promise;
-    const generation = getGeneration();
-    const loadStartedAt = clockNow();
-    const performance = {};
-    modelWeightState.performance = performance;
-    const deferPhysicsSync = () => {
-      const readyGeneration = generation;
-      const afterPaint =
-        typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
-      afterPaint(() =>
-        setTimeout(() => {
-          if (readyGeneration !== getGeneration() || !modelWeightState.loaded) {
-            return;
-          }
-          syncPhysicsToSelection();
-        }, 0),
-      );
-    };
-    const meshes = [...knownMeshes].filter(eligibleSkinningMesh);
-    if (!meshes.length) {
-      modelWeightState.loaded = true;
-      modelWeightState.noWeights = true;
-      modelWeightState.savedSelectionApplied = true;
-      refreshModelWeightSummary({ refreshStats: true });
-      deferPhysicsSync();
-      notifyModelWeightChanged();
-      return Promise.resolve(modelWeightSnapshot());
-    }
-    const folderPath = meshes[0].userData.modPath;
-    modelWeightState.loading = true;
-    modelWeightState.error = null;
-    modelWeightState.noWeights = false;
-    notifyModelWeightChanged();
-    modelWeightState.promise = (async () => {
-      const api = window.pywebview?.api?.get_model_skinning_preview;
-      if (typeof api !== 'function') {
-        throw new Error('Model skin-weight preview is unavailable.');
-      }
-      const preview = await api(folderPath);
-      if (generation !== getGeneration()) return modelWeightSnapshot();
-      modelWeightState.savedBonesBySource = selectionMapFromEntries(preview?.saved_bones);
-      const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
-      if (bufferResponse && !bufferResponse.ok) {
-        throw new Error(`Skin data download failed (${bufferResponse.status}).`);
-      }
-      const buffer = bufferResponse ? await bufferResponse.arrayBuffer() : null;
-      if (buffer && buffer.byteLength !== Number(preview.data.length)) {
-        throw new Error('Skin data download was incomplete.');
-      }
-      performance.fetchMs = clockNow() - loadStartedAt;
-      const installStartedAt = clockNow();
-      const installBudget = createWorkBudget();
-      for (const mesh of meshes) {
-        if (generation !== getGeneration() || !knownMeshes.has(mesh)) return modelWeightSnapshot();
-        const state = stateFor(mesh);
-        const entry = preview?.meshes?.[mesh.userData.semanticKey];
-        if (!entry || entry.status !== 'ok') {
-          state.error = entry?.error || 'No usable skin weights were returned.';
-          state.loaded = false;
-          continue;
-        }
-        try {
-          installSkinningEntry(mesh, entry, buffer, { refreshSelection: false });
-        } catch (error) {
-          state.error = error instanceof Error ? error.message : String(error);
-          state.loaded = false;
-        }
-        await installBudget.checkpoint();
-      }
-      if (generation !== getGeneration()) return modelWeightSnapshot();
-      modelWeightState.loaded = true;
-      refreshModelWeightSummary({ refreshStats: true });
-      performance.basicInstallMs = clockNow() - installStartedAt;
-      performance.weightReadyMs = clockNow() - loadStartedAt;
-      Object.assign(performance, installBudget.getStats());
-      // Basic Weight data is usable before derived selection masks and
-      // physics restoration begin.  Keep the loading flag tied to this
-      // milestone so the UI can paint and accept input immediately.
-      modelWeightState.loading = false;
-      notifyModelWeightChanged();
-      if (!modelWeightState.savedSelectionApplied) {
-        modelWeightState.savedSelectionApplied = true;
-        setSelectedBones(sourceSelectionEntries(modelWeightState.savedBonesBySource), {
-          syncPhysics: false,
-          refreshMasks: false,
-        });
-        await restoreSelectedWeightMasks(generation);
-        deferPhysicsSync();
-      } else {
-        await restoreSelectedWeightMasks(generation);
-        deferPhysicsSync();
-        notifyModelWeightChanged();
-      }
-      performance.selectedMaskRestoreMs = clockNow() - loadStartedAt - performance.weightReadyMs;
-      return modelWeightSnapshot();
-    })();
-    return modelWeightState.promise
-      .catch((error) => {
-        if (generation === getGeneration()) {
-          setModelWeightLoadError(error);
-          refreshModelWeightSummary({ refreshStats: true });
-          notifyModelWeightChanged();
-        }
-        return modelWeightSnapshot();
-      })
-      .finally(() => {
-        if (generation === getGeneration()) {
-          performance.totalMs = clockNow() - loadStartedAt;
-          modelWeightState.loading = false;
-          modelWeightState.promise = null;
-          notifyModelWeightChanged();
-        }
-      });
-  }
-
   function updateHeatmap(mesh, state, selectedMask = state.selectedWeightMask) {
     if (!state.heatmapMode) return;
     if (!selectedMask) {
@@ -715,13 +579,13 @@ export function createSkinningRuntime({
     }
   }
 
-  function updateModelWeightHeatmap(changedSourceKeys = null) {
+  function updateModelWeightHeatmap(changedSourceKeys = null, heatmapEnabled = false) {
     knownMeshes.forEach((mesh) => {
       const state = states.get(mesh);
       if (!state?.loaded) return;
       if (changedSourceKeys && !changedSourceKeys.has(state.skinningSourceKey)) return;
       const mask = state.selectedWeightMask;
-      if (modelWeightState.heatmapEnabled && mask?.some((value) => value > 0)) {
+      if (heatmapEnabled && mask?.some((value) => value > 0)) {
         state.heatmapMode = 'bone';
         updateHeatmap(mesh, state, mask);
       } else if (state.heatmapMode) {
@@ -810,8 +674,8 @@ export function createSkinningRuntime({
     getSkinningState: (mesh) => states.get(mesh) || null,
     getSkinningBaseMaterial,
     withSkinningBaseMaterial,
+    refreshSelectedWeightMask,
     installSkinningEntry,
-    loadModelWeights,
     markFinalBoundsDirty,
     rebaseAfterShapeChange,
     updateModelWeightHeatmap,
