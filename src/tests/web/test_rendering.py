@@ -360,6 +360,11 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     open_model(page, 'fixture-01')
     wait_loaded(page)
     assert bridge_calls(page, 'weights') == []
+    page.evaluate("""() => {
+      window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
+        -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
+      ]);
+    }""")
     page.locator('#weight-rig-tab').click()
     page.evaluate("""async () => {
       const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
@@ -367,6 +372,41 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     }""")
     page.wait_for_function('window.__rigApi.getModelRigState().loaded && window.__rigApi.getModelRigState().model?.joints.length > 1')
     assert bridge_calls(page, 'weights') == [['fixture-01']]
+    api_result = page.evaluate("""() => {
+      const rig = window.__rigApi;
+      const controlRig = rig.getModelRigState().humanoidControlRig;
+      const target = [...controlRig.controls.leftHand.position];
+      target[1] -= 0.05;
+      const ikEnabled = rig.setRigIkEnabled(true);
+      const ikSolved = rig.solveRigIkTarget(target);
+      rig.resetRigPose();
+
+      const physicsBefore = rig.getModelPhysicsState();
+      const nextFrequency = physicsBefore.frequencyHz + 1.25;
+      const physicsSet = rig.setPhysicsFrequency(nextFrequency);
+      const physicsChanged = rig.getModelPhysicsState().frequencyHz === nextFrequency;
+      const physicsReset = rig.resetModelPhysics();
+      const physicsRestored = rig.getModelPhysicsState().frequencyHz === physicsBefore.frequencyHz;
+
+      return {
+        accepted: controlRig.accepted,
+        ikEnabled,
+        ikSolved: !!ikSolved && ikSolved.controlRig === 'humanoid',
+        physicsSet,
+        physicsChanged,
+        physicsReset,
+        physicsRestored,
+      };
+    }""")
+    assert api_result == {
+        'accepted': True,
+        'ikEnabled': True,
+        'ikSolved': True,
+        'physicsSet': True,
+        'physicsChanged': True,
+        'physicsReset': True,
+        'physicsRestored': True,
+    }
     result = page.evaluate("""async () => {
       const {weightRigApi: rig} = await import('./js/weight-rig/weight-rig-core.js');
       const model = rig.getModelRigState().model;
