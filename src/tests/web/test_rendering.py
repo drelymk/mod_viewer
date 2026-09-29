@@ -679,7 +679,7 @@ def test_weight_rig_shape_change_invalidates_and_rebuilds_preserving_root(viewer
     assert invalidated == {'loaded': False, 'loading': False, 'model': None}
 
     rebuilt = page.evaluate("""async () => {
-      await window.__rigApi.ensureModelRigLoaded();
+      await window.__rigApi.activateWeightRig();
       const state = window.__rigApi.getModelRigState();
       return {
         loaded: state.loaded,

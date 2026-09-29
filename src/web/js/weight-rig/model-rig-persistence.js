@@ -1,5 +1,5 @@
 export const MODEL_RIG_VERSION = 1;
-export const MODEL_RIG_BUILDER_VERSION = 1;
+export const MODEL_RIG_BUILDER_VERSION = 2;
 
 function stableNumber(value) {
   const number = Number(value);
@@ -319,26 +319,6 @@ export function hydrateModelRig(data, sourceRigs = []) {
     for (const member of joint.members) {
       if (sourceBoneToModelJointId.has(member.sourceBoneKey)) return null;
       sourceBoneToModelJointId.set(member.sourceBoneKey, joint.jointId);
-    }
-  }
-
-  // Older caches may have been built while selection restoration temporarily
-  // dropped the authoritative model-wide-ID descriptor. Reject only those
-  // caches whose joint membership contradicts the now-validated global IDs.
-  if (sourceRigs.length > 0 && sourceRigs.every((rig) => rig.boneIdsModelWide === true)) {
-    const jointByGlobalBoneId = new Map();
-    for (const joint of joints) {
-      const boneIds = new Set(joint.members.map((member) => member.boneId));
-      if (boneIds.size !== 1) return null;
-    }
-    for (const sourceRig of sourceRigs) {
-      for (const boneId of sourceRig.boneIds || []) {
-        const jointId = sourceBoneToModelJointId.get(sourceBoneKey(sourceRig.sourceKey, boneId));
-        if (!Number.isInteger(jointId)) return null;
-        const currentJointId = jointByGlobalBoneId.get(Number(boneId));
-        if (currentJointId !== undefined && currentJointId !== jointId) return null;
-        jointByGlobalBoneId.set(Number(boneId), jointId);
-      }
     }
   }
 

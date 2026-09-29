@@ -283,7 +283,6 @@ function beginRigJointPicking(...args) {
 export const weightRigApi = Object.freeze({
   getModelWeightState: weightModelSession.getState,
   activateWeightRig: weightRigActivationSession.activate,
-  ensureModelWeightsLoaded: weightModelSession.ensureLoaded,
   setBoneSelected: weightModelSession.setBoneSelected,
   clearSelectedBones: weightModelSession.clearSelectedBones,
   loadSavedBoneSelection: weightModelSession.loadSavedBoneSelection,
@@ -295,7 +294,6 @@ export const weightRigApi = Object.freeze({
   setWeightPickerViewMode: weightPickingSession.setViewMode,
 
   getModelRigState: rigModelSession.getState,
-  ensureModelRigLoaded: rigModelSession.ensureLoaded,
   beginRigJointPicking,
   cancelRigJointPicking: rigModelSession.cancelJointPicking,
   clearRigJointSelection: rigModelSession.clearJointSelection,
@@ -640,7 +638,6 @@ export function registerWeightRigMesh(mesh) {
   knownMeshes.add(mesh);
   if (!wasKnown) {
     invalidateHumanoidDetection();
-    weightRigActivationSession?.invalidate();
   }
   if (modelWeightState.loaded) weightModelSession?.refreshModelWeightSummary({ refreshStats: true });
   if (!physicsRuntime.getState().enabled) return;

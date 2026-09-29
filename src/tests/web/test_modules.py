@@ -329,39 +329,6 @@ def test_source_rig_cooperative_preparation_keeps_source_wide_mode_and_cache_ide
     assert result['vertexEvidenceCount'] == 3
 
 
-def test_model_rig_cache_rejects_pre_descriptor_split_for_global_bone_ids(module_page):
-    result = module_page.evaluate("""async () => {
-      const persistence = await import('./js/weight-rig/model-rig-persistence.js');
-      const sourceRigs = ['source-a|offset=0', 'source-b|offset=0'].map(sourceKey => ({
-        sourceKey, boneIds: [5], boneIdsModelWide: true,
-      }));
-      const member = (sourceKey, boneId = 5) => ({sourceKey, sourceBoneKey: `${sourceKey}#bone=${boneId}`, boneId});
-      const joint = (jointId, members) => ({jointId, members, representativeMember: members[0], parentId: null,
-        restCenter: [0, 0, 0], restPivot: [0, 0, 0], restFrame: [0, 0, 0, 1]});
-      const base = {modelReferenceRadius: 1, edges: []};
-      const stale = persistence.serializeModelRig({...base, joints: [
-        joint(0, [member(sourceRigs[0].sourceKey)]), joint(1, [member(sourceRigs[1].sourceKey)]),
-      ]}, {sourceRigs});
-      const compatible = persistence.serializeModelRig({...base, joints: [
-        joint(0, sourceRigs.map(source => member(source.sourceKey))),
-      ]}, {sourceRigs});
-      const distinctIdRigs = [
-        {sourceKey: 'source-c|offset=0', boneIds: [5], boneIdsModelWide: true},
-        {sourceKey: 'source-d|offset=0', boneIds: [6], boneIdsModelWide: false},
-      ];
-      const allModelWideRigs = distinctIdRigs.map(source => ({...source, boneIdsModelWide: true}));
-      const distinctIdJoint = persistence.serializeModelRig({...base, joints: [
-        joint(0, distinctIdRigs.map(source => member(source.sourceKey, source.boneIds[0]))),
-      ]}, {sourceRigs: distinctIdRigs});
-      return {staleRejected: persistence.hydrateModelRig(stale, sourceRigs) === null,
-        compatibleAccepted: !!persistence.hydrateModelRig(compatible, sourceRigs),
-        mixedDescriptorCacheAllowsDistinctIdsToShareJoint: !!persistence.hydrateModelRig(distinctIdJoint, distinctIdRigs),
-        allModelWideRejectsDistinctIdJoint: persistence.hydrateModelRig(distinctIdJoint, allModelWideRigs) === null};
-    }""")
-    assert result == {'staleRejected': True, 'compatibleAccepted': True,
-        'mixedDescriptorCacheAllowsDistinctIdsToShareJoint': True, 'allModelWideRejectsDistinctIdJoint': True}
-
-
 def test_control_conditions_preserve_or_groups_negation_and_contradictions(module_page):
     result = module_page.evaluate("""async () => {
       const state = await import('./js/editing/control-state.js');
