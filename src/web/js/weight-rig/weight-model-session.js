@@ -159,6 +159,7 @@ export function createWeightModelSession({
   getGeneration,
 } = {}) {
   let selectionSavePromise = null;
+  let selectionRestoreOperation = null;
 
   function setModelWeightLoadError(error) {
     modelWeightState.error = error instanceof Error ? error.message : String(error);
@@ -166,28 +167,17 @@ export function createWeightModelSession({
     modelWeightState.noWeights = false;
   }
 
-  function deferPhysicsSync(generation) {
-    const afterPaint =
-      typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
-    afterPaint(() =>
-      setTimeout(() => {
-        if (generation !== getGeneration() || !modelWeightState.loaded) return;
-        syncPhysicsToSelection();
-      }, 0),
-    );
-  }
-
-  async function restoreSelectedWeightMasks(generation) {
+  async function restoreSelectedWeightMasks(generation, isCurrent = () => true) {
     const budget = createWorkBudget();
     for (const mesh of knownMeshes) {
-      if (generation !== getGeneration()) return false;
+      if (generation !== getGeneration() || !isCurrent()) return false;
       const state = states.get(mesh);
       if (state?.loaded) {
         refreshSelectedWeightMask(mesh, state, modelWeightState.selectedBonesBySource.get(state.skinningSourceKey));
       }
       await budget.checkpoint();
     }
-    if (generation !== getGeneration()) return false;
+    if (generation !== getGeneration() || !isCurrent()) return false;
     updateModelWeightHeatmap(null, modelWeightState.heatmapEnabled);
     notifyChanged();
     return true;
@@ -205,8 +195,8 @@ export function createWeightModelSession({
       modelWeightState.loaded = true;
       modelWeightState.noWeights = true;
       modelWeightState.savedSelectionApplied = true;
+      modelWeightState.savedSelectionMasksRestored = true;
       refreshModelWeightSummary({ refreshStats: true });
-      deferPhysicsSync(generation);
       notifyChanged();
       return Promise.resolve(modelWeightSnapshot());
     }
@@ -258,25 +248,17 @@ export function createWeightModelSession({
       performance.basicInstallMs = clockNow() - installStartedAt;
       performance.weightReadyMs = clockNow() - loadStartedAt;
       Object.assign(performance, installBudget.getStats());
-      // Basic Weight data is usable before derived selection masks and
-      // physics restoration begin. Keep the loading flag tied to this
-      // milestone so the UI can paint and accept input immediately.
+      // Apply saved IDs before making the newly loaded Weight controls
+      // interactive. Derived masks remain part of feature activation.
+      if (!modelWeightState.savedSelectionApplied) {
+        const savedSelection = selectionMapFromEntries(modelWeightState.savedBonesBySource);
+        retainAvailableBones(savedSelection);
+        modelWeightState.selectedBonesBySource = savedSelection;
+        modelWeightState.savedSelectionApplied = true;
+      }
+      modelWeightState.savedSelectionMasksRestored = false;
       modelWeightState.loading = false;
       notifyChanged();
-      if (!modelWeightState.savedSelectionApplied) {
-        modelWeightState.savedSelectionApplied = true;
-        setSelectedBones(sourceSelectionEntries(modelWeightState.savedBonesBySource), {
-          syncPhysics: false,
-          refreshMasks: false,
-        });
-        await restoreSelectedWeightMasks(generation);
-        deferPhysicsSync(generation);
-      } else {
-        await restoreSelectedWeightMasks(generation);
-        deferPhysicsSync(generation);
-        notifyChanged();
-      }
-      performance.selectedMaskRestoreMs = clockNow() - loadStartedAt - performance.weightReadyMs;
       return modelWeightSnapshot();
     })();
     return modelWeightState.promise
@@ -309,6 +291,35 @@ export function createWeightModelSession({
       if (filtered.size) selection.set(sourceKey, filtered);
       else selection.delete(sourceKey);
     }
+  }
+
+  function restoreSavedSelection({ generation = getGeneration(), isCurrent = () => true } = {}) {
+    const current = () => generation === getGeneration() && isCurrent();
+    if (!current() || !modelWeightState.loaded || modelWeightState.noWeights) return Promise.resolve(false);
+    if (modelWeightState.savedSelectionMasksRestored) return Promise.resolve(modelWeightSnapshot());
+    if (selectionRestoreOperation?.generation === generation) {
+      const pending = selectionRestoreOperation;
+      return pending.promise.then((result) => {
+        if (result !== false || !current()) return result;
+        if (selectionRestoreOperation === pending) selectionRestoreOperation = null;
+        return restoreSavedSelection({ generation, isCurrent });
+      });
+    }
+    const startedAt = clockNow();
+    const operation = { generation, promise: null };
+    operation.promise = (async () => {
+      const restored = await restoreSelectedWeightMasks(generation, isCurrent);
+      if (!restored || !current()) return false;
+      modelWeightState.savedSelectionMasksRestored = true;
+      if (modelWeightState.performance) {
+        modelWeightState.performance.selectedMaskRestoreMs = clockNow() - startedAt;
+      }
+      return modelWeightSnapshot();
+    })().finally(() => {
+      if (selectionRestoreOperation === operation) selectionRestoreOperation = null;
+    });
+    selectionRestoreOperation = operation;
+    return operation.promise;
   }
 
   function refreshModelBoneStats() {
@@ -449,6 +460,7 @@ export function createWeightModelSession({
     getState: modelWeightSnapshot,
     refreshModelWeightSummary,
     ensureLoaded: loadModelWeights,
+    restoreSavedSelection,
     setSelectedBones,
     setBoneSelected,
     clearSelectedBones: () => setSelectedBones([]),
@@ -463,6 +475,7 @@ export function createWeightModelSession({
     },
     reset() {
       selectionSavePromise = null;
+      selectionRestoreOperation = null;
       refreshModelWeightSummary({ refreshStats: true });
     },
   };

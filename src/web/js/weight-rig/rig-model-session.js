@@ -6,8 +6,6 @@ import { sourceBoneKey } from './weight-rig-reconcile.js';
 import {
   aggregateInfluenceGraphs,
   buildInferredRigForest,
-  hasUsableSurfaceTopology,
-  inspectSurfaceTopology,
   inspectSurfaceTopologyCooperative,
   jointPivotMap,
 } from './weight-rig.js';
@@ -52,80 +50,11 @@ export function createRigSourceSession({
   knownMeshes,
   modelWeightState,
   sourceSkinningRigs,
-  ensureRigMeshPrepared,
-  ensureRigMeshPreparedCooperative = ensureRigMeshPrepared,
-  ensureInfluenceGraph,
-  ensureInfluenceGraphCooperative = ensureInfluenceGraph,
+  ensureRigMeshPreparedCooperative,
+  ensureInfluenceGraphCooperative,
   rebuildRestFrames,
   cloneForest,
 } = {}) {
-  function memberArraysEqual(left, right) {
-    if (left === right) return true;
-    if (!left || !right || left.length !== right.length) return false;
-    for (let index = 0; index < left.length; index += 1) {
-      if (!Object.is(left[index], right[index])) return false;
-    }
-    return true;
-  }
-
-  function memberEvidenceEqual(left, right) {
-    const leftState = left.state;
-    const rightState = right.state;
-    if (leftState.influenceCount !== rightState.influenceCount) return false;
-    const leftArrays = memberEvidenceArrays(left);
-    const rightArrays = memberEvidenceArrays(right);
-    const leftLengths = leftArrays.map((values) => values?.length ?? null);
-    const rightLengths = rightArrays.map((values) => values?.length ?? null);
-    if (leftLengths.some((length, index) => length !== rightLengths[index])) {
-      return false;
-    }
-    return leftArrays.every((values, index) => memberArraysEqual(values, rightArrays[index]));
-  }
-
-  function normalizeMembers(members) {
-    const evidenceBuckets = new Map();
-    const uniqueMembers = [];
-    for (const member of members) {
-      // Provenance identifies a draw, but it is not part of Rig evidence
-      // equality.  Bucket only by cheap evidence shape, then retain the
-      // exact array comparison as the authoritative duplicate check.
-      const key = memberEvidenceShapeKey(member);
-      const bucket = evidenceBuckets.get(key) || [];
-      if (bucket.some((candidate) => memberEvidenceEqual(candidate, member))) {
-        continue;
-      }
-      bucket.push(member);
-      evidenceBuckets.set(key, bucket);
-      uniqueMembers.push(member);
-    }
-    return uniqueMembers;
-  }
-
-  function aggregateInfluenceGraph(members) {
-    const loadedMembers = members
-      .map((mesh) => {
-        const state = states.get(mesh);
-        if (state?.loaded) ensureRigMeshPrepared?.(mesh, state);
-        return state?.loaded ? preparedMember(mesh, state) : null;
-      })
-      .filter(Boolean);
-    const uniqueMembers = normalizeMembers(loadedMembers);
-    const surfaceEligible = uniqueMembers.map((member) =>
-      hasUsableSurfaceTopology(member.state.baselinePositions, member.surfaceIndices),
-    );
-    const evidenceMode = surfaceEligible.every(Boolean) ? 'surface' : 'vertex';
-    const graph = aggregateInfluenceGraphs(
-      uniqueMembers.map((member) => {
-        const surfaceEvidence =
-          evidenceMode === 'surface'
-            ? { surfaceEvidenceAvailable: true }
-            : inspectSurfaceTopology(member.state.baselinePositions, member.surfaceIndices);
-        return ensureInfluenceGraph(member.mesh, member.state, evidenceMode, surfaceEvidence);
-      }),
-    );
-    return finalizeInfluenceGraph(graph, loadedMembers, uniqueMembers);
-  }
-
   async function memberArraysEqualCooperative(left, right, budget, isCurrent) {
     if (left === right) return true;
     if (!left || !right || left.length !== right.length) return false;
@@ -254,7 +183,7 @@ export function createRigSourceSession({
     };
   }
 
-  function assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest, { finalize = true } = {}) {
+  function assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest) {
     const descriptor = modelWeightState.sourceDescriptors.get(sourceKey);
     const jointPivotByBoneId = jointPivotMap(inferredForest, influenceGraph.relationships);
     const rig = {
@@ -296,24 +225,7 @@ export function createRigSourceSession({
       poseRootOverrides: new Map(),
       physicsRig: null,
     };
-    if (finalize) {
-      rebuildRestFrames(rig);
-      rig.defaultInferredForest = cloneForest(rig.inferredForest);
-      rig.defaultJointPivotByBoneId = new Map(
-        [...rig.jointPivotByBoneId].map(([boneId, pivot]) => [boneId, [...pivot]]),
-      );
-    }
     return rig;
-  }
-
-  function createSourceSkinningRig(sourceKey, members) {
-    const influenceGraph = aggregateInfluenceGraph(members);
-    const forestStartedAt = clockNow();
-    const inferredForest = buildInferredRigForest(influenceGraph);
-    if (influenceGraph.__cooperativeTimings) {
-      influenceGraph.__cooperativeTimings.inferredForestMs = clockNow() - forestStartedAt;
-    }
-    return assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest);
   }
 
   async function createSourceSkinningRigCooperative(sourceKey, members, budget, isCurrent = () => true) {
@@ -329,7 +241,7 @@ export function createRigSourceSession({
     }
     await budget.checkpoint();
     if (!isCurrent()) return null;
-    const rig = assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest, { finalize: false });
+    const rig = assembleSourceSkinningRig(sourceKey, members, influenceGraph, inferredForest);
     await budget.checkpoint();
     if (!isCurrent()) return null;
     const restFrameStartedAt = clockNow();
@@ -346,51 +258,8 @@ export function createRigSourceSession({
     return rig;
   }
 
-  function resetPose(rig) {
-    rig.poseRotationByBoneId.clear();
-    rig.poseTransforms.clear();
-    rig.poseRotations.clear();
-    rig.poseTransformCache.clear();
-    rig.poseFrameCache.clear();
-  }
-
   function sameMeshSet(left, right) {
     return left?.size === right?.length && right.every((mesh) => left.has(mesh));
-  }
-
-  function refresh(rig, members, { resetPose: shouldReset = true } = {}) {
-    const refreshed = createSourceSkinningRig(rig.sourceKey, members);
-    rig.meshes = refreshed.meshes;
-    rig.influenceGraph = refreshed.influenceGraph;
-    rig.boneIds = refreshed.boneIds;
-    rig.centerByBoneId = refreshed.centerByBoneId;
-    rig.inferredForest = refreshed.inferredForest;
-    rig.jointPivotByBoneId = refreshed.jointPivotByBoneId;
-    rig.defaultInferredForest = cloneForest(refreshed.defaultInferredForest);
-    rig.defaultJointPivotByBoneId = new Map(
-      [...refreshed.defaultJointPivotByBoneId].map(([boneId, pivot]) => [boneId, [...pivot]]),
-    );
-    rig.restFrameByBoneId = refreshed.restFrameByBoneId;
-    rig.restDirectionByBoneId = refreshed.restDirectionByBoneId;
-    rig.restFrameEvidenceByBoneId = refreshed.restFrameEvidenceByBoneId;
-    rig.continuationChildByBoneId = refreshed.continuationChildByBoneId;
-    rig.vertexEvidence = refreshed.vertexEvidence;
-    rig.structureRevision = refreshed.structureRevision;
-    rig.poseFrameCache = refreshed.poseFrameCache;
-    rig.poseRootOverrides = refreshed.poseRootOverrides;
-    if (shouldReset) resetPose(rig);
-    return rig;
-  }
-
-  function ensure(sourceKey, members) {
-    let rig = sourceSkinningRigs.get(sourceKey);
-    if (!rig) {
-      rig = createSourceSkinningRig(sourceKey, members);
-      sourceSkinningRigs.set(sourceKey, rig);
-    } else if (!sameMeshSet(rig.meshes, members)) {
-      refresh(rig, members);
-    }
-    return rig;
   }
 
   const inFlight = new Map();
@@ -410,7 +279,7 @@ export function createRigSourceSession({
       await budget.checkpoint();
       if (!current()) return null;
       const rig = await createSourceSkinningRigCooperative(sourceKey, members, budget, current);
-      if (!current()) return null;
+      if (!rig || !current()) return null;
       sourceSkinningRigs.set(sourceKey, rig);
       return rig;
     })();
@@ -441,18 +310,13 @@ export function createRigSourceSession({
     return [...sourceSkinningRigs.values()];
   }
 
-  function buildAll() {
-    const groups = groupLoadedMeshes();
-    for (const [sourceKey, members] of groups) ensure(sourceKey, members);
-    return retainSourceRigs(groups);
-  }
-
   async function buildAllCooperative({ generation = null, isCurrent = () => true } = {}) {
     const groups = groupLoadedMeshes();
     const budget = createWorkBudget();
     for (const [sourceKey, members] of groups) {
       if (generation !== null && !isCurrent()) return null;
-      await ensureCooperative(sourceKey, members, { generation, isCurrent });
+      const rig = await ensureCooperative(sourceKey, members, { generation, isCurrent });
+      if (!rig) return null;
       await budget.checkpoint();
     }
     if (generation !== null && !isCurrent()) return null;
@@ -460,11 +324,8 @@ export function createRigSourceSession({
   }
 
   return {
-    ensure,
     ensureCooperative,
-    buildAll,
     buildAllCooperative,
-    resetPose,
     reset() {
       inFlight.clear();
     },
@@ -476,10 +337,8 @@ export function createRigModelSession({
   modelWeightState,
   getGeneration,
   ensureModelWeightsLoaded,
-  buildAllSourceSkinningRigs,
-  buildAllSourceSkinningRigsCooperatively = buildAllSourceSkinningRigs,
+  buildAllSourceSkinningRigsCooperatively,
   buildModelSkinningRig,
-  syncPhysicsToSelection,
   getSnapshot,
   notifyChanged,
   requestRender,
@@ -574,7 +433,6 @@ export function createRigModelSession({
       const built = await buildModelSkinningRig(sourceRigs, { generation, isCurrent });
       if (!built || !isCurrent()) return getSnapshot();
       state.loaded = true;
-      syncPhysicsToSelection?.();
       return getSnapshot();
     })()
       .catch((error) => {

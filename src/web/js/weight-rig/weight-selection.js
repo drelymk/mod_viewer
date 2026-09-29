@@ -338,6 +338,47 @@ export function normalizeBoneSelection(entries) {
     .sort((left, right) => left.sourceKey.localeCompare(right.sourceKey));
 }
 
+/** Convert source-scoped entries to the selection state map without touching
+ * authoritative source descriptors owned by weight installation. */
+export function selectionMapFromEntries(entries) {
+  return new Map(normalizeBoneSelection(entries).map((entry) => [entry.sourceKey, new Set(entry.boneIds)]));
+}
+
+export function selectionRecordsFromMap(selectionMap, sourceDescriptors = new Map()) {
+  return [...(selectionMap || [])]
+    .map(([sourceKey, boneIds]) => {
+      const sourceKeyText = String(sourceKey);
+      const separator = sourceKeyText.lastIndexOf('|offset=');
+      const nextSegment = sourceKeyText.indexOf('|', separator + 8);
+      const fallbackOffset = Number(sourceKeyText.slice(separator + 8, nextSegment < 0 ? undefined : nextSegment));
+      const descriptor =
+        sourceDescriptors.get(sourceKey) ||
+        (separator > 0 && Number.isInteger(fallbackOffset)
+          ? {
+              sourceKey,
+              sourceFile: sourceKeyText.slice(0, separator),
+              boneIdOffset: fallbackOffset,
+            }
+          : null);
+      return descriptor
+        ? {
+            ...descriptor,
+            boneIds: normalizeSelectedBoneIds(boneIds),
+          }
+        : null;
+    })
+    .filter((entry) => entry?.boneIds.length);
+}
+
+export function sourceSelectionEntries(selectionMap, sourceDescriptors = new Map()) {
+  return selectionRecordsFromMap(selectionMap, sourceDescriptors).map((entry) => ({
+    sourceKey: entry.sourceKey,
+    sourceFile: entry.sourceFile,
+    boneIdOffset: entry.boneIdOffset,
+    boneIds: entry.boneIds,
+  }));
+}
+
 export function selectionForSource(selection, sourceKey) {
   const entry = normalizeBoneSelection(selection).find((item) => item.sourceKey === sourceKey);
   return new Set(entry?.boneIds || []);

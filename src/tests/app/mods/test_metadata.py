@@ -78,7 +78,7 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
 def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path):
     value = {
         "version": 2,
-        "model_rig_builder_version": 1,
+        "model_rig_builder_version": 2,
         "controls": {
             "leftShoulder": {
                 "semantic": {"sideN": -0.18, "height01": 0.7,
@@ -154,7 +154,7 @@ def test_malformed_humanoid_rig_does_not_hide_valid_pose_presets():
 def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
     value = {
         "version": 1,
-        "builder_version": 1,
+        "builder_version": 2,
         "model_reference_radius": 1.25,
         "source_table": ["component01|offset=0"],
         "joints": [{
@@ -189,7 +189,7 @@ def test_model_rig_sidecar_rejects_impossible_topology(tmp_path):
                 "representative_member_index": 0, "parent_id": parent,
                 "rest_center": [0, number, 0], "rest_pivot": [0, number, 0],
                 "rest_frame": [0, 0, 0, 1]}
-    value = {"version": 1, "builder_version": 1,
+    value = {"version": 1, "builder_version": 2,
              "model_reference_radius": 1, "source_table": ["component01|offset=0"],
              "joints": [joint(0, 1), joint(1, 0)], "edges": [{
                  "joint_a": 0, "joint_b": 1, "relationship_type": "source",

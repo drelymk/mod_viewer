@@ -3,11 +3,10 @@
 
 import { weightRigApi } from '../weight-rig/weight-rig-core.js';
 const {
+  activateWeightRig,
   beginWeightModelPicking,
   cancelWeightModelPicking,
   clearSelectedBones,
-  ensureModelRigLoaded,
-  ensureModelWeightsLoaded,
   getModelPhysicsState,
   getModelRigState,
   getModelWeightState,
@@ -1090,30 +1089,11 @@ function closePopover() {
   ui.boneButton.setAttribute('aria-expanded', 'false');
 }
 
-function scheduleRigLoadAfterPaint(generation) {
-  const afterPaint =
-    typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
-  afterPaint(() =>
-    setTimeout(() => {
-      const weight = getModelWeightState();
-      if (weight.generation !== generation || !weight.loaded || weight.error || weight.noWeights) return;
-      void ensureModelRigLoaded();
-    }, 0),
-  );
-}
-
 function loadOnDemand() {
   if (loadingPromise) return loadingPromise;
-  loadingPromise = ensureModelWeightsLoaded()
-    .then((weight) => {
-      if (weight?.loaded && !weight.error && !weight.noWeights) {
-        scheduleRigLoadAfterPaint(weight.generation);
-      }
-      return weight;
-    })
-    .finally(() => {
-      loadingPromise = null;
-    });
+  loadingPromise = activateWeightRig().finally(() => {
+    loadingPromise = null;
+  });
   return loadingPromise;
 }
 

@@ -167,6 +167,7 @@ export function createWeightRuntimeState() {
     savedBonesBySource: new Map(),
     sourceDescriptors: new Map(),
     savedSelectionApplied: false,
+    savedSelectionMasksRestored: false,
     savingSelection: false,
     selectionSaveError: null,
     heatmapEnabled: false,

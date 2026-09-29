@@ -1,5 +1,5 @@
 export const MODEL_RIG_VERSION = 1;
-export const MODEL_RIG_BUILDER_VERSION = 1;
+export const MODEL_RIG_BUILDER_VERSION = 2;
 
 function stableNumber(value) {
   const number = Number(value);
