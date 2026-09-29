@@ -111,6 +111,257 @@ def test_weight_selection_keeps_equal_bone_ids_scoped_to_exact_sources(module_pa
     assert [entry['bone_ids'] for entry in result['serialized']] == [[2, 4, 6], [2]]
 
 
+def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_and_save(module_page):
+    result = module_page.evaluate("""async () => {
+      const selection = await import('./js/weight-rig/weight-selection.js');
+      const {createWeightRuntimeState} = await import('./js/weight-rig/weight-runtime.js');
+      const {createWeightModelSession} = await import('./js/weight-rig/weight-model-session.js');
+      const runtime = createWeightRuntimeState();
+      const mesh = {userData: {modPath: 'fixture-root', semanticKey: 'mesh-a'}, geometry: {index: null}};
+      runtime.knownMeshes.add(mesh);
+      const sourceKey = 'fixture/stream.buf|offset=7';
+      const descriptor = {sourceKey, sourceFile: 'fixture/stream.buf', boneIdOffset: 7, boneIdsModelWide: true};
+      let saved = null;
+      const refreshedSelections = [];
+      const snapshot = () => ({
+        loaded: runtime.modelWeightState.loaded,
+        selectedBones: selection.selectionRecordsFromMap(
+          runtime.modelWeightState.selectedBonesBySource, runtime.modelWeightState.sourceDescriptors),
+      });
+      const session = createWeightModelSession({
+        modelWeightState: runtime.modelWeightState,
+        states: runtime.states,
+        stateFor: runtime.stateFor,
+        knownMeshes: runtime.knownMeshes,
+        modelWeightSnapshot: snapshot,
+        selectionMapFromEntries: selection.selectionMapFromEntries,
+        sourceSelectionEntries: map => selection.sourceSelectionEntries(map, runtime.modelWeightState.sourceDescriptors),
+        refreshSelectedWeightMask: (_mesh, _state, boneIds) => refreshedSelections.push([...(boneIds || [])]),
+        updateModelWeightHeatmap: () => {},
+        installSkinningEntry: () => {
+          const state = runtime.stateFor(mesh);
+          Object.assign(state, {loaded: true, skinningSourceKey: sourceKey, boneIds: [3, 5], influenceCount: 1,
+            indices: new Uint32Array([3, 5]), weights: new Float32Array([1, 0]), baselinePositions: new Float32Array([0, 0, 0])});
+          return {source: descriptor};
+        },
+        syncPhysicsToSelection: () => true,
+        serializeBoneSelection: selection.serializeBoneSelection,
+        eligibleSkinningMesh: () => true,
+        notifyChanged: () => {}, requestRender: () => {}, getGeneration: () => 1,
+      });
+      const previousApi = window.pywebview?.api;
+      window.pywebview = {api: {
+        get_model_skinning_preview: async () => ({
+          saved_bones: [{source: descriptor.sourceFile, source_key: sourceKey, bone_id_offset: 7, bone_ids: [3]}],
+          meshes: {'mesh-a': {status: 'ok'}}, data: null,
+        }),
+        save_weight_selection: async (path, entries) => {
+          saved = {path, entries};
+          return {saved: true, selected_bones: entries};
+        },
+      }};
+      try {
+        const ready = await session.ensureLoaded();
+        const beforeMasks = {
+          selected: ready.selectedBones[0]?.boneIds,
+          descriptor: runtime.modelWeightState.sourceDescriptors.get(sourceKey)?.boneIdsModelWide,
+          masksRestored: runtime.modelWeightState.savedSelectionMasksRestored,
+        };
+        session.setBoneSelected(sourceKey, 5, true);
+        await session.restoreSavedSelection();
+        await session.saveSelection();
+        return {
+          beforeMasks,
+          refreshedSelections,
+          afterSave: selection.selectionRecordsFromMap(
+            runtime.modelWeightState.selectedBonesBySource, runtime.modelWeightState.sourceDescriptors),
+          descriptorAfterSave: runtime.modelWeightState.sourceDescriptors.get(sourceKey)?.boneIdsModelWide,
+          saved: saved && {path: saved.path, entries: saved.entries},
+        };
+      } finally {
+        window.pywebview = {api: previousApi};
+      }
+    }""")
+    assert result['beforeMasks'] == {'selected': [3], 'descriptor': True, 'masksRestored': False}
+    assert result['refreshedSelections'] == [[3, 5], [3, 5]]
+    assert result['afterSave'][0]['boneIds'] == [3, 5]
+    assert result['afterSave'][0]['boneIdsModelWide'] is True
+    assert result['descriptorAfterSave'] is True
+    assert result['saved']['path'] == 'fixture-root'
+    assert result['saved']['entries'][0]['bone_ids'] == [3, 5]
+
+
+def test_weight_rig_activation_sequences_ready_paint_and_retries_independent_stages(module_page):
+    result = module_page.evaluate("""async () => {
+      const {createWeightRigActivationSession} = await import('./js/weight-rig/weight-rig-activation-session.js');
+      let generation = 4, releasePaint;
+      const paintGate = new Promise(resolve => { releasePaint = resolve; });
+      const calls = [];
+      let rigAttempt = 0;
+      const session = createWeightRigActivationSession({
+        getGeneration: () => generation,
+        ensureWeightsLoaded: async () => { calls.push('weights'); return {loaded: true}; },
+        waitForWeightReadyPaint: async () => { calls.push('paint-wait'); await paintGate; calls.push('painted'); },
+        restoreSavedSelection: async () => { calls.push('selection'); return {savedSelectionMasksRestored: true}; },
+        syncPhysicsToSelection: async () => { calls.push('physics'); return true; },
+        ensureRigLoaded: async () => {
+          calls.push('rig'); rigAttempt += 1;
+          return rigAttempt === 1 ? {loaded: false, error: 'fixture rig failure'} : {loaded: true};
+        },
+      });
+      const first = session.activate();
+      const duplicate = session.activate();
+      await Promise.resolve();
+      const beforePaint = [...calls];
+      releasePaint();
+      const firstResult = await first;
+      const retryResult = await session.activate();
+      const afterRetry = [...calls];
+      const completedResult = await session.activate();
+      return {samePromise: first === duplicate, beforePaint, firstRig: firstResult.rig,
+        retryRig: retryResult.rig, afterRetry, afterComplete: calls, completedRig: completedResult.rig};
+    }""");
+    assert result['samePromise'] is True
+    assert result['beforePaint'] == ['weights', 'paint-wait']
+    assert result['firstRig']['error'] == 'fixture rig failure'
+    assert result['retryRig']['loaded'] is True
+    assert result['afterRetry'].count('physics') == 1
+    assert result['afterRetry'].count('rig') == 2
+    assert result['afterComplete'] == result['afterRetry']
+
+
+def test_weight_rig_activation_cancels_after_model_rebaseline(module_page):
+    result = module_page.evaluate("""async () => {
+      const {createWeightRigActivationSession} = await import('./js/weight-rig/weight-rig-activation-session.js');
+      let generation = 2, releasePaint;
+      const paintGate = new Promise(resolve => { releasePaint = resolve; });
+      const calls = [];
+      const session = createWeightRigActivationSession({
+        getGeneration: () => generation,
+        ensureWeightsLoaded: async () => ({loaded: true}),
+        waitForWeightReadyPaint: async () => paintGate,
+        restoreSavedSelection: async () => { calls.push('selection'); },
+        syncPhysicsToSelection: async () => { calls.push('physics'); },
+        ensureRigLoaded: async () => { calls.push('rig'); return {loaded: true}; },
+      });
+      const pending = session.activate();
+      await Promise.resolve();
+      session.invalidate();
+      releasePaint();
+      const result = await pending;
+      return {result, calls};
+    }""");
+    assert result['result']['stale'] is True
+    assert result['calls'] == []
+
+
+def test_prepared_model_rig_commit_discards_stale_save_completion(module_page):
+    result = module_page.evaluate("""async () => {
+      const {commitPreparedModelRig} = await import('./js/weight-rig/weight-rig-activation-session.js');
+      let current = true, releaseSave;
+      const saveGate = new Promise(resolve => { releaseSave = resolve; });
+      const calls = [];
+      const pending = commitPreparedModelRig({
+        isCurrent: () => current,
+        saveCache: async () => { calls.push('save-start'); await saveGate; calls.push('save-end'); return true; },
+        activate: () => calls.push('activate'),
+      });
+      await Promise.resolve();
+      current = false;
+      releaseSave();
+      const result = await pending;
+      return {result, calls};
+    }""");
+    assert result['result']['activated'] is False
+    assert result['result']['cacheSaved'] is True
+    assert result['calls'] == ['save-start', 'save-end']
+
+
+def test_source_rig_cooperative_preparation_keeps_source_wide_mode_and_cache_identity(module_page):
+    result = module_page.evaluate("""async () => {
+      const {createRigSourceSession} = await import('./js/weight-rig/rig-model-session.js');
+      const sourceKey = 'fixture/stream.buf|offset=0';
+      const sourceSkinningRigs = new Map();
+      const modelWeightState = {sourceDescriptors: new Map([[sourceKey, {
+        sourceKey, sourceFile: 'fixture/stream.buf', boneIdOffset: 0,
+      }]])};
+      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      const indices = new Uint32Array([1, 1, 1]);
+      const weights = new Float32Array([1, 1, 1]);
+      const makeMesh = (name, boneId, triangleIndices) => ({
+        userData: {semanticKey: name}, geometry: {index: {array: triangleIndices}}, boneId,
+      });
+      const first = makeMesh('mesh-a', 1, new Uint16Array([0, 1, 2]));
+      const duplicate = makeMesh('mesh-b', 1, new Uint16Array([0, 1, 2]));
+      const vertexFallback = makeMesh('mesh-c', 2, new Uint16Array([0, 1]));
+      const states = new Map([first, duplicate, vertexFallback].map(mesh => [mesh, {
+        loaded: true, skinningSourceKey: sourceKey, influenceCount: 1,
+        boneIds: [mesh.boneId], indices, weights, baselinePositions: positions,
+      }]));
+      const knownMeshes = new Set([first, duplicate, vertexFallback]);
+      const preparationModes = [];
+      let preparationCount = 0;
+      const session = createRigSourceSession({
+        states, knownMeshes, modelWeightState, sourceSkinningRigs,
+        ensureRigMeshPreparedCooperative: async () => { preparationCount += 1; return true; },
+        ensureInfluenceGraphCooperative: async (mesh, state, mode) => {
+          preparationModes.push(mode);
+          return {evidenceMode: mode, nodes: [{boneId: mesh.boneId, totalWeight: 1,
+            affectedVertexCount: 1, weightedCenter: [mesh.boneId, 0, 0], weightedRadius: 0,
+            maxVertexWeight: 1}], relationships: []};
+        },
+        rebuildRestFrames: () => {}, cloneForest: forest => structuredClone(forest),
+      });
+      const members = [first, duplicate, vertexFallback];
+      const rig = await session.ensureCooperative(sourceKey, members, {generation: 1, isCurrent: () => true});
+      const callsAfterBuild = preparationCount;
+      const cached = await session.ensureCooperative(sourceKey, members, {generation: 1, isCurrent: () => true});
+      return {sameObject: rig === cached, preparationModes, callsAfterBuild, callsAfterCacheHit: preparationCount,
+        memberCount: rig.influenceGraph.memberCount, uniqueMemberCount: rig.influenceGraph.uniqueMemberCount,
+        meshCount: rig.meshes.size, vertexEvidenceCount: rig.vertexEvidence.length};
+    }""");
+    assert result['sameObject'] is True
+    assert result['preparationModes'] == ['vertex', 'vertex']
+    assert result['callsAfterCacheHit'] == result['callsAfterBuild'] == 3
+    assert result['memberCount'] == 3
+    assert result['uniqueMemberCount'] == 2
+    assert result['meshCount'] == 3
+    assert result['vertexEvidenceCount'] == 3
+
+
+def test_model_rig_cache_rejects_pre_descriptor_split_for_global_bone_ids(module_page):
+    result = module_page.evaluate("""async () => {
+      const persistence = await import('./js/weight-rig/model-rig-persistence.js');
+      const sourceRigs = ['source-a|offset=0', 'source-b|offset=0'].map(sourceKey => ({
+        sourceKey, boneIds: [5], boneIdsModelWide: true,
+      }));
+      const member = (sourceKey, boneId = 5) => ({sourceKey, sourceBoneKey: `${sourceKey}#bone=${boneId}`, boneId});
+      const joint = (jointId, members) => ({jointId, members, representativeMember: members[0], parentId: null,
+        restCenter: [0, 0, 0], restPivot: [0, 0, 0], restFrame: [0, 0, 0, 1]});
+      const base = {modelReferenceRadius: 1, edges: []};
+      const stale = persistence.serializeModelRig({...base, joints: [
+        joint(0, [member(sourceRigs[0].sourceKey)]), joint(1, [member(sourceRigs[1].sourceKey)]),
+      ]}, {sourceRigs});
+      const compatible = persistence.serializeModelRig({...base, joints: [
+        joint(0, sourceRigs.map(source => member(source.sourceKey))),
+      ]}, {sourceRigs});
+      const distinctIdRigs = [
+        {sourceKey: 'source-c|offset=0', boneIds: [5], boneIdsModelWide: true},
+        {sourceKey: 'source-d|offset=0', boneIds: [6], boneIdsModelWide: false},
+      ];
+      const allModelWideRigs = distinctIdRigs.map(source => ({...source, boneIdsModelWide: true}));
+      const distinctIdJoint = persistence.serializeModelRig({...base, joints: [
+        joint(0, distinctIdRigs.map(source => member(source.sourceKey, source.boneIds[0]))),
+      ]}, {sourceRigs: distinctIdRigs});
+      return {staleRejected: persistence.hydrateModelRig(stale, sourceRigs) === null,
+        compatibleAccepted: !!persistence.hydrateModelRig(compatible, sourceRigs),
+        mixedDescriptorCacheAllowsDistinctIdsToShareJoint: !!persistence.hydrateModelRig(distinctIdJoint, distinctIdRigs),
+        allModelWideRejectsDistinctIdJoint: persistence.hydrateModelRig(distinctIdJoint, allModelWideRigs) === null};
+    }""");
+    assert result == {'staleRejected': True, 'compatibleAccepted': True,
+        'mixedDescriptorCacheAllowsDistinctIdsToShareJoint': True, 'allModelWideRejectsDistinctIdJoint': True}
+
+
 def test_control_conditions_preserve_or_groups_negation_and_contradictions(module_page):
     result = module_page.evaluate("""async () => {
       const state = await import('./js/editing/control-state.js');

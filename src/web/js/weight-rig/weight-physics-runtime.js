@@ -121,7 +121,6 @@ export function createWeightPhysicsRuntime({
   selectedBoneCount,
   eligibleSkinningMesh,
   getSourceSkinningRig,
-  ensureSourceSkinningRig,
   ensureSourceSkinningRigCooperatively,
   getModelTransformState,
   notifyModelRigChanged,
@@ -697,9 +696,7 @@ export function createWeightPhysicsRuntime({
       basePoseRevision: -1,
       skinRig,
     };
-    skinRig.physicsRig = rig;
-    refreshSourcePhysicsRig(rig, members);
-    return rig;
+    return refreshSourcePhysicsRig(rig, members, skinRig);
   }
 
   function createSourcePhysicsRig(sourceKey, members, options = {}) {
@@ -717,11 +714,11 @@ export function createWeightPhysicsRuntime({
     })();
   }
 
-  function refreshSourcePhysicsRig(rig, members) {
+  function refreshSourcePhysicsRig(rig, members, skinRig = rig.skinRig) {
     rig.meshes = new Set(members);
     rig.composedTransformsDirty = true;
-    rig.skinRig = ensureSourceSkinningRig(rig.sourceKey, members);
-    if (!rig.skinRig) return null;
+    if (!skinRig || !sourceMembersMatch(skinRig, members)) return null;
+    rig.skinRig = skinRig;
     rig.skinRig.physicsRig = rig;
     rig.influenceGraph = rig.skinRig.influenceGraph;
     rig.centerByBoneId = new Map((rig.influenceGraph.nodes || []).map((node) => [node.boneId, node.weightedCenter]));
@@ -796,6 +793,7 @@ export function createWeightPhysicsRuntime({
     }
 
     let attached = false;
+    let failed = false;
     for (const [sourceKey, members] of groups) {
       if (!isCurrent()) return false;
       const selected = modelWeightState.selectedBonesBySource.get(sourceKey);
@@ -816,6 +814,7 @@ export function createWeightPhysicsRuntime({
           });
           rig = typeof requestedRig?.then === 'function' ? await requestedRig : requestedRig;
         } catch (error) {
+          failed = true;
           members.forEach((mesh) => {
             const state = states.get(mesh);
             if (state) {
@@ -840,7 +839,7 @@ export function createWeightPhysicsRuntime({
       requestRender();
     }
     notifyModelRigChanged?.();
-    return true;
+    return !failed;
   }
 
   function syncToSelection(changedSourceKeys = null) {
@@ -848,11 +847,10 @@ export function createWeightPhysicsRuntime({
     const enabled = modelPhysicsSession.getState().enabled;
     if (!shouldEnable) {
       if (enabled) disable();
-      return false;
+      return Promise.resolve(true);
     }
     if (!enabled) modelPhysicsSession.enable(getModelTransformState?.());
-    void syncParticipants(changedSourceKeys).catch(() => false);
-    return true;
+    return syncParticipants(changedSourceKeys).catch(() => false);
   }
 
   function reset() {
