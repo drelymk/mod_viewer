@@ -182,8 +182,7 @@ weightModelSession = createWeightModelSession({
   knownMeshes,
   modelWeightSnapshot,
   selectionMapFromEntries,
-  sourceSelectionEntries: (selectionMap) =>
-    sourceSelectionEntries(selectionMap, modelWeightState.sourceDescriptors),
+  sourceSelectionEntries: (selectionMap) => sourceSelectionEntries(selectionMap, modelWeightState.sourceDescriptors),
   refreshSelectedWeightMask: (...args) => skinningRuntime.refreshSelectedWeightMask(...args),
   updateModelWeightHeatmap: (...args) => skinningRuntime.updateModelWeightHeatmap(...args),
   installSkinningEntry: (...args) => skinningRuntime.installSkinningEntry(...args),

@@ -341,9 +341,7 @@ export function normalizeBoneSelection(entries) {
 /** Convert source-scoped entries to the selection state map without touching
  * authoritative source descriptors owned by weight installation. */
 export function selectionMapFromEntries(entries) {
-  return new Map(
-    normalizeBoneSelection(entries).map((entry) => [entry.sourceKey, new Set(entry.boneIds)]),
-  );
+  return new Map(normalizeBoneSelection(entries).map((entry) => [entry.sourceKey, new Set(entry.boneIds)]));
 }
 
 export function selectionRecordsFromMap(selectionMap, sourceDescriptors = new Map()) {

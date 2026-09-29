@@ -220,7 +220,7 @@ def test_weight_rig_activation_sequences_ready_paint_and_retries_independent_sta
       const completedResult = await session.activate();
       return {samePromise: first === duplicate, beforePaint, firstRig: firstResult.rig,
         retryRig: retryResult.rig, afterRetry, afterComplete: calls, completedRig: completedResult.rig};
-    }""");
+    }""")
     assert result['samePromise'] is True
     assert result['beforePaint'] == ['weights', 'paint-wait']
     assert result['firstRig']['error'] == 'fixture rig failure'
@@ -250,7 +250,7 @@ def test_weight_rig_activation_cancels_after_model_rebaseline(module_page):
       releasePaint();
       const result = await pending;
       return {result, calls};
-    }""");
+    }""")
     assert result['result']['stale'] is True
     assert result['calls'] == []
 
@@ -271,7 +271,7 @@ def test_prepared_model_rig_commit_discards_stale_save_completion(module_page):
       releaseSave();
       const result = await pending;
       return {result, calls};
-    }""");
+    }""")
     assert result['result']['activated'] is False
     assert result['result']['cacheSaved'] is True
     assert result['calls'] == ['save-start', 'save-end']
@@ -319,7 +319,7 @@ def test_source_rig_cooperative_preparation_keeps_source_wide_mode_and_cache_ide
       return {sameObject: rig === cached, preparationModes, callsAfterBuild, callsAfterCacheHit: preparationCount,
         memberCount: rig.influenceGraph.memberCount, uniqueMemberCount: rig.influenceGraph.uniqueMemberCount,
         meshCount: rig.meshes.size, vertexEvidenceCount: rig.vertexEvidence.length};
-    }""");
+    }""")
     assert result['sameObject'] is True
     assert result['preparationModes'] == ['vertex', 'vertex']
     assert result['callsAfterCacheHit'] == result['callsAfterBuild'] == 3
@@ -357,7 +357,7 @@ def test_model_rig_cache_rejects_pre_descriptor_split_for_global_bone_ids(module
         compatibleAccepted: !!persistence.hydrateModelRig(compatible, sourceRigs),
         mixedDescriptorCacheAllowsDistinctIdsToShareJoint: !!persistence.hydrateModelRig(distinctIdJoint, distinctIdRigs),
         allModelWideRejectsDistinctIdJoint: persistence.hydrateModelRig(distinctIdJoint, allModelWideRigs) === null};
-    }""");
+    }""")
     assert result == {'staleRejected': True, 'compatibleAccepted': True,
         'mixedDescriptorCacheAllowsDistinctIdsToShareJoint': True, 'allModelWideRejectsDistinctIdJoint': True}
 
