@@ -813,11 +813,15 @@ async function buildModelSkinningRig(
   if (!(await checkpoint())) return null;
   const previousSelectedJointId = modelRigState.selectedJointId;
   const previousRootSignatures = new Set(modelRigState.explicitRootSignatures);
-  const reconciliation = await buildModelRigReconciliationCooperative(sourceRigs, {}, {
-    budget,
-    isCurrent: () => generation === null || isCurrent(),
-    timings: performance,
-  });
+  const reconciliation = await buildModelRigReconciliationCooperative(
+    sourceRigs,
+    {},
+    {
+      budget,
+      isCurrent: () => generation === null || isCurrent(),
+      timings: performance,
+    },
+  );
   if (!reconciliation) return null;
   performance.reconciliationMs = clockNow() - startedAt;
   if (!(await checkpoint())) return null;

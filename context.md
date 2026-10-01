@@ -375,5 +375,6 @@ of documentation, comments and tests; use portable fixtures instead.
   prefer observable readiness over fixed sleeps. Mock `window.pywebview.api`
   for UI state without importing GUI-bound `app.bridge.api` into browser fixtures.
 - Benchmark texture concurrency, lazy loading or transport changes with
-  `tools/benchmark_texture_pipeline.py`. Keep formatting/lint/mechanical checks
-  in CI and focus review on consequential behavior and these contracts.
+  `tools/benchmark_texture_pipeline.py`. Require the full local quality audit to
+  pass before every commit and retain CI enforcement. Focus review on consequential
+  behavior and these contracts.

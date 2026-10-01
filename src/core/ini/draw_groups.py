@@ -120,7 +120,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     resolved_buffers = _resolve_component_buffers(
         section_info, resources, resource_copy_sources, sections=sections)
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
-    vertex_binding_index = resolved_buffers["vertex_binding_index"]
     component_buffers = resolved_buffers["component_buffers"]
     component_positions = resolved_buffers["component_positions"]
     component_texcoords = resolved_buffers["component_texcoords"]

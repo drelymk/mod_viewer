@@ -244,7 +244,7 @@ export function createRigSourceSession({
   const inFlight = new Map();
   const sourceErrors = new Map();
 
-  async function ensureCooperative(sourceKey, members, { generation = null, isCurrent = () => true } = {}) {
+  async function ensureCooperative(sourceKey, members, { isCurrent = () => true } = {}) {
     const current = isCurrent;
     if (!current()) return null;
     const existing = sourceSkinningRigs.get(sourceKey);
