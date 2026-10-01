@@ -35,25 +35,29 @@ def main():
     args = parser.parse_args()
     output = (ROOT / args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z"],
+    candidates = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=ROOT,
         capture_output=True,
         encoding="utf-8",
         check=True,
     ).stdout.split("\0")
-    files = [name for name in tracked if name and not name.startswith(VENDOR)]
+    files = [
+        name
+        for name in dict.fromkeys(candidates)
+        if name and not name.startswith(VENDOR) and (ROOT / name).is_file()
+    ]
     python_files = [name for name in files if name.endswith(".py")]
     ruff_format_files = [name for name in python_files if name.startswith("tools/")]
     prettier_files = [
         name
         for name in files
         if (name.startswith("src/web/js/") and Path(name).suffix == ".js")
-        or name == "eslint.config.mjs"
+        or name == "tools/config/eslint.config.mjs"
     ]
     python = sys.executable
     ruff = [python, "-m", "ruff"]
-    eslint = ["node", "node_modules/eslint/bin/eslint.js"]
+    eslint = ["node", "tools/node_modules/eslint/bin/eslint.js"]
     audits = {
         "ruff-lint": run_audit(
             output,
@@ -62,7 +66,7 @@ def main():
                 *ruff,
                 "check",
                 "--config",
-                "ruff.toml",
+                "pyproject.toml",
                 "--no-cache",
                 "--output-format=json",
                 *python_files,
@@ -75,7 +79,7 @@ def main():
                 *ruff,
                 "format",
                 "--config",
-                "ruff.toml",
+                "pyproject.toml",
                 "--no-cache",
                 "--check",
                 *ruff_format_files,
@@ -86,7 +90,11 @@ def main():
             "prettier",
             [
                 "node",
-                "node_modules/prettier/bin/prettier.cjs",
+                "tools/node_modules/prettier/bin/prettier.cjs",
+                "--config",
+                "tools/package.json",
+                "--ignore-path",
+                "tools/config/prettierignore",
                 "--check",
                 *prettier_files,
             ],
@@ -96,6 +104,8 @@ def main():
             "eslint",
             [
                 *eslint,
+                "--config",
+                "tools/config/eslint.config.mjs",
                 "src/web/js",
                 "--max-warnings=0",
                 "--format=json",
@@ -126,7 +136,7 @@ def main():
             python,
             "-m",
             "codespell_lib",
-            "--config=.codespellrc",
+            "--toml=pyproject.toml",
             *text_files,
         ],
     )

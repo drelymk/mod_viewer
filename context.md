@@ -274,7 +274,8 @@ of documentation, comments and tests; use portable fixtures instead.
   models whose sources all declare validated model-wide IDs (R16 Blend or active
   VertexVG remapping) may group equal numeric IDs directly. Keep R16 IDs unchanged
   without adding component offsets again. Otherwise
-  require normalized mutual-best geometry/topology evidence, one member per
+  require normalized mutual-best geometry/topology evidence through strict seeds,
+  neighbour propagation and graph alignment, one member per
   source, ambiguity rejection, a maximum-spanning forest and cycle-free boundary
   attachments; retain rejected evidence for diagnostics and never rewrite authored
   indices/weights. Cross-palette posing may stretch where inferred and authored
@@ -282,7 +283,11 @@ of documentation, comments and tests; use portable fixtures instead.
   deterministic `joint_id` values bind Main Rig mappings. Reconcile lazily from
   the current source rigs and retain structure only in memory; model-rig caches
   are neither read nor written. Builder provenance still versions saved control
-  mappings in `.mod_viewer.json`.
+  mappings in `.mod_viewer.json`. Missing source-bone references never establish
+  equivalence. Keep one canonical source-to-joint Map and diagnostic counts and
+  decisions; avoid eager duplicate evidence snapshots. Cooperative vertex matching
+  and graph assembly share one cancellation checkpoint; only the public build
+  boundary converts stale work to `null`. Root editing keeps synchronous orientation.
 - Rig presets use `rig.version = 1` in `.mod_viewer.json`: stable IDs, bounded
   names, explicit root signatures and normalized non-identity local quaternions.
   Preserve unrelated metadata and IDs on rename; resolve entries exactly by

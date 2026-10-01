@@ -3,8 +3,8 @@
 Install the development and quality tools with Python 3.12 and Node.js 24:
 
 ```sh
-python -m pip install -r requirements-dev.txt
-npm ci --ignore-scripts
+python -m pip install -r tools/requirements-dev.txt
+npm --prefix tools ci --ignore-scripts
 python tools/quality_audit.py
 ```
 
@@ -12,15 +12,16 @@ Before every commit, the full audit must pass locally on the final contents bein
 committed. Fix findings or missing tools, and re-run after any further change.
 CI continues to enforce the same checks.
 
-The audit checks tracked authored files and excludes vendored JavaScript. Reports
-go to `.quality-reports/`, which is ignored by Git; CI uploads them as the
+The audit checks tracked and untracked authored files, skips deleted files, and
+excludes vendored JavaScript. Reports go to `.quality-reports/`, which is ignored
+by Git; CI uploads them as the
 `quality-audit` artifact. Checks do not rewrite source files. Hygiene fixers run
 on temporary copies.
 
 | Tool             | Scope and purpose                                                              | CI policy                 |
 | ---------------- | ------------------------------------------------------------------------------ | ------------------------- |
-| Ruff             | Lint all tracked Python; format-check normalized Python tooling under `tools/` | Reject findings           |
-| Prettier         | `src/web/js/**/*.js` and `eslint.config.mjs`                                   | Reject formatting changes |
+| Ruff             | Lint all authored Python; format-check normalized Python tooling under `tools/` | Reject findings           |
+| Prettier         | `src/web/js/**/*.js` and `tools/config/eslint.config.mjs`                          | Reject formatting changes |
 | ESLint           | JavaScript correctness under `src/web/js`                                     | Reject errors and warnings |
 | codespell        | Common spelling errors in authored text                                       | Reject findings           |
 | pre-commit-hooks | Whitespace, final newlines, line endings, conflict markers, JSON and YAML      | Reject findings           |
@@ -43,3 +44,13 @@ are outside the English spelling check.
 
 Browser UI and WebGPU tests remain excluded from GitHub Actions. The normal CI
 test job runs the unit, core, app and integration suite.
+
+Python lint, test discovery, and spelling settings live in `pyproject.toml`.
+The npm manifest, lockfile, and installed development packages live under
+`tools/`. Run `npm --prefix tools run lint` or
+`npm --prefix tools run format:check` from the repository root. Both scripts
+check application files from the repository root.
+
+Prettier settings live in `tools/package.json`; its ignore list and the ESLint
+config live in `tools/config/`. The npm scripts and audit use those paths
+explicitly so Prettier also applies these settings to files under `src/`.

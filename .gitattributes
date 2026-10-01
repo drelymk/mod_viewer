@@ -8,8 +8,8 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.toml text eol=lf
-/requirements*.txt text eol=lf
+/src/requirements.txt text eol=lf
+/tools/requirements-dev.txt text eol=lf
 /.gitignore text eol=lf
-/.codespellrc text eol=lf
 /.gitattributes text eol=lf
-/.prettierignore text eol=lf
+/tools/config/prettierignore text eol=lf

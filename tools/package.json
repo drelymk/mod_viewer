@@ -1,0 +1,20 @@
+{
+  "name": "mod-viewer-quality",
+  "private": true,
+  "scripts": {
+    "lint": "cd .. && eslint --config tools/config/eslint.config.mjs src/web/js",
+    "format:check": "cd .. && prettier --config tools/package.json --ignore-path tools/config/prettierignore --check \"src/web/js/**/*.js\" tools/config/eslint.config.mjs"
+  },
+  "prettier": {
+    "singleQuote": true,
+    "tabWidth": 2,
+    "printWidth": 120,
+    "endOfLine": "lf"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.11.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.9"
+  }
+}

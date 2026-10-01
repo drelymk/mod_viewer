@@ -138,7 +138,6 @@ export function createRigPoseRuntime({
       });
     }
     rig.poseTransformCache.clear();
-    rig.poseFrameCache.clear();
     rig.poseActiveJointKey = null;
     rig.poseAffectedJointIds = new Set();
   }
@@ -469,7 +468,6 @@ export function createRigPoseRuntime({
     rig.poseActiveVerticesByMesh.clear();
     rig.poseSourceBoneIdsByMesh.clear();
     rig.poseTransformCache.clear();
-    rig.poseFrameCache.clear();
     rig.poseActiveJointKey = '';
     rig.poseAffectedJointIds = new Set();
     return changed || hadPose;
@@ -491,21 +489,20 @@ export function createRigPoseRuntime({
     const rig = getRig();
     const joint = jointForId(id);
     if (!rig || !joint || !rig.componentByJointId.has(id)) return null;
-    const cache = rig.poseFrameCache.get(id);
-    const component = componentForJoint(id, rig);
-    const parent = component?.parentById?.[id];
-    const parentId = parent === null || parent === undefined ? null : Number(parent);
-    const parentRotation =
-      parentId === null ? new THREE.Quaternion() : rig.poseRotations.get(parentId)?.clone() || new THREE.Quaternion();
+    const transform = rig.poseTransforms.get(id) || RIG_IDENTITY_MATRIX;
     const boneRotation = rig.poseRotations.get(id)?.clone() || new THREE.Quaternion();
+    const localRotation = rig.poseRotationByJointId.get(id) || new THREE.Quaternion();
+    // Each joint can have a different humanoid driver. Remove its manual
+    // rotation from its composed frame to recover the FK gesture's parent frame.
+    const parentRotation = boneRotation.clone().multiply(localRotation.clone().invert());
     const restRotation = rig.restFrameByJointId.get(id)?.clone() || new THREE.Quaternion();
     return {
-      pivot: (
-        cache?.pivot || new THREE.Vector3(...(rig.jointPivotByJointId.get(id) || joint.restPivot || [0, 0, 0]))
-      ).toArray(),
-      center: (
-        cache?.center || new THREE.Vector3(...(rig.centerByJointId.get(id) || joint.restCenter || [0, 0, 0]))
-      ).toArray(),
+      pivot: new THREE.Vector3(...(rig.jointPivotByJointId.get(id) || joint.restPivot || [0, 0, 0]))
+        .applyMatrix4(transform)
+        .toArray(),
+      center: new THREE.Vector3(...(rig.centerByJointId.get(id) || joint.restCenter || [0, 0, 0]))
+        .applyMatrix4(transform)
+        .toArray(),
       parentRotation: parentRotation.normalize().toArray(),
       boneRotation: boneRotation.normalize().toArray(),
       restRotation: restRotation.normalize().toArray(),

@@ -5,7 +5,7 @@
 import { Quaternion, Vector3 } from 'three';
 import { createWorkBudget } from './cooperative-scheduler.js';
 
-export const MODEL_RIG_BUILDER_VERSION = 3;
+export const MODEL_RIG_BUILDER_VERSION = 4;
 
 export const CROSS_SOURCE_CANDIDATE_DISTANCE = 0.1;
 export const CROSS_SOURCE_STRICT_DISTANCE = 0.04;
@@ -86,23 +86,6 @@ function edgeScore(edge) {
   return number(edge?.treeEdgeScore ?? edge?.score ?? edge?.containment ?? edge?.jaccard, 0);
 }
 
-function sourceEdgeEvidence(rig, component, boneId) {
-  return (component?.edges || [])
-    .filter((edge) => {
-      const left = Number(edge.boneA);
-      const right = Number(edge.boneB);
-      return left === boneId || right === boneId;
-    })
-    .map((edge) => ({
-      boneA: Number(edge.boneA),
-      boneB: Number(edge.boneB),
-      treeEdgeScore: edgeScore(edge),
-      sharedVertexCount: number(edge.sharedVertexCount),
-      centerDistance: edge.centerDistance === null ? null : number(edge.centerDistance, 0),
-      sourceKey: String(rig.sourceKey),
-    }));
-}
-
 function directionAvailable(evidence) {
   return !!evidence?.restDirection && evidence.directionSource !== 'canonical-y';
 }
@@ -171,12 +154,10 @@ function collectSourceBoneEvidence(rig) {
       parentBoneId,
       childBoneIds,
       neighborBoneIds,
-      depth: number(mapValue(component?.depthById, boneId)),
       degree: childBoneIds.length + (parentBoneId === null ? 0 : 1),
       isRoot: parentBoneId === null,
       totalWeight: number(node?.totalWeight),
       affectedVertexCount: number(node?.affectedVertexCount),
-      sourceEdgeEvidence: sourceEdgeEvidence(rig, component, boneId),
     });
   });
   return result;
@@ -322,24 +303,16 @@ function sortVertexSamples(samples) {
   return samples.sort((left, right) => left.sampleKey.localeCompare(right.sampleKey));
 }
 
-async function vertexSamplesForRigCooperative(
-  rig,
-  { budget = createWorkBudget(), isCurrent = () => true, vertexBatch = 256 } = {},
-) {
+async function vertexSamplesForRigCooperative(rig, checkpoint) {
   const samples = [];
   for (const descriptor of vertexEvidenceDescriptors(rig)) {
     for (let vertexIndex = 0; vertexIndex < descriptor.vertexCount; vertexIndex += 1) {
-      if (vertexIndex % vertexBatch === 0) {
-        if (!isCurrent()) return null;
-        await budget.checkpoint();
-        if (!isCurrent()) return null;
-      }
+      if ((vertexIndex & 255) === 0) await checkpoint();
       appendVertexSample(samples, descriptor, vertexIndex);
     }
   }
-  if (!isCurrent()) return null;
   sortVertexSamples(samples);
-  await budget.checkpoint();
+  await checkpoint();
   return samples;
 }
 
@@ -369,7 +342,7 @@ function considerNearestSample(sample, candidate, matchDistance, best) {
   return best;
 }
 
-async function nearestSampleCooperative(sample, cells, cellSize, matchDistance, { budget, isCurrent }) {
+async function nearestSampleCooperative(sample, cells, cellSize, matchDistance, checkpoint) {
   const [x, y, z] = cellKey(sample.point, cellSize).split(':').map(Number);
   let best = null;
   let candidateCount = 0;
@@ -379,11 +352,7 @@ async function nearestSampleCooperative(sample, cells, cellSize, matchDistance, 
         const entries = cells.get(`${x + dx}:${y + dy}:${z + dz}`);
         if (!entries) continue;
         for (const candidate of entries) {
-          if ((candidateCount++ & 255) === 0) {
-            if (!isCurrent()) return { cancelled: true };
-            await budget.checkpoint();
-            if (!isCurrent()) return { cancelled: true };
-          }
+          if ((candidateCount++ & 255) === 0) await checkpoint();
           best = considerNearestSample(sample, candidate, matchDistance, best);
         }
       }
@@ -399,23 +368,13 @@ function addSpatialSample(cells, sample, cellSize) {
   cells.set(key, entries);
 }
 
-async function buildSpatialCellsCooperative(
-  samples,
-  cellSize,
-  { budget = createWorkBudget(), isCurrent = () => true, sampleBatch = 256 } = {},
-) {
+async function buildSpatialCellsCooperative(samples, cellSize, checkpoint) {
   const cells = new Map();
   for (let index = 0; index < samples.length; index += 1) {
-    if (index % sampleBatch === 0) {
-      if (!isCurrent()) return null;
-      await budget.checkpoint();
-      if (!isCurrent()) return null;
-    }
-    const sample = samples[index];
-    addSpatialSample(cells, sample, cellSize);
+    if ((index & 255) === 0) await checkpoint();
+    addSpatialSample(cells, samples[index], cellSize);
   }
-  if (!isCurrent()) return null;
-  await budget.checkpoint();
+  await checkpoint();
   return cells;
 }
 
@@ -450,9 +409,10 @@ function addMutualCrossSourceEvidence(evidence, leftRig, rightRig, leftSample, r
   }
 }
 
-function finishCrossSourceEvidence(evidence, isCurrent = () => true) {
+async function finishCrossSourceEvidence(evidence, checkpoint) {
+  let recordIndex = 0;
   for (const record of evidence.values()) {
-    if (!isCurrent()) return null;
+    if ((recordIndex++ & 127) === 0) await checkpoint();
     const minimumMass = Math.max(EPSILON, Math.min(record.leftMass, record.rightMass));
     const unionMass = Math.max(EPSILON, record.leftMass + record.rightMass - record.weightedMatchStrength);
     record.crossContainment = clamp(record.weightedMatchStrength / minimumMass);
@@ -467,40 +427,25 @@ function finishCrossSourceEvidence(evidence, isCurrent = () => true) {
   return evidence;
 }
 
-export async function crossSourceWeightEvidenceCooperative(
+async function crossSourceWeightEvidenceCooperative(
   leftRig,
   rightRig,
   referenceRadius,
-  leftSamples = null,
-  rightSamples = null,
-  leftCells = null,
-  rightCells = null,
-  { budget = createWorkBudget(), isCurrent = () => true, sampleBatch = 128 } = {},
+  leftSampleList,
+  rightSampleList,
+  leftCellMap,
+  rightCellMap,
+  checkpoint,
 ) {
-  const leftSampleList = leftSamples || (await vertexSamplesForRigCooperative(leftRig, { budget, isCurrent }));
-  const rightSampleList = rightSamples || (await vertexSamplesForRigCooperative(rightRig, { budget, isCurrent }));
-  if (!leftSampleList || !rightSampleList) return null;
   if (!leftSampleList.length || !rightSampleList.length) return new Map();
-  const matchDistance = Math.max(referenceRadius * 0.02, EPSILON);
+  const matchDistance = crossSourceMatchDistance(referenceRadius);
   const cellSize = matchDistance;
-  const leftCellMap =
-    leftCells || (await buildSpatialCellsCooperative(leftSampleList, cellSize, { budget, isCurrent }));
-  const rightCellMap =
-    rightCells || (await buildSpatialCellsCooperative(rightSampleList, cellSize, { budget, isCurrent }));
-  if (!leftCellMap || !rightCellMap) return null;
   const nearestLeftByRight = new Map();
   const nearestRightByLeft = new Map();
   for (let index = 0; index < rightSampleList.length; index += 1) {
-    if (index % sampleBatch === 0) {
-      if (!isCurrent()) return null;
-      await budget.checkpoint();
-    }
+    if ((index & 127) === 0) await checkpoint();
     const rightSample = rightSampleList[index];
-    const best = await nearestSampleCooperative(rightSample, leftCellMap, cellSize, matchDistance, {
-      budget,
-      isCurrent,
-    });
-    if (best?.cancelled) return null;
+    const best = await nearestSampleCooperative(rightSample, leftCellMap, cellSize, matchDistance, checkpoint);
     if (best)
       nearestLeftByRight.set(rightSample, {
         leftSample: best.sample,
@@ -508,16 +453,9 @@ export async function crossSourceWeightEvidenceCooperative(
       });
   }
   for (let index = 0; index < leftSampleList.length; index += 1) {
-    if (index % sampleBatch === 0) {
-      if (!isCurrent()) return null;
-      await budget.checkpoint();
-    }
+    if ((index & 127) === 0) await checkpoint();
     const leftSample = leftSampleList[index];
-    const best = await nearestSampleCooperative(leftSample, rightCellMap, cellSize, matchDistance, {
-      budget,
-      isCurrent,
-    });
-    if (best?.cancelled) return null;
+    const best = await nearestSampleCooperative(leftSample, rightCellMap, cellSize, matchDistance, checkpoint);
     if (best)
       nearestRightByLeft.set(leftSample, {
         rightSample: best.sample,
@@ -528,15 +466,12 @@ export async function crossSourceWeightEvidenceCooperative(
   const evidence = new Map();
   let pairIndex = 0;
   for (const [rightSample, { leftSample, distance }] of nearestLeftByRight.entries()) {
-    if (pairIndex++ % sampleBatch === 0) {
-      if (!isCurrent()) return null;
-      await budget.checkpoint();
-    }
+    if ((pairIndex++ & 127) === 0) await checkpoint();
     const reverse = nearestRightByLeft.get(leftSample);
     if (!reverse || reverse.rightSample !== rightSample) continue;
     addMutualCrossSourceEvidence(evidence, leftRig, rightRig, leftSample, rightSample, distance, matchDistance);
   }
-  return finishCrossSourceEvidence(evidence, isCurrent);
+  return finishCrossSourceEvidence(evidence, checkpoint);
 }
 
 function candidateFor(left, right, allEvidence, crossEvidenceByPair, gate) {
@@ -673,7 +608,9 @@ class GuardedUnionFind {
   }
 
   same(left, right) {
-    return !!left && !!right && this.find(left) === this.find(right);
+    const leftRoot = this.find(left);
+    const rightRoot = this.find(right);
+    return leftRoot !== undefined && rightRoot !== undefined && leftRoot === rightRoot;
   }
 
   hasSourceConflict(left, right) {
@@ -837,7 +774,6 @@ function diagnosticCandidate(candidate, decision, rejectionReason = null) {
     relativeEdgeAlignment: candidate.relativeEdgeAlignment,
     edgeLengthRatio: candidate.edgeLengthRatio,
     graphAlignmentScore: candidate.graphAlignmentScore,
-    graphAlignmentPathLength: candidate.graphAlignmentPathLength || null,
     matchedVertexCount: candidate.matchedVertexCount ?? candidate.crossEvidence?.matchedVertexCount ?? 0,
     weightedMatchStrength: candidate.weightedMatchStrength ?? candidate.crossEvidence?.weightedMatchStrength ?? 0,
     crossContainment: candidate.crossEvidence?.crossContainment ?? null,
@@ -860,45 +796,29 @@ function crossSourceMatchDistance(referenceRadius) {
   return Math.max(referenceRadius * 0.02, EPSILON);
 }
 
-async function buildCrossSourceWeightEvidenceCooperative(
-  sourceRigs,
-  referenceRadius,
-  { budget = createWorkBudget(), isCurrent = () => true, timings = null } = {},
-) {
+async function buildCrossSourceWeightEvidenceCooperative(sourceRigs, referenceRadius, checkpoint, timings = null) {
   const rigs = orderedSourceRigs(sourceRigs);
   if (rigs.length < 2) return new Map();
   const matchDistance = crossSourceMatchDistance(referenceRadius);
   const samplesBySourceKey = new Map();
   const cellsBySourceKey = new Map();
   for (const rig of rigs) {
-    if (!isCurrent()) return null;
     const sourceKey = String(rig.sourceKey);
     const sampleStartedAt = clockNow();
-    const samples = await vertexSamplesForRigCooperative(rig, {
-      budget,
-      isCurrent,
-    });
-    if (!samples) return null;
+    const samples = await vertexSamplesForRigCooperative(rig, checkpoint);
     if (timings) timings.sampleBuildMs = (timings.sampleBuildMs || 0) + clockNow() - sampleStartedAt;
     const spatialStartedAt = clockNow();
-    const cells = await buildSpatialCellsCooperative(samples, matchDistance, {
-      budget,
-      isCurrent,
-    });
-    if (!cells) return null;
+    const cells = await buildSpatialCellsCooperative(samples, matchDistance, checkpoint);
     if (timings) timings.spatialIndexMs = (timings.spatialIndexMs || 0) + clockNow() - spatialStartedAt;
     samplesBySourceKey.set(sourceKey, samples);
     cellsBySourceKey.set(sourceKey, cells);
-    await budget.checkpoint();
+    await checkpoint();
   }
   const evidence = new Map();
   let pairIndex = 0;
   for (let leftIndex = 0; leftIndex < rigs.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < rigs.length; rightIndex += 1) {
-      if (pairIndex++ % 2 === 0) {
-        if (!isCurrent()) return null;
-        await budget.checkpoint();
-      }
+      if (pairIndex++ % 2 === 0) await checkpoint();
       const leftRig = rigs[leftIndex];
       const rightRig = rigs[rightIndex];
       const matchStartedAt = clockNow();
@@ -910,9 +830,8 @@ async function buildCrossSourceWeightEvidenceCooperative(
         samplesBySourceKey.get(String(rightRig.sourceKey)),
         cellsBySourceKey.get(String(leftRig.sourceKey)),
         cellsBySourceKey.get(String(rightRig.sourceKey)),
-        { budget, isCurrent },
+        checkpoint,
       );
-      if (!pairEvidence) return null;
       if (timings) timings.crossSourceMatchMs = (timings.crossSourceMatchMs || 0) + clockNow() - matchStartedAt;
       pairEvidence.forEach((record, key) => evidence.set(key, record));
     }
@@ -1112,156 +1031,6 @@ async function runGraphAlignment(
   }
 }
 
-async function pathBetweenSourceBones(startKey, endKey, evidenceByKey, checkpoint) {
-  if (evidenceByKey.get(startKey)?.sourceKey !== evidenceByKey.get(endKey)?.sourceKey) {
-    return null;
-  }
-  const previous = new Map([[startKey, null]]);
-  const queue = [startKey];
-  for (let index = 0; index < queue.length; index += 1) {
-    if ((index & 63) === 0) await checkpoint();
-    const current = queue[index];
-    if (current === endKey) break;
-    const evidence = evidenceByKey.get(current);
-    for (const neighborId of evidence?.neighborBoneIds || []) {
-      const neighborKey = sourceBoneKey(evidence.sourceKey, neighborId);
-      if (previous.has(neighborKey)) continue;
-      previous.set(neighborKey, current);
-      queue.push(neighborKey);
-    }
-  }
-  if (!previous.has(endKey)) return null;
-  const path = [];
-  for (let current = endKey; current !== null; current = previous.get(current)) path.push(current);
-  return path.reverse();
-}
-
-function matchedSourcePairs(unionFind, evidenceByKey) {
-  const result = new Map();
-  unionFind.clusters().forEach((members) => {
-    const bySource = new Map();
-    members.forEach((key) => {
-      const sourceKey = evidenceByKey.get(key).sourceKey;
-      const entries = bySource.get(sourceKey) || [];
-      entries.push(key);
-      bySource.set(sourceKey, entries);
-    });
-    const sources = [...bySource.keys()].sort();
-    for (let leftIndex = 0; leftIndex < sources.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < sources.length; rightIndex += 1) {
-        const left = bySource.get(sources[leftIndex])?.[0];
-        const right = bySource.get(sources[rightIndex])?.[0];
-        if (!left || !right) continue;
-        const key = [sources[leftIndex], sources[rightIndex]].join('|');
-        const pairs = result.get(key) || [];
-        pairs.push({ left, right });
-        result.set(key, pairs);
-      }
-    }
-  });
-  return result;
-}
-
-async function runPathAlignment(
-  candidates,
-  evidenceByKey,
-  unionFind,
-  diagnostics,
-  accepted,
-  correspondenceStrength,
-  checkpoint,
-) {
-  if (!unresolvedCandidates(candidates, unionFind).length) return;
-  const candidateByPair = new Map(
-    candidates.map((candidate) => [
-      crossPairKey(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
-      candidate,
-    ]),
-  );
-  let changed = true;
-  const pathCache = new Map();
-  const pathFor = async (startKey, endKey) => {
-    const key = `${startKey}\u0000${endKey}`;
-    if (pathCache.has(key)) return pathCache.get(key);
-    const path = await pathBetweenSourceBones(startKey, endKey, evidenceByKey, checkpoint);
-    pathCache.set(key, path);
-    return path;
-  };
-  while (changed) {
-    changed = false;
-    if (!unresolvedCandidates(candidates, unionFind).length) break;
-    const alignments = new Map();
-    let pairCount = 0;
-    for (const anchors of matchedSourcePairs(unionFind, evidenceByKey).values()) {
-      for (let leftIndex = 0; leftIndex < anchors.length; leftIndex += 1) {
-        for (let rightIndex = leftIndex + 1; rightIndex < anchors.length; rightIndex += 1) {
-          if ((pairCount++ & 63) === 0) await checkpoint();
-          const first = anchors[leftIndex];
-          const second = anchors[rightIndex];
-          const leftPath = await pathFor(first.left, second.left);
-          const rightPath = await pathFor(first.right, second.right);
-          if (!leftPath || !rightPath || leftPath.length !== rightPath.length || leftPath.length < 3) continue;
-          const internal = [];
-          for (let index = 1; index < leftPath.length - 1; index += 1) {
-            const candidate = candidateByPair.get(crossPairKey(leftPath[index], rightPath[index]));
-            if (
-              !candidate ||
-              graphEvidenceContradicts(candidate) ||
-              unionFind.same(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey)
-            ) {
-              internal.length = 0;
-              break;
-            }
-            internal.push(candidate);
-          }
-          if (!internal.length) continue;
-          const alignmentKey = internal
-            .map((candidate) => crossPairKey(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey))
-            .join('|');
-          if (alignments.has(alignmentKey)) continue;
-          alignments.set(alignmentKey, {
-            candidates: internal,
-            pathLength: leftPath.length,
-            score: average(
-              internal.map((candidate) => candidate.graphAlignmentScore ?? candidate.combinedConfidence),
-              0,
-            ),
-            leftAnchor: first.left,
-            rightAnchor: first.right,
-          });
-        }
-      }
-    }
-    const ordered = [...alignments.values()].sort(
-      (left, right) =>
-        right.pathLength - left.pathLength ||
-        right.score - left.score ||
-        left.leftAnchor.localeCompare(right.leftAnchor) ||
-        left.rightAnchor.localeCompare(right.rightAnchor),
-    );
-    for (const alignment of ordered) {
-      if (
-        alignment.candidates.some((candidate) =>
-          unionFind.same(candidate.left.sourceBoneKey, candidate.right.sourceBoneKey),
-        )
-      )
-        continue;
-      let acceptedPath = false;
-      for (const candidate of alignment.candidates) {
-        candidate.graphAlignmentPathLength = alignment.pathLength;
-        candidate.graphAlignmentScore = Math.max(candidate.graphAlignmentScore || 0, alignment.score);
-        if (
-          acceptedEquivalence(candidate, 'graph-alignment-3', unionFind, diagnostics, accepted, correspondenceStrength)
-        ) {
-          acceptedPath = true;
-          changed = true;
-        }
-      }
-      if (acceptedPath) break;
-    }
-  }
-}
-
 async function runEquivalencePasses(candidates, evidenceByKey, unionFind, checkpoint) {
   const accepted = [];
   const diagnostics = [];
@@ -1349,15 +1118,6 @@ async function runEquivalencePasses(candidates, evidenceByKey, unionFind, checkp
     });
   }
   await runGraphAlignment(
-    candidates,
-    evidenceByKey,
-    unionFind,
-    diagnostics,
-    accepted,
-    correspondenceStrength,
-    checkpoint,
-  );
-  await runPathAlignment(
     candidates,
     evidenceByKey,
     unionFind,
@@ -1488,10 +1248,21 @@ function buildModelJoints(unionFind, evidenceByKey, strengthByKey, referenceRadi
   return { joints, keyToJoint };
 }
 
+function sourceEdgeIndex(edges) {
+  const index = new Map();
+  for (const edge of edges || []) {
+    const key = unorderedPairKey(Number(edge.boneA), Number(edge.boneB));
+    if (!index.has(key)) index.set(key, edge);
+  }
+  return index;
+}
+
 function sourceModelEdges(sourceRigs, keyToJoint) {
   const edgeMap = new Map();
   for (const rig of sourceRigs) {
+    const relationships = sourceEdgeIndex(rig.influenceGraph?.relationships);
     for (const component of rig?.inferredForest?.components || []) {
+      const sourceEdges = sourceEdgeIndex(component.edges);
       const parentById = component.parentById || {};
       for (const [childValue, parentValue] of Object.entries(parentById)) {
         if (parentValue === null || parentValue === undefined) continue;
@@ -1513,16 +1284,9 @@ function sourceModelEdges(sourceRigs, keyToJoint) {
           combinedTreeScore: 0,
           relationshipType: 'source',
         };
-        const sourceEdge = (component.edges || []).find((candidate) => {
-          const a = Number(candidate.boneA);
-          const b = Number(candidate.boneB);
-          return (a === parentBoneId && b === childBoneId) || (a === childBoneId && b === parentBoneId);
-        });
-        const sourceRelationship = (rig.influenceGraph?.relationships || []).find((candidate) => {
-          const a = Number(candidate.boneA);
-          const b = Number(candidate.boneB);
-          return (a === parentBoneId && b === childBoneId) || (a === childBoneId && b === parentBoneId);
-        });
+        const pair = unorderedPairKey(parentBoneId, childBoneId);
+        const sourceEdge = sourceEdges.get(pair);
+        const sourceRelationship = relationships.get(pair);
         const treeScore = edgeScore(sourceEdge);
         edge.sourceEdges.push({
           sourceKey: String(rig.sourceKey),
@@ -1579,6 +1343,7 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
     adjacency.get(edge.jointB)?.push({ edge, other: edge.jointA });
   });
   adjacency.forEach((items) => items.sort((left, right) => left.other - right.other));
+  const edgeByPair = new Map(edges.map((edge) => [unorderedPairKey(edge.jointA, edge.jointB), edge]));
   const componentById = new Map();
   const components = [];
   const unseen = new Set(joints.map((joint) => joint.jointId));
@@ -1587,8 +1352,8 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
     const members = [];
     const queue = [start];
     unseen.delete(start);
-    while (queue.length) {
-      const current = queue.shift();
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const current = queue[cursor];
       members.push(current);
       (adjacency.get(current) || []).forEach((item) => {
         if (!unseen.has(item.other)) return;
@@ -1604,13 +1369,10 @@ function orientModelForest(joints, edges, votes, rootOverrides = new Map()) {
     const parentById = { [rootId]: null };
     const childrenById = { [rootId]: [] };
     const depthById = { [rootId]: 0 };
-    const edgeByPair = new Map(
-      edges.map((edge) => [`${Math.min(edge.jointA, edge.jointB)}:${Math.max(edge.jointA, edge.jointB)}`, edge]),
-    );
     const walk = [rootId];
     const visited = new Set([rootId]);
-    while (walk.length) {
-      const parent = walk.shift();
+    for (let cursor = 0; cursor < walk.length; cursor += 1) {
+      const parent = walk[cursor];
       (adjacency.get(parent) || []).forEach((item) => {
         if (visited.has(item.other)) return;
         visited.add(item.other);
@@ -1690,7 +1452,7 @@ function componentSupport(component, joints) {
   return component.nodeIds.reduce((sum, id) => sum + number(joints[id]?.evidence?.totalWeight, 0), 0);
 }
 
-function jointPairKey(leftId, rightId) {
+function unorderedPairKey(leftId, rightId) {
   return `${Math.min(leftId, rightId)}:${Math.max(leftId, rightId)}`;
 }
 
@@ -1731,26 +1493,34 @@ async function aggregateComponentCrossEvidence(
   jointEvidenceByPair = null,
   checkpoint,
 ) {
-  const jointEvidence = [];
+  if (!crossEvidenceByPair.size) {
+    return {
+      matchedVertexCount: 0,
+      weightedMatchStrength: 0,
+      crossQuality: 0,
+      supportedJointPairCount: 0,
+      nearestSupportedDistance: null,
+      supportedTargetCountByAccessory: new Map(),
+    };
+  }
+  const supported = [];
   let pairCount = 0;
   for (const accessoryId of component.nodeIds) {
     for (const targetId of target.nodeIds) {
       if ((pairCount++ & 255) === 0) await checkpoint();
-      const key = jointPairKey(accessoryId, targetId);
+      const key = unorderedPairKey(accessoryId, targetId);
       const evidence =
         jointEvidenceByPair?.get(key) ||
         aggregateJointCrossEvidence(joints[accessoryId], joints[targetId], crossEvidenceByPair);
       jointEvidenceByPair?.set(key, evidence);
+      if (!(evidence.matchedVertexCount > 0)) continue;
       const accessoryCenter = vectorFrom(joints[accessoryId]?.restCenter);
       const targetCenter = vectorFrom(joints[targetId]?.restCenter);
       const distance =
         accessoryCenter && targetCenter ? accessoryCenter.distanceTo(targetCenter) / referenceRadius : Infinity;
-      if (evidence.matchedVertexCount > 0 || Number.isFinite(distance)) {
-        jointEvidence.push({ accessoryId, targetId, distance, evidence });
-      }
+      supported.push({ accessoryId, targetId, distance, evidence });
     }
   }
-  const supported = jointEvidence.filter((item) => item.evidence.matchedVertexCount > 0);
   const supportedTargetCountByAccessory = new Map();
   supported.forEach((item) =>
     supportedTargetCountByAccessory.set(
@@ -1879,7 +1649,7 @@ async function attachmentCandidates(joints, forest, referenceRadius, crossEviden
           const accessoryJoint = joints[accessoryId];
           const accessoryAnchor = jointDescriptorById.get(accessoryId)?.anchor;
           if (!accessoryAnchor) continue;
-          const witnessKey = jointPairKey(targetId, accessoryId);
+          const witnessKey = unorderedPairKey(targetId, accessoryId);
           let sourceWitnesses = sourceWitnessesByJointPair.get(witnessKey);
           if (!sourceWitnesses) {
             sourceWitnesses = sourceWitnessesForJoints(targetJoint, accessoryJoint, sourceKeysByJointId);
@@ -2089,22 +1859,6 @@ async function addAttachments(joints, sourceEdges, forest, referenceRadius, cros
   return { edges: [...sourceEdges, ...accepted].sort(compareForestEdges), diagnostics };
 }
 
-function evidenceSnapshot(evidence) {
-  return [...evidence.entries()].map(([key, item]) => [
-    key,
-    {
-      ...item,
-      weightedCenter: [...item.weightedCenter],
-      jointPivot: item.jointPivot ? [...item.jointPivot] : null,
-      restAnchor: [...item.restAnchor],
-      restDirection: item.restDirection ? [...item.restDirection] : null,
-      restFrame: [...item.restFrame],
-      childBoneIds: [...item.childBoneIds],
-      sourceEdgeEvidence: item.sourceEdgeEvidence.map((edge) => ({ ...edge })),
-    },
-  ]);
-}
-
 async function assembleModelRigReconciliation(
   sourceRigs,
   evidenceByKey,
@@ -2156,7 +1910,6 @@ async function assembleModelRigReconciliation(
     ...equivalence.diagnostics,
     ...attachmentDiagnostics.filter((item) => item.decision === 'rejected'),
   ];
-  const sourceBoneToModelJointId = Object.fromEntries([...model.keyToJoint.entries()]);
   const unmatchedCount = [...unionFind.clusters().values()].filter((members) => members.length === 1).length;
   const ambiguousCount = rejectedCandidates.filter(
     (item) => item.rejectionReason === 'ambiguous' || item.rejectionReason === 'attachment_ambiguous',
@@ -2210,15 +1963,9 @@ async function assembleModelRigReconciliation(
   };
   return {
     modelReferenceRadius: referenceRadius,
-    sourceBoneEvidence: evidenceSnapshot(evidenceByKey),
-    restAnchorBySourceBoneKey: Object.fromEntries(
-      [...evidenceByKey.entries()].map(([key, item]) => [key, [...item.restAnchor]]),
-    ),
-    sourceBoneToModelJointId,
     sourceBoneToModelJointMap: model.keyToJoint,
     joints: model.joints,
     edges: finalEdges,
-    forestEdges: finalEdges,
     components: finalForest.components,
     componentByJointId: finalForest.componentByJointId,
     reconciliation,
@@ -2246,9 +1993,9 @@ export async function buildModelRigReconciliationCooperative(
     if (!isCurrent()) throw stale;
   };
   try {
+    await checkpoint();
     const evidenceByKey = new Map();
     for (const rig of rigs) {
-      if (!isCurrent()) return null;
       collectSourceBoneEvidence(rig).forEach((evidence, key) => evidenceByKey.set(key, evidence));
       await checkpoint();
     }
@@ -2266,8 +2013,7 @@ export async function buildModelRigReconciliationCooperative(
     }
     const crossEvidenceByPair = useModelWideBoneIds
       ? new Map()
-      : await buildCrossSourceWeightEvidenceCooperative(matchingRigs, referenceRadius, { budget, isCurrent, timings });
-    if (!crossEvidenceByPair) return null;
+      : await buildCrossSourceWeightEvidenceCooperative(matchingRigs, referenceRadius, checkpoint, timings);
     await checkpoint();
     const graphStartedAt = clockNow();
     const result = await assembleModelRigReconciliation(rigs, evidenceByKey, referenceRadius, {
@@ -2275,7 +2021,7 @@ export async function buildModelRigReconciliationCooperative(
       options: { ...options, crossEvidenceByPair },
       checkpoint,
     });
-    if (!isCurrent()) return null;
+    await checkpoint();
     if (timings) timings.graphBuildMs = clockNow() - graphStartedAt;
     return result;
   } catch (error) {
