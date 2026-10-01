@@ -416,6 +416,8 @@ export default {
   'weightRig.status.selectionSaveError': '본 선택을 저장하지 못했습니다: {detail}',
   'weightRig.status.loadingWeights': '웨이트 로드 중…',
   'weightRig.status.loadingRig': '리그 로드 중…',
+  'weightRig.status.surfaceRigUnavailable':
+    '리그를 사용할 수 없습니다: 사용 가능한 면이 없습니다. 영향을 받는 웨이트 소스 수: {count}.',
   'weightRig.status.noWeights': '이 모델에 사용할 수 있는 스킨 웨이트가 없습니다.',
   'weightRig.control.chest': '가슴',
   'weightRig.control.pelvis': '골반',

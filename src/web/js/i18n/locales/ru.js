@@ -417,6 +417,8 @@ export default {
   'weightRig.status.selectionSaveError': 'Не удалось сохранить выбор костей: {detail}',
   'weightRig.status.loadingWeights': 'Загрузка весов…',
   'weightRig.status.loadingRig': 'Загрузка рига…',
+  'weightRig.status.surfaceRigUnavailable':
+    'Риг недоступен: нет пригодных граней. Число затронутых источников весов: {count}.',
   'weightRig.status.noWeights': 'Для этой модели нет доступных весов скиннинга.',
   'weightRig.control.chest': 'Грудь',
   'weightRig.control.pelvis': 'Таз',

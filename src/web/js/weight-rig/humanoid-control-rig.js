@@ -6,7 +6,7 @@ import {
   buildProportionalHumanoidRig,
   semanticAxesFrame,
 } from './humanoid-proportional-template.js';
-import { MODEL_RIG_BUILDER_VERSION } from './model-rig-persistence.js';
+import { MODEL_RIG_BUILDER_VERSION } from './weight-rig-reconcile.js';
 
 const EPSILON = 1e-8;
 export const HUMANOID_CONTROL_RIG_VERSION = 2;
@@ -432,7 +432,7 @@ function cloneControlRig(rig) {
   return serializeHumanoidControlRig(rig);
 }
 
-/** Resolve saved ModelJoint IDs without guessing replacements. */
+/** Resolve current ModelJoint IDs; older mappings retain only semantic positions. */
 export function resolveHumanoidControlMappings({ savedOverrides, modelRig } = {}) {
   const result = new Map();
   const rejectedControlKeys = new Set();
@@ -444,16 +444,22 @@ export function resolveHumanoidControlMappings({ savedOverrides, modelRig } = {}
   CONTROL_KEYS.forEach((controlKey) => {
     const raw = controls[controlKey];
     if (!raw || typeof raw !== 'object' || !Object.prototype.hasOwnProperty.call(raw, 'joint_id')) return;
-    // An explicit ID is only meaningful for the ModelRig builder that wrote
-    // it. Missing or stale provenance rejects the mapping and disables the
-    // proximity fallback for this control.
-    if (builderVersion !== MODEL_RIG_BUILDER_VERSION) {
-      rejectedControlKeys.add(controlKey);
-      return;
-    }
     const jointId = Number.isInteger(raw.joint_id) ? raw.joint_id : null;
     if (!Number.isInteger(jointId) || jointId < 0) {
       rejectedControlKeys.add(controlKey);
+      return;
+    }
+    if (builderVersion !== MODEL_RIG_BUILDER_VERSION) {
+      // Discard IDs from older builders, but keep valid saved positions eligible
+      // for the normal point-to-point binding. Unknown provenance stays unbound.
+      if (
+        !Number.isInteger(builderVersion) ||
+        builderVersion <= 0 ||
+        builderVersion >= MODEL_RIG_BUILDER_VERSION ||
+        !validSemantic(raw.semantic)
+      ) {
+        rejectedControlKeys.add(controlKey);
+      }
       return;
     }
     if (usedJoints.has(jointId)) {

@@ -8,6 +8,10 @@ npm ci --ignore-scripts
 python tools/quality_audit.py
 ```
 
+Before every commit, the full audit must pass locally on the final contents being
+committed. Fix findings or missing tools, and re-run after any further change.
+CI continues to enforce the same checks.
+
 The audit checks tracked authored files and excludes vendored JavaScript. Reports
 go to `.quality-reports/`, which is ignored by Git; CI uploads them as the
 `quality-audit` artifact. Checks do not rewrite source files. Hygiene fixers run

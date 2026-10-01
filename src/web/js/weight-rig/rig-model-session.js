@@ -2,13 +2,7 @@
 // receives construction and sampling services from the composition root, but
 // the asynchronous state transitions and user intents live here.
 
-import { sourceBoneKey } from './weight-rig-reconcile.js';
-import {
-  aggregateInfluenceGraphs,
-  buildInferredRigForest,
-  inspectSurfaceTopologyCooperative,
-  jointPivotMap,
-} from './weight-rig.js';
+import { aggregateInfluenceGraphs, buildInferredRigForest, jointPivotMap } from './weight-rig.js';
 import { createWorkBudget } from './cooperative-scheduler.js';
 import { weightRigStatus } from './weight-rig-status.js';
 
@@ -50,7 +44,7 @@ export function createRigSourceSession({
   knownMeshes,
   modelWeightState,
   sourceSkinningRigs,
-  ensureRigMeshPreparedCooperative,
+  ensureRigMeshPrepared,
   ensureInfluenceGraphCooperative,
   rebuildRestFrames,
   cloneForest,
@@ -121,9 +115,7 @@ export function createRigSourceSession({
       vertexCount: 0,
       triangleCount: 0,
       meshPreparationMs: 0,
-      topologyMs: 0,
       surfaceGraphMs: 0,
-      vertexGraphMs: 0,
     };
     const loadedMembers = [];
     for (const mesh of members) {
@@ -131,7 +123,7 @@ export function createRigSourceSession({
       const state = states.get(mesh);
       if (!state?.loaded) continue;
       const preparationStartedAt = clockNow();
-      if (!(await ensureRigMeshPreparedCooperative(mesh, state, { budget, isCurrent }))) return null;
+      if (!ensureRigMeshPrepared(mesh, state)) return null;
       timings.meshPreparationMs += clockNow() - preparationStartedAt;
       loadedMembers.push(preparedMember(mesh, state));
       await budget.checkpoint();
@@ -143,36 +135,23 @@ export function createRigSourceSession({
       (sum, member) => sum + Math.floor((member.state.baselinePositions?.length || 0) / 3),
       0,
     );
-    const surfaceEvidenceByMesh = new Map();
-    let surfaceEligible = true;
-    for (const member of uniqueMembers) {
-      const topologyStartedAt = clockNow();
-      const measure = await inspectSurfaceTopologyCooperative(member.state.baselinePositions, member.surfaceIndices, {
-        budget,
-        isCurrent,
-      });
-      if (!measure) return null;
-      timings.topologyMs += clockNow() - topologyStartedAt;
-      surfaceEvidenceByMesh.set(member.mesh, measure);
-      timings.triangleCount += measure.triangleCount;
-      surfaceEligible = surfaceEligible && measure.surfaceEvidenceAvailable;
-    }
-    const evidenceMode = surfaceEligible ? 'surface' : 'vertex';
     const graphs = [];
     for (const member of uniqueMembers) {
       if (!isCurrent()) return null;
-      const surfaceEvidence = surfaceEvidenceByMesh.get(member.mesh);
       const graphStartedAt = clockNow();
-      const graph = await ensureInfluenceGraphCooperative(member.mesh, member.state, evidenceMode, surfaceEvidence, {
+      const graph = await ensureInfluenceGraphCooperative(member.mesh, member.state, {
         budget,
         isCurrent,
       });
       if (!graph) return null;
-      if (evidenceMode === 'surface') {
-        timings.surfaceGraphMs += clockNow() - graphStartedAt;
-      } else {
-        timings.vertexGraphMs += clockNow() - graphStartedAt;
+      if (!isCurrent()) return null;
+      if (!(graph.validTriangleCount > 0 && graph.totalSurfaceArea > 0)) {
+        const error = new Error('Rig requires usable triangle geometry for every source member.');
+        error.code = 'rig_surface_unavailable';
+        throw error;
       }
+      timings.surfaceGraphMs += clockNow() - graphStartedAt;
+      timings.triangleCount += graph.triangleCount;
       graphs.push(graph);
       await budget.checkpoint();
     }
@@ -263,9 +242,10 @@ export function createRigSourceSession({
   }
 
   const inFlight = new Map();
+  const sourceErrors = new Map();
 
-  async function ensureCooperative(sourceKey, members, { generation = null, isCurrent = () => true } = {}) {
-    const current = () => generation === null || generation === undefined || isCurrent();
+  async function ensureCooperative(sourceKey, members, { isCurrent = () => true } = {}) {
+    const current = isCurrent;
     if (!current()) return null;
     const existing = sourceSkinningRigs.get(sourceKey);
     if (existing && sameMeshSet(existing.meshes, members)) return existing;
@@ -280,12 +260,19 @@ export function createRigSourceSession({
       if (!current()) return null;
       const rig = await createSourceSkinningRigCooperative(sourceKey, members, budget, current);
       if (!rig || !current()) return null;
+      sourceErrors.delete(sourceKey);
       sourceSkinningRigs.set(sourceKey, rig);
       return rig;
     })();
     inFlight.set(sourceKey, promise);
     try {
       return await promise;
+    } catch (error) {
+      if (current() && error.code === 'rig_surface_unavailable') {
+        sourceErrors.set(sourceKey, error.message);
+        sourceSkinningRigs.delete(sourceKey);
+      }
+      throw error;
     } finally {
       if (inFlight.get(sourceKey) === promise) inFlight.delete(sourceKey);
     }
@@ -307,6 +294,9 @@ export function createRigSourceSession({
     for (const sourceKey of [...sourceSkinningRigs.keys()]) {
       if (!groups.has(sourceKey)) sourceSkinningRigs.delete(sourceKey);
     }
+    for (const sourceKey of sourceErrors.keys()) {
+      if (!groups.has(sourceKey)) sourceErrors.delete(sourceKey);
+    }
     return [...sourceSkinningRigs.values()];
   }
 
@@ -314,20 +304,28 @@ export function createRigSourceSession({
     const groups = groupLoadedMeshes();
     const budget = createWorkBudget();
     for (const [sourceKey, members] of groups) {
-      if (generation !== null && !isCurrent()) return null;
-      const rig = await ensureCooperative(sourceKey, members, { generation, isCurrent });
-      if (!rig) return null;
+      if (!isCurrent()) return null;
+      try {
+        const rig = await ensureCooperative(sourceKey, members, { generation, isCurrent });
+        if (!rig) return null;
+      } catch (error) {
+        if (error.code !== 'rig_surface_unavailable') throw error;
+      }
       await budget.checkpoint();
     }
-    if (generation !== null && !isCurrent()) return null;
-    return retainSourceRigs(groups);
+    if (!isCurrent()) return null;
+    const rigs = retainSourceRigs(groups);
+    if (!rigs.length && sourceErrors.size) throw new Error([...sourceErrors.values()][0]);
+    return rigs;
   }
 
   return {
     ensureCooperative,
     buildAllCooperative,
+    getErrors: () => Object.fromEntries(sourceErrors),
     reset() {
       inFlight.clear();
+      sourceErrors.clear();
     },
   };
 }
@@ -358,9 +356,7 @@ export function createRigModelSession({
     for (const influence of sampled.influences) {
       const boneId = Number(influence?.boneId);
       const weight = Number(influence?.weight);
-      const jointId =
-        getModelJointId?.(sampled.sourceKey, boneId) ??
-        getSnapshot()?.model?.sourceBoneToModelJointId?.get(sourceBoneKey(sampled.sourceKey, boneId));
+      const jointId = getModelJointId(sampled.sourceKey, boneId);
       if (!Number.isInteger(boneId) || !Number.isFinite(weight) || weight <= 0 || !Number.isInteger(jointId)) continue;
       const current = jointScores.get(jointId);
       if (!current) {

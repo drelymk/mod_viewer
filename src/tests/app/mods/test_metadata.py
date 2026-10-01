@@ -78,7 +78,7 @@ def test_rig_pose_preset_lifecycle_preserves_unrelated_metadata(tmp_path):
 def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path):
     value = {
         "version": 2,
-        "model_rig_builder_version": 2,
+        "model_rig_builder_version": metadata.MODEL_RIG_BUILDER_VERSION,
         "controls": {
             "leftShoulder": {
                 "semantic": {"sideN": -0.18, "height01": 0.7,
@@ -106,6 +106,14 @@ def test_humanoid_control_rig_lifecycle_preserves_presets_and_metadata(tmp_path)
     })["saved"] is False
     assert path.read_bytes() == before
     assert metadata.humanoid_control_rig(str(tmp_path)) == semantic
+    older = {**value, "model_rig_builder_version": metadata.MODEL_RIG_BUILDER_VERSION - 1}
+    data["rig"]["humanoid_control_rig"] = older
+    path.write_text(json.dumps(data), encoding="utf-8")
+    before = path.read_bytes()
+    assert metadata.humanoid_control_rig(str(tmp_path)) == older
+    assert path.read_bytes() == before
+    assert metadata.save_humanoid_control_rig(str(tmp_path), older)["saved"] is False
+    assert path.read_bytes() == before
     result = metadata.save_humanoid_control_rig(str(tmp_path), value)
 
     assert result["saved"] is True
@@ -149,53 +157,6 @@ def test_malformed_humanoid_rig_does_not_hide_valid_pose_presets():
         },
     })
     assert result["presets"][0]["id"] == "pose-1"
-
-
-def test_model_rig_sidecar_round_trip_is_compact_and_lossless(tmp_path):
-    value = {
-        "version": 1,
-        "builder_version": 2,
-        "model_reference_radius": 1.25,
-        "source_table": ["component01|offset=0"],
-        "joints": [{
-            "joint_id": 0,
-            "members": [[0, 7]],
-            "representative_member_index": 0,
-            "parent_id": None,
-            "rest_center": [0, 1, 0],
-            "rest_pivot": [0, 1, 0],
-            "rest_frame": [0, 0, 0, 1],
-        }],
-        "edges": [],
-    }
-    saved = metadata.save_model_rig(str(tmp_path), value)
-    assert saved == {"saved": True,
-                     "path": str(tmp_path / metadata.MODEL_RIG_METADATA_NAME)}
-    assert metadata.load_model_rig(str(tmp_path)) == value
-    sidecar_text = (tmp_path / metadata.MODEL_RIG_METADATA_NAME).read_text(
-        encoding="utf-8")
-    assert "\n" not in sidecar_text
-    assert json.loads(sidecar_text) == value
-    assert metadata.save_model_rig(str(tmp_path), {
-        **value, "joints": [{**value["joints"][0],
-                              "members": [[0, 7], [0, 8]],
-                              "representative_member_index": 1}],
-    })["saved"] is True
-
-
-def test_model_rig_sidecar_rejects_impossible_topology(tmp_path):
-    def joint(number, parent):
-        return {"joint_id": number, "members": [[0, number + 7]],
-                "representative_member_index": 0, "parent_id": parent,
-                "rest_center": [0, number, 0], "rest_pivot": [0, number, 0],
-                "rest_frame": [0, 0, 0, 1]}
-    value = {"version": 1, "builder_version": 2,
-             "model_reference_radius": 1, "source_table": ["component01|offset=0"],
-             "joints": [joint(0, 1), joint(1, 0)], "edges": [{
-                 "joint_a": 0, "joint_b": 1, "relationship_type": "source",
-                 "edge_strength": 1, "edge_pivot": [0, 0, 0]}]}
-    assert metadata.save_model_rig(str(tmp_path), value)["saved"] is False
-    assert not (tmp_path / metadata.MODEL_RIG_METADATA_NAME).exists()
 
 
 

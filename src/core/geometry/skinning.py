@@ -176,8 +176,7 @@ def _resolve_vertex_vg_resource(resource_name, resolve_vertex_info,
 
 
 def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
-                            bone_id_offset=0, remap_resources=None,
-                            declared_vertex_vg_resources_for_blend=None):
+                            bone_id_offset=0, remap_resources=None):
     """Resolve one conservative Blend candidate from active ``vbN`` state.
 
     The caller supplies the resolver already used by draw-group assembly, so
@@ -236,20 +235,6 @@ def resolve_skinning_source(effective_vertex_resources, resolve_vertex_info, *,
                 if remap_error:
                     unsupported.append(remap_error)
                     continue
-            else:
-                valid_declared = []
-                declared_resources = ()
-                if callable(declared_vertex_vg_resources_for_blend):
-                    declared_resources = (
-                        declared_vertex_vg_resources_for_blend(
-                            resource_name, filename) or ())
-                for candidate_name in declared_resources:
-                    candidate, _candidate_error = _resolve_vertex_vg_resource(
-                        candidate_name, resolve_vertex_info, influence_count)
-                    if candidate is not None:
-                        valid_declared.append(candidate)
-                if len(valid_declared) == 1:
-                    remap_info = valid_declared[0]
         source = SkinningSource(
             file=filename, stride=stride,
             influence_count=influence_count, encoding=encoding,

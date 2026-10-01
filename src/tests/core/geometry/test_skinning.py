@@ -334,12 +334,10 @@ def test_skinning_remap_resolution_lifecycle():
         "ResourceRemap02": {"filename": "remap-02.buf", "stride": 16,
                             "format": "DXGI_FORMAT_R16_UINT"},
     }
-    candidates = []
     def resolve(explicit=None):
         source, error = resolve_skinning_source(
             {1: "ResourceBlend"}, resources.get, bone_id_offset=12,
-            remap_resources=explicit,
-            declared_vertex_vg_resources_for_blend=lambda *_: candidates)
+            remap_resources=explicit)
         assert error is None
         return source
 
@@ -347,12 +345,10 @@ def test_skinning_remap_resolution_lifecycle():
     decoded = decode_skinning(local, bytes([3] + [0] * 7 + [255] + [0] * 7), [0])
     assert unpack_values(decoded.indices, "8I")[0] == 15
     assert skinning_source_descriptor(local)["bone_ids_model_wide"] is False
-    candidates.append("ResourceRemap01")
-    mapped = resolve()
+    assert resolve().vertex_vg_file is None
+    mapped = resolve({35: "ResourceRemap01"})
     assert mapped.vertex_vg_file == "remap-01.buf"
     assert mapped.bone_id_namespace == "wwmi_vertex_vg"
-    candidates.append("ResourceRemap02")
-    assert resolve().vertex_vg_file is None
     explicit = resolve({35: "ResourceRemap02"})
     assert explicit.vertex_vg_file == "remap-02.buf"
     assert skinning_source_descriptor(explicit)["bone_ids_model_wide"] is True

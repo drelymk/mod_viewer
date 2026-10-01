@@ -111,6 +111,273 @@ def test_weight_selection_keeps_equal_bone_ids_scoped_to_exact_sources(module_pa
     assert [entry['bone_ids'] for entry in result['serialized']] == [[2, 4, 6], [2]]
 
 
+def test_saved_humanoid_arm_rebinds_after_builder_change_and_deforms_vertices(module_page):
+    result = module_page.evaluate("""async () => {
+      const humanoid = await import('./js/weight-rig/humanoid-control-rig.js');
+      const bindingApi = await import('./js/weight-rig/humanoid-rig-binding.js');
+      const ik = await import('./js/weight-rig/humanoid-rig-ik.js');
+      const deformation = await import('./js/weight-rig/weight-deformation.js');
+      const automatic = humanoid.buildHumanoidControlRig({meshes: [{userData: {
+        humanoidRestPositions: new Float32Array([-1,0,0, 1,0,0, 0,2,0, -1,1.5,0, 1,1.5,0]),
+      }}]});
+      const keys = ['leftShoulder', 'leftElbow', 'leftHand'];
+      const positions = ['rightHand', ...keys].map(key => automatic.controls[key].position);
+      const model = {joints: positions.map((restPivot, jointId) => ({jointId, restPivot})),
+        components: [{rootId: 0, nodeIds: [0], parentById: {0: null}, childrenById: {0: []}},
+          {rootId: 1, nodeIds: [1,2,3], parentById: {1: null, 2: 1, 3: 2},
+            childrenById: {1: [2], 2: [3], 3: []}}]};
+      const baseline = new Float32Array(positions.flat());
+      const indices = new Uint32Array([10,11,12,13]);
+      const weights = new Float32Array([1,1,1,1]);
+      const authored = {indices: [...indices], weights: [...weights]};
+      const target = [...positions[3]]; target[1] += 0.1; target[2] += 0.05;
+      const rows = [];
+      for (const version of [1, 2, humanoid.MODEL_RIG_BUILDER_VERSION]) {
+        const current = version === humanoid.MODEL_RIG_BUILDER_VERSION;
+        const saved = {version: humanoid.HUMANOID_CONTROL_RIG_VERSION,
+          model_rig_builder_version: version, controls: Object.fromEntries(keys.map((key, index) =>
+            [key, {semantic: automatic.controls[key].semantic, joint_id: index + (current ? 1 : 0)}]))};
+        const originalSaved = JSON.stringify(saved);
+        const mappings = humanoid.resolveHumanoidControlMappings({savedOverrides: saved, modelRig: model});
+        const controlRig = humanoid.applyHumanoidControlRigOverrides({automaticRig: automatic,
+          savedOverrides: saved, modelRig: model, resolvedMappings: mappings});
+        const binding = bindingApi.buildHumanoidRigBinding({controlRig, modelRig: model, controlMappings: mappings});
+        const solved = ik.solveHumanoidControlIk({controlRig, role: 'left_arm', target});
+        const posedControls = ik.mergeHumanoidLimbPose({}, solved.positions, solved.keys);
+        const deform = pose => {
+          const driver = bindingApi.buildHumanoidDriverBaseTransforms({binding, controlRig,
+            modelRig: model, posedControls: pose});
+          const aliases = new Map([...driver.result].map(([id, matrix]) => [id + 10, matrix]));
+          return deformation.applyWeightedTransformDeformation(baseline, indices, weights, 1, aliases);
+        };
+        const posed = deform(posedControls), restored = deform(null);
+        const close = (actual, expected) => actual.every((value, i) => Math.abs(value - expected[i]) < 1e-5);
+        rows.push({current, mappedIds: [...mappings.values()].map(value => value.jointId),
+          rejected: [...mappings.rejectedControlKeys],
+          anchors: keys.map(key => binding.diagnostics.bindingsByControl[key].anchorJointId),
+          reached: solved.reached, handFollows: close([...posed.slice(9,12)], solved.end),
+          handMoved: !close([...posed.slice(9,12)], positions[3]),
+          otherHandUnchanged: close([...posed.slice(0,3)], positions[0]),
+          restored: close([...restored], [...baseline]), savedUnchanged: JSON.stringify(saved) === originalSaved});
+      }
+      return {rows, authoredUnchanged: JSON.stringify(authored) ===
+        JSON.stringify({indices: [...indices], weights: [...weights]})};
+    }""")
+    assert result['authoredUnchanged']
+    for row in result['rows']:
+        assert row['mappedIds'] == ([1, 2, 3] if row['current'] else [])
+        assert row['rejected'] == []
+        assert row['anchors'] == [1, 2, 3]
+        assert all(row[key] for key in ('reached', 'handFollows', 'handMoved',
+                                       'otherHandUnchanged', 'restored', 'savedUnchanged'))
+
+
+@pytest.mark.parametrize(('builder', 'joint_id', 'valid_semantic'), [
+    (None, 0, True), (0, 0, True), (4, 0, True), (True, 0, True),
+    (1, -1, True), (1, None, True), (1, '0', True), (1, 0, False),
+    (3, -1, True), (3, 99, True),
+])
+def test_invalid_humanoid_mapping_provenance_stays_unbound(module_page, builder, joint_id, valid_semantic):
+    result = module_page.evaluate("""async ({builder, jointId, validSemantic}) => {
+      const humanoid = await import('./js/weight-rig/humanoid-control-rig.js');
+      const semantic = validSemantic ? {sideN: -0.2, height01: 0.7, depthN: 0} : {height01: 0.7};
+      const mappings = humanoid.resolveHumanoidControlMappings({
+        savedOverrides: {model_rig_builder_version: builder,
+          controls: {leftHand: {joint_id: jointId, semantic}}},
+        modelRig: {joints: [{jointId: 0}]},
+      });
+      return {mapped: [...mappings], rejected: [...mappings.rejectedControlKeys]};
+    }""", {'builder': builder, 'jointId': joint_id, 'validSemantic': valid_semantic})
+    assert result == {'mapped': [], 'rejected': ['leftHand']}
+
+
+@pytest.fixture
+def reconciliation_page(module_page):
+    module_page.evaluate("""async () => {
+      window.__reconciliation = await import('./js/weight-rig/weight-rig-reconcile.js');
+      window.__sourceRig = (sourceKey, rows, modelWide = false, direction = [1, 0, 0]) => {
+        const nodes = rows.map(([boneId, center, parent, weight = 1]) => ({
+          boneId, weightedCenter: center, weightedRadius: 1, totalWeight: weight, affectedVertexCount: 32,
+        }));
+        const parentById = Object.fromEntries(rows.map(([id, , parent]) => [id, parent]));
+        const childrenById = Object.fromEntries(rows.map(([id]) => [id,
+          rows.filter(([, , parent]) => parent === id).map(([child]) => child)]));
+        const components = rows.filter(([, , parent]) => parent === null).map(([rootId], componentId) => {
+          const nodeIds = [], depthById = {[rootId]: 0}, pending = [rootId];
+          while (pending.length) {
+            const id = pending.shift(); nodeIds.push(id);
+            childrenById[id].forEach(child => {depthById[child] = depthById[id] + 1; pending.push(child);});
+          }
+          return {componentId, rootId, nodeIds, depthById,
+            parentById: Object.fromEntries(nodeIds.map(id => [id, parentById[id]])),
+            childrenById: Object.fromEntries(nodeIds.map(id => [id, childrenById[id]])),
+            edges: nodeIds.filter(id => parentById[id] !== null).map(id =>
+              ({boneA: parentById[id], boneB: id, treeEdgeScore: 1})),
+          };
+        });
+        return {sourceKey, boneIdsModelWide: modelWide, boneIds: nodes.map(node => node.boneId),
+          influenceGraph: {nodes, relationships: components.flatMap(component => component.edges)},
+          inferredForest: {components, componentByBoneId: new Map(components.flatMap(component =>
+            component.nodeIds.map(id => [id, component.componentId])))},
+          centerByBoneId: new Map(nodes.map(node => [node.boneId, node.weightedCenter])),
+          restDirectionByBoneId: new Map(nodes.map(node => [node.boneId, direction])),
+          restFrameEvidenceByBoneId: new Map(nodes.map(node => [node.boneId, {directionSource: 'geometry'}])),
+          restFrameByBoneId: new Map(), jointPivotByBoneId: new Map(), vertexEvidence: [],
+        };
+      };
+      window.__buildRig = (rigs, options = {}, work = {}) =>
+        window.__reconciliation.buildModelRigReconciliationCooperative(rigs, options,
+          {budget: {checkpoint: async () => {}}, ...work});
+    }""")
+    return module_page
+
+
+@pytest.mark.parametrize(('marked', 'model_wide'), [(False, False), (True, False), (True, True)])
+def test_reconciliation_preserves_exact_sources_and_stable_rebuild(reconciliation_page, marked, model_wide):
+    result = reconciliation_page.evaluate("""async ({marked, modelWide}) => {
+      const {sourceBoneKey} = window.__reconciliation;
+      const keys = [1, 2].map(id => marked ? `stream#bone=part-0${id}.buf|offset=0`
+        : `folder-0${id}/stream.buf|offset=0`);
+      const rigs = keys.map(key => window.__sourceRig(key, [[1, [0, 0, 0], null]], modelWide));
+      const first = await window.__buildRig(rigs);
+      const permuted = await window.__buildRig([...rigs].reverse());
+      const rebuilt = await window.__buildRig(rigs);
+      const signature = rig => rig.joints.map(joint => [joint.jointId, joint.signature]);
+      const separate = await window.__buildRig([
+        window.__sourceRig(keys[0], [[1, [0, 0, 0], null]], true),
+        window.__sourceRig(keys[1], [[1, [10, 0, 0], null]], false),
+      ], {modelReferenceRadius: 1});
+      return {jointCount: first.joints.length, members: first.joints[0].members.map(member => member.sourceKey),
+        mapped: keys.map(key => first.sourceBoneToModelJointMap.get(sourceBoneKey(key, 1))),
+        stable: JSON.stringify(signature(first)) === JSON.stringify(signature(permuted)),
+        rebuilt: JSON.stringify(signature(first)) === JSON.stringify(signature(rebuilt)),
+        separateCount: separate.joints.length};
+    }""", {'marked': marked, 'modelWide': model_wide})
+    assert result['jointCount'] == 1
+    assert len(set(result['members'])) == 2
+    assert result['mapped'] == [0, 0]
+    assert result['stable'] and result['rebuilt']
+    assert result['separateCount'] == 2
+
+
+def test_reconciliation_skips_unneeded_vertex_work_and_completes_strict_chains(reconciliation_page):
+    result = reconciliation_page.evaluate("""async () => {
+      const source = window.__sourceRig('source-01', [[1, [0, 0, 0], null]]);
+      source.vertexEvidence = [{get positions() {throw new Error('unused vertex evidence was read');}}];
+      const single = await window.__buildRig([source]);
+      const empty = window.__sourceRig('source-02', []);
+      empty.vertexEvidence = source.vertexEvidence;
+      const withEmpty = await window.__buildRig([source, empty]);
+      const chain = (key, first) => window.__sourceRig(key, Array.from({length: 100}, (_,i) =>
+        [first+i, [i, 0, 0], i ? first+i-1 : null]));
+      let completeCheckpoints = 0;
+      const complete = await window.__buildRig([chain('source-01', 1), chain('source-02', 201)], {},
+        {budget: {checkpoint: async () => {completeCheckpoints += 1;}}});
+      return {singleCount: single.joints.length, withEmptyCount: withEmpty.joints.length,
+        candidateCount: single.reconciliation.candidateCount,
+        completeCount: complete.joints.length, edges: complete.edges.length,
+        completedWithoutPathWork: completeCheckpoints < 100,
+        strictCount: complete.reconciliation.acceptedEquivalences.filter(item => item.pass === 'strict').length,
+        uniqueSources: complete.joints.every(joint => new Set(joint.members.map(item => item.sourceKey)).size
+          === joint.members.length)};
+    }""")
+    assert result == {'singleCount': 1, 'withEmptyCount': 1, 'candidateCount': 0, 'completeCount': 100,
+                      'edges': 99, 'completedWithoutPathWork': True, 'strictCount': 100, 'uniqueSources': True}
+
+
+@pytest.mark.parametrize('model_wide', [False, True])
+def test_reconciliation_cancels_at_collection_and_graph_checkpoints(reconciliation_page, model_wide):
+    result = reconciliation_page.evaluate("""async modelWide => {
+      const rigs = ['source-01', 'source-02'].map((key, source) => window.__sourceRig(key,
+        Array.from({length: 12}, (_, i) => {
+          const first = modelWide ? 1 : source * 100 + 1;
+          return [first + i, [i, 0, 0], i ? first + i - 1 : null];
+        }), modelWide));
+      let totalCheckpoints = 0;
+      const expected = await window.__buildRig(rigs, {},
+        {budget: {checkpoint: async () => {totalCheckpoints += 1;}}});
+      const cancelled = [];
+      for (const cancelAt of [1, 2, Math.ceil(totalCheckpoints / 2), totalCheckpoints]) {
+        let current = true, checkpoints = 0;
+        const result = await window.__buildRig(rigs, {}, {isCurrent: () => current,
+          budget: {checkpoint: async () => {
+            await new Promise(resolve => setTimeout(resolve, 0));
+            if (++checkpoints === cancelAt) current = false;
+          }}});
+        cancelled.push(result === null);
+      }
+      const recovered = await window.__buildRig(rigs);
+      return {cancelled, graphCheckpoints: totalCheckpoints > 4,
+        recovered: JSON.stringify(recovered) === JSON.stringify(expected)};
+    }""", model_wide)
+    assert result == {'cancelled': [True] * 4, 'graphCheckpoints': True, 'recovered': True}
+
+
+def test_reconciliation_rejects_equal_endpoint_competition(reconciliation_page):
+    result = reconciliation_page.evaluate("""async () => {
+      const rigs = [window.__sourceRig('source-01', [[1, [0, 0, 0], null]]),
+        window.__sourceRig('source-02', [[2, [0, 0, 0], null], [3, [0, 0, 0], null]])];
+      const built = await window.__buildRig(rigs);
+      const reversed = await window.__buildRig([...rigs].reverse());
+      return {joints: built.joints.length, accepted: built.reconciliation.acceptedEquivalences.length,
+        ambiguous: built.reconciliation.rejectedCandidates.some(item => item.rejectionReason === 'ambiguous'),
+        stable: JSON.stringify(built) === JSON.stringify(reversed)};
+    }""")
+    assert result == {'joints': 3, 'accepted': 0, 'ambiguous': True, 'stable': True}
+
+
+@pytest.mark.parametrize('parent', [3, 99])
+def test_reconciliation_recovers_source_cycles_and_missing_parents(reconciliation_page, parent):
+    result = reconciliation_page.evaluate("""async parent => {
+      const rig = window.__sourceRig('source-01',
+        [[1, [0, 0, 0], null], [2, [1, 0, 0], 1], [3, [2, 0, 0], 2]]);
+      rig.inferredForest.components[0].parentById[1] = parent;
+      const built = await window.__buildRig([rig]);
+      const component = built.components[0];
+      return {joints: built.joints.length, edges: built.edges.length, root: component.rootId,
+        roots: Object.values(component.parentById).filter(value => value === null).length,
+        reachable: component.nodeIds.every(id => Number.isFinite(component.depthById[id]))};
+    }""", parent)
+    assert result == {'joints': 3, 'edges': 2, 'root': 0, 'roots': 1, 'reachable': True}
+
+
+@pytest.mark.parametrize('competing_host', [False, True])
+@pytest.mark.parametrize('chained', [False, True])
+def test_reconciliation_preserves_boundary_orientation_and_rejects_ambiguous_hosts(reconciliation_page, competing_host, chained):
+    result = reconciliation_page.evaluate("""async ({competingHost, chained}) => {
+      const {sourceBoneKey} = window.__reconciliation;
+      const body = key => window.__sourceRig(key,
+        [[10, [-2, 0, 0], null, 32], [11, [0, 0, 0], 10, 32], [12, [2, 0, 0], 11, 32]], false,
+        key === 'source-02' ? [0, 1, 0] : [1, 0, 0]);
+      const accessory = window.__sourceRig('source-03',
+        [[20, [0, 0, 0.5], null, 4], [21, [0, 0, 0.08], 20, 4]], false, [0, 0, 1]);
+      const rigs = [body('source-01'), accessory];
+      if (competingHost) rigs.push(body('source-02'));
+      if (chained) rigs.push(window.__sourceRig('source-04',
+        [[30, [0, 0, 1], null], [31, [0, 0, 0.58], 30]]));
+      const built = await window.__buildRig(rigs, {modelReferenceRadius: 2});
+      const reversed = await window.__buildRig([...rigs].reverse(), {modelReferenceRadius: 2});
+      const id = (key, bone) => built.sourceBoneToModelJointMap.get(sourceBoneKey(key, bone));
+      const parent = (key, bone) => built.joints[id(key, bone)].parentId;
+      return {attachments: built.reconciliation.attachmentCount,
+        hostPreserved: parent('source-01', 11) === id('source-01', 10)
+          && parent('source-01', 12) === id('source-01', 11),
+        boundaryPreserved: competingHost ? parent('source-03', 21) === id('source-03', 20)
+          : parent('source-03', 21) === id('source-01', 11) && parent('source-03', 20) === id('source-03', 21),
+        chainPreserved: !chained || parent('source-04', 31) === id('source-03', 20)
+          && parent('source-04', 30) === id('source-04', 31),
+        ambiguity: built.reconciliation.attachmentDiagnostics.some(item => item.rejectionReason === 'attachment_ambiguous'),
+        reachable: built.components.every(component => component.nodeIds.every(id => component.depthById[id] !== null)),
+        stable: JSON.stringify(built.joints) === JSON.stringify(reversed.joints),
+        edgeCount: built.edges.length};
+    }""", {'competingHost': competing_host, 'chained': chained})
+    assert result['attachments'] == (0 if competing_host else 1) + int(chained)
+    assert result['hostPreserved'] and result['boundaryPreserved'] and result['chainPreserved']
+    assert result['reachable'] and result['stable']
+    assert result['ambiguity'] is competing_host
+    assert result['edgeCount'] == (5 if competing_host else 4) + 2 * int(chained)
+
+
 def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_and_save(module_page):
     result = module_page.evaluate("""async () => {
       const selection = await import('./js/weight-rig/weight-selection.js');
@@ -255,78 +522,133 @@ def test_weight_rig_activation_cancels_after_model_rebaseline(module_page):
     assert result['calls'] == []
 
 
-def test_prepared_model_rig_commit_discards_stale_save_completion(module_page):
+def test_source_rig_surface_failure_recovery_and_cache_lifecycle(module_page):
     result = module_page.evaluate("""async () => {
-      const {commitPreparedModelRig} = await import('./js/weight-rig/weight-rig-activation-session.js');
-      let current = true, releaseSave;
-      const saveGate = new Promise(resolve => { releaseSave = resolve; });
-      const calls = [];
-      const pending = commitPreparedModelRig({
-        isCurrent: () => current,
-        saveCache: async () => { calls.push('save-start'); await saveGate; calls.push('save-end'); return true; },
-        activate: () => calls.push('activate'),
-      });
-      await Promise.resolve();
-      current = false;
-      releaseSave();
-      const result = await pending;
-      return {result, calls};
-    }""")
-    assert result['result']['activated'] is False
-    assert result['result']['cacheSaved'] is True
-    assert result['calls'] == ['save-start', 'save-end']
-
-
-def test_source_rig_cooperative_preparation_keeps_source_wide_mode_and_cache_identity(module_page):
-    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
       const {createRigSourceSession} = await import('./js/weight-rig/rig-model-session.js');
+      const {createSkinningRuntime} = await import('./js/weight-rig/skinning-runtime.js');
+      const {createWeightRuntimeState} = await import('./js/weight-rig/weight-runtime.js');
+      const runtime = createWeightRuntimeState();
+      const skin = createSkinningRuntime({...runtime, requestRender: () => {}});
       const sourceKey = 'fixture/stream.buf|offset=0';
+      const otherKey = 'fixture/stream-02.buf|offset=0';
+      const makeMesh = (name, boneId, source, triangles) => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+        geometry.setIndex(triangles);
+        const mesh = new THREE.Mesh(geometry);
+        mesh.userData.semanticKey = name;
+        const state = runtime.stateFor(mesh);
+        Object.assign(state, {loaded: true, skinningSourceKey: source, influenceCount: 1,
+          boneIds: [boneId], indices: new Uint32Array(3).fill(boneId), weights: new Float32Array([1,1,1])});
+        runtime.knownMeshes.add(mesh);
+        runtime.modelWeightState.sourceDescriptors.set(source, {sourceKey: source, sourceFile: 'fixture/stream.buf', boneIdOffset: 0});
+        return mesh;
+      };
+      const first = makeMesh('mesh-01', 1, sourceKey, [0,1,2]);
+      const duplicate = makeMesh('mesh-02', 1, sourceKey, [0,1,2]);
+      const invalid = makeMesh('mesh-03', 2, sourceKey, [0,0,0]);
       const sourceSkinningRigs = new Map();
-      const modelWeightState = {sourceDescriptors: new Map([[sourceKey, {
-        sourceKey, sourceFile: 'fixture/stream.buf', boneIdOffset: 0,
-      }]])};
-      const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
-      const indices = new Uint32Array([1, 1, 1]);
-      const weights = new Float32Array([1, 1, 1]);
-      const makeMesh = (name, boneId, triangleIndices) => ({
-        userData: {semanticKey: name}, geometry: {index: {array: triangleIndices}}, boneId,
-      });
-      const first = makeMesh('mesh-a', 1, new Uint16Array([0, 1, 2]));
-      const duplicate = makeMesh('mesh-b', 1, new Uint16Array([0, 1, 2]));
-      const vertexFallback = makeMesh('mesh-c', 2, new Uint16Array([0, 1]));
-      const states = new Map([first, duplicate, vertexFallback].map(mesh => [mesh, {
-        loaded: true, skinningSourceKey: sourceKey, influenceCount: 1,
-        boneIds: [mesh.boneId], indices, weights, baselinePositions: positions,
-      }]));
-      const knownMeshes = new Set([first, duplicate, vertexFallback]);
-      const preparationModes = [];
       let preparationCount = 0;
-      const session = createRigSourceSession({
-        states, knownMeshes, modelWeightState, sourceSkinningRigs,
-        ensureRigMeshPreparedCooperative: async () => { preparationCount += 1; return true; },
-        ensureInfluenceGraphCooperative: async (mesh, state, mode) => {
-          preparationModes.push(mode);
-          return {evidenceMode: mode, nodes: [{boneId: mesh.boneId, totalWeight: 1,
-            affectedVertexCount: 1, weightedCenter: [mesh.boneId, 0, 0], weightedRadius: 0,
-            maxVertexWeight: 1}], relationships: []};
-        },
-        rebuildRestFrames: () => {}, cloneForest: forest => structuredClone(forest),
-      });
-      const members = [first, duplicate, vertexFallback];
-      const rig = await session.ensureCooperative(sourceKey, members, {generation: 1, isCurrent: () => true});
+      const session = createRigSourceSession({...runtime, sourceSkinningRigs,
+        ensureRigMeshPrepared: (...args) => { preparationCount++; return skin.ensureRigMeshPrepared(...args); },
+        ensureInfluenceGraphCooperative: (...args) => skin.ensureInfluenceGraphCooperative(...args),
+        rebuildRestFrames: () => {}, cloneForest: structuredClone});
+      let rejected = false;
+      try { await session.buildAllCooperative(); } catch (error) { rejected = error.message.includes('triangle geometry'); }
+      const missing = {rejected, committed: sourceSkinningRigs.size, errors: Object.keys(session.getErrors())};
+      const other = makeMesh('mesh-04', 3, otherKey, [0,1,2]);
+      const partial = await session.buildAllCooperative();
+      invalid.geometry.setIndex([0,1,2]);
+      skin.rebaseAfterShapeChange(invalid);
+      const members = [first, duplicate, invalid];
+      const repaired = await session.ensureCooperative(sourceKey, members);
       const callsAfterBuild = preparationCount;
-      const cached = await session.ensureCooperative(sourceKey, members, {generation: 1, isCurrent: () => true});
-      return {sameObject: rig === cached, preparationModes, callsAfterBuild, callsAfterCacheHit: preparationCount,
-        memberCount: rig.influenceGraph.memberCount, uniqueMemberCount: rig.influenceGraph.uniqueMemberCount,
-        meshCount: rig.meshes.size, vertexEvidenceCount: rig.vertexEvidence.length};
+      const cached = await session.ensureCooperative(sourceKey, members);
+      return {missing, partial: partial.map(rig => rig.sourceKey), sameObject: repaired === cached,
+        callsAfterBuild, callsAfterCacheHit: preparationCount, errors: session.getErrors(),
+        memberCount: repaired.influenceGraph.memberCount, uniqueMemberCount: repaired.influenceGraph.uniqueMemberCount,
+        meshCount: repaired.meshes.size, vertexEvidenceCount: repaired.vertexEvidence.length,
+        mode: repaired.influenceGraph.evidenceMode,
+        weightsUsable: [...runtime.knownMeshes].every(mesh => runtime.stateFor(mesh).loaded),
+        noVertexPreparation: [...runtime.knownMeshes].every(mesh => !('influenceNodes' in runtime.stateFor(mesh))),
+        authoredWeights: [...runtime.stateFor(first).weights]};
     }""")
-    assert result['sameObject'] is True
-    assert result['preparationModes'] == ['vertex', 'vertex']
-    assert result['callsAfterCacheHit'] == result['callsAfterBuild'] == 3
-    assert result['memberCount'] == 3
+    assert result['missing'] == {'rejected': True, 'committed': 0, 'errors': ['fixture/stream.buf|offset=0']}
+    assert result['partial'] == ['fixture/stream-02.buf|offset=0']
+    assert result['sameObject'] and result['weightsUsable'] and result['noVertexPreparation']
+    assert result['callsAfterCacheHit'] == result['callsAfterBuild']
+    assert result['errors'] == {}
+    assert result['memberCount'] == result['meshCount'] == result['vertexEvidenceCount'] == 3
     assert result['uniqueMemberCount'] == 2
-    assert result['meshCount'] == 3
-    assert result['vertexEvidenceCount'] == 3
+    assert result['mode'] == 'surface'
+    assert result['authoredWeights'] == [1, 1, 1]
+
+
+def test_skinning_install_requires_canonical_wire_fields(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createSkinningRuntime} = await import('./js/weight-rig/skinning-runtime.js');
+      const {createWeightRuntimeState} = await import('./js/weight-rig/weight-runtime.js');
+      const {aggregateModelWeightBoneStats} = await import('./js/weight-rig/weight-runtime.js');
+      const runtime = createWeightRuntimeState();
+      const skin = createSkinningRuntime({...runtime, requestRender: () => {}});
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+      const mesh = new THREE.Mesh(geometry);
+      const buffer = new ArrayBuffer(24);
+      new Uint32Array(buffer, 0, 3).set([1,2,1]);
+      new Float32Array(buffer, 12, 3).set([1,0.5,1]);
+      const entry = {vertex_count: 3, influence_count: 1, bone_ids: [1,2],
+        source: {key: 'fixture/stream.buf|offset=0', file: 'fixture/stream.buf', bone_id_offset: 0},
+        data: {indices: {offset: 0, length: 12, type: 'u32'}, weights: {offset: 12, length: 12, type: 'f32'}},
+        weight_stats: {'1': {affected_vertex_count: 2, total_weight: 2}, '2': {affected_vertex_count: 1, total_weight: 0.5}}};
+      const variants = [{bone_ids: undefined}, {bone_ids: null}, {bone_ids: [true]}, {bone_ids: [-1]},
+        {bone_ids: [1.5]}, {weight_stats: {'1': {affectedVertexCount: 2, totalWeight: 2}}}];
+      const rejected = variants.map(overrides => {
+        try { skin.installSkinningEntry(mesh, {...entry, ...overrides}, buffer); return false; }
+        catch { return !runtime.stateFor(mesh).loaded; }
+      });
+      skin.installSkinningEntry(mesh, entry, buffer);
+      return {rejected, bones: runtime.stateFor(mesh).boneIds,
+        stats: aggregateModelWeightBoneStats([runtime.stateFor(mesh).weightBoneStats])};
+    }""")
+    assert result['rejected'] == [True] * 6
+    assert result['bones'] == [1, 2]
+    assert result['stats'] == {'1': {'affectedVertexCount': 2, 'averageInfluence': 1},
+                               '2': {'affectedVertexCount': 1, 'averageInfluence': 0.5}}
+
+
+def test_surface_graph_rebaseline_discards_inflight_evidence(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createSkinningRuntime} = await import('./js/weight-rig/skinning-runtime.js');
+      const {createWeightRuntimeState} = await import('./js/weight-rig/weight-runtime.js');
+      const runtime = createWeightRuntimeState();
+      const skin = createSkinningRuntime({...runtime, requestRender: () => {}});
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
+      geometry.setIndex([0,1,2]);
+      const mesh = new THREE.Mesh(geometry);
+      const state = runtime.stateFor(mesh);
+      Object.assign(state, {loaded: true, indices: new Uint32Array([1,1,1]), weights: new Float32Array([1,1,1]),
+        boneIds: [1], influenceCount: 1});
+      let release, started;
+      const ready = new Promise(resolve => started = resolve);
+      const paused = new Promise(resolve => release = resolve);
+      const old = skin.ensureInfluenceGraphCooperative(mesh, state, {budget: {checkpoint: async () => {started(); await paused;}}});
+      await ready;
+      skin.rebaseAfterShapeChange(mesh, {positions: new Float32Array([10,0,0, 11,0,0, 10,1,0])});
+      const current = await skin.ensureInfluenceGraphCooperative(mesh, state);
+      release();
+      const obsolete = await old;
+      const cached = await skin.ensureInfluenceGraphCooperative(mesh, state);
+      return {obsolete: obsolete === null, cachePreserved: current === cached,
+        center: current.nodes[0].weightedCenter, weights: [...state.weights]};
+    }""")
+    assert result['obsolete'] and result['cachePreserved']
+    assert result['center'] == pytest.approx([10 + 1 / 3, 1 / 3, 0])
+    assert result['weights'] == [1, 1, 1]
 
 
 def test_control_conditions_preserve_or_groups_negation_and_contradictions(module_page):

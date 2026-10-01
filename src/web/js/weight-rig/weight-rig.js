@@ -54,11 +54,6 @@ export function inspectSurfaceTopology(positions, triangleIndices = null) {
   return accumulator.finish();
 }
 
-function compactVertexCount(indices, weights, influenceCount) {
-  if (!indices || !weights || !Number.isInteger(influenceCount) || influenceCount <= 0) return 0;
-  return Math.floor(Math.min(indices.length, weights.length) / influenceCount);
-}
-
 function positiveInfluencesForVertex(indices, weights, influenceCount, vertexIndex) {
   const result = new Map();
   const start = vertexIndex * influenceCount;
@@ -488,7 +483,6 @@ function createSurfaceGraphAccumulator(
       totalSurfaceArea: topology.totalSurfaceArea,
       measuredVertexCount: topology.measuredVertexCount,
       zeroMeasureVertexCount: topology.zeroMeasureVertexCount,
-      fallbackReason: null,
     };
   }
 
@@ -552,122 +546,8 @@ export async function buildSurfaceInfluenceGraphCooperative(
   return accumulator.finish();
 }
 
-function createInfluenceNodeAccumulator(baselinePositions, indices, weights, influenceCount, boneIds = null) {
-  const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const requested = boneIds === null || boneIds === undefined ? null : new Set([...boneIds].map(Number));
-  const entries = new Map();
-
-  function process(vertex) {
-    const influences = positiveInfluencesForVertex(indices, weights, influenceCount, vertex);
-    influences.forEach((weight, boneId) => {
-      if (requested && !requested.has(boneId)) return;
-      const entry = entries.get(boneId) || {
-        boneId,
-        totalWeight: 0,
-        affectedVertexCount: 0,
-        affectedMeasure: null,
-        maxVertexWeight: 0,
-        weightedX: 0,
-        weightedY: 0,
-        weightedZ: 0,
-        squaredPositionWeight: 0,
-        positionWeight: 0,
-      };
-      entry.totalWeight += weight;
-      entry.affectedVertexCount += 1;
-      entry.maxVertexWeight = Math.max(entry.maxVertexWeight, weight);
-      if (baselinePositions && baselinePositions.length >= vertex * 3 + 3) {
-        const offset = vertex * 3;
-        const x = Number(baselinePositions[offset]);
-        const y = Number(baselinePositions[offset + 1]);
-        const z = Number(baselinePositions[offset + 2]);
-        if ([x, y, z].every(Number.isFinite)) {
-          entry.weightedX += x * weight;
-          entry.weightedY += y * weight;
-          entry.weightedZ += z * weight;
-          entry.squaredPositionWeight += (x * x + y * y + z * z) * weight;
-          entry.positionWeight += weight;
-        }
-      }
-      entries.set(boneId, entry);
-    });
-  }
-
-  function finish() {
-    const orderedIds = requested ? [...requested] : [...entries.keys()];
-    return orderedIds
-      .filter((boneId) => entries.has(boneId))
-      .map((boneId) => {
-        const entry = entries.get(boneId);
-        const nodeCenter =
-          entry.positionWeight > 0
-            ? [
-                entry.weightedX / entry.positionWeight,
-                entry.weightedY / entry.positionWeight,
-                entry.weightedZ / entry.positionWeight,
-              ]
-            : [0, 0, 0];
-        const weightedRadius =
-          entry.positionWeight > 0
-            ? Math.sqrt(
-                Math.max(
-                  0,
-                  entry.squaredPositionWeight / entry.positionWeight -
-                    (nodeCenter[0] ** 2 + nodeCenter[1] ** 2 + nodeCenter[2] ** 2),
-                ),
-              )
-            : null;
-        return {
-          boneId: entry.boneId,
-          totalWeight: entry.totalWeight,
-          affectedVertexCount: entry.affectedVertexCount,
-          affectedMeasure: entry.affectedMeasure,
-          maxVertexWeight: entry.maxVertexWeight,
-          weightedCenter: nodeCenter,
-          weightedRadius,
-        };
-      });
-  }
-
-  return { vertexCount, process, finish };
-}
-
-export function buildInfluenceNodes(baselinePositions, indices, weights, influenceCount, boneIds = null) {
-  const accumulator = createInfluenceNodeAccumulator(baselinePositions, indices, weights, influenceCount, boneIds);
-  for (let vertex = 0; vertex < accumulator.vertexCount; vertex += 1) {
-    accumulator.process(vertex);
-  }
-  return accumulator.finish();
-}
-
-export async function buildInfluenceNodesCooperative(
-  baselinePositions,
-  indices,
-  weights,
-  influenceCount,
-  boneIds = null,
-  { budget = createWorkBudget(), isCurrent = () => true, vertexBatch = 256 } = {},
-) {
-  const accumulator = createInfluenceNodeAccumulator(baselinePositions, indices, weights, influenceCount, boneIds);
-  for (let vertex = 0; vertex < accumulator.vertexCount; vertex += 1) {
-    if (vertex % vertexBatch === 0) {
-      if (!isCurrent()) return null;
-      await budget.checkpoint();
-      if (!isCurrent()) return null;
-    }
-    accumulator.process(vertex);
-  }
-  if (!isCurrent()) return null;
-  await budget.checkpoint();
-  return accumulator.finish();
-}
-
 function pairKey(boneA, boneB) {
   return boneA < boneB ? `${boneA}:${boneB}` : `${boneB}:${boneA}`;
-}
-
-function pairIds(boneA, boneB) {
-  return boneA < boneB ? [boneA, boneB] : [boneB, boneA];
 }
 
 function centerDistance(centerA, centerB) {
@@ -679,166 +559,6 @@ function centerDistance(centerA, centerB) {
     Number(centerA[1]) - Number(centerB[1]),
     Number(centerA[2]) - Number(centerB[2]),
   );
-}
-
-function createInfluenceRelationshipAccumulator(
-  baselinePositions,
-  indices,
-  weights,
-  influenceCount,
-  nodes,
-  boundingSphereRadius = null,
-) {
-  const nodeById = new Map((nodes || []).map((node) => [Number(node.boneId), node]));
-  const vertexCount = compactVertexCount(indices, weights, influenceCount);
-  const relationships = new Map();
-  const ids = [];
-  const mergedWeights = [];
-
-  function process(vertex) {
-    ids.length = 0;
-    mergedWeights.length = 0;
-    const start = vertex * influenceCount;
-    for (let influence = 0; influence < influenceCount; influence += 1) {
-      const boneId = Number(indices[start + influence]);
-      const weight = Number(weights[start + influence]);
-      if (!nodeById.has(boneId) || !Number.isFinite(weight) || weight <= 0) {
-        continue;
-      }
-      const existing = ids.indexOf(boneId);
-      if (existing >= 0) mergedWeights[existing] += weight;
-      else {
-        ids.push(boneId);
-        mergedWeights.push(weight);
-      }
-    }
-    for (let left = 0; left < ids.length; left += 1) {
-      for (let right = left + 1; right < ids.length; right += 1) {
-        const [boneA, boneB] = pairIds(ids[left], ids[right]);
-        const key = pairKey(boneA, boneB);
-        const weightA = mergedWeights[left];
-        const weightB = mergedWeights[right];
-        const jointWeight = weightA * weightB;
-        const relationship = relationships.get(key) || {
-          boneA,
-          boneB,
-          sharedVertexCount: 0,
-          sharedMeasure: null,
-          minOverlap: 0,
-          productOverlap: 0,
-          jointWeightTotal: 0,
-          jointX: 0,
-          jointY: 0,
-          jointZ: 0,
-        };
-        relationship.sharedVertexCount += 1;
-        relationship.minOverlap += Math.min(weightA, weightB);
-        relationship.productOverlap += jointWeight;
-        if (
-          baselinePositions &&
-          baselinePositions.length >= vertex * 3 + 3 &&
-          Number.isFinite(jointWeight) &&
-          jointWeight > 0
-        ) {
-          const offset = vertex * 3;
-          const x = Number(baselinePositions[offset]);
-          const y = Number(baselinePositions[offset + 1]);
-          const z = Number(baselinePositions[offset + 2]);
-          if ([x, y, z].every(Number.isFinite)) {
-            relationship.jointWeightTotal += jointWeight;
-            relationship.jointX += x * jointWeight;
-            relationship.jointY += y * jointWeight;
-            relationship.jointZ += z * jointWeight;
-          }
-        }
-        relationships.set(key, relationship);
-      }
-    }
-  }
-
-  function finish() {
-    const radius = Number(boundingSphereRadius);
-    return [...relationships.values()].map((relationship) => {
-      const nodeA = nodeById.get(relationship.boneA);
-      const nodeB = nodeById.get(relationship.boneB);
-      const supportA = Number(nodeA?.totalWeight) || 0;
-      const supportB = Number(nodeB?.totalWeight) || 0;
-      const containmentDenominator = Math.min(supportA, supportB);
-      const jaccardDenominator = supportA + supportB - relationship.minOverlap;
-      const distance = centerDistance(nodeA?.weightedCenter, nodeB?.weightedCenter);
-      const jointCenter =
-        relationship.jointWeightTotal > 0
-          ? [
-              relationship.jointX / relationship.jointWeightTotal,
-              relationship.jointY / relationship.jointWeightTotal,
-              relationship.jointZ / relationship.jointWeightTotal,
-            ]
-          : null;
-      return {
-        ...relationship,
-        jointCenter,
-        containment: containmentDenominator > 0 ? relationship.minOverlap / containmentDenominator : 0,
-        jaccard: jaccardDenominator > 0 ? relationship.minOverlap / jaccardDenominator : 0,
-        centerDistance: distance,
-        normalizedDistance: distance !== null && radius > 0 ? distance / radius : null,
-      };
-    });
-  }
-
-  return { vertexCount, process, finish };
-}
-
-/** Build overlap evidence and an overlap-derived pivot for every bone pair. */
-export function buildInfluenceRelationships(
-  baselinePositions,
-  indices,
-  weights,
-  influenceCount,
-  nodes,
-  boundingSphereRadius = null,
-) {
-  const accumulator = createInfluenceRelationshipAccumulator(
-    baselinePositions,
-    indices,
-    weights,
-    influenceCount,
-    nodes,
-    boundingSphereRadius,
-  );
-  for (let vertex = 0; vertex < accumulator.vertexCount; vertex += 1) {
-    accumulator.process(vertex);
-  }
-  return accumulator.finish();
-}
-
-export async function buildInfluenceRelationshipsCooperative(
-  baselinePositions,
-  indices,
-  weights,
-  influenceCount,
-  nodes,
-  boundingSphereRadius = null,
-  { budget = createWorkBudget(), isCurrent = () => true, vertexBatch = 128 } = {},
-) {
-  const accumulator = createInfluenceRelationshipAccumulator(
-    baselinePositions,
-    indices,
-    weights,
-    influenceCount,
-    nodes,
-    boundingSphereRadius,
-  );
-  for (let vertex = 0; vertex < accumulator.vertexCount; vertex += 1) {
-    if (vertex % vertexBatch === 0) {
-      if (!isCurrent()) return null;
-      await budget.checkpoint();
-      if (!isCurrent()) return null;
-    }
-    accumulator.process(vertex);
-  }
-  if (!isCurrent()) return null;
-  await budget.checkpoint();
-  return accumulator.finish();
 }
 
 function relationshipSort(a, b) {
@@ -860,16 +580,12 @@ function treeEdgeCompare(a, b) {
 }
 
 export function candidateRelationshipEdges(graph, options = {}) {
-  const minSharedVertexCount = Number(options.minSharedVertexCount ?? 1);
   const containmentThreshold = Number(options.containmentThreshold ?? CANDIDATE_CONTAINMENT_THRESHOLD);
   const jaccardThreshold = Number(options.jaccardThreshold ?? CANDIDATE_JACCARD_THRESHOLD);
-  const surfaceEvidence = graph?.evidenceMode === 'surface';
   return (graph?.relationships || [])
     .filter(
       (relationship) =>
-        (surfaceEvidence
-          ? Number(relationship.productOverlap) > 0
-          : relationship.sharedVertexCount >= minSharedVertexCount) &&
+        Number(relationship.productOverlap) > 0 &&
         (relationship.containment >= containmentThreshold || relationship.jaccard >= jaccardThreshold),
     )
     .map((relationship) => {
@@ -1146,7 +862,7 @@ function nodeEvidenceScore(node, adjacency, edges) {
   // component maxima so adding a high-ID bone cannot change the result.
   return {
     centrality,
-    affected: Number(node.affectedMeasure ?? node.affectedVertexCount) || 0,
+    affected: Number(node.affectedMeasure) || 0,
     weight: Number(node.totalWeight) || 0,
     degree: (adjacency.get(node.boneId) || []).length,
     edgeStrength,
@@ -1237,13 +953,10 @@ export function buildInferredRigForest(graph, options = {}) {
 /** Aggregate per-mesh evidence while preserving weighted joint positions. */
 export function aggregateInfluenceGraphs(graphs) {
   const inputGraphs = (graphs || []).filter(Boolean);
-  const evidenceModes = new Set(inputGraphs.map((graph) => graph.evidenceMode || 'vertex'));
-  if (evidenceModes.size > 1) {
-    throw new Error('Cannot aggregate incompatible Rig evidence modes.');
+  if (inputGraphs.some((graph) => graph.evidenceMode !== 'surface')) {
+    throw new Error('Rig evidence must come from usable triangle geometry.');
   }
-  const evidenceMode = [...evidenceModes][0] || 'vertex';
   const diagnosticTotal = (field) => inputGraphs.reduce((sum, graph) => sum + (Number(graph?.[field]) || 0), 0);
-  const fallbackReasons = [...new Set(inputGraphs.map((graph) => graph?.fallbackReason).filter(Boolean))];
   const nodeTotals = new Map();
   const relationshipTotals = new Map();
   for (const graph of inputGraphs) {
@@ -1266,9 +979,7 @@ export function aggregateInfluenceGraphs(graphs) {
       };
       entry.totalWeight += totalWeight;
       entry.affectedVertexCount += Number(node.affectedVertexCount) || 0;
-      if (evidenceMode === 'surface') {
-        entry.affectedMeasure += Number(node.affectedMeasure) || 0;
-      }
+      entry.affectedMeasure += Number(node.affectedMeasure) || 0;
       entry.maxVertexWeight = Math.max(entry.maxVertexWeight, Number(node.maxVertexWeight) || 0);
       entry.weightedX += totalWeight * (Number(center[0]) || 0);
       entry.weightedY += totalWeight * (Number(center[1]) || 0);
@@ -1299,9 +1010,7 @@ export function aggregateInfluenceGraphs(graphs) {
         jointZ: 0,
       };
       entry.sharedVertexCount += Number(relationship.sharedVertexCount) || 0;
-      if (evidenceMode === 'surface') {
-        entry.sharedMeasure += Number(relationship.sharedMeasure) || 0;
-      }
+      entry.sharedMeasure += Number(relationship.sharedMeasure) || 0;
       entry.minOverlap += Number(relationship.minOverlap) || 0;
       entry.productOverlap += Number(relationship.productOverlap) || 0;
       const jointWeightTotal = Number(relationship.jointWeightTotal) || 0;
@@ -1330,7 +1039,7 @@ export function aggregateInfluenceGraphs(graphs) {
         boneId: entry.boneId,
         totalWeight: entry.totalWeight,
         affectedVertexCount: entry.affectedVertexCount,
-        affectedMeasure: evidenceMode === 'surface' ? entry.affectedMeasure : null,
+        affectedMeasure: entry.affectedMeasure,
         maxVertexWeight: entry.maxVertexWeight,
         weightedCenter: center,
         weightedRadius: Math.sqrt(Math.max(0, entry.secondMoment / entry.totalWeight - centerLengthSquared)),
@@ -1370,7 +1079,7 @@ export function aggregateInfluenceGraphs(graphs) {
     const distancePenalty = Number.isFinite(normalizedDistance) ? 1 / (1 + Math.max(0, normalizedDistance)) : 1;
     return {
       ...relationship,
-      sharedMeasure: evidenceMode === 'surface' ? relationship.sharedMeasure : null,
+      sharedMeasure: relationship.sharedMeasure,
       jointCenter:
         relationship.jointWeightTotal > 0
           ? [
@@ -1390,7 +1099,7 @@ export function aggregateInfluenceGraphs(graphs) {
     nodes,
     relationships,
     boundingSphereRadius: radius,
-    evidenceMode,
+    evidenceMode: 'surface',
     triangleCount: diagnosticTotal('triangleCount'),
     validTriangleCount: diagnosticTotal('validTriangleCount'),
     degenerateTriangleCount: diagnosticTotal('degenerateTriangleCount'),
@@ -1398,7 +1107,6 @@ export function aggregateInfluenceGraphs(graphs) {
     totalSurfaceArea: diagnosticTotal('totalSurfaceArea'),
     measuredVertexCount: diagnosticTotal('measuredVertexCount'),
     zeroMeasureVertexCount: diagnosticTotal('zeroMeasureVertexCount'),
-    fallbackReason: fallbackReasons.length ? fallbackReasons.join(';') : null,
   };
 }
 

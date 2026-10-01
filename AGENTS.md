@@ -2,10 +2,14 @@
 
 The durable project invariants live in `context.md`. Read that file before substantial implementation or review work, and treat those invariants as authoritative unless the change intentionally updates them.
 
-Keep deterministic formatting, lint, and other mechanical checks in CI. Code review should focus on consequential regressions and repository-specific behavior.
+Run deterministic formatting, lint, and other mechanical checks locally before committing, and keep them enforced in CI. Code review should focus on consequential regressions and repository-specific behavior.
 
 ## Implementation workflow
 
+- Before every commit, run `python tools/quality_audit.py` with the repository's
+  development dependencies installed. All checks must pass locally on the final
+  contents being committed. Fix findings or missing audit tools before committing;
+  do not skip or weaken checks. Re-run the audit after any further change.
 - When the user provides an implementation plan, follow that plan as the
   authoritative scope and acceptance criteria; re-read it before implementing
   and do not silently replace it with a different approach.

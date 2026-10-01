@@ -229,14 +229,14 @@ def test_model_skinning_preview_includes_validated_saved_bones(monkeypatch):
     monkeypatch.setattr(
         preview, "authoritative_context",
         lambda _folder: ("mod", {}, context))
-    monkeypatch.setattr(
-        preview, "_skinning_draws",
-        lambda *_args: (
-            SimpleNamespace(game=SimpleNamespace(game="genshin")), {}))
-
     result = preview.get_model_skinning_preview("mod")
 
     assert result["status"] == "error"
+    assert result["code"] == "model_not_loaded"
+    preview._skinning_manifests["mod"] = {}
+    loaded_empty = preview.get_model_skinning_preview("mod")
+    assert loaded_empty["status"] == "error"
+    assert loaded_empty["saved_bones"] == result["saved_bones"]
     assert result["saved_bones"] == [{
         "source": "Component02/Component02Blend.buf", "bone_id_offset": 0,
         "source_key": "component02/component02blend.buf|offset=0",

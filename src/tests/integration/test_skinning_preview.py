@@ -46,7 +46,7 @@ def test_model_skinning_preview_matches_rendered_compaction(tmp_path, monkeypatc
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
     monkeypatch.setattr(
-        preview, "_skinning_draws",
+        "app.mods.analysis.resolved_draws",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("loaded-model Weight must not resolve draws")),
     )
@@ -114,7 +114,7 @@ def test_model_skinning_preview_uses_wwmi_vertex_vg_identity(
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
     monkeypatch.setattr(
-        preview, "_skinning_draws",
+        "app.mods.analysis.resolved_draws",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("loaded-model Weight must not resolve draws")),
     )
@@ -151,7 +151,7 @@ def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
     sections = merge_sections([str(ini)])
     groups = build_draw_groups(sections, extract_resources(sections))
     geometry = GeometryBlob()
-    build_mesh_result(groups, str(tmp_path), geometry=geometry)
+    rendered = build_mesh_result(groups, str(tmp_path), geometry=geometry)
     published = []
 
     def publish(blob, *, replace=True):
@@ -167,19 +167,12 @@ def test_get_model_skinning_preview_batches_successes_and_keeps_partial_errors(
         lambda _path: (str(tmp_path), {}, context))
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.publish_geometry", publish)
-    parsed = SimpleNamespace(game=SimpleNamespace(game="gimi"), groups=groups)
-    draw = groups[0]["draws"][0]
-    broken = replace(draw, skinning_source=SkinningSource(
+    entry = rendered.skinning_manifest["Component01Blend-1"]
+    broken = replace(entry, skinning_source=SkinningSource(
         "missing.blend", 32, 4, "gimi_f32_u32_4"))
-    static = replace(draw, skinning_source=None)
-    monkeypatch.setattr(
-        preview, "_skinning_draws",
-        lambda *_args, **_kwargs: (parsed, {
-            "Component01Blend-1": (draw, groups[0]),
-            "BrokenBlend-1": (broken, groups[0]),
-            "Static-1": (static, groups[0]),
-        }),
-    )
+    preview._skinning_manifests[str(tmp_path)] = {
+        "Component01Blend-1": entry, "BrokenBlend-1": broken,
+    }
     preview._active_mesh_keys[str(tmp_path)] = {
         "Component01Blend-1", "BrokenBlend-1", "Static-1",
     }

@@ -121,8 +121,8 @@ export function aggregateModelWeightBoneStats(statMaps) {
   for (const stats of statMaps || []) {
     for (const [rawBoneId, rawEntry] of Object.entries(stats || {})) {
       const boneId = Number(rawBoneId);
-      const affectedVertexCount = Number(rawEntry?.affectedVertexCount ?? rawEntry?.affected_vertex_count);
-      const totalWeight = Number(rawEntry?.totalWeight ?? rawEntry?.total_weight);
+      const affectedVertexCount = Number(rawEntry?.affectedVertexCount);
+      const totalWeight = Number(rawEntry?.totalWeight);
       if (
         !Number.isFinite(boneId) ||
         !Number.isFinite(affectedVertexCount) ||
@@ -200,7 +200,6 @@ export function createWeightRuntimeState() {
       combinedPhysicsVerticesRef: null,
       finalBoundsDirty: false,
       preDeformationFrustumCulled: null,
-      influenceNodes: null,
       influenceGraph: null,
       baselinePositions: null,
       baselineNormals: null,
@@ -210,7 +209,6 @@ export function createWeightRuntimeState() {
       diagnostics: null,
       weightBoneStats: {},
       encoding: null,
-      centerByBoneId: null,
       poseTransforms: null,
       poseRotations: new Map(),
       poseActiveVertices: null,

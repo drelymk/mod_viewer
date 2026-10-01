@@ -415,6 +415,7 @@ export default {
   'weightRig.status.selectionSaveError': 'Could not save bone selection: {detail}',
   'weightRig.status.loadingWeights': 'Loading weights…',
   'weightRig.status.loadingRig': 'Loading Rig…',
+  'weightRig.status.surfaceRigUnavailable': 'Rig unavailable: no usable faces. Affected weight source count: {count}.',
   'weightRig.status.noWeights': 'No skin weights available for this model.',
   'weightRig.control.chest': 'Chest',
   'weightRig.control.pelvis': 'Pelvis',
