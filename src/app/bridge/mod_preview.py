@@ -9,10 +9,9 @@ from collections import OrderedDict
 import webview
 
 from core.geometry.buffers import BufferStore
-from core.geometry.conventions import geometry_convention_for
 from core.geometry.mesh_builder import GeometryBlob
 from core.geometry.skinning import (
-    SkinningPreviewError, build_skinning_preview, decode_skinning,
+    SkinningPreviewError, decode_skinning,
     skinning_source_descriptor,
 )
 from core.resource_paths import safe_resource_path
@@ -20,7 +19,7 @@ from core.textures import encode_texture_file, texture_cache_stats
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import ModSourceError, mod_source_for_path
 from core.ini.health import analyze_mod
-from app.mods.analysis import build_mod_ini_snapshot, resolved_draws
+from app.mods.analysis import build_mod_ini_snapshot
 from app.mods.texture_save.service import save_texture_color
 from core.textures.profiles import texture_profile_for
 
@@ -312,37 +311,6 @@ class ModPreview:
             return self._semantic_read_error()
 
     @staticmethod
-    def _skinning_draws(context):
-        """Resolve every rendered draw once for the model preview."""
-        return resolved_draws(context)
-
-    @staticmethod
-    def _decode_skinning_draw(draw, group, mod_dir, buffers,
-                              geometry_convention, timing=None, source=None):
-        resolve = source.resolve_resource if source is not None \
-            else lambda value: safe_resource_path(mod_dir, value)
-        exists = source.is_file if source is not None else os.path.exists
-        paths = [
-            resolve(group["position_file"]),
-            resolve(group["texcoord_file"]),
-            resolve(group["ib_file"]),
-        ]
-        if not all(path and exists(path) for path in paths):
-            raise SkinningPreviewError(
-                "geometry_not_available",
-                "The rendered draw geometry could not be prepared.")
-        default_streams = buffers.vertex_streams(
-            paths[0], group.get("position_stride"), paths[1],
-            group.get("texcoord_stride"))
-        buffers.raw(paths[2])
-        return build_skinning_preview(
-            draw, group, mod_dir, buffers=buffers,
-            default_streams=default_streams,
-            default_index_size=group.get("index_size", 4),
-            geometry_convention=geometry_convention, timing=timing,
-            source=source)
-
-    @staticmethod
     def _skinning_source_descriptor(draw_or_source):
         source = getattr(draw_or_source, "skinning_source", draw_or_source)
         return skinning_source_descriptor(source)
@@ -401,61 +369,33 @@ class ModPreview:
                 data=context.metadata)
             active_mesh_keys = self._active_mesh_keys.get(folder_path)
             manifest = self._skinning_manifests.get(folder_path)
-            mapping_source = "loaded_model_manifest" if manifest is not None \
-                else "legacy_rebuild"
-            if manifest is not None:
-                requested = (set(active_mesh_keys)
-                             if active_mesh_keys is not None
-                             else set(manifest))
-                requested &= set(manifest)
-                selected_items = {
-                    key: manifest[key] for key in requested
+            mapping_source = "loaded_model_manifest" if manifest is not None else "unavailable"
+            if manifest is None:
+                return {
+                    "status": "error",
+                    "format_version": 1,
+                    "code": "model_not_loaded",
+                    "saved_bones": saved_bones,
+                    "meshes": {},
+                    "error": "Load the model before requesting skin weights.",
                 }
-                parsed = None
-            else:
-                resolve_started = time.perf_counter()
-                parsed, draws = self._skinning_draws(context)
-                timing["resolve_draws_seconds"] = (
-                    time.perf_counter() - resolve_started)
-                timing["resolve_draw_count"] = len(draws)
-                eligible_draws = {
-                    key: selected for key, selected in draws.items()
-                    if selected[0].skinning_source is not None
-                }
-                requested = (set(active_mesh_keys)
-                             if active_mesh_keys is not None
-                             else set(eligible_draws))
-                requested &= set(eligible_draws)
-                selected_items = {
-                    key: eligible_draws[key] for key in requested
-                }
+            requested = set(active_mesh_keys) if active_mesh_keys is not None else set(manifest)
+            selected_items = {key: manifest[key] for key in requested if key in manifest}
             meshes = {}
             pieces = []
             offset = 0
             buffers = BufferStore(
                 source=getattr(context, "source", None),
                 overrides=edit_session.ib_overrides_for(folder_path))
-            convention = (geometry_convention_for(parsed.game.game)
-                          if parsed is not None else None)
             for mesh_key in sorted(selected_items):
                 if not self._skinning_request_is_current(request_generation):
                     return self._stale_skinning_preview()
                 selected = selected_items[mesh_key]
-                draw = selected[0] if manifest is None else None
                 try:
-                    if manifest is not None:
-                        decoded = self._decode_skinning_manifest_entry(
-                            selected, context.mod_dir, buffers, timing,
-                            source=getattr(context, "source", None))
-                        entry, blob = self._skin_entry(
-                            decoded, selected.skinning_source, offset)
-                    else:
-                        draw, group = selected
-                        decoded = self._decode_skinning_draw(
-                            draw, group, context.mod_dir, buffers, convention,
-                            timing=timing,
-                            source=getattr(context, "source", None))
-                        entry, blob = self._skin_entry(decoded, draw, offset)
+                    decoded = self._decode_skinning_manifest_entry(
+                        selected, context.mod_dir, buffers, timing,
+                        source=getattr(context, "source", None))
+                    entry, blob = self._skin_entry(decoded, selected.skinning_source, offset)
                 except SkinningPreviewError as error:
                     meshes[mesh_key] = {
                         "status": "error",
@@ -644,17 +584,6 @@ class ModPreview:
     def clear_humanoid_control_rig(self, folder_path):
         folder_path = self._access.mod_folder(folder_path)
         return metadata.clear_humanoid_control_rig(folder_path)
-
-    def load_model_rig(self, folder_path):
-        folder_path = self._access.mod_folder(folder_path)
-        source = edit_session.source_for(folder_path) or \
-            mod_source_for_path(folder_path)
-        return metadata.load_model_rig(
-            folder_path, source=source)
-
-    def save_model_rig(self, folder_path, model_rig):
-        folder_path = self._access.mod_folder(folder_path)
-        return metadata.save_model_rig(folder_path, model_rig)
 
     def save_component_material_kind(self, folder_path, source, component,
                                      material_kind):

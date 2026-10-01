@@ -93,6 +93,10 @@ def weighted_payload(include_ineligible=False, include_second_member=False, incl
     blob = bytearray(struct.pack('<6I6f', 0, 1, 0, 1, 1, 1, 0.8, 0.2, 0.8, 0.2, 1, 0))
     preview_meshes = {'mesh-00': {
         'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [0, 1],
+        'weight_stats': {
+            '0': {'bone_id': 0, 'affected_vertex_count': 2, 'total_weight': 1.6},
+            '1': {'bone_id': 1, 'affected_vertex_count': 3, 'total_weight': 1.4},
+        },
         'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
         'data': {'indices': {'offset': 0, 'length': 24, 'type': 'u32'},
                  'weights': {'offset': 24, 'length': 24, 'type': 'f32'}},
@@ -103,6 +107,10 @@ def weighted_payload(include_ineligible=False, include_second_member=False, incl
         blob.extend(struct.pack('<6I6f', 2, 3, 2, 3, 3, 2, 0.7, 0.3, 0.7, 0.3, 0.6, 0.4))
         preview_meshes['mesh-01'] = {
             'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [2, 3],
+            'weight_stats': {
+                '2': {'bone_id': 2, 'affected_vertex_count': 3, 'total_weight': 1.8},
+                '3': {'bone_id': 3, 'affected_vertex_count': 3, 'total_weight': 1.2},
+            },
             'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
             'data': {'indices': {'offset': offset, 'length': 24, 'type': 'u32'},
                      'weights': {'offset': offset + 24, 'length': 24, 'type': 'f32'}},
@@ -113,6 +121,10 @@ def weighted_payload(include_ineligible=False, include_second_member=False, incl
         blob.extend(struct.pack('<6I6f', 4, 5, 4, 5, 5, 4, 0.65, 0.35, 0.65, 0.35, 0.55, 0.45))
         preview_meshes['mesh-02'] = {
             'status': 'ok', 'vertex_count': 3, 'influence_count': 2, 'bone_ids': [4, 5],
+            'weight_stats': {
+                '4': {'bone_id': 4, 'affected_vertex_count': 3, 'total_weight': 1.75},
+                '5': {'bone_id': 5, 'affected_vertex_count': 3, 'total_weight': 1.25},
+            },
             'source': {'key': 'stream-01.buf|offset=0', 'file': 'stream-01.buf', 'bone_id_offset': 0},
             'data': {'indices': {'offset': offset, 'length': 24, 'type': 'u32'},
                      'weights': {'offset': offset + 24, 'length': 24, 'type': 'f32'}},

@@ -12,7 +12,6 @@ import {
 import { requestRender } from '../scene/render-scheduler.js';
 import { rebuildModelRestFrames, rebuildSourceRigRestFrames } from './weight-rig-frames.js';
 import { buildModelRigReconciliationCooperative, sourceBoneKey } from './weight-rig-reconcile.js';
-import { hydrateModelRig, loadOrBuildModelRig, serializeModelRig } from './model-rig-persistence.js';
 import {
   selectionMapFromEntries,
   selectionRecordsFromMap,
@@ -28,7 +27,7 @@ import { createRigPresetSession } from './rig-preset-session.js';
 import { createWeightModelSession, createWeightPickingSession } from './weight-model-session.js';
 import { createSkinningRuntime } from './skinning-runtime.js';
 import { createRigModelSession, createRigSourceSession } from './rig-model-session.js';
-import { commitPreparedModelRig, createWeightRigActivationSession } from './weight-rig-activation-session.js';
+import { createWeightRigActivationSession } from './weight-rig-activation-session.js';
 import { createRigPoseRuntime } from './rig-pose-runtime.js';
 import {
   createRigRuntimeState,
@@ -148,7 +147,7 @@ rigSourceSession = createRigSourceSession({
   knownMeshes,
   modelWeightState,
   sourceSkinningRigs,
-  ensureRigMeshPreparedCooperative: (...args) => skinningRuntime.ensureRigMeshPreparedCooperative(...args),
+  ensureRigMeshPrepared: (...args) => skinningRuntime.ensureRigMeshPrepared(...args),
   ensureInfluenceGraphCooperative: (...args) => skinningRuntime.ensureInfluenceGraphCooperative(...args),
   rebuildRestFrames: (rig) => rebuildSourceRigRestFrames(rig, () => ++rigRuntime.structureRevision),
   cloneForest: cloneSourceForest,
@@ -539,6 +538,7 @@ function rigSnapshot() {
     loaded: modelRigState.loaded,
     loading: modelRigState.loading,
     error: modelRigState.error,
+    sourceErrors: rigSourceSession.getErrors(),
     jointPickIntent: modelRigState.jointPickIntent ? { ...modelRigState.jointPickIntent } : null,
     structureRevision: modelRigState.structureRevision,
     selectedJointId: modelRigState.selectedJointId,
@@ -798,40 +798,12 @@ function updateModelPoseFrameCache(rig, transforms) {
   }
 }
 
-function modelRigFolderPath() {
-  return [...knownMeshes].find((mesh) => mesh?.userData?.modPath)?.userData?.modPath || null;
-}
-
-async function loadPersistedModelRig(path = modelRigFolderPath()) {
-  const api = globalThis.window?.pywebview?.api;
-  if (!path || typeof api?.load_model_rig !== 'function') return null;
-  try {
-    return await api.load_model_rig(path);
-  } catch {
-    // An unreadable cache is equivalent to a cache miss. The normal
-    // reconciliation path remains the source of truth.
-    return null;
-  }
-}
-
-async function savePersistedModelRig(value, path = modelRigFolderPath()) {
-  const api = globalThis.window?.pywebview?.api;
-  if (!path || typeof api?.save_model_rig !== 'function') return false;
-  try {
-    const result = await api.save_model_rig(path, value);
-    return result?.saved === true;
-  } catch {
-    return false;
-  }
-}
-
 async function buildModelSkinningRig(
   sourceRigs = [...sourceSkinningRigs.values()],
   { generation = null, isCurrent = () => true } = {},
 ) {
   const startedAt = clockNow();
   const performance = { ...(modelRigState.performance || {}) };
-  const modelRigPath = modelRigFolderPath();
   const budget = createWorkBudget();
   const checkpoint = async () => {
     if (generation !== null && !isCurrent()) return false;
@@ -841,26 +813,13 @@ async function buildModelSkinningRig(
   if (!(await checkpoint())) return null;
   const previousSelectedJointId = modelRigState.selectedJointId;
   const previousRootSignatures = new Set(modelRigState.explicitRootSignatures);
-  const lifecycle = await loadOrBuildModelRig({
-    load: () => loadPersistedModelRig(modelRigPath),
-    hydrate: (saved) => hydrateModelRig(saved?.model_rig || saved, sourceRigs),
-    build: () =>
-      buildModelRigReconciliationCooperative(
-        sourceRigs,
-        {},
-        {
-          budget,
-          isCurrent: () => generation === null || isCurrent(),
-          timings: performance,
-        },
-      ),
+  const reconciliation = await buildModelRigReconciliationCooperative(sourceRigs, {}, {
+    budget,
+    isCurrent: () => generation === null || isCurrent(),
+    timings: performance,
   });
-  const reconciliation = lifecycle.modelRig;
-  const hydratedFromCache = lifecycle.hydratedFromCache;
   if (!reconciliation) return null;
-  performance.modelRigCacheHit = hydratedFromCache;
-  performance.modelRigHydrationMs = hydratedFromCache ? clockNow() - startedAt : 0;
-  performance.reconciliationMs = hydratedFromCache ? 0 : clockNow() - startedAt;
+  performance.reconciliationMs = clockNow() - startedAt;
   if (!(await checkpoint())) return null;
   const joints = reconciliation.joints || [];
   const rig = {
@@ -916,7 +875,6 @@ async function buildModelSkinningRig(
   // Install provenance-derived edge pivots before capturing the default
   // orientation. Reset Pose must restore the same pivots used on first load.
   rebuildModelRestFrames(rig, rig.inferredForest);
-  const persistedModelRig = !hydratedFromCache ? serializeModelRig(rig, { sourceRigs }) : null;
   rig.defaultComponents = rig.components.map(cloneModelComponent);
   rig.defaultComponentByJointId = new Map(rig.componentByJointId);
   rig.defaultRootIdByComponent = new Map(
@@ -947,41 +905,34 @@ async function buildModelSkinningRig(
     );
   }
   if (!(await checkpoint())) return null;
-  const commit = await commitPreparedModelRig({
-    isCurrent: () => generation === null || isCurrent(),
-    saveCache: persistedModelRig ? () => savePersistedModelRig(persistedModelRig, modelRigPath) : null,
-    activate: ({ cacheSaved }) => {
-      if (modelSkinningRig) rigPoseRuntime?.resetPose({ request: false });
-      rigRuntime.structureRevision += 1;
-      rig.structureRevision = rigRuntime.structureRevision;
-      if (restoredRootSignatures.size) rig.structureRevision = ++rigRuntime.structureRevision;
-      performance.modelRigCacheSaved = cacheSaved;
-      modelRigState.performance = performance;
-      modelRigState.explicitRootSignatures = restoredRootSignatures;
-      rigPresetSession?.clearLastApplyResult?.();
-      sourceRigs.forEach((sourceRig) => {
-        rig.sourceTransformAliases.set(sourceRig.sourceKey, new Map());
-        rig.sourceRotationAliases.set(sourceRig.sourceKey, new Map());
-        sourceRig.poseRotationByBoneId.clear();
-        sourceRig.poseTransforms = new Map();
-        sourceRig.poseRotations = new Map();
-        sourceRig.poseTransformCache.clear();
-        sourceRig.poseFrameCache.clear();
-      });
-      modelSkinningRig = rig;
-      buildPrimaryHumanoidRig(rig);
-      skinningRuntime.updateModelWeightHeatmap(null, modelWeightState.heatmapEnabled);
-      modelRigState.structureRevision = rig.structureRevision;
-      modelRigState.selectedJointId =
-        Number.isInteger(previousSelectedJointId) && joints[previousSelectedJointId] ? previousSelectedJointId : null;
-      updateModelPoseFrameCache(rig, rig.poseTransforms);
-      performance.totalRigBuildMs = clockNow() - startedAt;
-      const modelStats = budget.getStats();
-      performance.modelRigLargestChunkMs = modelStats.largestChunkMs;
-      performance.modelRigYieldCount = modelStats.yieldCount;
-    },
+  if (modelSkinningRig) rigPoseRuntime?.resetPose({ request: false });
+  rigRuntime.structureRevision += 1;
+  rig.structureRevision = rigRuntime.structureRevision;
+  if (restoredRootSignatures.size) rig.structureRevision = ++rigRuntime.structureRevision;
+  modelRigState.performance = performance;
+  modelRigState.explicitRootSignatures = restoredRootSignatures;
+  rigPresetSession?.clearLastApplyResult?.();
+  sourceRigs.forEach((sourceRig) => {
+    rig.sourceTransformAliases.set(sourceRig.sourceKey, new Map());
+    rig.sourceRotationAliases.set(sourceRig.sourceKey, new Map());
+    sourceRig.poseRotationByBoneId.clear();
+    sourceRig.poseTransforms = new Map();
+    sourceRig.poseRotations = new Map();
+    sourceRig.poseTransformCache.clear();
+    sourceRig.poseFrameCache.clear();
   });
-  return commit.activated ? rig : null;
+  modelSkinningRig = rig;
+  buildPrimaryHumanoidRig(rig);
+  skinningRuntime.updateModelWeightHeatmap(null, modelWeightState.heatmapEnabled);
+  modelRigState.structureRevision = rig.structureRevision;
+  modelRigState.selectedJointId =
+    Number.isInteger(previousSelectedJointId) && joints[previousSelectedJointId] ? previousSelectedJointId : null;
+  updateModelPoseFrameCache(rig, rig.poseTransforms);
+  performance.totalRigBuildMs = clockNow() - startedAt;
+  const modelStats = budget.getStats();
+  performance.modelRigLargestChunkMs = modelStats.largestChunkMs;
+  performance.modelRigYieldCount = modelStats.yieldCount;
+  return rig;
 }
 
 function buildPrimaryHumanoidRig(rig) {
@@ -1028,16 +979,9 @@ function applySavedHumanoidRig(rig, savedOverrides = null) {
 
 function handleModelTransformChanged(event) {
   const detail = event.detail || {};
-  const fallbackMesh = detail.meshes?.[0];
-  const fallbackTransform = fallbackMesh?.quaternion?.toArray
-    ? {
-        orientation: fallbackMesh.quaternion.toArray(),
-        translation: fallbackMesh.position?.toArray?.() || [0, 0, 0],
-      }
-    : getModelTransformState();
   modelPhysicsSession.handleModelTransform({
     ...detail,
-    modelTransform: detail.modelTransform || fallbackTransform,
+    modelTransform: detail.modelTransform || getModelTransformState(),
   });
 }
 

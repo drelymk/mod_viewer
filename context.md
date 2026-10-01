@@ -252,30 +252,37 @@ of documentation, comments and tests; use portable fixtures instead.
 
 - Advertise only usable authored Blend streams. First Weight access lazily decodes
   one model-wide blob with per-mesh ranges; failures degrade the feature, not model
-  loading. Bone identity is mod-relative Blend source plus resolved offset; IBs
+  loading. Decode only the loaded model's retained manifest; do not rebuild geometry
+  for Weight. Preserve GIMI float/u32, WWMI R8 (four/eight influences), WWMI R16
+  and rigid u32 input formats with one u32/float runtime representation.
+  Bone identity is mod-relative Blend source plus resolved offset; IBs
   only preserve compact vertex mapping. Selection is exact-source-scoped and
   persists without dropping unrelated metadata or filtered choices. Picking is
   distance-weighted on the exact hit mesh within 2% of model radius, with triangle
   fallback; discovery never selects bones or enables Physics.
 - One rig per exact skinning source owns centers, topology, Physics and transforms;
   hidden members still contribute, while each mesh uses its authored weights.
-  Use triangle-integrated evidence only when every member has positive-area
-  geometry, otherwise fall the entire source back to vertex evidence. Never mix
-  modes or mix vertex-weighted panel statistics into the Rig graph. Deduplicate
+  Require triangle-integrated evidence with positive-area geometry in every member;
+  an unusable member makes Rig/Physics unavailable for that source while Weight
+  inspection and other valid sources remain usable. Keep vertex-weighted panel
+  statistics separate from the Rig graph. Deduplicate
   exact members for evidence but keep provenance. Infer only conservative
   maximum-spanning topology from overlap/centers: Blend data provides no names,
   canonical skeleton, hierarchy, bind pose, animation or semantic labels.
 - Cross-source reconciliation is a viewer-owned graph over source rigs. Preserve
   `SourceBoneRef {sourceKey,boneId}` and `${sourceKey}#bone=${boneId}`; only
-  validated all-VertexVG models may group equal numeric IDs directly. Otherwise
+  models whose sources all declare validated model-wide IDs (R16 Blend or active
+  VertexVG remapping) may group equal numeric IDs directly. Keep R16 IDs unchanged
+  without adding component offsets again. Otherwise
   require normalized mutual-best geometry/topology evidence, one member per
   source, ambiguity rejection, a maximum-spanning forest and cycle-free boundary
   attachments; retain rejected evidence for diagnostics and never rewrite authored
   indices/weights. Cross-palette posing may stretch where inferred and authored
   topology differ. `ModelJoint` signatures sort canonical source-bone keys and
-  deterministic `joint_id` values hydrate Main Rig mappings. Persist structure in
-  `.mod_viewer.rig.json`; reuse only for matching format, builder and source table.
-  Automatic asset-change detection is deferred.
+  deterministic `joint_id` values bind Main Rig mappings. Reconcile lazily from
+  the current source rigs and retain structure only in memory; model-rig caches
+  are neither read nor written. Builder provenance still versions saved control
+  mappings in `.mod_viewer.json`.
 - Rig presets use `rig.version = 1` in `.mod_viewer.json`: stable IDs, bounded
   names, explicit root signatures and normalized non-identity local quaternions.
   Preserve unrelated metadata and IDs on rename; resolve entries exactly by
@@ -300,10 +307,13 @@ of documentation, comments and tests; use portable fixtures instead.
   deltas before source aliasing. IK depends on accepted controls, uses virtual
   two-bone controls and composes before manual pose/Physics. Metadata save/reset
   refreshes mappings and pose on the loaded ModelRig without reconciliation.
+  Discard joint IDs saved by older builders while retaining valid semantic
+  positions for normal point-to-point rebinding. Explicit mappings with malformed
+  IDs or missing or unknown builder provenance remain unbound.
 - Rig snapshots expose only panel/overlay view models; evidence and performance
   stay private. Joint selection is independent of pose, Weight selection, Physics
   and overlay state; Reset Joint/Pose preserves selection and saved presets. Keep
-  O(1) overlay objects. Reconcile only for absent/incompatible sidecars. Step each
+  O(1) overlay objects. Reuse the loaded in-memory rig until invalidation. Step each
   source rig once at fixed 1/120 second with bounded catch-up; deform visible
   selected-weight vertices and baseline normals, defer exact bounds until settling,
   retain conservative culling and update character shadows every deformation frame.

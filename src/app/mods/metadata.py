@@ -20,7 +20,6 @@ from core.textures.color_adjustment import (
 from core.mod_source import is_archive_path
 
 METADATA_NAME = ".mod_viewer.json"
-MODEL_RIG_METADATA_NAME = ".mod_viewer.rig.json"
 PRESENT_NAMES_KEY = "__all__"
 _LOCK = threading.RLock()
 
@@ -30,13 +29,7 @@ RIG_METADATA_VERSION = 1
 RIG_PRESET_NAME_MAX_LENGTH = 80
 RIG_SIGNATURE_MAX_LENGTH = 1024
 HUMANOID_CONTROL_RIG_VERSION = 2
-MODEL_RIG_VERSION = 1
-MODEL_RIG_BUILDER_VERSION = 2
-MODEL_RIG_SOURCE_MAX_LENGTH = 1024
-MODEL_RIG_MAX_JOINTS = 250000
-MODEL_RIG_MAX_MEMBERS_PER_JOINT = 256
-MODEL_RIG_MAX_EDGES = 250000
-MODEL_RIG_MAX_BYTES = 64 * 1024 * 1024
+MODEL_RIG_BUILDER_VERSION = 3
 HUMANOID_CONTROL_KEYS = (
     "chest", "pelvis", "neck", "head", "leftShoulder", "leftElbow", "leftHand",
     "rightShoulder", "rightElbow", "rightHand", "leftHip", "leftKnee",
@@ -121,212 +114,8 @@ def _save(folder_path, data):
     return {"saved": True, "path": path}
 
 
-def _model_rig_text(value, maximum=MODEL_RIG_SOURCE_MAX_LENGTH):
-    return (isinstance(value, str) and bool(value) and len(value) <= maximum
-            and "\x00" not in value)
 
 
-def _model_rig_vector(value, length):
-    if not isinstance(value, list) or len(value) != length:
-        return None
-    if any(isinstance(item, bool) or not isinstance(item, (int, float))
-           or not math.isfinite(item) for item in value):
-        return None
-    return [float(item) for item in value]
-
-
-def _normalized_model_rig(value, *, include_text=False):
-    if not isinstance(value, dict):
-        return None
-    if value.get("version") != MODEL_RIG_VERSION \
-            or value.get("builder_version") != MODEL_RIG_BUILDER_VERSION:
-        return None
-    source_table = value.get("source_table")
-    joints = value.get("joints")
-    edges = value.get("edges")
-    model_reference_radius = value.get("model_reference_radius")
-    if (not isinstance(source_table, list)
-            or not isinstance(joints, list)
-            or not isinstance(edges, list)
-            or len(joints) == 0 or len(joints) > MODEL_RIG_MAX_JOINTS
-            or len(edges) > MODEL_RIG_MAX_EDGES
-            or isinstance(model_reference_radius, bool)
-            or not isinstance(model_reference_radius, (int, float))
-            or not math.isfinite(model_reference_radius)
-            or model_reference_radius <= 0):
-        return None
-
-    sources = []
-    source_keys = set()
-    for source in source_table:
-        if not _model_rig_text(source):
-            return None
-        if source in source_keys:
-            return None
-        source_keys.add(source)
-        sources.append(source)
-
-    normalized_joints = []
-    for index, joint in enumerate(joints):
-        if (not isinstance(joint, dict)
-                or isinstance(joint.get("joint_id"), bool)
-                or joint.get("joint_id") != index):
-            return None
-        members = joint.get("members")
-        representative_member_index = joint.get("representative_member_index")
-        parent_id = joint.get("parent_id")
-        if (not isinstance(members, list)
-                or len(members) > MODEL_RIG_MAX_MEMBERS_PER_JOINT
-                or len(members) == 0
-                or (isinstance(representative_member_index, bool)
-                    or not isinstance(representative_member_index, int)
-                    or representative_member_index < 0
-                    or representative_member_index >= len(members))
-                or (parent_id is not None
-                    and (isinstance(parent_id, bool)
-                         or not isinstance(parent_id, int)
-                         or parent_id < 0 or parent_id >= len(joints)
-                         or parent_id == index))):
-            return None
-        normalized_members = []
-        for member in members:
-            if (not isinstance(member, list) or len(member) != 2
-                    or isinstance(member[0], bool)
-                    or not isinstance(member[0], int) or member[0] < 0
-                    or member[0] >= len(source_table)
-                    or isinstance(member[1], bool)
-                    or not isinstance(member[1], int) or member[1] < 0):
-                return None
-            bone_id = member[1]
-            normalized_members.append([member[0], bone_id])
-        vectors = {
-            key: _model_rig_vector(joint.get(key), length)
-            for key, length in (("rest_center", 3), ("rest_pivot", 3),
-                                ("rest_frame", 4))}
-        if any(vector is None for vector in vectors.values()):
-            return None
-        normalized_joints.append({
-            "joint_id": index,
-            "members": normalized_members,
-            "representative_member_index": representative_member_index,
-            "parent_id": parent_id,
-            **vectors,
-        })
-    visit_state = [0] * len(normalized_joints)
-    for start in range(len(normalized_joints)):
-        if visit_state[start] == 2:
-            continue
-        path = []
-        current = start
-        while current is not None and visit_state[current] == 0:
-            visit_state[current] = 1
-            path.append(current)
-            current = normalized_joints[current]["parent_id"]
-        if current is not None and visit_state[current] == 1:
-            return None
-        for index in path:
-            visit_state[index] = 2
-
-    normalized_edges = []
-    edge_keys = set()
-    for edge in edges:
-        if not isinstance(edge, dict):
-            return None
-        joint_a = edge.get("joint_a")
-        joint_b = edge.get("joint_b")
-        relationship_type = edge.get("relationship_type")
-        edge_strength = edge.get("edge_strength")
-        edge_pivot = _model_rig_vector(edge.get("edge_pivot"), 3)
-        if (isinstance(joint_a, bool) or not isinstance(joint_a, int)
-                or isinstance(joint_b, bool) or not isinstance(joint_b, int)
-                or joint_a < 0 or joint_b < 0 or joint_a >= len(joints)
-                or joint_b >= len(joints) or joint_a == joint_b
-                or relationship_type not in ("source", "attachment")
-                or isinstance(edge_strength, bool)
-                or not isinstance(edge_strength, (int, float))
-                or not math.isfinite(edge_strength) or edge_strength < 0
-                or edge_pivot is None):
-            return None
-        left, right = sorted((joint_a, joint_b))
-        edge_key = (left, right)
-        if edge_key in edge_keys:
-            return None
-        edge_keys.add(edge_key)
-        normalized_edges.append({
-            "joint_a": left,
-            "joint_b": right,
-            "relationship_type": relationship_type,
-            "edge_strength": float(edge_strength),
-            "edge_pivot": edge_pivot,
-        })
-    expected_edge_keys = {
-        tuple(sorted((joint["parent_id"], joint["joint_id"])))
-        for joint in normalized_joints if joint["parent_id"] is not None
-    }
-    if edge_keys != expected_edge_keys:
-        return None
-
-    normalized = {
-        "version": MODEL_RIG_VERSION,
-        "builder_version": MODEL_RIG_BUILDER_VERSION,
-        "model_reference_radius": float(model_reference_radius),
-        "source_table": sources,
-        "joints": normalized_joints,
-        "edges": normalized_edges,
-    }
-    try:
-        text = json.dumps(normalized, separators=(",", ":"),
-                          ensure_ascii=False)
-        if len(text.encode("utf-8")) > MODEL_RIG_MAX_BYTES:
-            return None
-    except (TypeError, ValueError, UnicodeError):
-        return None
-    return (normalized, text) if include_text else normalized
-
-
-def load_model_rig(folder_path, source=None):
-    """Load a validated cached ModelRig sidecar, if one is present."""
-    try:
-        if source is not None:
-            path = source.resolve_resource(MODEL_RIG_METADATA_NAME)
-            if not path or not source.is_file(path) \
-                    or source.size(path) > MODEL_RIG_MAX_BYTES:
-                return None
-            return _normalized_model_rig(json.loads(source.read_text(path)))
-        if is_archive_path(folder_path):
-            return None
-        path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
-        if os.path.getsize(path) > MODEL_RIG_MAX_BYTES:
-            return None
-        with open(path, encoding="utf-8") as fh:
-            return _normalized_model_rig(json.load(fh))
-    except (OSError, ValueError, TypeError):
-        return None
-
-
-def save_model_rig(folder_path, model_rig):
-    """Atomically replace the cached ModelRig sidecar."""
-    normalized_result = _normalized_model_rig(model_rig, include_text=True)
-    if normalized_result is None:
-        return {"saved": False, "error": "Invalid ModelRig metadata."}
-    if is_archive_path(folder_path):
-        return {"saved": False,
-                "error": "Viewer metadata cannot be saved for compressed mods."}
-    normalized, text = normalized_result
-    with _LOCK:
-        path = os.path.join(folder_path, MODEL_RIG_METADATA_NAME)
-        temp_path = path + ".tmp"
-        try:
-            with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(text)
-            os.replace(temp_path, path)
-        except (OSError, TypeError, ValueError) as error:
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-            return {"saved": False, "error": str(error)}
-    return {"saved": True, "path": path}
 
 
 def mesh_color_adjustments(folder_path=None, data=None):

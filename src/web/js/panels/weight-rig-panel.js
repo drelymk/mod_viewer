@@ -1074,7 +1074,9 @@ function syncStatus() {
     });
   } else if (weight.loading) status = t('weightRig.status.loadingWeights');
   else if (rig.loading) status = t('weightRig.status.loadingRig');
-  else if (weight.loaded && (!weight.sources?.length || weight.noWeights)) {
+  else if (Object.keys(rig.sourceErrors || {}).length) {
+    status = t('weightRig.status.surfaceRigUnavailable', { count: Object.keys(rig.sourceErrors).length });
+  } else if (weight.loaded && (!weight.sources?.length || weight.noWeights)) {
     status = t('weightRig.status.noWeights');
   } else if (!weight.loaded && !rig.loaded) status = '';
   if (weight.pickStatus || rig.pickStatus) {

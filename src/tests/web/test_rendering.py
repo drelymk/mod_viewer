@@ -362,6 +362,11 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     page.evaluate('window.modViewer.activeMeshes[1].visible = false')
     assert bridge_calls(page, 'weights') == []
     page.evaluate("""() => {
+      window.__rigFileCalls = [];
+      window.pywebview.api.load_model_rig = async () => { window.__rigFileCalls.push('read'); throw new Error('retired rig cache'); };
+      window.pywebview.api.save_model_rig = async () => { window.__rigFileCalls.push('write'); throw new Error('retired rig cache'); };
+    }""")
+    page.evaluate("""() => {
       window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
         -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
       ]);
@@ -581,6 +586,13 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     page.locator('.rig-clear-joint').click()
     assert page.locator('.rig-bone-select').input_value() == ''
     assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition')
+    assert page.evaluate("""async () => {
+      const rig = window.__rigApi;
+      const before = rig.getModelRigState().structureRevision;
+      await rig.activateWeightRig();
+      await rig.activateWeightRig();
+      return rig.getModelRigState().structureRevision === before && window.__rigFileCalls.length === 0;
+    }""")
     assert bridge_calls(page, 'weights') == [['fixture-01']]
     assert bridge_calls(page, 'export') == []
 
@@ -688,3 +700,50 @@ def test_weight_rig_shape_change_invalidates_and_rebuilds_preserving_root(viewer
       };
     }""")
     assert rebuilt == {'loaded': True, 'root': selected['joint'], 'selectedRoot': None}
+
+
+def test_weight_rig_collapsed_source_keeps_weights_and_other_physics_then_recovers(viewer):
+    payload, weights = weighted_payload(include_second_member=True)
+    weights['meshes']['mesh-01']['source'] = {
+        'key': 'stream-02.buf|offset=0', 'file': 'stream-02.buf', 'bone_id_offset': 0,
+    }
+    payload['meshes']['mesh-01']['shape_targets'] = [
+        {'var': 'shape01', 'pos': append_stream(payload, 'f', [0] * 9)},
+    ]
+    payload['state']['defaults'] = {'shape01': '0'}
+    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    page.locator('#weight-rig-tab').click()
+    page.evaluate("""async () => {
+      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
+      window.__rigApi = weightRigApi;
+    }""")
+    page.wait_for_function('window.__rigApi.getModelRigState().loaded')
+    page.evaluate("""() => {
+      const rig = window.__rigApi;
+      rig.getModelWeightState().sources.forEach(source => rig.setBoneSelected(source.key, source.availableBoneIds.at(-1), true));
+    }""")
+    page.wait_for_function('window.__rigApi.getModelPhysicsState().participantCount === 2')
+
+    for value, expected_participants, expected_errors in [('1', 1, 1), ('0', 2, 0)]:
+        state = page.evaluate("""async value => {
+          const {setControlValue} = await import('./js/editing/control-state.js');
+          const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+          setControlValue('shape01', value);
+          refreshMeshes({force: {shapes: true}});
+          await window.__rigApi.activateWeightRig();
+          const weight = window.__rigApi.getModelWeightState();
+          const rig = window.__rigApi.getModelRigState();
+          return {weightLoaded: weight.loaded, sourceCount: weight.sources.length,
+            selectionCount: weight.selectedBones.length, rigLoaded: rig.loaded,
+            errors: Object.keys(rig.sourceErrors).length};
+        }""", value)
+        assert state == {'weightLoaded': True, 'sourceCount': 2, 'selectionCount': 2,
+                         'rigLoaded': True, 'errors': expected_errors}
+        page.wait_for_function(
+            'expected => window.__rigApi.getModelPhysicsState().participantCount === expected',
+            arg=expected_participants,
+        )
+        if expected_errors:
+            assert 'Rig unavailable for 1 weight sources' in page.locator('.weight-rig-status').inner_text()

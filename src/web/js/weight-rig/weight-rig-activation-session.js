@@ -6,22 +6,6 @@ function afterWeightReadyPaint() {
   });
 }
 
-/** Fence asynchronous cache writes from the synchronous model-rig activation. */
-export async function commitPreparedModelRig({ isCurrent = () => true, saveCache, activate } = {}) {
-  if (!isCurrent()) return { activated: false, cacheSaved: false };
-  let cacheSaved = false;
-  if (typeof saveCache === 'function') {
-    try {
-      cacheSaved = (await saveCache()) === true;
-    } catch {
-      cacheSaved = false;
-    }
-  }
-  if (!isCurrent()) return { activated: false, cacheSaved };
-  activate?.({ cacheSaved });
-  return { activated: true, cacheSaved };
-}
-
 /** Own the Weight-ready, saved-selection, Rig-build, and Physics-restore stages. */
 export function createWeightRigActivationSession({
   getGeneration,
