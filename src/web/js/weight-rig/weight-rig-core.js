@@ -77,7 +77,6 @@ let weightRigActivationSession = null;
 let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
-const RIG_IDENTITY_MATRIX = new THREE.Matrix4();
 let humanoidRigEditSession = null;
 
 function clockNow() {
@@ -770,34 +769,6 @@ function modelJointIdForSourceBone(sourceKeyValue, boneId) {
   return modelSkinningRig?.sourceBoneToModelJointId?.get(sourceBoneKey(sourceKeyValue, boneId));
 }
 
-function updateModelPoseFrameCache(rig, transforms) {
-  const seen = new Set();
-  for (const joint of rig?.joints || []) {
-    const jointId = Number(joint.jointId);
-    if (!Number.isInteger(jointId)) continue;
-    const componentId = rig.componentByJointId?.get?.(jointId);
-    const component = Number.isInteger(Number(componentId)) ? rig.components?.[Number(componentId)] : null;
-    const parent = component?.parentById?.[jointId];
-    const parentId = parent === null || parent === undefined ? null : Number(parent);
-    const parentTransform = parentId === null ? RIG_IDENTITY_MATRIX : transforms.get(parentId) || RIG_IDENTITY_MATRIX;
-    const pivotValues = rig.jointPivotByJointId.get(jointId) ||
-      (parentId !== null ? rig.centerByJointId.get(parentId) : null) ||
-      rig.centerByJointId.get(jointId) || [0, 0, 0];
-    const centerValues = rig.centerByJointId.get(jointId) || [0, 0, 0];
-    const frame = rig.poseFrameCache.get(jointId) || {
-      center: new THREE.Vector3(),
-      pivot: new THREE.Vector3(),
-    };
-    frame.center.fromArray(centerValues).applyMatrix4(transforms.get(jointId) || RIG_IDENTITY_MATRIX);
-    frame.pivot.fromArray(pivotValues).applyMatrix4(parentTransform);
-    rig.poseFrameCache.set(jointId, frame);
-    seen.add(jointId);
-  }
-  for (const jointId of rig.poseFrameCache.keys()) {
-    if (!seen.has(jointId)) rig.poseFrameCache.delete(jointId);
-  }
-}
-
 async function buildModelSkinningRig(
   sourceRigs = [...sourceSkinningRigs.values()],
   { generation = null, isCurrent = () => true } = {},
@@ -861,7 +832,6 @@ async function buildModelSkinningRig(
     poseRotations: new Map(),
     manualPoseTransforms: new Map(),
     poseTransformCache: new Map(),
-    poseFrameCache: new Map(),
     poseAffectedJointIds: new Set(),
     poseActiveJointKey: '',
     poseActiveVerticesByMesh: new Map(),
@@ -870,7 +840,7 @@ async function buildModelSkinningRig(
     structureRevision: 0,
     jointBuildDiagnostics: {
       mergeCount: reconciliation.reconciliation?.equivalenceClusterCount || 0,
-      sourceBoneCount: reconciliation.reconciliation?.sourceBoneCount || reconciliation.sourceBoneEvidence?.length || 0,
+      sourceBoneCount: reconciliation.reconciliation?.sourceBoneCount || 0,
       componentCount: (reconciliation.components || []).length,
       edgeCount: (reconciliation.edges || []).length,
     },
@@ -931,7 +901,6 @@ async function buildModelSkinningRig(
   modelRigState.structureRevision = rig.structureRevision;
   modelRigState.selectedJointId =
     Number.isInteger(previousSelectedJointId) && joints[previousSelectedJointId] ? previousSelectedJointId : null;
-  updateModelPoseFrameCache(rig, rig.poseTransforms);
   performance.totalRigBuildMs = clockNow() - startedAt;
   const modelStats = budget.getStats();
   performance.modelRigLargestChunkMs = modelStats.largestChunkMs;

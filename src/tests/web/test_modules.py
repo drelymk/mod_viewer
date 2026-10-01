@@ -3,6 +3,411 @@
 import pytest
 
 
+def _prepare_rig_overlay(page, orthographic=False):
+    page.evaluate("""async orthographic => {
+      const THREE = await import('three/webgpu');
+      const overlay = await import('./js/scene/rig-overlay-controller.js');
+      const canvas = document.createElement('canvas');
+      canvas.style.cssText = 'width:800px;height:600px';
+      document.body.appendChild(canvas);
+      const captured = new Set();
+      canvas.setPointerCapture = id => captured.add(id);
+      canvas.hasPointerCapture = id => captured.has(id);
+      canvas.releasePointerCapture = id => captured.delete(id);
+      const camera = orthographic ? new THREE.OrthographicCamera(-2,2,1.5,-1.5,0.1,100)
+        : new THREE.PerspectiveCamera(50, 4/3, 0.1, 100);
+      camera.position.z = 5; camera.updateMatrixWorld();
+      const scene = new THREE.Scene(), mesh = new THREE.Object3D();
+      scene.add(mesh);
+      const positions = {chest:[0,0.6,0], pelvis:[0,-0.4,0], neck:[0,0.8,0], head:[0,1,0],
+        leftShoulder:[-0.35,0.6,0], leftElbow:[-0.6,0.3,0], leftHand:[-0.9,0,0],
+        rightShoulder:[0.35,0.6,0], rightElbow:[0.6,0.3,0], rightHand:[0.9,0,0],
+        leftHip:[-0.2,-0.4,0], leftKnee:[-0.2,-0.8,0], leftFoot:[-0.2,-1.2,0],
+        rightHip:[0.2,-0.4,0], rightKnee:[0.2,-0.8,0], rightFoot:[0.2,-1.2,0]};
+      const rig = {available:true, accepted:true, source:'humanoid_control_rig',
+        controls:Object.fromEntries(Object.entries(positions).map(([key,position]) => [key,{position}]))};
+      const joints = [0,1,2].map(jointId => ({jointId, restCenter:[jointId*0.5,0,0], restPivot:[jointId*0.5,0,0]}));
+      const snapshot = {selectedJointId:1, rotationSnapDegrees:15, jointPickIntent:null,
+        model:{key:'model-01', structureRevision:1, joints, humanoidControlRig:rig,
+          components:[{rootId:0,nodeIds:[0,1,2]}], forestEdges:[{jointA:0,jointB:1},{jointA:1,jointB:2}]},
+        ik:{enabled:false, available:true, controlKeys:['leftShoulder','leftElbow','leftHand']},
+        humanoidRigEdit:{editing:false, controls:structuredClone(rig.controls), mappedJointIdByControl:{}}};
+      const arcball = Object.assign(new THREE.EventDispatcher(), {enabled:true,
+        leftRotation:true, unsetMouseAction(){this.leftRotation=false;}, setMouseAction(){this.leftRotation=true;}});
+      const calls = {rotations:[], solves:[], finished:[], carries:[], drafts:[], picks:[], surfaces:[], unavailable:0};
+      const ctx = window.__overlay = {THREE, overlay, canvas, camera, scene, mesh, snapshot, arcball, captured, calls,
+        frameReads:0, frames:new Map(joints.map(joint => [joint.jointId,{pivot:[...joint.restPivot],
+          gizmoRotation:[0,0,0,1], parentRotation:[0,0,0,1], restRotation:[0,0,0,1]}]))};
+      ctx.notify = () => window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-changed',{detail:ctx.snapshot}));
+      ctx.pointer = (type, id, x, y, button=0, extra={}) => canvas.dispatchEvent(new PointerEvent(type,
+        {pointerId:id, clientX:x, clientY:y, button, bubbles:true, cancelable:true, ...extra}));
+      ctx.screen = point => overlay.projectRigPointToClient({point,camera,canvas,worldMatrix:ctx.controller.group.matrixWorld});
+      ctx.controller = overlay.createRigOverlayController({scene,camera,canvas,arcballControls:arcball,
+        getMeshes:()=>[mesh], getRigState:()=>ctx.snapshot, getHumanoidRigEditSnapshot:()=>ctx.snapshot.humanoidRigEdit,
+        getRigJointPoseFrame:id=>{ctx.frameReads++; return ctx.frames.get(id);},
+        setRigJointRotation:(id,q,options)=>calls.rotations.push({id,q:q.toArray(),options}),
+        solveRigIkTarget:(target,options)=>{calls.solves.push({target,options});
+          ctx.snapshot.model.humanoidControlRig.controls[ctx.snapshot.ik.controlKeys[2]].position=[...target]; ctx.notify();},
+        finishRigJointPose:id=>calls.finished.push(id), onRigJointPicked:id=>calls.picks.push(id),
+        onRigSurfacePickRequested:point=>calls.surfaces.push(point),
+        onTransformControlsUnavailable:()=>calls.unavailable++,
+        beginHumanoidControlCarry:key=>{calls.carries.push('begin'); ctx.snapshot.humanoidRigEdit.carryingControlKey=key; ctx.notify(); return true;},
+        finishHumanoidControlCarry:()=>{calls.carries.push('finish'); ctx.snapshot.humanoidRigEdit.carryingControlKey=null; ctx.notify();},
+        cancelHumanoidControlCarry:()=>{calls.carries.push('cancel'); ctx.snapshot.humanoidRigEdit.carryingControlKey=null; ctx.notify();},
+        updateHumanoidControlDraft:(key,point,options)=>{calls.drafts.push({key,point,options});
+          ctx.snapshot.humanoidRigEdit.controls[key].position=point;},
+      });
+      ctx.controller.refresh();
+    }""", orthographic)
+
+
+def test_rig_overlay_pose_edit_and_disposal_restore_interaction_ownership(module_page):
+    _prepare_rig_overlay(module_page)
+    result = module_page.evaluate("""async () => {
+      const ctx = window.__overlay, {controller,snapshot,arcball,canvas,calls} = ctx;
+      const controls = await controller.ensureTransformControls();
+      ctx.pointer('pointerdown',7,400,300);
+      controls.dragging=true;
+      const blocked = !arcball.enabled && ctx.overlay.isRigTransformInteractionActive();
+      snapshot.humanoidRigEdit.editing=true; ctx.notify();
+      const editRestored = arcball.enabled && !ctx.overlay.isRigTransformInteractionActive()
+        && !controller.getDebugState().controlsAttached && ctx.captured.size===0;
+      const point = ctx.screen(snapshot.humanoidRigEdit.controls.leftHand.position);
+      ctx.pointer('pointerdown',11,point.x,point.y);
+      const carrying = controller.getDebugState().carryingControlKey==='leftHand'
+        && !arcball.leftRotation && ctx.captured.has(11);
+      controller.dispose(); controller.dispose();
+      ctx.pointer('pointermove',11,point.x+20,point.y);
+      return {blocked,editRestored,carrying, enabled:arcball.enabled,leftRotation:arcball.leftRotation,
+        captures:ctx.captured.size,cursor:canvas.style.cursor,carries:calls.carries,
+        noDraftAfterDispose:calls.drafts.length===0,
+        removed:controller.group.parent===null, interaction:ctx.overlay.isRigTransformInteractionActive()};
+    }""")
+    assert result == {'blocked':True,'editRestored':True,'carrying':True,'enabled':True,'leftRotation':True,
+                      'captures':0,'cursor':'','carries':['begin','cancel'],'noDraftAfterDispose':True,
+                      'removed':True,'interaction':False}
+
+
+def test_rig_overlay_joint_pick_uses_own_pointer_and_releases_capture_on_exit(module_page):
+    _prepare_rig_overlay(module_page)
+    result = module_page.evaluate("""async () => {
+      const ctx = window.__overlay; await ctx.controller.ensureTransformControls();
+      ctx.snapshot.jointPickIntent={kind:'select'}; ctx.notify();
+      const p = ctx.screen([0.5,0,0]);
+      ctx.pointer('pointerdown',11,p.x,p.y);
+      ctx.pointer('pointerup',22,p.x,p.y);
+      const foreignIgnored = ctx.calls.picks.length===0 && ctx.captured.has(11);
+      ctx.pointer('pointerup',11,p.x,p.y);
+      ctx.pointer('pointerdown',33,p.x,p.y);
+      ctx.snapshot.jointPickIntent=null; ctx.notify();
+      const released = ctx.captured.size===0;
+      ctx.controller.dispose();
+      return {foreignIgnored,released,picks:ctx.calls.picks,surfaces:ctx.calls.surfaces.length};
+    }""")
+    assert result == {'foreignIgnored':True,'released':True,'picks':[1],'surfaces':0}
+
+
+def test_rig_overlay_pick_and_control_carry_preserve_navigation_and_magnetic_exclusions(module_page):
+    _prepare_rig_overlay(module_page)
+    result = module_page.evaluate("""async () => {
+      const ctx=window.__overlay, {controller,snapshot,calls}=ctx;
+      await controller.ensureTransformControls();
+      snapshot.jointPickIntent={kind:'select'}; ctx.notify();
+      const joint=ctx.screen([0.5,0,0]);
+      ctx.pointer('pointermove',11,joint.x,joint.y);
+      const acquired=controller.getDebugState().hoveredJointId===1;
+      ctx.pointer('pointermove',11,joint.x+10,joint.y);
+      const retained=controller.getDebugState().hoveredJointId===1;
+      ctx.pointer('pointermove',11,joint.x+14,joint.y);
+      const released=controller.getDebugState().hoveredJointId===null;
+      ctx.pointer('pointerdown',11,joint.x,joint.y,0,{altKey:true});
+      const altFree=ctx.captured.size===0;
+      ctx.pointer('pointerdown',11,20,20); ctx.pointer('pointerup',11,20,20);
+      ctx.pointer('pointerdown',11,joint.x,joint.y); ctx.pointer('pointerup',11,joint.x+5,joint.y);
+      const surfaceOnly=calls.surfaces.length===1 && calls.picks.length===0;
+      snapshot.jointPickIntent=null; snapshot.humanoidRigEdit.editing=true;
+      snapshot.humanoidRigEdit.mappedJointIdByControl={leftShoulder:0,leftHand:2}; ctx.notify();
+      const hand=ctx.screen(snapshot.humanoidRigEdit.controls.leftHand.position);
+      ctx.pointer('pointerdown',11,hand.x,hand.y); ctx.pointer('pointerup',11,hand.x,hand.y);
+      const carrySurvivesRelease=controller.getDebugState().carryingControlKey==='leftHand' && ctx.captured.size===0;
+      const excluded=ctx.screen([0,0,0]); ctx.pointer('pointermove',11,excluded.x,excluded.y);
+      const otherMappingExcluded=calls.drafts.at(-1).options.candidateJointId!==0;
+      const mappedDistance=calls.drafts.at(-1).options.mappedDistance;
+      ctx.pointer('pointermove',11,joint.x,joint.y);
+      const nearest=calls.drafts.at(-1).options;
+      const beforeNavigation=calls.drafts.length;
+      ctx.pointer('pointerdown',22,joint.x,joint.y,2);
+      ctx.camera.position.x+=0.1; ctx.camera.updateMatrixWorld(); ctx.arcball.dispatchEvent({type:'change'});
+      ctx.pointer('pointermove',11,joint.x+10,joint.y,0,{buttons:2});
+      const navigationFree=calls.drafts.length===beforeNavigation && ctx.arcball.enabled;
+      ctx.pointer('pointerup',22,joint.x+10,joint.y,2);
+      ctx.pointer('pointerdown',11,joint.x+10,joint.y);
+      const finished=ctx.arcball.leftRotation && controller.getDebugState().carryingControlKey===null;
+      const next=ctx.screen(snapshot.humanoidRigEdit.controls.leftHand.position);
+      ctx.pointer('pointerdown',11,next.x,next.y);
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',cancelable:true}));
+      const cancelled=ctx.arcball.leftRotation && ctx.captured.size===0 && controller.getDebugState().carryingControlKey===null;
+      controller.dispose();
+      return {acquired,retained,released,altFree,surfaceOnly,carrySurvivesRelease,otherMappingExcluded,
+        mappedDistanceFinite:Number.isFinite(mappedDistance),magneticJoint:nearest.candidateJointId,
+        magneticDistance:nearest.candidateDistance,navigationFree,finished,cancelled,carries:calls.carries};
+    }""")
+    assert all(result[key] for key in ('acquired','retained','released','altFree','surfaceOnly',
+                                     'carrySurvivesRelease','otherMappingExcluded','mappedDistanceFinite',
+                                     'navigationFree','finished','cancelled')), result
+    assert result['magneticJoint'] == 1
+    assert result['magneticDistance'] == pytest.approx(0)
+    assert result['carries'] == ['begin','finish','begin','cancel']
+
+
+@pytest.mark.parametrize('orthographic', [False, True])
+def test_rig_overlay_projection_and_pick_ties_are_deterministic(module_page, orthographic):
+    _prepare_rig_overlay(module_page, orthographic)
+    result = module_page.evaluate("""async () => {
+      const ctx=window.__overlay; await ctx.controller.ensureTransformControls();
+      const params={camera:ctx.camera,canvas:ctx.canvas,worldMatrix:ctx.controller.group.matrixWorld};
+      const pointer=ctx.screen([0,0,0]);
+      const ties=ctx.overlay.findNearestRigJoint({...params,pointer,candidates:[
+        {jointId:2,pivot:[0,0,0]},{jointId:1,pivot:[0,0,0]}]});
+      const depth=ctx.overlay.findNearestRigJoint({...params,pointer,candidates:[
+        {jointId:1,pivot:[0,0,0]},{jointId:5,pivot:[0,0,0.5]}]});
+      const control=ctx.overlay.findNearestHumanoidControl({...params,pointer,controls:{
+        control02:[0,0,0],control01:[0,0,0]}});
+      const clipped=ctx.overlay.projectRigPointToClient({...params,point:[0,0,6]})===null;
+      const outside=ctx.overlay.findNearestRigJoint({...params,pointer:{x:-100,y:-100},
+        candidates:[{jointId:0,pivot:[0,0,0]}]})===null;
+      ctx.controller.dispose();
+      return {tie:ties.jointId,ordered:ties.candidates.map(item=>item.jointId),depth:depth.jointId,
+        control:control.key,clipped,outside};
+    }""")
+    assert result == {'tie':1,'ordered':[1,2],'depth':5,'control':'control01','clipped':True,'outside':True}
+
+
+def test_rig_overlay_fk_ik_gestures_keep_proxy_ownership_and_finalize_once(module_page):
+    _prepare_rig_overlay(module_page)
+    result = module_page.evaluate("""async () => {
+      const ctx=window.__overlay, {THREE,controller,snapshot,calls,frames}=ctx;
+      const controls=await controller.ensureTransformControls();
+      const parent=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0),0.3);
+      const rest=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),0.2);
+      const delta=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),0.4);
+      frames.get(1).parentRotation=parent.toArray(); frames.get(1).restRotation=rest.toArray(); ctx.notify();
+      ctx.pointer('pointerdown',11,400,300);
+      controls.dragging=true;
+      ctx.pointer('pointerup',22,400,300);
+      const foreignIgnored=controls.dragging && !ctx.arcball.enabled && ctx.captured.has(11);
+      controls.object.quaternion.copy(parent).multiply(delta).multiply(rest);
+      const owned=controls.object.quaternion.clone();
+      controls.dispatchEvent({type:'objectChange'});
+      window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-pose-changed',{detail:{jointId:1}}));
+      ctx.notify();
+      const preserved=controls.object.quaternion.angleTo(owned)<1e-6;
+      const converted=new THREE.Quaternion(...calls.rotations[0].q).angleTo(delta)<1e-6;
+      const snap=controls.rotationSnap;
+      controls.dragging=false;
+      controls.dispatchEvent({type:'dragging-changed',value:false});
+      ctx.pointer('pointerup',11,400,300);
+      const releaseDeferred=ctx.overlay.isRigTransformInteractionActive();
+      snapshot.ik.enabled=true; snapshot.selectedJointId=null; ctx.notify();
+      controls.dragging=true;
+      await Promise.resolve();
+      const newerProtected=ctx.overlay.isRigTransformInteractionActive();
+      const target=[-0.8,0.1,0.05]; controls.object.position.set(...target);
+      controls.dispatchEvent({type:'objectChange'});
+      const ikOwned=controls.object.position.toArray();
+      controls.dragging=false;
+      controls.dispatchEvent({type:'dragging-changed',value:false});
+      await Promise.resolve();
+      const endpoint=controls.object.position.toArray();
+      const finished={fk:[...calls.finished], ik:calls.solves.map(call=>call.options.dragging)};
+      const restored=ctx.arcball.enabled && !ctx.overlay.isRigTransformInteractionActive();
+      snapshot.ik.enabled=false; snapshot.selectedJointId=1; ctx.notify();
+      ctx.pointer('pointerdown',33,400,300); controls.dragging=true;
+      ctx.pointer('pointercancel',33,400,300); await Promise.resolve();
+      const cancelled=!controls.dragging && ctx.arcball.enabled && !ctx.overlay.isRigTransformInteractionActive()
+        && !ctx.captured.has(33) && calls.finished.length===2;
+      controller.dispose();
+      return {preserved,converted,snap,releaseDeferred,newerProtected,ikOwned,endpoint,finished,restored,foreignIgnored,cancelled};
+    }""")
+    assert result['preserved'] and result['converted'] and result['foreignIgnored'] and result['cancelled']
+    assert result['snap'] == pytest.approx(0.2617993877991494)
+    assert result['releaseDeferred'] and result['newerProtected'] and result['restored']
+    assert result['ikOwned'] == result['endpoint'] == [-0.8, 0.1, 0.05]
+    assert result['finished'] == {'fk':[1], 'ik':[True,False]}
+
+
+@pytest.mark.parametrize('orthographic', [False, True])
+def test_rig_overlay_reuses_visible_geometry_and_keeps_scaled_marker_sizes(module_page, orthographic):
+    _prepare_rig_overlay(module_page, orthographic)
+    result = module_page.evaluate("""async () => {
+      const ctx=window.__overlay, {THREE,controller,snapshot,mesh}=ctx;
+      await controller.ensureTransformControls();
+      const find=name=>controller.group.getObjectByName(name);
+      const lines=controller.group.children[0].children.find(item=>item.isLineSegments);
+      const marker=find('viewer-inferred-rig-model-joint-markers');
+      const materials=()=>controller.group.children.find(item=>item.name==='viewer-humanoid-control-rig-overlay')
+        .children.filter(item=>item.isSprite).map(item=>item.material.uuid);
+      const original={geometry:lines.geometry.uuid,materials:JSON.stringify(materials())};
+      ctx.frameReads=0;
+      window.dispatchEvent(new CustomEvent('mod-viewer-model-rig-pose-changed',{detail:{jointId:1}}));
+      const reads=ctx.frameReads;
+      const color=new THREE.Color(); marker.getColorAt(0,color);
+      const defaultColor=color.toArray();
+      snapshot.humanoidRigEdit.editing=true; ctx.notify();
+      const reused=lines.geometry.uuid===original.geometry && JSON.stringify(materials())===original.materials;
+      snapshot.humanoidRigEdit.candidateJointId=0; ctx.notify();
+      marker.getColorAt(0,color); const candidateColor=color.toArray();
+      snapshot.humanoidRigEdit.candidateJointId=null;
+      const widths=[];
+      for(const modelScale of [1,3]) {
+        mesh.scale.setScalar(modelScale);
+        window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed'));
+        const sprite=find('viewer-humanoid-point-leftHand');
+        const left=sprite.position.clone(), right=sprite.position.clone();
+        left.x-=sprite.scale.x/2; right.x+=sprite.scale.x/2;
+        widths.push(Math.abs(ctx.screen(right).x-ctx.screen(left).x));
+      }
+      const pointObjects=[]; controller.group.traverse(item=>{if(item.isPoints)pointObjects.push(item);});
+      snapshot.model={...snapshot.model,key:'model-02',joints:snapshot.model.joints.map(joint=>
+        ({...joint,restPivot:[joint.jointId,0,0]}))};
+      ctx.notify();
+      const changedModelRebuilt=controller.getDebugState().rebuildCount===2;
+      controller.dispose();
+      return {reused,widths,defaultColor,candidateColor,reads,pointObjects:pointObjects.length,changedModelRebuilt};
+    }""")
+    assert result['reused'] and result['changedModelRebuilt']
+    assert result['widths'] == pytest.approx([10,10])
+    assert result['defaultColor'] == pytest.approx([0.29,0.42,0.5])
+    assert result['candidateColor'] == pytest.approx([1,0.78,0.08])
+    assert result['reads'] <= 4
+    assert result['pointObjects'] == 1
+
+
+@pytest.mark.parametrize('interrupt', ['edit', 'dispose', 'failure'])
+def test_rig_overlay_lazy_controls_ignore_interrupted_load_then_recover(module_page, interrupt):
+    routes = []
+    module_page.route('**/TransformControls.js', lambda route: routes.append(route))
+    with module_page.expect_request('**/TransformControls.js'):
+        _prepare_rig_overlay(module_page)
+    module_page.evaluate("""interrupt => {
+      const ctx=window.__overlay;
+      ctx.pending=ctx.controller.ensureTransformControls();
+      if (interrupt==='dispose') ctx.controller.dispose();
+      else if (interrupt==='edit') {ctx.snapshot.humanoidRigEdit.editing=true; ctx.notify();}
+    }""", interrupt)
+    assert len(routes) == 1
+    if interrupt == 'failure':
+        routes[0].abort()
+    else:
+        routes[0].continue_()
+    result = module_page.evaluate("""async interrupt => {
+      const ctx=window.__overlay;
+      const pending=await ctx.pending;
+      const skipped=pending===null && !ctx.controller.getDebugState().controlsCreated;
+      let recovered=true;
+      if(interrupt==='edit') {
+        ctx.snapshot.humanoidRigEdit.editing=false; ctx.notify();
+        recovered=!!(await ctx.controller.ensureTransformControls());
+      }
+      const unavailable=ctx.calls.unavailable;
+      ctx.controller.dispose();
+      return {skipped,recovered,unavailable};
+    }""", interrupt)
+    assert result == {'skipped':True,'recovered':True,'unavailable':int(interrupt == 'failure')}
+
+
+def test_rig_overlay_picking_follows_runtime_fk_ik_and_reset(module_page):
+    _prepare_rig_overlay(module_page)
+    result = module_page.evaluate("""async () => {
+      const ctx=window.__overlay, {THREE,controller}=ctx;
+      const {createRigPoseRuntime}=await import('./js/weight-rig/rig-pose-runtime.js');
+      const binding=await import('./js/weight-rig/humanoid-rig-binding.js');
+      const ik=await import('./js/weight-rig/humanoid-rig-ik.js');
+      const deformation=await import('./js/weight-rig/weight-deformation.js');
+      const controlRig=structuredClone(ctx.snapshot.model.humanoidControlRig);
+      const keys=['leftShoulder','leftElbow','leftHand'], sourceKey='stream-01.buf';
+      const joints=keys.map((key,jointId)=>({jointId,signature:`joint-${jointId}`,
+        restPivot:[...controlRig.controls[key].position],
+        restCenter:controlRig.controls[key].position.map((v,i)=>v+(i===2?0.05:0)),
+        members:[{sourceKey,boneId:jointId}]}));
+      const component={componentId:0,rootId:0,nodeIds:[0,1,2],parentById:{0:null,1:0,2:1},
+        childrenById:{0:[1],1:[2],2:[]}};
+      const source={sourceKey,boneIds:[0,1,2],poseRotationByBoneId:new Map(),
+        inferredForest:{components:[component],componentByBoneId:{0:0,1:0,2:0}}};
+      const rig={joints,components:[component],componentByJointId:new Map([[0,0],[1,0],[2,0]]),
+        inferredForest:{components:[component]},sourceRigs:[source],structureRevision:2,
+        edges:[{jointA:0,jointB:1},{jointA:1,jointB:2}],
+        centerByJointId:new Map(joints.map(j=>[j.jointId,j.restCenter])),
+        jointPivotByJointId:new Map(joints.map(j=>[j.jointId,j.restPivot])),
+        restFrameByJointId:new Map(joints.map(j=>[j.jointId,new THREE.Quaternion()])),
+        poseRotationByJointId:new Map(),poseTransforms:new Map(),poseRotations:new Map(),
+        poseTransformCache:new Map(),
+        sourceTransformAliases:new Map(),sourceRotationAliases:new Map(),
+        poseActiveVerticesByMesh:new Map(),poseSourceBoneIdsByMesh:new Map(),poseAffectedJointIds:new Set(),
+        humanoidControlRig:controlRig};
+      rig.defaultComponents=[component]; rig.defaultComponentByJointId=new Map(rig.componentByJointId);
+      rig.defaultJointPivotByJointId=new Map(rig.jointPivotByJointId);
+      rig.defaultRestFrameByJointId=new Map(rig.restFrameByJointId);
+      rig.defaultRestDirectionByJointId=new Map(); rig.defaultRestContinuationChildByJointId=new Map();
+      rig.humanoidBinding=binding.buildHumanoidRigBinding({modelRig:rig,controlRig,
+        controlMappings:new Map(keys.map((key,jointId)=>[key,{jointId}]))});
+      const baseline=new Float32Array(joints.flatMap(j=>j.restPivot));
+      const skin={indices:new Uint32Array([0,1,2]),weights:new Float32Array([1,1,1]),influenceCount:1};
+      let vertices=new Float32Array(baseline);
+      const state={loaded:true,humanoidPose:{},ikEnabled:false,selectedJointId:1,explicitRootSignatures:new Set()};
+      const publish=()=>{ctx.snapshot.selectedJointId=state.selectedJointId;
+        ctx.snapshot.model={key:'model-01',structureRevision:rig.structureRevision,joints:rig.joints,
+          components:rig.components,forestEdges:rig.edges,humanoidControlRig:{...controlRig,
+            controls:Object.fromEntries(Object.entries(controlRig.controls).map(([key,control])=>
+              [key,{...control,position:state.humanoidPose[key]||control.position}]))}}; ctx.notify();};
+      const runtime=createRigPoseRuntime({state,getRig:()=>rig,sourceSkinningRigs:new Map([[sourceKey,source]]),
+        skinningRuntime:{applyDeformation:()=>{vertices=deformation.applyWeightedTransformDeformation(
+          baseline,skin.indices,skin.weights,1,skin.poseTransforms);return true;},finalizeDeformationGeometry:()=>false},
+        physicsRuntime:{forEachRigMesh:(_rig,callback)=>callback(ctx.mesh,skin)},hasActivePhysics:()=>false,
+        getModelJointId:(_source,id)=>id,quaternionIsIdentity:q=>Math.abs(q.w)>1-1e-10,
+        notifyChanged:publish,notifyPoseChanged:(_source,id)=>window.dispatchEvent(new CustomEvent(
+          'mod-viewer-model-rig-pose-changed',{detail:{jointId:id}})),requestRender:()=>{},
+        cloneForest:structuredClone,invalidateShadow:()=>{},getPrimaryLimb:()=>({available:true,role:'left_arm',keys}),
+        solveControlIk:ik.solveHumanoidControlIk,mergeLimbPose:ik.mergeHumanoidLimbPose});
+      ctx.frames={get:id=>runtime.getFrame(id)};
+      publish(); await controller.ensureTransformControls();
+      const close=(a,b)=>a.every((v,i)=>Math.abs(v-b[i])<1e-5);
+      const inspect=()=>{
+        ctx.snapshot.jointPickIntent={type:'selected-joint'}; publish();
+        const markers=controller.group.getObjectByName('viewer-inferred-rig-model-joint-markers');
+        const matrix=new THREE.Matrix4();
+        return joints.every(j=>{const frame=runtime.getFrame(j.jointId); markers.getMatrixAt(j.jointId,matrix);
+          const transformedCenter=new THREE.Vector3(...j.restCenter).applyMatrix4(
+            rig.poseTransforms.get(j.jointId)||new THREE.Matrix4()).toArray();
+          const parent=new THREE.Quaternion(...frame.parentRotation), local=rig.poseRotationByJointId.get(j.jointId)||new THREE.Quaternion();
+          const recovered=parent.multiply(local).multiply(new THREE.Quaternion(...frame.restRotation));
+          return close(frame.pivot,[...vertices.slice(j.jointId*3,j.jointId*3+3)])
+            && close(frame.center,transformedCenter) && close(new THREE.Vector3().setFromMatrixPosition(matrix).toArray(),frame.pivot)
+            && recovered.angleTo(new THREE.Quaternion(...frame.gizmoRotation))<1e-5;});
+      };
+      const before=baseline.slice(6,9);
+      const fkApplied=runtime.setRotation(1,new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),-0.7),{dragging:true});
+      const fkFollows=inspect(), fkMoved=!close([...vertices.slice(6,9)],[...before]);
+      ctx.snapshot.jointPickIntent=null; publish(); state.ikEnabled=true;
+      const target=[...controlRig.controls.leftHand.position]; target[1]+=0.25;target[2]+=0.05;
+      const solved=runtime.solveTarget(target);
+      const ikFollows=inspect(),ikMoved=!close([...vertices.slice(6,9)],[...before]);
+      const hand=ctx.screen(runtime.getFrame(2).pivot);
+      ctx.pointer('pointermove',11,hand.x,hand.y);
+      const raisedHover=controller.getDebugState().hoveredJointId===2;
+      ctx.pointer('pointerdown',11,hand.x,hand.y);ctx.pointer('pointerup',11,hand.x,hand.y);
+      const old=ctx.screen(before);ctx.pointer('pointermove',11,old.x,old.y);
+      const staleMiss=controller.getDebugState().hoveredJointId!==2;
+      const reset=runtime.resetPose(); publish();
+      const resetFollows=inspect(),restored=close([...vertices],[...baseline]);
+      controller.dispose();
+      return {fkApplied,fkFollows,fkMoved,ikApplied:solved.applied,ikFollows,ikMoved,raisedHover,staleMiss,
+        picked:ctx.calls.picks,reset,resetFollows,restored,authoredUnchanged:close([...baseline],joints.flatMap(j=>j.restPivot))};
+    }""")
+    assert result.pop('picked') == [2]
+    assert all(result.values()), result
+
+
 def _prepare_compute_clock(page):
     page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
@@ -132,7 +537,7 @@ def test_saved_humanoid_arm_rebinds_after_builder_change_and_deforms_vertices(mo
       const authored = {indices: [...indices], weights: [...weights]};
       const target = [...positions[3]]; target[1] += 0.1; target[2] += 0.05;
       const rows = [];
-      for (const version of [1, 2, humanoid.MODEL_RIG_BUILDER_VERSION]) {
+      for (const version of [1, 2, humanoid.MODEL_RIG_BUILDER_VERSION - 1, humanoid.MODEL_RIG_BUILDER_VERSION]) {
         const current = version === humanoid.MODEL_RIG_BUILDER_VERSION;
         const saved = {version: humanoid.HUMANOID_CONTROL_RIG_VERSION,
           model_rig_builder_version: version, controls: Object.fromEntries(keys.map((key, index) =>
@@ -173,13 +578,15 @@ def test_saved_humanoid_arm_rebinds_after_builder_change_and_deforms_vertices(mo
 
 
 @pytest.mark.parametrize(('builder', 'joint_id', 'valid_semantic'), [
-    (None, 0, True), (0, 0, True), (4, 0, True), (True, 0, True),
+    (None, 0, True), (0, 0, True), ('future', 0, True), (True, 0, True),
     (1, -1, True), (1, None, True), (1, '0', True), (1, 0, False),
-    (3, -1, True), (3, 99, True),
+    ('current', -1, True), ('current', 99, True),
 ])
 def test_invalid_humanoid_mapping_provenance_stays_unbound(module_page, builder, joint_id, valid_semantic):
     result = module_page.evaluate("""async ({builder, jointId, validSemantic}) => {
       const humanoid = await import('./js/weight-rig/humanoid-control-rig.js');
+      if (builder === 'current') builder = humanoid.MODEL_RIG_BUILDER_VERSION;
+      if (builder === 'future') builder = humanoid.MODEL_RIG_BUILDER_VERSION + 1;
       const semantic = validSemantic ? {sideN: -0.2, height01: 0.7, depthN: 0} : {height01: 0.7};
       const mappings = humanoid.resolveHumanoidControlMappings({
         savedOverrides: {model_rig_builder_version: builder,
@@ -293,11 +700,17 @@ def test_reconciliation_cancels_at_collection_and_graph_checkpoints(reconciliati
           const first = modelWide ? 1 : source * 100 + 1;
           return [first + i, [i, 0, 0], i ? first + i - 1 : null];
         }), modelWide));
+      for (const rig of rigs) {
+        rig.vertexEvidence = [{positions: new Float32Array(258 * 3),
+          indices: new Uint32Array(258).fill(rig.boneIds[0]),
+          weights: new Float32Array(258).fill(1), influenceCount: 1}];
+      }
+      const authored = rigs.map(rig => JSON.stringify(rig.vertexEvidence));
       let totalCheckpoints = 0;
       const expected = await window.__buildRig(rigs, {},
         {budget: {checkpoint: async () => {totalCheckpoints += 1;}}});
       const cancelled = [];
-      for (const cancelAt of [1, 2, Math.ceil(totalCheckpoints / 2), totalCheckpoints]) {
+      for (const cancelAt of [1, 2, ...[0.25, 0.5, 0.75].map(part => Math.ceil(totalCheckpoints * part)), totalCheckpoints]) {
         let current = true, checkpoints = 0;
         const result = await window.__buildRig(rigs, {}, {isCurrent: () => current,
           budget: {checkpoint: async () => {
@@ -308,9 +721,11 @@ def test_reconciliation_cancels_at_collection_and_graph_checkpoints(reconciliati
       }
       const recovered = await window.__buildRig(rigs);
       return {cancelled, graphCheckpoints: totalCheckpoints > 4,
+        authoredUnchanged: rigs.every((rig, i) => JSON.stringify(rig.vertexEvidence) === authored[i]),
         recovered: JSON.stringify(recovered) === JSON.stringify(expected)};
     }""", model_wide)
-    assert result == {'cancelled': [True] * 4, 'graphCheckpoints': True, 'recovered': True}
+    assert result == {'cancelled': [True] * 6, 'graphCheckpoints': True,
+                      'authoredUnchanged': True, 'recovered': True}
 
 
 def test_reconciliation_rejects_equal_endpoint_competition(reconciliation_page):
@@ -339,6 +754,54 @@ def test_reconciliation_recovers_source_cycles_and_missing_parents(reconciliatio
         reachable: component.nodeIds.every(id => Number.isFinite(component.depthById[id]))};
     }""", parent)
     assert result == {'joints': 3, 'edges': 2, 'root': 0, 'roots': 1, 'reachable': True}
+
+
+def test_reconciliation_missing_neighbours_are_not_equivalence_evidence(reconciliation_page):
+    result = reconciliation_page.evaluate("""async () => {
+      const rigs = ['source-01', 'source-02'].map((key, index) => {
+        const rig = window.__sourceRig(key, [[index + 1, [index * 0.05, 0, 0], null]]);
+        rig.inferredForest.components[0].parentById[index + 1] = 999;
+        return rig;
+      });
+      const built = await window.__buildRig(rigs, {modelReferenceRadius: 1});
+      return {joints: built.joints.length, accepted: built.reconciliation.acceptedEquivalences.length,
+        separateMembers: built.joints.every(joint => joint.members.length === 1)};
+    }""")
+    assert result == {'joints': 2, 'accepted': 0, 'separateMembers': True}
+
+
+def test_reconciliation_preserves_first_source_edge_provenance_and_sync_rerooting(reconciliation_page):
+    result = reconciliation_page.evaluate("""async () => {
+      const rig = window.__sourceRig('source-01',
+        [[1, [0,0,0], null], [2, [1,0,0], 1], [3, [10,0,0], null], [4, [11,0,0], 3]]);
+      rig.inferredForest.components[0].edges = [
+        {boneA: '2', boneB: '1', treeEdgeScore: 0.25},
+        {boneA: 1, boneB: 2, treeEdgeScore: 0.75},
+      ];
+      rig.influenceGraph.relationships = [
+        {boneA: '2', boneB: '1', jointCenter: [0.4,0,0], jointWeightTotal: 2},
+        {boneA: 1, boneB: 2, jointCenter: [0.8,0,0], jointWeightTotal: 8},
+        {boneA: 3, boneB: 4, jointCenter: [10.5,0,0], jointWeightTotal: 3},
+      ];
+      const before = JSON.stringify(rig.influenceGraph);
+      const built = await window.__buildRig([rig]);
+      const edges = [...built.edges].sort((a,b) => a.jointA - b.jointA);
+      const roots = Object.fromEntries(built.components.map(component =>
+        [component.componentId, component.nodeIds.at(-1)]));
+      const oriented = window.__reconciliation.orientModelRigForest(built.joints, built.edges, roots);
+      return {scores: edges.map(edge => edge.combinedTreeScore),
+        provenance: edges.map(edge => edge.sourceEdges[0]),
+        synchronous: !(oriented instanceof Promise),
+        roots: oriented.components.map(component => component.rootId),
+        parents: built.joints.map(joint => joint.parentId),
+        authoredUnchanged: JSON.stringify(rig.influenceGraph) === before};
+    }""")
+    assert result == {'scores': [0.25, 1], 'provenance': [
+        {'sourceKey': 'source-01', 'parentBoneId': 1, 'childBoneId': 2,
+         'treeEdgeScore': 0.25, 'jointCenter': [0.4, 0, 0], 'jointWeightTotal': 2},
+        {'sourceKey': 'source-01', 'parentBoneId': 3, 'childBoneId': 4,
+         'treeEdgeScore': 1, 'jointCenter': [10.5, 0, 0], 'jointWeightTotal': 3}],
+        'synchronous': True, 'roots': [1, 3], 'parents': [1, None, 3, None], 'authoredUnchanged': True}
 
 
 @pytest.mark.parametrize('competing_host', [False, True])
