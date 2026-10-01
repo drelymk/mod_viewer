@@ -746,4 +746,5 @@ def test_weight_rig_collapsed_source_keeps_weights_and_other_physics_then_recove
             arg=expected_participants,
         )
         if expected_errors:
-            assert 'Rig unavailable for 1 weight sources' in page.locator('.weight-rig-status').inner_text()
+            assert ('Rig unavailable: no usable faces. Affected weight source count: 1.'
+                    in page.locator('.weight-rig-status').inner_text())

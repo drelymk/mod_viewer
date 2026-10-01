@@ -418,6 +418,8 @@ export default {
   'weightRig.status.selectionSaveError': 'ボーン選択を保存できませんでした：{detail}',
   'weightRig.status.loadingWeights': 'ウェイトを読み込み中…',
   'weightRig.status.loadingRig': 'リグを読み込み中…',
+  'weightRig.status.surfaceRigUnavailable':
+    'リグを使用できません：使用可能な面がありません。影響を受けるウェイトソース数：{count}。',
   'weightRig.status.noWeights': 'このモデルに使用可能なスキンウェイトがありません。',
   'weightRig.control.chest': '胸',
   'weightRig.control.pelvis': '骨盤',

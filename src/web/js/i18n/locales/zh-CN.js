@@ -407,6 +407,7 @@ export default {
   'weightRig.status.selectionSaveError': '无法保存骨骼选择：{detail}',
   'weightRig.status.loadingWeights': '正在加载权重…',
   'weightRig.status.loadingRig': '正在加载骨架…',
+  'weightRig.status.surfaceRigUnavailable': '骨架不可用：没有可用的面。受影响的权重来源数量：{count}。',
   'weightRig.status.noWeights': '此模型没有可用的蒙皮权重。',
   'weightRig.control.chest': '胸部',
   'weightRig.control.pelvis': '骨盆',

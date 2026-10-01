@@ -421,6 +421,8 @@ export default {
   'weightRig.status.selectionSaveError': 'No se pudo guardar la selección de huesos: {detail}',
   'weightRig.status.loadingWeights': 'Cargando pesos…',
   'weightRig.status.loadingRig': 'Cargando Rig…',
+  'weightRig.status.surfaceRigUnavailable':
+    'Rig no disponible: no hay caras utilizables. Número de fuentes de pesos afectadas: {count}.',
   'weightRig.status.noWeights': 'No hay pesos de skinning disponibles para este modelo.',
   'weightRig.control.chest': 'Pecho',
   'weightRig.control.pelvis': 'Pelvis',
