@@ -247,7 +247,7 @@ Update.
 To run from source:
 
 ```console
-pip install -r requirements.txt
+pip install -r src/requirements.txt
 python src/viewer_app.py
 ```
 
@@ -258,6 +258,17 @@ python src/build.py
 ```
 
 Build output is written to `dist/`.
+
+## Repository layout
+
+- `src/`: application, browser assets, tests, build scripts, and runtime dependencies.
+- `tools/`: development scripts, dependencies, and JavaScript tool configuration.
+- `docs/`: [quality checks](docs/QUALITY.md) and [third-party notices](docs/THIRD_PARTY_NOTICES.md).
+- `media/`: README images.
+
+Python tool settings live in `pyproject.toml`; npm scripts, the lockfile, and
+Prettier settings live under `tools/`. Use `npm --prefix tools` for npm commands
+from the repository root. [context.md](context.md) records the project contracts.
 
 ## License
 

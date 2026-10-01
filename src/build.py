@@ -38,7 +38,7 @@ from app.settings.paths import APP_VERSION
 
 ASSETS = os.path.join(HERE, "assets")
 WEB = os.path.join(HERE, "web")
-THIRD_PARTY_NOTICES = os.path.join(HERE, "..", "THIRD_PARTY_NOTICES.md")
+THIRD_PARTY_NOTICES = os.path.join(HERE, "..", "docs", "THIRD_PARTY_NOTICES.md")
 FEATURES_FILE = os.path.join(HERE, "features.ini")
 # Generated at build time from FEATURES_FILE and deleted again right after --
 # see resolve_features()/write_baked_features()/clean_baked_features(). Never
@@ -55,8 +55,7 @@ ENTRY = "viewer_app.py"
 # Actual PyInstaller --name / dist/ output name -- version is baked into the
 # build folder and exe filename so more than one build can sit in dist/ at once.
 BUILD_NAME = f"{APP_NAME}-{APP_VERSION}"
-REQUIREMENTS_FILE = os.path.abspath(os.path.join(HERE, os.pardir,
-                                                 "requirements.txt"))
+REQUIREMENTS_FILE = os.path.join(HERE, "requirements.txt")
 MIN_PYTHON = (3, 10, 1)
 
 # Pinned so the compiled bootloader always matches the PyInstaller doing the
