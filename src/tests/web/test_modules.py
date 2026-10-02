@@ -1,5 +1,7 @@
 """Ordered control replay independent of GPU availability."""
 
+import math
+
 import pytest
 
 
@@ -1127,53 +1129,90 @@ def test_control_conditions_preserve_or_groups_negation_and_contradictions(modul
     assert result == [True, False, True, False, True]
 
 
-def test_compute_shape_and_pose_reuse_attributes_across_pause_and_resume(module_page):
+@pytest.mark.parametrize("pose_only", [False, True], ids=["shape-and-pose", "pose-only"])
+def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tmp_path, pose_only):
+    from tests.support.animations import POSE_SHADER, compute_mod, load_mod, read_sections, save_sections
+
+    ini = compute_mod(tmp_path / "mod", shared_outputs=True, rotating_pose=True)
+    sections = read_sections(ini)
+    sections["CustomShaderPose"] = [
+        line.replace("30 * $dt", "10 * $dt") for line in sections["CustomShaderPose"]]
+    if pose_only:
+        del sections["CustomShaderShape"]
+        (ini.parent / "pose.hlsl").write_text(
+            POSE_SHADER.replace("numthreads(64, 1, 1)", "numthreads(1, 1, 1)"), encoding="utf-8")
+        for section in ("CustomShaderPose", "CustomShaderPose02"):
+            sections[section] = [
+                line.replace("ResourcePosition.1", "ResourcePosition.2").replace(
+                    "Dispatch = 1, 1, 1", "Dispatch = 3, 1, 1") for line in sections[section]]
+    save_sections(ini, sections)
+    _, built = load_mod(ini, ini.parent)
+    entries = list(built.meshes.values())
+    assert len(entries) == 2
     _prepare_compute_clock(module_page)
-    result = module_page.evaluate("""() => {
+    result = module_page.evaluate("""async entries => {
+      const THREE = await import('three/webgpu');
+      const {decodeF32} = await import('./js/textures/decode.js');
       const runtime = window.__animation, controls = window.__controls;
-      const encode = window.__encode, variable = window.__variable;
-      controls.setControlValue('input01', '1');
-      const frames = new Float32Array(28);
-      for (const offset of [0,14]) {
-        frames[offset] = frames[offset+1] = frames[offset+2] = 1;
-        frames[offset+3] = 0.25; frames[offset+9] = 1;
-      }
-      const program = {external_variables: ['input01'], initials: {phase01: 0}, commands: [
-        window.__advance('phase01', 1, window.__enabled('input01')),
-        {op: 'dispatch', track_id: 'track-01', kind: 'shape', pass: 0, phase: variable('phase01')},
-        {op: 'dispatch', track_id: 'track-01', kind: 'pose', phase: variable('phase01')},
-      ]};
-      const registered = runtime.registerAnimatedMesh(window.__mesh, 'track-01', {
-        kind: 'gimi_compute', program_id: 'program-01', track_id: 'track-01', program, vertex_count: 3,
-        base_normals: encode(new Float32Array([0,0,2, 0,0,2, 0,0,2])),
-        shape_passes: [{deltas: encode(new Float32Array([1,0,0,0,0,0, 1,0,0,0,0,0, 1,0,0,0,0,0])),
-          weight_operation: {kind: 'sine', scale: 1, amplitude: 0.5, offset: 0.5}}],
-        pose: {bone_count: 1, frame_count: 2, frames: encode(frames), blend: {
-          weights: encode(new Float32Array([1,0,0,0, 1,0,0,0, 1,0,0,0])),
-          indices: encode(new Int32Array(12)),
-        }},
+      const meshes = entries.map(entry => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(decodeF32(entry.pos), 3));
+        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(
+          decodeF32(entry.animation_geometry.base_normals), 3));
+        const mesh = new THREE.Mesh(geometry);
+        mesh.userData.basePositions = geometry.attributes.position.array.slice();
+        return mesh;
       });
+      const attributes = meshes.map(mesh => ({...mesh.geometry.attributes}));
+      const registered = entries.map((entry, index) => runtime.registerAnimatedMesh(
+        meshes[index], entry.animation_geometry.track_id, entry.animation_geometry));
+      const positions = () => meshes.map(mesh => [...mesh.geometry.attributes.position.array]);
       window.__frame(0);
-      const first = [...window.__position.array];
-      controls.setControlValue('input01', '0'); window.__frame(1000);
-      const paused = [...window.__position.array], sleeping = window.__pendingFrames() === 0;
-      controls.setControlValue('input01', '1'); runtime.wakeAnimationRuntime();
-      window.__frame(5000);
-      const resumed = [...window.__position.array];
-      window.__frame(5100);
-      const continued = [...window.__position.array];
+      const first = positions();
+      window.__frame(10);
+      const throttled = positions();
+      window.__frame(40);
+      const advanced = positions();
+      controls.setControlValue('pause', '1'); window.__frame(80);
+      const paused = positions(), sleeping = window.__pendingFrames() === 0;
+      controls.setControlValue('pause', '0'); runtime.wakeAnimationRuntime(); window.__frame(5000);
+      const resumed = positions();
+      window.__frame(5040);
+      const continued = positions();
+      controls.setControlValue('anime_state', '1'); runtime.wakeAnimationRuntime(); window.__frame(5040);
+      const reset = positions(), trigger = controls.getControlValue('anime_state');
       runtime.resetAnimationRuntime();
-      return {registered, first, paused, resumed, continued, sleeping,
-        stable: window.__position === window.__mesh.geometry.attributes.position
-          && window.__normal === window.__mesh.geometry.attributes.normal,
-        normals: [...window.__normal.array], cleared: runtime.animationRuntimeSnapshot().clocks};
-    }""")
-    assert result['registered'] and result['stable'] and result['sleeping']
-    assert result['first'] == pytest.approx([0.75,0,0, 1.75,0,0, 0.75,1,0])
-    assert result['paused'] == result['resumed'] == result['first']
-    assert result['continued'][0] > result['resumed'][0] + 0.04
-    assert result['normals'] == [0,0,1] * 3
-    assert result['cleared'] == 0
+      return {registered, first, throttled, advanced, paused, resumed, continued, reset, trigger, sleeping,
+        stable: meshes.every((mesh, index) =>
+          mesh.geometry.attributes.position === attributes[index].position &&
+          mesh.geometry.attributes.normal === attributes[index].normal),
+        normals: [...meshes[0].geometry.attributes.normal.array],
+        cleared: runtime.animationRuntimeSnapshot().clocks, pending: window.__pendingFrames()};
+    }""", entries)
+    assert result["registered"] == [True, True]
+    assert result["stable"] and result["sleeping"]
+    for state in ("first", "advanced", "paused", "resumed", "continued", "reset"):
+        assert result[state][0] == pytest.approx(result[state][1])
+    def positions(phase, translation, interpolation):
+        weight = 0 if pose_only else (
+            .5 * (math.sin(phase * 30) + 1) + math.sin((phase - .05236) * 30) + 1)
+        qz = interpolation * 2 ** -.5
+        qw = 1 - interpolation + interpolation * 2 ** -.5
+        angle = 2 * math.atan2(qz, qw)
+        cosine, sine = math.cos(angle), math.sin(angle)
+        return [value for x, y in (
+            (weight + translation, 0), (1 + 2 * weight + translation, 0),
+            (3 * weight + translation, 1))
+            for value in (cosine * x - sine * y, sine * x + cosine * y + .1, 0)]
+    assert result["first"][0] == pytest.approx(positions(0, .25, 0), abs=1e-5)
+    assert result["throttled"] == result["first"]
+    assert result["advanced"][0] == pytest.approx(positions(.004, .45, .4))
+    assert result["paused"] == result["resumed"] == result["advanced"]
+    assert result["continued"][0] == pytest.approx(positions(.008, .65, .8))
+    assert result["reset"][0] == pytest.approx(positions(.008, .25, 0))
+    assert result["trigger"] == "0"
+    assert result["normals"] == [0, 1, 0] * 3
+    assert result["cleared"] == result["pending"] == 0
 
 
 def test_sparse_compute_overlay_retains_rest_geometry_and_independent_pass_state(module_page):

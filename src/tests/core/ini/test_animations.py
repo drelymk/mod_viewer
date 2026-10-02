@@ -1,97 +1,46 @@
-"""Synthetic coverage for the narrow baked-animation analysis path."""
+"""Baked animation contracts at analysis and mesh publication boundaries."""
 
 import struct
 
 import pytest
 
-from core.ini.animations import discover_animation_clocks, frame_condition
+from core.geometry.mesh_builder import GeometryBlob
 from core.ini.analysis import analyze_ini
-from core.ini.draw_scan import _scan_sections_for_draws
+from core.ini.animations import discover_animation_clocks
 from core.ini.sections import extract_resources, parse_sections
-from core.geometry.mesh_builder import (
-    GeometryBlob, _animation_families, build_mesh_result,
-)
-from core.geometry.draw_call import DrawCall
+from tests.support.animations import load_mod, read_sections, save_sections, write_vertices
+from tests.support.provenance import geometry_values
 
 
-def _sections(text):
-    return parse_sections("source-01.ini", text=text)
-
-
-def test_commandlist_families_match_each_draws_resolved_geometry():
-    active = [[{"var": "animate", "value": "1", "negate": False}]]
-    inactive = [[{"var": "animate", "value": "2", "negate": False}]]
-    draws = [DrawCall(
-        label=name, count=3, ib_file=f"{name}.ib",
-        position_file="shared-position.buf",
-        texcoord_file=f"{name}-texcoord.buf", conditions=active,
-    ) for name in ("leg", "phase01")]
-    bindings = [{
-        "position_file": "shared-position.buf",
-        "ib_file": f"{name}.ib",
-        "file": f"{name}-position.{frame}.buf",
-        "animation_conditions": [[{
-            "var": "frame", "value": str(frame), "negate": False,
-        }]],
-        "conditions": active,
-    } for name in ("leg", "phase01") for frame in (0, 1)]
-    bindings.append({**bindings[0], "file": "inactive.buf",
-                     "conditions": inactive})
-    clocks = [
-        {"id": "active", "frame_var": "frame", "frame_start": 0,
-         "frame_end": 1, "conditions": active},
-        {"id": "inactive", "frame_var": "frame", "frame_start": 0,
-         "frame_end": 1, "conditions": inactive},
-    ]
-
-    families = _animation_families(
-        draws, clocks, group={"animation_vertex_bindings": bindings})
-
-    assert len(families) == 2
-    for family in families:
-        name = family["base_draw"].label
-        assert family["position_switching"]
-        assert list(family["clock_ids"]) == ["active"]
-        assert [(frame, draw.position_file)
-                for frame, draw in sorted(family["draws"].items())] == [
-                    (frame, f"{name}-position.{frame}.buf")
-                    for frame in (0, 1)
-                ]
-
-
-def test_animation_clock_and_frame_branches_stay_out_of_toggle_state():
-    sections = _sections(r"""
-[KeyAnim]
+def test_clocks_preserve_controls_live_speed_and_independent_ranges():
+    sections = parse_sections("source-01.ini", text="""
+[Constants]
+$fps = 30
+$speed = 0.5
+$start = 0
+$end = 1
+$animate = 1
+[KeyAnimate]
 type = cycle
 key = a
-$anim = 0, 1
-
-[Constants]
-$fps = 30
-$frameStart = 0
-$frameEnd = 1
-$anim = 0
-
+$animate = 0,1
 [Present]
-if $anim == 1
-$frame = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
+if $animate == 1
+$frame = (time * $fps * $speed % ($end - $start + 1) + $start) // 1
 endif
-
+$other = (time * 12.5 % 4 + 1) // 1
 [TextureOverrideComponent01]
-if $anim == 1
-if $frame == 0
-vb0 = ResourcePosition0
 vb1 = ResourceTexcoord
 ib = ResourceIB
+if $animate == 1
+if $frame == 0
+vb0 = ResourcePosition0
 drawindexed = 3, 0, 0
 elif $frame == 1
 vb0 = ResourcePosition1
-vb1 = ResourceTexcoord
-ib = ResourceIB
 drawindexed = 3, 0, 0
 endif
 endif
-
 [ResourcePosition0]
 filename = position0.buf
 stride = 40
@@ -105,258 +54,64 @@ stride = 20
 filename = index.buf
 format = DXGI_FORMAT_R32_UINT
 """)
-
-    discovered = discover_animation_clocks(sections)
-    assert len(discovered.clocks) == 1
-    clock = discovered.clocks[0]
-    assert (clock.frame_var, clock.fps_var, clock.fps_value,
-            clock.frame_start, clock.frame_end) == (
-        "frame", "fps", 30, 0, 1)
-    assert clock.conditions == [[{
-        "var": "anim", "value": "1", "negate": False,
-    }]]
-
-    scanned = _scan_sections_for_draws(
-        sections, gating_vars={"anim"}, animation_vars=discovered.frame_vars)
-    draws = scanned["TextureOverrideComponent01"]["draws"]
-    assert [draw.conditions for draw in draws] == [
-        [[{"var": "anim", "value": "1", "negate": False}]],
-        [[{"var": "anim", "value": "1", "negate": False}]],
-    ]
-    assert [frame_condition(draw.animation_conditions, {"frame"})
-            for draw in draws] == [("frame", 0), ("frame", 1)]
-
-    analysis = analyze_ini(
-        sections, resources=extract_resources(sections),
-        extra_gating_vars={"anim"})
+    clocks = {clock.frame_var: clock for clock in discover_animation_clocks(sections).clocks}
+    clock = clocks["frame"]
+    assert (clock.fps_var, clock.fps_value, clock.speed_var, clock.speed_value,
+            clock.frame_start, clock.frame_end) == ("fps", 30, "speed", .5, 0, 1)
+    assert (clocks["other"].fps_value, clocks["other"].frame_start,
+            clocks["other"].frame_end) == (12.5, 1, 4)
+    analysis = analyze_ini(sections, resources=extract_resources(sections),
+                           extra_gating_vars={"animate"})
     assert "frame" not in analysis.gating_vars
-    assert analysis.draw_groups[0]["draws"][0].animation_conditions
+    draws = analysis.draw_groups[0]["draws"]
+    assert [draw.conditions for draw in draws] == [clock.conditions] * 2
+    assert [draw.animation_conditions[0][0]["value"] for draw in draws] == ["0", "1"]
 
 
-def test_animation_clock_supports_literal_fps_and_independent_ranges():
-    sections = _sections(r"""
-[Present]
-$phase01 = (time * 24 % ($phaseEnd - $phaseStart + 1) + $phaseStart) // 1
-$phase02 = (time * 12.5 % 4 + 1) // 1
-
-[Constants]
-$phaseStart = 1
-$phaseEnd = 40
-""")
-
-    discovered = discover_animation_clocks(sections)
-    by_frame = {clock.frame_var: clock for clock in discovered.clocks}
-    assert set(by_frame) == {"phase01", "phase02"}
-    assert (by_frame["phase01"].fps_var, by_frame["phase01"].fps_value,
-            by_frame["phase01"].frame_start, by_frame["phase01"].frame_end) == (
-        None, 24, 1, 40)
-    assert (by_frame["phase02"].fps_var, by_frame["phase02"].fps_value,
-            by_frame["phase02"].frame_start, by_frame["phase02"].frame_end) == (
-        None, 12.5, 1, 4)
-
-
-def test_animation_clock_supports_live_speed_multiplier():
-    sections = _sections(r"""
-[Constants]
-global persist $fps = 50
-global persist $xx = 0.9
-global $frameStart = 1
-global $frameEnd = 50
-
-[Present]
-$aaa = (time * $fps * $xx % ($frameEnd - $frameStart + 1) + $frameStart) // 1
-""")
-
-    clock = discover_animation_clocks(sections).clocks[0]
-    assert (clock.frame_var, clock.fps_var, clock.fps_value,
-            clock.speed_var, clock.speed_value,
-            clock.frame_start, clock.frame_end) == (
-        "aaa", "fps", 50, "xx", 0.9, 1, 50)
-
-
-def test_static_vb0_bindings_are_not_animation_metadata():
-    sections = _sections(r"""
-[CommandListStatic]
-vb0 = ResourcePosition
-
-[ResourcePosition]
-filename = position.buf
-stride = 40
-""")
-
-    scanned = _scan_sections_for_draws(sections, animation_vars=set())
-    assert scanned["CommandListStatic"]["animation_vertex_bindings"] == []
-
-
-def test_same_frame_variable_ranges_share_one_geometry_track():
-    def branch(frame):
-        return DrawCall(
-            label="Component01",
-            count=3,
-            animation_conditions=[[{
-                "var": "swapvar", "value": str(frame), "negate": False,
-            }]],
-        )
-
-    families = _animation_families(
-        [branch(frame) for frame in range(3)],
-        [
-            {"id": "clock-a", "frame_var": "swapvar", "frame_start": 0,
-             "frame_end": 1, "conditions": [[{
-                 "var": "anim", "value": "1", "negate": False,
-             }]]},
-            {"id": "clock-b", "frame_var": "swapvar", "frame_start": 0,
-             "frame_end": 2, "conditions": [[{
-                 "var": "anim", "value": "4", "negate": False,
-             }]]},
-        ])
-
-    assert len(families) == 1
-    family = families[0]
-    assert set(family["draws"]) == {0, 1, 2}
-    assert list(family["clock_ids"]) == ["clock-a", "clock-b"]
-    assert (family["frame_start"], family["frame_end"]) == (0, 2)
-
-
-@pytest.mark.parametrize("static,noncontiguous", [
-    (False, False), (True, False), (True, True),
-])
-def test_position_buffer_frames_share_one_packed_mesh(
-        tmp_path, static, noncontiguous):
-    def write_positions(path, z):
-        data = bytearray()
-        points = ((0., 0.), (.5, .5), (1., 0.), (0., 1.)) \
-            if noncontiguous else ((0., 0.), (1., 0.), (0., 1.))
-        for x, y in points:
-            data.extend(struct.pack("<fff", x, y, z))
-            data.extend(b"\0" * 28)
-        path.write_bytes(data)
-
-    write_positions(tmp_path / "position0.buf", 0.)
-    write_positions(tmp_path / "position1.buf", 0. if static else 1.)
-    texcoord = bytearray()
-    uvs = ((0., 0.), (.5, .5), (1., 0.), (0., 1.)) \
-        if noncontiguous else ((0., 0.), (1., 0.), (0., 1.))
-    for u, v in uvs:
-        texcoord.extend(b"\0" * 4)
-        texcoord.extend(struct.pack("<ee", u, v))
-        texcoord.extend(b"\0" * 12)
-    (tmp_path / "texcoord.buf").write_bytes(texcoord)
-    (tmp_path / "index.buf").write_bytes(struct.pack(
-        "<III", 0, 2, 3) if noncontiguous else
-        struct.pack("<III", 0, 1, 2))
-
-    sections = _sections(r"""
-[Constants]
-$fps = 30
-$frameStart = 0
-$frameEnd = 1
-$anim = 1
-
-[Present]
-$frame = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
-
-[TextureOverrideComponent01]
+def _baked_mod(root, *, commandlist=False, static=False):
+    points = [(0., 0., 0.), (.5, .5, 0.), (1., 0., 0.), (0., 1., 0.)]
+    indices = (0, 1, 2) if static else (2, 0, 3)
+    write_vertices(root / "position0.buf", points)
+    write_vertices(root / "position1.buf", [(x, y, 0. if static else 1.) for x, y, _ in points])
+    (root / "texcoord.buf").write_bytes(b"\0" * 80)
+    (root / "index.buf").write_bytes(struct.pack("<3I", *indices))
+    bindings = """
 if $frame == 0
 vb0 = ResourcePosition0
-vb1 = ResourceTexcoord
-ib = ResourceIB
+elif $frame == 1
+vb0 = ResourcePosition1
+endif
+"""
+    draw = """
+if $frame == 0
+vb0 = ResourcePosition0
 drawindexed = 3, 0, 0
 elif $frame == 1
 vb0 = ResourcePosition1
 drawindexed = 3, 0, 0
 endif
-
-[ResourcePosition0]
-filename = position0.buf
-stride = 40
-[ResourcePosition1]
-filename = position1.buf
-stride = 40
-[ResourceTexcoord]
-filename = texcoord.buf
-stride = 20
-[ResourceIB]
-filename = index.buf
-format = DXGI_FORMAT_R32_UINT
-""")
-    analysis = analyze_ini(
-        sections, resources=extract_resources(sections),
-        extra_gating_vars={"anim"})
-    geometry = GeometryBlob()
-    built = build_mesh_result(
-        analysis.draw_groups, str(tmp_path), geometry=geometry,
-        animations=analysis.animations)
-
-    assert len(built.meshes) == 1
-    entry = next(iter(built.meshes.values()))
-    if static and not noncontiguous:
-        assert "animation_geometry" not in entry
-        assert built.diagnostics["animation_geometry_bytes"] == 0
-        return
-    animation = entry["animation_geometry"]
-    assert animation["frames"] == 2
-    assert animation["clock_ids"]
-    assert animation["bounds"] == {
-        "min": [0.0, 0.0, 0.0],
-        "max": [1.0, 1.0, 0. if static else 1.],
-    }
-    assert built.diagnostics["animation_prepare_calls"] == 1
-    assert animation["position_frame_bytes"] == 36
-    assert animation["positions"]["length"] == 72
-    positions = geometry.to_bytes()[animation["positions"]["offset"]:]
-    assert struct.unpack_from("<fff", positions, 0) == (0., 0., 0.)
-    assert struct.unpack_from("<fff", positions, 36) == (
-        0., 0., 0. if static else 1.)
-
-
-def test_commandlist_position_bindings_form_animation_family(tmp_path):
-    for name, z in (("position0.buf", 0.), ("position1.buf", 1.)):
-        data = bytearray()
-        for x, y in ((0., 0.), (1., 0.), (0., 1.)):
-            data.extend(struct.pack("<fff", x, y, z))
-            data.extend(b"\0" * 28)
-        (tmp_path / name).write_bytes(data)
-    texcoord = bytearray()
-    for u, v in ((0., 0.), (1., 0.), (0., 1.)):
-        texcoord.extend(b"\0" * 4)
-        texcoord.extend(struct.pack("<ee", u, v))
-        texcoord.extend(b"\0" * 12)
-    (tmp_path / "texcoord.buf").write_bytes(texcoord)
-    (tmp_path / "index.buf").write_bytes(struct.pack("<III", 0, 1, 2))
-
-    sections = _sections(r"""
+"""
+    if commandlist:
+        draw = "drawindexed = 3, 0, 0"
+        bindings = bindings.replace("vb0 =", "if DRAW_TYPE == 1\nvb0 =").replace(
+            "elif $frame", "endif\nelse if $frame").replace(
+                "ResourcePosition1\nendif", "ResourcePosition1\nendif\nendif")
+    ini = root / "source-01.ini"
+    ini.write_text(f"""
 [Constants]
 $fps = 30
-$frameStart = 0
-$frameEnd = 1
-
+$start = 0
+$end = 1
 [Present]
-$frame = (time * $fps % ($frameEnd - $frameStart + 1) + $frameStart) // 1
-
+$frame = (time * $fps % ($end - $start + 1) + $start) // 1
 [TextureOverrideComponent01]
-ib = ResourceComponent01IB
 vb1 = ResourceComponent01Texcoord
-drawindexed = 3, 0, 0
-
+ib = ResourceComponent01IB
+{draw}
 [TextureOverrideComponent01Blend]
 run = CommandListComponent01Blend
-
 [CommandListComponent01Blend]
-if $frame == 0
-if DRAW_TYPE == 2
-vb1 = ResourceComponent01Texcoord
-elif DRAW_TYPE == 1
-vb0 = ResourcePosition0
-endif
-else if $frame == 1
-if DRAW_TYPE == 2
-vb1 = ResourceComponent01Texcoord
-elif DRAW_TYPE == 1
-vb0 = ResourcePosition1
-endif
-endif
-
+{bindings if commandlist else ""}
 [ResourcePosition0]
 filename = position0.buf
 stride = 40
@@ -369,66 +124,77 @@ stride = 20
 [ResourceComponent01IB]
 filename = index.buf
 format = DXGI_FORMAT_R32_UINT
-""")
-    analysis = analyze_ini(
-        sections, resources=extract_resources(sections))
-    group = analysis.draw_groups[0]
-    bindings = group["animation_vertex_bindings"]
-    assert [frame_condition(item["animation_conditions"], {"frame"})
-            for item in bindings] == [("frame", 0), ("frame", 1)]
+""", encoding="utf-8")
+    return ini, [points[index] for index in sorted(indices)]
 
+
+@pytest.mark.parametrize("mode", ["draw-branches", "commandlist", "range-switch", "static"])
+def test_baked_frames_publish_one_mesh_in_draw_order(tmp_path, mode):
+    ini, expected_points = _baked_mod(
+        tmp_path, commandlist=mode == "commandlist", static=mode == "static")
+    if mode == "range-switch":
+        sections = read_sections(ini)
+        sections["Constants"].extend(["$animate = 1", "$longEnd = 2"])
+        sections["KeyAnimate"] = ["key = a", "type = cycle", "$animate = 1,2"]
+        sections["Present"] = [
+            "if $animate == 1", *sections["Present"], "elif $animate == 2",
+            "$frame = (time * $fps % ($longEnd - $start + 1) + $start) // 1", "endif"]
+        lines = sections["TextureOverrideComponent01"]
+        lines[-1:-1] = ["elif $frame == 2", "vb0 = ResourcePosition2", "drawindexed = 3, 0, 0"]
+        sections["ResourcePosition2"] = ["filename = position2.buf", "stride = 40"]
+        write_vertices(tmp_path / "position2.buf", [
+            (0., 0., 2.), (.5, .5, 2.), (1., 0., 2.), (0., 1., 2.)])
+        save_sections(ini, sections)
     geometry = GeometryBlob()
-    built = build_mesh_result(
-        analysis.draw_groups, str(tmp_path), geometry=geometry,
-        animations=analysis.animations)
+    _, built = load_mod(ini, tmp_path, geometry=geometry)
     assert len(built.meshes) == 1
     entry = next(iter(built.meshes.values()))
-    assert entry["animation_geometry"]["frames"] == 2
-    positions = geometry.to_bytes()[
-        entry["animation_geometry"]["positions"]["offset"]:]
-    assert struct.unpack_from("<fff", positions, 0) == (0., 0., 0.)
-    assert struct.unpack_from("<fff", positions, 36) == (0., 0., 1.)
+    expected = tuple(value for point in expected_points for value in point)
+    assert geometry_values(geometry, entry["pos"]) == expected
+    reference = entry["idx"]
+    assert struct.unpack_from("<3I", geometry.data, reference["offset"]) == (
+        (0, 1, 2) if mode == "static" else (1, 0, 2))
+    if mode == "static":
+        assert "animation_geometry" not in entry
+        assert not built.animations
+    else:
+        payload = entry["animation_geometry"]
+        assert payload["frames"] == (3 if mode == "range-switch" else 2)
+        assert set(payload["clock_ids"]) == set(built.animations)
+        assert len(built.animations) == (2 if mode == "range-switch" else 1)
+        assert geometry_values(geometry, payload["positions"]) == tuple(
+            value if index % 3 != 2 else float(frame)
+            for frame in range(payload["frames"]) for index, value in enumerate(expected))
+        assert payload["bounds"] == {
+            "min": [0., 0., 0.], "max": [1., 1., float(payload["frames"] - 1)]}
 
 
-def test_draw_range_frames_reuse_compacted_topology_and_reject_mismatch(tmp_path):
-    def build(root, second_uv_offset, include_second=True,
-              second_indices=(3, 4, 5)):
-        root.mkdir()
-        positions = bytearray()
-        for z in (0., 1.):
-            for x, y in ((0., 0.), (1., 0.), (0., 1.)):
-                positions.extend(struct.pack("<fff", x, y, z))
-                positions.extend(b"\0" * 28)
-        (root / "position.buf").write_bytes(positions)
-        texcoord = bytearray()
-        for _frame in range(2):
-            for u, v in ((0., 0.), (1., 0.), (0., 1.)):
-                texcoord.extend(b"\0" * 4)
-                texcoord.extend(struct.pack(
-                    "<ee", u, v + (second_uv_offset if _frame else 0.)))
-                texcoord.extend(b"\0" * 12)
-        (root / "texcoord.buf").write_bytes(texcoord)
-        (root / "index.buf").write_bytes(
-            struct.pack("<IIIIII", 0, 1, 2, *second_indices))
-        second_branch = """elif $frame == 1
-drawindexed = 3, 3, 0
-""" if include_second else ""
-        sections = _sections(f"""
+@pytest.mark.parametrize("case", ["compatible", "changed-uv", "changed-topology", "missing-frame"])
+def test_draw_range_animation_requires_matching_geometry(tmp_path, case):
+    points = [(x, y, z) for z in (0., 1.)
+              for x, y in ((0., 0.), (1., 0.), (0., 1.))]
+    write_vertices(tmp_path / "position.buf", points)
+    (tmp_path / "texcoord.buf").write_bytes(b"".join(
+        b"\0" * 4 + struct.pack("<ee", x, y + (.25 if case == "changed-uv" and z else 0.))
+        + b"\0" * 12 for x, y, z in points))
+    indices = (0, 1, 2, 3, 4, 4 if case == "changed-topology" else 5)
+    (tmp_path / "index.buf").write_bytes(struct.pack("<6I", *indices))
+    second = "elif $frame == 1\ndrawindexed = 3, 3, 0" if case != "missing-frame" else ""
+    ini = tmp_path / "source-01.ini"
+    ini.write_text(f"""
 [Constants]
-$frameStart = 0
-$frameEnd = 1
-
+$start = 0
+$end = 1
 [Present]
-$frame = (time * 30 % ($frameEnd - $frameStart + 1) + $frameStart) // 1
-
+$frame = (time * 30 % ($end - $start + 1) + $start) // 1
 [TextureOverrideComponent01]
 vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 ib = ResourceIB
 if $frame == 0
 drawindexed = 3, 0, 0
-{second_branch}endif
-
+{second}
+endif
 [ResourcePosition]
 filename = position.buf
 stride = 40
@@ -438,50 +204,19 @@ stride = 20
 [ResourceIB]
 filename = index.buf
 format = DXGI_FORMAT_R32_UINT
-""")
-        analysis = analyze_ini(
-            sections, resources=extract_resources(sections))
-        geometry = GeometryBlob()
-        return build_mesh_result(
-            analysis.draw_groups, str(root), geometry=geometry,
-            animations=analysis.animations), geometry
-
-    def static_blob_length(built):
-        entry = next(iter(built.meshes.values()))
-        refs = [entry["pos"], entry["idx"]]
-        if "uv" in entry:
-            refs.append(entry["uv"])
-        return max(ref["offset"] + ref["length"] for ref in refs)
-
-    def static_blob_bytes(built):
-        entry = next(iter(built.meshes.values()))
-        refs = [entry["pos"], entry["idx"]]
-        if "uv" in entry:
-            refs.append(entry["uv"])
-        return sum(ref["length"] for ref in refs)
-
-    compatible, compatible_geometry = build(tmp_path / "compatible", 0.)
-    compatible_entries = list(compatible.meshes.values())
-    assert len(compatible_entries) == 1
-    assert compatible_entries[0]["animation_geometry"]["frames"] == 2
-    assert compatible.diagnostics["animation_prepare_calls"] == 1
-    assert len(compatible_geometry) > static_blob_bytes(compatible)
-
-    mismatched, mismatched_geometry = build(tmp_path / "mismatched", 0.25)
-    mismatched_entries = list(mismatched.meshes.values())
-    assert len(mismatched_entries) == 1
-    assert "animation_geometry" not in mismatched_entries[0]
-    assert mismatched.diagnostics["animation_prepare_calls"] == 2
-    assert len(mismatched_geometry) == static_blob_length(mismatched)
-
-    differing, _geometry = build(
-        tmp_path / "differing-index", 0., second_indices=(3, 4, 4))
-    assert "animation_geometry" not in next(iter(differing.meshes.values()))
-    assert differing.diagnostics["animation_prepare_calls"] == 2
-
-    missing, missing_geometry = build(
-        tmp_path / "missing", 0., include_second=False)
-    missing_entries = list(missing.meshes.values())
-    assert len(missing_entries) == 1
-    assert "animation_geometry" not in missing_entries[0]
-    assert len(missing_geometry) == static_blob_length(missing)
+""", encoding="utf-8")
+    geometry = GeometryBlob()
+    _, built = load_mod(ini, tmp_path, geometry=geometry)
+    assert len(built.meshes) == 1
+    entry = next(iter(built.meshes.values()))
+    if case == "compatible":
+        assert entry["animation_geometry"]["frames"] == 2
+        assert geometry_values(geometry, entry["animation_geometry"]["positions"]) == (
+            0., 0., 0., 1., 0., 0., 0., 1., 0.,
+            0., 0., 1., 1., 0., 1., 0., 1., 1.)
+    else:
+        assert "animation_geometry" not in entry
+        assert not built.animations
+        refs = [value for value in entry.values()
+                if isinstance(value, dict) and "offset" in value and "length" in value]
+        assert len(geometry) == max(ref["offset"] + ref["length"] for ref in refs)
