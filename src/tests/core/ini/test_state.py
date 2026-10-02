@@ -1,6 +1,5 @@
 """State-rule extraction cases adjacent to, but distinct from, menus."""
 
-from .test_menu import _by_slot, sections
 from core.ini.menu import extract_menu_toggles
 from core.ini.state import extract_state_rules
 from core.ini.parser import gating_var_names
@@ -10,10 +9,23 @@ from core.ini.toggles import extract_variable_defaults
 import pytest
 
 
+def sections(text):
+    return parse_sections("state.ini", text=text)
+
+
+def _by_slot(menu):
+    return {entry["slot"]: entry for entry in menu.values()}
+
+
 @pytest.mark.parametrize("comparison", ["< 2", "<= 1", "> 1", ">= 2"])
 def test_menu_numeric_conditions_share_draw_and_present_semantics(comparison):
-    from .test_menu import MENU_INI
-    text = MENU_INI + f"""
+    text = f"""
+[CommandListActions]
+if $click == 4
+$input05 = ($input05 + 1) % 3
+elif $click == 9
+$extra = 1 - $extra
+endif
 [Present]
 if $input05 {comparison}
 $piece = 1
