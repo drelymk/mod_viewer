@@ -21,11 +21,14 @@ _INCR_MOD_RE = re.compile(                              # $v = ($v + 1) % N
     r'^\(\s*\$(\w+)\s*\+\s*1\s*\)\s*%\s*(\d+)$')
 _STEP_RE    = re.compile(r'^\$(\w+)\s*([+-])\s*1$')  # $v = $v +/- 1
 _MOD_RE     = re.compile(r'^\$(\w+)\s*%\s*(\d+)$')   # $v = $v % N
-_GUARD_RE   = re.compile(r'^\$(\w+)\s*(==|!=|>=|<=|>|<)\s*(-?\d+|\$\w+)$')
+_GUARD_RE   = re.compile(r'^\$(\w+)\s*(==|!=|>=|<=|>|<)\s*(-?\d+(?:\.\d+)?|\$\w+)$')
 _LITERAL_RE = re.compile(r'^-?\d+(?:\.\d+)?$')
+_INTEGER_RE = re.compile(r'(-?\d+)(?:\.0+)?$')
 _ELSE_RE    = re.compile(r'(?:else\s+if|elif)\s+(.*)$', re.I)
 _STATE_ADD_RE = re.compile(
     r'^\$(\w+)\s*=\s*\$(\w+)\s*\+\s*\$(\w+)$')
+_BUTTON_RE = re.compile(r'CommandListButton(\d+)(Left|Right)', re.I)
+_IMAGE_BINDING_RE = re.compile(r'ps-t100\s*=\s*(\S+)', re.I)
 
 _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">"}
 
@@ -35,9 +38,13 @@ _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">
 _MIN_SLOTS = 2
 
 
+def _clean_line(raw):
+    return str(raw).split(";", 1)[0].strip()
+
+
 def _conditional_blocks(lines):
     """Return cleaned lines and ordered if/elif/else blocks, or None if malformed."""
-    cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
+    cleaned = [_clean_line(raw) for raw in lines]
     root, stack = [], []
     body = root
     for index, line in enumerate(cleaned):
@@ -70,7 +77,7 @@ def _conditional_blocks(lines):
     return (cleaned, root) if not stack else None
 
 
-def _split_slot_branches(parsed, image_chains=None):
+def _slot_chains(parsed, image_chains=None):
     """Find slot dispatch chains, including nested page menus."""
     if parsed is None:
         return []
@@ -96,7 +103,7 @@ def _split_slot_branches(parsed, image_chains=None):
             if len(parts) >= _MIN_SLOTS and image_chains is not None:
                 image_chains.append(parts)
             if len(parts) >= _MIN_SLOTS and not nested:
-                found.extend(part[:3] for part in parts)
+                found.append([part[:3] for part in parts])
             found.extend(nested)
         return found
 
@@ -105,6 +112,66 @@ def _split_slot_branches(parsed, image_chains=None):
 
 def _cycle_values(lo, hi):
     return [str(i) for i in range(lo, hi + 1)]
+
+
+def _same_var(left, right):
+    return (left is not None and right is not None
+            and left.casefold() == right.casefold())
+
+
+def _integer_value(text):
+    match = _INTEGER_RE.fullmatch(str(text))
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+def _wrap_values(guard, reset, *, decrement=False):
+    """Return an exact integer cycle; unsupported or reversed bounds have none."""
+    boundary, reset = _integer_value(guard["value"]), _integer_value(reset)
+    if boundary is None or reset is None:
+        return None
+    if decrement:
+        lo, hi = boundary + (guard["op"] == "<="), reset
+    else:
+        lo = reset
+        hi = boundary + {"<": 0, "<=": 1, ">": 0, ">=": -1}[guard["op"]]
+    return _cycle_values(lo, hi) if hi >= lo else None
+
+
+def _conditional_bodies(nodes):
+    """Visit each body separately, preserving its execution order and guards."""
+    yield nodes
+    for block in nodes:
+        if isinstance(block, dict):
+            for branch in block["branches"]:
+                yield from _conditional_bodies(branch["body"])
+
+
+def _wrap_ranges(nodes, variable, *, decrement=False):
+    """Find direct resets in wrap blocks at the current conditional depth."""
+    ranges = set()
+    for block in nodes:
+        if not isinstance(block, dict):
+            continue
+        branch = block["branches"][0]
+        guard = _guard(branch["condition"])
+        ops = ("<", "<=") if decrement else (">", ">=")
+        if not guard or not _same_var(guard["var"], variable) or guard["op"] not in ops:
+            continue
+        resets = []
+        for line in branch["body"]:
+            assignment = _ASSIGN_RE.fullmatch(line) if isinstance(line, str) else None
+            if assignment and _same_var(assignment.group(1), variable):
+                resets.append(assignment.group(2).strip())
+        if len(resets) == 1:
+            values = _wrap_values(guard, resets[0], decrement=decrement)
+            if values:
+                ranges.add(tuple(values))
+    return ranges
 
 
 def _resource_file(resources, name):
@@ -118,10 +185,50 @@ def _resource_file(resources, name):
 
 
 def _branch_image(nodes, resources):
-    bindings = [re.fullmatch(r"ps-t100\s*=\s*(\S+)", line, re.I)
+    bindings = [_IMAGE_BINDING_RE.fullmatch(line)
                 for line in nodes if isinstance(line, str)]
     names = [match.group(1) for match in bindings if match]
     return _resource_file(resources, names[0]) if len(names) == 1 else None
+
+
+def _section_image(lines, resources, *, last=False):
+    """Resolve the first or last usable direct artwork binding in a section."""
+    image = None
+    for raw in lines:
+        binding = _IMAGE_BINDING_RE.fullmatch(_clean_line(raw))
+        if binding:
+            image = _resource_file(resources, binding.group(1)) or image
+            if image and not last:
+                break
+    return image
+
+
+def _slot_images(image_chains, known_slots, slot_groups, resources):
+    """Match dispatch artwork to slots, omitting missing or conflicting images."""
+    candidates = {}
+    for chain in image_chains:
+        artwork = [(int(slot), _branch_image(nodes, resources))
+                   for _var, slot, _body, nodes in chain]
+        mapped = [(slot, image) for slot, image in artwork if slot in known_slots]
+        if sum(bool(image) for _slot, image in mapped) < _MIN_SLOTS:
+            # Offset click IDs can use the same complete numbering pattern as
+            # artwork indices. Accept only one whole-group translation.
+            image_slots = {slot for slot, _image in artwork}
+            offsets = set()
+            for group in slot_groups:
+                if len(group) != len(image_slots):
+                    continue
+                offset = min(group) - min(image_slots)
+                if {slot + offset for slot in image_slots} == group:
+                    offsets.add(offset)
+            if len(offsets) == 1:
+                offset = next(iter(offsets))
+                mapped = [(slot + offset, image) for slot, image in artwork]
+        if sum(bool(image) for _slot, image in mapped) >= _MIN_SLOTS:
+            for slot, image in mapped:
+                candidates.setdefault(slot, set()).add(image)
+    return {slot: next(iter(images)) for slot, images in candidates.items()
+            if len(images) == 1 and None not in images}
 
 
 def _guard(text, numeric_defaults=None):
@@ -149,14 +256,15 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
     """
     var, values, effects = None, None, []
     cycle_kind, finite = None, False
-    stack = []                    # {guard, branches} per open `if`
+    stack = []                    # {guard, branches, body} per open `if`
+    step_body = ()
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
 
-    for line in body:
+    for index, line in enumerate(body):
         low = line.lower()
         if low.startswith("if "):
             stack.append({"guard": _guard(line[3:], numeric_defaults),
-                          "branches": 1})
+                          "branches": 1, "body": index})
             continue
         if low == "endif":
             if stack:
@@ -178,6 +286,7 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
                     frame["guard"] = (_negate(frame["guard"])
                                       if frame["branches"] == 1 else None)
                 frame["branches"] += 1
+                frame["body"] = index
             continue
 
         m = _ASSIGN_RE.fullmatch(line)
@@ -187,13 +296,13 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
         guard = stack[-1]["guard"] if stack else None
 
         flip = _FLIP_RE.fullmatch(rhs)
-        if flip and flip.group(1) == lhs:
+        if flip and _same_var(flip.group(1), lhs):
             var, values = lhs, ["0", "1"]
             cycle_kind = "flip"
             finite = True
             continue
         incr_mod = _INCR_MOD_RE.fullmatch(rhs)
-        if incr_mod and incr_mod.group(1) == lhs:
+        if incr_mod and _same_var(incr_mod.group(1), lhs):
             count = int(incr_mod.group(2))
             if count > 0:
                 var, values = lhs, _cycle_values(0, count - 1)
@@ -201,15 +310,16 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
                 finite = True
             continue
         incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
-        if incr and incr.group(1) == lhs:
+        if incr and _same_var(incr.group(1), lhs):
             var, values = lhs, ["0", "1"]   # Placeholder until the wrap count is known.
             cycle_kind = "increment"
             finite = False
-            if guard and guard["var"] == lhs and guard["op"] in ("<", "<="):
+            step_body = tuple(frame["body"] for frame in stack)
+            if guard and _same_var(guard["var"], lhs) and guard["op"] in ("<", "<="):
                 wrap = (guard, len(stack))
             continue
         mod = _MOD_RE.fullmatch(rhs)
-        if mod and mod.group(1) == lhs and lhs == var:
+        if mod and _same_var(mod.group(1), lhs) and _same_var(lhs, var):
             count = int(mod.group(2))
             if count > 0:
                 values = _cycle_values(0, count - 1)
@@ -218,35 +328,40 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
 
         if not _LITERAL_RE.fullmatch(rhs):
             continue
+        if cycle_kind == "increment" and _same_var(lhs, var) and stack:
+            reset_body = tuple(frame["body"] for frame in stack)
+            # Only the cycle's own wrap branch may separate its step and reset.
+            before_step = (in_wrap_else and len(reset_body) == len(step_body)
+                           and reset_body[:-1] == step_body[:-1])
+            if not before_step and reset_body[:-1] != step_body:
+                return None
         # `if $v < 2 / $v = $v + 1 / else / $v = 0 / endif`. Checked before the
         # trailing-`if` idiom below, which the negated else guard also matches.
-        if (cycle_kind == "increment" and in_wrap_else and lhs == var
-                and wrap[0]["var"] == var):
-            hi = int(wrap[0]["value"]) + (1 if wrap[0]["op"] == "<=" else 0)
-            lo = int(rhs)
-            if hi >= lo:
-                values = _cycle_values(lo, hi)
-                finite = True
+        if (cycle_kind == "increment" and in_wrap_else and _same_var(lhs, var)
+                and _same_var(wrap[0]["var"], var)):
+            values = _wrap_values(wrap[0], rhs)
+            if values is None:
+                return None
+            finite = True
             continue
         # `if $v > 2 / $v = 0 / endif` closes the cycle opened by `$v = $v + 1`.
-        if (cycle_kind == "increment" and guard and lhs == var
-                and guard["var"] == var
+        if (cycle_kind == "increment" and guard and _same_var(lhs, var)
+                and _same_var(guard["var"], var)
                 and guard["op"] in (">", ">=")):
-            hi = int(guard["value"]) - (1 if guard["op"] == ">=" else 0)
-            lo = int(rhs)
-            if hi >= lo:
-                values = _cycle_values(lo, hi)
-                finite = True
+            values = _wrap_values(guard, rhs)
+            if values is None:
+                return None
+            finite = True
             continue
         # A binary flip's reset is bookkeeping only when its guard is
         # demonstrably unreachable for the flip's known range. Reachable
         # same-variable assignments are real effects and must be replayed.
-        if (cycle_kind == "flip" and lhs == var and guard
-                and guard["var"] == var
+        if (cycle_kind == "flip" and _same_var(lhs, var) and guard
+                and _same_var(guard["var"], var)
                 and guard["op"] in (">", ">=")):
-            boundary = int(guard["value"])
+            boundary = _integer_value(guard["value"])
             max_value = max(int(value) for value in values)
-            unreachable = (
+            unreachable = boundary is not None and (
                 (guard["op"] == ">" and max_value <= boundary)
                 or (guard["op"] == ">=" and max_value < boundary)
             )
@@ -276,54 +391,39 @@ def _parse_arrow_button(lines):
             $Hair = 5
         endif
     """
-    cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
-    variable = direction = None
-    for line in cleaned:
-        match = _ASSIGN_RE.fullmatch(line)
+    parsed = _conditional_blocks(lines)
+    if parsed is None:
+        return None
+    for body in _conditional_bodies(parsed[1]):
+        for index, line in enumerate(body):
+            assignment = _ASSIGN_RE.fullmatch(line) if isinstance(line, str) else None
+            if not assignment:
+                continue
+            lhs, rhs = assignment.group(1), assignment.group(2).strip()
+            step = _STEP_RE.fullmatch(rhs)
+            if step and _same_var(step.group(1), lhs):
+                ranges = _wrap_ranges(body[index + 1:], lhs,
+                                      decrement=step.group(2) == "-")
+                if len(ranges) == 1:
+                    return lhs, list(next(iter(ranges)))
+    return None
+
+
+def _arrow_button_items(sections):
+    """Recognise numbered arrow menus, retaining each item's first valid range."""
+    items = {}
+    for section, lines in sections.items():
+        match = _BUTTON_RE.fullmatch(section)
         if not match:
             continue
-        lhs, rhs = match.group(1), match.group(2).strip()
-        step = _STEP_RE.fullmatch(rhs)
-        if step and step.group(1).lower() == lhs.lower():
-            variable, direction = lhs, step.group(2)
-            break
-    if variable is None:
-        return None
-
-    guard = reset = None
-    for index, line in enumerate(cleaned):
-        if not line.lower().startswith("if "):
-            continue
-        candidate = _guard(line[3:])
-        if not candidate or candidate["var"].lower() != variable.lower():
-            continue
-        valid_ops = ("<", "<=") if direction == "-" else (">", ">=")
-        if candidate["op"] not in valid_ops:
-            continue
-        for later in cleaned[index + 1:]:
-            if later.lower() == "endif":
-                break
-            assignment = _ASSIGN_RE.fullmatch(later)
-            if (assignment and assignment.group(1).lower() == variable.lower()
-                    and _LITERAL_RE.fullmatch(assignment.group(2).strip())):
-                guard, reset = candidate, assignment.group(2).strip()
-                break
-        if guard:
-            break
-    if not guard or reset is None:
-        return None
-
-    boundary = int(guard["value"])
-    reset_value = int(float(reset))
-    if direction == "-":
-        lo = boundary + (1 if guard["op"] == "<=" else 0)
-        hi = reset_value
-    else:
-        lo = reset_value
-        hi = boundary - (1 if guard["op"] == ">=" else 0)
-    if hi < lo:
-        return None
-    return variable, _cycle_values(lo, hi)
+        action = _parse_arrow_button(lines)
+        if action:
+            slot = int(match.group(1))
+            items.setdefault(slot, (section, *action, first_source(lines) or {}))
+    # A lone step button is more likely ordinary bookkeeping than a menu.
+    if len(items) < _MIN_SLOTS:
+        return []
+    return [(slot, *item) for slot, item in sorted(items.items())]
 
 
 def _static_numeric_defaults(sections):
@@ -334,7 +434,7 @@ def _static_numeric_defaults(sections):
     assignment = re.compile(r'^(?:post\s+)?\$(\w+)\s*(?:=|\+=|-=)', re.I)
     for section, lines in sections.items():
         for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
+            line = _clean_line(raw)
             match = declaration.fullmatch(line) if section.casefold() == "constants" else None
             if match:
                 name, value = match.groups()
@@ -357,7 +457,7 @@ def _mouse_press_vars(sections):
     for section, lines in sections.items():
         if not str(section).casefold().startswith("key"):
             continue
-        cleaned = [str(raw).split(";", 1)[0].strip() for raw in lines]
+        cleaned = [_clean_line(raw) for raw in lines]
         keys = [line.partition("=")[2].strip() for line in cleaned
                 if line.partition("=")[0].strip().casefold() == "key"]
         if not any(mouse_key.fullmatch(token) for key in keys
@@ -449,54 +549,35 @@ def _controller_records(sections, section_filter=None):
         if section_filter is not None and not section_filter(str(section)):
             continue
         for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
+            line = _clean_line(raw)
             if line:
                 records.append((section, line, raw))
     return records
 
 
 def _controller_wrap_values(records, variable):
-    """Return the range from an authored ``if state > N`` reset block."""
-    ranges = []
-    variable = variable.casefold()
-    for index, (_section, line, _raw) in enumerate(records):
-        if not line.lower().startswith("if "):
-            continue
-        guard = _guard(line[3:])
-        if (not guard or guard["var"].casefold() != variable
-                or guard["op"] not in (">", ">=")):
-            continue
-        depth = 1
-        reset = None
-        for _section2, later, _raw2 in records[index + 1:]:
-            low = later.lower()
-            if low.startswith("if "):
-                depth += 1
-                continue
-            if low == "endif":
-                depth -= 1
-                if depth == 0:
-                    break
-                continue
-            if depth != 1:
-                continue
-            assignment = _ASSIGN_RE.fullmatch(later)
-            if (assignment
-                    and assignment.group(1).casefold() == variable
-                    and _LITERAL_RE.fullmatch(assignment.group(2).strip())):
-                reset = assignment.group(2).strip()
-                break
-        if reset is None:
-            continue
-        try:
-            lower = int(float(reset))
-            upper = int(guard["value"]) - (1 if guard["op"] == ">=" else 0)
-        except ValueError:
-            continue
-        if upper >= lower:
-            ranges.append(tuple(_cycle_values(lower, upper)))
-    unique = set(ranges)
-    return list(next(iter(unique))) if len(unique) == 1 else None
+    """Return a range whose state-add and reset share an execution body."""
+    parsed = _conditional_blocks(line for _section, line, _raw in records)
+    if parsed is None:
+        return None
+
+    def is_step(line):
+        match = _STATE_ADD_RE.fullmatch(line) if isinstance(line, str) else None
+        return (match and _same_var(match.group(1), variable)
+                and _same_var(match.group(2), variable))
+
+    ranges = set()
+    for body in _conditional_bodies(parsed[1]):
+        for index, node in enumerate(body):
+            if is_step(node):
+                ranges.update(_wrap_ranges(body[index + 1:], variable))
+            elif isinstance(node, dict):
+                branches = node["branches"]
+                # The pre-step idiom puts the state-add directly in wrap's else.
+                if (len(branches) == 2 and branches[1]["condition"] is None
+                        and any(is_step(line) for line in branches[1]["body"])):
+                    ranges.update(_wrap_ranges([node], variable))
+    return list(next(iter(ranges))) if len(ranges) == 1 else None
 
 
 def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
@@ -531,7 +612,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
         if not section.casefold().startswith("commandlist"):
             continue
         for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
+            line = _clean_line(raw)
             assignment = _ASSIGN_RE.fullmatch(line)
             if assignment:
                 lhs, rhs = assignment.group(1), assignment.group(2).strip()
@@ -625,6 +706,7 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
               if name.casefold().startswith("commandlist")}
     section_lookup = {name.casefold(): lines for name, lines in sections.items()}
     image_chains = []
+    slot_groups = []
 
     def declared(name):
         return canon.get(name.lower(), name)
@@ -632,14 +714,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     def add_entry(section, slot, variable, values, effects=(), *,
                   src=None, key_section=None, kind=None, image=None):
         if image is None and kind != "mouse_region":
-            for raw in section_lookup.get(f"commandlisticon{slot}", ()):
-                binding = re.fullmatch(
-                    r"ps-t100\s*=\s*(\S+)",
-                    str(raw).split(";", 1)[0].strip(), re.I)
-                if binding:
-                    image = _resource_file(resources, binding.group(1))
-                    if image:
-                        break
+            image = _section_image(
+                section_lookup.get(f"commandlisticon{slot}", ()), resources)
         variable = declared(variable)
         base_key = _prefixed(f"{key_section or section}#{slot}", var_prefix)
         key = base_key
@@ -673,79 +749,37 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         menu[key] = entry
 
     for name, parsed_blocks in blocks.items():
-        parsed = []
-        for _slot_var, slot_value, body in _split_slot_branches(
+        for chain in _slot_chains(
                 parsed_blocks, image_chains if resources is not None else None):
-            info = _parse_branch(body)
-            if info:
-                parsed.append((slot_value, info))
-        if len(parsed) < _MIN_SLOTS:
-            continue
+            parsed = []
+            for _slot_var, slot_value, body in chain:
+                info = _parse_branch(body)
+                if info:
+                    parsed.append((slot_value, info))
+            if len(parsed) < _MIN_SLOTS:
+                continue
 
-        lines = sections[name]
-        src = first_source(lines) or {}
-        for slot_value, (var, values, effects) in parsed:
-            add_entry(name, slot_value, var, values, effects, src=src)
+            slot_groups.append({int(slot) for slot, _info in parsed})
+            src = first_source(sections[name]) or {}
+            for slot_value, (var, values, effects) in parsed:
+                add_entry(name, slot_value, var, values, effects, src=src)
 
-    # Arrow-pair image menus have no clicked-slot dispatch chain.  Their
-    # numeric ButtonNLeft/ButtonNRight sections each mutate one variable and
-    # wrap it at the authored bounds.  Require at least two distinct numbered
-    # items before treating this naming/behaviour combination as a menu; a
-    # lone step button elsewhere in a mod should remain ordinary bookkeeping.
-    arrow_items = {}
-    button_re = re.compile(r'^CommandListButton(\d+)(Left|Right)$', re.I)
-    for name, lines in sections.items():
-        match = button_re.fullmatch(name)
-        if not match:
-            continue
-        parsed = _parse_arrow_button(lines)
-        if not parsed:
-            continue
-        slot = int(match.group(1))
-        variable, values = parsed
-        arrow_items.setdefault(slot, []).append(
-            (variable, values, name, first_source(lines) or {}))
-
-    if len(arrow_items) >= _MIN_SLOTS:
-        for slot, candidates in sorted(arrow_items.items()):
-            # Both directions normally agree. Prefer the first range and only
-            # merge candidates that drive the same case-insensitive variable.
-            variable, values, section, src = candidates[0]
-            same_var = [item for item in candidates
-                        if item[0].lower() == variable.lower()]
-            if len(same_var) > 1:
-                ranges = {tuple(item[1]) for item in same_var}
-                if len(ranges) == 1:
-                    values = same_var[0][1]
-            button_section = re.sub(r"(?:Left|Right)$", "", section,
-                                    flags=re.I)
-            add_entry(section, slot, variable, values, src=src,
-                      key_section=button_section)
+    for slot, section, variable, values, src in _arrow_button_items(sections):
+        button_section = re.sub(r"(?:Left|Right)$", "", section, flags=re.I)
+        add_entry(section, slot, variable, values, src=src,
+                  key_section=button_section)
     for slot, section, variable, values, effects, src in _mouse_button_items(
             sections, blocks):
-        image = None
-        for raw in section_lookup.get(f"commandlistdrawbutton_{slot}", ()):
-            binding = re.fullmatch(
-                r"ps-t100\s*=\s*(\S+)",
-                str(raw).split(";", 1)[0].strip(), re.I)
-            if binding:
-                image = _resource_file(resources, binding.group(1)) or image
+        image = _section_image(
+            section_lookup.get(f"commandlistdrawbutton_{slot}", ()),
+            resources, last=True)
         add_entry(section, slot, variable, values, effects, src=src,
                   kind="mouse_region", image=image)
-    known_slots = {info["slot"] for info in menu.values()}
-    candidates = {}
-    for chain in image_chains:
-        mapped = [(int(slot), _branch_image(nodes, resources))
-                  for _var, slot, _body, nodes in chain
-                  if int(slot) in known_slots]
-        if sum(bool(image) for _slot, image in mapped) >= _MIN_SLOTS:
-            for slot, image in mapped:
-                candidates.setdefault(slot, set()).add(image)
+    images = _slot_images(image_chains, {info["slot"] for info in menu.values()},
+                          slot_groups, resources)
     for info in menu.values():
-        images = candidates.get(info["slot"], ())
-        if (info.get("kind") != "mouse_region" and len(images) == 1
-                and None not in images):
-            info["image_file"] = next(iter(images))
+        if info.get("kind") != "mouse_region" and info["slot"] in images:
+            info["image_file"] = images[info["slot"]]
     return menu
 
 

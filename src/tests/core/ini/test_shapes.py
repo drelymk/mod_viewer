@@ -1,8 +1,49 @@
 """Shape-slider discovery cases with explicit regression fixtures."""
 
-from .test_menu import sections
 from core.ini.shapes import extract_shape_sliders
 from core.ini.parser import extract_resources
+from core.ini.sections import parse_sections
+
+
+def sections(text):
+    return parse_sections("shapes.ini", text=text)
+
+
+def test_slider_artwork_requires_an_unambiguous_authored_draw_link():
+    text = """
+[CommandListDrawSlider.Amount]
+x87 = $Amount * x87
+[CustomShaderBlend]
+x88 = $Amount
+cs-t50 = copy ResourceStart
+cs-t51 = copy ResourceEnd
+[ResourceStart]
+stride = 40
+filename = start.buf
+[ResourceEnd]
+stride = 40
+filename = end.buf
+[ResourceBadge]
+filename = badge.dds
+[ResourceAlternative]
+filename = alternative.dds
+"""
+    paint = """
+[CommandListRenderBadge]
+ps-t100 = ResourceBadge
+run = CustomShaderElement
+run = CommandListDrawSlider.Amount
+"""
+    for drawing, expected in (
+        (paint, "badge.dds"),
+        (paint.replace("run = CustomShaderElement", ""), None),
+        (paint + paint.replace("RenderBadge", "RenderAlternative")
+         .replace("ResourceBadge", "ResourceAlternative"), None),
+    ):
+        parsed = sections(text + drawing)
+        slider, = extract_shape_sliders(parsed, extract_resources(parsed))
+        assert slider["var"] == "Amount"
+        assert slider.get("image_file") == expected
 
 
 
