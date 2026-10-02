@@ -256,14 +256,15 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
     """
     var, values, effects = None, None, []
     cycle_kind, finite = None, False
-    stack = []                    # {guard, branches} per open `if`
+    stack = []                    # {guard, branches, body} per open `if`
+    step_body = ()
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
 
-    for line in body:
+    for index, line in enumerate(body):
         low = line.lower()
         if low.startswith("if "):
             stack.append({"guard": _guard(line[3:], numeric_defaults),
-                          "branches": 1})
+                          "branches": 1, "body": index})
             continue
         if low == "endif":
             if stack:
@@ -285,6 +286,7 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
                     frame["guard"] = (_negate(frame["guard"])
                                       if frame["branches"] == 1 else None)
                 frame["branches"] += 1
+                frame["body"] = index
             continue
 
         m = _ASSIGN_RE.fullmatch(line)
@@ -312,6 +314,7 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
             var, values = lhs, ["0", "1"]   # Placeholder until the wrap count is known.
             cycle_kind = "increment"
             finite = False
+            step_body = tuple(frame["body"] for frame in stack)
             if guard and _same_var(guard["var"], lhs) and guard["op"] in ("<", "<="):
                 wrap = (guard, len(stack))
             continue
@@ -325,6 +328,13 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
 
         if not _LITERAL_RE.fullmatch(rhs):
             continue
+        if cycle_kind == "increment" and _same_var(lhs, var) and stack:
+            reset_body = tuple(frame["body"] for frame in stack)
+            # Only the cycle's own wrap branch may separate its step and reset.
+            before_step = (in_wrap_else and len(reset_body) == len(step_body)
+                           and reset_body[:-1] == step_body[:-1])
+            if not before_step and reset_body[:-1] != step_body:
+                return None
         # `if $v < 2 / $v = $v + 1 / else / $v = 0 / endif`. Checked before the
         # trailing-`if` idiom below, which the negated else guard also matches.
         if (cycle_kind == "increment" and in_wrap_else and _same_var(lhs, var)
@@ -394,7 +404,8 @@ def _parse_arrow_button(lines):
             if step and _same_var(step.group(1), lhs):
                 ranges = _wrap_ranges(body[index + 1:], lhs,
                                       decrement=step.group(2) == "-")
-                return (lhs, list(next(iter(ranges)))) if len(ranges) == 1 else None
+                if len(ranges) == 1:
+                    return lhs, list(next(iter(ranges)))
     return None
 
 
@@ -545,12 +556,27 @@ def _controller_records(sections, section_filter=None):
 
 
 def _controller_wrap_values(records, variable):
-    """Return the range from an authored ``if state > N`` reset block."""
+    """Return a range whose state-add and reset share an execution body."""
     parsed = _conditional_blocks(line for _section, line, _raw in records)
     if parsed is None:
         return None
-    ranges = {values for body in _conditional_bodies(parsed[1])
-              for values in _wrap_ranges(body, variable)}
+
+    def is_step(line):
+        match = _STATE_ADD_RE.fullmatch(line) if isinstance(line, str) else None
+        return (match and _same_var(match.group(1), variable)
+                and _same_var(match.group(2), variable))
+
+    ranges = set()
+    for body in _conditional_bodies(parsed[1]):
+        for index, node in enumerate(body):
+            if is_step(node):
+                ranges.update(_wrap_ranges(body[index + 1:], variable))
+            elif isinstance(node, dict):
+                branches = node["branches"]
+                # The pre-step idiom puts the state-add directly in wrap's else.
+                if (len(branches) == 2 and branches[1]["condition"] is None
+                        and any(is_step(line) for line in branches[1]["body"])):
+                    ranges.update(_wrap_ranges([node], variable))
     return list(next(iter(ranges))) if len(ranges) == 1 else None
 
 

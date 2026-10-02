@@ -40,8 +40,18 @@ def _dispatch(selector, items):
      ["-1", "0", "1", "2"]),
     ("$Palette = $PALETTE + 1\nif $palette > 3\n$PALETTE = 0.25\nendif", None),
     ("$Palette = $PALETTE + 1\nif $palette > 1\n$PALETTE = 2\nendif", None),
+    ("if $visible\n$Palette = $Palette + 1\nif $Palette > 2\n$Palette = 0\nendif\nendif",
+     ["0", "1", "2"]),
+    ("$Palette = $Palette + 1\nif $hovered\nif $Palette > 2\n$Palette = 0\nendif\nendif", None),
+    ("$Palette = $Palette + 1\nif $Palette > 2\nif $hovered\n$Palette = 0\nendif\nendif", None),
+    ("if $visible\n$Palette = $Palette + 1\nelse\nif $Palette > 2\n$Palette = 0\nendif\nendif", None),
+    ("if $visible\nif $Palette < 2\n$Palette = $Palette + 1\nelse\n$Palette = 0\nendif\nendif",
+     ["0", "1", "2"]),
+    ("if $Palette < 2\n$Palette = $Palette + 1\nelse\nif $hovered\n$Palette = 0\nendif\nendif", None),
 ], ids=["flip", "inline-modulo", "sequential-modulo", "decimal-reset",
-        "inclusive-before-step", "exclusive-after-step", "fractional", "reversed"])
+        "inclusive-before-step", "exclusive-after-step", "fractional", "reversed",
+        "common-guard", "guarded-wrap", "guarded-reset", "sibling-branches",
+        "common-guard-before-step", "guarded-before-step-reset"])
 def test_slot_cycles_have_exact_values_and_case_insensitive_identity(action, expected):
     text = "[Constants]\nglobal persist $Palette = 0\n[CommandListSelect]\n"
     text += _dispatch("selection", [
@@ -212,8 +222,10 @@ def test_conflicting_artwork_does_not_guess_and_reused_page_slots_remain_distinc
     ("$Palette = $PALETTE + 1\nif $palette > 2\nelse\n$PALETTE = 0\nendif", None),
     ("$Palette = $PALETTE + 1\nif $palette > 2\n$PALETTE = 0.5\nendif", None),
     ("$Palette = $PALETTE + 1\nif $palette > 2\n$PALETTE = 0", None),
+    ("$frame = $frame + 1\n$Palette = $Palette + 1\nif $Palette > 3\n$Palette = 0\nendif",
+     ["0", "1", "2", "3"]),
 ], ids=["increment", "decrement", "common-guard", "guarded-reset", "guarded-wrap",
-        "else-only-reset", "fractional-reset", "malformed"])
+        "else-only-reset", "fractional-reset", "malformed", "bookkeeping-before-cycle"])
 def test_arrow_cycles_require_a_reset_in_the_same_execution_body(action, expected):
     text = "[Constants]\nglobal persist $Palette = 0\n[CommandListButton7Right]\n" + action
     text += """
@@ -245,9 +257,23 @@ filename = frame.dds
         assert controls["Palette"]["section"] == "CommandListButton7Right"
 
 
-@pytest.mark.parametrize("reset,expected", [("0.000", ["0", "1", "2", "3"]),
-                                            ("1.0", ["1", "2", "3"]), ("0.5", None)])
-def test_forwarded_controllers_use_exact_cycles_and_keep_pulse_artwork(reset, expected):
+@pytest.mark.parametrize("action,expected", [
+    ("$Palette = $PALETTE + $trigger\nif $palette > 3\n$PALETTE = 0.000\nendif",
+     ["0", "1", "2", "3"]),
+    ("$Palette = $PALETTE + $trigger\nif $palette > 3\n$PALETTE = 1.0\nendif",
+     ["1", "2", "3"]),
+    ("$Palette = $PALETTE + $trigger\nif $palette > 3\n$PALETTE = 0.5\nendif", None),
+    ("if $visible\n$Palette = $Palette + $trigger\nif $Palette > 3\n$Palette = 0\nendif\nendif",
+     ["0", "1", "2", "3"]),
+    ("$Palette = $Palette + $trigger\nif $hovered\nif $Palette > 3\n$Palette = 0\nendif\nendif", None),
+    ("$Palette = $Palette + $trigger\nif $Palette > 3\nif $hovered\n$Palette = 0\nendif\nendif", None),
+    ("if $visible\n$Palette = $Palette + $trigger\nelse\nif $Palette > 3\n$Palette = 0\nendif\nendif", None),
+    ("if $visible\nif $Palette > 3\n$Palette = 0\nelse\n$Palette = $Palette + $trigger\nendif\nendif",
+     ["0", "1", "2", "3"]),
+    ("if $Palette > 3\nif $hovered\n$Palette = 0\nendif\nelse\n$Palette = $Palette + $trigger\nendif", None),
+], ids=["decimal-zero", "decimal-one", "fractional", "common-guard", "guarded-wrap",
+        "guarded-reset", "sibling-branches", "common-guard-before-step", "guarded-before-step-reset"])
+def test_forwarded_controllers_use_exact_cycles_and_keep_pulse_artwork(action, expected):
     parsed = _sections(f"""
 [Constants]
 global persist $Palette = 1
@@ -262,10 +288,7 @@ endif
 [ResourceBadge]
 filename = badge.dds
 [Present]
-$Palette = $PALETTE + $trigger
-if $palette > 3
-$PALETTE = {reset}
-endif
+{action}
 """)
     resources = extract_resources(parsed)
     assert extract_controller_toggles(parsed, set(), resources=resources) == {}
