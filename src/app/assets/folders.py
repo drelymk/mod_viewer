@@ -83,6 +83,7 @@ def _validated_entry(asset_type, folder, *, require_exists):
     return {"type": asset_type, "path": normalized, "enabled": True}
 
 
+@config.transaction()
 def _write_entries(entries, config_file=None):
     value = _read_config(config_file)
     value["assetFolders"] = entries
@@ -102,6 +103,7 @@ def write_entries(entries, config_file=None):
     _write_entries(entries, config_file)
 
 
+@config.transaction()
 def add_folder(asset_type, folder, config_file=None):
     entries = _read_entries(config_file)
     entry = _validated_entry(asset_type, folder, require_exists=True)
@@ -112,6 +114,7 @@ def add_folder(asset_type, folder, config_file=None):
     return entries
 
 
+@config.transaction()
 def edit_folder(original_folder, asset_type, folder, config_file=None):
     entries = _read_entries(config_file)
     original = normalize_path(original_folder)
@@ -131,6 +134,7 @@ def edit_folder(original_folder, asset_type, folder, config_file=None):
     return entries
 
 
+@config.transaction()
 def delete_folder(folder, config_file=None):
     entries = _read_entries(config_file)
     target = normalize_path(folder)
@@ -141,6 +145,7 @@ def delete_folder(folder, config_file=None):
     return filtered
 
 
+@config.transaction()
 def set_enabled(folder, enabled, config_file=None):
     """Change only a registered root's matching participation flag."""
     if not isinstance(enabled, bool):

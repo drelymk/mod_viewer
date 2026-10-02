@@ -83,6 +83,7 @@ export default {
   'folder.collapse': '{name}を折りたたむ',
   'folder.moreActionsFor': '{name}のその他の操作',
   'folder.edit': '編集',
+  'folder.open': 'フォルダーを開く',
   'folder.remove': '削除',
   'folder.notFound': 'フォルダーが見つかりません',
   'folder.editMod': 'MODフォルダーを編集',

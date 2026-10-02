@@ -158,6 +158,10 @@ export function toggleTextureDisplayMode(meshes) {
   setTextureDisplayMode(mode, meshes);
 }
 
+export function getTextureDisplayMode() {
+  return textureModes[textureModeIndex];
+}
+
 export function setTextureDisplayMode(mode, meshes) {
   const nextIndex = textureModes.indexOf(mode);
   if (nextIndex < 0) return false;

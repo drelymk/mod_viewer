@@ -23,6 +23,7 @@ export function createFolderRegistryPanel({
   listChildren,
   onRootSelected,
   onChildSelected,
+  onOpenFolder,
   onEdit,
   onDelete,
   renderLabel,
@@ -34,12 +35,19 @@ export function createFolderRegistryPanel({
   const childCache = new Map();
   let roots = [];
   let activePath = null;
+  let activeMenu = null;
 
   const className = (suffix) => `${classPrefix}-${suffix} folder-${suffix}`;
   const selector = (suffix) => `.${classPrefix}-${suffix}`;
   const pathAttribute = `data-${classPrefix}-path`;
 
   function closeMenus(except = null) {
+    if (activeMenu && activeMenu.menu !== except) {
+      activeMenu.menu.hidden = true;
+      activeMenu.more.setAttribute('aria-expanded', 'false');
+      activeMenu.owner.appendChild(activeMenu.menu);
+      activeMenu = null;
+    }
     listElement.querySelectorAll(selector('action-menu')).forEach((menu) => {
       if (menu !== except) {
         menu.hidden = true;
@@ -51,6 +59,11 @@ export function createFolderRegistryPanel({
   document.addEventListener('click', (event) => {
     if (!event.target.closest(selector('actions'))) closeMenus();
   });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeMenus();
+  });
+  listElement.addEventListener('scroll', () => closeMenus(), true);
+  window.addEventListener('resize', () => closeMenus());
 
   function setActivePath(path) {
     activePath = canonicalPath(path);
@@ -169,7 +182,8 @@ export function createFolderRegistryPanel({
       if (extras instanceof Node) row.appendChild(extras);
     }
 
-    if (isRoot && (onEdit || onDelete)) {
+    const canOpenFolder = onOpenFolder && entry.kind !== 'archive';
+    if ((isRoot && (onEdit || onDelete)) || canOpenFolder) {
       const actions = document.createElement('span');
       actions.className = className('actions');
       const more = document.createElement('button');
@@ -189,7 +203,29 @@ export function createFolderRegistryPanel({
       menu.className = className('action-menu');
       menu.setAttribute('role', 'menu');
       menu.hidden = true;
-      if (onEdit) {
+      if (canOpenFolder) {
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = className('open');
+        open.setAttribute('role', 'menuitem');
+        open.textContent = t('folder.open');
+        open.disabled = entry.exists === false;
+        open.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          closeMenus();
+          open.disabled = true;
+          try {
+            const response = await onOpenFolder(entry);
+            setTextError(errorElement, response?.error);
+          } catch (caught) {
+            setTextError(errorElement, caught.message || String(caught));
+          } finally {
+            open.disabled = entry.exists === false;
+          }
+        });
+        menu.appendChild(open);
+      }
+      if (isRoot && onEdit) {
         const edit = document.createElement('button');
         edit.type = 'button';
         edit.className = className('edit');
@@ -197,13 +233,12 @@ export function createFolderRegistryPanel({
         edit.textContent = t('folder.edit');
         edit.addEventListener('click', (event) => {
           event.stopPropagation();
-          menu.hidden = true;
-          more.setAttribute('aria-expanded', 'false');
+          closeMenus();
           onEdit(entry);
         });
         menu.appendChild(edit);
       }
-      if (onDelete) {
+      if (isRoot && onDelete) {
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = className('remove');
@@ -211,17 +246,40 @@ export function createFolderRegistryPanel({
         remove.textContent = t('folder.remove');
         remove.addEventListener('click', (event) => {
           event.stopPropagation();
-          menu.hidden = true;
-          more.setAttribute('aria-expanded', 'false');
+          closeMenus();
           onDelete(entry);
         });
         menu.appendChild(remove);
       }
+      const showMenu = (x, y) => {
+        closeMenus(menu);
+        activeMenu = { menu, more, owner: actions };
+        // Keep fixed menus outside the dock's blur and scrolling containers.
+        document.body.appendChild(menu);
+        menu.hidden = false;
+        menu.style.position = 'fixed';
+        menu.style.right = 'auto';
+        const bounds = menu.getBoundingClientRect();
+        const gutter = 8;
+        menu.style.left = `${Math.max(gutter, Math.min(x, window.innerWidth - bounds.width - gutter))}px`;
+        menu.style.top = `${Math.max(gutter, Math.min(y, window.innerHeight - bounds.height - gutter))}px`;
+        more.setAttribute('aria-expanded', 'true');
+      };
       more.addEventListener('click', (event) => {
         event.stopPropagation();
-        closeMenus(menu);
-        menu.hidden = !menu.hidden;
-        more.setAttribute('aria-expanded', String(!menu.hidden));
+        if (!menu.hidden) {
+          closeMenus();
+          return;
+        }
+        const bounds = more.getBoundingClientRect();
+        showMenu(bounds.right, bounds.bottom + 5);
+      });
+      row.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (more.disabled) return;
+        const bounds = row.getBoundingClientRect();
+        showMenu(event.clientX || bounds.left, event.clientY || bounds.bottom);
       });
       actions.append(more, menu);
       row.appendChild(actions);
@@ -245,6 +303,7 @@ export function createFolderRegistryPanel({
   }
 
   function setRootBusy(path, busy) {
+    if (busy) closeMenus();
     const key = canonicalPath(path);
     const node = [...listElement.children].find((candidate) => {
       const row = candidate.querySelector(`:scope > ${selector('row')}`);
@@ -299,6 +358,7 @@ export function createFolderRegistryPanel({
   }
 
   function render(entries, { expandedPaths = [] } = {}) {
+    closeMenus();
     roots = entries || [];
     listElement.innerHTML = '';
     listElement.hidden = roots.length === 0;
@@ -309,6 +369,7 @@ export function createFolderRegistryPanel({
   }
 
   function updateRoot(entry) {
+    closeMenus();
     const key = canonicalPath(entry?.path);
     const index = roots.findIndex((root) => canonicalPath(root.path) === key);
     if (!key || index < 0) return false;

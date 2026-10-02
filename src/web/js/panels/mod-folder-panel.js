@@ -46,6 +46,7 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     listChildren: (path) => window.pywebview.api.list_subfolders(path),
     onRootSelected: (path) => selectFolder(path),
     onChildSelected: (path) => selectFolder(path),
+    onOpenFolder: (entry) => window.pywebview.api.open_mod_folder(entry.path),
     onEdit: (entry) => openEditor('edit', entry),
     onDelete: (entry) => removeFolder(entry),
     renderLabel: (entry) => entry.name,

@@ -82,6 +82,7 @@ export default {
   'folder.collapse': '收起 {name}',
   'folder.moreActionsFor': '{name} 的更多操作',
   'folder.edit': '编辑',
+  'folder.open': '打开文件夹',
   'folder.remove': '移除',
   'folder.notFound': '未找到文件夹',
   'folder.editMod': '编辑 MOD 文件夹',

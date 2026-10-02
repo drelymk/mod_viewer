@@ -1,5 +1,7 @@
 """Transactional Asset Folder registry and index orchestration."""
 
+from app.settings import config
+
 from . import folders as asset_folders
 from . import index as asset_index
 
@@ -37,6 +39,7 @@ def _commit_index_and_entries(asset_type, folder_path, index, entries):
         raise _error(error, index_preserved=previous is not None) from error
 
 
+@config.transaction()
 def add(asset_type, folder_path):
     try:
         entries = asset_folders.load_registry()
@@ -54,6 +57,7 @@ def add(asset_type, folder_path):
         raise _error(error) from error
 
 
+@config.transaction()
 def edit(original_path, asset_type, folder_path):
     try:
         entries = asset_folders.load_registry()
@@ -88,6 +92,7 @@ def edit(original_path, asset_type, folder_path):
     return new_entries
 
 
+@config.transaction()
 def delete(folder_path):
     try:
         entries = asset_folders.load_registry()
@@ -111,6 +116,7 @@ def set_enabled(folder_path, enabled):
         raise _error(error) from error
 
 
+@config.transaction()
 def rebuild(folder_path):
     try:
         entries = asset_folders.load_registry()

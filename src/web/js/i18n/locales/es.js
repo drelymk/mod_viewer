@@ -83,6 +83,7 @@ export default {
   'folder.collapse': 'Contraer {name}',
   'folder.moreActionsFor': 'Más acciones para {name}',
   'folder.edit': 'Editar',
+  'folder.open': 'Abrir carpeta',
   'folder.remove': 'Quitar',
   'folder.notFound': 'No se encontró la carpeta',
   'folder.editMod': 'Editar carpeta de MOD',

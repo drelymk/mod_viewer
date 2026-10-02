@@ -93,6 +93,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       });
     },
     onEdit: (entry) => openEditor('edit', entry),
+    onOpenFolder: (entry) => window.pywebview.api.open_asset_folder(entry.path),
     onDelete: (entry) => removeFolder(entry),
     rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],
     renderRootExtras: (entry) => {

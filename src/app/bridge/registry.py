@@ -5,7 +5,24 @@ import os
 from app.assets import catalog as asset_catalog
 from app.assets import folders as asset_folders
 from app.assets import index as asset_index
-from app.settings import mod_folders
+from app.settings import mod_folders, viewer_preferences
+
+
+def _open_folder(folder_path, authorize):
+    """Open an authorized directory through the native Windows shell."""
+    try:
+        if not isinstance(folder_path, str) or not os.path.isabs(folder_path):
+            raise ValueError("Folder path must be absolute.")
+        folder = authorize(folder_path)
+        if not os.path.isdir(folder):
+            raise ValueError("Folder not found or is not a directory.")
+        startfile = getattr(os, "startfile", None)
+        if startfile is None:
+            raise OSError("Opening folders in Explorer requires Windows.")
+        startfile(folder, "explore")
+    except (OSError, ValueError) as error:
+        return {"error": str(error)}
+    return {"ok": True}
 
 
 class ModFolderRegistry:
@@ -25,6 +42,9 @@ class ModFolderRegistry:
         self._access.refresh_mod_roots(entries)
         return {"folders": self._folder_entries(entries)}
 
+    def open_folder(self, folder_path):
+        return _open_folder(folder_path, self._access.mod_folder)
+
     def get_panel_opacity(self):
         try:
             return {"value": mod_folders.load_panel_opacity()}
@@ -36,6 +56,18 @@ class ModFolderRegistry:
         try:
             return {"value": mod_folders.save_panel_opacity(value)}
         except mod_folders.ModFolderError as error:
+            return {"error": str(error)}
+
+    def get_viewer_preferences(self):
+        try:
+            return {"value": viewer_preferences.load_preferences()}
+        except ValueError as error:
+            return {"error": str(error), "value": {}}
+
+    def set_viewer_preferences(self, changes):
+        try:
+            return {"value": viewer_preferences.save_preferences(changes)}
+        except ValueError as error:
             return {"error": str(error)}
 
     def get_language(self):
@@ -113,6 +145,9 @@ class AssetFolderRegistry:
     def __init__(self, access, on_changed=None):
         self._access = access
         self._on_changed = on_changed
+
+    def open_folder(self, folder_path):
+        return _open_folder(folder_path, self._access.asset_folder)
 
     @staticmethod
     def _asset_folder_entries(entries):
