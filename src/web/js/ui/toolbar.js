@@ -11,7 +11,7 @@ import {
   setKeyLightIntensity,
 } from '../scene/scene.js';
 import { KEY_LIGHT_MAX_INTENSITY } from '../scene/key-light-controller.js';
-import { setTextureDisplayMode } from '../scene/render-modes.js';
+import { getTextureDisplayMode, setTextureDisplayMode } from '../scene/render-modes.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { closeHeaderPopovers } from './header-popovers.js';
 
@@ -38,7 +38,7 @@ function intensityToKeyLightLevel(value) {
   return normalizeKeyLightLevel((Number(value) / KEY_LIGHT_MAX_INTENSITY) * 100);
 }
 
-export function initEnvironmentControl() {
+export function initEnvironmentControl(onChange = () => {}) {
   const button = $('environment-btn');
   const icon = $('environment-icon');
   const popover = $('environment-popover');
@@ -77,7 +77,8 @@ export function initEnvironmentControl() {
       option.textContent = t(`environment.preset.${preset.id}`);
       option.classList.toggle('selected', preset.id === currentId);
       option.addEventListener('click', () => {
-        applyEnvironmentPreset(preset.id);
+        const previousId = currentId;
+        if (applyEnvironmentPreset(preset.id) && currentId !== previousId) onChange('environment', currentId);
         closePopover();
       });
       popover.appendChild(option);
@@ -108,7 +109,7 @@ export function initEnvironmentControl() {
   return applyEnvironmentPreset;
 }
 
-export function initToolPopovers() {
+export function initToolPopovers(onChange = () => {}) {
   const textureButton = $('texture-btn');
   const lightButton = $('light-btn');
   const aoButton = $('ao-btn');
@@ -182,7 +183,9 @@ export function initToolPopovers() {
       option.setAttribute('role', 'menuitem');
       option.textContent = t(key);
       option.addEventListener('click', () => {
+        const previousMode = getTextureDisplayMode();
         setTextureDisplayMode(mode, activeMeshes);
+        if (mode !== previousMode) onChange('textureMode', mode);
         closeAll();
       });
       texturePopover.appendChild(option);
@@ -272,8 +275,22 @@ export function initToolPopovers() {
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
   aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);
-  lightSlider?.addEventListener('input', () => applyKeyLightLevel(lightSlider.value));
-  aoSlider?.addEventListener('input', () => applyAmbientOcclusionLevel(aoSlider.value));
+  lightSlider?.addEventListener('input', () => {
+    applyKeyLightLevel(lightSlider.value);
+    onChange('keyLightIntensity', getKeyLightIntensity(), { persist: false });
+  });
+  aoSlider?.addEventListener('input', () => {
+    applyAmbientOcclusionLevel(aoSlider.value);
+    onChange('ambientOcclusion', getAmbientOcclusionStrength(), { persist: false });
+  });
+  lightSlider?.addEventListener('change', () => {
+    applyKeyLightLevel(lightSlider.value);
+    onChange('keyLightIntensity', getKeyLightIntensity());
+  });
+  aoSlider?.addEventListener('change', () => {
+    applyAmbientOcclusionLevel(aoSlider.value);
+    onChange('ambientOcclusion', getAmbientOcclusionStrength());
+  });
   document.addEventListener('click', (event) => {
     if (event.target.closest('#texture-btn, #texture-popover, #light-btn, #light-popover, #ao-btn, #ao-popover')) {
       return;
@@ -289,7 +306,10 @@ export function initToolPopovers() {
     }
   });
 
-  return () => updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+  return () => {
+    updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+    updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
+  };
 }
 
 export function initToolbarOverflow() {

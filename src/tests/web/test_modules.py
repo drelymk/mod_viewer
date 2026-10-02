@@ -5,6 +5,110 @@ import math
 import pytest
 
 
+def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(module_page):
+    result = module_page.evaluate("""async () => {
+      const {createPreferencePersistence} = await import('./js/ui/preference-persistence.js');
+      const applied = [], writes = [], stored = {};
+      let loadResolve, writeResolve, firstWriteResolve, finishedResolve;
+      let active = 0, maxActive = 0, opacity = 58;
+      const firstWrite = new Promise(resolve => firstWriteResolve = resolve);
+      const finished = new Promise(resolve => finishedResolve = resolve);
+      const prefs = createPreferencePersistence({getMethod:'get_viewer_preferences',
+        setMethod:'set_viewer_preferences', apply:(key,value)=>applied.push([key,value])});
+      prefs.change('grid', false);
+      prefs.change('environment', 'studio', {persist:false});
+      window.pywebview = {api:{
+        get_viewer_preferences:()=>new Promise(resolve => loadResolve=resolve),
+        set_viewer_preferences:async changes=>{
+          active++; maxActive=Math.max(maxActive,active); writes.push(changes);
+          if(writes.length===1) {
+            firstWriteResolve(); await new Promise(resolve=>writeResolve=resolve);
+          }
+          Object.assign(stored,changes); active--; return {value:{...stored}};
+        },
+        get_panel_opacity:async()=>({value:opacity}),
+        set_panel_opacity:async value=>{
+          active++; maxActive=Math.max(maxActive,active); opacity=value; active--;
+          if(value===58) finishedResolve(); return {value};
+        },
+      }};
+      window.dispatchEvent(new Event('pywebviewready'));
+      loadResolve({value:{grid:true,environment:'indoor',bloom:true}});
+      await firstWrite;
+      const panel = createPreferencePersistence({getMethod:'get_panel_opacity',
+        setMethod:'set_panel_opacity', key:'panelOpacity', apply:()=>{}});
+      panel.change('panelOpacity',35);
+      await Promise.resolve();
+      panel.change('panelOpacity',58);
+      prefs.change('grid',true);
+      prefs.change('wireframe',true);
+      prefs.change('environment','studio');
+      writeResolve(); await finished;
+      const count = writes.length, restored = {};
+      window.pywebview.api.get_viewer_preferences = async()=>({value:{...stored}});
+      createPreferencePersistence({getMethod:'get_viewer_preferences',
+        setMethod:'set_viewer_preferences', apply:(key,value)=>restored[key]=value});
+      await Promise.resolve();
+      return {applied,writes,stored,restored,maxActive,opacity,noStartupSave:writes.length===count};
+    }""")
+    assert result == {
+        'applied': [['bloom', True]],
+        'writes': [{'grid': False}, {'grid': True, 'wireframe': True, 'environment': 'studio'}],
+        'stored': {'grid': True, 'wireframe': True, 'environment': 'studio'},
+        'restored': {'grid': True, 'wireframe': True, 'environment': 'studio'},
+        'maxActive': 1, 'opacity': 58, 'noStartupSave': True,
+    }
+
+
+def test_appearance_controls_share_persistence_and_save_explicit_defaults(module_page):
+    module_page.evaluate("""async () => {
+      document.body.innerHTML = `<div class="appearance-wrap">
+        <button id="appearance-btn"></button><div id="appearance-popover" hidden>
+        <label for="panel-opacity"></label><input id="panel-opacity" type="range" min="0" max="100">
+        <output id="panel-opacity-value"></output></div></div>
+        <div id="language-control"><button id="language-btn"></button>
+        <div id="language-popover" hidden><select id="app-language">
+        <option value="en">English</option><option value="ja">Japanese</option>
+        <option value="es">Spanish</option></select></div></div>`;
+      const saved = window.__preferences = {panelOpacity:35, language:'ja', writes:[]};
+      window.pywebview = {api:{
+        get_panel_opacity:async()=>({value:saved.panelOpacity}),
+        set_panel_opacity:async value=>{saved.panelOpacity=value; saved.writes.push(['opacity',value]); return {value};},
+        get_language:async()=>({value:saved.language}),
+        set_language:async value=>{saved.language=value; saved.writes.push(['language',value]); return {value};},
+      }};
+      const appearance = await import('./js/ui/appearance.js');
+      appearance.initPanelOpacityControl(); appearance.initLanguageControl();
+    }""")
+    module_page.wait_for_function('document.getElementById("panel-opacity").value === "35" && document.getElementById("app-language").value === "ja"')
+    assert module_page.evaluate('window.__preferences.writes') == []
+    module_page.evaluate("""() => {
+      const opacity=document.getElementById('panel-opacity'); opacity.value='0';
+      opacity.dispatchEvent(new Event('input',{bubbles:true}));
+    }""")
+    assert module_page.evaluate('window.__preferences.writes') == []
+    assert module_page.evaluate('document.documentElement.style.getPropertyValue("--panel-opacity")') == '0'
+    module_page.evaluate("""() => {
+      const opacity=document.getElementById('panel-opacity');
+      opacity.dispatchEvent(new Event('change',{bubbles:true}));
+      const language=document.getElementById('app-language'); language.value='es';
+      language.dispatchEvent(new Event('change',{bubbles:true}));
+    }""")
+    module_page.wait_for_function('window.__preferences.writes.length === 2')
+    module_page.evaluate("""() => {
+      const opacity=document.getElementById('panel-opacity'); opacity.value='58';
+      opacity.dispatchEvent(new Event('input',{bubbles:true}));
+      opacity.dispatchEvent(new Event('change',{bubbles:true}));
+      const language=document.getElementById('app-language'); language.value='en';
+      language.dispatchEvent(new Event('change',{bubbles:true}));
+    }""")
+    module_page.wait_for_function('window.__preferences.writes.length === 4')
+    assert module_page.evaluate('window.__preferences') == {
+        'panelOpacity': 58, 'language': 'en',
+        'writes': [['opacity', 0], ['language', 'es'], ['opacity', 58], ['language', 'en']],
+    }
+
+
 def _prepare_rig_overlay(page, orthographic=False):
     page.evaluate("""async orthographic => {
       const THREE = await import('three/webgpu');

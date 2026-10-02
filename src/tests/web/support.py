@@ -81,7 +81,7 @@ def viewer(edge_browser, frontend_url):
     """Isolated viewer pages with an observable native bridge double."""
     contexts = []
 
-    def create(responses, pending=None, startup=None, native=None):
+    def create(responses, pending=None, startup=None, native=None, preferences=None):
         context = edge_browser.new_context(bypass_csp=True, viewport={"width": 1280, "height": 900})
         contexts.append(context)
         state = json.dumps({
@@ -121,6 +121,8 @@ def viewer(edge_browser, frontend_url):
             return value;
           };
           window.pywebview = {api: {
+            get_viewer_preferences: call('preferencesRead', () => window.__fixturePreferences()),
+            set_viewer_preferences: call('preferencesSave', changes => window.__fixturePreferences(changes)),
             select_folder: call('pick', () => {
               const path = state.nextPath || null;
               state.nextPath = null;
@@ -141,6 +143,10 @@ def viewer(edge_browser, frontend_url):
             }),
             get_mod_folders: call('folders', {folders: []}),
             get_asset_folders: call('assets', {folders: []}),
+            list_subfolders: call('modChildren', {folders: []}),
+            list_asset_subfolders: call('assetChildren', {folders: []}),
+            open_mod_folder: call('modFolderOpen', {ok: true}),
+            open_asset_folder: call('assetFolderOpen', {ok: true}),
             get_language: call('language', {value: 'en'}),
             get_diagnostics: call('diagnostics', {summary: {issues: 0, errors: 0}, files: {}, issues: []}),
             list_ini_files: call('iniList', [{value: 'source-01.ini', label: 'source-01.ini'}]),
@@ -189,6 +195,14 @@ def viewer(edge_browser, frontend_url):
                 payload['geometry']['url'] = '/geometry/fixture-missing'
             return payload
 
+        saved_preferences = dict(preferences or {})
+
+        def preference_fixture(_source, changes=None):
+            if changes is not None:
+                saved_preferences.update(changes)
+            return {"value": dict(saved_preferences)}
+
+        context.expose_binding('__fixturePreferences', preference_fixture)
         context.expose_binding('__fixtureLoad', load_fixture)
         page = context.new_page()
         page.goto(frontend_url)

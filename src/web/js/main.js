@@ -18,17 +18,8 @@ import {
   setBloomAvailable,
   setBloomEnabled,
   setBloomSuppressedByDebug,
-  toggleGrid,
-  toggleTrackballGizmo,
 } from './scene/scene.js';
-import {
-  activeMeshes,
-  resetMeshState,
-  toggleGlossy,
-  toggleSmoothShading,
-  toggleToonShading,
-  toggleWireframe,
-} from './mesh/visibility.js';
+import { activeMeshes, resetMeshState } from './mesh/visibility.js';
 import { refreshMeshTexture } from './mesh/mesh-factory.js';
 import { initSelection } from './scene/selection.js';
 import { initModFolderPanel } from './panels/mod-folder-panel.js';
@@ -42,11 +33,7 @@ import { getLoadedWeightRigFeature, loadWeightRigFeature } from './weight-rig/we
 import { initLanguageControl, initPanelOpacityControl } from './ui/appearance.js';
 import { alertDialog } from './ui/dialogs.js';
 import { LANGUAGE_CHANGED, t } from './i18n/index.js';
-import {
-  getOutlineState as getMeshOutlineState,
-  setOutlineSuppressedByDebug,
-  setOutlinesEnabled,
-} from './scene/outline-renderer.js';
+import { getOutlineState as getMeshOutlineState, setOutlineSuppressedByDebug } from './scene/outline-renderer.js';
 import {
   displayMeshPayload as displayMeshPayloadFlow,
   exportChanges as exportChangesFlow,
@@ -69,6 +56,7 @@ import { viewerState } from './app/state.js';
 import { getLoadBenchmark } from './app/load-benchmark.js';
 import { initEnvironmentControl, initToolPopovers, initToolbarOverflow } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
+import { initViewerPreferences } from './ui/viewer-preferences.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -322,47 +310,11 @@ rendererReady.then((ready) => {
     event.stopPropagation();
     void toggleMissingAssetParts();
   });
-  $('wire-btn').addEventListener('click', toggleWireframe);
-  $('outline-btn').addEventListener('click', () => {
-    const enabled = setOutlinesEnabled();
-    const button = $('outline-btn');
-    button.classList.toggle('active', enabled);
-    button.setAttribute('aria-pressed', String(enabled));
-    const label = t('render.outlines', {
-      state: enabled ? t('common.on') : t('common.off'),
-    });
-    button.title = label;
-    button.setAttribute('aria-label', label);
-  });
-  $('bloom-btn').addEventListener('click', () => {
-    setBloomEnabled(!getBloomEnabled());
-    syncBloomControl();
-  });
-  $('grid-btn').addEventListener('click', toggleGrid);
-  $('shading-btn').addEventListener('click', toggleSmoothShading);
-  $('toon-btn').addEventListener('click', toggleToonShading);
-  $('glossy-btn').addEventListener('click', toggleGlossy);
-  const syncAmbientOcclusionControl = initToolPopovers();
+  let viewerPreferences;
+  const savePreference = (...args) => viewerPreferences?.change(...args);
+  const syncToolControls = initToolPopovers(savePreference);
   syncBloomControl();
-  window.addEventListener(LANGUAGE_CHANGED, () => {
-    syncBloomControl();
-    const outlineButton = $('outline-btn');
-    if (outlineButton) {
-      const label = t('render.outlines', {
-        state: outlineButton.getAttribute('aria-pressed') === 'true' ? t('common.on') : t('common.off'),
-      });
-      outlineButton.title = label;
-      outlineButton.setAttribute('aria-label', label);
-    }
-    const gridButton = $('grid-btn');
-    if (gridButton) {
-      const label = t('render.grid', {
-        state: gridButton.getAttribute('aria-pressed') === 'true' ? t('common.on') : t('common.off'),
-      });
-      gridButton.title = label;
-      gridButton.setAttribute('aria-label', label);
-    }
-  });
+  window.addEventListener(LANGUAGE_CHANGED, syncBloomControl);
   for (const eventName of [
     'mod-viewer-mod-load-started',
     'mod-viewer-mod-loaded',
@@ -376,11 +328,15 @@ rendererReady.then((ready) => {
     event.stopPropagation();
     resetMeshState();
   });
-  $('trackball-btn').addEventListener('click', toggleTrackballGizmo);
   $('camera-reset-view-btn').addEventListener('click', () => resetView(activeMeshes));
   $('camera-flip-btn').addEventListener('click', () => rotateModelQuarterTurn(activeMeshes));
   $('camera-flip-horizontal-btn').addEventListener('click', () => rotateModelHorizontalQuarterTurn(activeMeshes));
-  const applyEnvironmentPreset = initEnvironmentControl();
+  const applyEnvironmentPreset = initEnvironmentControl(savePreference);
+  viewerPreferences = initViewerPreferences({
+    applyEnvironmentPreset,
+    syncToolControls,
+    syncBloomControl,
+  });
   initLeftDock();
   initRightDock();
   initInspectorPanel();
@@ -484,7 +440,7 @@ rendererReady.then((ready) => {
     getAmbientOcclusionStrength,
     setAmbientOcclusionStrength: (value) => {
       const changed = setAmbientOcclusionStrength(value);
-      syncAmbientOcclusionControl?.();
+      syncToolControls();
       return changed;
     },
     getBloomEnabled,
@@ -496,14 +452,7 @@ rendererReady.then((ready) => {
     getMaterialState,
     getRenderCount,
     setMaterialDebugMode: setMaterialDebugModeForMeshes,
-    setOutlineEnabled: (value) => {
-      const enabled = setOutlinesEnabled(value);
-      const button = $('outline-btn');
-      button.classList.toggle('active', enabled);
-      button.setAttribute('aria-pressed', String(enabled));
-      button.setAttribute('aria-label', `Silhouette outlines: ${enabled ? 'on' : 'off'}`);
-      return enabled;
-    },
+    setOutlineEnabled: viewerPreferences.applyOutlines,
     getOutlineState: (index) => getMeshOutlineState(activeMeshes[index]),
     getCurrentSource: () => (viewerState.currentSource ? { ...viewerState.currentSource } : null),
   };

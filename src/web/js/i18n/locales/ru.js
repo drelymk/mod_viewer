@@ -83,6 +83,7 @@ export default {
   'folder.collapse': 'Свернуть {name}',
   'folder.moreActionsFor': 'Дополнительные действия для {name}',
   'folder.edit': 'Изменить',
+  'folder.open': 'Открыть папку',
   'folder.remove': 'Убрать',
   'folder.notFound': 'Папка не найдена',
   'folder.editMod': 'Изменить папку MOD',

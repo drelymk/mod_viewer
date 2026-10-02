@@ -83,6 +83,7 @@ export default {
   'folder.collapse': 'Collapse {name}',
   'folder.moreActionsFor': 'More actions for {name}',
   'folder.edit': 'Edit',
+  'folder.open': 'Open Folder',
   'folder.remove': 'Remove',
   'folder.notFound': 'Folder not found',
   'folder.editMod': 'Edit Mod Folder',

@@ -74,6 +74,130 @@ def test_panel_preference_survives_page_reload_without_loading_or_editing_source
     assert page.locator('#controls-panel').is_hidden()
 
 
+def test_library_folder_context_menus_open_native_folders_without_loading(viewer):
+    page = viewer({}, native={
+        'folders': {'folders': [{'name': 'Library', 'path': 'root-01', 'exists': True}]},
+        'assets': {'folders': [{'type': 'GIMI', 'path': 'root-02', 'exists': True}]},
+        'modChildren': {'folders': [{'name': 'Child', 'path': 'root-01/child'},
+                                   {'name': 'Archive', 'path': 'root-01/archive.zip', 'kind': 'archive'}]},
+        'assetChildren': {'folders': [{'name': 'Category', 'path': 'root-02/category'},
+                                     {'name': 'Asset', 'path': 'root-02/asset', 'asset': True}]},
+    })
+    for tab, prefix, root, children, method in [
+        ('mod-library', 'mod-folder', 'root-01', ['root-01/child'], 'modFolderOpen'),
+        ('assets', 'asset-folder', 'root-02', ['root-02/category', 'root-02/asset'], 'assetFolderOpen'),
+    ]:
+        page.locator(f'[data-left-tab="{tab}"]').click()
+        root_row = page.locator(f'.{prefix}-row[data-{prefix}-path="{root}"]')
+        root_row.click(button='right')
+        menu = page.locator(f'.{prefix}-action-menu:not([hidden])')
+        assert menu.locator(f'.{prefix}-open').inner_text() == 'Open Folder'
+        assert menu.locator(f'.{prefix}-edit').count() == 1
+        assert menu.locator(f'.{prefix}-remove').count() == 1
+        menu.locator(f'.{prefix}-open').click()
+        root_row.locator(f'.{prefix}-expand').click()
+        for child in children:
+            row = page.locator(f'.{prefix}-row[data-{prefix}-path="{child}"]')
+            row.click(button='right')
+            menu = page.locator(f'.{prefix}-action-menu:not([hidden])')
+            assert menu.locator('button').count() == 1
+            menu.locator(f'.{prefix}-open').click()
+        assert bridge_calls(page, method) == [[root], *[[child] for child in children]]
+        root_row.click(button='right')
+        page.keyboard.press('Escape')
+        assert page.locator(f'.{prefix}-action-menu:not([hidden])').count() == 0
+    archive_row = page.locator('.mod-folder-row[data-mod-folder-path="root-01/archive.zip"]')
+    assert archive_row.locator('.mod-folder-open').count() == 0
+    for name in ['load', 'asset', 'export', 'discard', 'names', 'textures']:
+        assert bridge_calls(page, name) == []
+    page.evaluate('window.__bridge.results.assetFolderOpen = {error:"fixture failure"}')
+    page.locator('.asset-folder-row[data-asset-folder-path="root-02/category"]').click(button='right')
+    page.locator('.asset-folder-action-menu:not([hidden]) .asset-folder-open').click()
+    page.wait_for_function('document.getElementById("asset-folder-error").textContent === "fixture failure"')
+
+
+def test_environment_and_tools_restore_and_save_without_orientation_or_source_edits(viewer):
+    settings = {
+        'environment': 'studio', 'wireframe': True, 'outlines': True,
+        'ambientOcclusion': 0.4, 'bloom': True, 'glossy': True,
+        'toonShading': True, 'grid': False, 'smoothShading': False,
+        'textureMode': 'diffuse', 'keyLightIntensity': 0.75,
+        'navigationGizmo': False,
+    }
+    page = viewer({'fixture-01': model_payload()}, preferences=settings)
+    page.wait_for_function('window.modViewer.getEnvironmentPreset().id === "studio"')
+    assert bridge_calls(page, 'preferencesSave') == []
+    for control in ['wire', 'outline', 'glossy', 'toon']:
+        assert page.locator(f'#{control}-btn').get_attribute('aria-pressed') == 'true'
+    for control in ['grid', 'shading', 'trackball']:
+        assert page.locator(f'#{control}-btn').get_attribute('aria-pressed') == 'false'
+    assert page.locator('#ao-slider').input_value() == '40'
+    assert page.locator('#light-slider').input_value() == '50'
+    assert 'diffuse-only' in page.locator('#texture-btn').get_attribute('class')
+    assert page.locator('#bloom-btn').is_disabled()
+    assert page.evaluate('window.modViewer.getBloomEnabled()') is True
+    page.locator('#environment-btn').click()
+    page.locator('#environment-popover button').nth(1).click()
+    assert bridge_calls(page, 'preferencesSave') == []
+
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.locator('#texture-btn').click()
+    page.locator('#texture-popover button').nth(2).click()
+    assert page.evaluate("""() => {
+      const material = window.modViewer.activeMeshes[0].material;
+      return material.wireframe && material.flatShading && material.roughness === 0.2;
+    }""")
+    assert bridge_calls(page, 'preferencesSave') == []
+    # Make emission capability observable without requesting a source texture.
+    page.evaluate("""() => {
+      const mesh = window.modViewer.activeMeshes[0];
+      mesh.material.userData.gameMaterial.profile = {
+        ...mesh.material.userData.gameMaterial.profile, emission_source:'emission_map_rgb'};
+      mesh.userData.emissionMapKey = 'emission_map::texture-01';
+      window.dispatchEvent(new Event('mod-viewer-mesh-state-changed'));
+    }""")
+    assert page.locator('#bloom-btn').get_attribute('aria-pressed') == 'true'
+    for control in ['wire', 'outline', 'bloom', 'glossy', 'toon', 'grid', 'shading', 'trackball']:
+        page.locator(f'#{control}-btn').click()
+    page.locator('#environment-btn').click()
+    page.locator('#environment-popover button').first.click()
+    page.locator('#texture-btn').click()
+    page.locator('#texture-popover button').first.click()
+    page.evaluate("""() => {
+      for(const id of ['ao-slider','light-slider']) {
+        const slider=document.getElementById(id); slider.value='0';
+        slider.dispatchEvent(new Event('input',{bubbles:true}));
+        slider.dispatchEvent(new Event('change',{bubbles:true}));
+      }
+    }""")
+    page.wait_for_function('window.__bridge.calls.filter(call => call.name === "preferencesSave").length === 12')
+    patches = bridge_calls(page, 'preferencesSave')
+    saved = {name: value for args in patches for name, value in args[0].items()}
+    expected = {
+        'environment': 'default', 'wireframe': False, 'outlines': False,
+        'ambientOcclusion': 0, 'bloom': False, 'glossy': False,
+        'toonShading': False, 'grid': True, 'smoothShading': True,
+        'textureMode': 'all', 'keyLightIntensity': 0, 'navigationGizmo': True,
+    }
+    assert saved == expected
+    page.locator('#camera-flip-btn').click()
+    page.locator('#camera-flip-horizontal-btn').click()
+    page.locator('#camera-reset-view-btn').click()
+    assert bridge_calls(page, 'preferencesSave') == patches
+    assert bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+    page.reload()
+    page.wait_for_function('window.modViewer !== undefined && document.getElementById("light-slider").value === "0"')
+    assert page.locator('#environment-btn').get_attribute('data-environment') == 'default'
+    assert page.locator('#grid-btn').get_attribute('aria-pressed') == 'true'
+    assert page.locator('#wire-btn').get_attribute('aria-pressed') == 'false'
+    assert page.locator('#ao-slider').input_value() == '0'
+    assert page.locator('#light-slider').input_value() == '0'
+    assert bridge_calls(page, 'preferencesSave') == []
+    assert bridge_calls(page, 'load') == []
+
+
 def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(viewer):
     payload = model_payload()
     mesh = payload['meshes']['mesh-00']

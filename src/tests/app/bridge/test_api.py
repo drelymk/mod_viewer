@@ -1,4 +1,8 @@
+import json
+import os
 from types import SimpleNamespace
+
+import pytest
 
 import webview
 
@@ -39,6 +43,7 @@ EXPECTED_API_METHODS = {
     "get_mod_folders",
     "get_language",
     "get_panel_opacity",
+    "get_viewer_preferences",
     "get_present_state",
     "get_semantic_state",
     "get_record_positions",
@@ -52,6 +57,8 @@ EXPECTED_API_METHODS = {
     "load_asset",
     "load_missing_asset_parts",
     "load_mod",
+    "open_mod_folder",
+    "open_asset_folder",
     "pick_asset_texture_file",
     "pick_texture_file",
     "rebuild_asset_index",
@@ -71,6 +78,7 @@ EXPECTED_API_METHODS = {
     "set_asset_folder_enabled",
     "set_language",
     "set_panel_opacity",
+    "set_viewer_preferences",
     "update_ini_text",
 }
 
@@ -85,6 +93,49 @@ def test_mod_viewer_api_surface_is_explicit_and_private_state_stays_private():
 
     assert public == EXPECTED_API_METHODS
     assert all(name.startswith("_") for name in vars(api))
+
+
+@pytest.mark.parametrize("source", ["mod", "asset"])
+def test_open_folder_opens_only_authorized_directories(tmp_path, monkeypatch, source):
+    mod_root = tmp_path / "mods"
+    asset_root = tmp_path / "assets"
+    mod_root.mkdir()
+    asset_root.mkdir()
+    root = mod_root if source == "mod" else asset_root
+    other_root = asset_root if source == "mod" else mod_root
+    child = root / "folder-01"
+    child.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    file = root / "archive-01.zip"
+    file.write_bytes(b"fixture")
+    filename = tmp_path / "config.json"
+    filename.write_text(json.dumps({
+        "version": 1, "modFolders": [{"name": "Library", "path": str(mod_root)}],
+        "assetFolders": [{"type": "GIMI", "path": str(asset_root), "enabled": False}],
+    }), encoding="utf-8")
+    original = filename.read_bytes()
+    monkeypatch.setattr(paths, "config_path", lambda: str(filename))
+    opened = []
+    monkeypatch.setattr(os, "startfile", lambda path, operation: opened.append((path, operation)), raising=False)
+    api = ModViewerAPI()
+    open_folder = api.open_mod_folder if source == "mod" else api.open_asset_folder
+    assert open_folder(str(root)) == {"ok": True}
+    assert open_folder(str(child / ".." / "folder-01")) == {"ok": True}
+    assert opened == [
+        (mod_folders.normalize_path(str(root)), "explore"),
+        (mod_folders.normalize_path(str(child)), "explore"),
+    ]
+    for denied in [outside, other_root, root.parent, root / "missing", file, "relative", None]:
+        assert open_folder(str(denied) if denied is not None else denied)["error"]
+    assert len(opened) == 2
+    assert filename.read_bytes() == original
+
+    def fail_open(_path, _operation):
+        raise OSError("fixture failure")
+
+    monkeypatch.setattr(os, "startfile", fail_open)
+    assert open_folder(str(child)) == {"error": "fixture failure"}
 
 
 def test_startup_request_is_consumed_once_and_authorizes_valid_folder(
@@ -123,6 +174,27 @@ def test_language_bridge_round_trip(tmp_path, monkeypatch):
     assert api.set_language("zh-CN") == {"value": "zh-CN"}
     assert api.get_language() == {"value": "zh-CN"}
     assert api.set_language("fr")["error"]
+
+
+def test_viewer_preferences_bridge_round_trip_and_invalid_config(tmp_path, monkeypatch):
+    filename = tmp_path / "config.json"
+    monkeypatch.setattr(paths, "config_path", lambda: str(filename))
+    api = ModViewerAPI()
+    assert api.get_viewer_preferences() == {"value": {}}
+    assert not filename.exists()
+    assert api.set_viewer_preferences({"environment": "studio"}) == {
+        "value": {"environment": "studio"},
+    }
+    assert api.set_viewer_preferences({"grid": False}) == {
+        "value": {"environment": "studio", "grid": False},
+    }
+    assert api.get_viewer_preferences()["value"]["grid"] is False
+    assert api.set_viewer_preferences({"orientation": 90})["error"]
+    original = "{"
+    filename.write_text(original, encoding="utf-8")
+    assert api.get_viewer_preferences()["error"]
+    assert api.set_viewer_preferences({"grid": True})["error"]
+    assert filename.read_text(encoding="utf-8") == original
 
 
 def test_invalid_startup_request_is_reported_without_failing_api(

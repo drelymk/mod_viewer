@@ -29,8 +29,10 @@ of documentation, comments and tests; use portable fixtures instead.
 - Diagnostics are lazy, read-only, detached reports cached by edit-session
   revision. Commits invalidate them; diagnostic failures must not fail mod loads.
 - App config is versioned and atomically replaced. Missing config uses defaults;
-  malformed/unsupported files remain untouched. Panel opacity is omitted until
-  changed, then persists explicitly even if restored to its default.
+  malformed/unsupported files remain untouched. Panel opacity, environment and
+  tool preferences are omitted until changed, then persist explicitly even if
+  restored to their defaults. Save these globally, including navigation gizmo
+  visibility, without saving camera/model orientation or capability suppression.
 - Mod Folder browsing lists immediate directory children deterministically and
   skips symlink escapes. Navigation must not load/validate mods, discover INIs
   or expose root Edit/Delete actions on ordinary children.
@@ -355,7 +357,8 @@ of documentation, comments and tests; use portable fixtures instead.
   only explicit Apply enters the staged mesh-edit path.
 - Tabs, panel collapse and library expansion live only in localStorage and
   cannot affect mod state, geometry, materials or Export. Global panel opacity
-  belongs to app config under the persistence rule above.
+  and environment/tool preferences belong to app config under the persistence
+  rule above.
 - Runtime UI text goes through the locale catalog with placeholder-compatible
   translations and English fallback. Language is app configuration, never mod
   state; do not localize stable resource, mesh, section or metadata identities.

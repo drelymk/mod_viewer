@@ -90,6 +90,12 @@ class ModViewerAPI:
     def set_panel_opacity(self, value):
         return self._mod_registry.set_panel_opacity(value)
 
+    def get_viewer_preferences(self):
+        return self._mod_registry.get_viewer_preferences()
+
+    def set_viewer_preferences(self, changes):
+        return self._mod_registry.set_viewer_preferences(changes)
+
     def get_language(self):
         return self._mod_registry.get_language()
 
@@ -108,6 +114,9 @@ class ModViewerAPI:
 
     def list_subfolders(self, folder_path):
         return self._mod_registry.list_subfolders(folder_path)
+
+    def open_mod_folder(self, folder_path):
+        return self._mod_registry.open_folder(folder_path)
 
     # -- persistent Asset Folders registry ---------------------------------
 
@@ -132,6 +141,9 @@ class ModViewerAPI:
 
     def list_asset_subfolders(self, folder_path):
         return self._asset_registry.list_asset_subfolders(folder_path)
+
+    def open_asset_folder(self, folder_path):
+        return self._asset_registry.open_folder(folder_path)
 
     # -- Asset preview and fill --------------------------------------------
 

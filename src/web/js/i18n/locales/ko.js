@@ -83,6 +83,7 @@ export default {
   'folder.collapse': '{name} 접기',
   'folder.moreActionsFor': '{name} 추가 작업',
   'folder.edit': '편집',
+  'folder.open': '폴더 열기',
   'folder.remove': '제거',
   'folder.notFound': '폴더를 찾을 수 없음',
   'folder.editMod': 'MOD 폴더 편집',
