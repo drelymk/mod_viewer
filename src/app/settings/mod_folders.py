@@ -81,6 +81,7 @@ def _write_config(value, config_file=None):
         raise ModFolderError(str(error)) from error
 
 
+@config.transaction()
 def _write_entries(entries, config_file=None):
     config = _read_config(config_file)
     config["modFolders"] = entries
@@ -103,6 +104,7 @@ def load_panel_opacity(config_file=None):
     return _validated_panel_opacity(config[PANEL_OPACITY_KEY])
 
 
+@config.transaction()
 def save_panel_opacity(value, config_file=None):
     """Persist an explicitly changed global panel opacity."""
     opacity = _validated_panel_opacity(value)
@@ -125,6 +127,7 @@ def load_language(config_file=None):
     return _validated_language(value)
 
 
+@config.transaction()
 def save_language(value, config_file=None):
     """Persist a supported UI language without changing other preferences."""
     language = _validated_language(value)
@@ -134,6 +137,7 @@ def save_language(value, config_file=None):
     return language
 
 
+@config.transaction()
 def add_folder(name, folder, config_file=None):
     entries = _read_entries(config_file)
     entry = _validated_entry(name, folder, require_exists=True)
@@ -144,6 +148,7 @@ def add_folder(name, folder, config_file=None):
     return entries
 
 
+@config.transaction()
 def edit_folder(original_folder, name, folder, config_file=None):
     entries = _read_entries(config_file)
     original = normalize_path(original_folder)
@@ -163,6 +168,7 @@ def edit_folder(original_folder, name, folder, config_file=None):
     return entries
 
 
+@config.transaction()
 def delete_folder(folder, config_file=None):
     entries = _read_entries(config_file)
     target = normalize_path(folder)

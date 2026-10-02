@@ -1,12 +1,26 @@
 """Shared persistence and filesystem comparison helpers for app config."""
 
+from contextlib import contextmanager
 import json
 import os
+from threading import RLock
 
 from . import paths
 
 
 CONFIG_VERSION = 1
+_config_lock = RLock()
+
+
+@contextmanager
+def transaction():
+    """Serialize a complete config read/modify/write across bridge threads.
+
+    Reentrancy lets registry/index transactions call nested config helpers.
+    Locking individual reads and writes alone cannot prevent lost updates.
+    """
+    with _config_lock:
+        yield
 
 
 def normalize_path(value):
@@ -34,6 +48,7 @@ def is_within(path, root):
         return False
 
 
+@transaction()
 def read_config(config_file=None):
     """Read the versioned config, preserving optional fields as authored."""
     filename = config_file_path(config_file)
@@ -73,6 +88,7 @@ def write_bytes_atomic(filename, payload):
                 pass
 
 
+@transaction()
 def write_config(value, config_file=None):
     """Atomically replace config.json after fully writing and syncing a temp."""
     filename = config_file_path(config_file)

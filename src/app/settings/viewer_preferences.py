@@ -43,6 +43,7 @@ def load_preferences(config_file=None):
     return _validated_preferences(value)
 
 
+@config.transaction()
 def save_preferences(changes, config_file=None):
     """Merge a validated patch without losing other config or tool settings."""
     changes = _validated_preferences(changes)

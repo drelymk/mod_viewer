@@ -28,8 +28,12 @@ of documentation, comments and tests; use portable fixtures instead.
   stages on the normal load path.
 - Diagnostics are lazy, read-only, detached reports cached by edit-session
   revision. Commits invalidate them; diagnostic failures must not fail mod loads.
-- App config is versioned and atomically replaced. Missing config uses defaults;
-  malformed/unsupported files remain untouched. Panel opacity, environment and
+- App config is versioned and atomically replaced. Every mutation holds the
+  shared Python config transaction from its initial read through replacement,
+  including Asset registry/index commit and rollback. Bridge calls run on
+  separate threads; frontend save ordering alone cannot prevent lost updates.
+  Missing config uses defaults; malformed/unsupported files remain untouched.
+  Panel opacity, environment and
   tool preferences are omitted until changed, then persist explicitly even if
   restored to their defaults. Save these globally, including navigation gizmo
   visibility, without saving camera/model orientation or capability suppression.
