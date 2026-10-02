@@ -800,7 +800,12 @@ def _pose_shader_signature(source, buffers, index_field):
         (5, "vertex"), (50, "vertex"), (51, "blend"), (52, "pose"))})
     names[match.group(1)] = "thread"
     aliases = re.findall(r"^\s*#define\s+(\w+)\s+IniParams\s*\[\s*(88|89)\s*\]\s*\.\s*x\s*$", source, re.M)
-    if (len(re.findall(r"^\s*#", source, re.M)) != len(aliases)
+    # Only unused single-line object macros can be ignored without preprocessing.
+    unused_defines = sum(
+        name not in dict(aliases) and len(re.findall(rf"\b{re.escape(name)}\b", source)) == 1
+        for name in re.findall(
+            r"^[ \t]*#define[ \t]+([A-Za-z_]\w*)(?:[ \t]+[^\\\r\n]*)?\r?$", source, re.M))
+    if (len(re.findall(r"^\s*#", source, re.M)) != len(aliases) + unused_defines
             or len(dict(aliases)) != len(aliases)
             or {slot for _, slot in aliases} != {"88", "89"}
             or not re.search(r"Texture1D\s*<\s*float4\s*>\s*IniParams\s*:\s*register\s*\(\s*t120\s*\)", source)):
@@ -1528,7 +1533,8 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                       and all(item["kind"] == "shape" for item in matching[0]["passes"])):
                     animation = build_track(chain, index, matching[0]["passes"], poses[0])
         nested = chain.get("nested_run")
-        if animation is None and nested and not chain.get("nested_ambiguous"):
+        if (animation is None and nested and not chain.get("nested_ambiguous")
+                and not chain.get("unsupported")):
             animation = build_track(chain, index, nested["passes"], nested=nested)
         if animation is not None:
             animations.append(animation)

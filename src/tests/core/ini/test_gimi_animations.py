@@ -64,7 +64,8 @@ def test_reload_rechecks_pose_shader_and_keeps_static_geometry_on_failure(tmp_pa
     shader_path = ini.parent / "pose.hlsl"
     # Reload equivalent dataflow despite different names, workgroup sizes and helpers.
     variants = [POSE_SHADER.replace("numthreads(64, 1, 1)", "numthreads(1, 1, 1)"),
-                SWAP_YZ_SHADER.replace("1e-6f", "0.000001")]
+                SWAP_YZ_SHADER.replace("1e-6f", "0.000001"),
+                "#define UNUSED_HELPER 1\n" + POSE_SHADER]
     renamed = re.sub(
         r"\b(base|blend|pose|rw_buffer|TIME|VG_COUNT|threadID|i|b|v|pos|qr|qd)\b",
         lambda match: "local_" + match.group(0), variants[0])
@@ -84,6 +85,7 @@ def test_reload_rechecks_pose_shader_and_keeps_static_geometry_on_failure(tmp_pa
         POSE_SHADER.replace("IniParams[89].x", "IniParams[89].y"),
         POSE_SHADER.replace("float4 qr =", "int4 qr ="),
         POSE_SHADER.replace("#define TIME IniParams[88].x", "#define TIME IniParams[88].x\n#define TIME 0"),
+        "#define normalize(x) float3(1, 0, 0)\n" + POSE_SHADER,
     ):
         shader_path.write_text(shader, encoding="utf-8")
         _, reloaded = load_mod(ini, ini.parent)
@@ -218,7 +220,9 @@ def test_nested_animation_uses_inherited_child_until_parent_is_supported(tmp_pat
     assert geometry_values(geometry, payload["shape_passes"][0]["deltas"])[::6] == (1., 2., 3.)
 
 
-@pytest.mark.parametrize("case", ["ambiguous-children", "child-rebind", "stale-parent-binding"])
+@pytest.mark.parametrize("case", [
+    "ambiguous-children", "child-rebind", "stale-parent-binding", "unsupported-parent-dispatch",
+])
 def test_nested_animation_rejects_unverified_inheritance(tmp_path, case):
     ini = nested_mod(tmp_path / "mod")
     sections = read_sections(ini)
@@ -228,6 +232,9 @@ def test_nested_animation_rejects_unverified_inheritance(tmp_path, case):
         lines.insert(lines.index("run = CustomShaderAnim"), "run = CustomShaderAnim02")
     elif case == "child-rebind":
         sections["CustomShaderAnim"].insert(0, "cs-u5 = copy ResourcePosition.2")
+    elif case == "unsupported-parent-dispatch":
+        lines = sections["CustomShaderParent"]
+        lines[lines.index("Dispatch = 1, 1, 1")] = "Dispatch = 1, 2, 1"
     else:
         lines = sections["CustomShaderParent"]
         lines.insert(lines.index("run = CustomShaderAnim"), "cs-t50 = null")
