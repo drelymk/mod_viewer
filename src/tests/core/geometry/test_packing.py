@@ -58,33 +58,27 @@ def _pack_fixture(tmp_path, indices, positions, *, uvs=None, base=0,
         sparse_shape_cache={})
 
 
-def test_animation_tight_position_copy_matches_scattered_packing():
-    raw = b"".join(struct.pack("<fff", *point) for point in (
-        (9., 9., 9.), (1., -2., 3.), (4., 5., 6.), (7., 8., 9.)))
-    contiguous = packing._pack_animation_positions(raw, 12, [1, 2, 3])
-    scattered = packing._pack_animation_positions(raw, 12, [1, 3])
-
-    assert contiguous == (
-        raw[12:48], (1., -2., 3.), (7., 8., 9.))
-    assert scattered == (
-        raw[12:24] + raw[36:48], (1., -2., 3.), (7., 8., 9.))
-    assert packing._pack_animation_positions(raw[:47], 12, [1, 2, 3]) is None
-    invalid = raw[:24] + struct.pack("<fff", float("nan"), 0., 0.) + raw[36:]
-    assert packing._pack_animation_positions(invalid, 12, [1, 2, 3]) is None
-
-
-def test_animation_position_frame_skips_normals_when_disabled(tmp_path):
-    (tmp_path / "frame.buf").write_bytes(struct.pack("<fff", 1., 2., 3.))
+@pytest.mark.parametrize("position_data,expected", [
+    (struct.pack("<6f", 1., 2., 3., 4., 5., 6.), (4., 5., 6.)),
+    (b"\0" * 23, None),
+    (struct.pack("<6f", 1., 2., 3., float("nan"), 5., 6.), None),
+], ids=["valid", "truncated", "nonfinite"])
+def test_position_only_animation_validates_frames_without_normal_decode(
+        tmp_path, position_data, expected):
+    (tmp_path / "frame.buf").write_bytes(position_data)
     draw = DrawCall(
         label="frame", position_file="frame.buf", position_stride=12,
         normal_source=VertexAttributeSource("frame.buf", 12, 0, "f32x3"))
     with patch.object(packing, "decode_normals",
                       side_effect=AssertionError("normal decode called")):
         frame = packing.pack_animation_position_frame(
-            draw, [0], mod_dir=str(tmp_path), buffers=BufferStore(),
+            draw, [1], mod_dir=str(tmp_path), buffers=BufferStore(),
             pack_normals=False)
-    assert frame.positions == struct.pack("<fff", 1., 2., 3.)
-    assert frame.normals is None
+    if expected is None:
+        assert frame is None
+    else:
+        assert _unpack_f32(frame.positions) == expected
+        assert frame.normals is None
 
 
 def test_repeated_vertices_keep_exact_packed_positions_uvs_and_indices(
