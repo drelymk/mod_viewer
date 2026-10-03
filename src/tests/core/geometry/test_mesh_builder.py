@@ -4,6 +4,8 @@ import os
 import struct
 import tempfile
 
+import pytest
+
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
 from core.geometry.draw_call import DrawCall
@@ -245,6 +247,92 @@ def test_handling_skip_with_no_drawindexed_draws_nothing():
         assert ("Component01B" not in names), (f"a handling=skip section with NO drawindexed draws nothing at all "
               f"(got groups: {sorted(names)})")
         assert ("Component01C" in names), ("a section with no handling=skip still gets the implicit whole-ib draw")
+
+
+@pytest.mark.parametrize("capture,consumer_ib,consumer_vb,capture_draw,implicit", [
+    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "", False),
+    ("resourcesaved = COPY VB0", "resourcecomponent01aib", "RESOURCESAVED", "", False),
+    ("ResourceSaved = ref vb0", "ResourceComponent01AIB", "ResourceSaved", "", False),
+    ("ResourceSaved = reference vb0", "ResourceComponent01AIB", "ResourceSaved", "", False),
+    ("run = CommandListCapture", "ResourceComponent01AIB", "ResourceSaved", "", False),
+    ("ResourceSaved = copy vb0", "ResourceComponent02AIB", "ResourceSaved", "", True),
+    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceComponent01Position", "", True),
+    ("ResourceSaved = copy vb1", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("ResourceSaved = copy ResourceComponent01Position", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "drawindexed = 3, 0, 0", False),
+])
+def test_capture_replayed_in_explicit_draw_preserves_consumers(
+        tmp_path, capture, consumer_ib, consumer_vb, capture_draw, implicit):
+    text = f"""[KeyStyle]
+type = cycle
+$Style = 0,1
+[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent02Position]
+vb0 = ResourceComponent01Position
+[TextureOverrideComponent02Texcoord]
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent01A]
+{capture}
+ib = ResourceComponent01AIB
+{capture_draw}
+[CommandListCapture]
+ResourceSaved = copy vb0
+[ResourceSaved]
+[TextureOverrideComponent02A]
+ib = {consumer_ib}
+vb0 = {consumer_vb}
+vb1 = ResourceComponent01Texcoord
+Resource\\GIMI\\Diffuse = ResourceDiffuse
+if $Style == 0
+drawindexed = 3, 0, 0
+else
+drawindexed = 3, 3, 0
+endif
+[ResourceComponent01AIB]
+filename = part-01.ib
+format = DXGI_FORMAT_R32_UINT
+[ResourceComponent02AIB]
+filename = part-02.ib
+format = DXGI_FORMAT_R32_UINT
+[ResourceComponent01Position]
+filename = position.buf
+stride = 40
+[ResourceComponent01Texcoord]
+filename = texcoord.buf
+stride = 20
+[ResourceDiffuse]
+filename = diffuse.dds
+"""
+    path = write(tmp_path, "mod.ini", text)
+    for name in ("part-01.ib", "part-02.ib"):
+        (tmp_path / name).write_bytes(struct.pack("<6I", 0, 1, 2, 0, 2, 3))
+    (tmp_path / "position.buf").write_bytes(b"".join(
+        struct.pack("<3f", x, y, 0.) + b"\0" * 28
+        for x, y in [(0., 0.), (1., 0.), (1., 1.), (0., 1.)]))
+    (tmp_path / "texcoord.buf").write_bytes(b"\0" * 20 * 4)
+    sections = merge_sections([path])
+    groups = build_draw_groups(sections, extract_resources(sections))
+    capture_groups = [group for group in groups if group["name"] == "Component01A"]
+    assert bool(capture_groups) == bool(implicit or capture_draw)
+    if capture_groups:
+        assert capture_groups[0]["draws"][0].count == (None if implicit else 3)
+    consumers = next(group for group in groups if group["name"] == "Component02A")["draws"]
+    assert [(draw.count, draw.start, draw.base) for draw in consumers] == [
+        (3, 0, 0), (3, 3, 0)]
+    assert [draw.conditions for draw in consumers] == [
+        [[{"var": "Style", "value": "0", "negate": False}]],
+        [[{"var": "Style", "value": "0", "negate": True}]]]
+    assert all(draw.texture_default_file == "diffuse.dds" for draw in consumers)
+    assert all(text.splitlines()[draw.sources[0]["line_no"] - 1].startswith(
+        "drawindexed") for draw in consumers)
+    meshes, _geometry = build_mesh_fixture(groups, str(tmp_path))
+    assert len(meshes) == 2 + bool(implicit or capture_draw)
+    assert [meshes[draw.label]["drawindexed"] for draw in consumers] == [
+        [3, 0, 0], [3, 3, 0]]
 
 
 COMPONENT_ABBREV_SUFFIX_INI = """[TextureOverrideXCNPosition]

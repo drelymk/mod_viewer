@@ -341,10 +341,25 @@ def _build_vertex_binding_index(section_info, sections,
 
 def _select_draw_sections(section_info, global_ib):
     """Select TextureOverride sections that can produce viewer geometry."""
+    captured_draw_inputs = {
+        ((draw.index_resource or global_ib or "").casefold(),
+         draw.vertex_resources[0].casefold())
+        for name, info in section_info.items()
+        if name.lower().startswith("textureoverride")
+        for draw in info["draws"] if draw.vertex_resources.get(0)
+    }
+
+    def capture_is_drawn(info):
+        # A capture reused by explicit draws of the same IB is preparation,
+        # so do not also synthesize a whole-buffer mesh for its section.
+        return any((info["ib"].casefold(), capture) in captured_draw_inputs
+                   for capture in info.get("vb0_captures", ()))
+
     return [(name, info) for name, info in section_info.items()
             if name.lower().startswith("textureoverride")
             and (info["ib"] or global_ib)
-            and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
+            and (info["draws"] or (info["ib"] and not info["handling_skip"]
+                                  and not capture_is_drawn(info)))]
 
 
 def _component_role_candidates(base):

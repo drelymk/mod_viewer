@@ -1,12 +1,17 @@
 """Real WebGPU output and control visibility with generated inputs."""
 
 import base64
+import io
+import struct
 
 from PIL import Image
+from app.assets.loader import AssetLoadResult, AssetMeshPart
+from app.assets.loader.models import AssetTexture
 from app.runtime import server
+from core.geometry.transport import GeometryBlob
 
 from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
-from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, wait_loaded, wait_texture
+from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, project_mesh_points, wait_loaded, wait_texture
 
 
 def _open_fixture(viewer, payload, extra=None):
@@ -85,6 +90,56 @@ def test_shared_texture_uploads_preserve_role_specific_color_spaces(viewer):
         separate: diffuse !== auxiliary, color: diffuse.colorSpace, data: auxiliary.colorSpace};
     }""")
     assert result == {'shared': True, 'separate': True, 'color': 'srgb', 'data': ''}
+
+
+def test_asset_packed_normal_shading_ignores_blue_and_retains_rg_detail(viewer, tmp_path):
+    key = 'normal_map::texture-01.png'
+    part = AssetMeshPart(
+        key='part-01', label='Component01', asset_type='ZZMI',
+        asset_path='Asset01', geometry_hash='12345678',
+        component_name='Component01', classification='A',
+        component_ordinal=0, first_index=0, index_count=3,
+        positions=struct.pack('<9f', 0, 0, 0, 1, 0, 0, 0, 0, 1),
+        indices=struct.pack('<3I', 0, 1, 2),
+        normals=struct.pack('<9f', 0, -1, 0, 0, -1, 0, 0, -1, 0),
+        uvs=struct.pack('<6f', 0, 0, 1, 0, 0, 1),
+        textures={'normal_map': AssetTexture(
+            'normal_map', 'texture-01.png', key, 'texture-01',
+            uri=solid_texture((128, 128, 0)))})
+    geometry = GeometryBlob()
+    payload = AssetLoadResult.from_parts(
+        'ZZMI', str(tmp_path), {'path': 'Asset01'}, [part],
+        geometry=geometry).payload
+    payload['_fixture_blob'] = bytes(geometry.data)
+    page = _open_fixture(viewer, payload)
+    wait_texture(page, role='normal_map')
+    sample = [[0.25, 0, 0.25]]
+    packed = mesh_pixels(page, sample)[0]
+    page.evaluate("""async () => {
+      const {updateGameMaterialTextures} = await import('./js/mesh/material-profile.js');
+      const mesh = window.modViewer.activeMeshes[0];
+      updateGameMaterialTextures(mesh, {normal_map: null});
+    }""")
+    geometry_normal = mesh_pixels(page, sample)[0]
+    assert max(abs(a-b) for a,b in zip(packed, geometry_normal)) < 10
+    page.evaluate("""async () => {
+      const {DataTexture, RGBAFormat, UnsignedByteType, NoColorSpace} = await import('three');
+      const {updateGameMaterialTextures} = await import('./js/mesh/material-profile.js');
+      window.__setNormalPixels = rgba => {
+        const texture = new DataTexture(new Uint8Array(rgba), 1, 1, RGBAFormat, UnsignedByteType);
+        texture.colorSpace = NoColorSpace;
+        texture.needsUpdate = true;
+        updateGameMaterialTextures(window.modViewer.activeMeshes[0], {normal_map: texture});
+      };
+      window.__setNormalPixels([128, 128, 255, 255]);
+    }""")
+    other_blue = mesh_pixels(page, sample)[0]
+    assert max(abs(a-b) for a,b in zip(packed, other_blue)) < 5
+    page.evaluate('window.__setNormalPixels([220, 128, 0, 255])')
+    tilted = mesh_pixels(page, sample)[0]
+    assert max(abs(a-b) for a,b in zip(packed, tilted)) > 10, (
+        packed, geometry_normal, other_blue, tilted,
+        page.evaluate('window.modViewer.activeMeshes[0].material.userData.gameMaterial.normalPacking'))
 
 
 def test_failed_texture_uses_renderable_fallback_without_retry_and_new_source_recovers(viewer):
@@ -372,6 +427,55 @@ def test_directional_shadows_keep_original_shape_with_a_low_angle_floor_fallback
             assert sum(unshadowed) - sum(shadowed) > 30, height
         else:
             assert max(abs(a - b) for a, b in zip(unshadowed, shadowed)) < 5, height
+
+
+def test_close_zoom_surface_shadow_stays_smooth_without_redrawing_the_map(viewer):
+    payload = model_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh.update(pos=append_stream(payload, 'f', [-4,-4,0, 4,-4,0, 4,4,0, -4,4,0]),
+                idx=append_stream(payload, 'I', [0,1,2, 0,2,3]), drawindexed=[6,0,0])
+    mesh.pop('uv')
+    page = _open_fixture(viewer, payload)
+    page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {scene, camera, controls, adoptModelMeshes,
+        invalidateCharacterShadowGeometry} = await import('./js/scene/scene.js');
+      const caster = new THREE.Mesh(new THREE.PlaneGeometry(8, 8),
+        new THREE.MeshStandardNodeMaterial({side: THREE.DoubleSide}));
+      caster.position.set(-4.685, 0, 0.6);
+      caster.castShadow = true;
+      scene.add(caster); adoptModelMeshes([caster]); caster.rotation.z = 0.35;
+      const light = scene.children.find(object => object.isDirectionalLight && object.castShadow);
+      light.position.set(-5, 2, 6);
+      controls.target.set(0, 0, 0);
+      camera.position.set(0, 0, 1.2);
+      camera.lookAt(controls.target); camera.updateMatrixWorld(); controls.update();
+      invalidateCharacterShadowGeometry();
+    }""")
+    states = []
+    for distance in (1.2, 0.9):
+        page.evaluate("""async distance => {
+          const {camera, controls} = await import('./js/scene/scene.js');
+          camera.position.z = distance;
+          camera.lookAt(controls.target); camera.updateMatrixWorld(); controls.update();
+        }""", distance)
+        mesh_pixels(page, [[0,0,0]])
+        center = project_mesh_points(page, [[0,0,0]])[0]
+        clip = {'x': center[0]-180, 'y': center[1]-180, 'width': 360, 'height': 360}
+        with Image.open(io.BytesIO(page.screenshot(clip=clip))) as image:
+            gray = image.convert('L')
+            rows = [[gray.getpixel((x, y)) for x in range(360)] for y in range(60, 300)]
+        # A flat receiver has one monotonic transition; per-pixel sample noise
+        # introduces repeated backwards steps inside that shadow edge.
+        assert all(row[-1] - row[0] > 30 for row in rows)
+        backwards = sum(max(left-right, 0) for row in rows for left, right in zip(row, row[1:]))
+        assert backwards < len(rows) / 2, backwards
+        states.append(page.evaluate("""async () => {
+          const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+          const {fitCount, shadowUpdateCount} = getCharacterShadowDebugState();
+          return {fitCount, shadowUpdateCount};
+        }"""))
+    assert states[1] == states[0]
 
 
 def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path):

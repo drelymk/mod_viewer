@@ -421,6 +421,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if not info["ib"]:
                     info["ib"] = match.group(1)
                 info["_cur_ib"] = match.group(1)
+            match = re.fullmatch(
+                r"(Resource\S+)\s*=\s*(?:copy|ref(?:erence)?)\s+vb0",
+                line, re.I)
+            if match:
+                info["vb0_captures"].add(match.group(1).casefold())
             if re.match(r"handling\s*=\s*skip\b", line, re.I):
                 info["handling_skip"] = True
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
@@ -502,6 +507,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             sections, name, section_lookup)
         info = {
             "vb0": None, "vb1": None, "vb2": None, "ib": None,
+            "vb0_captures": set(),
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
             "handling_skip": False, "_cur_diffuse_variants": [],
             "_diffuse_chain_key": None, "_diffuse_history": [],

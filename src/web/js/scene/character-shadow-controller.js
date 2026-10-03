@@ -87,7 +87,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
   scene.add(ground);
 
   renderer.shadowMap.enabled = true;
-  if (THREE.PCFShadowMap !== undefined) renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   light.castShadow = true;
   light.shadow.autoUpdate = false;
   light.shadow.mapSize.set(2048, 2048);

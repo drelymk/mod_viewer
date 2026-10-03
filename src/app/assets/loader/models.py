@@ -88,7 +88,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
     game = {"GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa"}[asset_type]
     root_id = os.path.normcase(os.path.abspath(root))
     source = record.get("path", "") if isinstance(record, dict) else ""
-    profile = material_profile_for(game)
+    profile = material_profile_for(game, asset_type.lower())
     profiles = {profile.id: profile.to_metadata()}
     meshes = {}
     textures = {}
