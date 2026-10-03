@@ -73,7 +73,14 @@ def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page)
         const ground = scene.children.find(object => object.userData.isViewerGround);
         floors.push({grid: grid.position.y, ground: ground.position.y});
       }
-      return {before, after, depths, floors, parallel: light.shadow.camera.isOrthographicCamera};
+      mesh.visible = false;
+      shadow.invalidateVisibility(); shadow.update();
+      const clearedFloors = [grid.position.y];
+      mesh.visible = true;
+      shadow.invalidateVisibility(); shadow.update();
+      clearedFloors.push(grid.position.y);
+      shadow.reset(); clearedFloors.push(grid.position.y);
+      return {before, after, depths, floors, clearedFloors, parallel: light.shadow.camera.isOrthographicCamera};
     }""")
     assert result['after'] == result['before']
     assert result['parallel']
@@ -81,6 +88,7 @@ def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page)
     for floor, expected in zip(result['floors'], [2, -8, 2]):
         assert floor['grid'] == expected
         assert expected - 0.01 < floor['ground'] < expected
+    assert result['clearedFloors'] == [0, 2, 0]
 
 
 def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(module_page):

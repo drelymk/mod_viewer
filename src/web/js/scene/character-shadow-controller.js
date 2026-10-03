@@ -163,6 +163,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     if (!finiteBox(modelBounds) || !finiteBox(casterBounds)) {
       groundAvailable = false;
       ground.visible = false;
+      if (grid) grid.position.y = 0;
       shadowFitDirty = false;
       fitCount += 1;
       return false;
@@ -260,6 +261,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     lastLightTarget = null;
     groundAvailable = false;
     ground.visible = false;
+    if (grid) grid.position.y = 0;
   }
 
   function getDebugState() {

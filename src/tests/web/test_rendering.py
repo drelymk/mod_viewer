@@ -441,6 +441,13 @@ def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(v
     }""")
     page.wait_for_function('window.__rigApi.getModelPhysicsState().participantCount > 0')
     assert page.evaluate("""() => {
+      const rig = window.__rigApi, frequency = rig.getModelPhysicsState().frequencyHz;
+      rig.setPhysicsFrequency(frequency + 1.25);
+      const changed = rig.getModelPhysicsState().frequencyHz === frequency + 1.25;
+      rig.resetModelPhysics();
+      return changed && rig.getModelPhysicsState().frequencyHz === frequency;
+    }""")
+    assert page.evaluate("""() => {
       const rig = window.__rigApi;
       rig.clearSelectedBones();
       const physics = rig.getModelPhysicsState();
