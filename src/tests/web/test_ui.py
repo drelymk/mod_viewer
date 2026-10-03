@@ -4,6 +4,33 @@ from .payloads import append_stream, model_payload
 from .support import bridge_calls, open_model, project_mesh_points, wait_loaded
 
 
+def test_key_light_drag_restores_controls_after_capture_loss_and_release(viewer):
+    page = viewer({'fixture-01': model_payload()})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    marker = page.evaluate("""async () => {
+      const {scene, camera, renderer, controls} = await import('./js/scene/scene.js');
+      const light = scene.children.find(object => object.isDirectionalLight && object.castShadow);
+      const point = light.position.clone().project(camera), rect = renderer.domElement.getBoundingClientRect();
+      window.__lightDrag = {canvas: renderer.domElement, controls};
+      window.addEventListener('pointerdown', event => window.__lightDrag.pointerId = event.pointerId,
+        {capture: true});
+      return [rect.left + (point.x + 1) * rect.width / 2, rect.top + (1 - point.y) * rect.height / 2];
+    }""")
+    for enabled, lose_capture in ((True, True), (False, False)):
+        page.evaluate('enabled => window.__lightDrag.controls.enabled = enabled', enabled)
+        page.mouse.move(*marker)
+        page.mouse.down()
+        page.mouse.move(marker[0] + 1, marker[1] + 1)
+        assert not page.evaluate('window.__lightDrag.controls.enabled')
+        if lose_capture:
+            page.evaluate('window.__lightDrag.canvas.releasePointerCapture(window.__lightDrag.pointerId)')
+            page.mouse.move(5, 5)
+            page.wait_for_function('window.__lightDrag.controls.enabled')
+        page.mouse.up()
+        assert page.evaluate('window.__lightDrag.controls.enabled') == enabled
+
+
 def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
     page = viewer({'fixture-01': model_payload(2)})
     open_model(page, 'fixture-01')

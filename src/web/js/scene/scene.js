@@ -168,6 +168,7 @@ const characterShadowController = createCharacterShadowController({
   renderer,
   scene,
   light: keyLight,
+  grid,
 });
 const viewportRenderPipeline = createViewportRenderPipeline({
   renderer,

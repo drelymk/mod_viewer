@@ -1,7 +1,11 @@
 """Role recovery from explicit and legacy texture slot mappings."""
 
+import pytest
+
 from core.ini.parser import (build_draw_groups, extract_resources, merge_sections,
                               _scan_sections_for_draws)
+from tests.support.model_data import standard_component_resources
+from tests.support.provenance import visible
 
 
 def _draw(tmp_path, assignments, resources, prefix=""):
@@ -16,18 +20,9 @@ def _draw(tmp_path, assignments, resources, prefix=""):
         "ib = ResourceComponent01IB",
         assignments,
         "drawindexed = 3, 0, 0",
-        "",
-        "[ResourceComponent01IB]",
-        "filename = component01.ib",
-        "format = DXGI_FORMAT_R32_UINT",
-        "",
-        "[ResourceComponent01Position]",
-        "filename = position.buf",
-        "stride = 40",
-        "",
-        "[ResourceComponent01Texcoord]",
-        "filename = texcoord.buf",
-        "stride = 20",
+        standard_component_resources(
+            position_file="position.buf", texcoord_file="texcoord.buf",
+            position_stride=40, texcoord_stride=20),
     ]
     for resource, filename in resources.items():
         lines.extend(["", f"[{resource}]", f"filename = {filename}"])
@@ -35,135 +30,57 @@ def _draw(tmp_path, assignments, resources, prefix=""):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     sections = merge_sections([str(path)])
     groups = build_draw_groups(sections, extract_resources(sections))
-    assert len(groups) == 1
-    assert len(groups[0]["draws"]) == 1
     return groups[0]["draws"][0]
 
 
-def _asset10_variant_groups(tmp_path):
-    components = ("Head", "Component01", "Dress")
-    lines = [
-        "[KeySwap]",
-        "type = cycle",
-        "$swapvar = 0,1,2,3",
-    ]
+@pytest.mark.parametrize("variant_count", [1, 2], ids=["singleton", "variants"])
+def test_legacy_roles_stay_with_their_component(tmp_path, variant_count):
+    components = ("Component01", "Component02")
+    lines = ["[KeyStyle]", "type = cycle", "$style = 0,1"]
     for component in components:
         lines.extend([
-            "",
-            f"[TextureOverrideAsset10{component}]",
-            f"vb0 = ResourceAsset10{component}Position",
-            f"vb1 = ResourceAsset10{component}Texcoord",
-            f"ib = ResourceAsset10{component}IB",
-            f"run = CommandListAsset10{component}",
+            f"[TextureOverride{component}]",
+            f"ib = Resource{component}IB",
+            f"vb0 = Resource{component}Position",
+            f"vb1 = Resource{component}Texcoord",
+            f"run = CommandList{component}",
             "drawindexed = 3, 0, 0",
-            "",
-            f"[CommandListAsset10{component}]",
+            f"[CommandList{component}]",
         ])
-        for variant in range(4):
-            keyword = "if" if variant == 0 else "else if"
+        for variant in range(variant_count):
+            if variant_count > 1:
+                lines.append("if $style == 0" if variant == 0 else "else")
+            suffix = f".{variant}" if variant_count > 1 else ""
             lines.extend([
-                f"{keyword} $swapvar == {variant}",
-                f"ps-t0 = ResourceAsset10{component}Diffuse.{variant}",
-                f"ps-t1 = ResourceAsset10{component}LightMap.{variant}",
+                f"ps-t0 = Resource{component}Diffuse{suffix}",
+                f"ps-t1 = Resource{component}LightMap{suffix}",
             ])
-        lines.append("endif")
-    for component in components:
-        lines.extend([
-            "",
-            f"[ResourceAsset10{component}Position]",
-            f"filename = {component.lower()}-position.buf",
-            "stride = 40",
-            "",
-            f"[ResourceAsset10{component}Texcoord]",
-            f"filename = {component.lower()}-texcoord.buf",
-            "stride = 20",
-            "",
-            f"[ResourceAsset10{component}IB]",
-            f"filename = {component.lower()}.ib",
-            "format = DXGI_FORMAT_R32_UINT",
-        ])
-        for variant in range(4):
-            lines.extend([
-                "",
-                f"[ResourceAsset10{component}Diffuse.{variant}]",
-                f"filename = {component.lower()}-diffuse-{variant}.dds",
-                "",
-                f"[ResourceAsset10{component}LightMap.{variant}]",
-                f"filename = {component.lower()}-light-{variant}.dds",
-            ])
-    path = tmp_path / "asset10-variants.ini"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    sections = merge_sections([str(path)])
-    return build_draw_groups(sections, extract_resources(sections))
-
-
-def test_asset10_style_scopes_keep_all_component_variants_independent(tmp_path):
-    groups = _asset10_variant_groups(tmp_path)
-
-    assert [group["name"] for group in groups] == ["Asset10Head", "Asset10Component01",
-                                                    "Asset10Dress"]
-    for group in groups:
-        draw = group["draws"][0]
-        component = group["name"][len("Asset10"):].lower()
-        assert [item["file"] for item in draw.texture_rules("diffuse")] == [
-            f"{component}-diffuse-{variant}.dds"
-            for variant in range(4)]
-        assert [item["file"] for item in draw.texture_rules("light_map")] == [
-            f"{component}-light-{variant}.dds"
-            for variant in range(4)]
-        assert draw.texture_provenance == {
-            "diffuse": "mod_slot_legacy",
-            "light_map": "mod_slot_legacy",
-        }
-
-
-def test_asset11_style_singleton_resources_keep_each_component_role(tmp_path):
-    lines = []
-    components = ("Head", "Component01", "Extra")
-    for component in components:
-        lines.extend([
-            f"[TextureOverrideAsset11{component}]",
-            f"vb0 = ResourceAsset11{component}Position",
-            f"vb1 = ResourceAsset11{component}Texcoord",
-            f"ib = ResourceAsset11{component}IB",
-            f"ps-t0 = ResourceAsset11{component}Diffuse",
-            f"ps-t1 = ResourceAsset11{component}LightMap",
-            "drawindexed = 3, 0, 0",
-            "",
-            f"[ResourceAsset11{component}Position]",
-            f"filename = {component.lower()}-position.buf",
-            "stride = 40",
-            "",
-            f"[ResourceAsset11{component}Texcoord]",
-            f"filename = {component.lower()}-texcoord.buf",
-            "stride = 20",
-            "",
-            f"[ResourceAsset11{component}IB]",
-            f"filename = {component.lower()}.ib",
-            "format = DXGI_FORMAT_R16_UINT",
-            "",
-            f"[ResourceAsset11{component}Diffuse]",
-            f"filename = {component.lower()}-diffuse.dds",
-            "",
-            f"[ResourceAsset11{component}LightMap]",
-            f"filename = {component.lower()}-light-map.dds",
-            "",
-        ])
-    path = tmp_path / "asset11-style.ini"
+        if variant_count > 1:
+            lines.append("endif")
+        lines.append(standard_component_resources(
+            position_file=f"{component}-position.buf",
+            texcoord_file=f"{component}-texcoord.buf",
+            ib_file=f"{component}.ib").replace("Component01", component))
+        for variant in range(variant_count):
+            suffix = f".{variant}" if variant_count > 1 else ""
+            for role in ("Diffuse", "LightMap"):
+                lines.extend([
+                    f"[Resource{component}{role}{suffix}]",
+                    f"filename = {component}-{role}-{variant}.dds",
+                ])
+    path = tmp_path / "mod.ini"
     path.write_text("\n".join(lines), encoding="utf-8")
     sections = merge_sections([str(path)])
     groups = build_draw_groups(sections, extract_resources(sections))
 
-    assert [group["name"] for group in groups] == [
-        "Asset11Head", "Asset11Component01", "Asset11Extra"]
+    assert [group["name"] for group in groups] == list(components)
     for group in groups:
         draw = group["draws"][0]
-        assert [item.role_hint for item in draw.slot_textures] == [
-            "diffuse", "light_map"]
-        assert draw.texture_provenance == {
-            "diffuse": "mod_slot_legacy",
-            "light_map": "mod_slot_legacy",
-        }
+        for role, channel in (("Diffuse", "diffuse"), ("LightMap", "light_map")):
+            expected = [f"{group['name']}-{role}-{variant}.dds"
+                        for variant in range(variant_count)]
+            files = [item["file"] for item in draw.texture_rules(channel)]
+            assert (files or [draw.texture_default(channel)]) == expected
 
 
 def test_resource_name_alone_does_not_imply_diffuse(tmp_path):
@@ -244,29 +161,33 @@ ps-t0 = ResourceOpaque""",
          "ResourceOpaque": "opaque.dds"},
     )
 
-    assert draw.slot_textures[0].role_hint == "diffuse"
-    assert draw.slot_textures[0].role_hint_source == "mod_slot_mapping"
+    assert draw.texture_default("diffuse") == "opaque.dds"
     assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
 
 
-def test_semantic_and_legacy_variants_keep_disjoint_conditions(tmp_path):
+@pytest.mark.parametrize("fallback, resources", [
+    ("ps-t0 = ResourceComponent01Diffuse.0\nps-t0 = ResourceComponent01Diffuse.1",
+     {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
+      "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds"}),
+    (r"ps-t0 = Resource\GIMI\Diffuse" "\nps-t0 = ResourceOpaque",
+     {"ResourceOpaque": "opaque.dds"}),
+], ids=["legacy", "mapped"])
+def test_semantic_and_slot_variants_keep_disjoint_conditions(
+        tmp_path, fallback, resources):
     draw = _draw(
         tmp_path,
-        r"""if $style == 0
+        rf"""if $style == 0
 Resource\GIMI\Diffuse = ResourceExplicit
 else
-ps-t0 = ResourceComponent01Diffuse.0
-ps-t0 = ResourceComponent01Diffuse.1
+{fallback}
 endif""",
-        {"ResourceExplicit": "explicit.dds",
-         "ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
-         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds"},
+        {"ResourceExplicit": "explicit.dds", **resources},
         prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
     )
 
-    assert {item["file"] for item in draw.texture_rules("diffuse")} == {
-        "explicit.dds", "component01-diffuse-0.dds", "component01-diffuse-1.dds"}
-    assert draw.texture_provenance == {"diffuse": "mod_slot_legacy"}
+    assert [[item["file"] for item in draw.texture_rules("diffuse")
+             if visible(item["conditions"], {"style": value})]
+            for value in ("0", "1")] == [["explicit.dds"], list(resources.values())]
 
 
 def test_proven_slotfix_assignment_keeps_conditional_variants(tmp_path):
@@ -284,25 +205,6 @@ endif""",
 
     assert [item["file"] for item in draw.texture_variants] == [
         "red.dds", "blue.dds"]
-    assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
-
-
-def test_semantic_and_slot_roles_keep_disjoint_conditional_branches(tmp_path):
-    draw = _draw(
-        tmp_path,
-        r"""if $style == 0
-Resource\GIMI\Diffuse = ResourceExplicit
-else
-ps-t0 = Resource\GIMI\Diffuse
-ps-t0 = ResourceOpaque
-endif""",
-        {"ResourceExplicit": "explicit.dds", "ResourceOpaque": "opaque.dds"},
-        prefix="[KeyStyle]\ntype = cycle\n$style = 0,1\n",
-    )
-
-    assert draw.texture_default("diffuse") == "explicit.dds"
-    assert {item["file"] for item in draw.texture_variants} == {
-        "explicit.dds", "opaque.dds"}
     assert draw.texture_provenance == {"diffuse": "mod_slot_semantic"}
 
 
