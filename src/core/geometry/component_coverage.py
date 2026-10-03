@@ -32,7 +32,6 @@ class AuthoredComponentOverride:
     index_count: int | None
     ini: str
     section: str
-    handling_skip: bool
     geometry_evidence: bool = False
     asset_identity_evidence: bool = True
 
@@ -45,7 +44,6 @@ class AuthoredComponentOverride:
 _HASH_RE = re.compile(r"^hash\s*=\s*(\S+)$", re.I)
 _FIRST_RE = re.compile(r"^match_first_index\s*=\s*(\d+)$", re.I)
 _COUNT_RE = re.compile(r"^match_index_count\s*=\s*(\d+)$", re.I)
-_SKIP_RE = re.compile(r"^handling\s*=\s*skip\b", re.I)
 _GEOMETRY_RE = re.compile(
     r"^(?:drawindexed|draw|ib|vb\d+)\s*=\s*(?!null\b)\S+", re.I)
 _IB_RE = re.compile(r"^ib\s*=\s*(?!null\b)\S+", re.I)
@@ -59,13 +57,9 @@ _AUXILIARY_RE = re.compile(
 def collect_component_overrides(sections, ini_path):
     """Return geometry ownership declared by TextureOverride sections.
 
-    Hashes remain available as Asset identity evidence even when a section
-    only binds textures. The composition planner uses ``geometry_evidence``
-    to avoid treating those texture-only bindings as rendered geometry.
-    Explicit ``handling = skip`` remains a coverage claim because it suppresses
-    the corresponding original draw. Execution follows the same command-list
-    closure as the normal INI scanner so declarations in nested ``run``
-    sections retain their component coverage semantics.
+    Component identity claims coverage independently of draw behavior.
+    Auxiliary buffer/compute hashes do not establish component identity.
+    Follow the normal scanner's command-list closure for nested declarations.
     """
     sections = sections or {}
     section_lookup = {str(name).casefold(): name for name in sections}
@@ -79,7 +73,6 @@ def collect_component_overrides(sections, ini_path):
         scope_lines = [raw for name in scope_sections
                        for raw in sections[name]]
         hashes = []
-        handling_skip = False
         geometry_evidence = False
         explicit_asset_identity = False
         auxiliary_geometry = False
@@ -103,8 +96,6 @@ def collect_component_overrides(sections, ini_path):
             if match:
                 last_index_count = int(match.group(1))
                 continue
-            if _SKIP_RE.match(line):
-                handling_skip = True
             if _IB_RE.match(line) or _DRAW_INDEXED_RE.match(line):
                 explicit_asset_identity = True
             if _AUXILIARY_RE.match(line):
@@ -170,7 +161,6 @@ def collect_component_overrides(sections, ini_path):
                 index_count=index_count,
                 ini=ini_path,
                 section=str(section),
-                handling_skip=handling_skip,
                 geometry_evidence=item_geometry,
                 asset_identity_evidence=item_identity,
             ))

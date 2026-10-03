@@ -340,73 +340,23 @@ def _build_vertex_binding_index(section_info, sections,
 
 
 def _select_draw_sections(section_info, global_ib):
-    """Select TextureOverride sections that can produce viewer geometry."""
-    skips_by_hash = {}
-    unmodeled_draws_by_hash = {}
-    guard_writes = set()
+    """Select authored draws, sharing auto only within one INI/hash family."""
+    family_auto = {}
     for name, info in section_info.items():
-        guard_writes.update(info.get("guard_writes", ()))
         match = info.get("geometry_match_at_end")
         if (name.lower().startswith("textureoverride") and match
-                and info.get("unmodeled_draws")):
-            unmodeled_draws_by_hash.setdefault(match.hash, []).append(info)
-        if (name.lower().startswith("textureoverride") and match
-                and info.get("skip_guards")
-                and info.get("skip_match_supported")):
-            skips_by_hash.setdefault(match.hash, []).append(info)
+                and info["drawindexed_auto"]):
+            family_auto[((info.get("src") or {}).get("ini_path"), match.hash)] = True
 
-    def original_is_skipped(info):
+    def has_auto(info):
         match = info.get("geometry_match_at_end")
-        guards = info.get("original_draw_guards")
-        if match is None or guards is None:
-            return False
-        # Auto/from-caller draws and unresolved command lists may replay a
-        # skipped original with sibling bindings. Preserve their fallback.
-        for replay in unmodeled_draws_by_hash.get(match.hash, ()):
-            if ((replay.get("src") or {}).get("ini_path")
-                    != (info.get("src") or {}).get("ini_path")):
-                continue
-            replay_match = replay["geometry_match_at_end"]
-            if (info.get("match_supported") and replay.get("match_supported")
-                    and any(getattr(replay_match, field) is not None
-                            and getattr(match, field) is not None
-                            and getattr(replay_match, field) != getattr(match, field)
-                            for field in ("first_index", "index_count"))):
-                continue
-            return False
-        for skip in skips_by_hash.get(match.hash, ()):
-            if ((skip.get("src") or {}).get("ini_path")
-                    != (info.get("src") or {}).get("ini_path")):
-                continue
-            skipped_match = skip["geometry_match_at_end"]
-            if ((skipped_match.first_index is not None
-                 or skipped_match.index_count is not None)
-                    and not info.get("skip_match_supported")):
-                continue
-            if any(getattr(skipped_match, field) is not None
-                   and getattr(skipped_match, field) != getattr(match, field)
-                   for field in ("first_index", "index_count")):
-                continue
-            for skip_guards in skip["skip_guards"]:
-                if skip_guards is None:
-                    continue
-                variables = {token[1:] for seen, current in skip_guards
-                             for expression in (*seen, current)
-                             for token in expression if token.startswith("$")}
-                variables.update(variable.rsplit("\\", 1)[-1]
-                                 for variable in tuple(variables))
-                # Only an explicit skip for this game-draw context can remove
-                # its fallback. Captures and additional draws are independent.
-                if (not variables.intersection(guard_writes)
-                        and set(skip_guards).issubset(guards)):
-                    return True
-        return False
+        return info["drawindexed_auto"] or (match and family_auto.get(
+            ((info.get("src") or {}).get("ini_path"), match.hash), False))
 
     return [(name, info) for name, info in section_info.items()
             if name.lower().startswith("textureoverride")
             and (info["ib"] or global_ib)
-            and (info["draws"] or (info["ib"] and not info["handling_skip"]
-                                  and not original_is_skipped(info)))]
+            and (info["draws"] or (info["ib"] and has_auto(info)))]
 
 
 def _component_role_candidates(base):

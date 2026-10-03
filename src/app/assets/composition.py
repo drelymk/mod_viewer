@@ -66,20 +66,6 @@ class AssetFillPlan:
     evidence: tuple[AuthoredComponentOverride, ...] = ()
     index_status: str = "not_configured"
 
-    @property
-    def skipped_parts(self):
-        skipped_evidence = tuple(
-            item for item in self.evidence if item.handling_skip)
-        range_counts = {}
-        for part in self.asset_parts:
-            range_counts[part.geometry_hash] = (
-                range_counts.get(part.geometry_hash, 0) + 1)
-        return tuple(
-            part for part in self.covered_parts
-            if any(_part_is_covered(
-                part, item, range_counts.get(part.geometry_hash, 0))
-                for item in skipped_evidence))
-
     def to_dict(self):
         asset = None
         if self.asset is not None:
@@ -91,7 +77,6 @@ class AssetFillPlan:
                 "asset_parts": len(self.asset_parts),
                 "handled_parts": len(self.covered_parts),
                 "missing_parts": len(self.missing_parts),
-                "skipped_parts": len(self.skipped_parts),
             },
             "index_status": self.index_status,
         }
@@ -135,7 +120,7 @@ def _asset_parts(asset_type, root, asset):
 def _part_is_covered(part, override, hash_range_count):
     if part.geometry_hash != override.geometry_hash:
         return False
-    if not override.handling_skip and not override.geometry_evidence:
+    if not override.asset_identity_evidence:
         return False
     if hash_range_count <= 1:
         return True

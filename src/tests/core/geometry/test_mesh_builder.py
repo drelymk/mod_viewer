@@ -1,10 +1,8 @@
-"""Mesh-buffer binding, draw fallback, and index decoding regressions."""
+"""Mesh-buffer binding, authored draws, and index decoding regressions."""
 
 import os
 import struct
 import tempfile
-
-import pytest
 
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
@@ -200,19 +198,23 @@ def test_cross_ib_vb_reassignment_mesh_builder():
               f"not a collapsed/garbage read of the SBS one (got {vert_sets})")
 
 
-HANDLING_SKIP_INI = """[TextureOverrideComponent01Blend]
+AUTHORED_DRAW_INI = """[TextureOverrideComponent01Blend]
 vb0 = ResourcePos
 vb1 = ResourceTc
 
 [TextureOverrideComponent01A]
+hash = 10101010
 ib = ResourceComponent01AIB
 drawindexed = 100, 0, 0
 
 [TextureOverrideComponent01B]
+hash = 10101010
 handling = skip
 ib = ResourceComponent01BIB
 
 [TextureOverrideComponent01C]
+hash = 10101010
+ResourceSaved = copy vb0
 ib = ResourceComponent01CIB
 
 [ResourceComponent01AIB]
@@ -237,104 +239,17 @@ stride = 20
 """
 
 
-def test_handling_skip_with_no_drawindexed_draws_nothing():
+def test_ib_only_parts_do_not_draw_regardless_of_handling_skip():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", HANDLING_SKIP_INI)
+        path = write(tmp, "mod.ini", AUTHORED_DRAW_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        names = {g["display_name"] for g in groups}
-        assert ("Component01A" in names), ("the section with an explicit drawindexed still draws")
-        assert ("Component01B" not in names), (f"a handling=skip section with NO drawindexed draws nothing at all "
-              f"(got groups: {sorted(names)})")
-        assert ("Component01C" in names), ("a section with no handling=skip still gets the implicit whole-ib draw")
-
-
-@pytest.mark.parametrize("capture,consumer_ib,consumer_vb,capture_draw,implicit", [
-    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("resourcesaved = COPY VB0", "resourcecomponent01aib", "RESOURCESAVED", "", True),
-    ("ResourceSaved = ref vb0", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("ResourceSaved = reference vb0", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("run = CommandListCapture", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("if $Style == 0\nResourceSaved = copy vb0\nendif", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("if $Style == 0\nrun = CommandListCapture\nendif", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("ResourceSaved = copy vb0", "ResourceComponent02AIB", "ResourceSaved", "", True),
-    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceComponent01Position", "", True),
-    ("ResourceSaved = copy vb1", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("ResourceSaved = copy ResourceComponent01Position", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("", "ResourceComponent01AIB", "ResourceSaved", "", True),
-    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "drawindexed = 3, 0, 0", False),
-])
-def test_capture_replayed_does_not_suppress_original_draw(
-        tmp_path, capture, consumer_ib, consumer_vb, capture_draw, implicit):
-    text = f"""[KeyStyle]
-type = cycle
-$Style = 0,1
-[TextureOverrideComponent01Position]
-vb0 = ResourceComponent01Position
-[TextureOverrideComponent01Texcoord]
-vb1 = ResourceComponent01Texcoord
-[TextureOverrideComponent02Position]
-vb0 = ResourceComponent01Position
-[TextureOverrideComponent02Texcoord]
-vb1 = ResourceComponent01Texcoord
-[TextureOverrideComponent01A]
-{capture}
-ib = ResourceComponent01AIB
-{capture_draw}
-[CommandListCapture]
-ResourceSaved = copy vb0
-[ResourceSaved]
-[TextureOverrideComponent02A]
-ib = {consumer_ib}
-vb0 = {consumer_vb}
-vb1 = ResourceComponent01Texcoord
-Resource\\GIMI\\Diffuse = ResourceDiffuse
-if $Style == 0
-drawindexed = 3, 0, 0
-else
-drawindexed = 3, 3, 0
-endif
-[ResourceComponent01AIB]
-filename = part-01.ib
-format = DXGI_FORMAT_R32_UINT
-[ResourceComponent02AIB]
-filename = part-02.ib
-format = DXGI_FORMAT_R32_UINT
-[ResourceComponent01Position]
-filename = position.buf
-stride = 40
-[ResourceComponent01Texcoord]
-filename = texcoord.buf
-stride = 20
-[ResourceDiffuse]
-filename = diffuse.dds
-"""
-    path = write(tmp_path, "mod.ini", text)
-    for name in ("part-01.ib", "part-02.ib"):
-        (tmp_path / name).write_bytes(struct.pack("<6I", 0, 1, 2, 0, 2, 3))
-    (tmp_path / "position.buf").write_bytes(b"".join(
-        struct.pack("<3f", x, y, 0.) + b"\0" * 28
-        for x, y in [(0., 0.), (1., 0.), (1., 1.), (0., 1.)]))
-    (tmp_path / "texcoord.buf").write_bytes(b"\0" * 20 * 4)
-    sections = merge_sections([path])
-    groups = build_draw_groups(sections, extract_resources(sections))
-    capture_groups = [group for group in groups if group["name"] == "Component01A"]
-    assert bool(capture_groups) == bool(implicit or capture_draw)
-    if capture_groups:
-        assert capture_groups[0]["draws"][0].count == (None if implicit else 3)
-    consumers = next(group for group in groups if group["name"] == "Component02A")["draws"]
-    assert [(draw.count, draw.start, draw.base) for draw in consumers] == [
-        (3, 0, 0), (3, 3, 0)]
-    assert [draw.conditions for draw in consumers] == [
-        [[{"var": "Style", "value": "0", "negate": False}]],
-        [[{"var": "Style", "value": "0", "negate": True}]]]
-    assert all(draw.texture_default_file == "diffuse.dds" for draw in consumers)
-    assert all(text.splitlines()[draw.sources[0]["line_no"] - 1].startswith(
-        "drawindexed") for draw in consumers)
-    meshes, _geometry = build_mesh_fixture(groups, str(tmp_path))
-    assert len(meshes) == 2 + bool(implicit or capture_draw)
-    assert [meshes[draw.label]["drawindexed"] for draw in consumers] == [
-        [3, 0, 0], [3, 3, 0]]
+        assert [group["display_name"] for group in groups] == ["Component01A"]
+        for name in ("TextureOverrideComponent01A", "TextureOverrideComponent01C"):
+            secs[name].append("handling = skip")
+        updated = build_draw_groups(secs, extract_resources(secs))
+        assert [group["display_name"] for group in updated] == ["Component01A"]
+        assert updated[0]["draws"][0].count == 100
 
 
 COMPONENT_ABBREV_SUFFIX_INI = """[TextureOverrideXCNPosition]
@@ -368,7 +283,7 @@ format = DXGI_FORMAT_R32_UINT
 """
 
 
-IMPLICIT_DRAW_DIFFUSE_INI = """[TextureOverrideImplicitPosition]
+AUTO_DRAW_DIFFUSE_INI = """[TextureOverrideImplicitPosition]
 vb0 = ResourceImplicitPosition
 
 [TextureOverrideImplicitBlend]
@@ -379,6 +294,7 @@ vb1 = ResourceImplicitTexcoord
 
 [TextureOverrideImplicitA]
 ib = ResourceImplicitIB
+drawindexed = auto
 ps-t0 = Resource\\GIMI\\Diffuse
 ps-t0 = ResourceImplicitDiffuse
 
@@ -403,18 +319,17 @@ filename = implicit.dds
 """
 
 
-def test_implicit_whole_buffer_draw_keeps_its_diffuse():
+def test_authored_auto_whole_buffer_draw_keeps_its_diffuse():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", IMPLICIT_DRAW_DIFFUSE_INI)
+        path = write(tmp, "mod.ini", AUTO_DRAW_DIFFUSE_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         group = groups[0]
-        assert (len(group["draws"]) == 1), ("exactly the one synthetic placeholder draw")
+        assert len(group["draws"]) == 1
         draw = group["draws"][0]
-        assert (draw.get("count") is None), ("the placeholder draw has no count -- it's the implicit whole-buffer read")
-        assert (draw.get("texture_default_file") == "implicit.dds"), (f"the placeholder draw still resolves the section's own "
-              f"ps-t0 diffuse, not None (got {draw.get('texture_default_file')})")
+        assert draw.count is None
+        assert draw.texture_default_file == "implicit.dds"
 
 
 def test_r16_index_buffer():

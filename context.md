@@ -120,9 +120,10 @@ of documentation, comments and tests; use portable fixtures instead.
   fields explicitly as render identity, visibility or provenance; do not derive
   identity reflectively from every field. Preserve numeric VB slots and the
   distinction between untouched and explicit null; VB changes need no IB change.
-- An IB section without `drawindexed` may emit one synthetic whole-buffer draw;
-  `handling=skip` without an explicit draw emits none. Authored rows retain
-  `count,start,base`; only synthetic rows receive generated display markers.
+- Viewer geometry is produced by authored `drawindexed` commands. Literal and
+  immutable-variable ranges resolve directly; `drawindexed = auto` uses the full
+  replacement IB for the applicable geometry-hash family. An IB binding alone
+  does not create a draw.
 - Apply shapes only with complete recognized buffer layouts. Other slider-like
   variables remain controls; shape targets cannot leak between position buffers.
 - Resource identity is mod-relative, never basename-only. Texture keys are
@@ -175,11 +176,12 @@ of documentation, comments and tests; use portable fixtures instead.
   Direct Assets never synthesize INIs/mods, modify sources or write
   `.mod_viewer.json`; source paths stay within registered roots and texture
   choices remain session-only. Ambiguity may yield candidates, never bindings.
-- Compute coverage from authored geometry override identities across all INIs,
-  including staged documents and `handling=skip`, rather than rendered draws.
-  Hash-only geometry overrides cover every range under that hash; texture-only
-  hashes identify Assets without claiming geometry. Automatic filling requires
-  one unique Asset and retains component/range provenance; filled geometry is
+- Asset Fill treats an authored component/range as handled when its component
+  identity is present in the mod, including staged documents. Draw/skip behavior
+  does not affect coverage.
+  Hash-only component overrides cover every range under that hash; auxiliary
+  buffer/compute hashes do not establish component identity. Automatic filling
+  requires one unique Asset and retains component/range provenance; filled geometry is
   session-only and removed on reload/switch.
 - GIMI head-local faces may use one geometry-derived rigid alignment from native
   full-body Eyes and a Face/FaceEye anchor. Transform positions and normals,
