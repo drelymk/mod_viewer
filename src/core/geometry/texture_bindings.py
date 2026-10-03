@@ -20,23 +20,27 @@ class TextureRegistry:
         self.source = source
         self._sources = {}
         self._keys = {}
+        self._paths = {}
 
     def key(self, path, role=None, *, identity=None):
-        exists = (self.source.is_file(path)
-                  if self.source is not None
-                  and self.source.is_resource_reference(path)
-                  else os.path.exists(path) if path else False)
-        if not path or not exists:
+        if not path:
             return None
         role = normalize_texture_role(role)
         cache_key = (path, role, identity)
-        if cache_key not in self._keys:
-            relative_path = identity or (
-                self.source.logical_path(path)
-                if self.source is not None
-                and self.source.is_resource_reference(path)
-                else os.path.relpath(path, self.mod_dir).replace(os.sep, "/"))
-            self._keys[cache_key] = texture_key(relative_path, role)
+        if cache_key in self._keys:
+            return self._keys[cache_key]
+        exists = (self.source.is_file(path)
+                  if self.source is not None
+                  and self.source.is_resource_reference(path)
+                  else os.path.exists(path))
+        if not exists:
+            return None
+        relative_path = identity or (
+            self.source.logical_path(path)
+            if self.source is not None
+            and self.source.is_resource_reference(path)
+            else os.path.relpath(path, self.mod_dir).replace(os.sep, "/"))
+        self._keys[cache_key] = texture_key(relative_path, role)
         return self._keys[cache_key]
 
     def ensure(self, path, role=None, *, identity=None):
@@ -64,9 +68,14 @@ class TextureRegistry:
         return {key: value for key, value in self._sources.items() if value}
 
     def resolve(self, filename):
-        if self.source is not None:
-            return self.source.resolve_resource(filename)
-        return safe_resource_path(self.mod_dir, filename)
+        if isinstance(filename, str) and filename in self._paths:
+            return self._paths[filename]
+        path = (self.source.resolve_resource(filename)
+                if self.source is not None
+                else safe_resource_path(self.mod_dir, filename))
+        if isinstance(filename, str):
+            self._paths[filename] = path
+        return path
 
 
 def build_texture_options(group, registry):

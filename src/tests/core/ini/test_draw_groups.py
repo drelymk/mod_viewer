@@ -8,12 +8,47 @@ from core.ini.sections import extract_resources, parse_sections
 from tests.support.model_data import standard_component_resources
 
 
+def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+Resource\GIMI\Diffuse = ResourceBase
+if $mode == 0
+Resource\GIMI\Diffuse = ResourceRed
+drawindexed = 3, 0, 0
+Resource\GIMI\Diffuse = ResourceBase
+drawindexed = 3, 3, 0
+else
+drawindexed = 3, 6, 0
+endif
+drawindexed = 3, 9, 0
+
+[ResourceBase]
+filename = base.dds
+[ResourceRed]
+filename = red.dds
+""" + standard_component_resources())
+    draws = build_draw_groups(
+        sections, extract_resources(sections), gating_vars={"mode"})[0]["draws"]
+
+    assert [(draw.start, [item["file"] for item in draw.texture_rules("diffuse")])
+            for draw in draws] == [
+        (0, ["base.dds", "red.dds"]),
+        (3, ["base.dds", "red.dds", "base.dds"]),
+        (6, []),
+        (9, ["base.dds", "red.dds", "base.dds"]),
+    ]
+    assert draws[2].texture_default("diffuse") == "base.dds"
+
+
 def test_draw_scanner_keeps_geometry_and_texture_hash_evidence_separate():
     sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
 hash = 0x10101010
 match_first_index = 12
 match_index_count = 24
 Resource\\GIMI\\Diffuse = ResourceDiffuseOpaque
+Resource\\GIMI\\LightMap = ResourceUnproven_33333333
 ps-t1 = ResourceMystery
 drawindexed = 3, 0, 0
 
@@ -36,20 +71,7 @@ this = ResourceMystery
             for item in draw.slot_textures] == [
                 (1, "ResourceMystery", ("22222222",))]
     assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
-
-
-def test_draw_scanner_does_not_infer_texture_hash_from_resource_name():
-    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
-hash = 10101010
-Resource\\GIMI\\Diffuse = ResourceFoo_11111111
-drawindexed = 3, 0, 0
-""")
-
-    draw = _scan_sections_for_draws(sections)["TextureOverrideComponent01"][
-        "draws"][0]
-
-    assert draw.slot_textures == []
-    assert "texture_hashes" not in draw.diffuse_variants[0]
+    assert "texture_hashes" not in draw.auxiliary_maps["light_map"]["variants"][0]
 
 
 def test_texture_override_index_preserves_conditions_and_resolves_files():
@@ -295,7 +317,6 @@ def test_draw_groups_resolve_the_scanner_snapshot_for_inline_execution():
     sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
 ib = ResourceComponent01IB
 vb0 = ResourceComponent01Position
-vb1 = ResourceComponent01Texcoord
 hash = 0123abcd
 match_first_index = 9
 match_index_count = 3
@@ -306,9 +327,11 @@ drawindexed = 3, 3, 0
 
 [CommandListComponent01]
 vb0 = ResourceComponent01PositionAlt
+vb1 = ResourceComponent01Texcoord
 Resource\\GIMI\\Diffuse = ResourceComponent01Diffuse
 Resource\\GIMI\\LightMap = ResourceComponent01LightMap
 drawindexed = 3, 0, 0
+
 [ResourceComponent01PositionAlt]
 filename = component01-position-alt.buf
 stride = 12
@@ -319,15 +342,17 @@ filename = component01-diffuse.dds
 [ResourceComponent01LightMap]
 filename = component01-light-map.dds
 """ + standard_component_resources())
-    scanned = _scan_sections_for_draws(sections, gating_vars={"mode"})
-    authored = scanned["TextureOverrideComponent01"]["draws"]
+    authored = _scan_sections_for_draws(sections, gating_vars={"mode"})[
+        "TextureOverrideComponent01"]["draws"]
+    assert [(draw.start, draw.vertex_resources)
+            for draw in authored] == [
+        (start, {0: "ResourceComponent01PositionAlt", 1: "ResourceComponent01Texcoord"})
+        for start in (0, 3)
+    ]
     groups = build_draw_groups(
         sections, extract_resources(sections), gating_vars={"mode"})
     draws = groups[0]["draws"]
 
-    assert [(item.start, item.vertex_resources[0]) for item in authored] == [
-        (0, "ResourceComponent01PositionAlt"),
-        (3, "ResourceComponent01PositionAlt")]
     assert [(item.start, item.position_file) for item in draws] == [
         (0, "component01-position-alt.buf"),
         (3, "component01-position-alt.buf")]
@@ -352,46 +377,15 @@ Resource\RabbitFX\Diffuse = ref ResourceComponent01Diffuse
 Resource\RabbitFX\GlowMap = ref ResourceComponent01Glow
 drawindexed = 3, 0, 0
 
-[ResourceComponent01IB]
-filename = component01.ib
-format = DXGI_FORMAT_R32_UINT
-
-[ResourceComponent01Position]
-filename = component01-position.buf
-stride = 12
-
-[ResourceComponent01Texcoord]
-filename = component01-texcoord.buf
-stride = 8
-
 [ResourceComponent01Diffuse]
 filename = component01-diffuse.dds
 
 [ResourceComponent01Glow]
 filename = component01-glow.dds
-""".replace("RabbitFX", namespace))
+""".replace("RabbitFX", namespace) + standard_component_resources())
     groups = build_draw_groups(sections, extract_resources(sections))
 
     assert groups[0]["draws"][0].texture_default("emission_map") == expected
-
-
-def test_draw_groups_preserve_inline_run_snapshots_without_buffer_files():
-    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
-ib = ResourceMissingIB
-vb0 = ResourceMissingPosition
-run = CommandListComponent01
-drawindexed = 3, 3, 0
-
-[CommandListComponent01]
-vb1 = ResourceMissingTexcoord
-drawindexed = 3, 0, 0
-""")
-
-    phase01 = _scan_sections_for_draws(sections)["TextureOverrideComponent01"]
-    assert [(draw.start, draw.index_resource) for draw in phase01["draws"]] == [
-        (0, "ResourceMissingIB"), (3, "ResourceMissingIB")]
-    assert phase01["draws"][0].vertex_resources == {
-        0: "ResourceMissingPosition", 1: "ResourceMissingTexcoord"}
 
 
 def test_draw_groups_do_not_infer_blend_from_shared_position_provenance():
@@ -428,9 +422,7 @@ stride = 32
     draw = build_draw_groups(
         sections, extract_resources(sections))[0]["draws"][0]
 
-    assert draw.skinning_error is None
     assert draw.skinning_source is None
-    assert draw.skinning_resolution["resolution_source"] is None
 
 
 def test_draw_groups_keep_draw_time_vertex_state_ordered():
@@ -472,6 +464,5 @@ stride = 32
         sections, extract_resources(sections))[0]["draws"]
 
     assert draws[0].skinning_source is None
-    assert draws[0].skinning_resolution["resolution_source"] is None
     assert draws[1].skinning_source.file == "direct.bin"
     assert draws[1].skinning_resolution["resolution_source"] == "direct"

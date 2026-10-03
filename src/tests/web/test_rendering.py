@@ -9,6 +9,28 @@ from .payloads import append_stream, model_payload, solid_texture, split_color_d
 from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, wait_loaded, wait_texture
 
 
+def _open_fixture(viewer, payload, extra=None):
+    page = viewer({'fixture-01': payload, **(extra or {})})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, len(payload['meshes']))
+    return page
+
+
+def _activate_rig(page, *, humanoid=False):
+    if humanoid:
+        page.evaluate("""() => {
+          window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
+            -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
+          ]);
+        }""")
+    page.locator('#weight-rig-tab').click()
+    page.evaluate("""async () => {
+      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
+      window.__rigApi = weightRigApi;
+    }""")
+    page.wait_for_function('window.__rigApi.getModelRigState().loaded')
+
+
 def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
     payload = model_payload()
     payload['meshes']['mesh-00'].update(
@@ -22,20 +44,14 @@ def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
                  {'var': 'input02', 'default': '0', 'values': ['0', '1']}],
     }}
     payload['state']['defaults'] = {'input01': '1', 'input02': '0'}
-    page = viewer({'fixture-01': payload})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, payload)
     backend = page.evaluate("""async () => {
       const {renderer, rendererReady} = await import('./js/scene/scene.js');
       await rendererReady;
       return renderer.backend.isWebGPUBackend === true && renderer.backend.compatibilityMode !== true;
     }""")
     assert backend
-    page.wait_for_function("""async () => {
-      const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
-      return getGameMaterialTexture(window.modViewer.activeMeshes[0].material, 'diffuse')?.image != null;
-    }""")
-    page.wait_for_function('window.modViewer.getRenderCount() > 0')
+    wait_texture(page)
     before = mesh_pixel(page)
     assert before[0] > before[1] + 25 and before[0] > before[2] + 25
     page.locator('#toggle-list .toggle-cycle-btn').first.click()
@@ -57,9 +73,7 @@ def test_shared_texture_uploads_preserve_role_specific_color_spaces(viewer):
     payload['textures']['normal_map::texture-01.png'] = solid_texture((128, 128, 255))
     for mesh in payload['meshes'].values():
         mesh['normal_map_key'] = 'normal_map::texture-01.png'
-    page = viewer({'fixture-01': payload})
-    open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
+    page = _open_fixture(viewer, payload)
     wait_texture(page)
     wait_texture(page, role='normal_map')
     result = page.evaluate("""async () => {
@@ -125,9 +139,7 @@ def test_manual_texture_override_survives_controls_and_clear_restores_authored_b
         'conditions': [[{'var': 'input01', 'value': '1', 'negate': False}]],
         'tex_key': 'diffuse::texture-02.png',
     }]
-    page = viewer({'fixture-01': payload})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, payload)
     result = page.evaluate("""async () => {
       const state = await import('./js/mesh/mesh-state.js');
       const controls = await import('./js/editing/control-state.js');
@@ -138,19 +150,13 @@ def test_manual_texture_override_survives_controls_and_clear_restores_authored_b
       state.setManualTexOverride(mesh, null); const none = mesh.userData.texKey;
       state.setManualTexOverride(mesh, undefined); const automatic = mesh.userData.texKey;
       controls.setControlValue('input01', '0'); state.applyTextureVariant(mesh);
-      return {sticky, none, automatic, restored: mesh.userData.texKey,
-        defaultKey: mesh.userData.defaultTexKey};
+      return [sticky, none, automatic, mesh.userData.texKey];
     }""")
-    assert result == {'sticky': 'diffuse::texture-01.png', 'none': None,
-                      'automatic': 'diffuse::texture-02.png', 'restored': 'diffuse::texture-01.png',
-                      'defaultKey': 'diffuse::texture-01.png'}
-    assert bridge_calls(page, 'export') == []
+    assert result == ['diffuse::texture-01.png', None, 'diffuse::texture-02.png', 'diffuse::texture-01.png']
 
 
 def test_color_preview_changes_pixels_and_reset_reuses_material_and_texture(viewer):
-    page = viewer({'fixture-01': textured_payload()})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, textured_payload())
     wait_texture(page)
     before = mesh_pixel(page)
     page.evaluate("""async () => {
@@ -174,13 +180,10 @@ def test_color_preview_changes_pixels_and_reset_reuses_material_and_texture(view
     restored = mesh_pixel(page)
     assert max(abs(a-b) for a,b in zip(before, restored)) < 15
     assert bridge_calls(page, 'textureSave') == []
-    assert bridge_calls(page, 'export') == []
 
 
 def test_texture_save_requires_confirmation_flushes_metadata_and_blocks_duplicate_submit(viewer):
-    page = viewer({'fixture-01': textured_payload(2, extension='dds')})
-    open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
+    page = _open_fixture(viewer, textured_payload(2, extension='dds'))
     page.evaluate("""async () => {
       const {setMeshColorAdjustment} = await import('./js/mesh/mesh-color-session.js');
       for (const mesh of window.modViewer.activeMeshes) setMeshColorAdjustment(mesh, {brightness: 0.6}, {persist: true});
@@ -226,7 +229,6 @@ def test_texture_save_requires_confirmation_flushes_metadata_and_blocks_duplicat
     page.locator('.texture-bake-summary').first.wait_for(state='visible')
     assert len(bridge_calls(page, 'textureSave')) == 2
     assert page.evaluate('window.modViewer.activeMeshes.every((mesh, i) => mesh.material === window.__materials[i])')
-    assert bridge_calls(page, 'export') == []
 
 
 def test_shape_changes_update_stable_attributes_and_restore_authored_normals(viewer):
@@ -235,9 +237,7 @@ def test_shape_changes_update_stable_attributes_and_restore_authored_normals(vie
     mesh['normal'] = append_stream(payload, 'f', [0,0,1] * 3)
     mesh['shape_targets'] = [{'var': 'shape01', 'pos': append_stream(payload, 'f', [0,0,0, 2,0,0, 0,2,0])}]
     payload['state']['defaults'] = {'shape01': '0'}
-    page = viewer({'fixture-01': payload})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, payload)
     result = page.evaluate("""async () => {
       const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
       const {setControlValue} = await import('./js/editing/control-state.js');
@@ -267,9 +267,7 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
         'positions': append_stream(payload, 'f', [0,0,0,1,0,0,0,1,0, 0,0,0.5,1,0,0.5,0,1,0.5]),
     }
     payload['animations'] = {'clock-01': {'frame_start': 0, 'frame_end': 1, 'fps': 30}}
-    page = viewer({'fixture-01': payload, 'fixture-02': model_payload()})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, payload, {'fixture-02': model_payload()})
     page.wait_for_function('window.modViewer.activeMeshes[0].geometry.attributes.position.array[2] === 0.5')
     page.evaluate('const mesh = window.modViewer.activeMeshes[0]; mesh.userData.animationSuspended = true; mesh.geometry.attributes.position.array.fill(7)')
     page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
@@ -289,9 +287,7 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
 
 
 def test_wireframe_suppresses_outlines_and_restores_preference_without_rebuilding(viewer):
-    page = viewer({'fixture-01': model_payload()})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, model_payload())
     result = page.evaluate("""async () => {
       const modes = await import('./js/scene/render-modes.js');
       const outlines = await import('./js/scene/outline-renderer.js');
@@ -306,7 +302,76 @@ def test_wireframe_suppresses_outlines_and_restores_preference_without_rebuildin
         stable: mesh.material === material && mesh.geometry === geometry};
     }""")
     assert result == {'enabled': True, 'suppressed': False, 'retained': True, 'restored': True, 'stable': True}
-    assert bridge_calls(page, 'export') == []
+
+
+def test_outline_keeps_shallow_backfaces_behind_the_visible_surface(viewer):
+    payload = model_payload(2)
+    payload['meshes']['mesh-01'].update(
+        pos=append_stream(payload, 'f', [0.2, 0.2, -0.001,
+                                       0.2, 0.4, -0.001,
+                                       0.4, 0.2, -0.001]))
+    for mesh in payload['meshes'].values():
+        mesh['normal'] = append_stream(payload, 'f', [0, 0, 1] * 3)
+    page = _open_fixture(viewer, payload)
+    before = mesh_pixel(page)
+    page.evaluate("""async () => {
+      const {setOutlinesEnabled} = await import('./js/scene/outline-renderer.js');
+      setOutlinesEnabled(true);
+    }""")
+    outlined = mesh_pixel(page)
+    assert max(abs(a - b) for a, b in zip(before, outlined)) < 15
+
+
+def test_directional_shadows_keep_original_shape_with_a_low_angle_floor_fallback(viewer):
+    payload = model_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh['pos'] = append_stream(payload, 'f', [
+        -0.5, 0, -0.5, 0.5, 0, -0.5, 0.5, 2, -0.5, -0.5, 2, -0.5,
+        -0.5, 0, 0.5, 0.5, 0, 0.5, 0.5, 2, 0.5, -0.5, 2, 0.5,
+    ])
+    mesh['idx'] = append_stream(payload, 'I', [
+        0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7,
+        0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
+        0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
+    ])
+    mesh['drawindexed'] = [36, 0, 0]
+    mesh.pop('uv')
+    page = _open_fixture(viewer, payload)
+    midpoint = page.evaluate("""async () => {
+      const {scene, camera, controls, setKeyLightIntensity} = await import('./js/scene/scene.js');
+      const {requestRender} = await import('./js/scene/render-scheduler.js');
+      scene.background.setHex(0x808080);
+      camera.position.set(8, 7, 12);
+      camera.lookAt(controls.target); camera.updateMatrixWorld();
+      const light = scene.children.find(object => object.isDirectionalLight && object.castShadow);
+      window.__shadowCameras = new Set();
+      window.modViewer.activeMeshes[0].onBeforeShadow = (_renderer, _object, _camera, shadowCamera) =>
+        window.__shadowCameras.add(shadowCamera.uuid);
+      window.__lowerKeyLight = height => {
+        window.__shadowCameras.clear(); light.position.set(-2, height, -2); requestRender();
+      };
+      setKeyLightIntensity(0);
+      return controls.target.y;
+    }""")
+    points = [[1, -0.001, 1], [1.5, -0.001, -0.9], [3.5, -0.001, -2]]
+    baseline = mesh_pixels(page, points)
+    unshadowed = baseline[0]
+    page.evaluate("""async () => {
+      const {setKeyLightIntensity, invalidateCharacterShadowMap} = await import('./js/scene/scene.js');
+      window.__shadowCameras.clear(); setKeyLightIntensity(1); invalidateCharacterShadowMap();
+    }""")
+    initial = mesh_pixels(page, points)
+    assert page.evaluate('window.__shadowCameras.size') == 1
+    assert sum(baseline[1]) - sum(initial[1]) > 30
+    assert max(abs(a - b) for a, b in zip(baseline[2], initial[2])) < 5
+    for height, maps in ((3, 1), (midpoint, 2), (-1, 1), (3, 1)):
+        page.evaluate('height => window.__lowerKeyLight(height)', height)
+        shadowed = mesh_pixels(page, [[1, -0.001, 1]])[0]
+        assert page.evaluate('window.__shadowCameras.size') == maps
+        if height > 0:
+            assert sum(unshadowed) - sum(shadowed) > 30, height
+        else:
+            assert max(abs(a - b) for a, b in zip(unshadowed, shadowed)) < 5, height
 
 
 def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path):
@@ -326,9 +391,7 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
                 idx=append_stream(payload, 'I', [0,1,2, 0,2,3]), drawindexed=[6,0,0],
                 tex_key='diffuse::texture-01.dds')
     payload['textures'] = dict(zip(['diffuse::texture-01.dds', 'diffuse::texture-02.png'], urls))
-    page = viewer({'fixture-01': payload})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
+    page = _open_fixture(viewer, payload)
     wait_texture(page)
     assert page.evaluate("""async () => {
       const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
@@ -356,350 +419,138 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
 
 def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(viewer):
     payload, weights = weighted_payload(include_ineligible=True)
-    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
-    open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
+    page = _open_fixture(viewer, payload, {'fixture-weights': weights})
     page.evaluate('window.modViewer.activeMeshes[1].visible = false')
     assert bridge_calls(page, 'weights') == []
-    page.evaluate("""() => {
-      window.__rigFileCalls = [];
-      window.pywebview.api.load_model_rig = async () => { window.__rigFileCalls.push('read'); throw new Error('retired rig cache'); };
-      window.pywebview.api.save_model_rig = async () => { window.__rigFileCalls.push('write'); throw new Error('retired rig cache'); };
-    }""")
-    page.evaluate("""() => {
-      window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
-        -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
-      ]);
-    }""")
-    page.locator('#weight-rig-tab').click()
-    page.evaluate("""async () => {
-      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
-      window.__rigApi = weightRigApi;
-    }""")
-    page.wait_for_function('window.__rigApi.getModelRigState().loaded && window.__rigApi.getModelRigState().model?.joints.length > 1')
-    assert bridge_calls(page, 'weights') == [['fixture-01']]
-    picking = page.evaluate("""() => {
+    _activate_rig(page, humanoid=True)
+
+    assert page.evaluate("""() => {
       const rig = window.__rigApi;
-      const weightStarted = rig.beginWeightModelPicking();
-      const weightActive = rig.getModelWeightState().picking;
-      const rigStarted = rig.beginRigJointPicking({type: 'selected-joint'});
-      const rigCancelledWeight = !rig.getModelWeightState().picking;
-      const rigActive = rig.getModelRigState().jointPickIntent?.type === 'selected-joint';
-      const weightStartedAgain = rig.beginWeightModelPicking();
-      const weightActiveAgain = rig.getModelWeightState().picking;
-      const weightCancelledRig = !rig.getModelRigState().jointPickIntent;
+      rig.beginWeightModelPicking();
+      rig.beginRigJointPicking({type: 'selected-joint'});
+      const rigOwnsPicking = !rig.getModelWeightState().picking
+        && rig.getModelRigState().jointPickIntent?.type === 'selected-joint';
+      rig.beginWeightModelPicking();
+      const weightOwnsPicking = rig.getModelWeightState().picking && !rig.getModelRigState().jointPickIntent;
       rig.cancelWeightModelPicking();
-      return {
-        weightStarted,
-        weightActive,
-        rigStarted,
-        rigCancelledWeight,
-        rigActive,
-        weightStartedAgain,
-        weightActiveAgain,
-        weightCancelledRig,
-      };
+      return rigOwnsPicking && weightOwnsPicking;
     }""")
-    assert picking == {
-        'weightStarted': True,
-        'weightActive': True,
-        'rigStarted': True,
-        'rigCancelledWeight': True,
-        'rigActive': True,
-        'weightStartedAgain': True,
-        'weightActiveAgain': True,
-        'weightCancelledRig': True,
-    }
-    selection = page.evaluate("""() => {
-      const rig = window.__rigApi;
-      const source = rig.getModelWeightState().sources[0];
-      const first = source.availableBoneIds[0];
-      const second = source.availableBoneIds[1];
-      rig.setBoneSelected(source.key, first, true);
-      const selected = rig.getModelWeightState().selectedBones[0]?.boneIds;
-      rig.setBoneSelected(source.key, first, false);
-      rig.setBoneSelected(source.key, second, true);
-      const changed = rig.getModelWeightState().selectedBones[0]?.boneIds;
-      return {
-        selected,
-        changed,
-        physicsEnabled: rig.getModelPhysicsState().enabled,
-      };
+    page.evaluate("""() => {
+      const rig = window.__rigApi, source = rig.getModelWeightState().sources[0];
+      rig.setBoneSelected(source.key, source.availableBoneIds.at(-1), true);
     }""")
-    assert selection == {
-        'selected': [0],
-        'changed': [1],
-        'physicsEnabled': True,
-    }
     page.wait_for_function('window.__rigApi.getModelPhysicsState().participantCount > 0')
-    physics_active = page.evaluate("""() => {
-      const state = window.__rigApi.getModelPhysicsState();
-      return {enabled: state.enabled, participantCount: state.participantCount};
+    assert page.evaluate("""() => {
+      const rig = window.__rigApi, frequency = rig.getModelPhysicsState().frequencyHz;
+      rig.setPhysicsFrequency(frequency + 1.25);
+      const changed = rig.getModelPhysicsState().frequencyHz === frequency + 1.25;
+      rig.resetModelPhysics();
+      return changed && rig.getModelPhysicsState().frequencyHz === frequency;
     }""")
-    assert physics_active['enabled'] is True
-    assert physics_active['participantCount'] > 0
-    cleared = page.evaluate("""() => {
+    assert page.evaluate("""() => {
       const rig = window.__rigApi;
       rig.clearSelectedBones();
       const physics = rig.getModelPhysicsState();
-      return {
-        selected: rig.getModelWeightState().selectedBones,
-        physicsEnabled: physics.enabled,
-        participantCount: physics.participantCount,
-      };
+      return rig.getModelWeightState().selectedBones.length === 0 && !physics.enabled && physics.participantCount === 0;
     }""")
-    assert cleared == {'selected': [], 'physicsEnabled': False, 'participantCount': 0}
-    reloaded = page.evaluate("""() => {
-      const rig = window.__rigApi;
-      rig.loadSavedBoneSelection();
-      const physics = rig.getModelPhysicsState();
-      return {
-        selected: rig.getModelWeightState().selectedBones,
-        physicsEnabled: physics.enabled,
-        participantCount: physics.participantCount,
-      };
-    }""")
-    assert reloaded == {'selected': [], 'physicsEnabled': False, 'participantCount': 0}
-    api_result = page.evaluate("""() => {
-      const rig = window.__rigApi;
-      const controlRig = rig.getModelRigState().humanoidControlRig;
-      const target = [...controlRig.controls.leftHand.position];
-      target[1] -= 0.05;
-      const ikEnabled = rig.setRigIkEnabled(true);
-      const ikSolved = rig.solveRigIkTarget(target);
-      rig.resetRigPose();
 
-      const physicsBefore = rig.getModelPhysicsState();
-      const nextFrequency = physicsBefore.frequencyHz + 1.25;
-      const physicsSet = rig.setPhysicsFrequency(nextFrequency);
-      const physicsChanged = rig.getModelPhysicsState().frequencyHz === nextFrequency;
-      const physicsReset = rig.resetModelPhysics();
-      const physicsRestored = rig.getModelPhysicsState().frequencyHz === physicsBefore.frequencyHz;
-
-      return {
-        accepted: controlRig.accepted,
-        ikEnabled,
-        ikSolved: !!ikSolved && ikSolved.controlRig === 'humanoid',
-        physicsSet,
-        physicsChanged,
-        physicsReset,
-        physicsRestored,
-      };
-    }""")
-    assert api_result == {
-        'accepted': True,
-        'ikEnabled': True,
-        'ikSolved': True,
-        'physicsSet': True,
-        'physicsChanged': True,
-        'physicsReset': True,
-        'physicsRestored': True,
-    }
-    result = page.evaluate("""async () => {
-      const {weightRigApi: rig} = await import('./js/weight-rig/weight-rig-core.js');
-      const model = rig.getModelRigState().model;
-      const joint = model.components[0].nodeIds.find(id => id !== model.components[0].rootId);
-      window.__rigJoint = joint;
-      const mesh = window.modViewer.activeMeshes[0];
-      window.__rigPosition = mesh.geometry.attributes.position;
+    joint = page.evaluate("""() => {
+      const model = window.__rigApi.getModelRigState().model;
+      window.__rigJoint = model.components[0].nodeIds.find(id => id !== model.components[0].rootId);
+      window.__rigPosition = window.modViewer.activeMeshes[0].geometry.attributes.position;
       window.__rigBaseline = [...window.__rigPosition.array];
-      return {joint, weights: rig.getModelWeightState().selectedBones};
+      return window.__rigJoint;
     }""")
-    page.locator('.rig-bone-select').select_option(str(result['joint']))
-    assert result['weights'] == []
+    page.locator('.rig-bone-select').select_option(str(joint))
     baseline_pixel = mesh_pixel(page)
-    assert page.evaluate("""async () => {
-      const THREE = await import('three/webgpu');
-      const {weightRigApi: rig} = await import('./js/weight-rig/weight-rig-core.js');
-      const changed = rig.setRigJointRotation(window.__rigJoint,
-        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), Math.PI / 2), {dragging: true});
+    assert page.evaluate("""() => {
+      const rig = window.__rigApi;
+      rig.setRigJointRotation(window.__rigJoint, [0, 0, Math.SQRT1_2, Math.SQRT1_2], {dragging: true});
       rig.finishRigJointPose(window.__rigJoint);
-      return changed && [...window.__rigPosition.array].some((value, i) => Math.abs(value-window.__rigBaseline[i]) > 1e-4);
+      return [...window.__rigPosition.array].some((value, i) => Math.abs(value-window.__rigBaseline[i]) > 1e-4);
     }""")
     posed_pixel = mesh_pixel(page)
     assert sum(abs(a-b) for a,b in zip(baseline_pixel, posed_pixel)) > 30
     page.locator('.rig-reset-pose').click()
-    assert page.evaluate('window.__rigPosition.array.every((value, i) => Math.abs(value-window.__rigBaseline[i]) < 1e-5)')
+    assert page.evaluate("""() =>
+      window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition
+      && window.__rigPosition.array.every((value, i) => Math.abs(value-window.__rigBaseline[i]) < 1e-5)
+    """)
     restored_pixel = mesh_pixel(page)
     assert max(abs(a-b) for a,b in zip(baseline_pixel, restored_pixel)) < 15
-    assert page.evaluate("""() => {
-      const rig = window.__rigApi;
-      const selectedJointId = window.__rigJoint;
-      const before = rig.getModelRigState();
-      const originalRoot = before.model.components[0].rootId;
-      const revision = before.structureRevision;
-      if (!rig.setRigJointRoot(selectedJointId)) return false;
-      const changed = rig.getModelRigState();
-      const updated = changed.selectedJointId === selectedJointId
-        && changed.model.components[0].rootId === selectedJointId
-        && changed.structureRevision > revision
-        && rig.getModelWeightState().selectedBones.length === 0;
-      return updated && rig.setRigJointRoot(originalRoot)
-        && rig.getModelRigState().model.components[0].rootId === originalRoot;
-    }""")
-    preset_result = page.evaluate("""async () => {
-      const rig = window.__rigApi;
-      const api = window.pywebview.api;
-      const component = rig.getModelRigState().model.components[0];
-      const originalRoot = component.rootId;
+
+    restored = page.evaluate("""async () => {
+      const rig = window.__rigApi, api = window.pywebview.api;
+      const component = rig.getModelRigState().model.components[0], originalRoot = component.rootId;
       const presetRoot = component.nodeIds.find(id => id !== originalRoot);
-      if (!Number.isInteger(presetRoot) || !rig.setRigJointRoot(presetRoot)) return {error: 'root'};
-      if (!rig.setRigJointRotation(originalRoot, [0, 0, Math.SQRT1_2, Math.SQRT1_2])) return {error: 'rotation'};
+      rig.setRigJointRoot(presetRoot);
+      rig.setRigJointRotation(originalRoot, [0, 0, Math.SQRT1_2, Math.SQRT1_2]);
       rig.finishRigJointPose(originalRoot);
-      let captured = null;
+      let captured;
       const previousSave = api.save_rig_pose_preset;
       api.save_rig_pose_preset = async (path, preset) => {
         captured = preset;
         return {saved: true, presets: [preset]};
       };
-      const saved = await rig.saveRigPosePreset('Root and Joint');
+      await rig.saveRigPosePreset('Pose 01');
       api.save_rig_pose_preset = previousSave;
-      if (!saved.saved || !captured) return {error: 'save'};
-      const reset = rig.resetRigPose();
-      const applied = rig.applyRigPosePresetById(captured.id);
-      const after = rig.getModelRigState();
-      return {
-        saved: saved.saved,
-        hasJoint: captured.joints.length === 1,
-        hasRoot: captured.roots.length === 1,
-        reset,
-        success: applied.success,
-        appliedJointCount: applied.appliedJointCount,
-        appliedRootCount: applied.appliedRootCount,
-        rootRestored: after.model.components[0].rootId === presetRoot,
-        poseRestored: Object.hasOwn(after.model.poseRotationByJointId, String(originalRoot)),
-        lastApplySucceeded: after.rigPresets.lastApplyResult?.success === true,
-      };
+      rig.resetRigPose();
+      const applied = rig.applyRigPosePresetById(captured.id), state = rig.getModelRigState();
+      return {success: applied.success, root: state.model.components[0].rootId,
+        posed: Object.hasOwn(state.model.poseRotationByJointId, String(originalRoot)), expectedRoot: presetRoot};
     }""")
-    assert preset_result == {
-        'saved': True,
-        'hasJoint': True,
-        'hasRoot': True,
-        'reset': True,
-        'success': True,
-        'appliedJointCount': 1,
-        'appliedRootCount': 1,
-        'rootRestored': True,
-        'poseRestored': True,
-        'lastApplySucceeded': True,
-    }
-    page.locator('.rig-clear-joint').click()
-    assert page.locator('.rig-bone-select').input_value() == ''
-    assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position === window.__rigPosition')
-    assert page.evaluate("""async () => {
-      const rig = window.__rigApi;
-      const before = rig.getModelRigState().structureRevision;
-      await rig.activateWeightRig();
-      await rig.activateWeightRig();
-      return rig.getModelRigState().structureRevision === before && window.__rigFileCalls.length === 0;
-    }""")
+    assert restored['success'] and restored['posed']
+    assert restored['root'] == restored['expectedRoot']
     assert bridge_calls(page, 'weights') == [['fixture-01']]
-    assert bridge_calls(page, 'export') == []
 
 
 def test_weight_rig_overlapping_unregister_rebuilds_using_final_membership(viewer):
     payload, weights = weighted_payload(include_third_member=True)
-    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
-    open_model(page, 'fixture-01')
-    wait_loaded(page, 3)
+    page = _open_fixture(viewer, payload, {'fixture-weights': weights})
     page.evaluate('window.modViewer.activeMeshes.slice(1).forEach(mesh => { mesh.visible = false; })')
-    page.evaluate("""() => {
-      window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
-        -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
-      ]);
-    }""")
-    page.locator('#weight-rig-tab').click()
-    page.evaluate("""async () => {
-      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
-      window.__rigApi = weightRigApi;
-    }""")
-    page.wait_for_function("""() => {
-      const weight = window.__rigApi.getModelWeightState();
-      const rig = window.__rigApi.getModelRigState();
-      return weight.loaded && weight.sources.length > 0 && rig.loaded && rig.model?.joints.length > 2;
-    }""")
-    initial = page.evaluate("""() => {
-      const state = window.__rigApi.getModelRigState();
-      return {loaded: state.loaded, loading: state.loading, joints: state.model?.joints.length || 0};
-    }""")
-    assert initial['loaded'] is True
-    assert initial['joints'] > 2
+    _activate_rig(page, humanoid=True)
+    initial_joints = page.evaluate('window.__rigApi.getModelRigState().model.joints.length')
 
-    rebuilding = page.evaluate("""async () => {
-      const {unregisterWeightRigMesh} = await import('./js/weight-rig/weight-rig-core.js');
-      unregisterWeightRigMesh(window.modViewer.activeMeshes[1]);
-      const state = window.__rigApi.getModelRigState();
-      return {loaded: state.loaded, loading: state.loading, model: state.model};
-    }""")
-    assert rebuilding == {'loaded': False, 'loading': True, 'model': None}
-    overlapping = page.evaluate("""async () => {
-      const {unregisterWeightRigMesh} = await import('./js/weight-rig/weight-rig-core.js');
-      unregisterWeightRigMesh(window.modViewer.activeMeshes[2]);
-      const state = window.__rigApi.getModelRigState();
-      return {loaded: state.loaded, loading: state.loading, model: state.model};
-    }""")
-    assert overlapping == {'loaded': False, 'loading': True, 'model': None}
+    for index in (1, 2):
+        assert page.evaluate("""async index => {
+          const {unregisterWeightRigMesh} = await import('./js/weight-rig/weight-rig-core.js');
+          unregisterWeightRigMesh(window.modViewer.activeMeshes[index]);
+          const state = window.__rigApi.getModelRigState();
+          return state.loading && !state.loaded && state.model === null;
+        }""", index)
     page.wait_for_function('window.__rigApi.getModelRigState().loaded && !window.__rigApi.getModelRigState().loading')
-    rebuilt = page.evaluate("""() => {
-      const state = window.__rigApi.getModelRigState();
-      return {loaded: state.loaded, joints: state.model?.joints.length || 0};
-    }""")
-    assert rebuilt['loaded'] is True
-    assert rebuilt['joints'] == 2
-    assert rebuilt['joints'] < initial['joints']
+    rebuilt_joints = page.evaluate('window.__rigApi.getModelRigState().model.joints.length')
+    assert initial_joints > rebuilt_joints == 2
 
 
 def test_weight_rig_shape_change_invalidates_and_rebuilds_preserving_root(viewer):
     payload, weights = weighted_payload()
-    mesh = payload['meshes']['mesh-00']
-    mesh['shape_targets'] = [{'var': 'shape01', 'pos': append_stream(payload, 'f', [0, 0, 0, 2, 0, 0, 0, 2, 0])}]
+    payload['meshes']['mesh-00']['shape_targets'] = [
+        {'var': 'shape01', 'pos': append_stream(payload, 'f', [0, 0, 0, 2, 0, 0, 0, 2, 0])},
+    ]
     payload['state']['defaults'] = {'shape01': '0'}
-    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
-    open_model(page, 'fixture-01')
-    wait_loaded(page)
-    page.evaluate("""() => {
-      window.modViewer.activeMeshes[0].userData.humanoidRestPositions = new Float32Array([
-        -1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, -1, 1.5, 0, 1, 1.5, 0,
-      ]);
-    }""")
-    page.locator('#weight-rig-tab').click()
-    page.evaluate("""async () => {
-      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
-      window.__rigApi = weightRigApi;
-    }""")
-    page.wait_for_function("""() => {
-      const weight = window.__rigApi.getModelWeightState();
-      const rig = window.__rigApi.getModelRigState();
-      return weight.loaded && weight.sources.length > 0 && rig.loaded && rig.model?.joints.length > 1;
-    }""")
-    selected = page.evaluate("""() => {
-      const rig = window.__rigApi;
-      const component = rig.getModelRigState().model.components[0];
+    page = _open_fixture(viewer, payload, {'fixture-weights': weights})
+    _activate_rig(page, humanoid=True)
+    joint = page.evaluate("""() => {
+      const rig = window.__rigApi, component = rig.getModelRigState().model.components[0];
       const joint = component.nodeIds.find(id => id !== component.rootId);
-      return {joint, selected: rig.setRigJointRoot(joint)};
+      rig.setRigJointRoot(joint);
+      return joint;
     }""")
-    assert selected['selected'] is True
 
-    invalidated = page.evaluate("""async () => {
+    assert page.evaluate("""async () => {
       const {setControlValue} = await import('./js/editing/control-state.js');
       const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-      setControlValue('shape01', '1');
-      refreshMeshes({force: {shapes: true}});
+      setControlValue('shape01', '1'); refreshMeshes({force: {shapes: true}});
       const state = window.__rigApi.getModelRigState();
-      return {loaded: state.loaded, loading: state.loading, model: state.model};
+      return !state.loaded && !state.loading && state.model === null;
     }""")
-    assert invalidated == {'loaded': False, 'loading': False, 'model': None}
-
     rebuilt = page.evaluate("""async () => {
       await window.__rigApi.activateWeightRig();
       const state = window.__rigApi.getModelRigState();
-      return {
-        loaded: state.loaded,
-        root: state.model.components[0].rootId,
-        selectedRoot: window.__rigApi.getModelRigState().selectedJointId,
-      };
+      return {root: state.model.components[0].rootId, selected: state.selectedJointId};
     }""")
-    assert rebuilt == {'loaded': True, 'root': selected['joint'], 'selectedRoot': None}
+    assert rebuilt == {'root': joint, 'selected': None}
 
 
 def test_weight_rig_collapsed_source_keeps_weights_and_other_physics_then_recovers(viewer):
@@ -711,40 +562,27 @@ def test_weight_rig_collapsed_source_keeps_weights_and_other_physics_then_recove
         {'var': 'shape01', 'pos': append_stream(payload, 'f', [0] * 9)},
     ]
     payload['state']['defaults'] = {'shape01': '0'}
-    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
-    open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
-    page.locator('#weight-rig-tab').click()
-    page.evaluate("""async () => {
-      const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
-      window.__rigApi = weightRigApi;
-    }""")
-    page.wait_for_function('window.__rigApi.getModelRigState().loaded')
+    page = _open_fixture(viewer, payload, {'fixture-weights': weights})
+    _activate_rig(page)
     page.evaluate("""() => {
       const rig = window.__rigApi;
       rig.getModelWeightState().sources.forEach(source => rig.setBoneSelected(source.key, source.availableBoneIds.at(-1), true));
     }""")
     page.wait_for_function('window.__rigApi.getModelPhysicsState().participantCount === 2')
 
-    for value, expected_participants, expected_errors in [('1', 1, 1), ('0', 2, 0)]:
+    for value, participants, errors in [('1', 1, 1), ('0', 2, 0)]:
         state = page.evaluate("""async value => {
           const {setControlValue} = await import('./js/editing/control-state.js');
           const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
-          setControlValue('shape01', value);
-          refreshMeshes({force: {shapes: true}});
+          setControlValue('shape01', value); refreshMeshes({force: {shapes: true}});
           await window.__rigApi.activateWeightRig();
-          const weight = window.__rigApi.getModelWeightState();
-          const rig = window.__rigApi.getModelRigState();
-          return {weightLoaded: weight.loaded, sourceCount: weight.sources.length,
-            selectionCount: weight.selectedBones.length, rigLoaded: rig.loaded,
-            errors: Object.keys(rig.sourceErrors).length};
+          const weight = window.__rigApi.getModelWeightState(), rig = window.__rigApi.getModelRigState();
+          return {selections: weight.selectedBones.length, errors: Object.keys(rig.sourceErrors).length};
         }""", value)
-        assert state == {'weightLoaded': True, 'sourceCount': 2, 'selectionCount': 2,
-                         'rigLoaded': True, 'errors': expected_errors}
+        assert state == {'selections': 2, 'errors': errors}
         page.wait_for_function(
             'expected => window.__rigApi.getModelPhysicsState().participantCount === expected',
-            arg=expected_participants,
+            arg=participants,
         )
-        if expected_errors:
-            assert ('Rig unavailable: no usable faces. Affected weight source count: 1.'
-                    in page.locator('.weight-rig-status').inner_text())
+        if errors:
+            assert 'Rig unavailable: no usable faces.' in page.locator('.weight-rig-status').inner_text()

@@ -5,6 +5,92 @@ import math
 import pytest
 
 
+def test_outline_zoom_does_not_expand_into_fine_geometry(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {resetOutlineProjectionReference, updateOutlineProjectionScale,
+        getOutlineState} = await import('./js/scene/outline-renderer.js');
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+      const target = new THREE.Vector3();
+      camera.position.set(0, 0, 10);
+      const snapshot = () => {
+        updateOutlineProjectionScale(camera, target, 800);
+        const state = getOutlineState();
+        return {pixels: state.effectiveWidthPixels,
+          extrusion: state.scalePerDepth * camera.position.distanceTo(target)};
+      };
+      resetOutlineProjectionReference(camera, target);
+      const fitted = snapshot();
+      camera.position.z = 40;
+      const distant = snapshot();
+      camera.position.z = 10;
+      const restored = snapshot();
+      return {fitted, distant, restored};
+    }""")
+    fitted = result['fitted']
+    assert result['distant']['pixels'] < fitted['pixels'] / 3
+    assert result['distant']['extrusion'] == pytest.approx(fitted['extrusion'])
+    assert result['restored'] == pytest.approx(fitted)
+
+
+def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {createCharacterShadowController} = await import('./js/scene/character-shadow-controller.js');
+      const {createKeyLightController} = await import('./js/scene/key-light-controller.js');
+      const renderer = {shadowMap: {}, domElement: document.createElement('canvas')};
+      const scene = new THREE.Scene(), light = new THREE.DirectionalLight();
+      scene.add(light, light.target);
+      const camera = new THREE.PerspectiveCamera();
+      camera.position.set(0, 0, 10);
+      const controls = {target: new THREE.Vector3(7, 4, -3)};
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 2));
+      mesh.position.copy(controls.target);
+      const alternate = new THREE.Mesh(mesh.geometry);
+      alternate.position.set(7, -6, -3); alternate.visible = false;
+      const grid = new THREE.GridHelper();
+      scene.add(mesh, alternate, grid);
+      const key = createKeyLightController({scene, light, renderer, camera, controls});
+      const shadow = createCharacterShadowController({scene, light, renderer, grid});
+      shadow.setMeshes([mesh, alternate]);
+      const box = new THREE.Box3().setFromObject(mesh);
+      key.rebase(box.getSize(new THREE.Vector3()).length()); key.update();
+      const projection = () => ({position: light.position.toArray(), target: light.target.position.toArray()});
+      const before = projection();
+      shadow.update();
+      const after = projection();
+      const direction = new THREE.Vector3().fromArray(before.position).sub(controls.target).normalize();
+      light.position.copy(controls.target).addScaledVector(direction, 0.05);
+      key.update(); shadow.update();
+      const depths = [];
+      for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y])
+        for (const z of [box.min.z, box.max.z])
+          depths.push(new THREE.Vector3(x,y,z).project(light.shadow.camera).z);
+      const floors = [];
+      for (const alternativeVisible of [false, true, false]) {
+        mesh.visible = !alternativeVisible; alternate.visible = alternativeVisible;
+        shadow.invalidateVisibility(); shadow.update();
+        const ground = scene.children.find(object => object.userData.isViewerGround);
+        floors.push({grid: grid.position.y, ground: ground.position.y});
+      }
+      mesh.visible = false;
+      shadow.invalidateVisibility(); shadow.update();
+      const clearedFloors = [grid.position.y];
+      mesh.visible = true;
+      shadow.invalidateVisibility(); shadow.update();
+      clearedFloors.push(grid.position.y);
+      shadow.reset(); clearedFloors.push(grid.position.y);
+      return {before, after, depths, floors, clearedFloors, parallel: light.shadow.camera.isOrthographicCamera};
+    }""")
+    assert result['after'] == result['before']
+    assert result['parallel']
+    assert all(abs(depth) <= 1 for depth in result['depths'])
+    for floor, expected in zip(result['floors'], [2, -8, 2]):
+        assert floor['grid'] == expected
+        assert expected - 0.01 < floor['ground'] < expected
+    assert result['clearedFloors'] == [0, 2, 0]
+
+
 def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(module_page):
     result = module_page.evaluate("""async () => {
       const {createPreferencePersistence} = await import('./js/ui/preference-persistence.js');

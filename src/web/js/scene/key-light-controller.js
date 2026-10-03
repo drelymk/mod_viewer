@@ -124,6 +124,7 @@ export function createKeyLightController({ scene, camera, renderer, controls, li
         startY: event.clientY,
         startPosition: light.position.clone(),
         cameraDirection,
+        controlsEnabled: controls.enabled,
         depthScale: Math.max(camera.position.distanceTo(controls.target) * 0.004, 0.0001),
       };
       controls.enabled = false;
@@ -155,15 +156,17 @@ export function createKeyLightController({ scene, camera, renderer, controls, li
 
   function finishDrag(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
+    const controlsEnabled = drag.controlsEnabled;
+    drag = null;
+    controls.enabled = controlsEnabled;
     if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
       renderer.domElement.releasePointerCapture(event.pointerId);
     }
-    drag = null;
-    controls.enabled = true;
     updateCursor(event);
   }
   renderer.domElement.addEventListener('pointerup', finishDrag);
   renderer.domElement.addEventListener('pointercancel', finishDrag);
+  renderer.domElement.addEventListener('lostpointercapture', finishDrag);
 
   function setIntensity(value) {
     const number = Number(value);

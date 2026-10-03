@@ -12,7 +12,7 @@ from .draw_resources import (
     _select_draw_sections,
 )
 from .draw_scan import _scan_sections_for_draws
-from .texture_roles import TextureOverrideIndex
+from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
 
 
 def _lookup_component_value(mapping, component):
@@ -33,9 +33,16 @@ def _lookup_component_value(mapping, component):
     return mapping.get(prefix) if prefix else None
 
 
-def _resolved_texture_assignments(assignments, resolve_file):
+def _resolved_texture_assignments(assignments, resolve_file, draw_conditions=None):
     resolved = []
     for assignment in assignments:
+        # A binding from a disjoint branch cannot affect this draw. Keep the
+        # surviving history in authored order, including repeated resources.
+        if draw_conditions and assignment["cond"] and not any(
+                _condition_group_is_consistent([*draw_group, *binding_group])
+                for draw_group in draw_conditions
+                for binding_group in assignment["cond"]):
+            continue
         file = resolve_file(assignment["res"])
         if not file:
             continue
@@ -47,8 +54,10 @@ def _resolved_texture_assignments(assignments, resolve_file):
 
 
 def _apply_diffuse_state(draw, authored, resolve_file):
+    history = _resolved_texture_assignments(
+        authored.diffuse_history, resolve_file, draw.conditions)
     variants = _resolved_texture_assignments(
-        authored.diffuse_variants, resolve_file)
+        authored.diffuse_variants, resolve_file, draw.conditions) or history
     if variants:
         draw.set_texture_default("diffuse", variants[0]["file"])
         draw.texture_hashes["diffuse"] = list(dict.fromkeys(
@@ -58,7 +67,6 @@ def _apply_diffuse_state(draw, authored, resolve_file):
     if len(variants) > 1:
         draw.set_texture_variants("diffuse", variants)
 
-    history = _resolved_texture_assignments(authored.diffuse_history, resolve_file)
     variant_variables = {
         clause["var"] for item in variants
         for group in item["conditions"] for clause in group
@@ -75,7 +83,8 @@ def _apply_diffuse_state(draw, authored, resolve_file):
 def _apply_auxiliary_map_state(draw, authored, resolve_file):
     for channel, state in authored.auxiliary_maps.items():
         assignments = state.get("history") or state.get("variants") or []
-        resolved = _resolved_texture_assignments(assignments, resolve_file)
+        resolved = _resolved_texture_assignments(
+            assignments, resolve_file, draw.conditions)
         default_file = None
         for item in resolved:
             if not item["conditions"]:

@@ -1,36 +1,50 @@
 """Texture registry identity and lazy-option regressions."""
 
 import io
-import os
 import zipfile
+from unittest.mock import Mock, patch
 
 from core.geometry.texture_bindings import TextureRegistry, build_texture_options
-from core.mod_source import ZipModSource
+from core.mod_source import DirectoryModSource, ZipModSource
 from core.textures.profiles import texture_profile_for
 from core.textures.pipeline import encode_texture_file
 
 
-def test_pool_only_texture_options_are_not_published(tmp_path):
-    pool = tmp_path / "pool.dds"
-    discovered = tmp_path / "discovered.dds"
-    pool.write_bytes(b"pool")
-    discovered.write_bytes(b"discovered")
-    registry = TextureRegistry(
-        str(tmp_path), texture_profile_for("genshin"),
-        texture_source=lambda path, role, **kwargs:
-        f"/texture/{os.path.basename(path)}")
+def test_texture_pool_publication_and_reload_lifecycle(tmp_path):
+    for name in ("pool.dds", "discovered.dds"):
+        (tmp_path / name).write_bytes(b"texture")
+    source = DirectoryModSource(tmp_path)
+    publish = Mock(side_effect=lambda path, role: f"/texture/{role}")
 
-    options = build_texture_options({
-        "diffuse_pool_files": [{"file": "pool.dds", "res": "ResourcePool"}],
-        "discovered_textures": [{"file": "discovered.dds", "source": "scan"}],
-    }, registry)
+    def registry():
+        return TextureRegistry(str(tmp_path), texture_profile_for("genshin"),
+                               source=source, texture_source=publish)
 
-    assert [item["tex_key"] for item in options] == [
-        "diffuse::pool.dds", "diffuse::discovered.dds"]
-    assert registry.sources == {}
+    with patch.object(source, "resolve_resource",
+                      wraps=source.resolve_resource) as resolve:
+        first = registry()
+        options = build_texture_options({
+            "diffuse_pool_files": [{"file": "pool.dds", "res": "ResourcePool"}],
+            "discovered_textures": [{"file": "discovered.dds", "source": "scan"}],
+        }, first)
+        assert [item["tex_key"] for item in options] == [
+            "diffuse::pool.dds", "diffuse::discovered.dds"]
+        assert first.sources == {}
 
-    assert registry.ensure(str(pool), "diffuse") == "diffuse::pool.dds"
-    assert registry.sources == {"diffuse::pool.dds": "/texture/pool.dds"}
+        resolve.reset_mock()
+        for _ in range(2):
+            path = first.resolve("pool.dds")
+            assert first.ensure(path, "diffuse") == "diffuse::pool.dds"
+            assert first.ensure(path, "normal_map") == "normal_map::pool.dds"
+        resolve.assert_not_called()
+        assert publish.call_count == 2
+
+        resolve.reset_mock()
+        publish.reset_mock()
+        second = registry()
+        assert second.ensure(second.resolve("pool.dds")) == "diffuse::pool.dds"
+        resolve.assert_called_once_with("pool.dds")
+        publish.assert_called_once()
 
 
 def test_zip_texture_registry_and_picker_read_member_bytes(tmp_path):

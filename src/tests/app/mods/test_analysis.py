@@ -371,12 +371,8 @@ filename = cv-alt.dds
         ("Source02::cloth", "1"),
         ("Source01::swapvar", "1"),
     }
-    diffuse_rules = cv_draw.texture_rules("diffuse")
-    assert len(diffuse_rules) == 2
-    assert {
-        (clause["var"], clause["value"])
-        for clause in diffuse_rules[0]["conditions"][0]
-    } == {("Source01::swapvar", "1")}
+    assert cv_draw.texture_default("diffuse") == "cv.dds"
+    assert cv_draw.texture_rules("diffuse") == []
 
     og_group = next(group for group in parsed.groups
                     if group["identity_source"].endswith(og.name))

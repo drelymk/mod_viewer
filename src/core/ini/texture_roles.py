@@ -245,12 +245,19 @@ _TEXTURE_SOURCE_PRIORITY = {
 
 def _effective_role_assignments(assignments):
     """Apply semantic, structural-slot, then legacy-slot precedence."""
+    priorities = [_TEXTURE_SOURCE_PRIORITY.get(item.get("source"), 0)
+                  for item in assignments]
+    # There are only a few evidence levels. Select their stronger assignments
+    # once, rather than rescan the entire execution history for every item.
+    higher_by_priority = {
+        priority: [item for item, candidate_priority
+                   in zip(assignments, priorities)
+                   if candidate_priority > priority]
+        for priority in set(priorities)
+    }
     result = []
-    for item in assignments:
-        priority = _TEXTURE_SOURCE_PRIORITY.get(item.get("source"), 0)
-        higher = [candidate for candidate in assignments
-                  if _TEXTURE_SOURCE_PRIORITY.get(
-                      candidate.get("source"), 0) > priority]
+    for item, priority in zip(assignments, priorities):
+        higher = higher_by_priority[priority]
         if not higher:
             result.append(item)
             continue

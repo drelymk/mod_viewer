@@ -1,16 +1,18 @@
 // Shared WebGPU/TSL inverted-hull silhouette outlines.
 
 import * as THREE from 'three/webgpu';
-import { cameraProjectionMatrix, normalViewGeometry, positionView, uniform, vec4 } from 'three/tsl';
+import { cameraProjectionMatrix, normalViewGeometry, positionView, uniform, vec3, vec4 } from 'three/tsl';
 import { requestRender } from './render-scheduler.js';
 
 const REFERENCE_OUTLINE_WIDTH_PIXELS = 0.75;
-const MIN_OUTLINE_WIDTH_PIXELS = 0.5;
+const MIN_OUTLINE_WIDTH_PIXELS = 0;
 const MAX_OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineScalePerDepthNode = uniform(0);
 const outlineViewDepth = positionView.z.negate().max(0.000001);
 const outlineWidthView = outlineViewDepth.mul(outlineScalePerDepthNode);
-const displacedOutlinePositionView = positionView.add(normalViewGeometry.mul(outlineWidthView));
+// Keep surface depth so cavity backfaces cannot expand through the visible face.
+const outlineNormalView = vec3(normalViewGeometry.xy, 0);
+const displacedOutlinePositionView = positionView.add(outlineNormalView.mul(outlineWidthView));
 const outlineVertexNode = cameraProjectionMatrix.mul(vec4(displacedOutlinePositionView, 1));
 
 function createOutlineMaterial(color) {
@@ -154,8 +156,9 @@ export function updateOutlineProjectionScale(camera, target, viewportHeight) {
   }
   const referenceSpan = outlineReferenceProjectionSpan > 0 ? outlineReferenceProjectionSpan : currentSpan;
   const ratio = referenceSpan / currentSpan;
+  // Shrink with projected geometry so distant mouth gaps and thin parts stay open.
   const effectiveWidthPixels = THREE.MathUtils.clamp(
-    REFERENCE_OUTLINE_WIDTH_PIXELS * Math.sqrt(ratio),
+    REFERENCE_OUTLINE_WIDTH_PIXELS * ratio,
     MIN_OUTLINE_WIDTH_PIXELS,
     MAX_OUTLINE_WIDTH_PIXELS,
   );
