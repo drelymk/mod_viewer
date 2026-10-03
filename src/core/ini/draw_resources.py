@@ -340,11 +340,24 @@ def _build_vertex_binding_index(section_info, sections,
 
 
 def _select_draw_sections(section_info, global_ib):
-    """Select TextureOverride sections that can produce viewer geometry."""
+    """Select authored draws, sharing auto only within one INI/hash family."""
+    family_auto = {}
+    for name, info in section_info.items():
+        match = info.get("geometry_match_at_end")
+        if (name.lower().startswith("textureoverride") and match
+                and match.first_index is None and match.index_count is None
+                and info["drawindexed_auto"]):
+            family_auto[((info.get("src") or {}).get("ini_path"), match.hash)] = True
+
+    def has_auto(info):
+        match = info.get("geometry_match_at_end")
+        return info["drawindexed_auto"] or (match and family_auto.get(
+            ((info.get("src") or {}).get("ini_path"), match.hash), False))
+
     return [(name, info) for name, info in section_info.items()
             if name.lower().startswith("textureoverride")
             and (info["ib"] or global_ib)
-            and (info["draws"] or (info["ib"] and not info["handling_skip"]))]
+            and (info["draws"] or (info["ib"] and has_auto(info)))]
 
 
 def _component_role_candidates(base):

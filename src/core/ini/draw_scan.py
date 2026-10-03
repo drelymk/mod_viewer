@@ -421,17 +421,17 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if not info["ib"]:
                     info["ib"] = match.group(1)
                 info["_cur_ib"] = match.group(1)
-            if re.match(r"handling\s*=\s*skip\b", line, re.I):
-                info["handling_skip"] = True
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
             if match:
                 occurrence = DrawOccurrence(
                     section_name, draw_ordinal, execution_path)
                 draw_ordinal += 1
+                if match[1].strip().casefold() == "auto":
+                    info["drawindexed_auto"] = True
+                    continue
                 arguments = resolve_drawindexed(match[1], draw_constants)
                 if arguments is None:
-                    if match[1].strip().casefold() != "auto":
-                        info["unresolved_draws"] = True
+                    info["unresolved_draws"] = True
                     continue
                 combined = DNF_TRUE
                 for frame in cond_stack:
@@ -503,7 +503,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
         info = {
             "vb0": None, "vb1": None, "vb2": None, "ib": None,
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
-            "handling_skip": False, "_cur_diffuse_variants": [],
+            "drawindexed_auto": False, "_cur_diffuse_variants": [],
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},

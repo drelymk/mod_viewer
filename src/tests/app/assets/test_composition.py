@@ -54,13 +54,12 @@ def _zzmi(hash_value, extra=""):
     )
 
 
-def test_collect_component_overrides_includes_skip_and_range():
+def test_collect_component_overrides_preserves_component_identity_and_range():
     result = collect_component_overrides({
         "TextureOverrideComponent02": [
             "hash = 0xAAAAAAAA",
             "match_first_index = 300",
             "match_index_count = 12",
-            "handling = skip",
         ],
     }, "nested/component02.ini")
 
@@ -68,8 +67,6 @@ def test_collect_component_overrides_includes_skip_and_range():
     assert result[0].key.geometry_hash == "aaaaaaaa"
     assert result[0].first_index == 300
     assert result[0].index_count == 12
-    assert result[0].handling_skip is True
-    assert result[0].geometry_evidence is False
     assert result[0].asset_identity_evidence is True
 
 
@@ -83,7 +80,6 @@ def test_auxiliary_buffer_hash_does_not_identify_another_asset():
         ],
     }, "mod.ini")
 
-    assert result[0].geometry_evidence is True
     assert result[0].asset_identity_evidence is False
 
 
@@ -107,18 +103,16 @@ def test_collect_component_overrides_follows_nested_command_lists():
     assert len(result) == 1
     assert result[0].geometry_hash == "aaaaaaaa"
     assert result[0].first_index == 300
-    assert result[0].handling_skip is True
-    assert result[0].geometry_evidence is True
     assert result[0].asset_identity_evidence is True
 
 
-def test_texture_only_hash_identifies_asset_without_covering_geometry(
+def test_component_identity_handles_range_independently_of_draw_behavior(
         tmp_path, monkeypatch):
-    index = _index(_geometry("aaaaaaaa", (0, 12)))
+    index = _index(_geometry("aaaaaaaa", (0, 12)), _geometry("bbbbbbbb", (0, 6)))
     monkeypatch.setattr(asset_index, "load_index",
                         lambda _type, _root: index)
     context = _context(tmp_path, {
-        "mod.ini": (
+        "mod.ini": _zzmi("bbbbbbbb") + (
             "[TextureOverrideComponent02IB]\n"
             "hash = aaaaaaaa\n"
             "run = CommandList\\ZZMI\\SetTextures\n"),
@@ -126,12 +120,18 @@ def test_texture_only_hash_identifies_asset_without_covering_geometry(
 
     plan = asset_composition.plan_missing_asset_parts(context)
 
-    assert plan.status == "ready"
+    assert plan.status == "nothing_missing"
     assert plan.asset == {"path": "Asset01", "geometry": [
-        _geometry("aaaaaaaa", (0, 12))]}
-    assert plan.evidence[0].geometry_evidence is False
-    assert not plan.covered_parts
-    assert [part.first_index for part in plan.missing_parts] == [0]
+        _geometry("aaaaaaaa", (0, 12)), _geometry("bbbbbbbb", (0, 6))]}
+    assert {part.geometry_hash for part in plan.covered_parts} == {"aaaaaaaa", "bbbbbbbb"}
+    assert not plan.missing_parts
+    context.ini.records[0].sections["TextureOverrideComponent02IB"].append(
+        "handling = skip")
+    assert asset_composition.plan_missing_asset_parts(context).to_dict() == plan.to_dict()
+    del context.ini.records[0].sections["TextureOverrideComponent02IB"]
+    absent = asset_composition.plan_missing_asset_parts(context)
+    assert absent.status == "ready"
+    assert [part.geometry_hash for part in absent.missing_parts] == ["aaaaaaaa"]
 
 
 def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(
@@ -154,7 +154,6 @@ def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(
     assert len(plan.asset_parts) == 2
     assert len(plan.covered_parts) == 2
     assert not plan.missing_parts
-    assert len(plan.skipped_parts) == 1
 
 
 def test_plan_ignores_auxiliary_hash_that_matches_another_asset(
@@ -313,18 +312,18 @@ def test_plan_matches_range_start_when_index_count_differs(
     assert [part.first_index for part in plan.missing_parts] == [0]
 
 
-def test_hash_only_skip_covers_all_ranges(tmp_path, monkeypatch):
+def test_hash_only_component_identity_covers_all_ranges(tmp_path, monkeypatch):
     index = _index(_geometry("aaaaaaaa", (0, 12), (300, 24)))
     monkeypatch.setattr(asset_index, "load_index",
                         lambda _type, _root: index)
     context = _context(tmp_path, {
-        "mod.ini": _zzmi("aaaaaaaa", "handling = skip\n"),
+        "mod.ini": "[TextureOverrideComponent01IB]\nhash = aaaaaaaa\n",
     })
 
     plan = asset_composition.plan_missing_asset_parts(context)
 
     assert plan.status == "nothing_missing"
-    assert len(plan.skipped_parts) == 2
+    assert len(plan.covered_parts) == 2
 
 
 def test_plan_reads_staged_document_projection(tmp_path, monkeypatch):

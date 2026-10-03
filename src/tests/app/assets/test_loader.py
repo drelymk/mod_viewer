@@ -13,7 +13,9 @@ from app.assets import textures as asset_textures
 from app.settings import paths as paths
 from app.runtime import server as server
 from app.assets.index import build_index
-from app.assets.loader import hash_asset, load_asset
+from app.assets.loader import (AssetLoadResult, AssetMeshPart, hash_asset,
+                               load_asset)
+from app.assets.loader.models import build_asset_fill_payload
 from app.bridge.api import ModViewerAPI
 from core.geometry.component_coverage import ComponentCoverageKey
 from core.geometry.transport import GeometryBlob
@@ -152,6 +154,43 @@ def _wwmi_triangle(folder, *, component_name="Body", vb_hash="11111111",
     if image:
         (folder / "Components-0 t=candidate.dds").write_bytes(
             b"not decoded during load")
+
+
+@pytest.mark.parametrize("asset_type,game,profile_id,normal_source", [
+    ("ZZMI", "zzz", "zzz:zzmi", "normal_map"),
+    ("GIMI", "genshin", "genshin:gimi", "normal_map"),
+    ("WWMI", "wuwa", "wuwa:wwmi", "normal_data"),
+])
+def test_asset_preview_and_fill_use_authoritative_material_profile(
+        tmp_path, asset_type, game, profile_id, normal_source):
+    part = AssetMeshPart(
+        key="part-01", label="Component01", asset_type=asset_type,
+        asset_path="Asset01", geometry_hash="12345678",
+        component_name="Component01", classification="A",
+        component_ordinal=0, first_index=0, index_count=3,
+        positions=struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0),
+        indices=struct.pack("<3I", 0, 1, 2))
+    record = {"path": "Asset01"}
+    preview = AssetLoadResult.from_parts(
+        asset_type, str(tmp_path), record, [part],
+        geometry=GeometryBlob()).payload
+    fill = build_asset_fill_payload(
+        asset_type, str(tmp_path), record, [part], geometry=GeometryBlob())
+    for payload in (preview, fill):
+        metadata = payload["metadata"]
+        assert metadata["game"]["id"] == game
+        assert metadata["game"]["texture_api"] == asset_type.lower()
+        assert set(metadata["material_profiles"]) == {profile_id}
+        profile = metadata["material_profiles"][profile_id]
+        assert profile["game"] == game
+        assert profile["texture_api"] == metadata["game"]["texture_api"]
+        assert profile["normal_xy"] == ["r", "g"]
+        assert profile["normal_source"] == normal_source
+        mesh = next(iter(payload["meshes"].values()))
+        assert mesh["material_profile_id"] == profile_id
+        assert mesh["material_kind"] == "unknown"
+        assert mesh["asset_source"] == part.asset_source
+    assert preview["metadata"]["material_profiles"] == fill["metadata"]["material_profiles"]
 
 
 def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):

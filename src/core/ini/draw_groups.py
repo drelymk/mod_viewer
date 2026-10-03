@@ -248,6 +248,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         group_normal_source = _resolve_normal_source(
             group_vertex_resources, resources, position_file, position_stride,
             resolve_vertex_info)
+        # A selected part without numeric ranges shares its family's authored
+        # auto draw, represented by the complete replacement IB.
         authored_draws = list(info["draws"]) or [AuthoredDrawCall(
             count=None, start=0, base=0, source=info["src"],
             occurrence=DrawOccurrence(section_name, None),

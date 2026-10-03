@@ -1,4 +1,4 @@
-"""Mesh-buffer binding, draw fallback, and index decoding regressions."""
+"""Mesh-buffer binding, authored draws, and index decoding regressions."""
 
 import os
 import struct
@@ -198,19 +198,23 @@ def test_cross_ib_vb_reassignment_mesh_builder():
               f"not a collapsed/garbage read of the SBS one (got {vert_sets})")
 
 
-HANDLING_SKIP_INI = """[TextureOverrideComponent01Blend]
+AUTHORED_DRAW_INI = """[TextureOverrideComponent01Blend]
 vb0 = ResourcePos
 vb1 = ResourceTc
 
 [TextureOverrideComponent01A]
+hash = 10101010
 ib = ResourceComponent01AIB
 drawindexed = 100, 0, 0
 
 [TextureOverrideComponent01B]
+hash = 10101010
 handling = skip
 ib = ResourceComponent01BIB
 
 [TextureOverrideComponent01C]
+hash = 10101010
+ResourceSaved = copy vb0
 ib = ResourceComponent01CIB
 
 [ResourceComponent01AIB]
@@ -235,16 +239,17 @@ stride = 20
 """
 
 
-def test_handling_skip_with_no_drawindexed_draws_nothing():
+def test_ib_only_parts_do_not_draw_regardless_of_handling_skip():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", HANDLING_SKIP_INI)
+        path = write(tmp, "mod.ini", AUTHORED_DRAW_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
-        names = {g["display_name"] for g in groups}
-        assert ("Component01A" in names), ("the section with an explicit drawindexed still draws")
-        assert ("Component01B" not in names), (f"a handling=skip section with NO drawindexed draws nothing at all "
-              f"(got groups: {sorted(names)})")
-        assert ("Component01C" in names), ("a section with no handling=skip still gets the implicit whole-ib draw")
+        assert [group["display_name"] for group in groups] == ["Component01A"]
+        for name in ("TextureOverrideComponent01A", "TextureOverrideComponent01C"):
+            secs[name].append("handling = skip")
+        updated = build_draw_groups(secs, extract_resources(secs))
+        assert [group["display_name"] for group in updated] == ["Component01A"]
+        assert updated[0]["draws"][0].count == 100
 
 
 COMPONENT_ABBREV_SUFFIX_INI = """[TextureOverrideXCNPosition]
@@ -278,7 +283,7 @@ format = DXGI_FORMAT_R32_UINT
 """
 
 
-IMPLICIT_DRAW_DIFFUSE_INI = """[TextureOverrideImplicitPosition]
+AUTO_DRAW_DIFFUSE_INI = """[TextureOverrideImplicitPosition]
 vb0 = ResourceImplicitPosition
 
 [TextureOverrideImplicitBlend]
@@ -289,6 +294,7 @@ vb1 = ResourceImplicitTexcoord
 
 [TextureOverrideImplicitA]
 ib = ResourceImplicitIB
+drawindexed = auto
 ps-t0 = Resource\\GIMI\\Diffuse
 ps-t0 = ResourceImplicitDiffuse
 
@@ -313,18 +319,17 @@ filename = implicit.dds
 """
 
 
-def test_implicit_whole_buffer_draw_keeps_its_diffuse():
+def test_authored_auto_whole_buffer_draw_keeps_its_diffuse():
     with tempfile.TemporaryDirectory() as tmp:
-        path = write(tmp, "mod.ini", IMPLICIT_DRAW_DIFFUSE_INI)
+        path = write(tmp, "mod.ini", AUTO_DRAW_DIFFUSE_INI)
         secs = merge_sections([path])
         groups = build_draw_groups(secs, extract_resources(secs))
         assert (len(groups) == 1), (f"one draw group built (got {len(groups)})")
         group = groups[0]
-        assert (len(group["draws"]) == 1), ("exactly the one synthetic placeholder draw")
+        assert len(group["draws"]) == 1
         draw = group["draws"][0]
-        assert (draw.get("count") is None), ("the placeholder draw has no count -- it's the implicit whole-buffer read")
-        assert (draw.get("texture_default_file") == "implicit.dds"), (f"the placeholder draw still resolves the section's own "
-              f"ps-t0 diffuse, not None (got {draw.get('texture_default_file')})")
+        assert draw.count is None
+        assert draw.texture_default_file == "implicit.dds"
 
 
 def test_r16_index_buffer():

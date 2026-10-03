@@ -8,6 +8,79 @@ from core.ini.sections import extract_resources, parse_sections
 from tests.support.model_data import standard_component_resources
 
 
+@pytest.mark.parametrize("command", [
+    "drawindexed = auto", "run = CommandListComponent01IB",
+])
+def test_hash_family_auto_keeps_parts_and_replacement_bindings_separate(command):
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01IB]
+hash = 10101010
+{command}
+[CommandListComponent01IB]
+drawindexed = auto
+[TextureOverrideComponent01A]
+hash = 10101010
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+ps-t0 = ResourceComponent01Diffuse
+[TextureOverrideComponent01B]
+hash = 10101010
+match_first_index = 3
+ib = ResourceComponent02IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+ps-t0 = ResourceComponent02Diffuse
+[TextureOverrideComponent02]
+hash = 20202020
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent01Unsupported]
+hash = 10101010
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+drawindexed = $runtime, 0, 0
+[ResourceComponent02IB]
+filename = component02.ib
+format = DXGI_FORMAT_R32_UINT
+[ResourceComponent01Diffuse]
+filename = component01-diffuse.dds
+[ResourceComponent02Diffuse]
+filename = component02-diffuse.dds
+""" + standard_component_resources())
+    groups = build_draw_groups(sections, extract_resources(sections))
+    assert [group["name"] for group in groups] == ["Component01A", "Component01B"]
+    draws = [group["draws"][0] for group in groups]
+    assert [(draw.count, draw.start, draw.base) for draw in draws] == [
+        (None, 0, 0), (None, 0, 0)]
+    assert [draw.geometry_match.first_index for draw in draws] == [0, 3]
+    assert [draw.ib_file for draw in draws] == ["component01.ib", "component02.ib"]
+    assert [draw.texture_default_file for draw in draws] == [
+        "component01-diffuse.dds", "component02-diffuse.dds"]
+
+
+def test_part_specific_auto_does_not_draw_same_hash_sibling():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01A]
+hash = 10101010
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+drawindexed = auto
+[TextureOverrideComponent01B]
+hash = 10101010
+match_first_index = 3
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+""" + standard_component_resources())
+    groups = build_draw_groups(sections, extract_resources(sections))
+    assert [group["name"] for group in groups] == ["Component01A"]
+    assert groups[0]["draws"][0].count is None
+
+
 def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
     sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
 ib = ResourceComponent01IB
