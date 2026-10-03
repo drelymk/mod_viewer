@@ -2,12 +2,13 @@
 
 import re
 
+from .condition import ConditionError, parse as parse_condition, tokenize
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
                                   normalize_geometry_hash)
-from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
+from .dnf import (DNF_TRUE, _WRITE_RE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, parse_condition_dnf)
 from .menu import extract_menu_var_names
 from .state import extract_state_rules
@@ -25,6 +26,23 @@ _RUN_SKIP_PREFIXES = (
     "Constants")
 _WWMI_BONE_OFFSET_RE = re.compile(
     r"^\$\\WWMIv1\\vg_offset\s*=\s*(\d+)\s*$", re.I)
+
+
+def _guard_signature(content):
+    """Keep exact variable-only guards without dropping untracked clauses."""
+    try:
+        tokens = tokenize(content)
+        parse_condition(content)
+    except (ConditionError, RecursionError):
+        return None
+    if any(token[0].isalpha() or token.startswith("_") for token in tokens):
+        return None
+    return tuple(token.casefold() for token in tokens)
+
+
+def _guard_snapshot(cond_stack):
+    guards = tuple(frame["guard"] for frame in cond_stack)
+    return guards if all(guard is not None for guard in guards) else None
 
 
 class _ScannedSections(dict):
@@ -322,17 +340,27 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         match_elif.group(1).strip(), alias_map)
                     frame["cur"] = dnf_and(dnf_not(frame["seen"]), branch)
                     frame["seen"] = dnf_or(frame["seen"], branch)
+                    signature = _guard_signature(match_elif.group(1).strip())
+                    frame["guard"] = ((tuple(frame["guard_seen"]), signature)
+                                      if signature is not None
+                                      and None not in frame["guard_seen"] else None)
+                    frame["guard_seen"].append(signature)
                 continue
             if low.startswith("if "):
                 branch = parse_condition_dnf(line[3:].strip(), alias_map)
                 seq_counter[0] += 1
+                signature = _guard_signature(line[3:].strip())
                 cond_stack.append({
-                    "cur": branch, "seen": branch, "seq": seq_counter[0]})
+                    "cur": branch, "seen": branch, "seq": seq_counter[0],
+                    "guard_seen": [signature],
+                    "guard": ((), signature) if signature is not None else None})
                 continue
             if low == "else":
                 if cond_stack:
                     frame = cond_stack[-1]
                     frame["cur"] = dnf_not(frame["seen"])
+                    frame["guard"] = ((tuple(frame["guard_seen"]), ())
+                                      if None not in frame["guard_seen"] else None)
                 continue
             if low == "endif":
                 if cond_stack:
@@ -340,8 +368,25 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 continue
             match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
             if match:
+                if info["_geometry_hash"] is not None:
+                    info["skip_match_supported"] = False
+                    info["match_supported"] = False
                 info["_geometry_hash"] = normalize_geometry_hash(
                     match.group(1))
+            match = re.match(r"(match_\w+)\s*=\s*(.*)$", line, re.I)
+            if match and (match[1].casefold() not in {
+                    "match_priority", "match_first_index", "match_index_count"}
+                    or (match[1].casefold() != "match_priority"
+                        and not re.fullmatch(r"\d+", match[2]))):
+                info["skip_match_supported"] = False
+                info["match_supported"] = False
+            assignment = _WRITE_RE.match(line)
+            if assignment:
+                info["guard_writes"].add(assignment[1].casefold())
+                info["guard_writes"].add(
+                    assignment[1].rsplit("\\", 1)[-1].casefold())
+            if re.match(r"handling\s*=\s*abort\b", line, re.I):
+                info["skip_match_supported"] = False
             match = re.match(r"match_first_index\s*=\s*(\d+)", line, re.I)
             if match:
                 info["_match_first_index"] = int(match.group(1))
@@ -420,14 +465,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             if match:
                 if not info["ib"]:
                     info["ib"] = match.group(1)
+                    info["original_draw_guards"] = _guard_snapshot(cond_stack)
                 info["_cur_ib"] = match.group(1)
-            match = re.fullmatch(
-                r"(Resource\S+)\s*=\s*(?:copy|ref(?:erence)?)\s+vb0",
-                line, re.I)
-            if match:
-                info["vb0_captures"].add(match.group(1).casefold())
             if re.match(r"handling\s*=\s*skip\b", line, re.I):
                 info["handling_skip"] = True
+                info["skip_guards"].append(_guard_snapshot(cond_stack))
+            if (re.match(r"draw\w*\s*=", line, re.I)
+                    and not re.match(r"drawindexed\s*=", line, re.I)):
+                info["unmodeled_draws"] = True
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
             if match:
                 occurrence = DrawOccurrence(
@@ -435,6 +480,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 draw_ordinal += 1
                 arguments = resolve_drawindexed(match[1], draw_constants)
                 if arguments is None:
+                    info["unmodeled_draws"] = True
                     if match[1].strip().casefold() != "auto":
                         info["unresolved_draws"] = True
                     continue
@@ -490,12 +536,18 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 current_run = run_ordinal
                 run_ordinal += 1
                 target_name = _run_target_name(line, section_lookup)
+                if not target_name or not target_name.lower().startswith("commandlist"):
+                    info["skip_match_supported"] = False
+                    info["unmodeled_draws"] = True
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     scan(sections[target_name], info, cond_stack, visiting,
                          target_name,
                          execution_path + ((section_name, current_run),))
                     visiting.discard(target_name)
+                elif target_name in visiting:
+                    info["skip_match_supported"] = False
+                    info["unmodeled_draws"] = True
 
     scanned = _ScannedSections(texture_override_index=texture_override_index)
     for name, lines in sections.items():
@@ -507,7 +559,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             sections, name, section_lookup)
         info = {
             "vb0": None, "vb1": None, "vb2": None, "ib": None,
-            "vb0_captures": set(),
+            "original_draw_guards": None, "skip_guards": [],
+            "skip_match_supported": True, "guard_writes": set(),
+            "match_supported": True,
+            "unmodeled_draws": False,
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
             "handling_skip": False, "_cur_diffuse_variants": [],
             "_diffuse_chain_key": None, "_diffuse_history": [],

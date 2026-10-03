@@ -250,11 +250,13 @@ def test_handling_skip_with_no_drawindexed_draws_nothing():
 
 
 @pytest.mark.parametrize("capture,consumer_ib,consumer_vb,capture_draw,implicit", [
-    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "", False),
-    ("resourcesaved = COPY VB0", "resourcecomponent01aib", "RESOURCESAVED", "", False),
-    ("ResourceSaved = ref vb0", "ResourceComponent01AIB", "ResourceSaved", "", False),
-    ("ResourceSaved = reference vb0", "ResourceComponent01AIB", "ResourceSaved", "", False),
-    ("run = CommandListCapture", "ResourceComponent01AIB", "ResourceSaved", "", False),
+    ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("resourcesaved = COPY VB0", "resourcecomponent01aib", "RESOURCESAVED", "", True),
+    ("ResourceSaved = ref vb0", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("ResourceSaved = reference vb0", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("run = CommandListCapture", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("if $Style == 0\nResourceSaved = copy vb0\nendif", "ResourceComponent01AIB", "ResourceSaved", "", True),
+    ("if $Style == 0\nrun = CommandListCapture\nendif", "ResourceComponent01AIB", "ResourceSaved", "", True),
     ("ResourceSaved = copy vb0", "ResourceComponent02AIB", "ResourceSaved", "", True),
     ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceComponent01Position", "", True),
     ("ResourceSaved = copy vb1", "ResourceComponent01AIB", "ResourceSaved", "", True),
@@ -262,7 +264,7 @@ def test_handling_skip_with_no_drawindexed_draws_nothing():
     ("", "ResourceComponent01AIB", "ResourceSaved", "", True),
     ("ResourceSaved = copy vb0", "ResourceComponent01AIB", "ResourceSaved", "drawindexed = 3, 0, 0", False),
 ])
-def test_capture_replayed_in_explicit_draw_preserves_consumers(
+def test_capture_replayed_does_not_suppress_original_draw(
         tmp_path, capture, consumer_ib, consumer_vb, capture_draw, implicit):
     text = f"""[KeyStyle]
 type = cycle

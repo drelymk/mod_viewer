@@ -29,6 +29,66 @@ from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_payload, build_mesh_result,
                                build_mesh_semantics)
 from tests.support_snapshot import snapshot_context
+from tests.support.model_data import triangle_geometry
+
+
+@pytest.mark.parametrize("replay, extra", [
+    ("drawindexed = auto", ""),
+    ("run = CommandListReplay", "[CommandListReplay]\ndrawindexed = auto\n"),
+    ("", "[TextureOverrideReplay]\nhash = 10101010\ndrawindexed = auto\n"),
+    ("", "[TextureOverrideReplay]\nhash = 10101010\nrun = CommandListMissing\n"),
+])
+def test_matching_skip_with_caller_replay_keeps_all_component_geometry(
+        tmp_path, replay, extra):
+    data = triangle_geometry()
+    (tmp_path / "position.buf").write_bytes(b"".join(
+        struct.pack("<9f", offset, 0, 0, offset + 1, 0, 0, offset, 1, 0)
+        for offset in (0, 2, 4)))
+    (tmp_path / "texcoord.buf").write_bytes(data["t.buf"] * 3)
+    parts = []
+    for index, part in enumerate(("Head", "Body", "Extra")):
+        (tmp_path / f"{part.lower()}.ib").write_bytes(struct.pack(
+            "<3I", *(index * 3 + value for value in range(3))))
+        parts.append(f"""[TextureOverrideComponent01{part}]
+hash = 10101010
+match_first_index = {index * 3}
+ib = ResourceComponent01{part}IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+[ResourceComponent01{part}IB]
+filename = {part.lower()}.ib
+format = R32_UINT
+""")
+    resources = """[ResourceComponent01Position]
+filename = position.buf
+stride = 12
+[ResourceComponent01Texcoord]
+filename = texcoord.buf
+stride = 8
+"""
+    path = tmp_path / "model.ini"
+
+    def load(commands, additional=""):
+        path.write_text("[TextureOverrideComponent01IB]\nhash = 10101010\n"
+                        + commands + "\n" + additional + "".join(parts)
+                        + resources, encoding="utf-8")
+        blob = GeometryBlob()
+        return mod_loader.load_mod(str(tmp_path), geometry=blob), blob
+
+    original, original_blob = load("")
+    replayed, replayed_blob = load("handling = skip\n" + replay, extra)
+    expected = {f"Component01{part}-1" for part in ("Head", "Body", "Extra")}
+    assert not original.get("error")
+    assert not replayed.get("error")
+    assert set(original["meshes"]) == set(replayed["meshes"]) == expected
+    assert original_blob.data == replayed_blob.data
+    assert {name: mesh["identity"] for name, mesh in original["meshes"].items()} == {
+        name: mesh["identity"] for name, mesh in replayed["meshes"].items()}
+
+    skipped, skipped_blob = load("handling = skip")
+    assert skipped.get("error")
+    assert not skipped.get("meshes")
+    assert not skipped_blob.data
 
 
 def test_nested_ini_resources_are_relative_to_their_ini():

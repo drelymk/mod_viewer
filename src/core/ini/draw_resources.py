@@ -341,25 +341,72 @@ def _build_vertex_binding_index(section_info, sections,
 
 def _select_draw_sections(section_info, global_ib):
     """Select TextureOverride sections that can produce viewer geometry."""
-    captured_draw_inputs = {
-        ((draw.index_resource or global_ib or "").casefold(),
-         draw.vertex_resources[0].casefold())
-        for name, info in section_info.items()
-        if name.lower().startswith("textureoverride")
-        for draw in info["draws"] if draw.vertex_resources.get(0)
-    }
+    skips_by_hash = {}
+    unmodeled_draws_by_hash = {}
+    guard_writes = set()
+    for name, info in section_info.items():
+        guard_writes.update(info.get("guard_writes", ()))
+        match = info.get("geometry_match_at_end")
+        if (name.lower().startswith("textureoverride") and match
+                and info.get("unmodeled_draws")):
+            unmodeled_draws_by_hash.setdefault(match.hash, []).append(info)
+        if (name.lower().startswith("textureoverride") and match
+                and info.get("skip_guards")
+                and info.get("skip_match_supported")):
+            skips_by_hash.setdefault(match.hash, []).append(info)
 
-    def capture_is_drawn(info):
-        # A capture reused by explicit draws of the same IB is preparation,
-        # so do not also synthesize a whole-buffer mesh for its section.
-        return any((info["ib"].casefold(), capture) in captured_draw_inputs
-                   for capture in info.get("vb0_captures", ()))
+    def original_is_skipped(info):
+        match = info.get("geometry_match_at_end")
+        guards = info.get("original_draw_guards")
+        if match is None or guards is None:
+            return False
+        # Auto/from-caller draws and unresolved command lists may replay a
+        # skipped original with sibling bindings. Preserve their fallback.
+        for replay in unmodeled_draws_by_hash.get(match.hash, ()):
+            if ((replay.get("src") or {}).get("ini_path")
+                    != (info.get("src") or {}).get("ini_path")):
+                continue
+            replay_match = replay["geometry_match_at_end"]
+            if (info.get("match_supported") and replay.get("match_supported")
+                    and any(getattr(replay_match, field) is not None
+                            and getattr(match, field) is not None
+                            and getattr(replay_match, field) != getattr(match, field)
+                            for field in ("first_index", "index_count"))):
+                continue
+            return False
+        for skip in skips_by_hash.get(match.hash, ()):
+            if ((skip.get("src") or {}).get("ini_path")
+                    != (info.get("src") or {}).get("ini_path")):
+                continue
+            skipped_match = skip["geometry_match_at_end"]
+            if ((skipped_match.first_index is not None
+                 or skipped_match.index_count is not None)
+                    and not info.get("skip_match_supported")):
+                continue
+            if any(getattr(skipped_match, field) is not None
+                   and getattr(skipped_match, field) != getattr(match, field)
+                   for field in ("first_index", "index_count")):
+                continue
+            for skip_guards in skip["skip_guards"]:
+                if skip_guards is None:
+                    continue
+                variables = {token[1:] for seen, current in skip_guards
+                             for expression in (*seen, current)
+                             for token in expression if token.startswith("$")}
+                variables.update(variable.rsplit("\\", 1)[-1]
+                                 for variable in tuple(variables))
+                # Only an explicit skip for this game-draw context can remove
+                # its fallback. Captures and additional draws are independent.
+                if (not variables.intersection(guard_writes)
+                        and set(skip_guards).issubset(guards)):
+                    return True
+        return False
 
     return [(name, info) for name, info in section_info.items()
             if name.lower().startswith("textureoverride")
             and (info["ib"] or global_ib)
             and (info["draws"] or (info["ib"] and not info["handling_skip"]
-                                  and not capture_is_drawn(info)))]
+                                  and not original_is_skipped(info)))]
 
 
 def _component_role_candidates(base):

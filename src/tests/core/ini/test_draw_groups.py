@@ -8,6 +8,131 @@ from core.ini.sections import extract_resources, parse_sections
 from tests.support.model_data import standard_component_resources
 
 
+@pytest.mark.parametrize("skip_hash,skip_match,skip_guard,binding_guard,command,retained", [
+    ("10101010", "", "$mode == 0", "$mode == 0", "handling = skip", False),
+    ("10101010", "", "$mode == 0", "$mode == 0", "run = CommandListSkip", False),
+    ("10101010", "", "$mode == 0", "$mode == 0", "handling = skip\ndrawindexed = auto", True),
+    ("10101010", "", "$mode == 0", "$mode == 0", "handling = skip\ndraw = from_caller", True),
+    ("10101010", "", "$mode == 0", "$mode == 0", "handling = skip\ndrawindexed = $unknown, 0, 0", True),
+    ("10101010", "", "$mode == 0", "$mode == 0", "run = CommandListReplay", True),
+    ("10101010", "", "", "$mode == 0", "handling = skip", False),
+    ("10101010", "", "$mode == 0", "", "handling = skip", True),
+    ("10101010", "", "$mode == 1", "$mode == 0", "handling = skip", True),
+    ("20202020", "", "$mode == 0", "$mode == 0", "handling = skip", True),
+    ("", "", "$mode == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "match_first_index = 0", "$mode == 0", "$mode == 0", "handling = skip", False),
+    ("10101010", "match_first_index = 3", "$mode == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "match_index_count = 6", "$mode == 0", "$mode == 0", "handling = skip", False),
+    ("10101010", "match_index_count = 3", "$mode == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "match_first_index = >=0", "$mode == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "match_first_vertex = 0", "$mode == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "", "DRAW_TYPE == 1", "$mode == 0", "handling = skip", True),
+    ("10101010", "", "$untracked == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "", "$mode == 0", "$mode == 0", "$mode = 1\nhandling = skip", True),
+    ("10101010", "", "$Mode == 0", "$mode == 0", "handling = skip", False),
+    ("10101010", "", r"$\Scope\mode == 0", r"$\Scope\mode == 0", "handling = skip", False),
+    ("10101010", "", "DRAW_TYPE == 1", "DRAW_TYPE == 1", "handling = skip", True),
+    ("10101010", "", "$mode == 0", "$mode == 0", "handling = abort\nhandling = skip", True),
+    ("10101010", "", "$mode == 0", "$mode == 0", "run = CommandListMissing\nhandling = skip", True),
+    ("10101010", "", "else:$mode == 0", "else:$mode == 0", "handling = skip", False),
+    ("10101010", "", "else:$mode == 0", "$mode == 0", "handling = skip", True),
+    ("10101010", "", r"$\Scope\mode == 0", r"$\Scope\mode == 0", "$mode = 1\nhandling = skip", True),
+])
+def test_matching_override_skip_controls_original_fallback_only(
+        skip_hash, skip_match, skip_guard, binding_guard, command, retained):
+    def guarded(guard, body):
+        if guard.startswith("else:"):
+            return f"if {guard[5:]}\nelse\n{body}\nendif"
+        return f"if {guard}\n{body}\nendif" if guard else body
+
+    skip_body = f"hash = {skip_hash}\nmatch_priority = 17\n{skip_match}\n{command}"
+    binding_body = ("hash = 10101010\nmatch_priority = 17\n"
+                    "match_first_index = 0\nmatch_index_count = 6\n"
+                    "ib = ResourceComponent01IB")
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01Position]
+vb0 = ResourceComponent01Position
+[TextureOverrideComponent01Texcoord]
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent01IB]
+{guarded(skip_guard, skip_body)}
+[TextureOverrideComponent01A]
+ResourceSaved = copy vb0
+{guarded(binding_guard, binding_body)}
+[TextureOverrideComponent02A]
+hash = 30303030
+match_priority = 17
+ib = ResourceComponent01IB
+vb0 = ResourceSaved
+drawindexed = 3, 0, 0
+[CommandListSkip]
+handling = skip
+[CommandListReplay]
+handling = skip
+drawindexed = auto
+[ResourceSaved]
+""" + standard_component_resources())
+    groups = build_draw_groups(
+        sections, extract_resources(sections), gating_vars={"mode"})
+    by_name = {group["name"]: group for group in groups}
+    assert ("Component01A" in by_name) == retained
+    if retained:
+        assert by_name["Component01A"]["draws"][0].count is None
+    consumer = by_name["Component02A"]["draws"][0]
+    assert (consumer.count, consumer.start, consumer.base) == (3, 0, 0)
+    assert consumer.occurrence.section == "TextureOverrideComponent02A"
+
+
+def test_matching_skip_does_not_cross_ini_analysis_sources():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+hash = 10101010
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+ib = ResourceComponent01IB
+""" + standard_component_resources())
+    sections.update(parse_sections("source-02.ini", text="""[TextureOverrideOtherIB]
+hash = 10101010
+handling = skip
+"""))
+    groups = build_draw_groups(sections, extract_resources(sections))
+    assert [group["name"] for group in groups] == ["Component01"]
+    assert groups[0]["draws"][0].count is None
+
+
+@pytest.mark.parametrize("replay_match,retained", [
+    ("", True),
+    ("match_first_index = 0", True),
+    ("match_first_index = 3", False),
+    ("match_index_count = 6", True),
+    ("match_index_count = 3", False),
+    ("match_first_index = >=3", True),
+])
+def test_caller_replay_only_protects_compatible_game_draw_ranges(
+        replay_match, retained):
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01IB]
+hash = 10101010
+handling = skip
+[TextureOverrideComponent01A]
+hash = 10101010
+match_first_index = 0
+match_index_count = 6
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+[TextureOverrideComponent01B]
+hash = 10101010
+{replay_match}
+run = CommandListMissing
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+drawindexed = 3, 0, 0
+""" + standard_component_resources())
+    groups = build_draw_groups(sections, extract_resources(sections))
+    assert ("Component01A" in {group["name"] for group in groups}) == retained
+    assert next(group for group in groups if group["name"] == "Component01B")[
+        "draws"][0].count == 3
+
+
 def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
     sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
 ib = ResourceComponent01IB
