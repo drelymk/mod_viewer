@@ -345,6 +345,7 @@ def _select_draw_sections(section_info, global_ib):
     for name, info in section_info.items():
         match = info.get("geometry_match_at_end")
         if (name.lower().startswith("textureoverride") and match
+                and match.first_index is None and match.index_count is None
                 and info["drawindexed_auto"]):
             family_auto[((info.get("src") or {}).get("ini_path"), match.hash)] = True
 

@@ -67,7 +67,6 @@ def test_collect_component_overrides_preserves_component_identity_and_range():
     assert result[0].key.geometry_hash == "aaaaaaaa"
     assert result[0].first_index == 300
     assert result[0].index_count == 12
-    assert result[0].geometry_evidence is False
     assert result[0].asset_identity_evidence is True
 
 
@@ -81,7 +80,6 @@ def test_auxiliary_buffer_hash_does_not_identify_another_asset():
         ],
     }, "mod.ini")
 
-    assert result[0].geometry_evidence is True
     assert result[0].asset_identity_evidence is False
 
 
@@ -105,7 +103,6 @@ def test_collect_component_overrides_follows_nested_command_lists():
     assert len(result) == 1
     assert result[0].geometry_hash == "aaaaaaaa"
     assert result[0].first_index == 300
-    assert result[0].geometry_evidence is True
     assert result[0].asset_identity_evidence is True
 
 
@@ -126,7 +123,6 @@ def test_component_identity_handles_range_independently_of_draw_behavior(
     assert plan.status == "nothing_missing"
     assert plan.asset == {"path": "Asset01", "geometry": [
         _geometry("aaaaaaaa", (0, 12)), _geometry("bbbbbbbb", (0, 6))]}
-    assert next(item for item in plan.evidence if item.geometry_hash == "aaaaaaaa").geometry_evidence is False
     assert {part.geometry_hash for part in plan.covered_parts} == {"aaaaaaaa", "bbbbbbbb"}
     assert not plan.missing_parts
     context.ini.records[0].sections["TextureOverrideComponent02IB"].append(

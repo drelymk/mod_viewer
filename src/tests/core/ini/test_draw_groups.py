@@ -61,6 +61,26 @@ filename = component02-diffuse.dds
         "component01-diffuse.dds", "component02-diffuse.dds"]
 
 
+def test_part_specific_auto_does_not_draw_same_hash_sibling():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01A]
+hash = 10101010
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+drawindexed = auto
+[TextureOverrideComponent01B]
+hash = 10101010
+match_first_index = 3
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+""" + standard_component_resources())
+    groups = build_draw_groups(sections, extract_resources(sections))
+    assert [group["name"] for group in groups] == ["Component01A"]
+    assert groups[0]["draws"][0].count is None
+
+
 def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
     sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
 ib = ResourceComponent01IB

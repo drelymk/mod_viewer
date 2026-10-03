@@ -25,14 +25,13 @@ class ComponentCoverageKey:
 
 @dataclass(frozen=True, slots=True)
 class AuthoredComponentOverride:
-    """One authored TextureOverride claim, including geometry evidence."""
+    """One authored TextureOverride component identity claim."""
 
     geometry_hash: str
     first_index: int | None
     index_count: int | None
     ini: str
     section: str
-    geometry_evidence: bool = False
     asset_identity_evidence: bool = True
 
     @property
@@ -44,8 +43,6 @@ class AuthoredComponentOverride:
 _HASH_RE = re.compile(r"^hash\s*=\s*(\S+)$", re.I)
 _FIRST_RE = re.compile(r"^match_first_index\s*=\s*(\d+)$", re.I)
 _COUNT_RE = re.compile(r"^match_index_count\s*=\s*(\d+)$", re.I)
-_GEOMETRY_RE = re.compile(
-    r"^(?:drawindexed|draw|ib|vb\d+)\s*=\s*(?!null\b)\S+", re.I)
 _IB_RE = re.compile(r"^ib\s*=\s*(?!null\b)\S+", re.I)
 _DRAW_INDEXED_RE = re.compile(r"^drawindexed\s*=\s*\S+", re.I)
 _AUXILIARY_RE = re.compile(
@@ -73,7 +70,6 @@ def collect_component_overrides(sections, ini_path):
         scope_lines = [raw for name in scope_sections
                        for raw in sections[name]]
         hashes = []
-        geometry_evidence = False
         explicit_asset_identity = False
         auxiliary_geometry = False
         last_first_index = None
@@ -100,8 +96,6 @@ def collect_component_overrides(sections, ini_path):
                 explicit_asset_identity = True
             if _AUXILIARY_RE.match(line):
                 auxiliary_geometry = True
-            if _GEOMETRY_RE.match(line):
-                geometry_evidence = True
         info = scanned.get(section, {})
         draw_matches = [
             item.geometry_match
@@ -128,7 +122,7 @@ def collect_component_overrides(sections, ini_path):
                 continue
             seen_declarations.add(key)
             declarations.append((match.hash, match.first_index,
-                                 match.index_count, True, True))
+                                 match.index_count, True))
 
         if end_match is not None:
             key = (end_match.hash, end_match.first_index,
@@ -136,7 +130,7 @@ def collect_component_overrides(sections, ini_path):
             if key not in seen_declarations:
                 declarations.append((
                     end_match.hash, end_match.first_index,
-                    end_match.index_count, geometry_evidence,
+                    end_match.index_count,
                     explicit_asset_identity or not auxiliary_geometry))
                 seen_declarations.add(key)
 
@@ -144,24 +138,20 @@ def collect_component_overrides(sections, ini_path):
                           else last_first_index)
         fallback_count = (end_match.index_count if end_match is not None
                           else last_index_count)
-        explicit_scope_geometry = explicit_asset_identity
         for geometry_hash in dict.fromkeys(hashes):
             if any(item[0] == geometry_hash for item in declarations):
                 continue
             declarations.append((
                 geometry_hash, fallback_first, fallback_count,
-                geometry_evidence, explicit_scope_geometry
-                or not auxiliary_geometry))
+                explicit_asset_identity or not auxiliary_geometry))
 
-        for (geometry_hash, first_index, index_count, item_geometry,
-             item_identity) in declarations:
+        for geometry_hash, first_index, index_count, item_identity in declarations:
             result.append(AuthoredComponentOverride(
                 geometry_hash=geometry_hash,
                 first_index=first_index,
                 index_count=index_count,
                 ini=ini_path,
                 section=str(section),
-                geometry_evidence=item_geometry,
                 asset_identity_evidence=item_identity,
             ))
     return tuple(result)
