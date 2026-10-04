@@ -250,6 +250,28 @@ def test_compute_without_any_available_target_vertices_stays_static(tmp_path):
     assert all("animation_geometry" not in mesh for mesh in built.meshes.values())
 
 
+def test_mixed_verified_and_invalid_child_branches_reject_the_whole_chain(tmp_path):
+    ini = branched_compute_mod(tmp_path / "mod")
+    sections = read_sections(ini)
+    sections["CustomShaderParent"] = [
+        "cs-u5 = copy ResourcePosition.2", "cs-t50 = copy ResourcePosition.2",
+        "if $mode == 0", "run = CustomShaderAnim01",
+        "else", "run = CustomShaderAnim02", "endif",
+        "ResourcePosition = ref cs-u5", "cs-u5 = null"]
+    save_sections(ini, sections)
+    _, supported = load_mod(ini, ini.parent)
+    assert len(next(iter(supported.meshes.values()))["animation_geometry"]["shape_passes"]) == 2
+
+    sections["CustomShaderAnim02"] = [
+        line.replace("cs-t50 = copy ResourcePosition.2", "cs-t50 = copy ResourceKey2")
+        for line in sections["CustomShaderAnim02"]]
+    save_sections(ini, sections)
+    parsed, rejected = load_mod(ini, ini.parent)
+    assert rejected.meshes
+    assert not any(group.get("_compute_animation") for group in parsed.groups)
+    assert all("animation_geometry" not in mesh for mesh in rejected.meshes.values())
+
+
 @pytest.mark.parametrize("case", [
     "ambiguous-children", "child-rebind", "different-child-base", "stale-parent-binding",
     "unsupported-parent-dispatch", "stale-parent-after-child",

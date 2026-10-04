@@ -1350,6 +1350,7 @@ def _compute_chains(sections, inputs, canonical, var_prefix, aliases):
                         continue
                     passes = nested_passes(child, value[1], chain["u5_resource"])
                     if not passes:
+                        chain["unsupported"] = True
                         continue
                     combined = DNF_TRUE
                     for frame in stack:
