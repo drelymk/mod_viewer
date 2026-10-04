@@ -11,7 +11,7 @@ from core.mod_source import DirectoryModSource, ZipModSource
 from core.ini.sections import parse_sections
 from tests.support.animations import (
     LINEAR_SHAPE_SHADER, POSE_SHADER, SHAPE_SHADER, SWAP_YZ_SHADER,
-    compute_mod, load_mod, nested_mod, read_sections, save_sections,
+    branched_compute_mod, compute_mod, load_mod, nested_mod, read_sections, save_sections,
 )
 from tests.support.provenance import geometry_values
 
@@ -97,17 +97,13 @@ def test_reload_rechecks_pose_shader_and_keeps_static_geometry_on_failure(tmp_pa
 
 
 @pytest.mark.parametrize("case", [
-    "elif", "unknown-alias", "wrong-phase-channel", "truncated-pose",
+    "unknown-alias", "wrong-phase-channel", "truncated-pose",
     "invalid-bone-index", "ambiguous-writers", "mismatched-output",
 ])
 def test_unsafe_compute_input_falls_back_to_renderable_static_mesh(tmp_path, case):
     ini = compute_mod(tmp_path / "mod")
     sections = read_sections(ini)
-    if case == "elif":
-        lines = sections["CustomShaderShape"]
-        end = lines.index("endif")
-        lines[end:end + 1] = ["elif $pause == 1", "$Freq_key = 0", "endif"]
-    elif case == "unknown-alias":
+    if case == "unknown-alias":
         sections["CommandListAlias"] = ["$allowed = ($runtime_value > 2)"]
         sections["CustomShaderShape"] = ["if $allowed", *sections["CustomShaderShape"], "endif"]
         sections["Present"] = [
@@ -216,12 +212,69 @@ def test_nested_animation_uses_inherited_child_until_parent_is_supported(tmp_pat
     _, rebuilt = load_mod(ini, ini.parent, geometry=geometry)
     payload = next(iter(rebuilt.meshes.values()))["animation_geometry"]
     assert not payload.get("overlay")
-    assert len(payload["shape_passes"]) == 1
+    assert len(payload["shape_passes"]) == 2
     assert geometry_values(geometry, payload["shape_passes"][0]["deltas"])[::6] == (1., 2., 3.)
 
 
+@pytest.mark.parametrize("target_size", [0, 40, 80, 120, 160, 79])
+def test_branched_children_use_available_vertices_and_preserve_program_indices(tmp_path, target_size):
+    ini = branched_compute_mod(tmp_path / "mod")
+    target = ini.parent / "key1.buf"
+    target.write_bytes((target.read_bytes() + b"\0" * 80)[:target_size])
+    geometry = GeometryBlob()
+    parsed, built = load_mod(ini, ini.parent, geometry=geometry)
+    entry = next(iter(built.meshes.values()))
+    assert entry["idx"]["length"] == 12
+    if target_size % 40:
+        assert "animation_geometry" not in entry
+        return
+    payload = entry["animation_geometry"]
+    assert {"mode", "hidden", "covered", "Speed"} <= parsed.animation_control_vars
+    passes = payload["shape_passes"]
+    assert [item["program_pass"] for item in passes] == ([1, 3] if not target_size else [0, 1, 2, 3])
+    if target_size:
+        assert geometry_values(geometry, passes[0]["deltas"])[::6] == (
+            1., 2. if target_size >= 80 else 0., 0.)
+    commands = payload["program"]["commands"]
+    assert [item["op"] for item in commands if item["op"] in {"if", "elif", "else", "endif"}] == [
+        "if", "elif", "elif", "else", "endif"]
+    assert [item["pass"] for item in commands if item["op"] == "dispatch"] == [0, 1, 2, 3]
+
+
+def test_compute_without_any_available_target_vertices_stays_static(tmp_path):
+    ini = branched_compute_mod(tmp_path / "mod")
+    for name in ("key1.buf", "key2.buf"):
+        (ini.parent / name).write_bytes(b"")
+    _, built = load_mod(ini, ini.parent)
+    assert built.meshes
+    assert all("animation_geometry" not in mesh for mesh in built.meshes.values())
+
+
+def test_mixed_verified_and_invalid_child_branches_reject_the_whole_chain(tmp_path):
+    ini = branched_compute_mod(tmp_path / "mod")
+    sections = read_sections(ini)
+    sections["CustomShaderParent"] = [
+        "cs-u5 = copy ResourcePosition.2", "cs-t50 = copy ResourcePosition.2",
+        "if $mode == 0", "run = CustomShaderAnim01",
+        "else", "run = CustomShaderAnim02", "endif",
+        "ResourcePosition = ref cs-u5", "cs-u5 = null"]
+    save_sections(ini, sections)
+    _, supported = load_mod(ini, ini.parent)
+    assert len(next(iter(supported.meshes.values()))["animation_geometry"]["shape_passes"]) == 2
+
+    sections["CustomShaderAnim02"] = [
+        line.replace("cs-t50 = copy ResourcePosition.2", "cs-t50 = copy ResourceKey2")
+        for line in sections["CustomShaderAnim02"]]
+    save_sections(ini, sections)
+    parsed, rejected = load_mod(ini, ini.parent)
+    assert rejected.meshes
+    assert not any(group.get("_compute_animation") for group in parsed.groups)
+    assert all("animation_geometry" not in mesh for mesh in rejected.meshes.values())
+
+
 @pytest.mark.parametrize("case", [
-    "ambiguous-children", "child-rebind", "stale-parent-binding", "unsupported-parent-dispatch",
+    "ambiguous-children", "child-rebind", "different-child-base", "stale-parent-binding",
+    "unsupported-parent-dispatch", "stale-parent-after-child",
 ])
 def test_nested_animation_rejects_unverified_inheritance(tmp_path, case):
     ini = nested_mod(tmp_path / "mod")
@@ -232,6 +285,11 @@ def test_nested_animation_rejects_unverified_inheritance(tmp_path, case):
         lines.insert(lines.index("run = CustomShaderAnim"), "run = CustomShaderAnim02")
     elif case == "child-rebind":
         sections["CustomShaderAnim"].insert(0, "cs-u5 = copy ResourcePosition.2")
+    elif case == "different-child-base":
+        sections["CustomShaderAnim"].insert(0, "cs-t50 = copy ResourceKey1")
+    elif case == "stale-parent-after-child":
+        lines = sections["CustomShaderParent"]
+        lines.insert(lines.index("run = CustomShaderAnim") + 1, "Dispatch = 1, 1, 1")
     elif case == "unsupported-parent-dispatch":
         lines = sections["CustomShaderParent"]
         lines[lines.index("Dispatch = 1, 1, 1")] = "Dispatch = 1, 2, 1"

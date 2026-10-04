@@ -2,6 +2,7 @@
 
 import { decodeF32, decodeI32 } from '../textures/decode.js';
 import { getControlValue, setControlValue, dnfSatisfied } from '../editing/control-state.js';
+import { evaluateExpression, evaluateCondition } from '../editing/conditions.js';
 import { invalidateCharacterShadowGeometry, invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
 import { requestRender } from '../scene/render-scheduler.js';
 
@@ -43,43 +44,6 @@ function signedUnit(value) {
 function numeric(value, fallback = 0) {
   const result = Number(value);
   return Number.isFinite(result) ? result : fallback;
-}
-
-function evaluateExpression(expression, program) {
-  if (!expression) return 0;
-  switch (expression.kind) {
-    case 'literal':
-      return numeric(expression.value);
-    case 'dt':
-      return program.dt;
-    case 'variable':
-      return numeric(program.variables[expression.variable]);
-    case 'binary': {
-      const left = evaluateExpression(expression.left, program);
-      const right = evaluateExpression(expression.right, program);
-      if (expression.op === '+') return left + right;
-      if (expression.op === '-') return left - right;
-      if (expression.op === '*') return left * right;
-      return 0;
-    }
-    default:
-      return 0;
-  }
-}
-
-function evaluateCondition(condition, program) {
-  if (!condition) return true;
-  if (condition.kind !== 'compare') return false;
-  const left = evaluateExpression(condition.left, program);
-  const right = evaluateExpression(condition.right, program);
-  switch (condition.op) {
-    case '==':
-      return left === right;
-    case '>':
-      return left > right;
-    default:
-      return false;
-  }
 }
 
 function expressionUsesDt(expression) {
@@ -135,9 +99,30 @@ function executeGimiProgram(track, now) {
   }
   let changed = false;
   let activeDtCommand = false;
+  const branches = [];
   for (const command of track.program.commands || []) {
+    const active = branches.every((branch) => branch.active);
+    if (command.op === 'if') {
+      const selected = active && evaluateCondition(command.condition, program);
+      branches.push({ parent: active, active: selected, matched: selected });
+      activeDtCommand ||= active && expressionUsesDt(command.condition);
+      continue;
+    }
+    if (command.op === 'elif' || command.op === 'else') {
+      const branch = branches.at(-1);
+      if (!branch) continue;
+      branch.active =
+        branch.parent && !branch.matched && (command.op === 'else' || evaluateCondition(command.condition, program));
+      activeDtCommand ||= branch.parent && !branch.matched && expressionUsesDt(command.condition);
+      branch.matched ||= branch.active;
+      continue;
+    }
+    if (command.op === 'endif') {
+      branches.pop();
+      continue;
+    }
     const conditions = command.conditions || [];
-    const conditionActive = conditions.every((condition) => evaluateCondition(condition, program));
+    const conditionActive = active && conditions.every((condition) => evaluateCondition(condition, program));
     const commandUsesDt =
       conditions.some(expressionUsesDt) || expressionUsesDt(command.expression) || expressionUsesDt(command.phase);
     activeDtCommand = activeDtCommand || (conditionActive && commandUsesDt);
@@ -184,7 +169,7 @@ function applyGimiPose(mesh, meshState, output) {
   const positions = position.array;
   const normals = normal.array;
   const shapeWeights = meshState.shapePasses.map((pass, index) => {
-    const phase = output.shapePhases[index];
+    const phase = output.shapePhases[pass.programPass ?? index];
     if (!Number.isFinite(phase)) return 0;
     return evaluateShapeWeight(pass.weightOperation, phase);
   });
@@ -610,6 +595,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     const shapePasses = (geometry.shape_passes || []).map((pass) => ({
       deltas: decodeF32(pass.deltas),
       weightOperation: pass.weight_operation,
+      programPass: pass.program_pass,
     }));
     const meshState = {
       vertexCount,

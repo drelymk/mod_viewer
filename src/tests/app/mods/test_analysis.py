@@ -3,6 +3,8 @@
 import os
 import tempfile
 
+import pytest
+
 from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.controls import build_menu_panel
 from core.ini.document import IniDocument
@@ -135,7 +137,7 @@ $\\Target\\style = $value
                              "section": "TextureOverrideComponent01"}
 
 
-def test_forwarded_button_images_follow_controller_pulses_not_slots(tmp_path):
+def test_forwarded_button_images_follow_pulse_or_state_variables(tmp_path):
     menu_path = tmp_path / "Menu.ini"
     target_path = tmp_path / "mod(5).ini"
     menu_path.write_text(r"""
@@ -159,7 +161,7 @@ else
 endif
 
 [CommandListArtworkB]
-if $pulseB == 0
+if $localB == 1 || $localB == 2
     ps-t100 = ResourceNormalB
 else
     ps-t100 = ResourcePressedB
@@ -232,17 +234,35 @@ stride = 8
     assert controls["mod(5)::styleB"]["image_file"] == "ui/b.dds"
 
 
-def test_forwarded_button_image_requires_both_states_to_match(tmp_path):
-    parsed = _forwarded_fixture(tmp_path, r"""
+@pytest.mark.parametrize("art_variable", ["clickPulse", "localState"])
+def test_forwarded_button_image_uses_first_state_artwork(tmp_path, art_variable):
+    parsed = _forwarded_fixture(tmp_path, rf"""
 [Constants]
 global $localState = 0
 global $clickPulse = 0
 
 [CommandListAdvance]
-$clickPulse = 1 - $clickPulse
+if cursor_x > $left && cursor_x < ($left + $width)
+    if cursor_y > $top && cursor_y < ($top + $height)
+        $clickPulse = 1 - $clickPulse
+    endif
+endif
+
+[CommandListBackdrop]
+x87 = $panelWidth
+y87 = $panelHeight
+z87 = $panelLeft
+w87 = $panelTop
+if ${art_variable} == 0
+    ps-t100 = ResourceBackdrop
+endif
 
 [CommandListArtwork]
-if $clickPulse == 0
+x87 = $width
+y87 = $height
+z87 = $left
+w87 = $top
+if ${art_variable} == 0
     ps-t100 = ResourceNormal
 else
     ps-t100 = ResourcePressed
@@ -260,10 +280,13 @@ filename = ui/on.dds
 
 [ResourcePressed]
 filename = ui/off.dds
+
+[ResourceBackdrop]
+filename = ui/backdrop.dds
 """, target_var="style", target_default="0")
 
     control = next(iter(parsed.menu.values()))
-    assert control.get("image_file") is None
+    assert control["image_file"] == "ui/on.dds"
 
 
 def _qualified_draw_ini(condition):

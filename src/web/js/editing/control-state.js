@@ -1,4 +1,5 @@
 // Mod control values plus safe source-ordered derived-state replay.
+import { compareValues } from './conditions.js';
 
 let values = {};
 let stateRules = [];
@@ -40,7 +41,7 @@ export function dnfSatisfied(condGroups) {
     group.every((condition) => {
       const current = values[condition.var];
       if (current === undefined) return true;
-      return condition.negate ? current !== condition.value : current === condition.value;
+      return compareValues(current, condition.negate ? '!=' : '==', condition.value);
     }),
   );
 }

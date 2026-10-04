@@ -154,12 +154,17 @@ of documentation, comments and tests; use portable fixtures instead.
   resource layouts, strides and file sizes; reject an unsupported or ambiguous
   chain without weakening its guards or hiding otherwise valid static geometry.
 - Keep discovery and resource state per INI. Nested GIMI children may inherit
-  only the validated parent bindings they do not replace. WWMI sparse tracks must
+  validated parent bindings and rebind the same verified base resource; replacing
+  the base or resetting the output UAV remains unsupported. Whole-record partial
+  shape targets animate only the vertices present in the base, target and dispatch;
+  omit passes with no available draw vertices. WWMI sparse tracks must
   match the narrow Present/two-pass shader contract and the exact shape-buffer
   layout. A matching authored plain slider with an externally driven phase remains
   a slider; synthetic sinusoidal or program-assigned phases remain compute tracks.
 - Execute program assignments, resets, conditions and dispatches in authored
-  order. Controls remain external inputs and state rules are the shared derived
+  order. Compile numeric and boolean expressions through the shared condition
+  syntax tree; select if/elif/else branches once on entry, including child calls.
+  Controls remain external inputs and state rules are the shared derived
   dependency model. Tracks from one program share program state while retaining
   independent output identities; visibility and control changes wake existing
   tracks rather than rebuilding meshes.

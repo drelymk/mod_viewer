@@ -111,3 +111,32 @@ def nested_mod(root):
         "cs-t51 = copy ResourceKey2", "cs = anim.hlsl", "Dispatch = 1, 1, 1"]
     save_sections(ini, sections)
     return ini
+
+
+def branched_compute_mod(root):
+    """Two verified children with exclusive branches and a partial target."""
+    ini = compute_mod(root)
+    sections = read_sections(ini)
+    del sections["CustomShaderShape"]
+    del sections["CustomShaderPose"]
+    sections["Constants"].extend([
+        "global $mode = 1", "global $hidden = 0", "global $covered = 0"])
+    sections["KeyMode"] = ["key = m", "type = cycle", "$mode = 0,1,2,3"]
+    sections["CustomShaderParent"] = [
+        "cs-u5 = copy ResourcePosition.2", "cs-t50 = copy ResourcePosition.2",
+        "if $mode == 1 && !($hidden || $covered)", "run = CustomShaderAnim01",
+        "elif $mode == 2 && !($hidden || $covered)", "run = CustomShaderAnim02",
+        "else if $mode == 3 && !($hidden || $covered)",
+        "run = CustomShaderAnim01", "run = CustomShaderAnim02",
+        "else", "$Freq_key = 0", "$Freq_pose = 0", "endif",
+        "ResourcePosition = ref cs-u5", "cs-u5 = null"]
+    for name, phase, target in (("01", "Freq_key", "ResourceKey1"),
+                                ("02", "Freq_pose", "ResourceKey2")):
+        sections[f"CustomShaderAnim{name}"] = [
+            f"${phase} = (${phase} + $Speed * $dt)", f"x88 = ${phase}",
+            "cs-t50 = copy ResourcePosition.2", f"cs-t51 = copy {target}",
+            "cs = shape.hlsl", "Dispatch = 1, 1, 1"]
+    target = root / "key1.buf"
+    target.write_bytes(target.read_bytes()[:80])
+    save_sections(ini, sections)
+    return ini

@@ -29,6 +29,7 @@ _STATE_ADD_RE = re.compile(
     r'^\$(\w+)\s*=\s*\$(\w+)\s*\+\s*\$(\w+)$')
 _BUTTON_RE = re.compile(r'CommandListButton(\d+)(Left|Right)', re.I)
 _IMAGE_BINDING_RE = re.compile(r'ps-t100\s*=\s*(\S+)', re.I)
+_RECT_BINDING_RE = re.compile(r'([xyzw]87)\s*=\s*(.*)', re.I)
 
 _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">"}
 
@@ -191,6 +192,96 @@ def _branch_image(nodes, resources):
     return _resource_file(resources, names[0]) if len(names) == 1 else None
 
 
+def _variable_images(blocks, resources, variables, region_vars=None):
+    """Resolve first artwork, matching authored click and draw regions when known."""
+    if resources is None or not variables:
+        return {}
+    roots = [parsed[1] for parsed in blocks if parsed is not None]
+    regions = {}
+    images = {}
+
+    def cursor_variables(text):
+        axes = {"x": set(), "y": set()}
+
+        def visit(part):
+            if isinstance(part, condition.Paren):
+                visit(part.inner)
+            elif isinstance(part, condition.And):
+                for child in part.parts:
+                    visit(child)
+            elif isinstance(part, condition.Cmp) and part.op in ("<", "<=", ">", ">="):
+                for axis in axes:
+                    if re.search(rf'\bcursor_{axis}\b', part.render(), re.I):
+                        axes[axis].update(name.casefold() for name in part.variables())
+
+        try:
+            visit(condition.parse(text or ""))
+        except condition.ConditionError:
+            pass
+        return axes
+
+    def click_regions(nodes, axes):
+        for node in nodes:
+            if isinstance(node, str):
+                assignment = _ASSIGN_RE.fullmatch(node)
+                if assignment and all(len(names) == 2 for names in axes.values()):
+                    region = tuple(frozenset(axes[axis]) for axis in ("x", "y"))
+                    regions.setdefault(assignment.group(1).casefold(), set()).add(region)
+                continue
+            for branch in node["branches"]:
+                bounds = cursor_variables(branch["condition"])
+                click_regions(branch["body"],
+                              {axis: axes[axis] | bounds[axis] for axis in axes})
+
+    def collect(nodes, rectangle, variable=None):
+        assigned = set()
+        for node in nodes:
+            if isinstance(node, str):
+                binding = _RECT_BINDING_RE.fullmatch(node)
+                if binding:
+                    register, value = binding.groups()
+                    register = register.casefold()
+                    name = re.fullmatch(r'\$(\w+)', value.strip())
+                    rectangle[register] = name.group(1).casefold() if name else None
+                    assigned.add(register)
+                if variable:
+                    region = tuple(frozenset(rectangle.get(register) for register in pair)
+                                   for pair in (("x87", "z87"), ("y87", "w87")))
+                    if variable in regions and region not in regions[variable]:
+                        continue
+                    image = _section_image((node,), resources)
+                    if image:
+                        images.setdefault(variable, image)
+                continue
+            branches = node["branches"]
+            try:
+                names = {name.casefold() for branch in branches
+                         if branch["condition"] is not None
+                         for name in condition.parse(branch["condition"]).variables()}
+            except condition.ConditionError:
+                names = set()
+            branch_variable = next(iter(names)) if len(names) == 1 else None
+            if branch_variable not in variables:
+                branch_variable = None
+            changed = set()
+            for branch in branches:
+                changed.update(collect(branch["body"], dict(rectangle), branch_variable))
+            # Conditional coordinate writes cannot leak into later draw regions.
+            for register in changed:
+                rectangle.pop(register, None)
+            assigned.update(changed)
+        return assigned
+
+    for root in roots:
+        click_regions(root, {"x": set(), "y": set()})
+    for variable, pulse in (region_vars or {}).items():
+        if pulse in regions:
+            regions.setdefault(variable, set()).update(regions[pulse])
+    for root in roots:
+        collect(root, {})
+    return images
+
+
 def _section_image(lines, resources, *, last=False):
     """Resolve the first or last usable direct artwork binding in a section."""
     image = None
@@ -205,6 +296,8 @@ def _section_image(lines, resources, *, last=False):
 
 def _slot_images(image_chains, known_slots, slot_groups, resources):
     """Match dispatch artwork to slots, omitting missing or conflicting images."""
+    if not known_slots:
+        return {}
     candidates = {}
     for chain in image_chains:
         artwork = [(int(slot), _branch_image(nodes, resources))
@@ -607,7 +700,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
 
     present_records = _controller_records(
         sections, lambda name: name.casefold() == "present")
-    flips, image_candidates = {}, {}
+    flips, blocks = {}, []
     for section, lines in sections.items():
         if not section.casefold().startswith("commandlist"):
             continue
@@ -621,33 +714,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
                     flips.setdefault(lhs.casefold(), (lhs, section, raw))
         if resources is None:
             continue
-        parsed = _conditional_blocks(lines)
-        if parsed is None:
-            continue
-
-        def collect(nodes):
-            for block in nodes:
-                if not isinstance(block, dict):
-                    continue
-                branches = block["branches"]
-                first = _SLOT_RE.fullmatch(branches[0]["condition"] or "")
-                if (first and first.group(2) == "0" and len(branches) == 2
-                        and branches[1]["condition"] is None):
-                    images = [_branch_image(branch["body"], resources)
-                              for branch in branches]
-                    image = (images[0] if all(images) and
-                             images[0].casefold() == images[1].casefold()
-                             else None)
-                    image_candidates.setdefault(first.group(1).casefold(), []).append(image)
-                for branch in branches:
-                    collect(branch["body"])
-
-        collect(parsed[1])
-    pulse_images = {
-        pulse: images[0] for pulse, images in image_candidates.items()
-        if all(images) and len({image.casefold() for image in images}) == 1
-    }
-
+        blocks.append(_conditional_blocks(lines))
     found = {}
 
     def add(local, values, section, raw, pulse_var=None):
@@ -666,9 +733,6 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
         }
         if pulse_var is not None:
             controller["_pulse_var"] = declared(pulse_var)
-            image = pulse_images.get(pulse_var.casefold())
-            if image:
-                controller["image_file"] = image
         found[local] = controller
 
     for local_key in allowed:
@@ -688,6 +752,17 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
         values = _controller_wrap_values(present_records, lhs)
         if values:
             add(lhs, values, section, raw, pulse_var=pulse)
+    variables = {name.casefold() for name in found}
+    variables.update(info["_pulse_var"].casefold() for info in found.values()
+                     if "_pulse_var" in info)
+    region_vars = {name.casefold(): info["_pulse_var"].casefold()
+                   for name, info in found.items() if "_pulse_var" in info}
+    images = _variable_images(blocks, resources, variables, region_vars)
+    for local, info in found.items():
+        image = (images.get(info.get("_pulse_var", local).casefold())
+                 or images.get(local.casefold()))
+        if image:
+            info["image_file"] = image
     return found
 
 
@@ -707,6 +782,7 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     section_lookup = {name.casefold(): lines for name, lines in sections.items()}
     image_chains = []
     slot_groups = []
+    missing_images = []
 
     def declared(name):
         return canon.get(name.lower(), name)
@@ -746,6 +822,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
             entry["kind"] = kind
         if image:
             entry["image_file"] = image
+        else:
+            missing_images.append((variable.casefold(), entry))
         menu[key] = entry
 
     for name, parsed_blocks in blocks.items():
@@ -780,6 +858,13 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     for info in menu.values():
         if info.get("kind") != "mouse_region" and info["slot"] in images:
             info["image_file"] = images[info["slot"]]
+    missing_images = [(variable, info) for variable, info in missing_images
+                      if "image_file" not in info]
+    variable_images = _variable_images(
+        blocks.values(), resources, {variable for variable, _info in missing_images})
+    for variable, info in missing_images:
+        if variable in variable_images:
+            info["image_file"] = variable_images[variable]
     return menu
 
 

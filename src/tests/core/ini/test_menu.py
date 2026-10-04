@@ -303,6 +303,125 @@ filename = badge.dds
             "section": "Present", "_pulse_var": "trigger", "image_file": "badge.dds"}}
 
 
+@pytest.mark.parametrize("first,alternate,guard,conflicting,expected", [
+    ("ResourceBadge", "ResourceBadge", "$mode == 0", False, "badge.dds"),
+    ("ResourceBadge", "resourceAlias", "$mode == 0", False, "badge.dds"),
+    ("ResourceBadge", "ResourceOther", "$mode == 0", False, "badge.dds"),
+    ("ResourceBadge", "ResourceMissing", "$mode == 0", False, "badge.dds"),
+    ("ResourceBadge", "ResourceBadge", "$mode == 0", True, "badge.dds"),
+    ("null", "ResourceOther", "$mode == 0", False, "other.dds"),
+    ("ResourceMissing", "ResourceOther", "$mode == 0", False, "other.dds"),
+    ("null", "ResourceMissing", "$mode == 0", False, None),
+    ("ResourceBadge", "ResourceOther", "$mode == 1 || $MODE == 2", False, "badge.dds"),
+    ("ResourceBadge", "ResourceOther", "$mode == 0 && $enabled", False, None),
+], ids=["same-resource", "same-file", "different-states", "missing-later", "later-artwork",
+        "null-first", "missing-first", "no-artwork", "compound-state", "ambiguous-variable"])
+def test_first_artwork_is_shared_by_direct_and_forwarded_controls(
+        first, alternate, guard, conflicting, expected):
+    text = f"""
+[Constants]
+global persist $Mode = 0
+[CommandListChoose]
+if $picked == 41
+$Mode = 1 - $MODE
+elif $picked == 42
+$anchor = 1 - $anchor
+endif
+[CommandListBadge]
+if {guard}
+ps-t100 = {first}
+else
+ps-t100 = {alternate}
+endif
+[ResourceBadge]
+filename = badge.dds
+[ResourceAlias]
+filename = badge.dds
+[ResourceOther]
+filename = other.dds
+"""
+    if conflicting:
+        text += """
+[CommandListOtherBadge]
+if $MODE == 0
+ps-t100 = ResourceOther
+else
+ps-t100 = ResourceOther
+endif
+"""
+    parsed = _sections(text)
+    resources = extract_resources(parsed)
+    direct = extract_menu_toggles(parsed, resources=resources, var_prefix="piece::")
+    forwarded = extract_controller_toggles(
+        parsed, {"mode"}, resources=resources, var_prefix="piece::")
+    for entry in (direct["piece::CommandListChoose#41"], forwarded["Mode"]):
+        assert entry["var"] == "piece::Mode"
+        assert entry["values"] == ["0", "1"]
+        assert entry.get("image_file") == expected
+        assert "_pulse_var" not in entry
+
+
+@pytest.mark.parametrize("coordinates,first,expected", [
+    (("width", "height", "left", "top"), "ResourceBadge", "badge.dds"),
+    (("WIDTH", "Height", "LEFT", "Top"), "ResourceBadge", "badge.dds"),
+    (("width", "height", "left", "top"), "null", "pressed.dds"),
+    (("height", "width", "top", "left"), "ResourceBadge", None),
+    (("width", "height", "left", "otherTop"), "ResourceBadge", None),
+], ids=["button", "case-insensitive", "first-usable", "swapped-axes", "other-region"])
+def test_button_artwork_matches_click_region_before_source_order(
+        coordinates, first, expected, monkeypatch):
+    assignments = "\n".join(f"{axis}87 = ${name}"
+                            for axis, name in zip("xyzw", coordinates))
+    parsed = _sections(f"""
+[CommandListChoose]
+if $picked == 41
+    if cursor_x > $left && cursor_x < ($left + $width)
+        if cursor_y > $top && cursor_y < ($top + $height)
+            $Mode = 1 - $Mode
+        endif
+    endif
+elif $picked == 42
+    $anchor = 1 - $anchor
+endif
+[CommandListBackdrop]
+x87 = $panelWidth
+y87 = $panelHeight
+z87 = $panelLeft
+w87 = $panelTop
+if $Mode == 0
+    ps-t100 = ResourceBackdrop
+endif
+if $theme == 0
+    ps-t100 = ResourceBackdrop
+endif
+[CommandListBadge]
+{assignments}
+if $Mode == 0
+    ps-t100 = {first}
+else
+    ps-t100 = ResourcePressed
+endif
+[ResourceBackdrop]
+filename = backdrop.dds
+[ResourceBadge]
+filename = badge.dds
+[ResourcePressed]
+filename = pressed.dds
+""")
+    resources = extract_resources(parsed)
+    lookup = resources.get_ci
+
+    def button_resource(name):
+        assert name.casefold() != "resourcebackdrop"
+        return lookup(name)
+
+    monkeypatch.setattr(resources, "get_ci", button_resource)
+    direct = extract_menu_toggles(parsed, resources=resources)
+    forwarded = extract_controller_toggles(parsed, {"mode"}, resources=resources)
+    for entry in (direct["CommandListChoose#41"], forwarded["Mode"]):
+        assert entry.get("image_file") == expected
+
+
 def test_mouse_regions_preserve_inactive_ordinals_and_require_finite_mouse_actions():
     text = """
 [Constants]
@@ -344,5 +463,13 @@ filename = badge.dds
     "if $picked == 6\nps-t100 = ResourceBadge\nelif $picked == 9\nps-t100 = ResourceBadge\nendif",
     "if $picked == 6\n$temporary = 1\nelif $picked == 9\n$other = 0\nendif",
 ])
-def test_bookkeeping_and_artwork_only_sections_do_not_create_controls(body):
-    assert _menu("[CommandListUtility]\n" + body) == {}
+def test_bookkeeping_and_artwork_only_sections_do_not_create_controls(body, monkeypatch):
+    parsed = _sections("[CommandListUtility]\n" + body
+                       + "\n[ResourceBadge]\nfilename = badge.dds\n")
+    resources = extract_resources(parsed)
+
+    def unrelated_artwork(name):
+        pytest.fail(f"Unrecognized controls must not request artwork: {name}")
+
+    monkeypatch.setattr(resources, "get_ci", unrelated_artwork)
+    assert extract_menu_toggles(parsed, resources=resources) == {}

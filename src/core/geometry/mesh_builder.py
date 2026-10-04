@@ -614,18 +614,25 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
     base_data = buffers.raw(base_path)
     blend_data = buffers.raw(blend_path) if pose else None
     vertex_count = int(animation["vertex_count"])
+    if len(base_data) % 40 or any(
+            index < 0 or index >= len(base_data) // 40 for index in used_vertices):
+        return None
     shape_entries = []
     base_normals = bytearray(len(used_vertices) * 12)
     for output, raw_index in enumerate(used_vertices):
         values = struct.unpack_from("<3f", base_data, raw_index * 40 + 12)
         struct.pack_into("<3f", base_normals, output * 12, *values)
-    for item in animation.get("shape_passes", ()):
+    for pass_index, item in enumerate(animation.get("shape_passes", ())):
         target_path = _gimi_path(mod_dir, item["target_file"], source)
         if not target_path:
             return None
         target_data = buffers.raw(target_path)
+        if len(target_data) % 40:
+            return None
+        limit = min(int(item["dispatch_vertices"]), vertex_count, len(target_data) // 40)
+        if not any(index < limit for index in used_vertices):
+            continue
         deltas = bytearray(len(used_vertices) * 24)
-        limit = min(int(item["dispatch_vertices"]), vertex_count)
         for output, raw_index in enumerate(used_vertices):
             if raw_index >= limit:
                 continue
@@ -640,8 +647,11 @@ def _prepare_gimi_geometry(animation, used_vertices, *, mod_dir, buffers,
         shape_entries.append({
             "deltas": _geometry_ref(deltas, geometry),
             "weight_operation": item.get("weight_operation"),
+            "program_pass": pass_index,
         })
 
+    if not shape_entries and pose is None:
+        return None
     result = {
         "kind": "gimi_compute",
         "track_id": animation["track_id"],
