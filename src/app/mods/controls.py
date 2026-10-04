@@ -115,7 +115,6 @@ def _attach_menu_image(panel_item, info, mod_dir, source, image_source):
     exists = source.is_file if source is not None else os.path.isfile
     if not image_path or not exists(image_path):
         return
-    panel_item["image_slot"] = True
     if image_source is not None:
         panel_item["image"] = image_source(image_path)
         return

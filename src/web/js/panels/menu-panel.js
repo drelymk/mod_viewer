@@ -5,6 +5,7 @@ import { registerViewSync, syncView } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { compareValues } from '../editing/conditions.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -17,22 +18,7 @@ function guardHolds(when) {
   if (!when) return true;
   const cur = getToggleValue(when.var);
   if (cur === undefined) return false;
-  switch (when.op) {
-    case '==':
-      return cur === when.value;
-    case '!=':
-      return cur !== when.value;
-    case '>':
-      return Number(cur) > Number(when.value);
-    case '<':
-      return Number(cur) < Number(when.value);
-    case '>=':
-      return Number(cur) >= Number(when.value);
-    case '<=':
-      return Number(cur) <= Number(when.value);
-    default:
-      return false;
-  }
+  return compareValues(cur, when.op, when.value);
 }
 
 let imageObserver = null;
@@ -62,15 +48,13 @@ function buildMenuItem(info) {
     });
   };
   syncLabel();
-  if (info.image_slot) {
-    btn.classList.add('menu-image-btn');
-    btn.replaceChildren();
-  }
   if (info.image) {
+    btn.classList.add('menu-image-btn');
     const img = document.createElement('img');
     img.alt = info.name;
+    img.addEventListener('error', () => btn.replaceChildren(createIcon('cycle')));
     queueMenuImage(img, info.image);
-    btn.appendChild(img);
+    btn.replaceChildren(img);
   }
 
   const nameSpan = document.createElement('span');
@@ -187,10 +171,6 @@ export function buildMenuPanel(menu) {
     return;
   }
   panel.style.display = 'block';
-  // `image_slot` also counts authored-but-empty placeholder textures. Those
-  // cells stay blank and clickable, and still belong to the mod's image grid.
-  const imaged = keys.filter((key) => menu[key].image || menu[key].image_slot).length;
-  list.classList.toggle('image-layout', imaged >= 2 && imaged / keys.length >= 0.6);
 
   // Register every menu variable before the first refresh. Derived [Present]
   // rules often depend on several sibling controls; refreshing while the list

@@ -5,6 +5,62 @@ import math
 import pytest
 
 
+def test_menu_grid_keeps_four_columns_and_icon_fallback_through_rebuilds(module_page):
+    module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export {getControlValue as getToggleValue, setControlValue as setToggleValue}
+  from '../editing/control-state.js';
+export {syncViews as refreshAll} from '../scene/view-sync.js';
+"""))
+    module_page.evaluate("""async () => {
+      const style = document.createElement('link');
+      style.rel = 'stylesheet'; style.href = './css/app.css';
+      await new Promise((resolve, reject) => {
+        style.onload = resolve; style.onerror = reject;
+        document.head.append(style);
+      });
+      document.body.innerHTML = '<div id="menu-panel"><div id="menu-list"></div></div>';
+      const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
+      window.menuFixture = {build: buildMenuPanel, menu: Object.fromEntries(
+        Array.from({length: 5}, (_, index) => [`option${index}`, {
+          name: `option${index}`, var: `option${index}`, slot: index,
+          source: null, values: ['0', '1'], default: '0', effects: [],
+        }]))};
+      buildMenuPanel(window.menuFixture.menu);
+    }""")
+    columns = "getComputedStyle(document.querySelector('#menu-list')).gridTemplateColumns.split(' ').length"
+    assert module_page.evaluate(columns) == 4
+    assert module_page.locator('.menu-item .ui-icon').count() == 5
+    module_page.locator('.menu-item button').first.click()
+    assert module_page.locator('.menu-value').first.inner_text() == '1'
+
+    module_page.set_viewport_size({"width": 800, "height": 600})
+    module_page.evaluate("""() => {
+      const {menu, build} = window.menuFixture;
+      for (const [index, info] of Object.values(menu).entries()) {
+        info.source = index < 4 ? 'source01' : 'source02';
+      }
+      menu.option0.image = './fixture-missing-image.png';
+      menu.option4.image = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>';
+      build(menu);
+    }""")
+    module_page.wait_for_function("""() =>
+      document.querySelectorAll('.menu-item .ui-icon').length === 4 &&
+      document.querySelector('.menu-item img')?.naturalWidth > 0
+    """)
+    assert module_page.evaluate(columns) == 4
+    assert module_page.evaluate("""() => [...document.querySelectorAll('.toggle-src-items')]
+      .every(items => getComputedStyle(items).gridTemplateColumns.split(' ').length === 4)
+    """)
+    module_page.locator('.toggle-src-hdr').first.click()
+    assert not module_page.locator('.toggle-src-items').first.is_visible()
+    module_page.evaluate("window.menuFixture.build({})")
+    assert not module_page.locator('#menu-panel').is_visible()
+    module_page.evaluate("window.menuFixture.build(window.menuFixture.menu)")
+    assert module_page.locator('#menu-panel').is_visible()
+    assert module_page.locator('.menu-item').count() == 5
+
+
 def test_outline_zoom_does_not_expand_into_fine_geometry(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
@@ -1403,6 +1459,97 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
     assert result["trigger"] == "0"
     assert result["normals"] == [0, 1, 0] * 3
     assert result["cleared"] == result["pending"] == 0
+
+
+@pytest.mark.parametrize("target_size", [0, 80], ids=["empty-target", "partial-target"])
+def test_branched_compute_children_play_separately_together_and_keep_missing_vertices(
+        module_page, tmp_path, target_size):
+    from tests.support.animations import branched_compute_mod, load_mod
+
+    ini = branched_compute_mod(tmp_path / "mod")
+    target = ini.parent / "key1.buf"
+    target.write_bytes(target.read_bytes()[:target_size])
+    _, built = load_mod(ini, ini.parent)
+    entry = next(iter(built.meshes.values()))
+    _prepare_compute_clock(module_page)
+    result = module_page.evaluate("""async entry => {
+      const {decodeF32} = await import('./js/textures/decode.js');
+      const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
+      window.__position.array.set(decodeF32(entry.pos));
+      mesh.userData.basePositions = window.__position.array.slice();
+      const attributes = {...mesh.geometry.attributes};
+      const registered = runtime.registerAnimatedMesh(mesh, entry.animation_geometry.track_id,
+        entry.animation_geometry);
+      const positions = () => [...window.__position.array];
+      const select = (mode, now) => {
+        controls.setControlValue('mode', mode); runtime.wakeAnimationRuntime(); window.__frame(now);
+        return positions();
+      };
+      window.__frame(0); const first = positions();
+      window.__frame(40); const advanced = positions();
+      const second = select('2', 80);
+      window.__frame(120); const secondAdvanced = positions();
+      const both = select('3', 160);
+      window.__frame(200); const bothAdvanced = positions();
+      controls.setControlValue('hidden', '1'); runtime.wakeAnimationRuntime(); window.__frame(240);
+      window.__frame(280);
+      const blocked = positions(), sleeping = window.__pendingFrames() === 0;
+      controls.setControlValue('hidden', '0');
+      const restarted = select('1', 5000);
+      // Mutating a guard inside its selected branch must not select another branch.
+      runtime.resetAnimationRuntime(); controls.resetControlState();
+      const program = entry.animation_geometry.program;
+      const start = program.commands.findIndex(command => command.op === 'if') + 1;
+      program.commands.splice(start, 0,
+        {op: 'set', variable: 'mode', expression: {kind: 'literal', value: 2}},
+        {op: 'set', variable: 'hidden', expression: {kind: 'literal', value: 1}});
+      runtime.registerAnimatedMesh(mesh, entry.animation_geometry.track_id, entry.animation_geometry);
+      window.__frame(0); const selectedBranch = positions();
+      runtime.resetAnimationRuntime();
+      return {registered, first, advanced, second, secondAdvanced, both, bothAdvanced,
+        blocked, sleeping, restarted, selectedBranch,
+        stable: mesh.geometry.attributes.position === attributes.position &&
+          mesh.geometry.attributes.normal === attributes.normal};
+    }""", entry)
+    def positions(first, second):
+        first = first if target_size else 0
+        return [first + 2 * second, 0, 0, 1 + 2 * first + 4 * second, 0, 0, 6 * second, 1, 0]
+    initial, advanced = .5, .5 * (math.sin(.004 * 30) + 1)
+    later = .5 * (math.sin(.008 * 30) + 1)
+    assert result["registered"] and result["stable"] and result["sleeping"]
+    assert result["first"] == pytest.approx(positions(initial, 0))
+    assert result["advanced"] == pytest.approx(positions(advanced, 0))
+    assert result["second"] == pytest.approx(positions(0, initial))
+    assert result["secondAdvanced"] == pytest.approx(positions(0, advanced))
+    assert result["both"] == pytest.approx(positions(advanced, advanced))
+    assert result["bothAdvanced"] == pytest.approx(positions(later, later))
+    assert result["blocked"] == pytest.approx(positions(0, 0))
+    assert result["restarted"] == result["selectedBranch"] == pytest.approx(positions(initial, 0))
+
+
+@pytest.mark.parametrize("source, values, expected", [
+    ("$a == 1 && ($b != 0 || !$c)", {"a": 1, "b": 0, "c": 0}, True),
+    ("$a == 1 && ($b != 0 || !$c)", {"a": 0, "b": 1, "c": 0}, False),
+    ("($a >= .5 && $a <= 1.) || $b < -1", {"a": .75, "b": 0}, True),
+    ("$a > 1 || $a !== 1", {"a": 1}, False),
+    ("!($a === 1) && $b", {"a": 0, "b": 2}, True),
+    ("($a + .5) * 2 == 3", {"a": 1}, True),
+])
+def test_shared_condition_compiler_and_runtime_agree(module_page, source, values, expected):
+    from core.ini.condition import compile_expression
+
+    expression = compile_expression(source)
+    result = module_page.evaluate("""async ({expression, values}) => {
+      const {evaluateCondition, compareValues} = await import('./js/editing/conditions.js');
+      const controls = await import('./js/editing/control-state.js');
+      controls.resetControlState();
+      for (const [name, value] of Object.entries(values)) controls.setControlValue(name, String(value));
+      const shared = Object.fromEntries(Object.keys(values).map(name => [name, controls.getControlValue(name)]));
+      return {condition: evaluateCondition(expression, {variables: shared, dt: 0}),
+        controls: controls.dnfSatisfied([[{var: 'a', value: String(values.a), negate: false}]]),
+        comparison: compareValues(shared.a, '==', String(values.a))};
+    }""", {"expression": expression, "values": values})
+    assert result == {"condition": expected, "controls": True, "comparison": True}
 
 
 def test_sparse_compute_overlay_retains_rest_geometry_and_independent_pass_state(module_page):

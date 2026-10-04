@@ -653,14 +653,12 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 }
 
 /* ── menu panel (right, under Toggle) ────────────────────────────────────── */
-#menu-list { display: flex; flex-direction: column; gap: 8px; }
-#menu-list.image-layout {
+#menu-list {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 7px;
 }
-#menu-list.image-layout.collapsed { display: none; }
-#menu-list.image-layout .menu-item {
+#menu-list .menu-item {
   min-width: 0;
   flex-wrap: wrap;
   justify-content: center;
@@ -669,24 +667,24 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   border-radius: 6px;
   background: #161b22;
 }
-#menu-list.image-layout .menu-name {
+#menu-list .menu-name {
   flex-basis: 100%;
   text-align: center;
   font-size: 10px;
 }
-.menu-image-btn { width: 52px; height: 52px; padding: 0; overflow: hidden; }
+.menu-image-btn { width: 52px; max-width: 100%; height: 52px; padding: 0; overflow: hidden; }
 .menu-image-btn img, .menu-slider-image {
   width: 100%; height: 100%; object-fit: contain; pointer-events: none;
 }
-#menu-list.image-layout .menu-slider-item { grid-column: 1 / -1; }
-#menu-list.image-layout > .toggle-src-hdr,
-#menu-list.image-layout > .toggle-src-items { grid-column: 1 / -1; }
-#menu-list.image-layout > .toggle-src-items {
+#menu-list .menu-slider-item { grid-column: 1 / -1; }
+#menu-list > .toggle-src-hdr,
+#menu-list > .toggle-src-items { grid-column: 1 / -1; }
+#menu-list > .toggle-src-items {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 7px;
 }
-#menu-list.image-layout > .toggle-src-items.collapsed { display: none; }
+#menu-list > .toggle-src-items.collapsed { display: none; }
 .menu-slider-image { width: 48px; height: 48px; flex: 0 0 48px; }
 .menu-item { display: flex; align-items: center; gap: 8px; }
 .menu-name {
@@ -959,10 +957,6 @@ body.feature-edit-mesh-off .mesh-edit-context-action { display: none; }
 @media (max-width: 900px) {
   #sidebar { width: 230px; max-width: calc(50vw - 28px); }
   #present-panel, #toggle-panel, #menu-panel { width: 250px; max-width: calc(50vw - 20px); }
-  #menu-list.image-layout { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  #menu-list.image-layout > .toggle-src-items {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
   .mod-folder-actions > .mod-folder-edit,
   .mod-folder-actions > .mod-folder-remove { display: none; }
   .mod-folder-actions > .mod-folder-more { display: flex; }

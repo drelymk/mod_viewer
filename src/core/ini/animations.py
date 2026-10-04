@@ -13,6 +13,7 @@ import os
 import re
 import struct
 
+from .condition import compile_expression
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, ordered_conditions_supported,
                   parse_condition_dnf)
@@ -81,104 +82,19 @@ def _compute_condition_is_supported(expression, aliases=None):
                 str(expression), aliases if aliases is not None else {}))
 
 
-class _ExpressionParser:
-    """Parse the deliberately small numeric language used by compute mods."""
-
-    _TOKEN_RE = re.compile(
-        r"\s*(?:(?P<number>(?:\d+(?:\.\d*)?|\.\d+))|"
-        r"(?P<name>\$?[A-Za-z_]\w*)|"
-        r"(?P<operator>[+*\-]))")
-
-    def __init__(self, text, canonical, var_prefix=None):
-        self.text = str(text).strip()
-        self.canonical = canonical
-        self.var_prefix = var_prefix or ""
-        self.tokens = []
-        position = 0
-        while position < len(self.text):
-            match = self._TOKEN_RE.match(self.text, position)
-            if match is None:
-                raise ValueError("unsupported expression token")
-            self.tokens.append(next(
-                (value for value in match.groups() if value is not None),
-                None))
-            position = match.end()
-        self.index = 0
-
-    def parse(self):
-        if not self.tokens:
-            raise ValueError("empty expression")
-        result = self._additive()
-        if self.index != len(self.tokens):
-            raise ValueError("trailing expression tokens")
-        return result
-
-    def _peek(self):
-        return self.tokens[self.index] if self.index < len(self.tokens) else None
-
-    def _take(self):
-        value = self._peek()
-        self.index += 1
-        return value
-
-    def _additive(self):
-        result = self._multiplicative()
-        while self._peek() in ("+", "-"):
-            operator = self._take()
-            result = {"kind": "binary", "op": operator,
-                      "left": result, "right": self._multiplicative()}
-        return result
-
-    def _multiplicative(self):
-        result = self._unary()
-        while self._peek() == "*":
-            operator = self._take()
-            result = {"kind": "binary", "op": operator,
-                      "left": result, "right": self._unary()}
-        return result
-
-    def _unary(self):
-        token = self._take()
-        if token is None:
-            raise ValueError("missing expression operand")
-        number = _numeric(token)
-        if number is not None:
-            return {"kind": "literal", "value": number}
-        if token.casefold() == "dt":
-            return {"kind": "dt"}
-        if not token.startswith("$"):
-            raise ValueError("bare names are not numeric operands")
-        local = str(token).lstrip("$")
-        local = _canonical(local, self.canonical)
-        if local.casefold() == "dt":
-            return {"kind": "dt"}
-        return {"kind": "variable",
-                "variable": f"{self.var_prefix}{local}"}
-
-
 def _compile_expression(value, canonical, var_prefix=None):
+    def variable_name(name):
+        local = _canonical(name, canonical)
+        return "dt" if local.casefold() == "dt" else f"{var_prefix or ''}{local}"
+
     try:
-        return _ExpressionParser(value, canonical, var_prefix).parse()
+        return compile_expression(value, variable_name)
     except (TypeError, ValueError):
         return None
 
 
-_COMPARISON_RE = re.compile(r"(==|>)")
-
-
 def _compile_condition(value, canonical, var_prefix=None):
-    text = str(value).strip()
-    match = _COMPARISON_RE.search(text)
-    if match is None:
-        return None
-    left = _compile_expression(
-        text[:match.start()], canonical, var_prefix)
-    right = _compile_expression(
-        text[match.end():], canonical, var_prefix)
-    if left is None or right is None:
-        return None
-    return {"kind": "compare", "op": match.group(1),
-            "left": left, "right": right}
+    return _compile_expression(value, canonical, var_prefix)
 
 
 def _expression_variables(value, result=None):
@@ -209,104 +125,99 @@ def _program_assignment(line, canonical, var_prefix):
     return {"op": "set", "variable": variable, "expression": expression}
 
 
-def _compile_animation_program(sections, animations, canonical, var_prefix=None):
-    """Compile only the authored CustomShader statements with dispatches."""
+def _compile_animation_program(sections, animations, canonical, var_prefix=None,
+                               condition_aliases=None):
+    """Compile verified dispatches and child calls in authored branch order."""
     dispatches = {}
     compile_sections = set()
     for animation in animations:
         track_id = animation["track_id"]
-        for index, item in enumerate(animation.get("shape_passes", ())):
+        items = [(item, {"pass": index, "kind": "shape"})
+                 for index, item in enumerate(animation.get("shape_passes", ()))]
+        if animation.get("pose") is not None:
+            items.append((animation["pose"], {"kind": "pose"}))
+        for item, metadata in items:
             section, line_index = tuple(item["dispatch_key"])
-            compile_sections.add(section)
-            dispatches.setdefault((section, line_index), []).append({
-                "track_id": track_id, "pass": index,
-                "phase": item["phase_expr"], "kind": "shape",
-            })
-        pose = animation.get("pose")
-        if pose is not None:
-            section, line_index = tuple(pose["dispatch_key"])
-            compile_sections.add(section)
-            dispatches.setdefault((section, line_index), []).append({
-                "track_id": track_id, "phase": pose["phase_expr"],
-                "kind": "pose",
-            })
+            call_key = tuple(item.get("call_key", ()))
+            compile_sections.add(call_key[0] if call_key else section)
+            dispatches.setdefault((section, line_index, call_key), []).append({
+                "track_id": track_id, "phase": item["phase_expr"], **metadata})
 
     initials = _literal_constant_assignments(sections, canonical)
+    unsupported = getattr(condition_aliases, "unsupported", set())
     key_variables = set()
     for section, lines in sections.items():
-        if not str(section).casefold().startswith("key"):
-            continue
-        for raw in lines:
-            line = str(raw).split(";", 1)[0].strip()
-            match = _COMPUTE_ASSIGN_RE.fullmatch(line)
-            if match is not None and match.group("lhs").startswith("$"):
-                key_variables.add(
-                    f"{var_prefix or ''}"
-                    f"{_canonical(match.group('lhs'), canonical)}")
+        if str(section).casefold().startswith("key"):
+            for raw in lines:
+                match = _COMPUTE_ASSIGN_RE.fullmatch(str(raw).split(";", 1)[0].strip())
+                if match and match.group("lhs").startswith("$"):
+                    key_variables.add(f"{var_prefix or ''}{_canonical(match.group('lhs'), canonical)}")
 
-    commands = []
-    variables = set()
-    assigned = set()
-    for section, lines in sections.items():
-        section_key = str(section).casefold()
-        if section_key not in compile_sections:
-            continue
-        conditions = []
-        for line_index, raw in enumerate(lines):
+    commands, variables, assigned = [], set(), set()
+    lookup = {str(name).casefold(): lines for name, lines in sections.items()}
+
+    def compile_section(section, call_key=()):
+        branches = []
+        for line_index, raw in enumerate(lookup[section]):
             line = str(raw).split(";", 1)[0].strip()
-            if not line:
-                continue
             low = line.casefold()
-            if low.startswith("global ") or low.startswith("persist ") \
-                    or low.startswith("global persist "):
+            if not line or low.startswith(("global ", "persist ")):
                 continue
-            if low.startswith("if "):
-                condition = _compile_condition(line[3:], canonical, var_prefix)
-                if condition is None:
-                    return None
-                conditions.append(condition)
+            branch = _CLOCK_ELIF_RE.fullmatch(line)
+            if low.startswith("if ") or branch:
+                if branch and (not branches or branches[-1]):
+                    return False
+                condition = _compile_condition(branch.group(1) if branch else line[3:],
+                                               canonical, var_prefix)
+                if condition is None or any(
+                        _unprefix(name, var_prefix).casefold() in unsupported
+                        for name in _expression_variables(condition)):
+                    return False
+                commands.append({"op": "elif" if branch else "if", "condition": condition})
                 variables.update(_expression_variables(condition))
+                if not branch:
+                    branches.append(False)
                 continue
-            if low == "endif":
-                if not conditions:
-                    return None
-                conditions.pop()
+            if low in {"else", "endif"}:
+                if not branches or (low == "else" and branches[-1]):
+                    return False
+                commands.append({"op": low})
+                if low == "else":
+                    branches[-1] = True
+                else:
+                    branches.pop()
                 continue
-            if re.match(r"(?:else|elif)\b", low):
-                return None
             raw_assignment = _COMPUTE_ASSIGN_RE.fullmatch(line)
-            if (raw_assignment is not None
-                    and raw_assignment.group("lhs").startswith("$")
-                    and _canonical(raw_assignment.group("lhs"), canonical)
-                    .casefold() in {"dt", "ts"}):
-                continue
-            assignment = _program_assignment(line, canonical, var_prefix)
-            if assignment is not None:
-                assignment["conditions"] = list(conditions)
+            if raw_assignment and raw_assignment.group("lhs").startswith("$"):
+                if _canonical(raw_assignment.group("lhs"), canonical).casefold() in {"dt", "ts"}:
+                    continue
+                assignment = _program_assignment(line, canonical, var_prefix)
+                if assignment is None:
+                    return False
                 commands.append(assignment)
                 variables.add(assignment["variable"])
                 variables.update(_expression_variables(assignment["expression"]))
                 assigned.add(assignment["variable"])
-                continue
-            if raw_assignment is not None and raw_assignment.group("lhs").startswith("$"):
-                return None
-            if _COMPUTE_DISPATCH_RE.fullmatch(line):
-                if conditions:
-                    return None
-                for item in dispatches.get((section_key, line_index), ()):
+            elif match := _COMPUTE_RUN_RE.fullmatch(line):
+                child = match.group("section").casefold()
+                child_key = (section, line_index)
+                if any(key[2] == child_key for key in dispatches):
+                    if call_key or child not in lookup or not compile_section(child, child_key):
+                        return False
+            elif _COMPUTE_DISPATCH_RE.fullmatch(line):
+                for item in dispatches.get((section, line_index, call_key), ()):
                     commands.append({"op": "dispatch", **item})
                     variables.update(_expression_variables(item["phase"]))
-        if conditions:
+        return not branches
+
+    for section in lookup:
+        if section in compile_sections and not compile_section(section):
             return None
-    normalized_initials = {
-        f"{var_prefix or ''}{_canonical(key, canonical)}": value
-        for key, value in initials.items()
-        if f"{var_prefix or ''}{_canonical(key, canonical)}" in variables
-    }
     return {
-        "external_variables": sorted(
-            (variables - assigned) | (variables & key_variables)),
-        "initials": normalized_initials,
+        "external_variables": sorted((variables - assigned) | (variables & key_variables)),
+        "initials": {f"{var_prefix or ''}{_canonical(key, canonical)}": value
+                     for key, value in initials.items()
+                     if f"{var_prefix or ''}{_canonical(key, canonical)}" in variables},
         "commands": commands,
     }
 
@@ -949,7 +860,8 @@ def _validate_compute_layout(inputs, shape_passes, pose=None, *, bone_count=None
         if (info.get("stride") != 40
                 or str(item["base_resource"]).casefold() != str(base_resource).casefold()):
             return None
-        if inputs.size(info.get("filename")) != base_size:
+        target_size = inputs.size(info.get("filename"))
+        if target_size is None or target_size % 40:
             return None
     result = {
         "base_file": base_info["filename"],
@@ -1321,6 +1233,10 @@ def _compute_binding_events(section, lines, inputs, inherited_base=None):
             continue
         event, value = "statement", None
         if inherited_base and re.match(r"cs-(?:u5|t50)\s*=", line, re.I):
+            binding = _COMPUTE_T_COPY_RE.fullmatch(line)
+            if (binding and binding.group("slot") == "50"
+                    and binding.group(2).casefold() == str(inherited_base).casefold()):
+                continue
             yield line, "invalid", None
             return
         match = _COMPUTE_T_COPY_RE.fullmatch(line)
@@ -1342,7 +1258,7 @@ def _compute_binding_events(section, lines, inputs, inherited_base=None):
             if int(match.group("slot")) == 5:
                 event, value = "output", match.group(1)
         elif match := _COMPUTE_RUN_RE.fullmatch(line):
-            event, value = "run", (match.group("section"), sources.get(50))
+            event, value = "run", (match.group("section"), sources.get(50), line_index)
         elif match := _COMPUTE_DISPATCH_RE.fullmatch(line):
             kind = "pose" if sources.get(52) else "shape"
             if (shader is None or shader["kind"] != kind
@@ -1373,6 +1289,12 @@ def _compute_binding_events(section, lines, inputs, inherited_base=None):
                 sources.pop(int(binding.group(1)[1:]), None)
                 event = "invalid"
         yield line, event, value
+        if event == "run":
+            # A child can change phase, shader and target bindings. A later
+            # parent dispatch must explicitly establish them again.
+            sources.pop(51, None)
+            sources.pop(52, None)
+            shader, phase, bone_count = None, None, None
 
 
 def _compute_chains(sections, inputs, canonical, var_prefix, aliases):
@@ -1413,7 +1335,8 @@ def _compute_chains(sections, inputs, canonical, var_prefix, aliases):
                 if chain is not None:
                     chains.append(chain)
                 chain = ({"u5_resource": value, "passes": [],
-                          "output_resource": None} if event == "begin" else None)
+                          "output_resource": None,
+                          "conditional_begin": bool(stack)} if event == "begin" else None)
             elif chain is not None:
                 if event == "output":
                     chain["output_resource"] = value
@@ -1421,7 +1344,7 @@ def _compute_chains(sections, inputs, canonical, var_prefix, aliases):
                     chain["passes"].append(value)
                 elif event == "invalid":
                     chain["unsupported"] = True
-                elif event == "run" and all(supported):
+                elif event == "run":
                     child = lookup.get(value[0].casefold())
                     if child is None or not str(child).casefold().startswith("customshader"):
                         continue
@@ -1431,7 +1354,11 @@ def _compute_chains(sections, inputs, canonical, var_prefix, aliases):
                     combined = DNF_TRUE
                     for frame in stack:
                         combined = dnf_and(combined, frame["cur"])
+                    call_key = (str(section).casefold(), value[2])
+                    chain.setdefault("child_passes", []).extend(
+                        {**item, "call_key": call_key} for item in passes)
                     nested = {"child_section": child, "passes": passes,
+                              "overlay_supported": all(supported),
                               "conditions": normalize_dnf(
                                   combined, tracked_vars, var_prefix)}
                     if chain.get("nested_run") is not None:
@@ -1501,6 +1428,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                 "dispatch_vertices": item["dispatch_vertices"],
                 "phase_expr": phase, "dispatch_key": item["dispatch_key"],
                 "weight_operation": item["weight_operation"],
+                "call_key": item.get("call_key", ()),
             } for item, phase in zip(shapes, phases)],
             "pose": None,
         }
@@ -1521,8 +1449,10 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
             continue
         poses = [item for item in chain["passes"] if item["kind"] == "pose"]
         shapes = [item for item in chain["passes"] if item["kind"] == "shape"]
+        shapes.extend(chain.get("child_passes", ()))
         animation = None
-        if not chain.get("unsupported") and not (poses and shapes):
+        if (not chain.get("unsupported") and not chain.get("conditional_begin")
+                and not (poses and shapes)):
             if not poses and str(output).casefold() not in pose_inputs:
                 animation = build_track(chain, index, shapes)
             elif len(poses) == 1:
@@ -1531,16 +1461,19 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                     animation = build_track(chain, index, [], poses[0])
                 elif (len(matching) == 1 and not matching[0].get("unsupported")
                       and all(item["kind"] == "shape" for item in matching[0]["passes"])):
-                    animation = build_track(chain, index, matching[0]["passes"], poses[0])
+                    animation = build_track(chain, index, [
+                        *matching[0]["passes"], *matching[0].get("child_passes", ())], poses[0])
         nested = chain.get("nested_run")
-        if (animation is None and nested and not chain.get("nested_ambiguous")
+        if (animation is None and nested and nested["overlay_supported"]
+                and not chain.get("nested_ambiguous")
                 and not chain.get("unsupported")):
             animation = build_track(chain, index, nested["passes"], nested=nested)
         if animation is not None:
             animations.append(animation)
     if not animations:
         return []
-    program = _compile_animation_program(sections, animations, canonical, var_prefix)
+    program = _compile_animation_program(
+        sections, animations, canonical, var_prefix, condition_aliases=aliases)
     if program is None:
         return []
     program_id = "gimi-program::" + hashlib.sha1(
@@ -1549,6 +1482,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
         for item in [*animation["shape_passes"], *([animation["pose"]] if animation["pose"] else [])]:
             item.pop("phase_expr")
             item.pop("dispatch_key")
+            item.pop("call_key", None)
         animation.update(program_id=program_id, program=program)
     return animations
 

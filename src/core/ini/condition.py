@@ -4,6 +4,7 @@ Unlike the DNF analysis parser, this syntax tree preserves expression
 structure so targeted edits leave unrelated condition text intact.
 """
 
+import math
 import re
 
 # Sentinels for a condition that partial evaluation has fully decided.
@@ -14,7 +15,7 @@ _TOKEN_RE = re.compile(r"""
       (?P<ws>\s+)
     | (?P<op>&&|\|\||===|!==|==|!=|<=|>=|<|>|//|[!()+\-*/%])
     | (?P<var>\$[\w\\]+)
-    | (?P<num>0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?)
+    | (?P<num>0[xX][0-9a-fA-F]+|\d+(?:\.\d*)?|\.\d+)
     | (?P<word>[A-Za-z_]\w*(?:-[A-Za-z]\w*)*)
     | (?P<other>\S)
 """, re.X)
@@ -249,6 +250,44 @@ def parse(text):
     if pos != len(tokens):
         raise ConditionError(f"trailing tokens {tokens[pos:]} in {text!r}")
     return node
+
+
+def compile_expression(text, variable_mapper=lambda name: name):
+    """Compile the shared syntax tree into a portable numeric/boolean expression.
+
+    Bare host runtime names are deliberately unsupported. Callers resolve
+    variable identity while the parser owns precedence and boolean syntax.
+    """
+    def compile_node(node):
+        if isinstance(node, Paren):
+            return compile_node(node.inner)
+        if isinstance(node, Operand):
+            if node.is_var:
+                variable = variable_mapper(node.var)
+                return ({"kind": "dt"} if variable == "dt" else
+                        {"kind": "variable", "variable": variable})
+            if node.text.casefold() == "dt":
+                return {"kind": "dt"}
+            try:
+                value = (int(node.text, 16) if "x" in node.text.casefold()
+                         else float(node.text))
+            except ValueError as exc:
+                raise ConditionError("unsupported runtime operand") from exc
+            if not math.isfinite(value):
+                raise ConditionError("non-finite operand")
+            return {"kind": "literal", "value": value}
+        if isinstance(node, (Cmp, Arith)):
+            return {"kind": "compare" if isinstance(node, Cmp) else "binary",
+                    "op": node.op, "left": compile_node(node.left),
+                    "right": compile_node(node.right)}
+        if isinstance(node, Not):
+            return {"kind": "not", "operand": compile_node(node.operand)}
+        if isinstance(node, (And, Or)):
+            return {"kind": "and" if isinstance(node, And) else "or",
+                    "parts": [compile_node(part) for part in node.parts]}
+        raise ConditionError("unsupported expression")
+
+    return compile_node(parse(str(text)))
 
 
 # -- partial evaluation -----------------------------------------------------
