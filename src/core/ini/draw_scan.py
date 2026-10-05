@@ -357,6 +357,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     info["_cur_slot_textures"].pop(slot, None)
                 else:
                     info["_cur_slot_textures"][slot] = resource
+                    # Manual candidates retain every authored branch, independent
+                    # of the effective slot snapshot and semantic role bindings.
+                    info["referenced_textures"].setdefault(
+                        resource.casefold(), resource)
                     structural_role = structural_slot_roles.get(slot)
                     legacy_role = scope_legacy_resource_roles.get(
                         resource.casefold())
@@ -507,6 +511,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
+            "referenced_textures": {},
             "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
             "_cur_compute_resources": {},

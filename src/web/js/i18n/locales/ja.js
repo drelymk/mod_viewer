@@ -478,6 +478,7 @@ export default {
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
   'texture.noTextures': 'テクスチャはまだありません。',
+  'texture.loadFailed': 'テクスチャ「{file}」を読み込めません。未対応の形式か、無効なファイルの可能性があります。',
   'texture.replace': '{title}を置換：{file}',
   'texture.add': '{title}を追加',
   'texture.remove': '{title}を削除',

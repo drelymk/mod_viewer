@@ -339,14 +339,21 @@ def _build_vertex_binding_index(section_info, sections,
     )
 
 
-def _select_draw_sections(section_info, global_ib):
-    """Select authored draws, sharing auto only within one INI/hash family."""
-    family_auto = {}
+def _hash_wide_overrides(section_info):
+    """Yield TextureOverrides that apply to every part of their hash family."""
     for name, info in section_info.items():
         match = info.get("geometry_match_at_end")
         if (name.lower().startswith("textureoverride") and match
-                and match.first_index is None and match.index_count is None
-                and info["drawindexed_auto"]):
+                and match.first_index is None and match.index_count is None):
+            yield info
+
+
+def _select_draw_sections(section_info, global_ib):
+    """Select authored draws, sharing auto only within one INI/hash family."""
+    family_auto = {}
+    for info in _hash_wide_overrides(section_info):
+        if info["drawindexed_auto"]:
+            match = info["geometry_match_at_end"]
             family_auto[((info.get("src") or {}).get("ini_path"), match.hash)] = True
 
     def has_auto(info):
@@ -596,6 +603,6 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
 __all__ = [
     "_ib_res_to_component", "_ib_index_size", "_extract_hash",
     "_collect_resource_copy_sources", "_resolve_normal_source",
-    "_resolve_component_buffers", "_select_draw_sections",
+    "_resolve_component_buffers", "_hash_wide_overrides", "_select_draw_sections",
     "VertexBindingIndex",
 ]

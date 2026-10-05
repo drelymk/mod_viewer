@@ -1,7 +1,96 @@
 """Selection reaches the Inspector without changing staged source state."""
 
-from .payloads import append_stream, model_payload
+from .payloads import append_stream, model_payload, textured_payload
 from .support import bridge_calls, open_model, project_mesh_points, wait_loaded
+
+
+def test_unavailable_texture_selection_reports_localized_error_without_mutation(viewer):
+    payload = textured_payload()
+    unavailable = 'diffuse::texture-03.dds'
+    payload['texture_pools']['pool-01'].append({
+        'tex_key': unavailable, 'file': 'texture-03.dds', 'label': 'texture-03'})
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.locator('#inspector-tab').click()
+    page.locator('.draw-item').click()
+    messages = []
+    for locale in ('en', 'zh-CN', 'ja', 'ko', 'es', 'ru'):
+        page.evaluate("""async locale => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale(locale);
+        }""", locale)
+        page.locator(f'.inspector-texture-option[data-texture-value="{unavailable}"]').click()
+        page.locator('#dialog-backdrop.show').wait_for()
+        message = page.locator('#dialog-message').inner_text()
+        expected = page.evaluate("""async () => {
+          const {t} = await import('./js/i18n/index.js');
+          return t('texture.loadFailed', {file: 'texture-03.dds'});
+        }""")
+        assert message == expected
+        messages.append(message)
+        page.locator('#dialog-ok').click()
+        assert page.evaluate('window.modViewer.activeMeshes[0].userData.manualTexOverride === undefined')
+    assert len(set(messages)) == len(messages)
+    assert bridge_calls(page, 'textures') == []
+    assert bridge_calls(page, 'export') == []
+    page.locator('.inspector-texture-option[data-texture-value="diffuse::texture-02.png"]').click()
+    page.wait_for_function('window.modViewer.activeMeshes[0].userData.manualTexOverride === "diffuse::texture-02.png"')
+    assert len(bridge_calls(page, 'textures')) == 1
+    page.locator('.inspector-manage-textures').click()
+    page.evaluate("""() => {
+      window.pywebview.api.pick_texture_file = async () => ({
+        error: 'untranslated fixture error', error_code: 'texture_load_failed', file: 'texture-03.dds'
+      });
+    }""")
+    page.locator('#texm-add').click()
+    page.locator('#texm-list [role="alert"]').wait_for()
+    assert page.locator('#texm-list [role="alert"]').inner_text() == messages[-1]
+    page.evaluate("""async () => {
+      const {setLocale} = await import('./js/i18n/index.js');
+      setLocale('en');
+    }""")
+    assert page.locator('#texm-list [role="alert"]').inner_text() == messages[0]
+    assert page.locator('.texm-row').count() == 3
+    page.locator('.texm-map-cell').first.click()
+    assert page.locator('#texm-list [role="alert"]').inner_text() == messages[0]
+    assert len(bridge_calls(page, 'textures')) == 1
+
+
+def test_delayed_texture_load_errors_only_report_the_current_manual_choice(viewer):
+    payload = textured_payload()
+    for index in (3, 4):
+        key = f'diffuse::texture-{index:02d}.dds'
+        payload['textures'][key] = f'/fixture-{index:02d}.dds'
+        payload['texture_pools']['pool-01'].append({
+            'tex_key': key, 'label': f'texture-{index:02d}'})
+    page = viewer({'fixture-01': payload})
+    pending = []
+    page.route('**/fixture-03.dds', lambda route: route.fulfill(
+        status=200, content_type='image/vnd-ms.dds', body=b'unsupported DDS'))
+    page.route('**/fixture-04.dds', lambda route: pending.append(route))
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.evaluate("""() => {
+      window.__textureErrors = [];
+      window.addEventListener('mod-viewer-texture-load-error', event =>
+        window.__textureErrors.push(event.detail.key));
+    }""")
+    page.locator('#inspector-tab').click()
+    page.locator('.draw-item').click()
+    page.locator('.inspector-texture-option[data-texture-value="diffuse::texture-03.dds"]').click()
+    page.locator('#dialog-backdrop.show').wait_for()
+    assert 'texture-03.dds' in page.locator('#dialog-message').inner_text()
+    page.locator('#dialog-ok').click()
+    with page.expect_request('**/fixture-04.dds'):
+        page.locator('.inspector-texture-option[data-texture-value="diffuse::texture-04.dds"]').click()
+    page.locator('.inspector-texture-option[data-texture-value="diffuse::texture-02.png"]').click()
+    assert len(pending) == 1
+    pending[0].fulfill(status=200, content_type='image/vnd-ms.dds', body=b'unsupported DDS')
+    page.wait_for_function('window.__textureErrors.includes("diffuse::texture-04.dds")')
+    assert page.locator('#dialog-backdrop').is_hidden()
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.manualTexOverride === "diffuse::texture-02.png"')
+    assert bridge_calls(page, 'export') == []
 
 
 def test_key_light_drag_restores_controls_after_capture_loss_and_release(viewer):

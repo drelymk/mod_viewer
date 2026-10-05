@@ -478,6 +478,8 @@ export default {
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
   'texture.noTextures': 'Текстур пока нет.',
+  'texture.loadFailed':
+    'Не удалось загрузить текстуру "{file}". Возможно, формат не поддерживается или файл некорректен.',
   'texture.replace': 'Заменить {title}: {file}',
   'texture.add': 'Добавить {title}',
   'texture.remove': 'Удалить {title}',

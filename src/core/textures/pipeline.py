@@ -343,7 +343,9 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
     else:
         uri = texture_source(resolved, texture_role)
     if not uri:
-        return {"error": "Could not read this file as an image."}
+        return {"error": "Could not read this file as an image.",
+                "error_code": "texture_load_failed",
+                "file": str(rel).replace("\\", "/")}
     relative_path = str(rel).replace("\\", "/")
     return {"tex_key": texture_key(relative_path, texture_role),
             "file": relative_path, "role": texture_role, "uri": uri}

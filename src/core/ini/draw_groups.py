@@ -9,7 +9,7 @@ from ..geometry.skinning import resolve_skinning_source
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
-    _select_draw_sections,
+    _hash_wide_overrides, _select_draw_sections,
 )
 from .draw_scan import _scan_sections_for_draws
 from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
@@ -149,6 +149,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         getattr(section_info, "global_compute_resources", {}) or {})
     if not draw_sections:
         return []
+
+    # Hash-wide references are manual choices for each same-INI/hash part.
+    family_references = {}
+    for provider in _hash_wide_overrides(section_info):
+        match = provider["geometry_match_at_end"]
+        family = ((provider.get("src") or {}).get("ini_path"), match.hash)
+        family_references.setdefault(family, {}).update(
+            provider["referenced_textures"])
 
     ib_file_cache = {}
 
@@ -417,6 +425,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if file and file not in seen_pool_files:
                 seen_pool_files.add(file)
                 pool_files.append({"res": resource_name, "file": file})
+        match = info.get("geometry_match_at_end")
+        family = (((info.get("src") or {}).get("ini_path"), match.hash)
+                  if match else None)
+        references = dict(family_references.get(family, {}))
+        references.update(info["referenced_textures"])
+        referenced_files = list(dict.fromkeys(
+            file for resource_name in references.values()
+            if (file := resolve_texture_file(resource_name))))
         groups.append({
             "name": label,
             "display_name": display_name,
@@ -431,6 +447,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "ib_file": ib_file,
             "diffuse_file": diffuse_info.get("filename"),
             "diffuse_pool_files": pool_files,
+            "referenced_texture_files": referenced_files,
             "index_size": index_size,
             "geometry_match": info.get("geometry_match_at_end"),
             "draws": draws,
