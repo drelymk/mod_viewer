@@ -1,4 +1,6 @@
 export default {
+  'mesh.createToggle': '토글 생성',
+  'toggle.noAutomaticKey': '자동으로 사용할 수 있는 키가 없습니다. 계속하려면 키를 입력하세요.',
   'app.title': 'Mod Viewer',
   'app.windowTitle': '3DMigoto Mod Viewer',
   'common.ok': '확인',

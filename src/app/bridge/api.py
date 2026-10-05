@@ -291,6 +291,9 @@ class ModViewerAPI:
         return toggle_api.get_toggle_details(
             self._access.mod_folder(folder_path), ini_rel, section_name)
 
+    def next_toggle_key(self, folder_path):
+        return toggle_api.next_toggle_key(self._access.mod_folder(folder_path))
+
     def add_toggle(self, folder_path, ini_rel, name, key_combo, var, values,
                    options=None):
         return toggle_api.add_toggle(

@@ -227,6 +227,7 @@ export default {
   'toggle.cycle': 'Cycle value',
   'toggle.noToggles': 'No toggles yet — click Add to create one.',
   'toggle.addTitle': 'Add Toggle',
+  'toggle.noAutomaticKey': 'No automatic key binding available. Enter a key binding to continue.',
   'toggle.editTitle': 'Edit {name}',
   'present.deleteKeyConfirm':
     'Delete the PRESENT key from every participating INI?\n\nThis only stages the change; the INI is not written until Export.',
@@ -624,6 +625,7 @@ export default {
   'mesh.visibleAutomatic': 'Visible automatically',
   'mesh.hiddenAutomatic': 'Hidden automatically',
   'mesh.separateLooseParts': 'Separate by Loose Parts',
+  'mesh.createToggle': 'Create Toggle',
   'mesh.separateBySelection': 'Separate by Selection',
   'mesh.applySelection': 'Apply Selection',
   'mesh.cancelSelection': 'Cancel Selection',

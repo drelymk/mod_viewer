@@ -1,4 +1,6 @@
 export default {
+  'mesh.createToggle': '创建切换',
+  'toggle.noAutomaticKey': '没有可用的自动按键绑定。请输入按键绑定以继续。',
   'app.title': 'Mod Viewer',
   'app.windowTitle': '3DMigoto Mod Viewer',
   'common.ok': '确定',

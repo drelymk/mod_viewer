@@ -490,6 +490,8 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   opacity: .55;
   cursor: default;
 }
+
+.mesh-context-menu .mesh-create-toggle-action { border-bottom: 1px solid var(--border); }
 .mesh-selection-box {
   position: fixed; z-index: 240; pointer-events: none; box-sizing: border-box;
   border: 1px solid var(--accent-soft); background: rgba(88,166,255,.14);
@@ -940,6 +942,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 body.feature-export-off #export-btn { display: none; }
 body.feature-modify-toggle-off #toggle-add-btn { display: none; }
 body.feature-modify-toggle-off .toggle-actions { display: none; }
+body.feature-modify-toggle-off .mesh-create-toggle-action { display: none; }
 body.feature-modify-toggle-off #present-action-btn { display: none; }
 body.feature-modify-toggle-off .present-author-actions { display: none; }
 body.feature-open-disabled-mod-off #open-disabled-mod { display: none; }

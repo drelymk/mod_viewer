@@ -34,6 +34,28 @@ def _toggle_error(error):
     return payload
 
 
+def _record_error(error):
+    return {"error": "the rewritten gating didn't match what was recorded, so "
+                     "the pending change was discarded; nothing was changed "
+                     f"(first mismatch: {error.mismatches[0]})",
+            "mismatches": error.mismatches}
+
+
+def _record_and_verify(path, doc, ini_rel, section_name, position_lines,
+                       target_lines, *, require_all=False):
+    result = record_editor.record_toggle(
+        doc, section_name, position_lines, target_lines, target_ini=ini_rel)
+    if require_all and result["skipped"]:
+        raise te.ToggleEditError(
+            "Can't create toggle: not every selected draw can be wired safely "
+            f"({result['skipped'][0]['reason']})")
+    mismatches = record_editor.verify_recording(path, result, text=doc.to_string())
+    result.pop("verify", None)
+    if mismatches:
+        raise _RecordVerificationFailure(mismatches)
+    return result
+
+
 def _ini_path(mod_dir, ini_rel):
     """Resolve a payload's relative ini name back to an absolute path,
     constrained to actually be one of this mod folder's own ini files (never
@@ -77,6 +99,36 @@ def list_source_inis(mod_dir):
             for p in paths]
 
 
+def _binding_identity(binding):
+    tokens = binding.lower().split()
+    modifiers = {"ctrl", "no_ctrl", "shift", "no_shift", "alt", "no_alt"}
+    keys = [token for token in tokens if token not in modifiers]
+    return ("ctrl" in tokens, "shift" in tokens, "alt" in tokens, tuple(keys))
+
+
+def next_toggle_key(mod_dir):
+    """Choose the first unused generated binding across the staged mod."""
+    used = set()
+    for ini in list_source_inis(mod_dir):
+        doc = edit_session.peek(mod_dir, _ini_path(mod_dir, ini["value"]))
+        for section in doc.sections:
+            if not section.name.lower().startswith("key"):
+                continue
+            for line in section.lines:
+                key, sep, value = line.text.partition("=")
+                if sep and key.strip().lower() in {"key", "back"}:
+                    used.add(_binding_identity(value.strip()))
+    groups = ("no_ctrl no_Shift no_alt", "ctrl no_Shift no_alt",
+              "no_ctrl Shift no_alt", "no_ctrl no_Shift alt",
+              "ctrl no_Shift alt", "ctrl Shift no_alt", "ctrl Shift alt")
+    for group in groups:
+        for character in ("'", "l", "p", ";", "o", "[", "]"):
+            binding = f"{group} {character}"
+            if _binding_identity(binding) not in used:
+                return {"key": binding}
+    return {"key": ""}
+
+
 def get_toggle_details(mod_dir, ini_rel, section_name):
     """Read toggle details from staged state when available; otherwise read from disk."""
     try:
@@ -106,6 +158,8 @@ def _run(mod_dir, ini_rel, fn, on_commit=None):
         if on_commit is not None:
             on_commit(path, result)
         return {"ok": True, "result": result, "pending": True}
+    except _RecordVerificationFailure as e:
+        return _record_error(e)
     except te.ToggleEditError as e:
         return _toggle_error(e)
     except Exception:
@@ -114,9 +168,27 @@ def _run(mod_dir, ini_rel, fn, on_commit=None):
 
 def add_toggle(mod_dir, ini_rel, name, key_combo, var, values, options=None):
     options = options or {}
-    return _run(mod_dir, ini_rel, lambda doc: te.add_toggle(
-        doc, name, key_combo, var, values,
-        default=options.get("default"), back_combo=options.get("back_combo")),
+    def add(doc):
+        targets = options.get("record_targets")
+        if targets is not None:
+            if not isinstance(targets, list) or not targets:
+                raise te.ToggleEditError("Create Toggle needs selected authored draws")
+            if [str(value) for value in values] != ["0", "1"]:
+                raise te.ToggleEditError("Create Toggle requires values 0,1")
+            if str(options.get("default")) != "0":
+                raise te.ToggleEditError("Create Toggle requires default 0")
+            record_editor.resolve_draw_references(doc, targets, ini_rel)
+        section = te.add_toggle(
+            doc, name, key_combo, var, values,
+            default=options.get("default"), back_combo=options.get("back_combo"))
+        if targets is not None:
+            _record_and_verify(
+                doc.path, doc, ini_rel, section,
+                {0: sorted({int(target["line"]) for target in targets}), 1: []},
+                targets, require_all=True)
+        return section
+
+    return _run(mod_dir, ini_rel, add,
         on_commit=lambda path, result: edit_session.mark_added(mod_dir, path, result))
 
 
@@ -192,26 +264,11 @@ def record_toggle(mod_dir, ini_rel, section_name, position_lines, target_lines):
         path = _ini_path(mod_dir, ini_rel)
         with edit_session.transaction(mod_dir, [path]) as transaction:
             doc = transaction.document(path)
-            result = record_editor.record_toggle(
-                doc, section_name, position_lines, target_lines,
-                target_ini=ini_rel)
-            # Pass the authoritative staged text; verify_recording converts it
-            # to an IniDocument projection instead of invoking parse_sections.
-            mismatches = record_editor.verify_recording(path, result,
-                                                         text=doc.to_string())
-            # "verify" only exists to drive the check just above -- an
-            # internal contract between record_editor's two halves, not part
-            # of the UI-facing report.
-            result.pop("verify", None)
-            if mismatches:
-                raise _RecordVerificationFailure(mismatches)
+            result = _record_and_verify(
+                path, doc, ini_rel, section_name, position_lines, target_lines)
         return {"ok": True, "result": result, "pending": True}
     except _RecordVerificationFailure as exc:
-        mismatches = exc.mismatches
-        return {"error": "the rewritten gating didn't match what was recorded, so "
-                          "the pending change was discarded; nothing was changed "
-                          f"(first mismatch: {mismatches[0]})",
-                "mismatches": mismatches}
+        return _record_error(exc)
     except te.ToggleEditError as e:
         return {"error": str(e)}
     except Exception:

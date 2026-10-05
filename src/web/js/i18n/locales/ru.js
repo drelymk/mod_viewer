@@ -1,4 +1,6 @@
 export default {
+  'mesh.createToggle': 'Создать переключатель',
+  'toggle.noAutomaticKey': 'Нет свободной автоматической привязки. Введите сочетание клавиш, чтобы продолжить.',
   'app.title': 'Mod Viewer',
   'app.windowTitle': '3DMigoto Mod Viewer',
   'common.ok': 'ОК',
