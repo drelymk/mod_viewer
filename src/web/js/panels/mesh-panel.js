@@ -107,7 +107,7 @@ function closeMeshContextMenu() {
 function createToggleSelection(anchor) {
   if (isRecording() || getFaceSelection()) return null;
   const context = meshPanelContexts.get(anchor);
-  if (!context?.modPath || context.toggleReadOnly) return null;
+  if (!context?.modPath) return null;
   const selected = getSelectedMeshes();
   if (!selected.length || !selected.includes(anchor)) return null;
   let ini = null;
@@ -117,7 +117,6 @@ function createToggleSelection(anchor) {
     if (
       !item ||
       item.modPath !== context.modPath ||
-      item.toggleReadOnly ||
       isLoosePart(mesh) ||
       mesh.userData.assetFill ||
       mesh.userData.componentDescriptor?.meshEditApplying ||
@@ -1206,7 +1205,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
           entry: meshes[name],
           inspectorRecord,
           modPath,
-          toggleReadOnly: readOnlySource || meshEditReadOnly,
           onToggleChange: options.onToggleChange,
         });
       }

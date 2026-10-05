@@ -433,6 +433,24 @@ def test_create_toggle_failure_preserves_prior_staged_state(toggle_mod, monkeypa
     assert not glob.glob(path + "_*.BAK")
 
 
+@pytest.mark.parametrize("alias, generated", [
+    ("no_modifiers", "no_ctrl no_Shift no_alt"),
+    ("no_control no_shift no_alt", "no_ctrl no_Shift no_alt"),
+    ("no-control no-shift no-alt", "no_ctrl no_Shift no_alt"),
+    ("no-ctrl no_shift no_alt", "no_ctrl no_Shift no_alt"),
+    ("control no_shift no_alt", "ctrl no_Shift no_alt"),
+])
+def test_automatic_toggle_binding_skips_equivalent_aliases(api_root, alias, generated):
+    lines = []
+    if generated.startswith("ctrl "):
+        for index, key in enumerate(("'", "l", "p", ";", "o", "[", "]")):
+            lines.extend([f"[KeyExisting{index}]", f"key = no_ctrl no_Shift no_alt {key}"])
+    lines.extend(["[KeyAlias0]", f"key = {alias} '",
+                  "[KeyAlias1]", f"key = {alias} l"])
+    _fixture(api_root, "mod.ini", "\n".join(lines) + "\n")
+    assert toggle_api.next_toggle_key(api_root) == {"key": f"{generated} p"}
+
+
 def test_automatic_toggle_binding_order_uses_all_staged_key_sections(api_root):
     first = _fixture(api_root, "mod.ini", "[KeyUtility]\nkey = '\nback = L\n")
     second = _fixture(api_root, "other.ini", "[KeyUtility]\nkey = p\n")

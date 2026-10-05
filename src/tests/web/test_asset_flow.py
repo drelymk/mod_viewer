@@ -6,6 +6,8 @@ from .support import bridge_calls, open_model, wait_loaded
 
 def test_asset_transition_removes_source_edit_actions(viewer):
     asset = model_payload()
+    source = asset['meshes']['mesh-00']['sources'][0]
+    source['occurrence'] = {'section': source['section'], 'ordinal': 0, 'path': []}
     asset['metadata'].update(source_kind='asset', source_read_only=True)
     page = viewer({'fixture-01': model_payload(), 'fixture-02': asset})
     open_model(page, 'fixture-01')
@@ -19,14 +21,18 @@ def test_asset_transition_removes_source_edit_actions(viewer):
     page.locator('#inspector-tab').click()
     page.locator('.draw-item').click()
     assert page.locator('.inspector-material-kind-control').is_disabled()
+    page.locator('.draw-item').click(button='right')
+    assert page.locator('.mesh-create-toggle-action').is_hidden()
     assert page.evaluate('window.modViewer.activeMeshes[0].userData.componentDescriptor.meshEditWritable') is False
     assert bridge_calls(page, 'export') == []
     assert bridge_calls(page, 'names') == []
     assert bridge_calls(page, 'color') == []
 
 
-def test_archive_preview_cannot_export_or_persist_metadata(viewer):
+def test_archive_preview_stages_toggle_but_cannot_export_or_persist_metadata(viewer):
     payload = textured_payload(extension='dds')
+    source = payload['meshes']['mesh-00']['sources'][0]
+    source['occurrence'] = {'section': source['section'], 'ordinal': 0, 'path': []}
     payload['metadata'].update(source_kind='archive', source_read_only=True)
     page = viewer({'fixture-01.zip': payload})
     open_model(page, 'fixture-01.zip')
@@ -49,6 +55,20 @@ def test_archive_preview_cannot_export_or_persist_metadata(viewer):
     assert bridge_calls(page, 'export') == []
     assert bridge_calls(page, 'names') == []
     assert bridge_calls(page, 'color') == []
+    page.locator('.draw-item').click(button='right')
+    action = page.locator('.mesh-create-toggle-action')
+    assert action.is_visible()
+    action.click()
+    page.locator('#tm-save').click()
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "semanticState")')
+    request = bridge_calls(page, 'toggleAdd')[0]
+    assert request[0] == 'fixture-01.zip'
+    assert request[-1] == {'default': '0', 'record_targets': [{
+        **source, 'drawindexed': payload['meshes']['mesh-00']['drawindexed']}]}
+    assert page.evaluate('window.__bridge.pending["fixture-01.zip"]')
+    assert page.locator('#export-btn').is_disabled()
+    assert len(bridge_calls(page, 'load')) == 1
+    assert bridge_calls(page, 'export') == []
 
 
 def test_dirty_source_to_asset_requires_confirmation_and_preserves_cancelled_edits(viewer):

@@ -9,6 +9,7 @@ import traceback
 
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import mod_source_for_path
+from core.ini.health import _normalized_key_chord as _binding_identity
 from core.editing import record as record_editor
 from core.editing import toggle as te
 from app.mods.analysis import build_mod_ini_snapshot
@@ -99,13 +100,6 @@ def list_source_inis(mod_dir):
             for p in paths]
 
 
-def _binding_identity(binding):
-    tokens = binding.lower().split()
-    modifiers = {"ctrl", "no_ctrl", "shift", "no_shift", "alt", "no_alt"}
-    keys = [token for token in tokens if token not in modifiers]
-    return ("ctrl" in tokens, "shift" in tokens, "alt" in tokens, tuple(keys))
-
-
 def next_toggle_key(mod_dir):
     """Choose the first unused generated binding across the staged mod."""
     used = set()
@@ -177,7 +171,6 @@ def add_toggle(mod_dir, ini_rel, name, key_combo, var, values, options=None):
                 raise te.ToggleEditError("Create Toggle requires values 0,1")
             if str(options.get("default")) != "0":
                 raise te.ToggleEditError("Create Toggle requires default 0")
-            record_editor.resolve_draw_references(doc, targets, ini_rel)
         section = te.add_toggle(
             doc, name, key_combo, var, values,
             default=options.get("default"), back_combo=options.get("back_combo"))
