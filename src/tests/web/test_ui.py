@@ -143,21 +143,131 @@ def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
     assert bridge_calls(page, 'load') == [['fixture-01', False]]
 
 
-def test_visibility_button_and_reset_synchronize_viewer_without_staging(viewer):
-    page = viewer({'fixture-01': model_payload()})
+def test_visibility_eyes_keyboard_and_reset_synchronize_without_staging(viewer):
+    page = viewer({'fixture-01': model_payload(2)})
     open_model(page, 'fixture-01')
-    wait_loaded(page)
-    button = page.locator('.draw-item .mesh-state-btn')
-    button.click()
+    wait_loaded(page, 2)
+    rows = page.locator('.draw-item')
+    rows.nth(0).click()
+    eye = page.locator('.inspector-visibility-btn')
+    button = rows.nth(0).locator('.mesh-state-btn')
+    page.evaluate('window.__inspectorEye = document.querySelector(".inspector-visibility-btn")')
+    eye.click()
     page.wait_for_function('!window.modViewer.activeMeshes[0].visible')
+    assert eye.get_attribute('aria-pressed') == button.get_attribute('aria-pressed') == 'false'
+    assert 'state-manual' in eye.get_attribute('class')
+    assert page.locator('.draw-item.selected').count() == 1
+    assert page.evaluate('window.modViewer.activeMeshes[1].visible')
+    eye.click()
+    assert eye.get_attribute('aria-pressed') == button.get_attribute('aria-pressed') == 'true'
+    assert 'state-manual' not in eye.get_attribute('class')
+    button.click()
+    assert eye.get_attribute('aria-pressed') == 'false'
+    page.keyboard.press('h')
+    assert not page.evaluate('window.modViewer.activeMeshes[0].visible')
+    rows.nth(0).click()
+    for visible in (True, False, True):
+        page.keyboard.press('h')
+        assert page.evaluate('window.modViewer.activeMeshes[0].visible') == visible
+        assert eye.get_attribute('aria-pressed') == button.get_attribute('aria-pressed') == str(visible).lower()
+        assert page.locator('.draw-item.selected').count() == 1
+    assert page.evaluate('window.__inspectorEye === document.querySelector(".inspector-visibility-btn")')
+
+    rows.nth(1).click(modifiers=['Control'])
+    button.click()
+    page.evaluate('document.activeElement.blur()')
+    for visibility in ([True, False], [False, True]):
+        page.keyboard.press('h')
+        assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == visibility
+        assert page.locator('.draw-item.selected').count() == 2
+        assert eye.get_attribute('aria-pressed') == str(visibility[1]).lower()
     page.evaluate("""async () => {
       const {resetMeshState} = await import('./js/mesh/visibility.js');
       resetMeshState();
     }""")
-    page.wait_for_function('window.modViewer.activeMeshes[0].visible')
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
     assert button.get_attribute('aria-pressed') == 'true'
+    assert eye.get_attribute('aria-pressed') == 'true'
+
+    rows.nth(1).locator('.mesh-name').dblclick()
+    page.keyboard.press('h')
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    page.keyboard.press('Escape')
+    for tag in ('textarea', 'select', 'button', 'div'):
+        page.evaluate("""tag => {
+          const editor = document.createElement(tag);
+          editor.id = 'fixture-editor';
+          if (tag === 'div') editor.contentEditable = 'true';
+          document.body.appendChild(editor);
+          editor.focus();
+        }""", tag)
+        page.keyboard.press('h')
+        assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+        page.evaluate('document.getElementById("fixture-editor").remove()')
+    for interaction in ('transform', 'picking'):
+        page.evaluate("""async interaction => {
+          const rig = await import('./js/scene/rig-overlay-state.js');
+          window.__setRigInteraction = interaction === 'transform'
+            ? rig.setRigTransformInteractionActive : rig.setRigJointPickingActive;
+          window.__setRigInteraction(true);
+        }""", interaction)
+        page.keyboard.press('h')
+        assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+        page.evaluate('window.__setRigInteraction(false)')
+    assert page.locator('.draw-item.selected').count() == 1
+    page.locator('.group-name').first.click()
+    assert eye.count() == 0
+    page.keyboard.press('h')
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    assert page.locator('.draw-item.selected').count() == 0
+    assert bridge_calls(page, 'names') == []
+    assert bridge_calls(page, 'record') == []
     assert bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+
+
+def test_keyboard_and_inspector_visibility_record_like_meshes_eye(viewer):
+    payload = controlled_payload(2)
+    payload['meshes']['mesh-01']['conditions'] = []
+    payload['meshes']['mesh-01']['sources'][0]['line'] = 2
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    requests = []
+    for action in ('keyboard', 'inspector', 'panel'):
+        if page.locator('#controls-panel').is_hidden():
+            page.locator('#controls-tab').click()
+        page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
+        page.locator('.toggle-row.recording').wait_for()
+        page.locator('.draw-item').nth(1).click()
+        point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+        page.mouse.click(*point, button='right')
+        assert page.locator('.mesh-context-menu:visible').count() == 0
+        if action == 'keyboard':
+            page.evaluate('document.activeElement.blur()')
+            page.keyboard.press('h')
+        elif action == 'inspector':
+            if page.locator('#inspector-panel').is_hidden():
+                page.locator('#inspector-tab').click()
+            page.locator('.inspector-visibility-btn').click()
+        else:
+            page.locator('.draw-item').nth(1).locator('.mesh-state-btn').click()
+        assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [True, False]
+        if page.locator('#controls-panel').is_hidden():
+            page.locator('#controls-tab').click()
+        page.locator('.toggle-cycle-btn').click()
+        assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, True]
+        assert len(bridge_calls(page, 'record')) == len(requests)
+        page.locator('.toggle-record-save').click()
+        page.wait_for_function('count => window.__bridge.calls.filter(call => call.name === "record").length > count',
+                               arg=len(requests))
+        page.wait_for_function('!document.querySelector(".toggle-row.recording")')
+        requests.append(bridge_calls(page, 'record')[-1])
+    assert all(request == requests[0] for request in requests)
+    assert requests[0][:4] == ['fixture-01', 'source-01.ini', 'KeyFixture', {'0': [1], '1': [2]}]
+    assert [target['line'] for target in requests[0][4]] == [1, 2]
+    assert bridge_calls(page, 'export') == []
+    assert page.evaluate('window.__bridge.pending["fixture-01"]')
 
 
 def test_opaque_display_labels_render_as_text_in_panel_and_inspector(viewer):
@@ -329,6 +439,20 @@ def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(vi
     page.locator('#dialog-backdrop.show').wait_for()
     page.locator('#dialog-ok').click()
     page.wait_for_function('document.querySelectorAll(".draw-item").length === 2')
+    rows = page.locator('.draw-item')
+    rows.nth(0).click()
+    rows.nth(1).click(modifiers=['Control'])
+    page.keyboard.press('h')
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => !part.visible)')
+    assert page.locator('.draw-item.selected').count() == 2
+    page.keyboard.press('h')
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => part.visible && part.userData.manuallyToggled)')
+    assert page.locator('.inspector-visibility-btn').get_attribute('aria-pressed') == 'true'
+    assert all(rows.nth(index).locator('.mesh-state-btn').get_attribute('aria-pressed') == 'true' for index in (0, 1))
+    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+    page.mouse.click(*point, button='right')
+    assert page.locator('[data-i18n="mesh.mergeLooseParts"]').is_visible()
+    assert page.locator('.mesh-create-toggle-action').is_hidden()
     assert bridge_calls(page, 'meshApply') == []
     assert page.locator('#export-btn').is_disabled()
     page.locator('.group-name').first.click(button='right')
@@ -379,12 +503,31 @@ def test_present_cycles_aligned_multi_variable_state_and_blocks_unsynchronized_d
     assert bridge_calls(page, 'export') == []
 
 
-def test_viewport_context_click_retains_selected_meshes_and_inspector_target(viewer):
-    page = viewer({'fixture-01': model_payload(2)})
+def test_viewport_context_menu_shares_selection_and_create_toggle(viewer):
+    payload = model_payload(3)
+    for index, mesh in enumerate(payload['meshes'].values()):
+        x = index * 2
+        mesh['pos'] = append_stream(payload, 'f', [x,0,0, x+1,0,0, x,1,0])
+        source = mesh['sources'][0]
+        source.update(line=10 + index, occurrence={
+            'section': source['section'], 'ordinal': index, 'path': []})
+    page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
+    wait_loaded(page, 3)
     page.locator('#inspector-tab').click()
     rows = page.locator('.draw-item')
+    rows.nth(0).click(button='right')
+    menu = page.locator('.mesh-context-menu')
+    panel_actions = menu.locator('button:visible').evaluate_all(
+        'buttons => buttons.map(button => [button.dataset.i18n, button.disabled])')
+    page.keyboard.press('Escape')
+    points = project_mesh_points(page, [[0.25, 0.25, 0], [4.25, 0.25, 0]])
+    page.mouse.click(*points[0], button='right')
+    assert menu.is_visible()
+    assert menu.locator('button:visible').evaluate_all(
+        'buttons => buttons.map(button => [button.dataset.i18n, button.disabled])') == panel_actions
+    assert menu.count() == 1
+    page.keyboard.press('Escape')
     rows.nth(0).click()
     rows.nth(1).click(modifiers=['Control'])
     inspector = page.locator('#inspector-content').inner_text()
@@ -392,8 +535,7 @@ def test_viewport_context_click_retains_selected_meshes_and_inspector_target(vie
       const {getSelectedMeshes} = await import('./js/scene/selection.js');
       window.__selection = getSelectedMeshes();
     }""")
-    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
-    page.mouse.click(*point, button='right')
+    page.mouse.click(*points[0], button='right')
     assert page.locator('.draw-item.selected').count() == 2
     assert page.evaluate("""async () => {
       const {getSelectedMeshes} = await import('./js/scene/selection.js');
@@ -401,6 +543,25 @@ def test_viewport_context_click_retains_selected_meshes_and_inspector_target(vie
     }""")
     assert page.locator('#inspector-content').is_visible()
     assert page.locator('#inspector-content').inner_text() == inspector
+    assert menu.locator('.mesh-create-toggle-action').is_visible()
+    menu.locator('.mesh-create-toggle-action').click()
+    page.wait_for_function('!document.getElementById("tm-save").disabled')
+    assert page.locator('#tm-name').input_value() == 'mesh-00'
+    assert page.locator('#tm-var').input_value() == 'mesh_00'
+    page.locator('#tm-cancel').click()
+    page.mouse.click(*points[1], button='right')
+    assert page.locator('.draw-item.selected').count() == 1
+    assert 'selected' in rows.nth(2).get_attribute('class')
+    assert page.evaluate("""async () => {
+      const {getSelectedMeshes} = await import('./js/scene/selection.js');
+      return getSelectedMeshes()[0] === window.modViewer.activeMeshes[2];
+    }""")
+    page.keyboard.press('Escape')
+    rect = page.locator('#canvas-container canvas').first.bounding_box()
+    page.mouse.click(rect['x'] + 20, rect['y'] + rect['height'] - 20, button='right')
+    assert menu.is_hidden()
+    assert page.locator('.draw-item.selected').count() == 1
+    assert bridge_calls(page, 'toggleAdd') == []
     assert bridge_calls(page, 'meshApply') == []
 
 
@@ -418,7 +579,11 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
         page.locator('.draw-item').first.click(button='right')
         page.locator('[data-i18n="mesh.separateBySelection"]').click()
         page.mouse.click(*point)
+        page.keyboard.press('h')
+        assert page.evaluate('window.modViewer.activeMeshes[0].visible')
         page.mouse.click(*point, button='right')
+        assert page.locator('[data-i18n="mesh.applySelection"]').is_visible()
+        assert page.locator('[data-i18n="mesh.cancelSelection"]').is_visible()
         page.locator(f'[data-i18n="mesh.{action}"]').click()
         assert bridge_calls(page, 'meshApply') == []
         if action == 'cancelSelection':
@@ -451,14 +616,15 @@ def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
     page.evaluate("""() => {
       document.body.classList.add('feature-edit-mesh-off');
     }""")
-    page.locator('.draw-item').click(button='right')
+    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+    page.mouse.click(*point, button='right')
     assert menu.is_visible()
     assert menu.locator('.mesh-create-toggle-action').is_visible()
     actions = menu.locator('.mesh-edit-context-action')
     assert actions.count() > 0
     assert all(actions.nth(index).is_hidden() for index in range(actions.count()))
     page.evaluate("document.body.classList.add('feature-modify-toggle-off')")
-    page.locator('.draw-item').click(button='right')
+    page.mouse.click(*point, button='right')
     assert menu.is_hidden()
     assert bridge_calls(page, 'meshApply') == []
 

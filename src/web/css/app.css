@@ -1260,6 +1260,8 @@ button:focus-visible, input:focus-visible, select:focus-visible,
 .weight-selection-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 .weight-selection-actions .ui-button { min-width: 0; font-size: 12px; }
 .inspector-header { padding-bottom: 11px; border-bottom: 1px solid var(--border); }
+.inspector-heading { display: flex; align-items: center; gap: 8px; }
+.inspector-heading h3 { flex: 1; min-width: 0; }
 .inspector-header h3 { margin: 0; color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
 .inspector-context {
   display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px;

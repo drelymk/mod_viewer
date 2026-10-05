@@ -2,6 +2,9 @@
 
 import { getRightDockTab, isRightDockOpen, setRightDockTab } from './right-dock.js';
 import { clearSelection } from '../scene/selection.js';
+import { toggleManualMeshVisibility } from '../mesh/mesh-state.js';
+import { noteRecordMeshEdit } from '../editing/record-session.js';
+import { createIcon } from '../ui/ui-icons.js';
 import {
   canEditMeshColor,
   getMeshColorAdjustment,
@@ -11,7 +14,7 @@ import {
 import { canSaveTexture, getTextureSaveTargets } from '../mesh/texture-save-session.js';
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
-import { getLoosePartSource } from '../mesh/loose-parts.js';
+import { getLoosePartSource, isLoosePart } from '../mesh/loose-parts.js';
 import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
 import { textureDisplayLabel } from '../textures/texture-key.js';
 
@@ -114,12 +117,45 @@ function buildHeader(content, title, context, titleHint = '') {
   const header = document.createElement('div');
   header.className = 'inspector-header';
   if (titleHint) header.title = titleHint;
+  const headingRow = document.createElement('div');
+  headingRow.className = 'inspector-heading';
   const heading = document.createElement('h3');
   heading.textContent = title;
-  header.appendChild(heading);
+  headingRow.appendChild(heading);
+  header.appendChild(headingRow);
   const subtitle = addText(header, 'inspector-context', context || '');
   subtitle.dataset.inspectorContext = 'true';
   content.appendChild(header);
+  return headingRow;
+}
+
+function updateVisibilityButton(button, mesh) {
+  button.classList.toggle('state-hidden', !mesh.visible);
+  button.classList.toggle('state-manual', !!mesh.userData.manuallyToggled);
+  button.setAttribute('aria-pressed', String(mesh.visible));
+  button.title = t(
+    mesh.userData.manuallyToggled
+      ? mesh.visible
+        ? 'mesh.visibleManual'
+        : 'mesh.hiddenManual'
+      : mesh.visible
+        ? 'mesh.visibleAutomatic'
+        : 'mesh.hiddenAutomatic',
+  );
+  button.setAttribute('aria-label', button.title);
+}
+
+function buildVisibilityButton(mesh) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'mesh-state-btn inspector-visibility-btn';
+  button.appendChild(createIcon('visibility'));
+  button.addEventListener('click', () => {
+    if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
+    toggleManualMeshVisibility(mesh);
+  });
+  updateVisibilityButton(button, mesh);
+  return button;
 }
 
 function buildAssetSection(content, value, isSummary = false) {
@@ -609,7 +645,8 @@ function buildMesh(mesh, record) {
   const name = meshDisplayLabel(mesh, record.label);
   const component = record.component;
   const componentName = component?.component || component || t('inspector.component');
-  buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
+  const heading = buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
+  heading.appendChild(buildVisibilityButton(mesh));
   buildAssetSection(content, source.userData.assetEntry?.asset_binding);
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
@@ -626,6 +663,8 @@ function updateInspectorState() {
     material.value = owner?.getMaterialKind?.() || 'auto';
   }
   if (current.type === 'mesh') {
+    const visibility = content.querySelector('.inspector-visibility-btn');
+    if (visibility) updateVisibilityButton(visibility, current.mesh);
     const source = semanticMesh(current.mesh);
     updateTextureControlState(content, source, current.record.component);
     if (!updateColorControlState(content, source)) {
@@ -726,7 +765,7 @@ export function initInspectorPanel() {
     if (!current || !changed.length) return;
     const affected =
       current.type === 'mesh'
-        ? changed.includes(semanticMesh(current.mesh))
+        ? changed.includes(current.mesh) || changed.includes(semanticMesh(current.mesh))
         : (current.record.meshes || []).some((mesh) => changed.includes(mesh));
     if (affected) updateInspectorState();
   });

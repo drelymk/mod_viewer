@@ -17,7 +17,7 @@ import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
-import { clearLooseParts, syncLoosePartMaterial } from './loose-parts.js';
+import { clearLooseParts, isLoosePart, syncLoosePartMaterial } from './loose-parts.js';
 import {
   disposeSkinningExperiment,
   getSkinningBaseMaterial,
@@ -403,6 +403,14 @@ export function applyMeshVisibility(mesh, { notify = true, render = true } = {})
   if (notify) notifyMeshStateChanged([mesh]);
   if (render) requestRender();
   return changed;
+}
+
+/** Toggle viewer visibility without changing the authored control state. */
+export function toggleManualMeshVisibility(mesh, options) {
+  const visible = !mesh.visible;
+  mesh.userData.manualVisible = visible;
+  mesh.userData.manuallyToggled = isLoosePart(mesh) || visible !== conditionsSatisfied(mesh);
+  return applyMeshVisibility(mesh, options);
 }
 
 function applyShapeTargets(mesh, { render = true } = {}) {
