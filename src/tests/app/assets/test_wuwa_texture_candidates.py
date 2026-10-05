@@ -16,6 +16,7 @@ from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.ini import draw_scan
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import DirectoryModSource, ZipModSource
+from tests.support.model_data import standard_component_resources
 
 
 def _write_geometry(root):
@@ -289,3 +290,86 @@ filename = sibling-map.dds
     assert draw.texture_default("diffuse") == "existing.dds"
     assert draw.texture_provenance == {"diffuse": "mod_semantic"}
     assert draw.asset_texture_defaults == {}
+
+
+def test_hash_wide_references_reach_only_same_ini_family_candidates(tmp_path):
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    _write_geometry(mod)
+    root_ini = """[TextureOverrideFamilyIB]
+hash = 0x1234ABCD
+run = CommandListShared
+[CommandListShared]
+run = CommandListAssignShared
+[CommandListAssignShared]
+ps-t3 = ref ResourceShared
+[TextureOverrideFamilyA]
+hash = 1234abcd
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+ps-t4 = ref ResourcePrivate
+drawindexed = 3, 0, 0
+[TextureOverrideFamilyB]
+hash = 1234abcd
+match_first_index = 3
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+drawindexed = 3, 0, 0
+[TextureOverrideCountScoped]
+hash = 1234abcd
+match_index_count = 6
+ps-t6 = ResourceCountScoped
+[TextureOverrideOtherFamily]
+hash = 99999999
+ps-t7 = ResourceOtherFamily
+[ResourceShared]
+filename = shared.dds
+[ResourcePrivate]
+filename = private.dds
+[ResourceCountScoped]
+filename = count-scoped.dds
+[ResourceOtherFamily]
+filename = other-family.dds
+""" + standard_component_resources(
+        position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    (mod / "Body.ini").write_text(root_ini, encoding="utf-8")
+    nested = mod / "nested"
+    nested.mkdir()
+    (nested / "Textures.ini").write_text("""[TextureOverrideForeignFamily]
+hash = 1234abcd
+run = CommandListShared
+[CommandListShared]
+ps-t3 = ResourceShared
+[ResourceShared]
+filename = foreign.dds
+""", encoding="utf-8")
+    for filename in ("shared.dds", "private.dds", "count-scoped.dds",
+                     "other-family.dds", "nested/foreign.dds"):
+        (mod / filename).write_bytes(b"synthetic texture")
+    source = DirectoryModSource(mod)
+    parsed = analyze_mod_inis(
+        discover_ini_paths(str(mod), source=source), str(mod), source=source)
+    assert [group["name"] for group in parsed.groups] == ["FamilyA", "FamilyB"]
+    expected = [["shared.dds", "private.dds"], ["shared.dds"]]
+    assert [group["referenced_texture_files"] for group in parsed.groups] == expected
+    parsed.game = SimpleNamespace(game="wuwa")
+    context = SimpleNamespace(
+        mod_dir=str(mod), source=source, dds_classification_cache={})
+    _apply_texture_enrichment(parsed, context, [], complete_index=False)
+    built = build_mesh_result(
+        parsed.groups, str(mod), geometry=GeometryBlob(),
+        texture_source=lambda path, role: "/texture/" + os.path.basename(path),
+        game_profile="wuwa", source=source)
+    for group, filenames in zip(parsed.groups, expected):
+        entry = built.meshes[group["name"] + "-1"]
+        choices = entry["texture_options"]
+        assert [choice["tex_key"] for choice in choices] == [
+            "diffuse::" + filename for filename in filenames]
+        assert all(choice["candidate_source"] == "wuwa_reference"
+                   for choice in choices)
+        assert entry["tex_key"] is None
+        assert all(entry.get(role + "_key") is None for role in (
+            "normal_map", "normal_data", "light_map", "material_map", "emission_map"))
