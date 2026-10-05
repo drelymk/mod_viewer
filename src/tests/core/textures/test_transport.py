@@ -23,7 +23,46 @@ from core.ini.document import IniDocument
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.mod_source import SevenZipModSource, ZipModSource
 from core.sevenzip import SevenZipEntry
+from core.textures.pipeline import encode_texture_key
 from tests.support.dds_data import write_bc7_dds
+
+
+def test_unsupported_native_candidate_retains_choice_and_reports_manual_pick_error(tmp_path):
+    header = bytearray(128)
+    header[:4] = b'DDS '
+    for offset, value in {4: 124, 8: 0x100F, 12: 4, 16: 4, 20: 4,
+                          76: 32, 80: 0x20000, 88: 8, 92: 0xFF,
+                          108: 0x1000}.items():
+        struct.pack_into('<I', header, offset, value)
+    path = tmp_path / 'single-channel.dds'
+    path.write_bytes(bytes(header) + bytes([128]) * 16)
+    with Image.open(path) as image:
+        assert image.mode == 'L'
+        assert image.size == (4, 4)
+    key = 'diffuse::single-channel.dds'
+    publication = server.begin_texture_publication(str(tmp_path))
+    try:
+        with patch('app.runtime.server.render_texture_png',
+                   side_effect=AssertionError('Model DDS must not render eagerly')):
+            payload = {'meshes': {'mesh-01': {
+                'component': 'Component1',
+                'texture_options': [{'tex_key': key, 'file': path.name,
+                                     'label': 'single-channel'}],
+            }}, 'textures': {}}
+            metadata.hydrate_textures(
+                str(tmp_path), payload, data={},
+                texture_source=publication.register, texture_profile='wuwa')
+            assert payload['texture_pools']['p0'][0]['tex_key'] == key
+            assert key not in payload['textures']
+            result = encode_texture_key(
+                str(tmp_path), key, texture_source=functools.partial(
+                    publication.register, validate=True))
+        assert result == {
+            'error': 'Could not read this file as an image.',
+            'error_code': 'texture_load_failed', 'file': path.name}
+        assert not publication._sources
+    finally:
+        publication.discard()
 
 
 def _write_geometry(root):

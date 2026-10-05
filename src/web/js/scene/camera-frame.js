@@ -27,6 +27,7 @@ export function createCameraFrame({
   let homeView = null;
   let clipNear = camera.near;
   let clipFar = camera.far;
+  let clippingMeshes = [];
   let orientationInitialized = false;
   const uprightRotation = new THREE.Quaternion();
   const baseFacingRotation = new THREE.Quaternion();
@@ -94,9 +95,17 @@ export function createCameraFrame({
     // Arcball can restore startup planes during scaling; reapply model-scaled
     // clipping after its update.
     const viewDistance = camera.position.distanceTo(controls.target);
-    const requiredFar = Math.max(clipFar, viewDistance * 4, 100);
-    if (camera.near !== clipNear || camera.far !== requiredFar) {
-      camera.near = clipNear;
+    camera.updateWorldMatrix(true, false);
+    const bounds = computeModelBounds(clippingMeshes, { visibleOnly: true });
+    if (!bounds.isEmpty()) bounds.applyMatrix4(camera.matrixWorldInverse);
+    const nearestDepth = bounds.isEmpty() ? 0 : -bounds.max.z;
+    const farthestDepth = bounds.isEmpty() ? 0 : -bounds.min.z;
+    // A tiny fixed near plane loses separation between thin surfaces at distance.
+    // Keep half the space before the closest bounds free for close inspection.
+    const requiredNear = Math.max(clipNear, nearestDepth * 0.5);
+    const requiredFar = Math.max(clipFar, viewDistance * 4, farthestDepth * 1.5, 100);
+    if (camera.near !== requiredNear || camera.far !== requiredFar) {
+      camera.near = requiredNear;
       camera.far = requiredFar;
       camera.updateProjectionMatrix();
     }
@@ -105,6 +114,7 @@ export function createCameraFrame({
   function frameView(meshes = [], direction = null, targetYOffset = 0) {
     const box = computeModelBounds(meshes);
     if (box.isEmpty()) return;
+    if (!clippingMeshes.length) clippingMeshes = [...meshes];
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     center.y += targetYOffset;
@@ -122,6 +132,7 @@ export function createCameraFrame({
     clipFar = camera.far;
     camera.updateProjectionMatrix();
     controls.update();
+    updateClipping();
   }
 
   function currentModelPivot() {
@@ -197,13 +208,15 @@ export function createCameraFrame({
     rotateMeshesAroundCenter(added, modelRotation, modelPivot);
     added.forEach((mesh) => mesh.position.add(modelTranslation));
     homeView.meshes.push(...homeTransforms);
+    clippingMeshes.push(...added.filter((mesh) => !clippingMeshes.includes(mesh)));
     return added;
   }
 
   function forgetModelMeshes(meshes = []) {
-    if (!homeView || !meshes.length) return;
+    if (!meshes.length) return;
     const removed = new Set(meshes);
-    homeView.meshes = homeView.meshes.filter((item) => !removed.has(item.mesh));
+    clippingMeshes = clippingMeshes.filter((mesh) => !removed.has(mesh));
+    if (homeView) homeView.meshes = homeView.meshes.filter((item) => !removed.has(item.mesh));
   }
 
   function resetModelOrientation({ preserveRotation = false } = {}) {
@@ -216,6 +229,7 @@ export function createCameraFrame({
     }
     modelPivot = null;
     homeView = null;
+    clippingMeshes = [];
   }
 
   function resetView() {
@@ -282,6 +296,7 @@ export function createCameraFrame({
     meshes,
     { preserveCamera = false, preserveHomeView = false, gameId = null, initialRotationY = 0 } = {},
   ) {
+    clippingMeshes = [...meshes];
     let orientationChanged = false;
     const preservedView = preserveCamera
       ? {
@@ -376,6 +391,7 @@ export function createCameraFrame({
       camera.updateMatrix();
       camera.updateMatrixWorld();
     }
+    updateClipping();
     controls.saveState();
     if (orientationChanged) onOrientationChanged?.(getModelTransformState());
   }

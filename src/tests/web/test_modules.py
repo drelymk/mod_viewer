@@ -61,7 +61,7 @@ export {syncViews as refreshAll} from '../scene/view-sync.js';
     assert module_page.locator('.menu-item').count() == 5
 
 
-def test_outline_zoom_does_not_expand_into_fine_geometry(module_page):
+def test_outline_zoom_keeps_distant_edges_visible_and_restores_reference(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three');
       const {resetOutlineProjectionReference, updateOutlineProjectionScale,
@@ -79,14 +79,96 @@ def test_outline_zoom_does_not_expand_into_fine_geometry(module_page):
       const fitted = snapshot();
       camera.position.z = 40;
       const distant = snapshot();
+      camera.position.z = 160;
+      const farther = snapshot();
+      camera.position.z = 1;
+      const close = snapshot();
       camera.position.z = 10;
       const restored = snapshot();
-      return {fitted, distant, restored};
+      return {fitted, distant, farther, close, restored};
     }""")
     fitted = result['fitted']
-    assert result['distant']['pixels'] < fitted['pixels'] / 3
-    assert result['distant']['extrusion'] == pytest.approx(fitted['extrusion'])
+    assert result['distant']['pixels'] == pytest.approx(0.5)
+    assert result['farther']['pixels'] == pytest.approx(result['distant']['pixels'])
+    assert result['distant']['pixels'] < fitted['pixels'] < result['close']['pixels']
+    assert result['close']['pixels'] == pytest.approx(1.5)
     assert result['restored'] == pytest.approx(fitted)
+
+
+def test_camera_clipping_tracks_zoom_pan_and_model_lifecycle(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three');
+      const {createCameraFrame} = await import('./js/scene/camera-frame.js');
+      const {computeModelBounds} = await import('./js/scene/model-bounds.js');
+      const camera = new THREE.PerspectiveCamera(45, 2, 0.001, 1000);
+      camera.coordinateSystem = THREE.WebGPUCoordinateSystem;
+      const renderer = {domElement: {getBoundingClientRect: () =>
+        ({left: 0, top: 0, width: 800, height: 600})}};
+      const controls = {target: new THREE.Vector3(), saveState() {}, setCamera() {},
+        update() {camera.lookAt(this.target); camera.updateMatrixWorld();}};
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 0.02));
+      const frame = createCameraFrame({camera, renderer, controls, grid: new THREE.GridHelper()});
+      frame.fitTo([mesh]);
+      const minimumNear = mesh.geometry.boundingBox.getSize(new THREE.Vector3()).length() * 0.0005;
+      mesh.geometry.computeBoundingBox = () => {throw new Error('Cached bounds must not rescan vertices');};
+      const snapshot = (meshes = [mesh]) => {
+        frame.updateClipping();
+        const box = computeModelBounds(meshes, {visibleOnly: true});
+        const depths = [];
+        if (!box.isEmpty()) for (const x of [box.min.x, box.max.x])
+          for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z])
+            depths.push(new THREE.Vector3(x, y, z).project(camera).z);
+        return {near: camera.near, far: camera.far, depths};
+      };
+      const fitted = snapshot();
+      const offset = camera.position.clone().sub(controls.target);
+      camera.position.copy(controls.target).addScaledVector(offset, 4); controls.update();
+      const distant = snapshot();
+      const pan = new THREE.Vector3(8000, 0, 0);
+      camera.position.add(pan); controls.target.add(pan); controls.update();
+      const panned = snapshot();
+      frame.translateModel([mesh], pan);
+      const translated = snapshot();
+      const added = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2));
+      added.position.z = camera.position.z - 0.4;
+      frame.adoptModelMeshes([added]);
+      const adopted = snapshot([mesh, added]);
+      added.visible = false;
+      const hidden = snapshot([mesh, added]);
+      frame.forgetModelMeshes([added]); added.visible = true;
+      const removed = snapshot();
+      frame.rotateModelQuarterTurn([mesh]);
+      const rotated = snapshot();
+      frame.resetView();
+      const restored = snapshot();
+      controls.target.set(0, 0, 0); camera.position.set(0, 0, 0.02); controls.update();
+      const close = snapshot();
+      camera.position.set(0, 0, 0); controls.target.set(0, 0, -1); controls.update();
+      const inside = snapshot();
+      mesh.visible = false;
+      const empty = snapshot();
+      frame.resetModelOrientation();
+      const replacement = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+      replacement.position.z = 20;
+      frame.fitTo([replacement]);
+      const switched = snapshot([replacement]);
+      return {minimumNear, fitted, distant, panned, translated, adopted, hidden,
+        removed, rotated, restored, close, inside, empty, switched};
+    }""")
+    for name in ('fitted', 'distant', 'panned', 'translated', 'adopted',
+                 'hidden', 'removed', 'rotated', 'restored', 'close', 'switched'):
+        state = result[name]
+        assert 0 < state['near'] < state['far'], name
+        assert all(0 <= depth <= 1 for depth in state['depths']), name
+    assert result['distant']['near'] > result['fitted']['near'] * 3
+    assert result['panned']['near'] == pytest.approx(result['distant']['near'])
+    assert result['translated']['near'] == pytest.approx(result['panned']['near'])
+    assert result['adopted']['near'] < result['translated']['near'] / 10
+    assert result['hidden']['near'] == pytest.approx(result['removed']['near'])
+    assert result['restored'] == pytest.approx(result['fitted'])
+    assert 0 < result['close']['near'] < 0.01
+    assert result['inside']['near'] == pytest.approx(result['minimumNear'])
+    assert result['empty']['near'] == pytest.approx(result['minimumNear'])
 
 
 def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page):

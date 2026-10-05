@@ -417,6 +417,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if file and file not in seen_pool_files:
                 seen_pool_files.add(file)
                 pool_files.append({"res": resource_name, "file": file})
+        referenced_files = list(dict.fromkeys(
+            file for resource_name in info["referenced_textures"].values()
+            if (file := resolve_texture_file(resource_name))))
         groups.append({
             "name": label,
             "display_name": display_name,
@@ -431,6 +434,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "ib_file": ib_file,
             "diffuse_file": diffuse_info.get("filename"),
             "diffuse_pool_files": pool_files,
+            "referenced_texture_files": referenced_files,
             "index_size": index_size,
             "geometry_match": info.get("geometry_match_at_end"),
             "draws": draws,

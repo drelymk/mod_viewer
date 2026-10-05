@@ -2,7 +2,7 @@
 
 import { addTexture } from '../mesh/mesh-factory.js';
 import { bindModalDismiss } from './modal-shell.js';
-import { textureFile } from '../textures/texture-key.js';
+import { textureDisplayLabel, textureFile } from '../textures/texture-key.js';
 import { createIcon } from './ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
@@ -13,6 +13,7 @@ let currentTitle = '';
 let currentModPath = '';
 let currentTexturePicker = null;
 let onChange = null; // re-render callback for every open per-mesh list
+let currentError = null;
 
 const mapColumns = [
   ['light_map', 'texture.lightMap'],
@@ -20,11 +21,9 @@ const mapColumns = [
   ['material_map', 'texture.materialMap'],
 ];
 
-function showError(message) {
-  const err = document.createElement('div');
-  err.className = 'texm-empty';
-  err.textContent = message;
-  $('texm-list').prepend(err);
+function showError(result) {
+  currentError = result;
+  render();
 }
 
 async function pickInto(opt, field) {
@@ -32,7 +31,7 @@ async function pickInto(opt, field) {
     ? await currentTexturePicker(field)
     : await window.pywebview.api.pick_texture_file(currentModPath, field);
   if (!result) return;
-  if (result.error) return showError(result.error);
+  if (result.error) return showError(result);
   addTexture(result.tex_key, result.uri);
   if (field === 'normal_map') {
     const transportRole = result.role;
@@ -51,6 +50,7 @@ async function pickInto(opt, field) {
     opt[field] = result.tex_key;
     opt[`${field}_manual`] = true;
   }
+  currentError = null;
   render();
   if (onChange) onChange();
 }
@@ -59,6 +59,16 @@ function render() {
   $('texm-title').textContent = t('texture.manageTitle', { name: currentTitle });
   const list = $('texm-list');
   list.innerHTML = '';
+  if (currentError) {
+    const err = document.createElement('div');
+    err.className = 'texm-empty';
+    err.setAttribute('role', 'alert');
+    err.textContent =
+      currentError.error_code === 'texture_load_failed'
+        ? t('texture.loadFailed', { file: currentError.file || t('texture.unknown') })
+        : currentError.error;
+    list.appendChild(err);
+  }
   const header = document.createElement('div');
   header.className = 'texm-grid texm-header';
   for (const key of ['texture.diffuse', 'texture.lightMap', 'texture.normalMap', 'texture.materialMap', null]) {
@@ -78,7 +88,7 @@ function render() {
     row.className = 'texm-row texm-grid';
     const label = document.createElement('span');
     label.className = 'texm-diffuse';
-    label.textContent = opt.label;
+    label.textContent = textureDisplayLabel(opt.tex_key, opt.label);
     label.title = opt.file || opt.tex_key;
     row.appendChild(label);
     for (const [field, titleKey] of mapColumns) {
@@ -90,12 +100,7 @@ function render() {
       const file = textureFile(displayKey);
       cell.title = displayKey ? t('texture.replace', { title, file }) : t('texture.add', { title });
       const name = document.createElement('span');
-      name.textContent = file
-        ? file
-            .split('/')
-            .pop()
-            .replace(/\.[^.]+$/, '')
-        : `+ ${title}`;
+      name.textContent = file ? textureDisplayLabel(displayKey) : `+ ${title}`;
       cell.appendChild(name);
       cell.addEventListener('click', () => pickInto(opt, field));
       if (displayKey) {
@@ -149,6 +154,7 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange, tex
   currentModPath = modPath;
   currentTexturePicker = texturePicker;
   onChange = onPoolChange;
+  currentError = null;
   render();
   $('texture-modal-backdrop').classList.add('show');
 
@@ -157,7 +163,7 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange, tex
     if (!result) return;
     if (result.error) {
       // This modal uses its list area for errors; it has no separate error region.
-      return showError(result.error);
+      return showError(result);
     }
     addTexture(result.tex_key, result.uri);
     const file = result.file || result.tex_key;
@@ -166,6 +172,7 @@ export function openTextureModal(componentName, pool, modPath, onPoolChange, tex
       .pop()
       .replace(/\.[^.]+$/, '');
     currentPool.push({ tex_key: result.tex_key, file, label });
+    currentError = null;
     render();
     if (onChange) onChange();
   };
@@ -177,6 +184,7 @@ function close() {
   currentModPath = '';
   currentTexturePicker = null;
   onChange = null;
+  currentError = null;
 }
 
 bindModalDismiss({

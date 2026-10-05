@@ -1,4 +1,4 @@
-"""Three-source WuWa component texture candidate discovery."""
+"""WuWa component texture candidates without automatic role inference."""
 
 import os
 import re
@@ -78,7 +78,7 @@ def _asset_files(root, relative_dir, cache):
 
 
 def apply(groups, mod_dir, source=None, *, resource_files=(), texture_indexes=()):
-    """Collect declared names, mod hash replacements, then Asset hash images.
+    """Collect declared names, slot references, replacements and Asset images.
 
     Resources and indexes are aggregated only after each INI has resolved its
     own resource names. No draw binding or semantic role is changed here.
@@ -111,7 +111,11 @@ def apply(groups, mod_dir, source=None, *, resource_files=(), texture_indexes=()
         for filename in named_files.get(_component_ordinal(group), ()):
             add_mod_file(filename, "wuwa_filename")
 
-        # Source 2: component hashes select all conditional replacements.
+        # Source 2: references are already resolved against this group's INI.
+        for filename in group.get("referenced_texture_files", ()):
+            add_mod_file(filename, "wuwa_reference")
+
+        # Source 3: component hashes select all conditional replacements.
         hashes, locations = _component_hashes(group)
         for texture_hash in hashes:
             for index in texture_indexes:
@@ -119,7 +123,7 @@ def apply(groups, mod_dir, source=None, *, resource_files=(), texture_indexes=()
                         texture_hash, ()):
                     add_mod_file(replacement.file, "wuwa_hash")
 
-        # Source 3: images in the exact matched Asset metadata directory.
+        # Source 4: images in the exact matched Asset metadata directory.
         for (root, relative_dir), location_hashes in locations.items():
             for path in _asset_files(root, relative_dir, asset_cache):
                 name = os.path.basename(path)

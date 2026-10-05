@@ -1,6 +1,7 @@
 // MESHES lists draw calls grouped by source INI and component.
 
 import { hasTexture } from '../mesh/mesh-factory.js';
+import { textureFile } from '../textures/texture-key.js';
 import { applyMeshVisibility, conditionsSatisfied, setManualTexOverride } from '../mesh/mesh-state.js';
 import {
   clearTextureRunGroups,
@@ -61,6 +62,21 @@ let suppressPanelClick = false;
 const meshPanelContexts = new WeakMap();
 const meshByRow = new WeakMap();
 const PANEL_SELECTION_THRESHOLD = 5;
+
+function showTextureLoadError(key) {
+  alertDialog(t('texture.loadFailed', { file: textureFile(key) || t('texture.unknown') }));
+}
+
+window.addEventListener('mod-viewer-texture-load-error', ({ detail }) => {
+  const key = detail?.key;
+  if (!key) return;
+  if (
+    groupsUI.some((group) =>
+      group.itemObjs.some((mesh) => mesh.userData.manualTexOverride === key && mesh.userData.texKey === key),
+    )
+  )
+    showTextureLoadError(key);
+});
 
 function meshRowWrap(mesh) {
   return getMeshView(mesh)?.row?.closest('.draw-item-wrap') || null;
@@ -1043,7 +1059,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 
       const setTextureOverride = (mesh, value) => {
         if (value !== undefined && value !== null && !hasTexture(value)) {
-          console.warn('Texture pool entry missing registry source', value);
+          showTextureLoadError(value);
           return false;
         }
         mesh.userData.textureHighlightDisabled = false;

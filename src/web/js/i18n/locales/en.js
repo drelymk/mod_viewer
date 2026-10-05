@@ -474,6 +474,7 @@ export default {
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
   'texture.noTextures': 'No textures yet.',
+  'texture.loadFailed': 'Cannot load texture "{file}". Its format may be unsupported or the file may be invalid.',
   'texture.replace': 'Replace {title}: {file}',
   'texture.add': 'Add {title}',
   'texture.remove': 'Remove {title}',

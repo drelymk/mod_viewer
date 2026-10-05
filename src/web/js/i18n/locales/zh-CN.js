@@ -466,6 +466,7 @@ export default {
   'texture.normalMap': 'NormalMap',
   'texture.materialMap': 'MaterialMap',
   'texture.noTextures': '暂无纹理。',
+  'texture.loadFailed': '无法加载纹理“{file}”。其格式可能不受支持，或文件可能无效。',
   'texture.replace': '替换 {title}：{file}',
   'texture.add': '添加 {title}',
   'texture.remove': '移除 {title}',

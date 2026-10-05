@@ -13,6 +13,7 @@ import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
 import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
+import { textureDisplayLabel } from '../textures/texture-key.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -76,7 +77,7 @@ function basename(value) {
 }
 
 function textureOptionLabel(option) {
-  return (
+  const label =
     option?.label ||
     basename(option?.file) ||
     basename(
@@ -85,8 +86,8 @@ function textureOptionLabel(option) {
         .slice(1)
         .join('::'),
     ) ||
-    t('inspector.texture')
-  );
+    t('inspector.texture');
+  return textureDisplayLabel(option?.tex_key, label);
 }
 
 function automaticTextureLabel(resolved, pool) {
@@ -94,7 +95,9 @@ function automaticTextureLabel(resolved, pool) {
   const option = pool.find((item) => item.tex_key === resolved);
   if (option) return `${t('inspector.automatic')} · ${textureOptionLabel(option)}`;
   const file = String(resolved).split('::').slice(1).join('::');
-  return file ? `${t('inspector.automatic')} · ${basename(file)}` : t('inspector.automatic');
+  return file
+    ? `${t('inspector.automatic')} · ${textureDisplayLabel(resolved, basename(file))}`
+    : t('inspector.automatic');
 }
 
 function componentContext(record) {

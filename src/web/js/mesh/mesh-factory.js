@@ -300,6 +300,7 @@ function handleTextureError(key, texture, uri) {
   if (loaders[key] === texture) delete loaders[key];
   disposeTexture(texture);
   for (const mesh of textureUsers.get(key) || []) refreshMeshTexture(mesh);
+  window.dispatchEvent(new CustomEvent('mod-viewer-texture-load-error', { detail: { key } }));
 }
 
 function isDDSUri(uri) {

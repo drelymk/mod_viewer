@@ -123,7 +123,7 @@ def test_mod_candidates_reject_missing_unsafe_and_non_image_resources(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["partial", "ambiguous", "not_found"])
-def test_inexact_assets_and_slot_bindings_do_not_add_a_fourth_source(
+def test_inexact_assets_and_slot_snapshots_do_not_supply_candidates(
         tmp_path, status):
     (tmp_path / "slot.dds").write_bytes(b"synthetic texture")
     (tmp_path / "Matched").mkdir()

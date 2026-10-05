@@ -32,3 +32,14 @@ export function isAssetTextureKey(key) {
   const parsed = splitTextureKey(key);
   return !!parsed?.path.startsWith('asset/');
 }
+
+/** Mark Asset sources in display labels while retaining their canonical keys. */
+export function textureDisplayLabel(key, label) {
+  const text =
+    label ||
+    textureFile(key)
+      .split('/')
+      .pop()
+      .replace(/\.[^.]+$/, '');
+  return text && isAssetTextureKey(key) && !text.endsWith(' (Asset)') ? `${text} (Asset)` : text;
+}

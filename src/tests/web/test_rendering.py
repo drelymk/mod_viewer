@@ -359,6 +359,41 @@ def test_wireframe_suppresses_outlines_and_restores_preference_without_rebuildin
     assert result == {'enabled': True, 'suppressed': False, 'retained': True, 'restored': True, 'stable': True}
 
 
+def test_thin_surfaces_keep_depth_order_through_distant_and_close_zoom(viewer):
+    payload = textured_payload(2)
+    keys = list(payload['textures'])
+    payload['textures'][keys[0]] = solid_texture((24, 240, 24))
+    payload['textures'][keys[1]] = solid_texture((240, 24, 24))
+    payload['meshes']['mesh-01'].update(
+        pos=append_stream(payload, 'f', [0, 0, -0.001,
+                                       1, 0, -0.001,
+                                       0, 1, -0.001]),
+        tex_key=keys[1])
+    page = _open_fixture(viewer, payload)
+    wait_texture(page, 0)
+    wait_texture(page, 1)
+    page.evaluate("""async () => {
+      const {camera, controls} = await import('./js/scene/scene.js');
+      window.__zoomCamera = camera; window.__zoomControls = controls;
+      controls.target.set(0.25, 0.25, 0);
+      // Render the rear layer last to expose any equal-depth collisions.
+      window.modViewer.activeMeshes.forEach((mesh, index) => mesh.renderOrder = index);
+    }""")
+    states = []
+    for distance in (2, 12, 0.02, 2):
+        page.evaluate("""distance => {
+          const camera = window.__zoomCamera, controls = window.__zoomControls;
+          camera.position.copy(controls.target); camera.position.z += distance;
+          camera.lookAt(controls.target); camera.updateMatrixWorld();
+        }""", distance)
+        pixel = mesh_pixels(page, [[0.25, 0.25, 0]])[0]
+        assert pixel[1] > pixel[0] + 50, (distance, pixel)
+        states.append(page.evaluate('window.__zoomCamera.near'))
+    assert states[1] > states[0]
+    assert 0 < states[2] < 0.02
+    assert states[3] == states[0]
+
+
 def test_outline_keeps_shallow_backfaces_behind_the_visible_surface(viewer):
     payload = model_payload(2)
     payload['meshes']['mesh-01'].update(
@@ -375,6 +410,53 @@ def test_outline_keeps_shallow_backfaces_behind_the_visible_surface(viewer):
     }""")
     outlined = mesh_pixel(page)
     assert max(abs(a - b) for a, b in zip(before, outlined)) < 15
+
+
+def test_outline_and_selection_preserve_coplanar_surface_with_visible_border(viewer):
+    payload = model_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh['idx'] = append_stream(payload, 'I', [0, 2, 1])
+    mesh['normal'] = append_stream(payload, 'f', [
+        -0.707, 0, -0.707, 0.707, 0, -0.707, 0, 0.707, -0.707,
+    ])
+    page = _open_fixture(viewer, payload)
+    points = [[x, y, 0] for x in (0.15, 0.3, 0.6)
+              for y in (0.15, 0.3, 0.6) if x + y < 0.9]
+    before = mesh_pixels(page, points)
+    page.evaluate("""async () => {
+      window.__outlines = await import('./js/scene/outline-renderer.js');
+      window.__outlines.setOutlinesEnabled(true);
+    }""")
+    outlined = mesh_pixels(page, points)
+    assert all(max(abs(a - b) for a, b in zip(old, new)) < 15
+               for old, new in zip(before, outlined))
+    page.evaluate("""async () => {
+      const {selectMesh} = await import('./js/scene/selection.js');
+      selectMesh(window.modViewer.activeMeshes[0]);
+    }""")
+    selected = mesh_pixels(page, points)
+    assert all(max(abs(a - b) for a, b in zip(old, new)) < 15
+               for old, new in zip(before, selected))
+    corners = project_mesh_points(page, [[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    with Image.open(io.BytesIO(page.screenshot())) as image:
+        rgb = image.convert('RGB')
+        yellow = sum(
+            r > 180 and g > 120 and b < 80
+            for x in range(min(p[0] for p in corners) - 3,
+                           max(p[0] for p in corners) + 4)
+            for y in range(min(p[1] for p in corners) - 3,
+                           max(p[1] for p in corners) + 4)
+            for r, g, b in [rgb.getpixel((x, y))]
+        )
+    assert yellow > 20, 'The selection silhouette must remain visible'
+    page.evaluate("""async () => {
+      window.__outlines.setOutlinesEnabled(false);
+      const {selectMesh} = await import('./js/scene/selection.js');
+      selectMesh(null);
+    }""")
+    restored = mesh_pixels(page, points)
+    assert all(max(abs(a - b) for a, b in zip(old, new)) < 15
+               for old, new in zip(before, restored))
 
 
 def test_directional_shadows_keep_original_shape_with_a_low_angle_floor_fallback(viewer):

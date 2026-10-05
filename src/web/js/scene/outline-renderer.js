@@ -5,7 +5,7 @@ import { cameraProjectionMatrix, normalViewGeometry, positionView, uniform, vec3
 import { requestRender } from './render-scheduler.js';
 
 const REFERENCE_OUTLINE_WIDTH_PIXELS = 0.75;
-const MIN_OUTLINE_WIDTH_PIXELS = 0;
+const MIN_OUTLINE_WIDTH_PIXELS = 0.5;
 const MAX_OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineScalePerDepthNode = uniform(0);
 const outlineViewDepth = positionView.z.negate().max(0.000001);
@@ -20,6 +20,8 @@ function createOutlineMaterial(color) {
     color,
     side: THREE.BackSide,
     depthTest: true,
+    // Equal-depth backfaces are already visible on the two-sided surface.
+    depthFunc: THREE.LessDepth,
     depthWrite: false,
   });
   material.toneMapped = false;
@@ -156,9 +158,8 @@ export function updateOutlineProjectionScale(camera, target, viewportHeight) {
   }
   const referenceSpan = outlineReferenceProjectionSpan > 0 ? outlineReferenceProjectionSpan : currentSpan;
   const ratio = referenceSpan / currentSpan;
-  // Shrink with projected geometry so distant mouth gaps and thin parts stay open.
   const effectiveWidthPixels = THREE.MathUtils.clamp(
-    REFERENCE_OUTLINE_WIDTH_PIXELS * ratio,
+    REFERENCE_OUTLINE_WIDTH_PIXELS * Math.sqrt(ratio),
     MIN_OUTLINE_WIDTH_PIXELS,
     MAX_OUTLINE_WIDTH_PIXELS,
   );
