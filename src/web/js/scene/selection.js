@@ -4,6 +4,9 @@
 import * as THREE from 'three/webgpu';
 import { camera, controls, renderer } from './scene.js';
 import { activeMeshes } from '../mesh/visibility.js';
+import { toggleManualMeshVisibility } from '../mesh/mesh-state.js';
+import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
+import { noteRecordMeshEdit } from '../editing/record-session.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
 import { setMeshSelectionOutline } from './outline-renderer.js';
 import {
@@ -16,6 +19,7 @@ import { requestRender } from './render-scheduler.js';
 import {
   getLoosePartSource,
   getLooseParts,
+  isLoosePart,
   indicesForTriangles,
   setLoosePartSelectionCleanup,
   separateSelectedTriangles,
@@ -481,21 +485,21 @@ function onPointerCancel(event) {
 }
 
 function onViewportContextMenu(event) {
-  if (!faceSelection) return;
+  if (isRigTransformInteractionActive() || isRigJointPickingActive()) return;
   const hit = raycastModelAtClientPoint({
     clientX: event.clientX,
     clientY: event.clientY,
     canvas: renderer.domElement,
     camera,
-    meshes: [faceSelection.target],
+    meshes: faceSelection ? [faceSelection.target] : activeMeshes,
   });
-  if (hit?.object !== faceSelection.target) return;
+  if (!hit || (faceSelection && hit.object !== faceSelection.target)) return;
   event.preventDefault();
   event.stopPropagation();
   window.dispatchEvent(
-    new CustomEvent('mod-viewer-face-selection-contextmenu', {
+    new CustomEvent('mod-viewer-mesh-contextmenu', {
       detail: {
-        mesh: faceSelection.target,
+        mesh: hit.object,
         clientX: event.clientX,
         clientY: event.clientY,
       },
@@ -504,9 +508,35 @@ function onViewportContextMenu(event) {
 }
 
 function onKeyDown(event) {
-  if (event.key !== 'Escape' || !faceSelection) return;
+  if (event.key === 'Escape' && faceSelection) {
+    event.preventDefault();
+    cancelFaceSelection();
+    return;
+  }
+  if (
+    event.key.toLowerCase() !== 'h' ||
+    event.defaultPrevented ||
+    event.repeat ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    faceSelection ||
+    isRigTransformInteractionActive() ||
+    isRigJointPickingActive()
+  )
+    return;
+  const target = event.target;
+  if (target instanceof Element && (target.closest('input, textarea, select, button') || target.isContentEditable))
+    return;
+  const meshes = getSelectedMeshes();
+  if (!meshes.length) return;
   event.preventDefault();
-  cancelFaceSelection();
+  for (const mesh of meshes) {
+    if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
+    toggleManualMeshVisibility(mesh, { notify: false, render: false });
+  }
+  notifyMeshStateChanged(meshes);
+  requestRender();
 }
 
 export function initSelection() {

@@ -2,7 +2,7 @@
 
 import { hasTexture } from '../mesh/mesh-factory.js';
 import { textureFile } from '../textures/texture-key.js';
-import { applyMeshVisibility, conditionsSatisfied, setManualTexOverride } from '../mesh/mesh-state.js';
+import { applyMeshVisibility, setManualTexOverride, toggleManualMeshVisibility } from '../mesh/mesh-state.js';
 import {
   clearTextureRunGroups,
   recomputeTextureRuns,
@@ -396,7 +396,7 @@ function openMeshContextMenu(event, mesh) {
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
-window.addEventListener('mod-viewer-face-selection-contextmenu', (event) => {
+window.addEventListener('mod-viewer-mesh-contextmenu', (event) => {
   const detail = event.detail;
   if (!detail?.mesh) return;
   openMeshContextMenu(
@@ -450,13 +450,20 @@ function showMeshContextMenuIfActionsVisible(menu, event) {
   positionMeshContextMenu(menu, event);
 }
 
-function syncMeshPanel() {
+function syncMeshPanel(changedMeshes = null) {
+  const changed = changedMeshes && new Set(changedMeshes);
   for (const group of groupsUI) {
+    if (
+      changed &&
+      !group.itemObjs.some((mesh) => changed.has(mesh) || getLooseParts(mesh).some((part) => changed.has(part)))
+    )
+      continue;
     group.itemObjs.forEach((mesh, index) => {
       group.itemCbs[index].checked = mesh.visible;
       const binding = getMeshView(mesh);
       binding?.syncStateIndicator?.();
       binding?.syncTextureSelection?.();
+      getLooseParts(mesh).forEach((part) => getMeshView(part)?.syncStateIndicator?.());
     });
     const any = group.itemCbs.some((control) => control.checked);
     const all = group.itemCbs.every((control) => control.checked);
@@ -464,6 +471,10 @@ function syncMeshPanel() {
     group.masterCb.indeterminate = any && !all;
   }
 }
+
+window.addEventListener('mod-viewer-mesh-state-changed', (event) => {
+  if (event.detail?.meshes?.length) syncMeshPanel(event.detail.meshes);
+});
 
 /** Prefer the explicit component field so parser collision suffixes stay out of labels. */
 function groupByComponent(names, meshes) {
@@ -599,25 +610,8 @@ function buildDrawRow(
   cb.checked = true;
   cb.addEventListener('click', (e) => {
     e.stopPropagation();
-    const nextVisible = !mesh.visible;
-    cb.checked = nextVisible;
-    if (loosePart) {
-      mesh.userData.manualVisible = nextVisible;
-      mesh.userData.manuallyToggled = true;
-      applyMeshVisibility(mesh, { notify: false });
-      updateStateIndicator(mesh);
-      return;
-    }
-    mesh.userData.manualVisible = nextVisible;
-    const automaticVisible = conditionsSatisfied(mesh);
-    mesh.userData.manuallyToggled = nextVisible !== automaticVisible;
-    noteRecordMeshEdit(mesh);
-    applyMeshVisibility(mesh);
-    updateStateIndicator(mesh);
-    const any = itemCbs.some((c) => c.checked);
-    const all = itemCbs.every((c) => c.checked);
-    masterCb.indeterminate = any && !all;
-    masterCb.checked = all;
+    if (!loosePart) noteRecordMeshEdit(mesh);
+    toggleManualMeshVisibility(mesh);
   });
   if (!loosePart && includeInGroup) itemCbs.push(cb);
 
