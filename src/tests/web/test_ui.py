@@ -479,8 +479,9 @@ def test_mesh_create_toggle_reuses_modal_selection_and_semantic_refresh(viewer):
     action.click()
     page.locator('#tm-save').wait_for(state='visible')
     page.wait_for_function('!document.getElementById("tm-save").disabled')
-    assert page.locator('#tm-name').input_value() == '3, 0, 0'
-    assert page.locator('#tm-var').input_value() == '3_0_0'
+    assert rows.nth(0).locator('.mesh-name').inner_text() == '3, 0, 0'
+    assert page.locator('#tm-name').input_value() == 'mesh-00'
+    assert page.locator('#tm-var').input_value() == 'mesh_00'
     assert page.locator('#tm-key').input_value() == "no_ctrl no_Shift no_alt '"
     assert page.locator('#tm-back').input_value() == ''
     assert page.locator('#tm-back').is_enabled()

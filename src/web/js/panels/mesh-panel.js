@@ -159,7 +159,7 @@ function createToggleSelection(anchor) {
       targets.set(JSON.stringify(ref), ref);
     }
   }
-  return { ini, name: meshRowLabel(anchor, context), targets: [...targets.values()] };
+  return { ini, name: anchor.userData.displayName || context.name, targets: [...targets.values()] };
 }
 
 function positionMeshContextMenu(menu, event) {
