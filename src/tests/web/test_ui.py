@@ -1,6 +1,6 @@
 """Selection reaches the Inspector without changing staged source state."""
 
-from .payloads import append_stream, model_payload, textured_payload
+from .payloads import append_stream, controlled_payload, model_payload, textured_payload
 from .support import bridge_calls, open_model, project_mesh_points, wait_loaded
 
 
@@ -439,24 +439,141 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
 
 
 def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
-    page = viewer({'fixture-01': model_payload()})
+    payload = model_payload()
+    payload['meshes']['mesh-00']['sources'][0]['occurrence'] = {
+        'section': 'TextureOverrideFixture', 'ordinal': 0, 'path': []}
+    page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.locator('.draw-item').click(button='right')
     menu = page.locator('.mesh-context-menu')
     assert menu.locator('[data-i18n="mesh.separateLooseParts"]').is_visible()
     page.evaluate("""() => {
-      const action = document.createElement('button');
-      action.dataset.fixture = 'action-01';
-      action.textContent = 'action-01';
-      action.setAttribute('role', 'menuitem');
-      document.querySelector('.mesh-context-menu').append(action);
       document.body.classList.add('feature-edit-mesh-off');
     }""")
     page.locator('.draw-item').click(button='right')
     assert menu.is_visible()
-    assert menu.locator('[data-fixture="action-01"]').is_visible()
+    assert menu.locator('.mesh-create-toggle-action').is_visible()
     actions = menu.locator('.mesh-edit-context-action')
     assert actions.count() > 0
     assert all(actions.nth(index).is_hidden() for index in range(actions.count()))
+    page.evaluate("document.body.classList.add('feature-modify-toggle-off')")
+    page.locator('.draw-item').click(button='right')
+    assert menu.is_hidden()
     assert bridge_calls(page, 'meshApply') == []
+
+
+def test_mesh_create_toggle_reuses_modal_selection_and_semantic_refresh(viewer):
+    payload = model_payload(2)
+    for index, mesh in enumerate(payload['meshes'].values()):
+        source = mesh['sources'][0]
+        source.update(line=10 + index, occurrence={
+            'section': source['section'], 'ordinal': index, 'path': []})
+    payload['meshes']['mesh-01']['display_name'] = 'Component01-1'
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    rows = page.locator('.draw-item')
+    action = page.locator('.mesh-create-toggle-action')
+    rows.nth(0).click(button='right')
+    action.click()
+    page.locator('#tm-save').wait_for(state='visible')
+    page.wait_for_function('!document.getElementById("tm-save").disabled')
+    assert rows.nth(0).locator('.mesh-name').inner_text() == '3, 0, 0'
+    assert page.locator('#tm-name').input_value() == 'mesh-00'
+    assert page.locator('#tm-var').input_value() == 'mesh_00'
+    assert page.locator('#tm-key').input_value() == "no_ctrl no_Shift no_alt '"
+    assert page.locator('#tm-back').input_value() == ''
+    assert page.locator('#tm-back').is_enabled()
+    assert page.locator('#tm-key').is_enabled()
+    for field, value in [('ini', 'source-01.ini'), ('values', '0,1'), ('default', '0')]:
+        assert page.locator(f'#tm-{field}').input_value() == value
+        assert page.locator(f'#tm-{field}').is_disabled()
+    page.locator('#tm-cancel').click()
+
+    rows.nth(1).click(modifiers=['Control'])
+    rows.nth(1).click(button='right')
+    assert page.locator('.draw-item.selected').count() == 2
+    action.click()
+    page.wait_for_function('!document.getElementById("tm-save").disabled')
+    assert page.locator('#tm-name').input_value() == 'Component01-1'
+    assert page.locator('#tm-var').input_value() == 'Component01_1'
+    page.locator('#tm-save').click()
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "semanticState")')
+    request = bridge_calls(page, 'toggleAdd')[0]
+    assert request[:7] == ['fixture-01', 'source-01.ini', 'Component01-1',
+                          "no_ctrl no_Shift no_alt '", 'Component01_1', ['0', '1'],
+                          {'default': '0', 'record_targets': [
+                              {'ini': source['ini'], 'line': source['line'],
+                               'section': source['section'], 'occurrence': source['occurrence'],
+                               'drawindexed': mesh['drawindexed']}
+                              for mesh in payload['meshes'].values() for source in mesh['sources']]}]
+    assert bridge_calls(page, 'record') == []
+    assert len(bridge_calls(page, 'load')) == 1
+    assert len(bridge_calls(page, 'semanticState')) == 1
+    assert bridge_calls(page, 'export') == []
+
+    page.locator('#controls-tab').click()
+    page.locator('#toggle-add-btn').click()
+    page.wait_for_function('!document.getElementById("tm-save").disabled')
+    for field in ('ini', 'values', 'default'):
+        assert page.locator(f'#tm-{field}').is_enabled()
+    for field in ('name', 'var', 'key', 'values', 'default'):
+        assert page.locator(f'#tm-{field}').input_value() == ''
+    assert len(bridge_calls(page, 'toggleKey')) == 2
+    page.locator('#tm-cancel').click()
+    page.evaluate('window.__bridge.results.toggleKey = {key: ""}')
+    rows.nth(0).click(button='right')
+    action.click()
+    page.wait_for_function('!document.getElementById("tm-save").disabled')
+    assert 'No automatic key binding available' in page.locator('#tm-error').inner_text()
+    assert page.locator('#tm-key').input_value() == ''
+    page.locator('#tm-key').fill('F9')
+    page.locator('#tm-cancel').click()
+
+
+def test_mesh_create_toggle_refuses_incomplete_or_transient_selection(viewer):
+    payload = controlled_payload(2)
+    for index, mesh in enumerate(payload['meshes'].values()):
+        source = mesh['sources'][0]
+        source.update(line=10 + index, occurrence={
+            'section': source['section'], 'ordinal': index, 'path': []})
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    rows = page.locator('.draw-item')
+    rows.nth(0).click()
+    rows.nth(1).click(modifiers=['Control'])
+    page.evaluate('window.__sourceSnapshot = window.modViewer.activeMeshes.map(mesh => structuredClone(mesh.userData.sources))')
+    for state in ('mixed', 'merged', 'unapplied', 'loose', 'assetFill', 'missing', 'commandPath', 'clean'):
+        page.evaluate("""state => {
+          const [first, second] = window.modViewer.activeMeshes;
+          for (const [index, mesh] of [first, second].entries()) {
+            mesh.userData.sources = structuredClone(window.__sourceSnapshot[index]);
+            mesh.userData.componentDescriptor.meshEditState = 'clean';
+            mesh.userData.assetFill = false;
+            delete mesh.userData.loosePartParent;
+          }
+          if (state === 'mixed') second.userData.sources[0].ini = 'source-02.ini';
+          if (state === 'merged') first.userData.sources.push({...first.userData.sources[0], ini: 'source-02.ini'});
+          if (state === 'unapplied') second.userData.componentDescriptor.meshEditState = 'edited';
+          if (state === 'assetFill') second.userData.assetFill = true;
+          if (state === 'loose') second.userData.loosePartParent = first;
+          if (state === 'missing') second.userData.sources = [];
+          if (state === 'commandPath') second.userData.sources[0].occurrence.path = [['CommandListFixture', 0]];
+        }""", state)
+        rows.nth(0).click(button='right')
+        assert page.locator('.draw-item.selected').count() == 2
+        assert page.locator('.mesh-create-toggle-action').is_visible() == (state == 'clean')
+    page.locator('[data-i18n="mesh.separateBySelection"]').click()
+    rows.nth(0).click(button='right')
+    assert page.locator('.mesh-create-toggle-action').is_hidden()
+    page.locator('[data-i18n="mesh.cancelSelection"]').click()
+    page.locator('#controls-tab').click()
+    page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
+    page.locator('.toggle-row.recording').wait_for()
+    rows.nth(0).click(button='right')
+    assert page.locator('.mesh-context-menu').is_hidden()
+    page.locator('.toggle-record-cancel').click()
+    assert bridge_calls(page, 'toggleAdd') == []
+    assert bridge_calls(page, 'record') == []

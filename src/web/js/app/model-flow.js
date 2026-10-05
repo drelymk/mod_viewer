@@ -262,6 +262,7 @@ export async function displayMeshPayload(
       },
     );
     buildMeshPanel(meshes, liveMeshes, modelPath, {
+      onToggleChange: assetMode ? null : onToggleChange,
       onMaterialKindChanged: assetMode ? null : onMaterialKindChanged,
       texturePools: payload.texture_pools || {},
       assetResolution: payload.asset_resolution || null,

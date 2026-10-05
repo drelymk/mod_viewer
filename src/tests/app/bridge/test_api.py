@@ -54,6 +54,7 @@ EXPECTED_API_METHODS = {
     "list_ini_files",
     "list_subfolders",
     "list_toggle_source_inis",
+    "next_toggle_key",
     "load_asset",
     "load_missing_asset_parts",
     "load_mod",

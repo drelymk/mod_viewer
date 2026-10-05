@@ -155,6 +155,7 @@ def viewer(edge_browser, frontend_url):
               state.iniText = text; stage(path); return {pending: true};
             }),
             list_toggle_source_inis: call('toggleSources', [{value: 'source-01.ini', label: 'source-01.ini'}]),
+            next_toggle_key: call('toggleKey', {key: "no_ctrl no_Shift no_alt '"}),
             get_toggle_details: call('toggleDetails', () => ({name: 'control-01', key: 'K', back: '', vars: {input01: ['0', '1']}})),
             add_toggle: call('toggleAdd', (path, ini, name, key, variable, values) => {
               state.controls[path].toggles.KeyFixture = {name, ini, section: 'KeyFixture', wired: true,

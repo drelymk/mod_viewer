@@ -1,4 +1,6 @@
 export default {
+  'mesh.createToggle': 'Crear alternancia',
+  'toggle.noAutomaticKey': 'No hay una tecla automática disponible. Introduce una combinación para continuar.',
   'app.title': 'Mod Viewer',
   'app.windowTitle': '3DMigoto Mod Viewer',
   'common.ok': 'Aceptar',

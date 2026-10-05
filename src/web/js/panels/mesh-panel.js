@@ -35,6 +35,7 @@ import { createIcon } from '../ui/ui-icons.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { summarizeAssetBindings } from './asset-diagnostics.js';
 import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
+import { openToggleModal } from '../editing/toggle-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
@@ -101,6 +102,64 @@ function closeMeshContextMenu() {
   if (!meshContextMenu) return;
   meshContextMenu.hidden = true;
   meshContextTarget = null;
+}
+
+function createToggleSelection(anchor) {
+  if (isRecording() || getFaceSelection()) return null;
+  const context = meshPanelContexts.get(anchor);
+  if (!context?.modPath) return null;
+  const selected = getSelectedMeshes();
+  if (!selected.length || !selected.includes(anchor)) return null;
+  let ini = null;
+  const targets = new Map();
+  for (const mesh of selected) {
+    const item = meshPanelContexts.get(mesh);
+    if (
+      !item ||
+      item.modPath !== context.modPath ||
+      isLoosePart(mesh) ||
+      mesh.userData.assetFill ||
+      mesh.userData.componentDescriptor?.meshEditApplying ||
+      mesh.userData.componentDescriptor?.meshEditState === 'edited' ||
+      getLooseParts(mesh).length
+    )
+      return null;
+    const sources = mesh.userData.sources || [];
+    const drawindexed = mesh.userData.assetEntry?.drawindexed;
+    if (
+      !sources.length ||
+      !Array.isArray(drawindexed) ||
+      drawindexed.length !== 3 ||
+      !drawindexed.every(Number.isInteger)
+    )
+      return null;
+    for (const source of sources) {
+      if (
+        !source.ini ||
+        !source.section ||
+        !source.occurrence ||
+        !Number.isInteger(source.line) ||
+        source.line < 1 ||
+        !Number.isInteger(source.occurrence.ordinal) ||
+        source.occurrence.ordinal < 0 ||
+        source.occurrence.section !== source.section
+      )
+        return null;
+      // A merged mesh must have every authored contribution in the edited INI.
+      if (ini !== null && source.ini !== ini) return null;
+      if (source.occurrence.path?.length) return null;
+      ini = source.ini;
+      const ref = {
+        ini,
+        line: source.line,
+        section: source.section,
+        drawindexed,
+        occurrence: source.occurrence,
+      };
+      targets.set(JSON.stringify(ref), ref);
+    }
+  }
+  return { ini, name: anchor.userData.displayName || context.name, targets: [...targets.values()] };
 }
 
 function positionMeshContextMenu(menu, event) {
@@ -199,16 +258,17 @@ function ensureMeshContextMenu() {
   meshContextMenu.setAttribute('role', 'menu');
   meshContextMenu.hidden = true;
   meshContextActions = {};
-  const addAction = (name, key) => {
+  const addAction = (name, key, className = 'mesh-edit-context-action') => {
     const action = document.createElement('button');
     action.type = 'button';
-    action.className = 'mesh-edit-context-action';
+    action.className = className;
     action.setAttribute('role', 'menuitem');
     action.dataset.i18n = key;
     action.textContent = t(key);
     meshContextActions[name] = action;
     meshContextMenu.appendChild(action);
   };
+  addAction('createToggle', 'mesh.createToggle', 'mesh-create-toggle-action');
   addAction('separate', 'mesh.separateLooseParts');
   addAction('separateSelection', 'mesh.separateBySelection');
   addAction('merge', 'mesh.mergeLooseParts');
@@ -217,6 +277,19 @@ function ensureMeshContextMenu() {
   addAction('apply', 'mesh.applyMeshChanges');
   addAction('cancel', 'mesh.cancelMeshChanges');
   document.body.appendChild(meshContextMenu);
+  meshContextActions.createToggle.addEventListener('click', () => {
+    const anchor = meshContextTarget;
+    const quickCreate = createToggleSelection(anchor);
+    const context = meshPanelContexts.get(anchor);
+    closeMeshContextMenu();
+    if (quickCreate)
+      void openToggleModal({
+        mode: 'add',
+        modPath: context.modPath,
+        quickCreate,
+        onSaved: context.onToggleChange,
+      });
+  });
   meshContextActions.separate.addEventListener('click', () => {
     const source = meshContextTarget;
     closeMeshContextMenu();
@@ -273,6 +346,7 @@ function openMeshContextMenu(event, mesh) {
   meshContextTarget = mesh;
   const selectionState = getFaceSelection();
   const actions = meshContextActions;
+  actions.createToggle.hidden = !createToggleSelection(mesh);
   if (selectionState) {
     actions.separate.hidden = true;
     actions.separateSelection.hidden = true;
@@ -346,6 +420,7 @@ function openComponentContextMenu(event, descriptor) {
   const menu = ensureMeshContextMenu();
   meshContextTarget = descriptor;
   const actions = meshContextActions;
+  actions.createToggle.hidden = true;
   actions.separate.hidden = true;
   actions.separateSelection.hidden = true;
   actions.merge.hidden = true;
@@ -1129,6 +1204,8 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
           groupName,
           entry: meshes[name],
           inspectorRecord,
+          modPath,
+          onToggleChange: options.onToggleChange,
         });
       }
       recomputeAutomaticTextureBoundaries(itemObjs);

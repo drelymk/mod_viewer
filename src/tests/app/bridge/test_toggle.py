@@ -363,3 +363,111 @@ def test_rejected_edit_does_not_corrupt_an_already_pending_doc(toggle_mod):
 
     with open(ini_path, encoding="utf-8") as fh:
         assert (fh.read() == FIXTURE), ("still nothing has reached disk -- both edits are only pending")
+
+
+def test_create_toggle_wires_all_selected_draws_in_one_staged_transaction(api_root):
+    root = api_root
+    text = WIRABLE_FIXTURE.replace("if $Upper == 0\n", "").replace("if $Upper == 1\n", "").replace("endif\n", "")
+    # One rendered draw can merge several physical authored contributions.
+    text = text.replace("drawindexed = 200,0,0", "drawindexed = 200,0,0\ndrawindexed = 100,0,0")
+    path = _fixture(root, "mod.ini", text)
+    lines = [index for index, line in enumerate(text.splitlines(), 1)
+             if line.startswith("drawindexed")]
+    targets = _target_refs(text, *lines)
+    edit_session.peek(root, path)
+    revision = edit_session.current_revision(root)
+    result = toggle_api.add_toggle(
+        root, "mod.ini", "Part-01, 02", "L", "Part_01_02", ["0", "1"],
+        {"default": "0", "record_targets": targets})
+    assert result == {"ok": True, "result": "KeyPart-01, 02", "pending": True}
+    assert edit_session.current_revision(root) == revision + 1
+    assert edit_session.new_sections_for(root) == {"mod.ini": {"KeyPart-01, 02"}}
+    staged = edit_session.peek(root, path)
+    assert "global persist $Part_01_02 = 0" in staged.to_string()
+
+    from core.ini.sections import sections_from_document
+    from core.ini.parser import _scan_sections_for_draws
+
+    draws = _scan_sections_for_draws(sections_from_document(staged))
+    conditions = [draw.conditions for section in draws.values() for draw in section["draws"]]
+    assert len(conditions) == 3
+    for upper in ("0", "1"):
+        for position in ("0", "1"):
+            visible = [record_editor._dnf_satisfied(
+                condition, {"Upper": upper, "Part_01_02": position})
+                for condition in conditions]
+            assert sum(visible) == (3 if position == "0" else 0)
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == text
+    assert not glob.glob(path + "_*.BAK")
+    assert toggle_api.export_changes(root)["saved"] == ["mod.ini"]
+
+
+@pytest.mark.parametrize("failure", ["stale", "mixed_ini", "skipped", "verify"])
+def test_create_toggle_failure_preserves_prior_staged_state(toggle_mod, monkeypatch, failure):
+    root, path = toggle_mod
+    assert toggle_api.add_toggle(root, "mod.ini", "Pending", "8", "Pending", ["0", "1"])["ok"]
+    before = edit_session.peek(root, path).to_string()
+    tracked = edit_session.new_sections_for(root)
+    line = next(index for index, text in enumerate(FIXTURE.splitlines(), 1)
+                if "100,0,0" in text)
+    targets = _target_refs(FIXTURE, line)
+    if failure == "stale":
+        targets[0]["drawindexed"] = [999, 0, 0]
+    elif failure == "mixed_ini":
+        targets += [{**targets[0], "ini": "other.ini"}]
+    elif failure == "skipped":
+        targets[0]["occurrence"]["path"] = [["CommandListFixture", 0]]
+    else:
+        monkeypatch.setattr(record_editor, "verify_recording",
+                            lambda *args, **kwargs: [{"reason": "fixture mismatch"}])
+    result = toggle_api.add_toggle(
+        root, "mod.ini", "Created", "9", "Created", ["0", "1"],
+        {"default": "0", "record_targets": targets})
+    assert "error" in result
+    assert edit_session.peek(root, path).to_string() == before
+    assert edit_session.new_sections_for(root) == tracked
+    assert edit_session.has_pending(root)
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == FIXTURE
+    assert not glob.glob(path + "_*.BAK")
+
+
+@pytest.mark.parametrize("alias, generated", [
+    ("no_modifiers", "no_ctrl no_Shift no_alt"),
+    ("no_control no_shift no_alt", "no_ctrl no_Shift no_alt"),
+    ("no-control no-shift no-alt", "no_ctrl no_Shift no_alt"),
+    ("no-ctrl no_shift no_alt", "no_ctrl no_Shift no_alt"),
+    ("control no_shift no_alt", "ctrl no_Shift no_alt"),
+])
+def test_automatic_toggle_binding_skips_equivalent_aliases(api_root, alias, generated):
+    lines = []
+    if generated.startswith("ctrl "):
+        for index, key in enumerate(("'", "l", "p", ";", "o", "[", "]")):
+            lines.extend([f"[KeyExisting{index}]", f"key = no_ctrl no_Shift no_alt {key}"])
+    lines.extend(["[KeyAlias0]", f"key = {alias} '",
+                  "[KeyAlias1]", f"key = {alias} l"])
+    _fixture(api_root, "mod.ini", "\n".join(lines) + "\n")
+    assert toggle_api.next_toggle_key(api_root) == {"key": f"{generated} p"}
+
+
+def test_automatic_toggle_binding_order_uses_all_staged_key_sections(api_root):
+    first = _fixture(api_root, "mod.ini", "[KeyUtility]\nkey = '\nback = L\n")
+    second = _fixture(api_root, "other.ini", "[KeyUtility]\nkey = p\n")
+    edit_session.load_documents(api_root, [first, second])
+    groups = ("no_ctrl no_Shift no_alt", "ctrl no_Shift no_alt",
+              "no_ctrl Shift no_alt", "no_ctrl no_Shift alt",
+              "ctrl no_Shift alt", "ctrl Shift no_alt", "ctrl Shift alt")
+    candidates = [f"{group} {key}" for group in groups for key in ("'", "l", "p", ";", "o", "[", "]")]
+    for index, binding in enumerate(candidates[3:]):
+        assert toggle_api.next_toggle_key(api_root) == {"key": binding}
+        with edit_session.transaction(api_root, [second]) as transaction:
+            doc = transaction.document(second)
+            doc.insert_lines(len(doc.lines), [f"[KeyGenerated{index}]", f"key = {binding}"])
+    assert toggle_api.next_toggle_key(api_root) == {"key": ""}
+    with edit_session.transaction(api_root, [first]) as transaction:
+        doc = transaction.document(first)
+        doc.replace_lines(1, 2, ["key = F10"])
+    assert toggle_api.next_toggle_key(api_root) == {"key": candidates[0]}
+    with open(first, encoding="utf-8") as fh:
+        assert fh.read() == "[KeyUtility]\nkey = '\nback = L\n"

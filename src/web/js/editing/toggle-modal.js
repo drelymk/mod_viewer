@@ -12,6 +12,8 @@ let currentModPath = null;
 let currentInfo = null; // the payload entry being edited (add: null)
 let onSaved = null; // callback invoked after a successful staged edit
 let editVarRows = []; // [{var, original, input}] built for edit mode
+let createTargets = null;
+let openRevision = 0;
 
 function syncLabels() {
   if (!currentMode) return;
@@ -33,6 +35,8 @@ function closeModal() {
   currentMode = null;
   currentInfo = null;
   editVarRows = [];
+  createTargets = null;
+  openRevision++;
 }
 
 /** One read-only var-name + editable comma-values row per cycled var. */
@@ -58,13 +62,14 @@ function buildEditVarRows(vars) {
 
 /** Add mode: a picker when there's a real choice. Edit mode: same list, but
  * disabled — an existing toggle's file can't change, only shown for context. */
-async function populateIniPicker(modPath, selected, editable) {
+async function populateIniPicker(modPath, selected, editable, revision) {
   const field = $('tm-ini-field');
   const select = $('tm-ini');
   select.innerHTML = '';
   select.disabled = !editable;
 
   const inis = await window.pywebview.api.list_toggle_source_inis(modPath);
+  if (revision !== openRevision) return;
   for (const opt of inis) {
     const o = document.createElement('option');
     o.value = opt.value;
@@ -76,40 +81,61 @@ async function populateIniPicker(modPath, selected, editable) {
 }
 
 /** Open for add or edit; edit values come from the authoritative session. */
-export async function openToggleModal({ mode, modPath, info, onSaved: cb }) {
+export async function openToggleModal({ mode, modPath, info, onSaved: cb, quickCreate = null }) {
+  const revision = ++openRevision;
   currentMode = mode;
   currentModPath = modPath;
   currentInfo = info || null;
   onSaved = cb;
+  createTargets = quickCreate?.targets || null;
   setError('');
+  for (const id of ['tm-ini', 'tm-values', 'tm-default']) $(id).disabled = false;
+  $('tm-save').disabled = true;
 
   $('tm-var-single').style.display = mode === 'add' ? '' : 'none';
   $('tm-vars-multi').style.display = mode === 'edit' ? '' : 'none';
   syncLabels();
   $('toggle-modal-backdrop').classList.add('show');
 
-  if (mode === 'add') {
-    $('tm-name').value = '';
-    $('tm-key').value = '';
-    $('tm-back').value = '';
-    $('tm-var').value = '';
-    $('tm-values').value = '';
-    $('tm-default').value = '';
-    await populateIniPicker(modPath, null, true);
-  } else {
-    await populateIniPicker(modPath, info.ini, false);
-    const details = await window.pywebview.api.get_toggle_details(modPath, info.ini, info.section);
-    if (details.error) {
-      setError(details.error);
+  try {
+    if (mode === 'add') {
+      $('tm-name').value = quickCreate?.name || '';
+      $('tm-key').value = '';
+      $('tm-back').value = '';
+      $('tm-var').value = quickCreate ? quickCreate.name.replace(/[^\p{L}\p{N}_]+/gu, '_') : '';
+      $('tm-values').value = quickCreate ? '0,1' : '';
+      $('tm-default').value = quickCreate ? '0' : '';
+      $('tm-values').disabled = !!quickCreate;
+      $('tm-default').disabled = !!quickCreate;
+      await populateIniPicker(modPath, quickCreate?.ini, !quickCreate, revision);
+      if (revision !== openRevision) return;
+      if (quickCreate) {
+        const result = await window.pywebview.api.next_toggle_key(modPath).catch((error) => ({ error: String(error) }));
+        if (revision !== openRevision) return;
+        $('tm-key').value = result.key || '';
+        if (!result.key) setError(result.error || t('toggle.noAutomaticKey'));
+      }
     } else {
-      $('tm-name').value = details.name;
-      $('tm-key').value = details.key;
-      $('tm-back').value = details.back;
-      buildEditVarRows(details.vars);
+      await populateIniPicker(modPath, info.ini, false, revision);
+      if (revision !== openRevision) return;
+      const details = await window.pywebview.api.get_toggle_details(modPath, info.ini, info.section);
+      if (revision !== openRevision) return;
+      if (details.error) {
+        setError(details.error);
+      } else {
+        $('tm-name').value = details.name;
+        $('tm-key').value = details.key;
+        $('tm-back').value = details.back;
+        buildEditVarRows(details.vars);
+      }
     }
-  }
 
-  $('tm-name').focus();
+    if (revision !== openRevision) return;
+    $('tm-save').disabled = false;
+    $('tm-name').focus();
+  } catch (error) {
+    if (revision === openRevision) setError(String(error));
+  }
 }
 
 function parseValues(text) {
@@ -131,6 +157,7 @@ function submitAdd() {
   const options = {};
   if (back) options.back_combo = back;
   if (def) options.default = def;
+  if (createTargets) options.record_targets = createTargets;
 
   return window.pywebview.api.add_toggle(currentModPath, ini, name, key, varName, values, options);
 }
