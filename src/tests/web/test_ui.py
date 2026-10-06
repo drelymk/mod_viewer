@@ -136,8 +136,11 @@ def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
       const {getSelectedMeshes} = await import('./js/scene/selection.js');
       window.__originalMeshes = [...window.modViewer.activeMeshes];
       window.__view = () => ({position: camera.position.toArray(), target: controls.target.toArray()});
-      window.__isFramed = () => controls.target.distanceTo(
-        computeModelBounds(getSelectedMeshes()).getCenter(new THREE.Vector3())) < 1e-6;
+      window.__isFramed = () => {
+        const center = computeModelBounds(getSelectedMeshes()).getCenter(new THREE.Vector3());
+        return controls.target.distanceTo(center) < 1e-6 &&
+          camera.getWorldDirection(new THREE.Vector3()).angleTo(center.sub(camera.position)) < 1e-6;
+      };
       window.__viewDistance = () => camera.position.distanceTo(controls.target);
     }""")
     rows = page.locator('.draw-item')
@@ -201,16 +204,33 @@ def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
     page.locator('#inspector-tab').click()
     assert page.locator('#inspector-panel').is_hidden()
     rows.nth(1).click(modifiers=['Control'])
-    point = project_mesh_points(page, [[2.25, 0.25, 0]])[0]
+    # A different hit prevents the preceding single-click from consuming this double-click.
+    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+    page.evaluate("""async () => {
+      const {controls} = await import('./js/scene/scene.js');
+      controls.focusAnimationTime = 20;
+    }""")
     page.mouse.dblclick(*point)
     assert page.locator('#inspector-panel').is_visible()
     assert page.locator('.draw-item.selected').count() == 1
-    assert 'selected' in rows.nth(1).get_attribute('class')
-    assert page.evaluate('window.__isFramed()')
+    assert 'selected' in rows.nth(0).get_attribute('class')
+    assert page.evaluate("""async () => {
+      const {controls} = await import('./js/scene/scene.js');
+      const started = performance.now();
+      let frames = 0;
+      await new Promise(resolve => {
+        const nextFrame = now => {
+          if (++frames >= 3 && now - started >= controls.focusAnimationTime) resolve();
+          else requestAnimationFrame(nextFrame);
+        };
+        requestAnimationFrame(nextFrame);
+      });
+      return window.__isFramed();
+    }""")
     single_distance = page.evaluate('window.__viewDistance()')
 
     page.locator('#controls-tab').click()
-    rows.nth(0).click(modifiers=['Control'])
+    rows.nth(1).click(modifiers=['Control'])
     page.keyboard.press('f')
     assert page.evaluate('window.__isFramed()')
     assert page.evaluate('window.__viewDistance()') > single_distance
