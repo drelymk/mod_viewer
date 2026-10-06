@@ -1,7 +1,6 @@
 // Selection-aware panel for material, texture, and color editing.
 
-import { getRightDockTab, isRightDockOpen, setRightDockTab } from './right-dock.js';
-import { clearSelection } from '../scene/selection.js';
+import { clearSelection, getSelectedMeshes } from '../scene/selection.js';
 import { toggleManualMeshVisibility } from '../mesh/mesh-state.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
 import { createIcon } from '../ui/ui-icons.js';
@@ -20,7 +19,6 @@ import { textureDisplayLabel } from '../textures/texture-key.js';
 
 const meshRecords = new WeakMap();
 let current = null;
-let selectionCount = 0;
 const $ = (id) => document.getElementById(id);
 
 function semanticMesh(mesh) {
@@ -681,16 +679,9 @@ function updateInspectorState() {
   }
 }
 
-function showInspectorOnSelection() {
-  if (selectionCount++ === 0 && isRightDockOpen() && getRightDockTab() !== 'weight') {
-    setRightDockTab('inspector', { persist: false });
-  }
-}
-
 function selectComponent(record) {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   clearSelection();
-  showInspectorOnSelection();
   current = { type: 'component', record };
   record.header?.classList.add('selected');
   buildComponent(record);
@@ -698,19 +689,28 @@ function selectComponent(record) {
   if (status) status.textContent = record.component || t('inspector.component');
 }
 
-function selectMesh(mesh) {
+function updateMeshSelectionStatus(mesh, record, meshes) {
+  const status = $('selected-mesh-status');
+  if (!status) return;
+  const componentName = record.component?.component || record.component || t('inspector.component');
+  if (meshes.length > 1) {
+    const components = new Set(meshes.map((selectedMesh) => meshRecords.get(selectedMesh)?.component));
+    status.textContent =
+      components.size === 1
+        ? t('mesh.selectionSameComponent', { count: meshes.length, component: componentName })
+        : t('mesh.selectionMultipleComponents', { count: meshes.length, components: components.size });
+  } else {
+    status.textContent = `${componentName} > ${meshDisplayLabel(mesh, record.label)}`;
+  }
+}
+
+function selectMesh(mesh, meshes) {
   const record = meshRecords.get(mesh);
   if (!record) return;
-  showInspectorOnSelection();
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = { type: 'mesh', mesh, record };
   buildMesh(mesh, record);
-  const status = $('selected-mesh-status');
-  if (status) {
-    const componentName = record.component?.component || record.component || t('inspector.component');
-    const meshName = meshDisplayLabel(mesh, record.label);
-    status.textContent = `${componentName} > ${meshName}`;
-  }
+  updateMeshSelectionStatus(mesh, record, meshes);
 }
 
 export function initInspectorPanel() {
@@ -721,20 +721,14 @@ export function initInspectorPanel() {
       if (status) status.textContent = current.record.component || t('inspector.component');
     } else if (current?.type === 'mesh') {
       buildMesh(current.mesh, current.record);
-      const status = $('selected-mesh-status');
-      if (status) {
-        const componentName =
-          current.record.component?.component || current.record.component || t('inspector.component');
-        const meshName = meshDisplayLabel(current.mesh, current.record.label);
-        status.textContent = `${componentName} > ${meshName}`;
-      }
+      updateMeshSelectionStatus(current.mesh, current.record, getSelectedMeshes());
     }
   });
   window.addEventListener('mod-viewer-component-selected', (event) => {
     if (event.detail?.component) selectComponent(event.detail.component);
   });
   window.addEventListener('mod-viewer-mesh-selected', (event) => {
-    if (event.detail?.mesh) selectMesh(event.detail.mesh);
+    if (event.detail?.mesh) selectMesh(event.detail.mesh, event.detail.meshes || [event.detail.mesh]);
     else {
       if (current?.type === 'component') current.record.header?.classList.remove('selected');
       current = null;
@@ -758,6 +752,7 @@ export function initInspectorPanel() {
     if (current.type === 'component' && current.record === component) buildComponent(component);
     if (current.type === 'mesh' && current.record.component === component) {
       buildMesh(current.mesh, current.record);
+      updateMeshSelectionStatus(current.mesh, current.record, getSelectedMeshes());
     }
   });
   window.addEventListener('mod-viewer-mesh-state-changed', (event) => {
@@ -775,7 +770,6 @@ export function initInspectorPanel() {
 export function clearInspector() {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = null;
-  selectionCount = 0;
   $('selected-mesh-status').textContent = '';
   clearContent();
 }
