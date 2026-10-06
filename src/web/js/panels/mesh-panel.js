@@ -38,7 +38,8 @@ import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
 import { openToggleModal } from '../editing/toggle-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
-import { invalidateCharacterShadowVisibility } from '../scene/scene.js';
+import { frameView, invalidateCharacterShadowVisibility } from '../scene/scene.js';
+import { setRightDockTab } from './right-dock.js';
 import { alertDialog, confirmDialog, rangeInputDialog } from '../ui/dialogs.js';
 import {
   MAX_LOOSE_PART_TOLERANCE,
@@ -269,6 +270,7 @@ function ensureMeshContextMenu() {
     meshContextMenu.appendChild(action);
   };
   addAction('createToggle', 'mesh.createToggle', 'mesh-create-toggle-action');
+  addAction('rename', 'mesh.rename', 'mesh-rename-action');
   addAction('separate', 'mesh.separateLooseParts');
   addAction('separateSelection', 'mesh.separateBySelection');
   addAction('merge', 'mesh.mergeLooseParts');
@@ -277,6 +279,11 @@ function ensureMeshContextMenu() {
   addAction('apply', 'mesh.applyMeshChanges');
   addAction('cancel', 'mesh.cancelMeshChanges');
   document.body.appendChild(meshContextMenu);
+  meshContextActions.rename.addEventListener('click', () => {
+    const mesh = meshContextTarget;
+    closeMeshContextMenu();
+    if (mesh) renameMesh(mesh);
+  });
   meshContextActions.createToggle.addEventListener('click', () => {
     const anchor = meshContextTarget;
     const quickCreate = createToggleSelection(anchor);
@@ -346,6 +353,11 @@ function openMeshContextMenu(event, mesh) {
   meshContextTarget = mesh;
   const selectionState = getFaceSelection();
   const actions = meshContextActions;
+  for (const action of Object.values(actions)) {
+    action.disabled = false;
+    action.title = '';
+  }
+  actions.rename.hidden = false;
   actions.createToggle.hidden = !createToggleSelection(mesh);
   if (selectionState) {
     actions.separate.hidden = true;
@@ -362,6 +374,14 @@ function openMeshContextMenu(event, mesh) {
       : Math.floor(Number(selectionState.source.geometry?.index?.count || 0) / 3);
     actions.applySelection.disabled = !isTarget || selectedCount === 0 || selectedCount >= targetCount;
     actions.cancelSelection.disabled = !isTarget;
+    actions.applySelection.title = !isTarget
+      ? t('mesh.reason.selectEditingMesh')
+      : selectedCount === 0
+        ? t('mesh.reason.selectFaces')
+        : selectedCount >= targetCount
+          ? t('mesh.reason.leaveFaces')
+          : '';
+    actions.cancelSelection.title = !isTarget ? t('mesh.reason.selectEditingMesh') : '';
     showMeshContextMenuIfActionsVisible(menu, event);
     return;
   }
@@ -372,6 +392,13 @@ function openMeshContextMenu(event, mesh) {
     descriptor?.meshEditState === 'applied' ||
     descriptor?.meshEditWritable === false ||
     descriptor?.meshEditApplying === true;
+  const lockedReason = descriptor?.meshEditApplying
+    ? t('mesh.reason.applyingChanges')
+    : descriptor?.meshEditWritable === false
+      ? t('mesh.reason.cannotWriteChanges')
+      : descriptor?.meshEditState === 'applied'
+        ? t('mesh.reason.appliedChanges')
+        : '';
   const selectedMeshes = getSelectedMeshes();
   const selectedSource = selectedMeshes.length ? getMeshEditSource(selectedMeshes[0]) : null;
   const mergeVisible =
@@ -385,14 +412,19 @@ function openMeshContextMenu(event, mesh) {
   const cleanSource = !activeSource && !isLoosePart(mesh);
   actions.separate.hidden = !(cleanSource || unrelatedMesh);
   actions.separateSelection.hidden = !!mergeVisible || !(cleanSource || activePart || unrelatedMesh);
-  actions.merge.hidden = !mergeVisible;
+  actions.merge.hidden = !(activePart || mergeVisible);
   actions.applySelection.hidden = true;
   actions.cancelSelection.hidden = true;
   actions.apply.hidden = true;
   actions.cancel.hidden = true;
   actions.separate.disabled = locked || !sameSource || isLoosePart(mesh);
   actions.separateSelection.disabled = locked || !sameSource || (!!activeSource && !activePart);
-  actions.merge.disabled = locked;
+  actions.merge.disabled = locked || !mergeVisible;
+  actions.separate.title = actions.separate.disabled ? lockedReason || t('mesh.reason.finishCurrentEdit') : '';
+  actions.separateSelection.title = actions.separateSelection.disabled
+    ? lockedReason || t('mesh.reason.finishCurrentEdit')
+    : '';
+  actions.merge.title = actions.merge.disabled ? lockedReason || t('mesh.reason.selectParts') : '';
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
@@ -420,6 +452,11 @@ function openComponentContextMenu(event, descriptor) {
   const menu = ensureMeshContextMenu();
   meshContextTarget = descriptor;
   const actions = meshContextActions;
+  for (const action of Object.values(actions)) {
+    action.disabled = false;
+    action.title = '';
+  }
+  actions.rename.hidden = true;
   actions.createToggle.hidden = true;
   actions.separate.hidden = true;
   actions.separateSelection.hidden = true;
@@ -434,6 +471,15 @@ function openComponentContextMenu(event, descriptor) {
   const disabled = descriptor.meshEditApplying === true || !descriptor.meshEditWritable || faceSelectionOwnsComponent;
   actions.apply.disabled = disabled;
   actions.cancel.disabled = disabled;
+  const reason = descriptor.meshEditApplying
+    ? t('mesh.reason.applyingChanges')
+    : !descriptor.meshEditWritable
+      ? t('mesh.reason.cannotWriteChanges')
+      : faceSelectionOwnsComponent
+        ? t('mesh.reason.finishCurrentEdit')
+        : '';
+  actions.apply.title = reason;
+  actions.cancel.title = reason;
   showMeshContextMenuIfActionsVisible(menu, event);
 }
 
@@ -589,6 +635,57 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
   return { hdr, masterCb, syncLabels, syncEditState };
 }
 
+function renameMesh(mesh) {
+  const labelSpan = getMeshView(mesh)?.row?.querySelector('.mesh-name');
+  if (!labelSpan || labelSpan.querySelector('input')) return;
+  const loosePart = isLoosePart(mesh);
+  const original = labelSpan.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'mesh-name-input';
+  input.value = original;
+  labelSpan.textContent = '';
+  labelSpan.append(input);
+
+  let finished = false;
+  const finish = (apply) => {
+    if (finished) return;
+    const next = input.value.trim();
+    if (apply && !next) return;
+    finished = true;
+    labelSpan.textContent = apply ? next : original;
+    if (!apply || next === original) return;
+    if (loosePart) {
+      mesh.userData.loosePartLabel = next;
+    } else {
+      mesh.userData.displayName = next;
+      mesh.userData.meshNames[mesh.userData.metadataKey] = next;
+      if (mesh.userData.modPath) {
+        window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
+      }
+    }
+    window.dispatchEvent(
+      new CustomEvent('mod-viewer-inspector-refresh', { detail: { component: componentForMesh(mesh) } }),
+    );
+  };
+
+  input.addEventListener('click', (event) => event.stopPropagation());
+  input.addEventListener('dblclick', (event) => event.stopPropagation());
+  input.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener('blur', () => finish(false));
+  input.focus();
+  input.select();
+}
+
 /** Display authored drawindexed arguments, or the synthetic number if absent. */
 function buildDrawRow(
   name,
@@ -613,6 +710,7 @@ function buildDrawRow(
     if (!loosePart) noteRecordMeshEdit(mesh);
     toggleManualMeshVisibility(mesh);
   });
+  cb.addEventListener('dblclick', (event) => event.stopPropagation());
   if (!loosePart && includeInGroup) itemCbs.push(cb);
 
   const label = entry.drawindexed ? entry.drawindexed.join(', ') : '#' + name.slice(groupName.length + 1);
@@ -633,54 +731,6 @@ function buildDrawRow(
     }
   };
   updateStateIndicator(mesh);
-  labelSpan.addEventListener('dblclick', (e) => {
-    e.stopPropagation();
-    if (labelSpan.querySelector('input')) return;
-
-    const original = labelSpan.textContent;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'mesh-name-input';
-    input.value = original;
-    labelSpan.textContent = '';
-    labelSpan.append(input);
-
-    let finished = false;
-    const finish = (apply) => {
-      if (finished) return;
-      const next = input.value.trim();
-      if (apply && !next) return;
-      finished = true;
-      labelSpan.textContent = apply ? next : original;
-      if (!apply || next === original) return;
-      if (loosePart) {
-        mesh.userData.loosePartLabel = next;
-        return;
-      }
-      mesh.userData.displayName = next;
-      mesh.userData.meshNames[mesh.userData.metadataKey] = next;
-      if (mesh.userData.modPath) {
-        window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
-      }
-    };
-
-    input.addEventListener('click', (event) => event.stopPropagation());
-    input.addEventListener('dblclick', (event) => event.stopPropagation());
-    input.addEventListener('keydown', (event) => {
-      event.stopPropagation();
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        finish(true);
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        finish(false);
-      }
-    });
-    input.addEventListener('blur', () => finish(false));
-    input.focus();
-    input.select();
-  });
-
   bindMeshView(mesh, {
     row,
     stateButton: cb,
@@ -691,6 +741,12 @@ function buildDrawRow(
     if (e.target === cb) return;
     if (e.ctrlKey) toggleMeshSelection(mesh);
     else selectMesh(mesh);
+  });
+  row.addEventListener('dblclick', (event) => {
+    if (isPanelSelectionInteractiveTarget(event.target) || getFaceSelection()) return;
+    selectMesh(mesh);
+    frameView([mesh]);
+    setRightDockTab('inspector', { userInitiated: true });
   });
   if (onContextMenu) {
     row.addEventListener('contextmenu', (event) => onContextMenu(event, mesh));

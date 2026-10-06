@@ -2,7 +2,8 @@
 // Ctrl toggles selection; Ctrl-drag selects visible geometry inside a rectangle.
 
 import * as THREE from 'three/webgpu';
-import { camera, controls, renderer } from './scene.js';
+import { camera, controls, frameView, renderer } from './scene.js';
+import { setRightDockTab } from '../panels/right-dock.js';
 import { activeMeshes } from '../mesh/visibility.js';
 import { toggleManualMeshVisibility } from '../mesh/mesh-state.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
@@ -484,6 +485,29 @@ function onPointerCancel(event) {
   restoreBoxGesture(event);
 }
 
+function onViewportDoubleClick(event) {
+  if (
+    event.button !== 0 ||
+    event.defaultPrevented ||
+    faceSelection ||
+    boxGesture ||
+    isRigTransformInteractionActive() ||
+    isRigJointPickingActive()
+  )
+    return;
+  const hit = raycastModelAtClientPoint({
+    clientX: event.clientX,
+    clientY: event.clientY,
+    canvas: renderer.domElement,
+    camera,
+    meshes: activeMeshes,
+  });
+  if (!hit) return;
+  selectMesh(hit.object);
+  frameView([hit.object]);
+  setRightDockTab('inspector', { userInitiated: true });
+}
+
 function onViewportContextMenu(event) {
   if (isRigTransformInteractionActive() || isRigJointPickingActive()) return;
   const hit = raycastModelAtClientPoint({
@@ -513,8 +537,9 @@ function onKeyDown(event) {
     cancelFaceSelection();
     return;
   }
+  const key = event.key.toLowerCase();
   if (
-    event.key.toLowerCase() !== 'h' ||
+    !['h', 'f'].includes(key) ||
     event.defaultPrevented ||
     event.repeat ||
     event.ctrlKey ||
@@ -531,6 +556,10 @@ function onKeyDown(event) {
   const meshes = getSelectedMeshes();
   if (!meshes.length) return;
   event.preventDefault();
+  if (key === 'f') {
+    frameView(meshes);
+    return;
+  }
   for (const mesh of meshes) {
     if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
     toggleManualMeshVisibility(mesh, { notify: false, render: false });
@@ -548,6 +577,7 @@ export function initSelection() {
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointercancel', onPointerCancel);
   canvas.addEventListener('lostpointercapture', onPointerCancel);
+  canvas.addEventListener('dblclick', onViewportDoubleClick);
   canvas.addEventListener('contextmenu', onViewportContextMenu);
   document.addEventListener('keydown', onKeyDown);
 }

@@ -130,6 +130,7 @@ camera.position.set(0, 1, 3);
 export const controls = new ArcballControls(camera, renderer.domElement, scene);
 controls.target.set(0, 0, 0);
 controls.enableAnimations = true;
+controls.enableFocus = false;
 // Keep wheel zoom anchored to the point under the cursor for model inspection.
 controls.cursorZoom = true;
 // Model-scaled clipping belongs to cameraFrame; Arcball must not overwrite it.

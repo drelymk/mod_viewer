@@ -121,23 +121,174 @@ def test_key_light_drag_restores_controls_after_capture_loss_and_release(viewer)
 
 
 def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
-    page = viewer({'fixture-01': model_payload(2)})
+    payload = model_payload(3)
+    payload['meshes']['mesh-01']['component'] = 'component-00'
+    for index, mesh in enumerate(payload['meshes'].values()):
+        x = index * 2
+        mesh['pos'] = append_stream(payload, 'f', [x,0,0, x+1,0,0, x,1,0])
+    page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
-    wait_loaded(page, 2)
-    page.evaluate('window.__originalMeshes = [...window.modViewer.activeMeshes]')
-    page.locator('#inspector-tab').click()
+    wait_loaded(page, 3)
+    page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {camera, controls} = await import('./js/scene/scene.js');
+      const {computeModelBounds} = await import('./js/scene/model-bounds.js');
+      const {getSelectedMeshes} = await import('./js/scene/selection.js');
+      window.__originalMeshes = [...window.modViewer.activeMeshes];
+      window.__view = () => ({position: camera.position.toArray(), target: controls.target.toArray()});
+      window.__isFramed = () => {
+        const center = computeModelBounds(getSelectedMeshes()).getCenter(new THREE.Vector3());
+        return controls.target.distanceTo(center) < 1e-6 &&
+          camera.getWorldDirection(new THREE.Vector3()).angleTo(center.sub(camera.position)) < 1e-6;
+      };
+      window.__viewDistance = () => camera.position.distanceTo(controls.target);
+    }""")
     rows = page.locator('.draw-item')
+    status = page.locator('#selected-mesh-status')
+    assert page.locator('#controls-panel').is_visible()
+    initial_view = page.evaluate('window.__view()')
     rows.nth(0).click()
     assert page.locator('.draw-item.selected').count() == 1
-    assert page.locator('#inspector-content').is_visible()
+    assert page.locator('#controls-panel').is_visible()
+    assert status.inner_text() == 'component-00 > mesh-00'
+    assert page.evaluate('window.__view()') == initial_view
     rows.nth(1).click(modifiers=['Control'])
     assert page.locator('.draw-item.selected').count() == 2
-    rows.nth(1).click()
+    assert status.inner_text() == '2 meshes selected · component-00'
+    rows.nth(2).click(modifiers=['Control'])
+    assert status.inner_text() == '3 meshes selected · 2 components'
+    page.evaluate("import('./js/i18n/index.js').then(module => module.setLocale('ja'))")
+    assert status.inner_text() == '3 個のメッシュを選択 · 2 個のコンポーネント'
+    page.evaluate("import('./js/i18n/index.js').then(module => module.setLocale('en'))")
+    assert status.inner_text() == '3 meshes selected · 2 components'
+    rows.nth(2).click(modifiers=['Control'])
+    assert page.locator('.draw-item.selected').count() == 2
+    assert page.locator('#controls-panel').is_visible()
+
+    rows.nth(2).click()
+    points = project_mesh_points(page, [[-0.1, 1.1, 0], [3.1, -0.1, 0]])
+    page.keyboard.down('Control')
+    page.mouse.move(*points[0])
+    page.mouse.down()
+    page.mouse.move(*points[1], steps=5)
+    page.mouse.up()
+    page.keyboard.up('Control')
+    assert page.locator('.draw-item.selected').count() == 3
+    assert page.locator('#controls-panel').is_visible()
+    rows.nth(2).click()
+    first = rows.nth(0).bounding_box()
+    second = rows.nth(1).bounding_box()
+    page.keyboard.down('Control')
+    page.mouse.move(first['x'] + first['width'] - 5, first['y'] + first['height'] / 2)
+    page.mouse.down()
+    page.mouse.move(second['x'] + second['width'] - 5, second['y'] + second['height'] / 2, steps=5)
+    page.mouse.up()
+    page.keyboard.up('Control')
+    assert page.locator('.draw-item.selected').count() == 3
+    assert page.locator('#controls-panel').is_visible()
+
+    page.locator('.group-name').first.click()
+    assert status.inner_text() == 'component-00'
+    assert page.locator('.draw-item.selected').count() == 0
+    assert page.locator('#controls-panel').is_visible()
+    point = project_mesh_points(page, [[2.25, 0.25, 0]])[0]
+    page.mouse.click(*point)
     assert page.locator('.draw-item.selected').count() == 1
     assert 'selected' in rows.nth(1).get_attribute('class')
-    page.locator('#controls-tab').click()
+    assert page.locator('#controls-panel').is_visible()
+
     page.locator('#inspector-tab').click()
+    rows.nth(0).click()
+    assert status.inner_text() == 'component-00 > mesh-00'
+    assert page.locator('#inspector-content').is_visible()
+    page.locator('#inspector-tab').click()
+    assert page.locator('#inspector-panel').is_hidden()
+    rows.nth(1).click(modifiers=['Control'])
+    # A different hit prevents the preceding single-click from consuming this double-click.
+    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+    page.evaluate("""async () => {
+      const {controls} = await import('./js/scene/scene.js');
+      controls.focusAnimationTime = 20;
+    }""")
+    page.mouse.dblclick(*point)
+    assert page.locator('#inspector-panel').is_visible()
     assert page.locator('.draw-item.selected').count() == 1
+    assert 'selected' in rows.nth(0).get_attribute('class')
+    assert page.evaluate("""async () => {
+      const {controls} = await import('./js/scene/scene.js');
+      const started = performance.now();
+      let frames = 0;
+      await new Promise(resolve => {
+        const nextFrame = now => {
+          if (++frames >= 3 && now - started >= controls.focusAnimationTime) resolve();
+          else requestAnimationFrame(nextFrame);
+        };
+        requestAnimationFrame(nextFrame);
+      });
+      return window.__isFramed();
+    }""")
+    single_distance = page.evaluate('window.__viewDistance()')
+
+    page.locator('#controls-tab').click()
+    rows.nth(1).click(modifiers=['Control'])
+    page.keyboard.press('f')
+    assert page.evaluate('window.__isFramed()')
+    assert page.evaluate('window.__viewDistance()') > single_distance
+    assert page.locator('#controls-panel').is_visible()
+    rows.nth(2).click()
+    page.keyboard.press('f')
+    assert page.evaluate('window.__isFramed()')
+    assert page.locator('#controls-panel').is_visible()
+
+    for click_name in (False, True):
+        if page.locator('#controls-panel').is_hidden():
+            page.locator('#controls-tab').click()
+        rows.nth(2).click(modifiers=['Control'])
+        if click_name:
+            rows.nth(0).locator('.mesh-name').dblclick(modifiers=['Control'])
+        else:
+            box = rows.nth(0).bounding_box()
+            rows.nth(0).dblclick(position={'x': box['width'] - 5, 'y': box['height'] / 2})
+        assert page.locator('#inspector-panel').is_visible()
+        assert page.locator('.draw-item.selected').count() == 1
+        assert 'selected' in rows.nth(0).get_attribute('class')
+        assert page.evaluate('window.__isFramed()')
+        assert page.locator('.mesh-name-input').count() == 0
+
+    page.locator('#controls-tab').click()
+    rows.nth(0).locator('.mesh-state-btn').dblclick()
+    assert page.locator('#controls-panel').is_visible()
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    rows.nth(0).click(button='right')
+    assert page.locator('#controls-panel').is_visible()
+    page.locator('[data-i18n="mesh.rename"]').click()
+    editor = page.locator('.mesh-name-input')
+    editor.fill('mesh-renamed')
+    view = page.evaluate('window.__view()')
+    editor.dblclick()
+    assert page.locator('#controls-panel').is_visible()
+    assert page.evaluate('window.__view()') == view
+    editor.press('Enter')
+    assert rows.nth(0).locator('.mesh-name').inner_text() == 'mesh-renamed'
+    assert status.inner_text() == 'component-00 > mesh-renamed'
+    assert len(bridge_calls(page, 'names')) == 1
+    rows.nth(0).click(button='right')
+    page.locator('[data-i18n="mesh.rename"]').click()
+    editor.fill('mesh-cancelled')
+    editor.press('Escape')
+    assert rows.nth(0).locator('.mesh-name').inner_text() == 'mesh-renamed'
+    assert len(bridge_calls(page, 'names')) == 1
+
+    page.locator('.group-name').first.click()
+    view = page.evaluate('window.__view()')
+    page.keyboard.press('f')
+    assert page.evaluate('window.__view()') == view
+    rows.nth(0).click()
+    rect = page.locator('#canvas-container canvas').first.bounding_box()
+    page.mouse.dblclick(rect['x'] + rect['width'] / 2, rect['y'] + rect['height'] * 0.9)
+    assert page.locator('#controls-panel').is_visible()
+    assert status.inner_text() == ''
+    assert page.evaluate('window.__view()') == view
     assert page.evaluate('window.modViewer.activeMeshes.every((mesh, i) => mesh === window.__originalMeshes[i])')
     assert bridge_calls(page, 'export') == []
     assert bridge_calls(page, 'load') == [['fixture-01', False]]
@@ -147,6 +298,7 @@ def test_visibility_eyes_keyboard_and_reset_synchronize_without_staging(viewer):
     page = viewer({'fixture-01': model_payload(2)})
     open_model(page, 'fixture-01')
     wait_loaded(page, 2)
+    page.locator('#inspector-tab').click()
     rows = page.locator('.draw-item')
     rows.nth(0).click()
     eye = page.locator('.inspector-visibility-btn')
@@ -189,9 +341,18 @@ def test_visibility_eyes_keyboard_and_reset_synchronize_without_staging(viewer):
     assert button.get_attribute('aria-pressed') == 'true'
     assert eye.get_attribute('aria-pressed') == 'true'
 
-    rows.nth(1).locator('.mesh-name').dblclick()
-    page.keyboard.press('h')
+    rows.nth(1).click()
+    rows.nth(1).click(button='right')
+    page.locator('[data-i18n="mesh.rename"]').click()
+    page.evaluate("""async () => {
+      const {camera, controls} = await import('./js/scene/scene.js');
+      window.__view = () => ({position: camera.position.toArray(), target: controls.target.toArray()});
+    }""")
+    view = page.evaluate('window.__view()')
+    for key in ('h', 'f'):
+        page.keyboard.press(key)
     assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    assert page.evaluate('window.__view()') == view
     page.keyboard.press('Escape')
     for tag in ('textarea', 'select', 'button', 'div'):
         page.evaluate("""tag => {
@@ -201,8 +362,10 @@ def test_visibility_eyes_keyboard_and_reset_synchronize_without_staging(viewer):
           document.body.appendChild(editor);
           editor.focus();
         }""", tag)
-        page.keyboard.press('h')
+        for key in ('h', 'f'):
+            page.keyboard.press(key)
         assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+        assert page.evaluate('window.__view()') == view
         page.evaluate('document.getElementById("fixture-editor").remove()')
     for interaction in ('transform', 'picking'):
         page.evaluate("""async interaction => {
@@ -211,9 +374,15 @@ def test_visibility_eyes_keyboard_and_reset_synchronize_without_staging(viewer):
             ? rig.setRigTransformInteractionActive : rig.setRigJointPickingActive;
           window.__setRigInteraction(true);
         }""", interaction)
-        page.keyboard.press('h')
+        for key in ('h', 'f'):
+            page.keyboard.press(key)
         assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+        assert page.evaluate('window.__view()') == view
         page.evaluate('window.__setRigInteraction(false)')
+    for key in ('Control+h', 'Alt+h', 'Meta+h', 'Control+f', 'Alt+f', 'Meta+f'):
+        page.keyboard.press(key)
+        assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+        assert page.evaluate('window.__view()') == view
     assert page.locator('.draw-item.selected').count() == 1
     page.locator('.group-name').first.click()
     assert eye.count() == 0
@@ -434,14 +603,44 @@ def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(vi
     page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
     wait_loaded(page)
+    page.locator('#inspector-tab').click()
     page.locator('.draw-item').click(button='right')
     page.locator('.mesh-context-menu [data-i18n="mesh.separateLooseParts"]').click()
     page.locator('#dialog-backdrop.show').wait_for()
     page.locator('#dialog-ok').click()
     page.wait_for_function('document.querySelectorAll(".draw-item").length === 2')
     rows = page.locator('.draw-item')
+    rows.nth(0).click(button='right')
+    merge = page.locator('[data-i18n="mesh.mergeLooseParts"]')
+    assert merge.is_disabled()
+    assert merge.get_attribute('title') == 'Select at least 2 parts from the same mesh'
+    page.keyboard.press('Escape')
     rows.nth(0).click()
     rows.nth(1).click(modifiers=['Control'])
+    rows.nth(0).click(button='right')
+    assert merge.is_enabled()
+    assert merge.get_attribute('title') == ''
+    page.keyboard.press('Escape')
+    # Check the same component menu as its edit availability changes.
+    page.evaluate('window.__editComponent = window.modViewer.activeMeshes[0].userData.componentDescriptor')
+    for field, value, reason in [
+        ('meshEditWritable', False, 'Mesh changes cannot be written'),
+        ('meshEditApplying', True, 'Mesh changes are being applied'),
+    ]:
+        page.evaluate('([field, value]) => {window.__editComponent[field] = value;}', [field, value])
+        page.locator('.group-name').first.click(button='right')
+        for key in ('applyMeshChanges', 'cancelMeshChanges'):
+            action = page.locator(f'[data-i18n="mesh.{key}"]')
+            assert action.is_disabled()
+            assert action.get_attribute('title') == reason
+        page.keyboard.press('Escape')
+        page.evaluate('([field, value]) => {window.__editComponent[field] = value;}', [field, not value])
+    page.locator('.group-name').first.click(button='right')
+    for key in ('applyMeshChanges', 'cancelMeshChanges'):
+        action = page.locator(f'[data-i18n="mesh.{key}"]')
+        assert action.is_enabled()
+        assert action.get_attribute('title') == ''
+    page.keyboard.press('Escape')
     page.keyboard.press('h')
     assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => !part.visible)')
     assert page.locator('.draw-item.selected').count() == 2
@@ -578,11 +777,28 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
     for action in ['cancelSelection', 'applySelection']:
         page.locator('.draw-item').first.click(button='right')
         page.locator('[data-i18n="mesh.separateBySelection"]').click()
+        page.mouse.click(*point, button='right')
+        apply = page.locator('[data-i18n="mesh.applySelection"]')
+        assert apply.is_disabled()
+        assert apply.get_attribute('title') == 'Select one or more faces first'
+        page.keyboard.press('Escape')
+        # Escape closes the context menu and ends face selection; start again.
+        page.locator('.draw-item').first.click(button='right')
+        page.locator('[data-i18n="mesh.separateBySelection"]').click()
         page.mouse.click(*point)
+        page.evaluate("""async () => {
+          const {camera, controls} = await import('./js/scene/scene.js');
+          window.__view = () => ({position: camera.position.toArray(), target: controls.target.toArray()});
+        }""")
+        view = page.evaluate('window.__view()')
+        page.keyboard.press('f')
+        assert page.evaluate('window.__view()') == view
         page.keyboard.press('h')
         assert page.evaluate('window.modViewer.activeMeshes[0].visible')
         page.mouse.click(*point, button='right')
         assert page.locator('[data-i18n="mesh.applySelection"]').is_visible()
+        assert apply.is_enabled()
+        assert apply.get_attribute('title') == ''
         assert page.locator('[data-i18n="mesh.cancelSelection"]').is_visible()
         page.locator(f'[data-i18n="mesh.{action}"]').click()
         assert bridge_calls(page, 'meshApply') == []
@@ -625,7 +841,9 @@ def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
     assert all(actions.nth(index).is_hidden() for index in range(actions.count()))
     page.evaluate("document.body.classList.add('feature-modify-toggle-off')")
     page.mouse.click(*point, button='right')
-    assert menu.is_hidden()
+    assert menu.is_visible()
+    assert menu.locator('button:visible').evaluate_all(
+        'buttons => buttons.map(button => button.dataset.i18n)') == ['mesh.rename']
     assert bridge_calls(page, 'meshApply') == []
 
 
@@ -679,7 +897,8 @@ def test_mesh_create_toggle_reuses_modal_selection_and_semantic_refresh(viewer):
     assert len(bridge_calls(page, 'semanticState')) == 1
     assert bridge_calls(page, 'export') == []
 
-    page.locator('#controls-tab').click()
+    if page.locator('#controls-panel').is_hidden():
+        page.locator('#controls-tab').click()
     page.locator('#toggle-add-btn').click()
     page.wait_for_function('!document.getElementById("tm-save").disabled')
     for field in ('ini', 'values', 'default'):
@@ -735,7 +954,8 @@ def test_mesh_create_toggle_refuses_incomplete_or_transient_selection(viewer):
     rows.nth(0).click(button='right')
     assert page.locator('.mesh-create-toggle-action').is_hidden()
     page.locator('[data-i18n="mesh.cancelSelection"]').click()
-    page.locator('#controls-tab').click()
+    if page.locator('#controls-panel').is_hidden():
+        page.locator('#controls-tab').click()
     page.locator('#toggle-list [aria-label="Record toggle mesh visibility"]').click()
     page.locator('.toggle-row.recording').wait_for()
     rows.nth(0).click(button='right')
