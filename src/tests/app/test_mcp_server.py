@@ -3,11 +3,13 @@
 import pytest
 import json
 import urllib.request
+from urllib.error import HTTPError
 
 import mcp_server
 from app.session import edit as edit_session
 from app.settings import mod_folders as mod_folders
 from core.ini.document import IniDocument
+from app.runtime import server
 from core.geometry.transport import GeometryBlob
 from tests.support.model_data import basic_model_ini, triangle_geometry
 
@@ -97,6 +99,11 @@ def test_inspect_mod_passes_staged_documents_without_serializing(tmp_path,
 
 
 def test_direct_and_mcp_loads_publish_accessible_geometry(tmp_path, monkeypatch):
+    monkeypatch.setattr(server.paths, "has_vendored_three", lambda: False)
+    monkeypatch.setattr(server, "_geometry_blobs", {})
+    mcp_server._preview_base_url.cache_clear()
+    with pytest.raises(RuntimeError, match="Vendored Three.js"):
+        server.start()
     (tmp_path / "mod.ini").write_text(basic_model_ini(), encoding="utf-8")
     buffers = triangle_geometry()
     for name, data in buffers.items():
@@ -124,6 +131,37 @@ def test_direct_and_mcp_loads_publish_accessible_geometry(tmp_path, monkeypatch)
         mesh = next(iter(payload["meshes"].values()))
         ref = mesh["pos"]
         assert blob[ref["offset"]:ref["offset"] + ref["length"]] == buffers["p.buf"]
+
+    viewer_url = base_url + server.publish_geometry(b"viewer")
+    weight_url = base_url + server.publish_geometry(b"weight", replace=False)
+    inspections = [mcp_server.inspect_mod(str(tmp_path)) for _ in range(8)]
+    assert server.geometry_stats() == {
+        "pending_blob_count": 4, "pending_blob_bytes": 12 + 2 * len(supplied),
+    }
+    with pytest.raises(HTTPError) as expired:
+        opener.open(inspections[0]["geometry"]["url"], timeout=5)
+    assert expired.value.code == 404
+
+    # Scale the aggregate byte limit down without allocating large fixtures.
+    monkeypatch.setattr(server, "_MAX_GEOMETRY_BYTES", len(supplied))
+    latest = mcp_server.inspect_mod(str(tmp_path))
+    assert server.geometry_stats() == {
+        "pending_blob_count": 3, "pending_blob_bytes": 12 + len(supplied),
+    }
+    with pytest.raises(ValueError, match="safety limit"):
+        server.publish_geometry(
+            bytes(len(supplied) + 1), replace=False, auxiliary=True)
+    for url, expected in ((viewer_url, b"viewer"), (weight_url, b"weight"),
+                          (latest["geometry"]["url"], supplied.to_bytes())):
+        with opener.open(url, timeout=5) as response:
+            assert response.read() == expected
+        with pytest.raises(HTTPError) as consumed:
+            opener.open(url, timeout=5)
+        assert consumed.value.code == 404
+    assert server.geometry_stats() == {
+        "pending_blob_count": 0, "pending_blob_bytes": 0,
+    }
+    mcp_server._preview_base_url.cache_clear()
 
 
 def test_mcp_reads_registry_for_each_invocation(tmp_path, monkeypatch):

@@ -292,7 +292,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
             animations=getattr(built, "animations", None))
         if geometry is None:
             from app.runtime.server import publish_payload_geometry
-            publish_payload_geometry(payload, built.geometry, replace=False)
+            publish_payload_geometry(
+                payload, built.geometry, replace=False, auxiliary=True)
         return payload
     except ModSourceError as error:
         context.skinning_manifest = {}

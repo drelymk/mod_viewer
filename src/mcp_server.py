@@ -20,7 +20,7 @@ mcp = FastMCP("3DMigoto Mod Viewer")
 @cache
 def _preview_base_url():
     """Serve inspection blobs on one process-local localhost server."""
-    return server.start()
+    return server.start(require_ui_assets=False)
 
 
 def _authorized_mod_folder(folder_path):
