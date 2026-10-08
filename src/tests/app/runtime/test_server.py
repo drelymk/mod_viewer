@@ -3,7 +3,6 @@
 import re
 import zipfile
 import urllib.request
-from unittest.mock import patch
 
 from app.runtime import server as server
 from core.mod_source import ZipModSource
@@ -97,10 +96,7 @@ def test_zip_texture_publication_keeps_member_bytes_private(tmp_path):
         assert entry.source_ref is member
         assert reads == []
 
-        with patch("app.runtime.server.render_texture_png",
-                   return_value=b"PNG"):
-            assert server._render_texture_request(
-                publication.token, "0", entry) == b"PNG"
+        assert server._texture_source_data(entry) == b"png-bytes"
         assert reads == [member]
     finally:
         publication.discard()

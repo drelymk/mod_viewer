@@ -2,18 +2,13 @@
 
 from .pipeline import (
     TEXTURE_ROLES,
-    encode_texture_data_uri,
     encode_texture_file,
     encode_texture_key,
     load_texture_image,
     load_texture_image_full,
     normalize_texture_key,
     normalize_texture_role,
-    render_texture_png,
-    reset_texture_cache,
-    set_texture_profile_hook,
     split_texture_key,
-    texture_cache_stats,
     texture_key,
     texture_key_for_role,
 )
@@ -30,18 +25,13 @@ from .color_adjustment import (
 
 __all__ = [
     "TEXTURE_ROLES",
-    "encode_texture_data_uri",
     "encode_texture_file",
     "encode_texture_key",
     "load_texture_image",
     "load_texture_image_full",
     "normalize_texture_key",
     "normalize_texture_role",
-    "render_texture_png",
-    "reset_texture_cache",
-    "set_texture_profile_hook",
     "split_texture_key",
-    "texture_cache_stats",
     "texture_key",
     "texture_key_for_role",
     "UVCoverage",

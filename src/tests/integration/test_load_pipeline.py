@@ -3,8 +3,7 @@
 import os
 import struct
 import tempfile
-import base64
-import io
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -29,6 +28,7 @@ from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_result,
                                build_mesh_semantics)
 from tests.support_snapshot import snapshot_context
+from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
 def test_nested_ini_resources_are_relative_to_their_ini():
@@ -376,6 +376,57 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         "existing.dds", "Components-0 t=candidate.dds"]
 
 
+def test_hash_replacements_reach_texture_manager_and_refreshed_toggles(
+        tmp_path, monkeypatch):
+    for filename, data in triangle_geometry().items():
+        (tmp_path / filename).write_bytes(data)
+    for filename in ("base.dds", "variant.dds"):
+        (tmp_path / filename).write_bytes(b"texture")
+    ini = basic_model_ini().replace(
+        "ib = ResourceComponent01IB", "hash = 10101010\nib = ResourceComponent01IB")
+    path = tmp_path / "mod.ini"
+    path.write_text(ini + """[KeyVariant]
+type = cycle
+$variant = 0,1
+[TextureOverrideColor]
+hash = 11111111
+this = ResourceBase
+if $variant == 1
+this = ResourceVariant
+endif
+[ResourceBase]
+filename = base.dds
+[ResourceVariant]
+filename = variant.dds
+""", encoding="utf-8")
+    asset_dir = tmp_path / "assets" / "Asset01"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "ib": "10101010", "object_indexes": [0],
+        "texture_hashes": [[["Diffuse", ".dds", "11111111"]]],
+    }]), encoding="utf-8")
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        asset_type="ZZMI", asset="Asset01", root=str(asset_dir.parent),
+        geometry_hash="10101010", first_index=0, metadata="Asset01/hash.json")
+    monkeypatch.setattr(mod_enrichment.asset_resolver, "resolve_groups",
+                        lambda groups, *_args, **_kwargs: [[binding] for _ in groups])
+    context = snapshot_context(str(tmp_path), [path])
+    full = mod_loader.load_mod(
+        context=context, geometry=GeometryBlob(),
+        texture_source=lambda _path, role: f"/texture/test/{role}")
+    assert not full.get("error")
+    metadata.hydrate_textures(str(tmp_path), full, data={})
+    mesh = full["meshes"]["Component01-1"]
+    pool = full["texture_pools"][mesh["texture_pool_id"]]
+    assert [item["file"] for item in pool] == ["base.dds", "variant.dds"]
+    assert mesh["tex_key"] in full["textures"]
+    assert set(full["controls"]["toggles"]) == {"KeyVariant"}
+    for refresh in (mod_loader.load_control_state, mod_loader.load_semantic_state):
+        state = refresh(context, active_mesh_keys=set(full["meshes"]))
+        assert state["controls"] == full["controls"]
+
+
 def _migration_payload(ambiguous=False):
     meshes = {}
     for ordinal in range(2 if ambiguous else 1):
@@ -665,10 +716,6 @@ def test_present_state_read_uses_staged_documents_without_geometry(
 def test_wuwa_publishes_one_intact_normal_data_source():
     from PIL import Image
 
-    def uri_mode(uri):
-        payload = base64.b64decode(uri.split(",", 1)[1])
-        return Image.open(io.BytesIO(payload)).mode
-
     with tempfile.TemporaryDirectory() as root:
         Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(
             os.path.join(root, "normal.png"))
@@ -687,18 +734,27 @@ def test_wuwa_publishes_one_intact_normal_data_source():
                         "start": 0, "base": 0, "conditions": [],
                         "normal_map_default_file": "normal.png"}],
         }]
-        built = build_mesh_result(group, root, geometry=GeometryBlob(),
-                                  game_profile="wuwa")
-        entry = built.meshes["Component01-1"]
+        publication = server.begin_texture_publication(root)
+        try:
+            built = build_mesh_result(
+                group, root, geometry=GeometryBlob(), game_profile="wuwa",
+                texture_source=publication.register)
+            entry = built.meshes["Component01-1"]
 
-        assert entry["normal_data_key"] == "normal_data::normal.png"
-        assert "normal_map_key" not in entry
-        assert entry["normal_map_enabled"] is False
-        assert "ao_map_key" not in entry
-        assert set(built.textures) == {"normal_data::normal.png"}
-        assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
-
-
+            assert entry["normal_data_key"] == "normal_data::normal.png"
+            assert "normal_map_key" not in entry
+            assert entry["normal_map_enabled"] is False
+            assert "ao_map_key" not in entry
+            assert set(built.textures) == {"normal_data::normal.png"}
+            uri = built.textures[entry["normal_data_key"]]
+            assert uri.startswith("/texture/") and uri.endswith(".png")
+            source = next(iter(publication._sources.values()))
+            assert source.role == "normal_data"
+            with Image.open(server._texture_source_data(source)) as image:
+                assert image.mode == "RGBA"
+                assert image.getpixel((0, 0)) == (128, 128, 12, 34)
+        finally:
+            server.release_texture_publication(publication)
 
 
 @pytest.mark.parametrize("saved_normals", [

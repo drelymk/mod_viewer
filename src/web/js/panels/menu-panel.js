@@ -6,6 +6,7 @@ import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { compareValues } from '../editing/conditions.js';
+import { renderDDSPreview } from '../textures/dds-preview.js';
 
 /** Variable names carry a "source::" prefix in multi-ini folders. */
 function displayName(variable) {
@@ -22,16 +23,41 @@ function guardHolds(when) {
 }
 
 let imageObserver = null;
+let imageGeneration = 0;
 
-function queueMenuImage(img, url) {
-  img.loading = 'lazy';
-  img.decoding = 'async';
+function loadMenuImage(image) {
+  const url = image.dataset.menuSrc;
+  delete image.dataset.menuSrc;
+  if (!url || !image.isConnected) return;
+  if (image.tagName === 'CANVAS') {
+    const generation = imageGeneration;
+    void renderDDSPreview(image, url, () => image.isConnected && generation === imageGeneration).catch(() => {
+      if (image.isConnected && generation === imageGeneration) image.dispatchEvent(new Event('error'));
+    });
+  } else image.src = url;
+}
+
+function createMenuImage(url, name) {
+  const nativeDDS = /\.dds(?:[?#]|$)/i.test(url);
+  const image = document.createElement(nativeDDS ? 'canvas' : 'img');
+  if (nativeDDS) {
+    image.setAttribute('role', 'img');
+    image.setAttribute('aria-label', name);
+  } else {
+    image.alt = name;
+    image.loading = 'lazy';
+    image.decoding = 'async';
+  }
+  return image;
+}
+
+function queueMenuImage(image, url) {
+  image.dataset.menuSrc = url;
   if (!imageObserver) {
-    img.src = url;
+    queueMicrotask(() => loadMenuImage(image));
     return;
   }
-  img.dataset.menuSrc = url;
-  imageObserver.observe(img);
+  imageObserver.observe(image);
 }
 
 function buildMenuItem(info) {
@@ -50,8 +76,7 @@ function buildMenuItem(info) {
   syncLabel();
   if (info.image) {
     btn.classList.add('menu-image-btn');
-    const img = document.createElement('img');
-    img.alt = info.name;
+    const img = createMenuImage(info.image, info.name);
     img.addEventListener('error', () => btn.replaceChildren(createIcon('cycle')));
     queueMenuImage(img, info.image);
     btn.replaceChildren(img);
@@ -93,9 +118,9 @@ function buildShapeSlider(info) {
   nameSpan.className = 'menu-name';
   nameSpan.textContent = info.name;
   if (info.image) {
-    const img = document.createElement('img');
+    const img = createMenuImage(info.image, info.name);
     img.className = 'menu-slider-image';
-    img.alt = info.name;
+    img.addEventListener('error', () => img.remove());
     queueMenuImage(img, info.image);
     item.appendChild(img);
   }
@@ -142,18 +167,15 @@ export function buildMenuPanel(menu) {
   const list = document.getElementById('menu-list');
   const panel = document.getElementById('menu-panel');
   imageObserver?.disconnect();
+  imageGeneration += 1;
   imageObserver =
     typeof IntersectionObserver === 'function'
       ? new IntersectionObserver(
           (entries, observer) => {
             for (const entry of entries) {
               if (!entry.isIntersecting) continue;
-              const img = entry.target;
-              if (img.isConnected && img.dataset.menuSrc) {
-                img.src = img.dataset.menuSrc;
-                delete img.dataset.menuSrc;
-              }
-              observer.unobserve(img);
+              loadMenuImage(entry.target);
+              observer.unobserve(entry.target);
             }
           },
           { rootMargin: '80px' },

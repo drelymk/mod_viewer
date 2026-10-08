@@ -4,8 +4,7 @@ import os
 
 from ..resource_paths import safe_resource_path
 from ..textures.pipeline import (
-    _begin_texture_cache, encode_texture_data_uri,
-    normalize_texture_role, texture_key,
+    normalize_texture_role, split_texture_key, texture_key,
 )
 
 
@@ -13,7 +12,6 @@ class TextureRegistry:
     """Build-scoped role-aware texture registry."""
 
     def __init__(self, mod_dir, profile, texture_source=None, source=None):
-        _begin_texture_cache(mod_dir)
         self.mod_dir = mod_dir
         self.profile = profile
         self.texture_source = texture_source
@@ -47,19 +45,7 @@ class TextureRegistry:
         role = normalize_texture_role(role)
         key = self.key(path, role, identity=identity)
         if key and key not in self._sources:
-            if self.texture_source is None:
-                if (self.source is not None
-                        and getattr(self.source, "virtual", False)
-                        and self.source.is_resource_reference(path)):
-                    value = encode_texture_data_uri(
-                        self.source.read_bytes(path),
-                        texture_role=role,
-                        source_name=self.source.logical_path(path))
-                else:
-                    value = encode_texture_data_uri(
-                        path, texture_role=role)
-            else:
-                value = self.texture_source(path, role)
+            value = self.texture_source(path, role) if self.texture_source else None
             self._sources[key] = value or ""
         return key
 
@@ -78,26 +64,28 @@ class TextureRegistry:
         return path
 
 
-def build_texture_options(group, registry):
-    """Build the lazy diffuse picker pool for one component/group."""
+def build_texture_options(group, registry, *, entries=()):
+    """Build the lazy picker pool after the group's draw bindings are final."""
     texture_options = []
-    texture_option_keys = set()
+    texture_option_keys = {}
 
     def append_texture_option(key, filename, label, **metadata):
-        if not key or key in texture_option_keys:
+        if not key:
             return
-        texture_option_keys.add(key)
+        if key in texture_option_keys:
+            return texture_option_keys[key]
         option = {"tex_key": key, "file": filename, "label": label}
         option.update(metadata)
+        texture_option_keys[key] = option
         texture_options.append(option)
+        return option
 
     for pool_entry in group.get("diffuse_pool_files") or []:
         path = registry.resolve(pool_entry["file"])
         key = registry.key(path)
-        if key:
-            res_name = pool_entry["res"]
-            label = res_name[8:] if res_name.startswith("Resource") else res_name
-            append_texture_option(key, pool_entry["file"], label)
+        res_name = pool_entry["res"]
+        label = res_name[8:] if res_name.startswith("Resource") else res_name
+        append_texture_option(key, pool_entry["file"], label)
 
     for candidate in group.get("discovered_textures") or []:
         filename = candidate.get("file")
@@ -114,10 +102,30 @@ def build_texture_options(group, registry):
         )[0]
         append_texture_option(
             key, filename, label, candidate_source=candidate.get("source"))
+
+    # Read the finished render bindings, including resolved defaults and
+    # alternatives, and attach their auxiliary maps to the manager's rows.
+    for entry in entries:
+        keys = [entry.get("tex_key"), *[
+            variant["tex_key"] for variant in entry.get("texture_variants", ())]]
+        for key in keys:
+            if not key:
+                continue
+            _role, filename = split_texture_key(key)
+            label = os.path.splitext(filename.replace("\\", "/").rsplit("/", 1)[-1])[0]
+            if (key == entry.get("tex_key") and entry.get(
+                    "texture_resolution", {}).get("diffuse") == "asset_original_fallback"):
+                label += " (Asset)"
+            option = append_texture_option(key, filename, label)
+            for channel in ("normal_map", "light_map", "normal_data",
+                            "material_map", "emission_map"):
+                map_key = entry.get(f"{channel}_key")
+                if map_key and not option.get(channel):
+                    option[channel] = map_key
     return texture_options
 
 
-def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
+def apply_draw_texture_bindings(entry, draw, *, registry):
     """Apply default and conditional role-aware texture bindings to an entry."""
     profile = registry.profile
 
@@ -150,22 +158,6 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
         if key:
             entry[f"{channel}_key"] = key
 
-    # The manager presents one row per diffuse. Seed that row with auxiliary
-    # maps resolved alongside this draw so authored maps can be inspected or
-    # replaced with the same controls as manual ones.
-    def seed_option_maps(diffuse_key):
-        if not diffuse_key:
-            return
-        option = next((item for item in texture_options
-                       if item["tex_key"] == diffuse_key), None)
-        if option:
-            for channel in ("normal_map", "light_map", "normal_data",
-                            "material_map", "emission_map"):
-                key = entry.get(f"{channel}_key")
-                if key and not option.get(channel):
-                    option[channel] = key
-
-    seed_option_maps(default_key)
     texture_rules = draw.texture_rules("diffuse")
     if texture_rules:
         variants = []
@@ -173,13 +165,10 @@ def apply_draw_texture_bindings(entry, draw, texture_options, *, registry):
             key = registry.ensure(
                 registry.resolve(variant["file"]))
             if key:
-                # Auxiliary assignments after a conditional diffuse branch
-                # belong to every branch reaching this draw.
-                seed_option_maps(key)
                 variants.append({
                     "conditions": variant["conditions"], "tex_key": key,
                 })
-        if len(variants) > 1:
+        if len(variants) > 1 or (variants and variants[0]["conditions"]):
             entry["texture_variants"] = variants
 
     for channel in ("light_map", "material_map", "emission_map"):

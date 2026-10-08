@@ -12,7 +12,7 @@ from .wuwa_texture_names import texture_component_ordinals
 
 _COMPONENT_RE = re.compile(
     r"^Component(?P<ordinal>\d+)(?:_\d+)?$", re.I)
-_IMAGE_EXTENSIONS = (".dds", ".png", ".jpg", ".jpeg", ".tga")
+_IMAGE_EXTENSIONS = (".dds", ".png", ".jpg", ".jpeg")
 
 
 def _component_ordinal(group):

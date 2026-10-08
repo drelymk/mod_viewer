@@ -1,13 +1,12 @@
 """Authored material maps and draw-time texture binding regressions."""
 
-import io
 
 import pytest
 from PIL import Image
 
 from core.ini.draw_groups import build_draw_groups
 from core.ini.sections import extract_resources, parse_sections
-from core.textures import render_texture_png
+from core.textures import load_texture_image_full
 from tests.support.model_data import standard_component_resources, triangle_geometry
 from tests.support.provenance import build_mesh_fixture, texture_file, visible
 
@@ -69,8 +68,7 @@ filename = material.dds
 def test_packed_light_map_passthrough_preserves_authored_rgb(tmp_path):
     path = tmp_path / "packed.png"
     Image.new("RGB", (1, 1), (210, 12, 94)).save(path)
-    packed = Image.open(io.BytesIO(render_texture_png(
-        str(path), texture_role="light_map")))
+    packed = load_texture_image_full(str(path))
 
     assert packed.getpixel((0, 0)) == (210, 12, 94, 255)
 

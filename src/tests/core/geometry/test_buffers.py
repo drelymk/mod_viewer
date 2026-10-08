@@ -1,12 +1,75 @@
 """Bounded geometry-buffer access regressions."""
 
 from unittest.mock import patch
+import math
+import struct
 import zipfile
 
 import pytest
 
 from core.geometry import buffers
 from core.mod_source import ZipModSource
+from tests.support.model_data import triangle_geometry
+
+
+def _texcoord_data(pairs, offset, fmt, stride, *, normals=False):
+    data = bytearray()
+    for index, pair in enumerate(pairs):
+        record = bytearray(stride)
+        if offset == 4:
+            record[:4] = struct.pack("<4B", 64, 96, 0, 0)
+        struct.pack_into(fmt, record, offset, *pair)
+        if normals:
+            struct.pack_into("<3f", record, 8,
+                             math.sin(index * .7), math.cos(index * .7), 0.)
+        data.extend(record)
+    return bytes(data)
+
+
+@pytest.mark.parametrize("offset,fmt,stride,signed", [
+    (0, "<ee", 4, False), (0, "<ff", 8, True),
+    (4, "<ee", 20, True), (4, "<ee", 24, False),
+])
+def test_uv_detection_decodes_representative_layouts(
+        tmp_path, offset, fmt, stride, signed):
+    pairs = [(.05 + index % 17 * .055, .05 + index // 17 * .055 - signed)
+             for index in range(289)]
+    data = _texcoord_data(pairs, offset, fmt, stride, normals=stride >= 20)
+    path = tmp_path / "texcoord.buf"
+    path.write_bytes(data)
+    detected = buffers._detect_uv_best(path, stride)
+    assert detected == (offset, fmt)
+    assert buffers._detect_uv_best(None, stride, data=data) == detected
+    assert buffers.read_texcoords(path, stride, *detected) == [
+        struct.unpack_from(fmt, data, index * stride + offset)
+        for index in range(len(pairs))]
+
+
+def test_signed_uv_detection_does_not_infer_an_axis_from_sparse_attributes():
+    pairs = [(.25, -.1 - index * .7 / 288) for index in range(289)]
+    data = bytearray(_texcoord_data(pairs, 4, "<ee", 20))
+    for index in range(0, len(pairs), 31):
+        struct.pack_into("<f", data, index * 20 + 8, -.9)
+    assert buffers._detect_uv_best(None, 20, data=data) == (0, "<ff")
+
+
+def test_signed_uv_detection_preserves_published_mesh_coordinates(tmp_path):
+    from core.geometry.mesh_builder import build_mesh_result
+
+    for filename, data in triangle_geometry().items():
+        (tmp_path / filename).write_bytes(data)
+    pairs = [(.25, -.5), (.75, .25), (.5, .75)]
+    (tmp_path / "t.buf").write_bytes(_texcoord_data(pairs, 4, "<ee", 20))
+    groups = [{
+        "name": "Component01", "position_file": "p.buf", "position_stride": 12,
+        "texcoord_file": "t.buf", "texcoord_stride": 20,
+        "ib_file": "i.buf", "index_size": 4,
+        "draws": [{"label": "Component01-1", "count": 3, "start": 0, "base": 0}],
+    }]
+    built = build_mesh_result(groups, str(tmp_path))
+    reference = built.meshes["Component01-1"]["uv"]
+    assert struct.unpack_from("<6f", built.geometry.data, reference["offset"]) == (
+        .25, 1.5, .75, .75, .5, .25)
 
 
 def test_buffer_store_reads_shared_file_once(tmp_path):

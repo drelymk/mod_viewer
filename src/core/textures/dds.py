@@ -254,7 +254,7 @@ def inspect_dds_header(header, file_size=None):
 
 
 def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, source_name=None):
-    """Return metadata for a valid model DDS within the viewer size limit."""
+    """Return metadata for a valid model DDS within the dimension limit."""
     try:
         path_string = (source_name if isinstance(source_name, str)
                        else os.fsdecode(os.fspath(path)))
@@ -263,16 +263,9 @@ def native_dds_info(path, max_size=MAX_MODEL_DDS_SIZE, source_name=None):
     if (not isinstance(path, (str, bytes, os.PathLike))
             or not path_string.lower().endswith(".dds")):
         return None
-    try:
-        max_size = int(max_size)
-    except (TypeError, ValueError):
-        return None
-    if max_size <= 0:
-        return None
-    info = inspect_dds(path)
-    if info is None or max(info.width, info.height) > max_size:
-        return None
-    return info
+    header, file_size = _header_and_size(path)
+    return native_dds_info_from_header(
+        header, file_size, max_size, source_name=path_string)
 
 
 def native_dds_info_from_header(header, file_size,
@@ -288,9 +281,10 @@ def native_dds_info_from_header(header, file_size,
         return None
     try:
         max_size = int(max_size)
-    except (TypeError, ValueError):
+        file_size = int(file_size)
+    except (TypeError, ValueError, OverflowError):
         return None
-    if max_size <= 0:
+    if max_size <= 0 or file_size <= 0:
         return None
     info = inspect_dds_header(header, file_size)
     if info is None or max(info.width, info.height) > max_size:

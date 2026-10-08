@@ -130,6 +130,13 @@ export {getControlValue as getToggleValue, setControlValue as setToggleValue}
   from '../editing/control-state.js';
 export {syncViews as refreshAll} from '../scene/view-sync.js';
 """))
+    module_page.route('**/js/textures/dds-preview.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export const renderDDSPreview = async (canvas, url, current) => {
+  window.previewCurrent = current;
+  await new Promise(resolve => {window.finishPreview = resolve;});
+};
+"""))
     module_page.evaluate("""async () => {
       const style = document.createElement('link');
       style.rel = 'stylesheet'; style.href = './css/app.css';
@@ -177,6 +184,16 @@ export {syncViews as refreshAll} from '../scene/view-sync.js';
     module_page.evaluate("window.menuFixture.build(window.menuFixture.menu)")
     assert module_page.locator('#menu-panel').is_visible()
     assert module_page.locator('.menu-item').count() == 5
+
+    module_page.evaluate("""() => {
+      menuFixture.menu.option0.image = './texture.dds';
+      menuFixture.build(menuFixture.menu);
+    }""")
+    module_page.wait_for_function('window.previewCurrent !== undefined')
+    assert module_page.evaluate('previewCurrent()')
+    module_page.evaluate('menuFixture.build({})')
+    assert not module_page.evaluate('previewCurrent()')
+    module_page.evaluate('finishPreview()')
 
 
 def test_outline_zoom_keeps_distant_edges_visible_and_restores_reference(module_page):

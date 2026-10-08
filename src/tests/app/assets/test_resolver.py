@@ -14,6 +14,7 @@ from core.textures import classifier as dds_classifier
 from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.asset_data import standard_asset_index
+from tests.support.provenance import visible
 
 
 def _index(root, asset_type="GIMI", metadata=None, *, asset="Asset01",
@@ -34,16 +35,16 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
             ["Diffuse", ".dds", "11111111"],
         ]],
     }]), encoding="utf-8")
+    conditions = [[{"var": "style", "value": "1", "negate": False}]]
     replacement = TextureReplacement.from_dnf(
-        "11111111", "ResourceAsset02Diffuse", [[{
-            "var": "style", "value": "1", "negate": False}]],
-        "TextureOverrideDiffuse")
-    replacement = TextureReplacement(
-        replacement.original_hash, replacement.resource, replacement.conditions,
-        replacement.source_section, "Asset02Diffuse.dds")
-    index = TextureOverrideIndex(
-        replacements_by_hash={"11111111": (replacement,)})
-    draw = DrawCall()
+        "11111111", "ResourceDiffuse", conditions, "TextureOverrideDiffuse")
+    index = TextureOverrideIndex(replacements_by_hash={"11111111": tuple(
+        TextureReplacement(replacement.original_hash, replacement.resource,
+                           replacement.conditions, replacement.source_section, name)
+        for name in ("first.dds", "last.dds"))})
+    authored = [[{"var": "style", "value": "2", "negate": False}]]
+    draw = DrawCall(texture_variants=[{
+        "conditions": authored, "file": "authored.dds"}])
     binding = AssetComponentBinding(
         status="exact", asset_type="GIMI", asset="Asset01", root=root,
         component_status="exact", range_status="exact",
@@ -53,13 +54,11 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
 
     apply([{"draws": [draw]}], [[binding]], texture_index=index)
 
-    assert draw.texture_rules("diffuse") == [{
-        "conditions": [[{
-            "var": "style", "value": "1", "negate": False}]],
-        "file": "Asset02Diffuse.dds",
-        "texture_hashes": ("11111111",),
-    }]
-    assert draw.texture_provenance == {"diffuse": "mod_texture_hash"}
+    rules = draw.texture_rules("diffuse")
+    assert [rule["file"] for rule in rules] == ["authored.dds", "first.dds", "last.dds"]
+    assert [next((rule["file"] for rule in reversed(rules)
+                  if visible(rule["conditions"], {"style": value})), None)
+            for value in ("0", "1", "2")] == [None, "last.dds", "authored.dds"]
     assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
@@ -406,7 +405,7 @@ def test_resolve_groups_reports_partial_index_coverage(tmp_path, monkeypatch):
     }
 
 
-def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
+def test_asset_original_fallback_requires_missing_mod_diffuse(tmp_path):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Asset01"
     asset_dir.mkdir(parents=True)
@@ -424,9 +423,9 @@ def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
     }]), encoding="utf-8")
     draw = DrawCall(
         geometry_match=GeometryMatch("10101010", 12, None),
-        texture_default_file="mod-diffuse.dds",
         slot_textures=[SlotTextureBinding(1, "ResourceMystery")],
     )
+    draw.light_map_default_file = "mod-light.dds"
     binding = AssetComponentBinding(
         status="exact", asset_type="GIMI", asset="Asset01", root=root,
         component_status="exact", range_status="exact",
@@ -435,15 +434,15 @@ def test_asset_original_fallback_fills_only_missing_roles(tmp_path):
         metadata="Asset01/hash.json",
     )
 
-    apply([{"draws": [draw]}], [[binding]])
-
-    assert draw.asset_texture_defaults["normal_map"]["path"].endswith(
-        "Asset01BodyBNormalMap.dds")
-    assert "diffuse" not in draw.asset_texture_defaults
+    groups = [{"draws": [draw]}]
+    apply(groups, [[binding]])
+    assert set(draw.asset_texture_defaults) == {"diffuse", "normal_map"}
+    assert draw.texture_default("light_map") == "mod-light.dds"
+    draw.texture_default_file = "mod-diffuse.dds"
+    apply(groups, [[binding]])
+    assert draw.asset_texture_defaults == {}
     assert draw.texture_provenance == {
-        "diffuse": "mod_semantic",
-        "normal_map": "asset_original_fallback",
-    }
+        "diffuse": "mod_semantic", "light_map": "mod_semantic"}
 
 
 def test_asset_locator_uses_component_and_classification(tmp_path):

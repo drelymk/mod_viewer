@@ -242,7 +242,7 @@ def _texture_variant_list(draw, role):
     }[role])
 
 
-def _apply_hash_replacements(draw, evidence, texture_index):
+def _apply_hash_replacements(draw, evidence, texture_index, diffuse_pool):
     """Apply exact Asset hash roles to conditional mod replacements."""
     if not isinstance(texture_index, TextureOverrideIndex):
         return
@@ -258,9 +258,14 @@ def _apply_hash_replacements(draw, evidence, texture_index):
         for replacement in replacements:
             if not replacement.file:
                 continue
+            if item.role == "diffuse":
+                diffuse_pool.setdefault(replacement.file, {
+                    "res": replacement.resource, "file": replacement.file,
+                })
             conditions = replacement.dnf
-            protected = existing + additions
-            for higher in protected:
+            # Authored role bindings outrank hash recovery. Replacements for
+            # this hash share one ordered history: later matching writes win.
+            for higher in existing:
                 conditions = _condition_difference(
                     conditions, higher.get("conditions") or [])
                 if conditions is None:
@@ -479,6 +484,8 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
         if dds_classification_cache is not None else {})
     for group, group_bindings in zip(groups, bindings):
         index = group.get("_texture_override_index") or texture_index
+        diffuse_pool = {item["file"]: item
+                        for item in group.get("diffuse_pool_files", ())}
         for draw, binding in zip(group.get("draws", []), group_bindings):
             if binding.status == "not_found" and not include_not_found:
                 continue
@@ -489,6 +496,13 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     or binding.component_status != "exact"
                     or binding.range_status != "exact"):
                 continue
+
+            # Recompute automatic defaults so a newly resolved mod diffuse
+            # cannot retain maps from an earlier Asset fallback.
+            for role in draw.asset_texture_defaults:
+                if draw.texture_provenance.get(role) == "asset_original_fallback":
+                    draw.texture_provenance.pop(role)
+            draw.asset_texture_defaults.clear()
 
             evidence = []
             role_hint_evidence = []
@@ -655,8 +669,12 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = _unique_evidence(
                 evidence + role_hint_evidence + dds_evidence)
-            _apply_hash_replacements(draw, all_evidence, index)
+            _apply_hash_replacements(draw, all_evidence, index, diffuse_pool)
             _apply_slot_hashes(draw, evidence + role_hint_evidence)
+            # Resolve all mod bindings first. Original Asset maps belong to
+            # the fallback material used only when the mod has no diffuse.
+            if _has_mod_texture(draw, "diffuse"):
+                continue
             conflicting_asset_roles = {
                 item.get("asset_hash_role")
                 for item in draw.asset_slot_evidence
@@ -678,3 +696,4 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                 }
                 draw.texture_provenance[item.role] = \
                     "asset_original_fallback"
+        group["diffuse_pool_files"] = list(diffuse_pool.values())

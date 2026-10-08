@@ -675,7 +675,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   font-size: 10px;
 }
 .menu-image-btn { width: 52px; max-width: 100%; height: 52px; padding: 0; overflow: hidden; }
-.menu-image-btn img, .menu-slider-image {
+.menu-image-btn img, .menu-image-btn canvas, .menu-slider-image {
   width: 100%; height: 100%; object-fit: contain; pointer-events: none;
 }
 #menu-list .menu-slider-item { grid-column: 1 / -1; }

@@ -28,17 +28,41 @@ def read_positions(buf_path, stride=POSITION_STRIDE):
     return positions
 
 
-_MIN_AXIS_SPREAD = 1e-4   # below this an axis is constant, i.e. not a real UV set
-_MIN_IN_RANGE = 0.95       # fraction of sampled UVs that must land in [0, 2]
+_MIN_AXIS_SPREAD = 1e-4
+_MIN_IN_RANGE = 0.95
+
+
+def _uv_candidate_score(pairs, sampled, uv_off, fmt, *, signed=False):
+    """Rank plausible samples without letting isolated signed outliers win."""
+    if not pairs or len(pairs) / sampled < _MIN_IN_RANGE:
+        return None
+    spreads = []
+    for axis in (0, 1):
+        values = [pair[axis] for pair in pairs]
+        if signed:
+            values.sort()
+            trim = len(values) // 20
+            spread = values[-1 - trim] - values[trim]
+        else:
+            spread = max(values) - min(values)
+        spreads.append(spread)
+    both_live = min(spreads) >= _MIN_AXIS_SPREAD
+    in_range = round(len(pairs) / sampled, 3)
+    if signed:
+        if not both_live:
+            return None
+        # Reinterpreted half-floats can have a tiny U range and a large V range.
+        # Require distributed variation and prefer evidence on the weaker axis.
+        return (in_range, min(spreads), sum(spreads), uv_off, fmt)
+    return (both_live, in_range, round(sum(spreads), 3), uv_off, fmt)
 
 
 def _detect_uv_best(tc_path, stride, n=4096, data=None):
-    """Try (offset 0 or 4) x (float16 or float32) and return the (uv_off, fmt)
-    with the largest UV spread where all values are within [0, 2].
+    """Detect half/float UV pairs at offset 0 or 4 from distributed samples.
 
-    Candidates are sampled evenly across the whole buffer. A candidate whose U
-    or V axis is constant is rejected in favor of a real two-dimensional UV
-    set, while a small number of outliers is tolerated.
+    Preserve credible nonnegative layouts. When none varies on both axes, try
+    signed coordinates with robust axis spreads before retaining the original
+    degenerate or stride-fitting fallback. Detection never changes UV values.
     """
     if data is None:
         with open(tc_path, "rb") as file:
@@ -49,33 +73,40 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
         return (DEFAULT_UV_OFFSET, "<ee")
     step = max(1, total // n)
     scored = []
+    candidates = []
     for uv_off in (0, 4):
         for fmt in ("<ee", "<ff"):
             fmtsize = struct.calcsize(fmt)
             if uv_off + fmtsize > stride:
                 continue
-            us, vs, sampled = [], [], 0
+            pairs, sampled = [], 0
             for index in range(0, total, step):
                 offset = index * stride + uv_off
                 if offset + fmtsize > size:
                     break
                 u, v = struct.unpack_from(fmt, data, offset)
                 sampled += 1
-                if -0.01 <= u <= 2.0 and -0.01 <= v <= 2.0:
-                    us.append(u)
-                    vs.append(v)
-            if not sampled or not us:
-                continue
-            in_range = len(us) / sampled
-            if in_range < _MIN_IN_RANGE:
-                continue
-            du, dv = max(us) - min(us), max(vs) - min(vs)
-            both_live = du >= _MIN_AXIS_SPREAD and dv >= _MIN_AXIS_SPREAD
-            scored.append((both_live, round(in_range, 3), round(du + dv, 3),
-                           uv_off, fmt))
-    if scored:
-        scored.sort(reverse=True)
-        return (scored[0][3], scored[0][4])
+                # Bounded positive comparisons also exclude NaN and infinity.
+                if -2.0 <= u <= 2.0 and -2.0 <= v <= 2.0:
+                    pairs.append((u, v))
+            candidates.append((pairs, sampled, uv_off, fmt))
+            nonnegative = [(u, v) for u, v in pairs
+                           if u >= -0.01 and v >= -0.01]
+            score = _uv_candidate_score(nonnegative, sampled, uv_off, fmt)
+            if score is not None:
+                scored.append(score)
+    best = max(scored) if scored else None
+    if best is not None and best[0]:
+        return best[-2:]
+    signed_scores = []
+    for pairs, sampled, uv_off, fmt in candidates:
+        score = _uv_candidate_score(pairs, sampled, uv_off, fmt, signed=True)
+        if score is not None:
+            signed_scores.append(score)
+    if signed_scores:
+        return max(signed_scores)[-2:]
+    if best is not None:
+        return best[-2:]
     for uv_off in (DEFAULT_UV_OFFSET, 0):
         if uv_off + 4 <= stride:
             return (uv_off, "<ee")

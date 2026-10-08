@@ -9,6 +9,7 @@ from app.assets.loader import AssetLoadResult, AssetMeshPart
 from app.assets.loader.models import AssetTexture
 from app.runtime import server
 from core.geometry.transport import GeometryBlob
+from tests.support.dds_data import dx10_dds, mode6_block
 
 from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
 from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, project_mesh_points, wait_loaded, wait_texture
@@ -601,6 +602,45 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
     assert compressed[1][0] > compressed[1][2] + 60
     assert all(max(abs(a-b) for a,b in zip(left, right)) < 40
                for left, right in zip(compressed, reference_pixels))
+
+
+def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
+    expected = [(96, 144, 192, 128), (192, 96, 48, 128)]
+    blocks = []
+    for *rgb, alpha in expected:
+        bits = int.from_bytes(mode6_block(tuple((value, value) for value in rgb)), 'little')
+        for offset in (49, 56):
+            bits = (bits & ~(127 << offset)) | ((alpha >> 1) << offset)
+        blocks.append(bits.to_bytes(16, 'little'))
+    path = tmp_path / 'menu.dds'
+    path.write_bytes(dx10_dds(b''.join(blocks), dxgi_format=99, width=4, height=8))
+    publication = server.begin_texture_publication(str(tmp_path))
+    url = publication.register_menu_image(str(path))
+    publication.commit()
+    try:
+        page = _open_fixture(viewer, textured_payload())
+        wait_texture(page)
+        before_pixels = mesh_pixel(page)
+        before_state = page.evaluate("""async url => {
+          const {renderer} = await import('./js/scene/scene.js');
+          window.previewState = () => [renderer.getRenderTarget()?.uuid || null,
+            renderer.getClearAlpha(), renderer.getScissorTest(), renderer.outputColorSpace,
+            renderer.toneMapping, renderer.getPixelRatio(), renderer.autoClear];
+          const before = previewState();
+          const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
+          buildMenuPanel({option01: {name: 'Option01', var: 'option01', values: ['0', '1'],
+            default: '0', image: url}});
+          return before;
+        }""", url)
+        page.wait_for_function("document.querySelector('#menu-list canvas')?.dataset.previewReady === 'true'")
+        result = page.evaluate("""() => ({state: previewState(), pixels: [64, 192].map(y =>
+          [...document.querySelector('#menu-list canvas').getContext('2d').getImageData(128, y, 1, 1).data])})""")
+        assert result['state'] == before_state
+        assert all(max(abs(left - right) for left, right in zip(actual, reference)) <= 4
+                   for actual, reference in zip(result['pixels'], expected))
+        assert max(abs(left - right) for left, right in zip(before_pixels, mesh_pixel(page))) < 5
+    finally:
+        publication.release()
 
 
 def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(viewer):

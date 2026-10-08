@@ -130,7 +130,7 @@ def test_file_classification_and_overrides():
         _write(os.path.join(tmp, "active.buf"), b"x", binary=True)
         _write(os.path.join(tmp, "inactive.dds"), b"x", binary=True)
         _write(os.path.join(tmp, "viewer.png"), b"x", binary=True)
-        _write(os.path.join(tmp, "orphan.tga"), b"x", binary=True)
+        _write(os.path.join(tmp, "orphan.bmp"), b"x", binary=True)
         _write(os.path.join(tmp, "active-20260901152230.dds"), b"x", binary=True)
         with open(os.path.join(tmp, ".mod_viewer.json"), "w", encoding="utf-8") as fh:
             json.dump({"textures": {"Component01::whole": {

@@ -237,7 +237,7 @@ filename = sibling-map.dds
         raise AssertionError("Discovery must not scan the mod or decode textures")
 
     monkeypatch.setattr(source, "list_files", unexpected)
-    monkeypatch.setattr("core.geometry.texture_bindings.encode_texture_data_uri",
+    monkeypatch.setattr("core.textures.pipeline._open_texture_image",
                         unexpected)
     monkeypatch.setattr("app.assets.enrichment.classify_dds", unexpected)
     _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
@@ -283,7 +283,8 @@ filename = sibling-map.dds
         *["diffuse::" + filename for filename in expected_files], asset_key]
     assert pool[-1]["label"] == "Components-2 t=aaaaaaaa (Asset)"
     assert all(item["tex_key"] in payload["textures"] for item in pool)
-    assert sum(str(path) == str(asset_file) for path, _role in published) == 1
+    assert sum(os.path.normcase(str(path)) == os.path.normcase(str(asset_file))
+               for path, _role in published) == 1
     assert all(not {"normal_map", "normal_data", "light_map",
                     "material_map", "emission_map"}.intersection(item)
                for item in pool)

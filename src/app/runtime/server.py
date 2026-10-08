@@ -9,7 +9,7 @@ origin lets index.html, the stylesheet and the JS modules be ordinary files.
 Two roots are exposed:
     /            the web/ directory (index.html, css/, js/)
     /vendor/     the vendored Three.js copy, when build.py has fetched it
-    /texture/    opaque URLs for the active load's native DDS or PNG textures
+    /texture/    opaque URLs for the active load's original texture files
 
 index.html is rendered rather than served verbatim, so the importmap points at
 the vendored WebGPU and TSL entry points.
@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 from core.textures.dds import (MAX_MODEL_DDS_SIZE, native_dds_info,
                                native_dds_info_from_header)
-from core.textures import render_texture_png, normalize_texture_role
+from core.textures import load_texture_image_full, normalize_texture_role
 from core.mod_source import ModSourceError
 from core.textures.profiles import texture_profile_for
 from app.settings import features, paths
@@ -40,14 +40,16 @@ _GEOMETRY_PREFIX = "/geometry/"
 _TEXTURE_PREFIX = "/texture/"
 _MAX_GEOMETRY_BYTES = 512 * 1024 * 1024
 _MAX_AUXILIARY_GEOMETRY_BLOBS = 2
-_TEXTURE_ENCODE_CONCURRENCY = 2
+_TEXTURE_CONTENT_TYPES = {
+    ".dds": "image/vnd-ms.dds", ".png": "image/png",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+    ".bmp": "image/bmp", ".gif": "image/gif",
+}
 _geometry_lock = threading.RLock()
 _geometry_blobs = {}
 _texture_lock = threading.RLock()
 _texture_publications = {}
 _active_texture_publication = None
-_texture_encode_semaphore = threading.BoundedSemaphore(
-    _TEXTURE_ENCODE_CONCURRENCY)
 
 
 @dataclass(frozen=True)
@@ -62,8 +64,7 @@ class TextureSource:
 
     path: str | None = None
     role: str = "diffuse"
-    max_size: int = 2048
-    preserve_alpha: bool = False
+    suffix: str = ".png"
     native_dds: bool = False
     data: bytes | None = None
     logical_path: str | None = None
@@ -89,8 +90,7 @@ class TexturePublication:
         self.game_profile = texture_profile_for(game).name
         return self.game_profile
 
-    def register(self, path, role=None, max_size=2048, preserve_alpha=False,
-                 validate=False, force_png=False):
+    def register(self, path, role=None, validate=False):
         """Publish a source once and return its opaque same-origin URL.
 
         The caller has already resolved the path through the core sandbox. The
@@ -119,15 +119,10 @@ class TexturePublication:
             data = None
             path_identity = ("file", os.path.normcase(path))
         role = normalize_texture_role(role)
-        try:
-            max_size = int(max_size)
-        except (TypeError, ValueError):
+        suffix = os.path.splitext(logical_path if source_ref else path)[1].lower()
+        if suffix not in _TEXTURE_CONTENT_TYPES:
             return None
-        if max_size <= 0:
-            return None
-        preserve_alpha = bool(preserve_alpha)
-        force_png = bool(force_png)
-        dedupe_key = (path_identity, role, max_size, preserve_alpha, force_png)
+        dedupe_key = (path_identity, role)
         existing_source = None
         with _texture_lock:
             if (_texture_publications.get(self.token) is not self
@@ -139,11 +134,11 @@ class TexturePublication:
                 if not validate:
                     return _texture_url(self.token, source_id, existing_source)
 
-        is_dds = (logical_path if source_ref else path).lower().endswith(".dds")
+        is_dds = suffix == ".dds"
 
         if source_ref:
             dds_info = None
-            if is_dds and not force_png:
+            if is_dds:
                 try:
                     header = self.source.read_prefix(path, 148)
                     file_size = self.source.size(path)
@@ -156,17 +151,16 @@ class TexturePublication:
         else:
             dds_info = (native_dds_info(
                 path, MAX_MODEL_DDS_SIZE, source_name=logical_path)
-                if is_dds and not force_png else None)
-        if is_dds and not force_png and dds_info is None:
+                if is_dds else None)
+        if is_dds and dds_info is None:
             return None
         source = existing_source or TextureSource(
             path=None if source_ref else path, data=data,
-            logical_path=logical_path, role=role, max_size=max_size,
-            preserve_alpha=preserve_alpha,
+            logical_path=logical_path, role=role, suffix=suffix,
             native_dds=dds_info is not None,
             mod_source=self.source if source_ref else None,
             source_ref=path if source_ref else None)
-        if validate and not source.native_dds and _render_texture_source(source) is None:
+        if validate and not source.native_dds and not _validate_texture_source(source):
             return None
 
         with _texture_lock:
@@ -181,19 +175,18 @@ class TexturePublication:
             return _texture_url(self.token, source_id, source)
 
     def register_menu_image(self, path):
-        """Register a small PNG preview without decoding it during load."""
-        return self.register(
-            path, "diffuse", max_size=256, preserve_alpha=True,
-            force_png=True)
+        """Publish a lazy menu source without changing its image bytes."""
+        return self.register(path, "diffuse")
 
     def commit(self, *, replace=True):
-        """Commit a publication, optionally retaining the active one."""
+        """Commit a publication, replacing only the previous viewer load."""
         global _active_texture_publication
         with _texture_lock:
             if self._state == "discarded":
                 return False
-            if replace:
-                _texture_publications.clear()
+            if (replace and _active_texture_publication is not None
+                    and _active_texture_publication is not self):
+                _active_texture_publication.release()
             _texture_publications[self.token] = self
             if replace:
                 _active_texture_publication = self
@@ -254,46 +247,24 @@ def _lookup_texture(token, source_id):
 
 
 def _texture_url(token, source_id, source):
-    suffix = ".dds" if source.native_dds else ".png"
-    return f"{_TEXTURE_PREFIX}{token}/{source_id}{suffix}"
+    return f"{_TEXTURE_PREFIX}{token}/{source_id}{source.suffix}"
 
 
-def _render_texture_source(source):
-    """Render one source while bounding concurrent image decode/encoding."""
+def _validate_texture_source(source):
+    """Validate explicit image picks without encoding a display copy."""
     try:
         data = _texture_source_data(source)
     except (OSError, ModSourceError):
-        return None
-    with _texture_encode_semaphore:
-        return render_texture_png(
-            data,
-            max_size=source.max_size,
-            preserve_alpha=source.preserve_alpha,
-            texture_role=source.role,
-            source_name=source.logical_path,
-        )
-
-
-def _render_texture_request(token, source_id, source):
-    """Render a request only if its publication is still active."""
-    with _texture_encode_semaphore:
-        if _lookup_texture(token, source_id) is not source:
-            return None
-        try:
-            data = _texture_source_data(source)
-        except (OSError, ModSourceError):
-            return None
-        return render_texture_png(
-            data,
-            max_size=source.max_size,
-            preserve_alpha=source.preserve_alpha,
-            texture_role=source.role,
-            source_name=source.logical_path,
-        )
+        return False
+    image = load_texture_image_full(data, source_name=source.logical_path)
+    if image is None:
+        return False
+    image.close()
+    return True
 
 
 def _texture_source_data(source):
-    """Resolve a registered source only when a render actually needs bytes."""
+    """Resolve a registered source only for an explicit validation request."""
     if source.data is not None:
         return source.data
     if source.mod_source is not None:
@@ -460,50 +431,23 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(blob)
 
     def _send_texture(self, address):
-        """Serve one registered native DDS or PNG texture."""
+        """Serve the original bytes of one registered texture."""
         parts = address.split("/")
         if len(parts) != 2 or not all(parts):
             self.send_error(404, "Texture not found")
             return
         token, requested_id = parts
-        if requested_id.endswith(".dds"):
-            suffix = "dds"
-            source_id = requested_id[:-4]
-        elif requested_id.endswith(".png"):
-            suffix = "png"
-            source_id = requested_id[:-4]
-        else:
-            # Extensionless texture URLs resolve as PNG for direct callers and fixtures.
-            suffix = "png"
-            source_id = requested_id
-        if not source_id:
-            self.send_error(404, "Texture not found")
-            return
+        source_id, separator, suffix = requested_id.rpartition(".")
+        if not separator:
+            source_id, suffix = requested_id, "png"
         source = _lookup_texture(token, source_id)
-        if source is None:
+        if source is None or source.suffix != "." + suffix:
             self.send_error(404, "Texture not found")
             return
-        if suffix == "dds":
-            if not source.native_dds:
-                self.send_error(404, "Texture not found")
-                return
-            return self._send_native_dds(token, source_id, source)
-        if source.native_dds:
-            self.send_error(404, "Texture not found")
-            return
-        png = _render_texture_request(token, source_id, source)
-        if png is None:
-            self.send_error(404, "Texture unavailable")
-            return
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", str(len(png)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(png)
+        return self._send_texture_source(token, source_id, source)
 
-    def _send_native_dds(self, token, source_id, source):
-        """Stream the registered DDS without entering the PNG semaphore."""
+    def _send_texture_source(self, token, source_id, source):
+        """Stream a registered texture while checking its publication lifetime."""
         if source.data is not None or source.mod_source is not None:
             if _lookup_texture(token, source_id) is not source:
                 self.send_error(404, "Texture unavailable")
@@ -520,7 +464,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, "Texture unavailable")
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "image/vnd-ms.dds")
+            self.send_header("Content-Type", _TEXTURE_CONTENT_TYPES[source.suffix])
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -537,7 +481,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, "Texture unavailable")
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "image/vnd-ms.dds")
+            self.send_header("Content-Type", _TEXTURE_CONTENT_TYPES[source.suffix])
             self.send_header("Content-Length", str(size))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

@@ -23,6 +23,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - Serve the privileged UI from ephemeral `127.0.0.1`; no `NavigateToString`,
   runtime CDN or third-party scripts. Publish geometry through one shared
   localhost blob, without base64 round trips or internal builder keys in payloads.
+  MCP inspection uses the viewer's lazy texture publications with absolute
+  localhost URLs and an independent inspection lifetime.
 - Share one canonical analysis per INI across controls, draws, shapes and
   resources. Never share discovery state across sibling INIs or repeat semantic
   stages on the normal load path.
@@ -140,6 +142,9 @@ of documentation, comments and tests; use portable fixtures instead.
   data. Normalize legacy path-only keys using the caller's known role.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
+- Original Asset texture fallback is available only when a draw has no mod
+  diffuse default or conditional assignment after mod texture resolution.
+  A mod diffuse suppresses all original Asset maps; retain mod-authored maps.
 - WWMI mod candidates use declared component-named Resource files across active
   INIs, every component-local `ps-tN` resource reference (including branches and
   called command lists), then replacements matching exact Asset TextureUsage
@@ -150,11 +155,15 @@ of documentation, comments and tests; use portable fixtures instead.
   Asset identities and labels distinct from mod files, and never scan loose mod
   files or infer automatic roles from these associations.
 - Texture pools and backend loading must not eagerly decode/render sources.
-  Production texture rendering stays at two concurrent jobs unless controlled
-  benchmarks justify changing it. Native DDS uses validated eligibility only;
-  model DDS must be supported, no larger than 8192 in either
-  dimension, and structurally valid; otherwise publication rejects it. Menu
-  DDS alone uses the existing lazy 256px PNG thumbnail path.
+  Publish supported texture files as lazy URLs serving their original bytes;
+  never encode PNG display copies or embed converted texture data. Detached
+  core analysis keeps texture identities but requires a publisher for image URLs.
+  Native DDS uses validated eligibility only;
+  model and menu DDS must be supported, no larger than 8192 in either dimension,
+  and structurally valid; otherwise publication rejects them. There is no DDS
+  file-byte cap. Menu DDS previews load only when visible
+  and render through the shared WebGPU renderer into HTML canvases; dispose
+  preview resources and ignore stale work when the panel is rebuilt.
 
 ## Animation reconstruction
 

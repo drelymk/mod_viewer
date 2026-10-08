@@ -18,7 +18,7 @@ from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      AssetTexture, part_filter_matches)
 
 
-_IMAGE_EXTENSIONS = (".dds", ".png", ".jpg", ".jpeg", ".tga")
+_IMAGE_EXTENSIONS = (".dds", ".png", ".jpg", ".jpeg")
 _MAX_BINARY_BYTES = 512 * 1024 * 1024
 _MAX_VERTEX_COUNT = 5_000_000
 _MAX_INDEX_COUNT = 15_000_000

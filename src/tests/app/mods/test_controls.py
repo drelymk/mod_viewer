@@ -17,6 +17,7 @@ from tests.support_snapshot import snapshot_context
 from app.mods.controls import build_toggle_panel
 
 
+
 def test_unwired_pending_sections_uses_full_staged_snapshot(tmp_path,
                                                           monkeypatch):
     menu_path = tmp_path / "nested" / "Menu.ini"
@@ -236,6 +237,7 @@ def test_present_state_does_not_build_geometry(
 
 def test_control_state_does_not_build_geometry(
         tmp_path, monkeypatch):
+    (tmp_path / "icon.dds").write_bytes(b"texture source")
     parsed = ParsedModAnalysis(
         groups=[{"draws": [{"conditions": [[{
             "var": "Input01", "value": "1", "negate": False,
@@ -245,7 +247,10 @@ def test_control_state_does_not_build_geometry(
             "source": None, "ini_path": str(tmp_path / "mod.ini"),
             "section": "KeyInput01", "vars": {"Input01": ["0", "1"]},
         }},
-        menu={}, defaults={"Input01": "0"}, state_rules=[], present={},
+        menu={"Menu01": {
+            "name": "Option01", "slot": 1, "source": None, "section": "CommandListMenu",
+            "var": "option01", "values": ["0", "1"], "effects": [], "image_file": "icon.dds",
+        }}, defaults={"Input01": "0"}, state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
     )
     context = snapshot_context(str(tmp_path), [str(tmp_path / "mod.ini")])
@@ -262,7 +267,12 @@ def test_control_state_does_not_build_geometry(
 
     monkeypatch.setattr("app.mods.controls.build_mesh_semantics", build_semantics)
 
-    result = load_control_state(context, active_mesh_keys={"Component01-1"})
+    result = load_control_state(
+        context, active_mesh_keys={"Component01-1"},
+        menu_image_source=lambda _path: "/texture/test/0.dds")
 
     assert semantic_calls
     assert set(result["controls"]["toggles"]) == {"KeyInput01"}
+    assert result["controls"]["menu"]["Menu01"]["image"] == "/texture/test/0.dds"
+    detached = load_control_state(context, active_mesh_keys={"Component01-1"})
+    assert "image" not in detached["controls"]["menu"]["Menu01"]

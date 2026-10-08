@@ -114,24 +114,25 @@ def _collect_legacy_scope_roles(sections, root, section_lookup):
     for family, anchors in family_anchors.items():
         slots = set(family_slots.get(family, set()))
         roles = family_roles.get(family, set())
-        for resource, resource_slots in assigned_resources.items():
+        family_resources = {
+            resource: resource_slots
+            for resource, resource_slots in assigned_resources.items()
             if (resource in anchors
-                    or any(resource.startswith(anchor)
-                           for anchor in anchors)):
-                slots.update(resource_slots)
-        if len(slots) != 1 or len(roles) != 1:
-            continue
-        slot = next(iter(slots))
-        if len(slot_roles.get(slot, ())) != 1:
+                or any(resource.startswith(anchor) for anchor in anchors))
+        }
+        for resource_slots in family_resources.values():
+            slots.update(resource_slots)
+        if not slots or len(roles) != 1:
             continue
         role = next(iter(roles))
-        for resource, resource_slots in assigned_resources.items():
-            if resource_slots != {slot}:
-                continue
-            if (resource in anchors
-                    or any(resource.startswith(anchor)
-                           for anchor in anchors)):
-                result[resource] = role
+        # Duplicate slot bindings are safe only when every family member uses
+        # the same slot set and all of those slots agree on the role.
+        if (any(resource_slots != slots
+                for resource_slots in family_resources.values())
+                or any(slot_roles.get(slot) != {role} for slot in slots)):
+            continue
+        for resource in family_resources:
+            result[resource] = role
     return result
 
 

@@ -6,9 +6,9 @@ from core.geometry.mesh_builder import build_mesh_semantics
 from core.ini.condition import is_namespaced
 from core.ini.state import control_dependencies
 from core.resource_paths import safe_resource_path
-from core.textures import encode_texture_data_uri
 
 from app.mods.analysis import _ini_rel, analyze_mod_inis
+from app.mods.enrichment import enrich_mod_analysis
 
 
 _VARIANT_FIELDS = (
@@ -109,21 +109,15 @@ def build_toggle_panel(toggle_keys, toggle_defaults, gating_vars, mod_dir=None,
 
 
 def _attach_menu_image(panel_item, info, mod_dir, source, image_source):
+    if image_source is None:
+        return
     resolve = source.resolve_resource if source is not None \
         else lambda value: safe_resource_path(mod_dir, value)
     image_path = resolve(info.get("image_file"))
     exists = source.is_file if source is not None else os.path.isfile
     if not image_path or not exists(image_path):
         return
-    if image_source is not None:
-        panel_item["image"] = image_source(image_path)
-        return
-    source_backed = source is not None and getattr(source, "virtual", False)
-    image = (source.read_bytes(image_path) if source_backed else image_path)
-    panel_item["image"] = encode_texture_data_uri(
-        image, max_size=256, preserve_alpha=True,
-        source_name=(source.logical_path(image_path)
-                     if source_backed else None))
+    panel_item["image"] = image_source(image_path)
 
 
 def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None,
@@ -220,6 +214,9 @@ def load_control_state(context, pending_new_sections=None,
                        active_mesh_keys=None, *, menu_image_source=None):
     """Read control semantics without constructing mesh geometry."""
     parsed = analyze_mod_inis(context.ini)
+    # Asset hash recovery can turn an otherwise unreferenced toggle variable
+    # into a draw's conditional texture binding, just as on the full load path.
+    enrich_mod_analysis(parsed, context)
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
                 source=context.source)
