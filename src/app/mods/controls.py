@@ -214,6 +214,8 @@ def load_control_state(context, pending_new_sections=None,
                        active_mesh_keys=None, *, menu_image_source=None):
     """Read control semantics without constructing mesh geometry."""
     parsed = analyze_mod_inis(context.ini)
+    # Asset hash recovery can turn an otherwise unreferenced toggle variable
+    # into a draw's conditional texture binding, just as on the full load path.
     enrich_mod_analysis(parsed, context)
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,

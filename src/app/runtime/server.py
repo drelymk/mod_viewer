@@ -179,13 +179,14 @@ class TexturePublication:
         return self.register(path, "diffuse")
 
     def commit(self, *, replace=True):
-        """Commit a publication, optionally retaining the active one."""
+        """Commit a publication, replacing only the previous viewer load."""
         global _active_texture_publication
         with _texture_lock:
             if self._state == "discarded":
                 return False
-            if replace:
-                _texture_publications.clear()
+            if (replace and _active_texture_publication is not None
+                    and _active_texture_publication is not self):
+                _active_texture_publication.release()
             _texture_publications[self.token] = self
             if replace:
                 _active_texture_publication = self

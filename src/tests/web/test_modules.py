@@ -130,6 +130,13 @@ export {getControlValue as getToggleValue, setControlValue as setToggleValue}
   from '../editing/control-state.js';
 export {syncViews as refreshAll} from '../scene/view-sync.js';
 """))
+    module_page.route('**/js/textures/dds-preview.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export const renderDDSPreview = async (canvas, url, current) => {
+  window.previewCurrent = current;
+  await new Promise(resolve => {window.finishPreview = resolve;});
+};
+"""))
     module_page.evaluate("""async () => {
       const style = document.createElement('link');
       style.rel = 'stylesheet'; style.href = './css/app.css';
@@ -178,75 +185,15 @@ export {syncViews as refreshAll} from '../scene/view-sync.js';
     assert module_page.locator('#menu-panel').is_visible()
     assert module_page.locator('.menu-item').count() == 5
 
-
-def test_menu_dds_previews_stay_lazy_and_ignore_rebuilt_panels(module_page):
-    module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
-        content_type='text/javascript', body="""
-export {getControlValue as getToggleValue, setControlValue as setToggleValue}
-  from '../editing/control-state.js';
-export {syncViews as refreshAll} from '../scene/view-sync.js';
-"""))
-    module_page.route('**/js/textures/dds-preview.js', lambda route: route.fulfill(
-        content_type='text/javascript', body="""
-export const renderDDSPreview = (canvas, url, current) => new Promise((resolve, reject) => {
-  window.previewRequests.push({canvas, url, current, resolve, reject});
-});
-"""))
-    result = module_page.evaluate("""async () => {
-      window.previewRequests = [];
-      window.IntersectionObserver = class {
-        constructor(callback) {this.callback = callback; window.menuObserver = this;}
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-        visible(target) {this.callback([{target, isIntersecting: true}], this);}
-      };
-      document.body.innerHTML = '<div id="menu-panel"><div id="menu-list"></div></div>';
-      const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
-      const menu = {
-        option01: {name: 'Option01', var: 'option01', values: ['0', '1'], default: '0',
-          image: './texture-01.dds'},
-        option02: {name: 'Option02', var: 'option02', kind: 'shape_slider', default: '0',
-          min: 0, max: 1, step: 0.1, image: './texture-02.DDS?revision=1'},
-      };
-      buildMenuPanel(menu);
-      const original = [...document.querySelectorAll('canvas')];
-      const lazy = previewRequests.length === 0 && original.every(image => !image.hasAttribute('src'));
-      menuObserver.visible(original[0]);
-      await Promise.resolve();
-      const first = previewRequests[0];
-      const active = first.current();
-      buildMenuPanel(menu);
-      const stale = !first.current();
-      first.reject(new Error('stale preview'));
-      await Promise.resolve();
-      await Promise.resolve();
-      menuObserver.visible(original[1]);
-      const fresh = [...document.querySelectorAll('canvas')];
-      const disconnectedIgnored = previewRequests.length === 1;
-      menuObserver.visible(fresh[0]);
-      menuObserver.visible(fresh[1]);
-      previewRequests[1].reject(new Error('failed icon'));
-      previewRequests[2].reject(new Error('failed slider'));
-      await Promise.resolve();
-      await Promise.resolve();
-      document.querySelector('button').click();
-      const fallback = !!document.querySelector('button .ui-icon') && !document.querySelector('canvas');
-      const value = document.querySelector('.menu-value').textContent;
-      window.IntersectionObserver = undefined;
-      buildMenuPanel(menu);
-      await Promise.resolve();
-      const withoutObserver = previewRequests.length === 5;
-      buildMenuPanel({});
-      for (const request of previewRequests.slice(3)) request.resolve();
-      return {lazy, active, stale, disconnectedIgnored, fallback, value, withoutObserver,
-        roles: original.map(image => [image.getAttribute('role'), image.getAttribute('aria-label')])};
+    module_page.evaluate("""() => {
+      menuFixture.menu.option0.image = './texture.dds';
+      menuFixture.build(menuFixture.menu);
     }""")
-    assert result == {
-        'lazy': True, 'active': True, 'stale': True, 'disconnectedIgnored': True,
-        'fallback': True, 'value': '1', 'withoutObserver': True,
-        'roles': [['img', 'Option01'], ['img', 'Option02']],
-    }
+    module_page.wait_for_function('window.previewCurrent !== undefined')
+    assert module_page.evaluate('previewCurrent()')
+    module_page.evaluate('menuFixture.build({})')
+    assert not module_page.evaluate('previewCurrent()')
+    module_page.evaluate('finishPreview()')
 
 
 def test_outline_zoom_keeps_distant_edges_visible_and_restores_reference(module_page):

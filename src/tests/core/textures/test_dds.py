@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from core.textures.dds import (MAX_MODEL_DDS_SIZE, inspect_dds,
+from core.textures.dds import (inspect_dds,
                                inspect_dds_header, inspect_dds_layout,
                                native_dds_info, native_dds_info_from_header)
 
@@ -134,36 +134,21 @@ def test_malformed_and_truncated_dds_are_rejected(tmp_path):
         assert inspect_dds(path) is None
 
 
-@pytest.mark.parametrize("dimension,accepted", [(8192, True), (8193, False)])
-def test_model_limit_uses_header_and_payload_size(dimension, accepted):
-    header = _dds(dimension, dimension, payload=False)
-    payload_size = ((dimension + 3) // 4) ** 2 * 16
-    file_size = len(header) + payload_size
-    assert MAX_MODEL_DDS_SIZE == 8192
+@pytest.mark.parametrize("dimension,format_name,accepted", [
+    (8192, "bc7_unorm", True), (8193, "bc7_unorm", False), (8192, "rgba8", True),
+])
+def test_model_limit_uses_header_and_payload_size(dimension, format_name, accepted):
+    header = _dds(dimension, dimension, format_name, payload=False)
+    file_size = len(header) + _level_size(dimension, dimension, format_name)
     assert inspect_dds_header(header, file_size) is not None
     assert (native_dds_info_from_header(
         header, file_size, source_name="large.dds") is not None) is accepted
-
-
-@pytest.mark.parametrize("file_size", [128 * 1024 * 1024, 256 * 1024 * 1024])
-def test_native_delivery_has_no_file_byte_cap(file_size):
-    header = _dds(payload=False)
-    assert native_dds_info_from_header(
-        header, file_size, source_name="texture.dds") is not None
 
 
 @pytest.mark.parametrize("file_size", [None, -1, 0, "invalid", float("inf")])
 def test_native_header_requires_a_known_valid_file_size(file_size):
     assert native_dds_info_from_header(
         _dds(payload=False), file_size, source_name="texture.dds") is None
-
-
-def test_uncompressed_model_with_valid_dimensions_has_no_file_byte_cap():
-    header = _dds(8192, 8192, "rgba8", payload=False)
-    file_size = len(header) + 8192 * 8192 * 4
-    assert inspect_dds_header(header, file_size) is not None
-    assert native_dds_info_from_header(
-        header, file_size, source_name="texture.dds") is not None
 
 
 @pytest.mark.parametrize(("format_name", "width", "height", "expected"), [

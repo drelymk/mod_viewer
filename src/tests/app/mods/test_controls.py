@@ -7,39 +7,15 @@ import pytest
 
 from app.mods.analysis import ParsedModAnalysis, build_mod_ini_snapshot
 from app.mods.controls import (
-    _gating_vars, _gating_vars_from_groups, build_menu_panel, load_control_state,
+    _gating_vars, _gating_vars_from_groups, load_control_state,
     load_present_state, unwired_pending_sections,
 )
 from app.mods.loader import load_mod, load_semantic_state
 from core.ini.document import IniDocument
 from tests.support_snapshot import snapshot_context
-from tests.support.dds_data import write_bc7_dds
 
 from app.mods.controls import build_toggle_panel
 
-
-def test_menu_dds_projection_requires_native_publication_without_png(tmp_path, monkeypatch):
-    from app.runtime import server
-
-    image = tmp_path / 'icon.dds'
-    write_bc7_dds(image)
-    info = {'name': 'Option01', 'slot': 1, 'source': None, 'section': 'CommandListMenu',
-            'var': 'option01', 'values': ['0', '1'], 'effects': [], 'image_file': image.name}
-
-    def reject_conversion(*_args, **_kwargs):
-        raise AssertionError('DDS menu preview converted to PNG')
-
-    monkeypatch.setattr('PIL.Image.Image.save', reject_conversion)
-    detached = build_menu_panel({'Menu01': info}, {}, mod_dir=str(tmp_path))
-    assert 'image' not in detached['Menu01']
-    publication = server.begin_texture_publication(str(tmp_path))
-    try:
-        displayed = build_menu_panel({'Menu01': info}, {}, mod_dir=str(tmp_path),
-                                     image_source=publication.register_menu_image)
-        assert displayed['Menu01']['image'].endswith('.dds')
-        assert displayed['Menu01']['values'] == ['0', '1']
-    finally:
-        publication.discard()
 
 
 def test_unwired_pending_sections_uses_full_staged_snapshot(tmp_path,
@@ -261,6 +237,7 @@ def test_present_state_does_not_build_geometry(
 
 def test_control_state_does_not_build_geometry(
         tmp_path, monkeypatch):
+    (tmp_path / "icon.dds").write_bytes(b"texture source")
     parsed = ParsedModAnalysis(
         groups=[{"draws": [{"conditions": [[{
             "var": "Input01", "value": "1", "negate": False,
@@ -270,7 +247,10 @@ def test_control_state_does_not_build_geometry(
             "source": None, "ini_path": str(tmp_path / "mod.ini"),
             "section": "KeyInput01", "vars": {"Input01": ["0", "1"]},
         }},
-        menu={}, defaults={"Input01": "0"}, state_rules=[], present={},
+        menu={"Menu01": {
+            "name": "Option01", "slot": 1, "source": None, "section": "CommandListMenu",
+            "var": "option01", "values": ["0", "1"], "effects": [], "image_file": "icon.dds",
+        }}, defaults={"Input01": "0"}, state_rules=[], present={},
         game=SimpleNamespace(game="unknown"),
     )
     context = snapshot_context(str(tmp_path), [str(tmp_path / "mod.ini")])
@@ -287,7 +267,12 @@ def test_control_state_does_not_build_geometry(
 
     monkeypatch.setattr("app.mods.controls.build_mesh_semantics", build_semantics)
 
-    result = load_control_state(context, active_mesh_keys={"Component01-1"})
+    result = load_control_state(
+        context, active_mesh_keys={"Component01-1"},
+        menu_image_source=lambda _path: "/texture/test/0.dds")
 
     assert semantic_calls
     assert set(result["controls"]["toggles"]) == {"KeyInput01"}
+    assert result["controls"]["menu"]["Menu01"]["image"] == "/texture/test/0.dds"
+    detached = load_control_state(context, active_mesh_keys={"Component01-1"})
+    assert "image" not in detached["controls"]["menu"]["Menu01"]

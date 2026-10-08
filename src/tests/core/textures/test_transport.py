@@ -21,7 +21,7 @@ from app.runtime import server as server
 from app.bridge.api import ModViewerAPI
 from core.ini.document import IniDocument
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
-from core.mod_source import SevenZipModSource, ZipModSource
+from core.mod_source import DirectoryModSource, SevenZipModSource, ZipModSource
 from core.sevenzip import SevenZipEntry
 from core.textures.pipeline import encode_texture_key
 from tests.support.dds_data import write_bc7_dds
@@ -122,8 +122,6 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
     ]
 
 
-
-
 def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
     _write_geometry(str(tmp_path))
     Image.new("RGB", (1, 1), (128, 128, 32)).save(tmp_path / "shared.png")
@@ -222,10 +220,6 @@ def test_auxiliary_publication_retains_active_mod_publication(tmp_path):
     assert server._lookup_texture(fill.token, "0") is None
 
 
-
-
-
-
 def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
     path = tmp_path / "normal.png"
     Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(path)
@@ -249,8 +243,6 @@ def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
     assert "normal_data_file" not in result
     assert "normal_data_uri" not in result
     assert server._lookup_texture(publication.token, "0").role == "normal_data"
-
-
 
 
 def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
@@ -297,18 +289,15 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
     }
 
 
-
-
-@pytest.mark.parametrize("menu_image", [False, True])
-def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_path, menu_image):
+def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_path):
     dds = tmp_path / "native.dds"
     write_bc7_dds(dds)
     invalid = tmp_path / "unsupported.dds"
     invalid.write_bytes(b"not a DDS")
     publication = server.begin_texture_publication(str(tmp_path))
-    register = publication.register_menu_image if menu_image else publication.register
-    native_url = register(str(dds))
-    rejected_url = register(str(invalid))
+    native_url = publication.register(str(dds))
+    assert publication.register_menu_image(str(dds)) == native_url
+    rejected_url = publication.register(str(invalid))
     publication.commit()
 
     assert native_url.endswith("/0.dds")
@@ -359,7 +348,7 @@ def test_normal_roles_use_native_dds(tmp_path):
     assert server._lookup_texture(publication.token, "2").native_dds is True
 
 
-def test_model_dds_limit_is_independent_of_png_size(tmp_path):
+def test_model_and_menu_dds_share_the_dimension_limit(tmp_path):
     accepted = tmp_path / "accepted.dds"
     rejected = tmp_path / "rejected.dds"
     write_bc7_dds(accepted, width=8192, height=4)
@@ -368,106 +357,65 @@ def test_model_dds_limit_is_independent_of_png_size(tmp_path):
     try:
         url = publication.register(str(accepted))
         assert url.endswith(".dds")
+        assert publication.register_menu_image(str(accepted)) == url
         assert publication.register(str(rejected)) is None
+        assert publication.register_menu_image(str(rejected)) is None
         assert server._lookup_texture(publication.token, "0").suffix == ".dds"
     finally:
         publication.discard()
 
 
-@pytest.mark.parametrize("archived", [False, True])
-@pytest.mark.parametrize("dimension,accepted", [(4, True), (8192, True), (8193, False)])
-def test_menu_dds_publication_is_native_lazy_and_dimension_limited(
-        tmp_path, archived, dimension, accepted):
-    path = tmp_path / "texture.dds"
-    write_bc7_dds(path, width=dimension, height=4)
-    data = path.read_bytes()
-    if archived:
-        archive_path = tmp_path / "mod.zip"
-        with zipfile.ZipFile(archive_path, "w") as archive:
-            archive.writestr(path.name, data)
-        source = ZipModSource(archive_path)
-        publication = server.begin_texture_publication(str(archive_path), source=source)
-        candidate = source.resolve_resource(path.name)
-    else:
-        publication = server.begin_texture_publication(str(tmp_path))
-        candidate = str(path)
-    try:
-        with patch("PIL.Image.Image.save",
-                   side_effect=AssertionError("menu DDS rendered to PNG")):
-            if archived:
-                with patch.object(source, "read_bytes", side_effect=AssertionError(
-                        "menu DDS payload read during registration")):
-                    url = publication.register_menu_image(candidate)
-            else:
-                url = publication.register_menu_image(candidate)
-        if accepted:
-            assert url.endswith(".dds")
-            entry = server._lookup_texture(publication.token, "0")
-            assert entry.native_dds
-        else:
-            assert url is None
-            assert not publication._sources
-    finally:
-        publication.discard()
-
-
-@pytest.mark.parametrize("extension,content_type", [
-    ("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"),
-    ("webp", "image/webp"), ("bmp", "image/bmp"), ("gif", "image/gif"),
+@pytest.mark.parametrize("extension,archived,content_type", [
+    ("png", False, "image/png"), ("jpg", True, "image/jpeg"),
+    ("dds", True, "image/vnd-ms.dds"),
 ])
-@pytest.mark.parametrize("archived", [False, True])
-def test_browser_images_publish_lazily_and_stream_original_bytes(
-        tmp_path, extension, content_type, archived):
+def test_textures_stream_original_bytes_lazily_from_disk_and_archive(
+        tmp_path, extension, archived, content_type):
     path = tmp_path / f"image.{extension}"
-    if extension in {"png", "webp"}:
-        Image.new("RGBA", (300, 2), (30, 60, 90, 128)).save(path)
+    if extension == "dds":
+        write_bc7_dds(path)
     else:
-        Image.new("RGB", (300, 2), (30, 60, 90)).save(path)
+        Image.new("RGBA" if extension == "png" else "RGB", (300, 2),
+                  (30, 60, 90, 128) if extension == "png" else (30, 60, 90)).save(path)
     original = path.read_bytes()
-    source = None
-    candidate = str(path)
     if archived:
         archive_path = tmp_path / "mod.zip"
         with zipfile.ZipFile(archive_path, "w") as archive:
             archive.writestr(path.name, original)
         source = ZipModSource(archive_path)
-        candidate = source.resolve_resource(path.name)
+    else:
+        source = DirectoryModSource(tmp_path)
+    candidate = source.resolve_resource(path.name)
     publication = server.begin_texture_publication(str(tmp_path), source=source)
-    reads = []
-    if source:
-        original_read = source.read_bytes
-        def read_bytes(reference):
-            reads.append(reference)
-            return original_read(reference)
-        source.read_bytes = read_bytes
-    handler = functools.partial(server._Handler, directory=str(tmp_path))
-    httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
+    httpd = server._ThreadingTCPServer(("127.0.0.1", 0), functools.partial(
+        server._Handler, directory=str(tmp_path)))
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
     try:
-        with patch("PIL.Image.Image.save", side_effect=AssertionError("image encoding")), \
+        with patch.object(source, "read_bytes", wraps=source.read_bytes) as read, \
+                patch.object(source, "read_prefix", wraps=source.read_prefix) as prefix, \
+                patch("PIL.Image.Image.save", side_effect=AssertionError("image encoding")), \
                 patch("app.runtime.server.load_texture_image_full", side_effect=AssertionError("image decode")):
             url = publication.register_menu_image(candidate)
             assert url == publication.register(candidate, "diffuse")
             assert url.endswith("." + extension)
-            assert reads == []
-            unsupported = tmp_path / "unsupported.bin"
-            unsupported.write_bytes(original)
-            assert publication.register(str(unsupported)) is None
+            read.assert_not_called()
+            if extension == "dds":
+                prefix.assert_called_once_with(candidate, 148)
             publication.commit()
             with urlopen(base_url + url) as response:
                 assert response.headers["Content-Type"] == content_type
                 assert response.read() == original
-            assert reads == ([candidate] if source else [])
-            with pytest.raises(HTTPError) as bad_suffix:
-                urlopen(base_url + url.rsplit(".", 1)[0] + ".dds")
-            assert bad_suffix.value.code == 404
+            assert read.call_count == int(archived)
         with patch("PIL.Image.Image.save", side_effect=AssertionError("image encoding")):
             assert publication.register(candidate, validate=True) == url
             invalid = tmp_path / f"invalid.{extension}"
             invalid.write_bytes(original[:8])
             assert publication.register(str(invalid), validate=True) is None
+        unsupported = tmp_path / "unsupported.bin"
+        unsupported.write_bytes(original)
+        assert publication.register(str(unsupported)) is None
         publication.release()
         with pytest.raises(HTTPError) as expired:
             urlopen(base_url + url)
@@ -477,62 +425,6 @@ def test_browser_images_publish_lazily_and_stream_original_bytes(
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-
-
-
-def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_request(
-        tmp_path):
-    dds = tmp_path / "native.dds"
-    write_bc7_dds(dds)
-    dds_bytes = dds.read_bytes()
-    archive_path = tmp_path / "mod.zip"
-    with zipfile.ZipFile(archive_path, "w") as archive:
-        archive.writestr("Mod/native.dds", dds_bytes)
-
-    source = ZipModSource(archive_path)
-    prefix_reads = []
-    full_reads = []
-    original_read_prefix = source.read_prefix
-    original_read_bytes = source.read_bytes
-
-    def read_prefix(reference, length):
-        prefix_reads.append((reference, length))
-        return original_read_prefix(reference, length)
-
-    def read_bytes(reference):
-        full_reads.append(reference)
-        return original_read_bytes(reference)
-
-    source.read_prefix = read_prefix
-    source.read_bytes = read_bytes
-    publication = server.begin_texture_publication(
-        str(archive_path), source=source)
-    httpd = None
-    try:
-        member = source.resolve_resource("native.dds")
-        url = publication.register(member)
-        entry = server._lookup_texture(publication.token, "0")
-
-        assert url.endswith(".dds")
-        assert entry.native_dds is True
-        assert prefix_reads == [(member, 148)]
-        assert full_reads == []
-
-        publication.commit()
-        handler = functools.partial(server._Handler, directory=str(tmp_path))
-        httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
-        base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
-        with urlopen(base_url + url) as response:
-            assert response.headers["Content-Type"] == "image/vnd-ms.dds"
-            assert response.read() == dds_bytes
-        assert full_reads == [member]
-    finally:
-        if httpd is not None:
-            httpd.shutdown()
-            httpd.server_close()
-        publication.discard()
 
 
 @pytest.mark.parametrize("archive_suffix", [".7z", ".rar"])

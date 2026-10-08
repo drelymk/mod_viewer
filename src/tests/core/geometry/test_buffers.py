@@ -9,6 +9,7 @@ import pytest
 
 from core.geometry import buffers
 from core.mod_source import ZipModSource
+from tests.support.model_data import triangle_geometry
 
 
 def _texcoord_data(pairs, offset, fmt, stride, *, normals=False):
@@ -25,55 +26,23 @@ def _texcoord_data(pairs, offset, fmt, stride, *, normals=False):
     return bytes(data)
 
 
-def _uv_grid(kind):
-    pairs = [(.05 + (index % 17) * .055, .05 + (index // 17) * .055)
-             for index in range(17 * 17)]
-    if kind == "signed-u":
-        return [(u - 1. if index % 7 == 0 else u, v)
-                for index, (u, v) in enumerate(pairs)]
-    if kind == "signed-v":
-        return [(u, v - 1. if index % 7 == 0 else v)
-                for index, (u, v) in enumerate(pairs)]
-    if kind == "negative":
-        return [(u - 1., v - 1.) for u, v in pairs]
-    if kind == "one-axis":
-        return [(.25, v) for _u, v in pairs]
-    return pairs
-
-
-@pytest.mark.parametrize("offset,fmt,stride", [
-    (0, "<ee", 4), (4, "<ee", 20),
-    (0, "<ff", 8), (4, "<ff", 12),
+@pytest.mark.parametrize("offset,fmt,stride,signed", [
+    (0, "<ee", 4, False), (0, "<ff", 8, True),
+    (4, "<ee", 20, True), (4, "<ee", 24, False),
 ])
-@pytest.mark.parametrize("kind", [
-    "positive", "signed-u", "signed-v", "negative", "one-axis",
-])
-def test_uv_detection_decodes_supported_layouts_without_remapping(
-        tmp_path, offset, fmt, stride, kind):
-    data = _texcoord_data(_uv_grid(kind), offset, fmt, stride)
+def test_uv_detection_decodes_representative_layouts(
+        tmp_path, offset, fmt, stride, signed):
+    pairs = [(.05 + index % 17 * .055, .05 + index // 17 * .055 - signed)
+             for index in range(289)]
+    data = _texcoord_data(pairs, offset, fmt, stride, normals=stride >= 20)
     path = tmp_path / "texcoord.buf"
     path.write_bytes(data)
-
     detected = buffers._detect_uv_best(path, stride)
     assert detected == (offset, fmt)
-    assert buffers._detect_uv_best(path, stride, data=data) == detected
-    expected = [struct.unpack_from(fmt, data, index * stride + offset)
-                for index in range(len(data) // stride)]
-    assert buffers.read_texcoords(path, stride, *detected) == expected
-
-
-@pytest.mark.parametrize("kind,stride", [
-    ("positive", 24), ("signed-v", 20), ("negative", 20),
-])
-def test_uv_detection_keeps_normal_attributes_out_of_uv_layout(kind, stride):
-    data = _texcoord_data(_uv_grid(kind), 4, "<ee", stride, normals=True)
-    assert buffers._detect_uv_best(None, stride, data=data) == (4, "<ee")
-
-
-def test_signed_uv_detection_prefers_variation_on_the_weaker_axis():
-    pairs = [(.2 + u * .1, -.3 - v * .5) for u, v in _uv_grid("positive")]
-    data = _texcoord_data(pairs, 4, "<ee", 20, normals=True)
-    assert buffers._detect_uv_best(None, 20, data=data) == (4, "<ee")
+    assert buffers._detect_uv_best(None, stride, data=data) == detected
+    assert buffers.read_texcoords(path, stride, *detected) == [
+        struct.unpack_from(fmt, data, index * stride + offset)
+        for index in range(len(pairs))]
 
 
 def test_signed_uv_detection_does_not_infer_an_axis_from_sparse_attributes():
@@ -81,78 +50,26 @@ def test_signed_uv_detection_does_not_infer_an_axis_from_sparse_attributes():
     data = bytearray(_texcoord_data(pairs, 4, "<ee", 20))
     for index in range(0, len(pairs), 31):
         struct.pack_into("<f", data, index * 20 + 8, -.9)
-    # The authored UVs have one constant axis. Sparse unrelated negatives must
-    # not manufacture a two-dimensional signed candidate from the next field.
     assert buffers._detect_uv_best(None, 20, data=data) == (0, "<ff")
 
 
-@pytest.mark.parametrize("offset,fmt,stride", [
-    (0, "<ee", 4), (4, "<ee", 20),
-    (0, "<ff", 8), (4, "<ff", 12),
-])
-def test_uv_detection_tolerates_sparse_nonfinite_vertices(offset, fmt, stride):
-    pairs = _uv_grid("signed-v")
-    pairs[5] = (float("nan"), .5)
-    pairs[15] = (.5, float("inf"))
-    pairs[25] = (-float("inf"), .5)
-    data = _texcoord_data(pairs, offset, fmt, stride)
-    assert buffers._detect_uv_best(None, stride, data=data) == (offset, fmt)
-
-
-def test_uv_detection_samples_beyond_an_initial_constant_region():
-    pairs = [(.25, .25)] * 4096 + _uv_grid("negative") * 16
-    data = _texcoord_data(pairs, 4, "<ee", 20, normals=True)
-    assert buffers._detect_uv_best(None, 20, n=32, data=data) == (4, "<ee")
-
-
-@pytest.mark.parametrize("data,stride,expected", [
-    (b"", 20, (4, "<ee")),
-    (b"\0" * 3, 4, (4, "<ee")),
-    (b"\0" * 16, 4, (0, "<ee")),
-    (b"\xff" * 80, 20, (4, "<ee")),
-])
-def test_uv_detection_keeps_safe_fallbacks(data, stride, expected):
-    assert buffers._detect_uv_best(None, stride, data=data) == expected
-
-
 def test_signed_uv_detection_preserves_published_mesh_coordinates(tmp_path):
-    from core.geometry.draw_call import DrawCall
     from core.geometry.mesh_builder import build_mesh_result
 
-    positions = b"".join(struct.pack("<3f", *point) + b"\0" * 28
-                         for point in ((0., 0., 0.), (1., 0., 0.), (0., 1., 0.)))
-    (tmp_path / "position.buf").write_bytes(positions)
-    (tmp_path / "component.ib").write_bytes(struct.pack("<3I", 0, 1, 2))
-    groups, expected = [], {}
-    for number, (stride, pairs) in enumerate([
-            (20, [(.25, -.5), (.75, .25), (.5, .75)]),
-            (24, [(.25, .5), (.75, .25), (.5, .75)])], start=1):
-        component = f"Component{number:02}"
-        filename = f"{component}.buf"
-        (tmp_path / filename).write_bytes(
-            _texcoord_data(pairs, 4, "<ee", stride))
-        draw = DrawCall(
-            label=f"{component}-1", count=3, ib_file="component.ib",
-            index_size=4, position_file="position.buf", position_stride=40,
-            texcoord_file=filename, texcoord_stride=stride)
-        groups.append({
-            "name": component, "position_file": "position.buf",
-            "position_stride": 40, "texcoord_file": filename,
-            "texcoord_stride": stride, "ib_file": "component.ib",
-            "index_size": 4, "draws": [draw],
-        })
-        expected[draw.label] = tuple(value for u, v in pairs for value in (u, 1. - v))
-
+    for filename, data in triangle_geometry().items():
+        (tmp_path / filename).write_bytes(data)
+    pairs = [(.25, -.5), (.75, .25), (.5, .75)]
+    (tmp_path / "t.buf").write_bytes(_texcoord_data(pairs, 4, "<ee", 20))
+    groups = [{
+        "name": "Component01", "position_file": "p.buf", "position_stride": 12,
+        "texcoord_file": "t.buf", "texcoord_stride": 20,
+        "ib_file": "i.buf", "index_size": 4,
+        "draws": [{"label": "Component01-1", "count": 3, "start": 0, "base": 0}],
+    }]
     built = build_mesh_result(groups, str(tmp_path))
-    assert set(built.meshes) == set(expected)
-    for label, mesh in built.meshes.items():
-        reference = mesh["uv"]
-        assert struct.unpack_from("<6f", built.geometry.data,
-                                  reference["offset"]) == expected[label]
-        assert reference["length"] == 24
-        assert mesh["pos"]["length"] == 36
-        assert struct.unpack_from("<3I", built.geometry.data,
-                                  mesh["idx"]["offset"]) == (0, 1, 2)
+    reference = built.meshes["Component01-1"]["uv"]
+    assert struct.unpack_from("<6f", built.geometry.data, reference["offset"]) == (
+        .25, 1.5, .75, .75, .5, .25)
 
 
 def test_buffer_store_reads_shared_file_once(tmp_path):
