@@ -278,7 +278,7 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
     def load_model(**kwargs):
         kwargs["context"].skinning_manifest = manifest
         return {
-            "meshes": {"Component01-1": {}},
+            "meshes": {"Component01-1": {"identity": {"key": "mesh-identity-01"}}},
             "metadata": {"game": {"id": "genshin"}},
             "controls": {"present": {}},
         }
@@ -298,7 +298,8 @@ def test_load_commits_texture_publication_after_geometry(monkeypatch):
 
     result = preview.load_mod("mod")
 
-    assert result["meshes"] == {"Component01-1": {}}
+    assert result["meshes"] == {
+        "Component01-1": {"identity": {"key": "mesh-identity-01"}}}
     assert [event[0] for event in events] == ["profile", "publish", "commit"]
     assert preview._active_mesh_keys == {"mod": {"Component01-1"}}
     assert preview._skinning_manifests == {"mod": manifest}
@@ -322,7 +323,7 @@ def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
     def load_model(**kwargs):
         captured["context"] = kwargs["context"]
         return {
-            "meshes": {"Component01-1": {}},
+            "meshes": {"Component01-1": {"identity": {"key": "mesh-identity-01"}}},
             "metadata": {"game": {"id": "genshin"}},
             "controls": {"present": {}},
         }

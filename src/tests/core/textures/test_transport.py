@@ -46,6 +46,7 @@ def test_unsupported_native_candidate_retains_choice_and_reports_manual_pick_err
                    side_effect=AssertionError('Model DDS must not render eagerly')):
             payload = {'meshes': {'mesh-01': {
                 'component': 'Component1',
+                'identity': {'key': 'mesh-identity-01'},
                 'texture_options': [{'tex_key': key, 'file': path.name,
                                      'label': 'single-channel'}],
             }}, 'textures': {}}
@@ -262,6 +263,7 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
             "Component01-1": {
                 "source": "Root.ini", "component": "Component01",
                 "drawindexed": [3, 0, 0],
+                "identity": {"key": "mesh-identity-01"},
                 "texture_options": [{
                     "tex_key": "diffuse::pool.png", "file": "pool.png",
                     "label": "Pool", "normal_map": "normal.png",

@@ -392,16 +392,20 @@ def _migration_payload(ambiguous=False):
 def _migration_value(kind, label):
     if kind == "mesh_names":
         return label
+    if kind == "mesh_color_adjustments":
+        return {"hue": 30 if label == "Canonical" else 60,
+                "saturation": 1, "brightness": 1, "contrast": 1,
+                "red": 1, "green": 1, "blue": 1, "tint": None}
     return {"tex_key": f"{label.lower()}.png", "label": label, "manual": True}
 
 
 def _hydrate_migration(tmp_path, kind, payload, data):
-    if kind == "mesh_names":
-        return metadata.hydrate_mesh_names(payload, data)
+    if kind != "textures":
+        return getattr(metadata, f"hydrate_{kind}")(payload, data)
     return metadata.hydrate_textures(str(tmp_path), payload, data)
 
 
-@pytest.mark.parametrize("kind", ["textures", "mesh_names"])
+@pytest.mark.parametrize("kind", ["textures", "mesh_names", "mesh_color_adjustments"])
 def test_metadata_migration_prefers_identity_key(tmp_path, kind):
     payload = _migration_payload()
     key = payload["meshes"]["component-01"]["identity"]["key"]
@@ -417,7 +421,7 @@ def test_metadata_migration_prefers_identity_key(tmp_path, kind):
         assert restored[key] == canonical
 
 
-@pytest.mark.parametrize("kind", ["textures", "mesh_names"])
+@pytest.mark.parametrize("kind", ["textures", "mesh_names", "mesh_color_adjustments"])
 def test_metadata_migration_reads_compatible_legacy_key(tmp_path, kind):
     payload = _migration_payload()
     key = payload["meshes"]["component-01"]["identity"]["key"]
@@ -431,7 +435,7 @@ def test_metadata_migration_reads_compatible_legacy_key(tmp_path, kind):
         assert restored[key] == legacy
 
 
-@pytest.mark.parametrize("kind", ["textures", "mesh_names"])
+@pytest.mark.parametrize("kind", ["textures", "mesh_names", "mesh_color_adjustments"])
 def test_metadata_migration_rejects_ambiguous_legacy_key(tmp_path, kind):
     payload = _migration_payload(ambiguous=True)
     restored = _hydrate_migration(tmp_path, kind, payload,
@@ -714,6 +718,7 @@ def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
     }}}
     payload = {"meshes": {"Component01-1": {
         "component": "Component01", "drawindexed": [3, 0, 0],
+        "identity": {"key": "mesh-identity-01"},
         "texture_options": [],
     }}, "textures": {}}
     registered = []
@@ -725,7 +730,7 @@ def test_wuwa_metadata_migrates_legacy_normal_map_to_normal_data(
     restored = metadata.hydrate_textures(
         str(tmp_path), payload, data, texture_source=register,
         texture_profile="wuwa")
-    migrated = restored["Component01::3,0,0"]
+    migrated = restored["mesh-identity-01"]
     assert migrated["normal_data"] == "normal_data::normal.png"
     assert "normal_map" not in migrated
     assert registered == ["diffuse", "normal_data"]
@@ -747,6 +752,7 @@ def test_wuwa_normal_data_tombstone_removes_ini_pool_value_on_hydration(
     }}}
     payload = {"meshes": {"Component01-1": {
         "component": "Component01", "drawindexed": [3, 0, 0],
+        "identity": {"key": "mesh-identity-01"},
         "texture_options": [{
             "tex_key": "diffuse::shared.png", "file": "shared.png",
             "label": "Shared",
@@ -759,7 +765,7 @@ def test_wuwa_normal_data_tombstone_removes_ini_pool_value_on_hydration(
     assert payload["meshes"]["Component01-1"]["texture_pool_id"] == "p0"
     assert "texture_options" not in payload["meshes"]["Component01-1"]
     option = payload["texture_pools"]["p0"][0]
-    assert restored["Component01::3,0,0"]["normal_data_manual"] is True
+    assert restored["mesh-identity-01"]["normal_data_manual"] is True
     assert "normal_data" not in option
     assert option["normal_data_manual"] is True
 

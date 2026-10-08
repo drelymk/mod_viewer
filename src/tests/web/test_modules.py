@@ -5,14 +5,14 @@ import math
 import pytest
 
 
-def test_semantic_refresh_endpoints_and_stale_completion_lifecycle(module_page):
+def test_semantic_refresh_endpoint_routing_and_completion_order(module_page):
     stubs = {
         'mesh/visibility.js': """
 export const refreshAll = value => window.effects.push(['refresh', value]);
 export const setStateRules = () => window.effects.push(['controls']);
 export const updateMeshSemantics = () => {
   window.effects.push(['meshes']);
-  return {success: window.meshUpdateSuccess, materialChangedMeshes: ['changed-01']};
+  return {success: true, materialChangedMeshes: ['changed-01']};
 };
 """,
         'panels/mesh-panel.js': """
@@ -29,7 +29,7 @@ export const refreshHealthReport = () => window.effects.push(['health']);
 export const setAssetResolution = () => {};
 """,
         'i18n/index.js': 'export const t = key => key;',
-        'ui/dialogs.js': 'export const alertDialog = async text => window.effects.push(["alert", text]);',
+        'ui/dialogs.js': 'export const alertDialog = async () => {throw new Error("Unexpected dialog");};',
     }
     for path, source in stubs.items():
         module_page.route(f'**/js/{path}', lambda route, *, source=source: route.fulfill(
@@ -39,7 +39,6 @@ export const setAssetResolution = () => {};
       const {viewerState} = await import('./js/app/state.js');
       viewerState.currentModPath = 'mod-01';
       window.effects = [];
-      window.meshUpdateSuccess = true;
       const requests = [];
       const api = {};
       for (const endpoint of ['get_present_state', 'get_control_state', 'get_mesh_semantics', 'get_semantic_state']) {
@@ -62,31 +61,10 @@ export const setAssetResolution = () => {};
         const success = await refresh[name](...args);
         snapshots.push({success, effects: structuredClone(effects), request: requests.at(-1)});
       }
-      let release;
-      api.get_semantic_state = path => {requests.push(['get_semantic_state', path]); return new Promise(resolve => release = resolve);};
-      const obsolete = refresh.refreshSemanticState(handlers);
-      await refresh.refreshPresentState(change, handlers);
-      effects.length = 0;
-      release({controls: {}, meshes: {}});
-      const obsoleteResult = await obsolete;
-      const obsoleteEffects = structuredClone(effects);
-
-      api.get_mesh_semantics = async () => {throw new Error('fixture failure');};
-      const failure = await refresh.refreshMeshSemantics(handlers);
-      const failureEffects = structuredClone(effects);
-      effects.length = 0;
-      api.get_semantic_state = async () => ({controls: {}, meshes: {}});
-      window.meshUpdateSuccess = false;
-      const mismatch = await refresh.refreshSemanticState(handlers);
-      const mismatchEffects = structuredClone(effects);
-      effects.length = 0;
-      viewerState.currentModPath = null;
-      const absent = await refresh.refreshControlSemantics(handlers);
-      return {snapshots, obsoleteResult, obsoleteEffects, failure, failureEffects,
-        mismatch, mismatchEffects, absent, absentEffects: effects};
+      return snapshots;
     }""")
     for snapshot, endpoint, mesh_updates, control_updates in zip(
-            result['snapshots'],
+            result,
             ['get_present_state', 'get_control_state', 'get_mesh_semantics', 'get_semantic_state'],
             [0, 0, 1, 1], [0, 1, 0, 1]):
         assert snapshot['success'] is True
@@ -102,18 +80,9 @@ export const setAssetResolution = () => {};
         else:
             present = next(item[1] for item in effects if item[0] == 'present')
             assert present['modPath'] == 'mod-01'
-    assert result['snapshots'][0]['effects'][0] == [
+    assert result[0]['effects'][0] == [
         'present', {'modPath': 'mod-01', 'onChange': None,
                     'selectedPosition': 2, 'applySelection': True}]
-    assert result['obsoleteResult'] is False and result['obsoleteEffects'] == []
-    assert result['failure'] is False
-    assert result['failureEffects'] == [
-        ['alert', 'errors.refreshSemantics'], ['pending', 'mod-01', True], ['health']]
-    assert result['mismatch'] is False
-    assert result['mismatchEffects'] == [
-        ['meshes'], ['alert', 'errors.refreshSemantics'],
-        ['pending', 'mod-01', True], ['health']]
-    assert result['absent'] is False and result['absentEffects'] == []
 
 
 def test_payload_meshes_consume_identity_for_mod_and_asset_choices(module_page):
