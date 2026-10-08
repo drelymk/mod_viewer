@@ -8,7 +8,7 @@ execute HLSL or infer a general shape-key engine.
 
 import re
 
-from .sections import canonical_var_names, first_source
+from .sections import ResourceTable, canonical_var_names, first_source
 
 _SHAPE_BUFFER_RE = re.compile(r"^cs-t(50|51)\s*=\s*copy\s+(\S+)\s*$", re.I)
 _SHAPE_X_RE = re.compile(r"^x88\s*=\s*(.+?)\s*$", re.I)
@@ -50,6 +50,7 @@ def _writable_u5_outputs(lines):
 def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                           canonical_vars=None):
     """Return slider descriptions for conservative two-buffer shape shaders."""
+    resources = ResourceTable.normalize(resources)
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     found = []
@@ -75,18 +76,7 @@ def extract_shape_sliders(sections, resources, var_prefix=None, source=None,
                 original = canon.get(match.group(2).lower(), match.group(2))
                 remapped_vars[alias.lower()] = original
 
-    def resource(name):
-        """3DMigoto resource identifiers are case-insensitive."""
-        if not name:
-            return {}
-        lookup = getattr(resources, "get_ci", None)
-        if lookup is not None:
-            return lookup(name)
-        lowered = name.lower()
-        for key, value in resources.items():
-            if key.lower() == lowered:
-                return value
-        return {}
+    resource = resources.get_ci
 
     slider_images = {}
     ui_sections = {name.casefold() for name in authored_sliders.values() if name}

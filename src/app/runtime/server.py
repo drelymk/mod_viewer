@@ -16,7 +16,6 @@ the vendored WebGPU and TSL entry points.
 """
 
 import functools
-import base64
 import http.server
 import os
 import secrets
@@ -307,48 +306,12 @@ def publish_geometry(blob, *, replace=True):
     return f"{_GEOMETRY_PREFIX}{token}"
 
 
-def publish_payload_geometry(payload, geometry=None, *, replace=True):
+def publish_payload_geometry(payload, geometry, *, replace=True):
     """Publish the structured payload's packed geometry and its references.
 
-    Normal loads pass the builder's append-only blob, so no encoded geometry
-    string is created or decoded.  The structured mesh map also supports a
-    base64-to-blob fallback for tests that deliberately exercise the direct
-    builder form.
+    The builder owns one append-only binary blob for static and animated data.
     """
-    meshes = payload.setdefault("meshes", {})
-    if geometry is not None:
-        blob = (geometry.to_bytes() if hasattr(geometry, "to_bytes")
-                else bytes(geometry))
-        if blob:
-            payload["geometry"] = {
-                "url": publish_geometry(blob, replace=replace),
-                "length": len(blob),
-            }
-        else:
-            payload["geometry"] = None
-        return
-
-    blob = bytearray()
-    for _name, entry in meshes.items():
-        if not isinstance(entry, dict) or entry.get("error"):
-            continue
-        for field in ("pos", "uv", "idx", "normal"):
-            encoded = entry.get(field)
-            if not isinstance(encoded, str):
-                continue
-            raw = base64.b64decode(encoded)
-            offset = len(blob)
-            blob.extend(raw)
-            entry[field] = {"offset": offset, "length": len(raw)}
-        for target in entry.get("shape_targets") or []:
-            for field in ("pos", "low_pos"):
-                encoded = target.get(field)
-                if not isinstance(encoded, str):
-                    continue
-                raw = base64.b64decode(encoded)
-                offset = len(blob)
-                blob.extend(raw)
-                target[field] = {"offset": offset, "length": len(raw)}
+    blob = geometry.to_bytes() if hasattr(geometry, "to_bytes") else bytes(geometry)
     if blob:
         payload["geometry"] = {
             "url": publish_geometry(blob, replace=replace),

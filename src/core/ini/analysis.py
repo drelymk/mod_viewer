@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 
-from .sections import canonical_var_names, extract_resources
+from .sections import ResourceTable, canonical_var_names, extract_resources
 from .toggles import (extract_toggle_keys, extract_variable_defaults)
 from .menu import extract_menu_toggles
 from .state import extract_state_rules
@@ -21,7 +21,7 @@ class IniAnalysis:
 
     sections: dict
     canonical_vars: dict
-    resources: dict
+    resources: ResourceTable
     toggles: dict
     menu: dict
     state_rules: list
@@ -51,7 +51,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     """
     if canonical_vars is None:
         canonical_vars = canonical_var_names(sections)
-    resources = resources if resources is not None else extract_resources(sections)
+    resources = (ResourceTable.normalize(resources) if resources is not None
+                 else extract_resources(sections))
     game_evidence, runtime_evidence, texture_api_evidence = \
         collect_game_evidence(sections, resources)
     toggles = extract_toggle_keys(

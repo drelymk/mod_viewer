@@ -1,4 +1,5 @@
 export default {
+  'errors.viewerPersistence': 'Не удалось сохранить настройки просмотра. Попробуйте ещё раз.',
   'mesh.rename': 'Переименовать',
   'mesh.selectionSameComponent': 'Выбрано мешей: {count} · {component}',
   'mesh.selectionMultipleComponents': 'Выбрано мешей: {count} · Компонентов: {components}',

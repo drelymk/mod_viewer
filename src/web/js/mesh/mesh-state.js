@@ -470,14 +470,11 @@ function intersects(left, right) {
 
 /** Apply only mesh categories affected by the final control-state diff. */
 export function refreshMeshes(options) {
-  // Calls without options refresh visibility, textures, and shapes.
-  const legacyRefresh = options === undefined;
-  const { changedVariables = new Set(), force = {}, additionalMeshes = [] } = options || {};
+  const { changedVariables = new Set(), force = {}, additionalMeshes = [] } = options;
   const changed = changedVariables instanceof Set ? changedVariables : new Set(changedVariables || []);
-  const effectiveForce = legacyRefresh ? { visibility: true, textures: true, shapes: true } : force;
-  const visibilityForced = effectiveForce.visibility === true;
-  const texturesForced = effectiveForce.textures === true;
-  const shapesForced = effectiveForce.shapes === true;
+  const visibilityForced = force.visibility === true;
+  const texturesForced = force.textures === true;
+  const shapesForced = force.shapes === true;
   const normalMeshes = activeMeshes.filter((mesh) => mesh.userData.assetFill !== true);
   const textureDirty =
     texturesForced || normalMeshes.some((mesh) => intersects(dependenciesFor(mesh).textures, changed));

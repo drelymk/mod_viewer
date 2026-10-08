@@ -1,4 +1,5 @@
 export default {
+  'errors.viewerPersistence': '无法保存查看器设置。请重试。',
   'mesh.rename': '重命名',
   'mesh.selectionSameComponent': '已选择 {count} 个网格 · {component}',
   'mesh.selectionMultipleComponents': '已选择 {count} 个网格 · {components} 个组件',

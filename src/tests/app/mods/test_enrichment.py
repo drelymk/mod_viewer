@@ -72,7 +72,7 @@ def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):
                          return_value={"Component01-1": {}}), \
             patch.object(loader, "build_mesh_result",
                          return_value=SimpleNamespace(
-                             meshes={"Component01-1": {}}, textures={})), \
+                             meshes={"Component01-1": {}}, textures={}, geometry=b"")), \
             patch.object(loader, "_assign_material_profiles", return_value={}):
         semantic_result = loader.load_mesh_semantics(context)
         assert semantic_result["meshes"] == {

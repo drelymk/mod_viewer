@@ -6,13 +6,21 @@ until ``export_mod_changes`` is explicitly called.
 """
 
 from mcp.server.fastmcp import FastMCP
+from functools import cache
 
 from app.bridge import toggle as toggle_api
 from app.mods import loader as mod_loader
 from app.session import edit as edit_session
 from app.settings import mod_folders
+from app.runtime import server
 
 mcp = FastMCP("3DMigoto Mod Viewer")
+
+
+@cache
+def _preview_base_url():
+    """Serve inspection blobs on one process-local localhost server."""
+    return server.start()
 
 
 def _authorized_mod_folder(folder_path):
@@ -37,11 +45,15 @@ def inspect_mod(folder_path: str) -> dict:
     """Load a mod and return its meshes, toggles, menus, and textures."""
     folder_path = _authorized_mod_folder(folder_path)
     documents = edit_session.documents_for(folder_path)
-    return mod_loader.load_mod(
+    payload = mod_loader.load_mod(
         folder_path,
         documents=documents or None,
         pending_new_sections=edit_session.new_sections_for(folder_path),
     )
+    if payload.get("geometry"):
+        payload["geometry"]["url"] = (
+            _preview_base_url() + payload["geometry"]["url"])
+    return payload
 
 
 @mcp.tool()

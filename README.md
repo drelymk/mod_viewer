@@ -270,6 +270,13 @@ Python tool settings live in `pyproject.toml`; npm scripts, the lockfile, and
 Prettier settings live under `tools/`. Use `npm --prefix tools` for npm commands
 from the repository root. [context.md](context.md) records the project contracts.
 
+Use `build_mesh_result` for binary geometry: mesh fields contain offset/length
+references into `result.geometry`. Pass that blob to `publish_payload_geometry`.
+`load_mod` publishes its blob when none is supplied; MCP inspection returns an
+absolute localhost URL for fetching the binary data.
+The older `build_mesh_payload` flat API retains encoded geometry through a separate
+adapter; it is intended only for external scripts.
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).

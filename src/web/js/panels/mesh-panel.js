@@ -1,3 +1,4 @@
+import { bridgeReady, reportPersistenceFailure } from '../app/bridge.js';
 // MESHES lists draw calls grouped by source INI and component.
 
 import { hasTexture } from '../mesh/mesh-factory.js';
@@ -93,10 +94,10 @@ function meshRowLabel(mesh, context) {
 }
 
 function saveComponentMaterialKind(modPath, source, component, kind) {
-  if (!modPath || !window.pywebview?.api?.save_component_material_kind) {
+  if (!modPath) {
     return Promise.resolve({ saved: false });
   }
-  return window.pywebview.api.save_component_material_kind(modPath, source, component, kind);
+  return bridgeReady().then((api) => api.save_component_material_kind(modPath, source, component, kind));
 }
 
 function closeMeshContextMenu() {
@@ -661,7 +662,14 @@ function renameMesh(mesh) {
       mesh.userData.displayName = next;
       mesh.userData.meshNames[mesh.userData.metadataKey] = next;
       if (mesh.userData.modPath) {
-        window.pywebview.api.save_mesh_names(mesh.userData.modPath, mesh.userData.meshNames);
+        const path = mesh.userData.modPath;
+        const names = { ...mesh.userData.meshNames };
+        void bridgeReady()
+          .then((api) => api.save_mesh_names(path, names))
+          .then((result) => {
+            if (result?.error) throw new Error(result.error);
+          })
+          .catch(reportPersistenceFailure);
       }
     }
     window.dispatchEvent(

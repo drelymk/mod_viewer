@@ -11,6 +11,7 @@ import {
 } from './mesh-color-session.js';
 import { reloadTextures } from './mesh-factory.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
+import { bridgeReady } from '../app/bridge.js';
 import { isNeutralColorAdjustment, normalizeColorAdjustment } from './color-adjustment.js';
 import { isAssetTextureKey, splitTextureKey } from '../textures/texture-key.js';
 
@@ -321,17 +322,14 @@ export function createTextureSaveSession({
   }
 
   async function runSave(job) {
-    const api = window.pywebview?.api?.save_texture_color;
-    if (typeof api !== 'function') {
-      onError({ status: 'error', error_code: 'texture_saving_unavailable' });
-      return null;
-    }
     saving = true;
     const requestId = String(++saveRequestSequence);
     activeSaveRequestId = requestId;
     onProgress({ stage: 'preparing' });
 
+    let api;
     try {
+      api = await bridgeReady();
       await Promise.all((job.state.targets || []).map((target) => flushMeshColorAdjustmentPersistence(target.mesh)));
     } catch {
       saving = false;
@@ -360,7 +358,7 @@ export function createTextureSaveSession({
 
     let result;
     try {
-      result = await api(
+      result = await api.save_texture_color(
         job.state.modPath,
         job.state.texKey,
         textureSaveTargetsPayload(job.state),

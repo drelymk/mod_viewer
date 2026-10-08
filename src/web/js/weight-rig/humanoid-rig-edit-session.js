@@ -373,9 +373,9 @@ export function createHumanoidRigEditSession({
       if (!path) throw new Error('Humanoid Rig persistence is unavailable.');
       const result = await queueWrite(async () => {
         if (Object.keys(value.controls).length) {
-          return persist?.(path, value);
+          return persist(path, value);
         }
-        if (savedOverrides) return clearPersist?.(path);
+        if (savedOverrides) return clearPersist(path);
         return { saved: true };
       });
       if (!result?.saved) throw new Error(result?.error || 'The Humanoid Rig was not saved.');
@@ -419,7 +419,7 @@ export function createHumanoidRigEditSession({
     state.error = null;
     notify();
     try {
-      const result = await queueWrite(() => clearPersist?.(path));
+      const result = await queueWrite(() => clearPersist(path));
       if (!result?.saved) throw new Error(result?.error || 'The Humanoid Rig was not reset.');
       if (requestGeneration !== generation) return { saved: true, stale: true };
       savedOverrides = null;

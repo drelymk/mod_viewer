@@ -1,11 +1,15 @@
 """MCP filesystem authorization contracts."""
 
 import pytest
+import json
+import urllib.request
 
 import mcp_server
 from app.session import edit as edit_session
 from app.settings import mod_folders as mod_folders
 from core.ini.document import IniDocument
+from core.geometry.transport import GeometryBlob
+from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
 def _entry(path):
@@ -90,6 +94,36 @@ def test_inspect_mod_passes_staged_documents_without_serializing(tmp_path,
                    for item in result["documents"])
     finally:
         edit_session.discard(folder)
+
+
+def test_direct_and_mcp_loads_publish_accessible_geometry(tmp_path, monkeypatch):
+    (tmp_path / "mod.ini").write_text(basic_model_ini(), encoding="utf-8")
+    buffers = triangle_geometry()
+    for name, data in buffers.items():
+        (tmp_path / name).write_bytes(data)
+    monkeypatch.setattr(mcp_server.mod_folders, "load_registry",
+                        lambda: _entry(tmp_path))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    base_url = mcp_server._preview_base_url()
+
+    direct = mcp_server.mod_loader.load_mod(str(tmp_path))
+    supplied = GeometryBlob()
+    owned = mcp_server.mod_loader.load_mod(str(tmp_path), geometry=supplied)
+    assert not direct.get("error") and not owned.get("error")
+    assert owned["geometry"] is None and len(supplied) > 0
+    inspected = mcp_server.inspect_mod(str(tmp_path))
+    json.dumps(inspected)
+    assert not inspected.get("error")
+    assert inspected["geometry"]["url"].startswith(base_url + "/geometry/")
+    for payload, url in ((direct, base_url + direct["geometry"]["url"]),
+                         (inspected, inspected["geometry"]["url"])):
+        with opener.open(url, timeout=5) as response:
+            blob = response.read()
+        assert len(blob) == payload["geometry"]["length"] == len(supplied)
+        assert blob == supplied.to_bytes()
+        mesh = next(iter(payload["meshes"].values()))
+        ref = mesh["pos"]
+        assert blob[ref["offset"]:ref["offset"] + ref["length"]] == buffers["p.buf"]
 
 
 def test_mcp_reads_registry_for_each_invocation(tmp_path, monkeypatch):

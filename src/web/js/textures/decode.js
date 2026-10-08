@@ -1,4 +1,4 @@
-// Decode packed mesh buffers from the binary localhost blob, with base64 fallback for direct payloads.
+// Decode packed mesh buffers from the shared binary localhost blob.
 
 let geometryBlob = null;
 
@@ -6,29 +6,34 @@ export function setGeometryBlob(buffer) {
   geometryBlob = buffer;
 }
 
-function decodeBytes(value) {
-  if (value && typeof value === 'object') {
-    if (!geometryBlob) throw new Error('Geometry blob has not loaded.');
-    return new Uint8Array(geometryBlob, value.offset, value.length);
+function decodeBytes(value, alignment) {
+  if (!geometryBlob) throw new Error('Geometry blob has not loaded.');
+  if (
+    !value ||
+    !Number.isSafeInteger(value.offset) ||
+    !Number.isSafeInteger(value.length) ||
+    value.offset < 0 ||
+    value.length < 0 ||
+    value.offset % alignment !== 0 ||
+    value.length % alignment !== 0 ||
+    value.offset > geometryBlob.byteLength - value.length
+  ) {
+    throw new Error('Invalid packed geometry reference.');
   }
-  const b64 = value;
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
+  return new Uint8Array(geometryBlob, value.offset, value.length);
 }
 
-export function decodeF32(b64) {
-  const bytes = decodeBytes(b64);
+export function decodeF32(reference) {
+  const bytes = decodeBytes(reference, 4);
   return new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
 }
 
-export function decodeU32(b64) {
-  const bytes = decodeBytes(b64);
+export function decodeU32(reference) {
+  const bytes = decodeBytes(reference, 4);
   return new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
 }
 
-export function decodeI32(b64) {
-  const bytes = decodeBytes(b64);
+export function decodeI32(reference) {
+  const bytes = decodeBytes(reference, 4);
   return new Int32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
 }

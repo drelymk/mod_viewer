@@ -4,6 +4,7 @@ import { activeMeshes } from './mesh-state.js';
 import { viewerState } from '../app/state.js';
 import { usesPackedNormal } from './material-profile.js';
 import { setHealthReport } from '../panels/health-report.js';
+import { bridgeReady, reportPersistenceFailure } from '../app/bridge.js';
 
 export {
   clearTextureRunGroups,
@@ -14,8 +15,8 @@ export {
 } from './mesh-texture-runs.js';
 
 export function saveTextureState(modPath) {
-  if (viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true) return;
-  if (!modPath || !window.pywebview?.api?.save_mesh_textures) return;
+  if (viewerState.currentSource?.kind === 'asset' || viewerState.currentSource?.readOnly === true) return;
+  if (!modPath) return;
   const state = {};
   for (const mesh of activeMeshes) {
     let texKey;
@@ -49,15 +50,13 @@ export function saveTextureState(modPath) {
     }
     state[mesh.userData.metadataKey] = savedState;
   }
-  const request = window.pywebview.api.save_mesh_textures(modPath, state);
-  if (request && typeof request.then === 'function') {
-    request.then(
-      (result) => {
-        if (!result?.error) setHealthReport(null);
-      },
-      () => {},
-    );
-  } else {
-    setHealthReport(null);
-  }
+  const request = bridgeReady()
+    .then((api) => api.save_mesh_textures(modPath, state))
+    .then((result) => {
+      if (result?.error) throw new Error(result.error);
+      if (viewerState.currentModPath === modPath) setHealthReport(null);
+      return result;
+    });
+  request.catch(reportPersistenceFailure);
+  return request;
 }

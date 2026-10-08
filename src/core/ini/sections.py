@@ -24,12 +24,19 @@ class ResourceTable(dict):
         super().__init__(records or {})
         self._by_name = {}
         for name, value in self.items():
-            self._by_name.setdefault(name.lower(), value)
+            self._by_name.setdefault(name.casefold(), value)
+
+    @classmethod
+    def normalize(cls, records):
+        """Adapt plain mappings once at analysis and standalone entry points."""
+        return records if isinstance(records, cls) else cls(records)
 
     def get_ci(self, name):
         if not name:
             return {}
-        return self.get(name) or self._by_name.get(str(name).lower(), {})
+        if name in self:
+            return self[name]
+        return self._by_name.get(str(name).casefold(), {})
 
 
 def canonical_var_names(sections):
