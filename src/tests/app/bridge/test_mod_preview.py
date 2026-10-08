@@ -494,11 +494,6 @@ def test_memory_diagnostics_report_resource_retention(monkeypatch):
     monkeypatch.setattr(
         "app.bridge.mod_preview.server.geometry_stats",
         lambda: {"pending_blob_count": 2, "pending_blob_bytes": 23})
-    monkeypatch.setattr(
-        "app.bridge.mod_preview.texture_cache_stats",
-        lambda: {"rendered_png_cache_entry_count": 3,
-                 "rendered_png_cache_bytes": 29})
-
     assert preview.get_memory_diagnostics() == {
         "geometry": {"pending_blob_count": 2, "pending_blob_bytes": 23},
         "weight": {
@@ -508,10 +503,6 @@ def test_memory_diagnostics_report_resource_retention(monkeypatch):
         "dds": {
             "cached_folder_count": 1,
             "classification_entry_count": 1,
-        },
-        "texture": {
-            "rendered_png_cache_entry_count": 3,
-            "rendered_png_cache_bytes": 29,
         },
     }
 

@@ -145,6 +145,27 @@ def test_model_limit_uses_header_and_payload_size(dimension, accepted):
         header, file_size, source_name="large.dds") is not None) is accepted
 
 
+@pytest.mark.parametrize("file_size", [128 * 1024 * 1024, 256 * 1024 * 1024])
+def test_native_delivery_has_no_file_byte_cap(file_size):
+    header = _dds(payload=False)
+    assert native_dds_info_from_header(
+        header, file_size, source_name="texture.dds") is not None
+
+
+@pytest.mark.parametrize("file_size", [None, -1, 0, "invalid", float("inf")])
+def test_native_header_requires_a_known_valid_file_size(file_size):
+    assert native_dds_info_from_header(
+        _dds(payload=False), file_size, source_name="texture.dds") is None
+
+
+def test_uncompressed_model_with_valid_dimensions_has_no_file_byte_cap():
+    header = _dds(8192, 8192, "rgba8", payload=False)
+    file_size = len(header) + 8192 * 8192 * 4
+    assert inspect_dds_header(header, file_size) is not None
+    assert native_dds_info_from_header(
+        header, file_size, source_name="texture.dds") is not None
+
+
 @pytest.mark.parametrize(("format_name", "width", "height", "expected"), [
     ("rgba8", 3, 5, [(3, 5, 60, 128), (1, 2, 8, 188), (1, 1, 4, 196)]),
     ("bc1_unorm", 5, 7, [(5, 7, 32, 148), (2, 3, 8, 180), (1, 1, 8, 188)]),

@@ -744,7 +744,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             # original direct-family behavior intact.
             for family_draw in family["draws"].values():
                 family_by_draw.setdefault(id(family_draw), family)
-        texture_options = build_texture_options(group, registry)
+        group_entries = []
         processed_families = set()
 
         for draw in unique:
@@ -835,8 +835,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 "normal_map_y_sign": texture_profile.normal_y_sign,
                 "normal_map_enabled": texture_profile.bind_normal_map,
             }
-            apply_draw_texture_bindings(
-                entry, draw, texture_options, registry=registry)
+            apply_draw_texture_bindings(entry, draw, registry=registry)
             if packed.texcoords is not None:
                 entry["uv"] = _geometry_ref(packed.texcoords, geometry)
             if packed.normals is not None:
@@ -889,8 +888,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if draw.sources:
                 entry["sources"] = [_rel_source(item, mod_dir, source=source)
                                     for item in draw.sources]
-            if texture_options:
-                entry["texture_options"] = texture_options
             # The literal drawindexed = count, start, base values let the UI
             # show a meaningful per-draw label instead of a bare index.
             if draw.count is not None:
@@ -908,6 +905,14 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if draw.asset_slot_evidence:
                 entry["asset_slot_evidence"] = list(draw.asset_slot_evidence)
             result[draw.label] = entry
+            group_entries.append(entry)
+
+        if group_entries:
+            texture_options = build_texture_options(
+                group, registry, entries=group_entries)
+            if texture_options:
+                for entry in group_entries:
+                    entry["texture_options"] = texture_options
 
     return MeshBuildResult(
         meshes=result,

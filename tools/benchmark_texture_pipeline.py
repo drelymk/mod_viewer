@@ -1,8 +1,7 @@
 """Benchmark the lazy texture pipeline on a real mod.
 
-The default command runs one isolated worker for each requested semaphore size
-and prints JSON suitable for comparing PRs. Use ``--repeats 3`` for a
-three-sample summary per semaphore size:
+The default command runs one isolated worker and prints JSON suitable for
+comparing PRs. Use ``--repeats 3`` for a three-sample summary:
 
     python tools/benchmark_texture_pipeline.py "<mod-folder>"
 
@@ -12,8 +11,7 @@ and runs the frontend load path in Edge. It reports backend stages, bridge
 transport, geometry transfer, CPU-side Three.js construction, and texture
 requests. Playwright bridge timings are harness overhead estimates, not
 native pywebview/WebView2 transport measurements. The worker is isolated so
-Pillow's cache and browser processes cannot make later concurrency rows
-artificially warm. Process isolation does not flush the operating system's
+browser processes cannot make later samples artificially warm. Process isolation does not flush the operating system's
 filesystem cache, so repeated buffer reads may be filesystem-cache warm.
 """
 
@@ -39,14 +37,6 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-
-_PROFILE_STAGES = (
-    "decode",
-    "rgb_rgba_conversion",
-    "resize",
-    "normal_z_reconstruction",
-    "png_encoding",
-)
 
 _SUMMARY_TIMING_FIELDS = (
     ("backend.api_load_seconds", ("backend", "api_load_seconds")),
@@ -109,80 +99,6 @@ _SUMMARY_COUNTER_FIELDS = (
     "shape_target_bytes",
     "meshes_missing_authored_normals",
 )
-
-
-class TextureProfiler:
-    """Thread-safe collector for the optional core texture profile hook."""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.events = []
-
-    def __call__(self, stage, seconds, details):
-        with self._lock:
-            self.events.append(
-                {
-                    "stage": stage,
-                    "seconds": seconds,
-                    **details,
-                }
-            )
-
-    def clear(self):
-        with self._lock:
-            events = list(self.events)
-            self.events.clear()
-            return events
-
-    @staticmethod
-    def _identities(events, stage):
-        return {
-            (event.get("path"), event.get("role"), event.get("transform"))
-            for event in events
-            if event["stage"] == stage
-        }
-
-    def summarize(self, events):
-        stage_seconds = defaultdict(float)
-        stage_calls = defaultdict(int)
-        for event in events:
-            stage = event["stage"]
-            if stage in _PROFILE_STAGES:
-                stage_seconds[stage] += event["seconds"]
-                stage_calls[stage] += 1
-        encoded = [event for event in events if event["stage"] == "encoded"]
-        return {
-            "stage_seconds": {
-                stage: stage_seconds.get(stage, 0.0) for stage in _PROFILE_STAGES
-            },
-            "stage_calls": {
-                stage: stage_calls.get(stage, 0) for stage in _PROFILE_STAGES
-            },
-            "cache_hits": sum(event["stage"] == "cache_hit" for event in events),
-            "cache_misses": sum(event["stage"] == "cache_miss" for event in events),
-            "actually_rendered": len(self._identities(events, "encoded")),
-            "png_bytes_encoded": sum(event.get("bytes", 0) for event in encoded),
-        }
-
-
-class RenderConcurrencyProbe:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.active = 0
-        self.peak = 0
-
-    def wrap(self, function):
-        def measured(*args, **kwargs):
-            with self._lock:
-                self.active += 1
-                self.peak = max(self.peak, self.active)
-            try:
-                return function(*args, **kwargs)
-            finally:
-                with self._lock:
-                    self.active -= 1
-
-        return measured
 
 
 def _install_load_instrumentation(timings, counters):
@@ -516,11 +432,8 @@ def _run_browser(
     base_url,
     api,
     mod_path,
-    profiler,
     sampler,
-    concurrency,
     browser_channel,
-    render_probe,
 ):
     from playwright.sync_api import sync_playwright
 
@@ -530,7 +443,6 @@ def _run_browser(
     page_errors = []
     console_errors = []
     payload_holder = {}
-    backend_events_holder = []
     bridge_callback_timings = []
     bridge_json_serialization_timings = []
 
@@ -570,7 +482,6 @@ def _run_browser(
             result = api.load_mod(path, disabled_ini)
         finally:
             bridge_callback_timings.append(time.perf_counter() - started)
-            backend_events_holder.extend(profiler.clear())
         payload_holder["payload"] = result
         if isinstance(result, dict):
             serialization_started = time.perf_counter()
@@ -705,7 +616,7 @@ def _run_browser(
             network_idle_error = str(error)
         # Without a WebGPU adapter Three.js still queues texture requests,
         # but there is no render loop to keep the page alive while the local
-        # PNG workers finish. Give those requests a short settling window so
+        # texture requests finish. Give those requests a short settling window so
         # the benchmark does not close the client socket mid-response.
         page.wait_for_timeout(5000 if not renderer_available else 250)
         texture_finished = time.perf_counter()
@@ -772,7 +683,7 @@ def _run_browser(
                 response["url"].split("?", 1)[0].lower().endswith(".dds")
                 for response in texture_responses
             ),
-            "png_request_count": sum(
+            "browser_image_request_count": sum(
                 not response["url"].split("?", 1)[0].lower().endswith(".dds")
                 for response in texture_responses
             ),
@@ -781,7 +692,7 @@ def _run_browser(
                 for response in texture_responses
                 if response["url"].split("?", 1)[0].lower().endswith(".dds")
             ),
-            "png_bytes_served": sum(
+            "browser_image_bytes_served": sum(
                 response["bytes"]
                 for response in texture_responses
                 if not response["url"].split("?", 1)[0].lower().endswith(".dds")
@@ -822,45 +733,31 @@ def _run_browser(
     texture_window = sampler.window(texture_started, texture_finished)
     browser_result.update(texture_window)
     browser_result["rss_cpu_source"] = sampler.source
-    browser_result["peak_simultaneous_encodes"] = render_probe.peak
-    return browser_result, payload_holder.get("payload"), backend_events_holder
+    return browser_result, payload_holder.get("payload")
 
 
-def _run_once(mod_path, concurrency, browser_channel):
+def _run_once(mod_path, browser_channel):
     from app.runtime import server
     from app.bridge.api import ModViewerAPI
-    from core import textures
 
     timings = defaultdict(list)
     counters = defaultdict(int)
-    profiler = TextureProfiler()
     sampler = _ProcessSampler()
     sampler.start()
-    old_hook = textures.set_texture_profile_hook(profiler)
-    textures.reset_texture_cache()
     api = ModViewerAPI()
     api._access.remember_mod_picker_selection(mod_path)
     patches = _install_load_instrumentation(timings, counters)
 
-    server._texture_encode_semaphore = threading.BoundedSemaphore(concurrency)
-    render_probe = RenderConcurrencyProbe()
-    original_server_render = server.render_texture_png
-    server.render_texture_png = render_probe.wrap(original_server_render)
     try:
         base_url = server.start()
-        browser, payload, backend_events = _run_browser(
+        browser, payload = _run_browser(
             base_url,
             api,
             mod_path,
-            profiler,
             sampler,
-            concurrency,
             browser_channel,
-            render_probe,
         )
     finally:
-        server.render_texture_png = original_server_render
-        textures.set_texture_profile_hook(old_hook)
         sampler.stop()
         _restore_patches(patches)
 
@@ -869,26 +766,6 @@ def _run_once(mod_path, concurrency, browser_channel):
 
     publication = server.active_texture_publication(mod_path)
     sources = list(publication._sources.values()) if publication else []
-    source_paths = {
-        os.path.normcase(os.path.abspath(source.path)) for source in sources
-    }
-    backend_rendered = {
-        (event.get("path"), event.get("role"))
-        for event in backend_events
-        if event["stage"] == "encoded"
-    }
-    backend_model_rendered = {
-        identity
-        for identity in backend_rendered
-        if os.path.normcase(identity[0]) in source_paths
-    }
-
-    texture_events = profiler.clear()
-    profile = profiler.summarize(texture_events)
-    browser["texture_profile"] = profile
-    browser["actually_rendered"] = profile["actually_rendered"]
-    browser["profiled_texture_seconds"] = sum(profile["stage_seconds"].values())
-
     source_bytes = sum(
         os.path.getsize(source.path)
         for source in sources
@@ -922,7 +799,6 @@ def _run_once(mod_path, concurrency, browser_channel):
     decode_normals_seconds = sum(timings["decode_normals"])
     build_shape_buffers_seconds = sum(timings["build_shape_buffers"])
     return {
-        "concurrency": concurrency,
         "backend": {
             "api_load_seconds": browser.get("bridge_callback_seconds", 0.0),
             "authoritative_context_seconds": sum(timings["authoritative_context"]),
@@ -951,10 +827,7 @@ def _run_once(mod_path, concurrency, browser_channel):
             "geometry_publication_seconds": sum(timings["geometry_publication"]),
             "registered_texture_sources": len(sources),
             "native_dds_sources": sum(source.native_dds for source in sources),
-            "png_fallback_sources": sum(not source.native_dds for source in sources),
-            "backend_model_texture_renders": len(backend_model_rendered),
-            "backend_other_texture_renders": len(backend_rendered)
-            - len(backend_model_rendered),
+            "browser_image_sources": sum(not source.native_dds for source in sources),
             **counters,
         },
         "assets": {
@@ -987,8 +860,8 @@ def _nested_value(value, path):
     return value
 
 
-def _summarize_runs(runs, concurrency):
-    selected = [run for run in runs if run["concurrency"] == concurrency]
+def _summarize_runs(runs):
+    selected = runs
     timings = {}
     for label, path in _SUMMARY_TIMING_FIELDS:
         values = [
@@ -1007,7 +880,6 @@ def _summarize_runs(runs, concurrency):
         if values:
             counters[field] = _summary_stats(values)
     return {
-        "concurrency": concurrency,
         "repeats": len(selected),
         "timings": timings,
         "counters": counters,
@@ -1018,17 +890,10 @@ def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mod_path", type=Path)
     parser.add_argument(
-        "--concurrency",
-        nargs="+",
-        type=int,
-        default=[1, 2, 4],
-        help="semaphore sizes (default: 1 2 4)",
-    )
-    parser.add_argument(
         "--repeats",
         type=int,
         default=1,
-        help="isolated samples per semaphore size (default: 1)",
+        help="isolated samples (default: 1)",
     )
     parser.add_argument("--browser-channel", default="msedge")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
@@ -1041,43 +906,37 @@ def main():
     mod_path = str(args.mod_path.resolve())
     if not os.path.isdir(mod_path):
         raise SystemExit(f"Mod folder not found: {mod_path}")
-    if any(value <= 0 for value in args.concurrency):
-        raise SystemExit("--concurrency values must be positive")
     if args.repeats <= 0:
         raise SystemExit("--repeats must be positive")
 
     if args.worker:
         with contextlib.redirect_stdout(sys.stderr):
-            result = _run_once(mod_path, args.concurrency[0], args.browser_channel)
+            result = _run_once(mod_path, args.browser_channel)
         print(json.dumps(result, indent=2 if args.pretty else None))
         return
 
     runs = []
-    for concurrency in args.concurrency:
-        for repeat in range(1, args.repeats + 1):
-            command = [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                mod_path,
-                "--worker",
-                "--concurrency",
-                str(concurrency),
-                "--browser-channel",
-                args.browser_channel,
-            ]
-            completed = subprocess.run(
-                command, cwd=str(REPO_ROOT), text=True, capture_output=True, timeout=600
+    for repeat in range(1, args.repeats + 1):
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            mod_path,
+            "--worker",
+            "--browser-channel",
+            args.browser_channel,
+        ]
+        completed = subprocess.run(
+            command, cwd=str(REPO_ROOT), text=True, capture_output=True, timeout=600
+        )
+        if completed.stderr:
+            print(completed.stderr, file=sys.stderr, end="")
+        if completed.returncode:
+            raise SystemExit(
+                f"benchmark worker failed for repeat {repeat}: {completed.stdout}"
             )
-            if completed.stderr:
-                print(completed.stderr, file=sys.stderr, end="")
-            if completed.returncode:
-                raise SystemExit(
-                    f"benchmark worker failed for concurrency {concurrency}, "
-                    f"repeat {repeat}: {completed.stdout}"
-                )
-            result = json.loads(completed.stdout)
-            result["repeat"] = repeat
-            runs.append(result)
+        result = json.loads(completed.stdout)
+        result["repeat"] = repeat
+        runs.append(result)
     output = {
         "mod_path": mod_path,
         "browser_channel": args.browser_channel,
@@ -1089,9 +948,7 @@ def main():
             "pywebview/WebView2 measurements.",
         ],
         "runs": runs,
-        "summary": [
-            _summarize_runs(runs, concurrency) for concurrency in args.concurrency
-        ],
+        "summary": _summarize_runs(runs),
     }
     print(json.dumps(output, indent=2 if args.pretty else None))
 

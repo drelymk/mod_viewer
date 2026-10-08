@@ -171,7 +171,7 @@ def _texture_file(files, texture_hash, extension, component, classification, rol
     candidates = []
     for path in files:
         name = os.path.basename(path).casefold()
-        if (not name.endswith((".dds", ".png", ".jpg", ".jpeg", ".tga"))
+        if (not name.endswith((".dds", ".png", ".jpg", ".jpeg"))
                 or (extension and not name.endswith(extension))):
             continue
         if stem and os.path.splitext(name)[0].endswith(stem):
@@ -211,7 +211,7 @@ def _range_texture_records(files, ib_candidates, first, count, vertex_count,
         family = {}
         for candidate in files:
             extension = os.path.splitext(candidate)[1].casefold()
-            if extension not in {".dds", ".png", ".jpg", ".jpeg", ".tga"}:
+            if extension not in {".dds", ".png", ".jpg", ".jpeg"}:
                 continue
             texture_stem = os.path.splitext(
                 os.path.basename(candidate))[0].casefold()

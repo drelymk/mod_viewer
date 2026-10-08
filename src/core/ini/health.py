@@ -26,7 +26,7 @@ _RESOURCE_REFERENCE_RE = re.compile(
     r"^(?P<prefix>copy(?:\s+(?:ref|reference))?|ref(?:erence)?|\S+)\s+"
     r"(?P<resource>Resource[A-Za-z0-9_.\\-]+)\s*$", re.I)
 _ASSET_EXTENSIONS = {
-    ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".tga", ".bmp",
+    ".buf", ".ib", ".vb", ".dds", ".png", ".jpg", ".jpeg", ".bmp",
 }
 _IGNORED_FILES = {".mod_viewer.json"}
 

@@ -42,7 +42,7 @@ def test_unsupported_native_candidate_retains_choice_and_reports_manual_pick_err
     key = 'diffuse::single-channel.dds'
     publication = server.begin_texture_publication(str(tmp_path))
     try:
-        with patch('app.runtime.server.render_texture_png',
+        with patch('PIL.Image.Image.save',
                    side_effect=AssertionError('Model DDS must not render eagerly')):
             payload = {'meshes': {'mesh-01': {
                 'component': 'Component1',
@@ -100,7 +100,7 @@ def test_mesh_builder_publishes_sources_without_rendering(tmp_path):
         registered.append((os.path.basename(path), role))
         return f"/texture/test/{len(registered) - 1}"
 
-    with patch("core.textures.render_texture_png",
+    with patch("PIL.Image.Image.save",
                side_effect=AssertionError("lazy app path rendered a texture")):
         built = build_mesh_result(
             _group({
@@ -159,7 +159,7 @@ def test_mod_loader_app_path_never_renders_model_textures(tmp_path):
         registered.append((os.path.basename(path), role))
         return f"/texture/integration/{len(registered) - 1}"
 
-    with patch("core.textures.render_texture_png",
+    with patch("PIL.Image.Image.save",
                side_effect=AssertionError("loader rendered a model texture")):
         loaded = mod_loader.load_mod(
             context=context, geometry=GeometryBlob(), texture_source=register)
@@ -280,7 +280,7 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
         registered.append((os.path.basename(path), role))
         return f"/texture/test/{role}"
 
-    with patch("core.textures.render_texture_png",
+    with patch("PIL.Image.Image.save",
                side_effect=AssertionError("pool publication rendered a texture")):
         metadata.hydrate_textures(
             str(tmp_path), payload, texture_source=register)
@@ -299,14 +299,16 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
 
 
 
-def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_path):
+@pytest.mark.parametrize("menu_image", [False, True])
+def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_path, menu_image):
     dds = tmp_path / "native.dds"
     write_bc7_dds(dds)
     invalid = tmp_path / "unsupported.dds"
     invalid.write_bytes(b"not a DDS")
     publication = server.begin_texture_publication(str(tmp_path))
-    native_url = publication.register(str(dds))
-    rejected_url = publication.register(str(invalid))
+    register = publication.register_menu_image if menu_image else publication.register
+    native_url = register(str(dds))
+    rejected_url = register(str(invalid))
     publication.commit()
 
     assert native_url.endswith("/0.dds")
@@ -319,25 +321,15 @@ def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_pa
     thread.start()
     base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
     try:
-        class RejectEncodeSemaphore:
-            def __enter__(self):
-                raise AssertionError("native DDS entered the PNG semaphore")
-
-            def __exit__(self, *_args):
-                return False
-
-        with patch.object(server, "_texture_encode_semaphore",
-                          RejectEncodeSemaphore()):
+        with patch("PIL.Image.Image.save", side_effect=AssertionError("image encoding")):
             for attempt in range(2):
                 with urlopen(base_url + native_url) as response:
                     if attempt == 0:
-                        assert response.headers["Content-Type"] == (
-                            "image/vnd-ms.dds")
-                        assert int(response.headers["Content-Length"]) == (
-                            dds.stat().st_size)
+                        assert response.headers["Content-Type"] == "image/vnd-ms.dds"
+                        assert int(response.headers["Content-Length"]) == dds.stat().st_size
                     assert response.read() == dds.read_bytes()
 
-        with patch("app.runtime.server.render_texture_png",
+        with patch("PIL.Image.Image.save",
                    side_effect=AssertionError("model DDS rendered to PNG")):
             for alias in (native_url[:-4] + ".png", native_url[:-4]):
                 with pytest.raises(HTTPError) as error:
@@ -377,35 +369,115 @@ def test_model_dds_limit_is_independent_of_png_size(tmp_path):
         url = publication.register(str(accepted))
         assert url.endswith(".dds")
         assert publication.register(str(rejected)) is None
-        assert server._lookup_texture(publication.token, "0").max_size == 2048
+        assert server._lookup_texture(publication.token, "0").suffix == ".dds"
     finally:
         publication.discard()
 
 
-def test_menu_dds_publication_defers_png_render_until_requested(tmp_path):
-    dds = tmp_path / "menu.dds"
-    write_bc7_dds(dds)
-    publication = server.begin_texture_publication(str(tmp_path))
+@pytest.mark.parametrize("archived", [False, True])
+@pytest.mark.parametrize("dimension,accepted", [(4, True), (8192, True), (8193, False)])
+def test_menu_dds_publication_is_native_lazy_and_dimension_limited(
+        tmp_path, archived, dimension, accepted):
+    path = tmp_path / "texture.dds"
+    write_bc7_dds(path, width=dimension, height=4)
+    data = path.read_bytes()
+    if archived:
+        archive_path = tmp_path / "mod.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr(path.name, data)
+        source = ZipModSource(archive_path)
+        publication = server.begin_texture_publication(str(archive_path), source=source)
+        candidate = source.resolve_resource(path.name)
+    else:
+        publication = server.begin_texture_publication(str(tmp_path))
+        candidate = str(path)
     try:
-        with patch("app.runtime.server.render_texture_png",
-                   return_value=b"PNG") as render:
-            url = publication.register_menu_image(str(dds))
-            assert url.endswith(".png")
-            assert render.call_count == 0
-
-            source_id = url.rsplit("/", 1)[1][:-4]
-            source = server._lookup_texture(publication.token, source_id)
-            assert source is not None
-            assert source.native_dds is False
-
-            assert server._render_texture_request(
-                publication.token, source_id, source) == b"PNG"
-            render.assert_called_once()
-            assert render.call_args.args[0] == str(dds)
-            assert render.call_args.kwargs["max_size"] == 256
-            assert render.call_args.kwargs["preserve_alpha"] is True
+        with patch("PIL.Image.Image.save",
+                   side_effect=AssertionError("menu DDS rendered to PNG")):
+            if archived:
+                with patch.object(source, "read_bytes", side_effect=AssertionError(
+                        "menu DDS payload read during registration")):
+                    url = publication.register_menu_image(candidate)
+            else:
+                url = publication.register_menu_image(candidate)
+        if accepted:
+            assert url.endswith(".dds")
+            entry = server._lookup_texture(publication.token, "0")
+            assert entry.native_dds
+        else:
+            assert url is None
+            assert not publication._sources
     finally:
         publication.discard()
+
+
+@pytest.mark.parametrize("extension,content_type", [
+    ("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"),
+    ("webp", "image/webp"), ("bmp", "image/bmp"), ("gif", "image/gif"),
+])
+@pytest.mark.parametrize("archived", [False, True])
+def test_browser_images_publish_lazily_and_stream_original_bytes(
+        tmp_path, extension, content_type, archived):
+    path = tmp_path / f"image.{extension}"
+    if extension in {"png", "webp"}:
+        Image.new("RGBA", (300, 2), (30, 60, 90, 128)).save(path)
+    else:
+        Image.new("RGB", (300, 2), (30, 60, 90)).save(path)
+    original = path.read_bytes()
+    source = None
+    candidate = str(path)
+    if archived:
+        archive_path = tmp_path / "mod.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr(path.name, original)
+        source = ZipModSource(archive_path)
+        candidate = source.resolve_resource(path.name)
+    publication = server.begin_texture_publication(str(tmp_path), source=source)
+    reads = []
+    if source:
+        original_read = source.read_bytes
+        def read_bytes(reference):
+            reads.append(reference)
+            return original_read(reference)
+        source.read_bytes = read_bytes
+    handler = functools.partial(server._Handler, directory=str(tmp_path))
+    httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        with patch("PIL.Image.Image.save", side_effect=AssertionError("image encoding")), \
+                patch("app.runtime.server.load_texture_image_full", side_effect=AssertionError("image decode")):
+            url = publication.register_menu_image(candidate)
+            assert url == publication.register(candidate, "diffuse")
+            assert url.endswith("." + extension)
+            assert reads == []
+            unsupported = tmp_path / "unsupported.bin"
+            unsupported.write_bytes(original)
+            assert publication.register(str(unsupported)) is None
+            publication.commit()
+            with urlopen(base_url + url) as response:
+                assert response.headers["Content-Type"] == content_type
+                assert response.read() == original
+            assert reads == ([candidate] if source else [])
+            with pytest.raises(HTTPError) as bad_suffix:
+                urlopen(base_url + url.rsplit(".", 1)[0] + ".dds")
+            assert bad_suffix.value.code == 404
+        with patch("PIL.Image.Image.save", side_effect=AssertionError("image encoding")):
+            assert publication.register(candidate, validate=True) == url
+            invalid = tmp_path / f"invalid.{extension}"
+            invalid.write_bytes(original[:8])
+            assert publication.register(str(invalid), validate=True) is None
+        publication.release()
+        with pytest.raises(HTTPError) as expired:
+            urlopen(base_url + url)
+        assert expired.value.code == 404
+    finally:
+        publication.release()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
 
 
 def test_zip_native_dds_reads_header_at_registration_and_original_bytes_on_request(
@@ -515,143 +587,47 @@ def test_sevenzip_native_dds_transport_reads_prefix_then_original_member(
         publication.discard()
 
 
-def test_texture_requests_are_threaded_but_rendering_is_bounded(tmp_path):
-    paths = []
-    for index in range(3):
-        path = tmp_path / f"texture-{index}.png"
-        Image.new("RGB", (1, 1), (index, 128, 32)).save(path)
-        paths.append(path)
+def test_retired_texture_request_is_rejected_after_source_open(tmp_path):
+    import builtins
 
-    publication = server.begin_texture_publication(str(tmp_path))
-    texture_urls = [publication.register(str(path)) for path in paths]
-    publication.commit()
-
-    active = 0
-    peak = 0
-    state_lock = threading.Lock()
-    two_started = threading.Event()
+    path = tmp_path / "image.png"
+    Image.new("RGB", (1, 1), (30, 60, 90)).save(path)
+    old = server.begin_texture_publication(str(tmp_path))
+    old_url = old.register(str(path))
+    old.commit()
+    current = server.begin_texture_publication(str(tmp_path))
+    current_url = current.register(str(path))
+    opened = threading.Event()
     release = threading.Event()
+    original_open = builtins.open
 
-    def blocked_render(*args, **kwargs):
-        nonlocal active, peak
-        with state_lock:
-            active += 1
-            peak = max(peak, active)
-            if active == 2:
-                two_started.set()
-        try:
-            assert release.wait(5), "test render gate was not released"
-            return b"PNG"
-        finally:
-            with state_lock:
-                active -= 1
+    def blocked_open(file, *args, **kwargs):
+        if str(file) == str(path):
+            opened.set()
+            assert release.wait(5), "source gate was not released"
+        return original_open(file, *args, **kwargs)
 
     handler = functools.partial(server._Handler, directory=str(tmp_path))
     httpd = server._ThreadingTCPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
-
-    def fetch(texture_url):
-        with urlopen(base_url + texture_url, timeout=5) as response:
+    def fetch(url):
+        with urlopen(base_url + url, timeout=5) as response:
             return response.read()
-
-    reached_two = False
     try:
-        with patch("app.runtime.server.render_texture_png", side_effect=blocked_render):
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = [executor.submit(fetch, texture_url)
-                           for texture_url in texture_urls]
-                reached_two = two_started.wait(2)
-                release.set()
-                results = [future.result(timeout=5) for future in futures]
-        assert results == [b"PNG"] * 3
+        with patch("builtins.open", side_effect=blocked_open), ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(fetch, old_url)
+            assert opened.wait(2)
+            current.commit()
+            release.set()
+            with pytest.raises(HTTPError) as expired:
+                pending.result(timeout=5)
+            assert expired.value.code == 404
+            assert fetch(current_url) == path.read_bytes()
     finally:
         release.set()
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
-
-    assert reached_two
-    assert peak == server._TEXTURE_ENCODE_CONCURRENCY == 2
-
-
-def test_retired_texture_request_skips_render_after_waiting_for_slot(tmp_path):
-    old_first = tmp_path / "old-first.png"
-    old_queued = tmp_path / "old-queued.png"
-    current = tmp_path / "current.png"
-    for path, color in ((old_first, (1, 128, 32)),
-                        (old_queued, (2, 128, 32)),
-                        (current, (3, 128, 32))):
-        Image.new("RGB", (1, 1), color).save(path)
-
-    old_publication = server.begin_texture_publication(str(tmp_path / "old"))
-    old_first_url = old_publication.register(str(old_first))
-    old_queued_url = old_publication.register(str(old_queued))
-    old_publication.commit()
-    old_first_source = server._lookup_texture(old_publication.token, "0")
-    old_queued_source = server._lookup_texture(old_publication.token, "1")
-
-    current_publication = server.begin_texture_publication(
-        str(tmp_path / "current"))
-    current_url = current_publication.register(str(current))
-    current_source = server._lookup_texture(current_publication.token, "0")
-
-    class ObservableSemaphore:
-        def __init__(self):
-            self._semaphore = threading.BoundedSemaphore(1)
-            self.waiting = threading.Event()
-
-        def __enter__(self):
-            if not self._semaphore.acquire(blocking=False):
-                self.waiting.set()
-                self._semaphore.acquire()
-            return self
-
-        def __exit__(self, exc_type, exc_value, traceback):
-            self._semaphore.release()
-
-    semaphore = ObservableSemaphore()
-    first_started = threading.Event()
-    release_first = threading.Event()
-    rendered_paths = []
-    rendered_paths_lock = threading.Lock()
-
-    def blocked_render(path, **kwargs):
-        with rendered_paths_lock:
-            rendered_paths.append(path)
-        if path == str(old_first):
-            first_started.set()
-            if not release_first.wait(5):
-                raise RuntimeError("test render gate was not released")
-        return b"PNG"
-
-    with patch.object(server, "_texture_encode_semaphore", semaphore), \
-            patch("app.runtime.server.render_texture_png", side_effect=blocked_render):
-        try:
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                first_future = executor.submit(
-                    server._render_texture_request,
-                    old_publication.token, "0", old_first_source)
-                assert first_started.wait(2)
-                queued_future = executor.submit(
-                    server._render_texture_request,
-                    old_publication.token, "1", old_queued_source)
-                assert semaphore.waiting.wait(2)
-
-                current_publication.commit()
-                release_first.set()
-
-                assert first_future.result(timeout=5) == b"PNG"
-                assert queued_future.result(timeout=5) is None
-                assert executor.submit(
-                    server._render_texture_request,
-                    current_publication.token, "0", current_source,
-                ).result(timeout=5) == b"PNG"
-        finally:
-            release_first.set()
-
-    assert old_first_url.endswith("/0.png")
-    assert old_queued_url.endswith("/1.png")
-    assert current_url.endswith("/0.png")
-    assert rendered_paths == [str(old_first), str(current)]
+        current.release()

@@ -15,7 +15,7 @@ from core.geometry.skinning import (
     skinning_source_descriptor,
 )
 from core.resource_paths import safe_resource_path
-from core.textures import encode_texture_file, texture_cache_stats
+from core.textures import encode_texture_file
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import ModSourceError, mod_source_for_path
 from core.ini.health import analyze_mod
@@ -469,7 +469,6 @@ class ModPreview:
                 "cached_folder_count": dds_folder_count,
                 "classification_entry_count": dds_entry_count,
             },
-            "texture": texture_cache_stats(),
         }
 
     @staticmethod
@@ -600,7 +599,7 @@ class ModPreview:
             return {"error": "Unknown texture role."}
         result = window.create_file_dialog(
             webview.FileDialog.OPEN, directory=folder_path,
-            file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
+            file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg)",))
         if not result:
             return None
         texture_source = self._active_texture_source(

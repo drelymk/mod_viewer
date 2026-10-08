@@ -1,27 +1,17 @@
-"""Texture identity and fallback image processing."""
+"""Texture identity, source publication, and CPU image decoding."""
 
-import base64
 import io
 import os
 import struct
-import threading
-import time
 import warnings
-from collections import OrderedDict
 
 from ..resource_paths import _canonical, safe_resource_path
 
 
-_TEXTURE_CACHE_LIMIT = 256 * 1024 * 1024
 _MAX_IMAGE_PIXELS = 100_000_000
 TEXTURE_ROLES = (
     "diffuse", "normal_map", "normal_data", "light_map", "material_map",
     "emission_map")
-_texture_cache = OrderedDict()
-_texture_cache_bytes = 0
-_texture_cache_mod = None
-_texture_cache_lock = threading.RLock()
-_texture_profile_hook = None
 
 
 _SRGB_DXGI_TO_UNORM = {
@@ -65,77 +55,6 @@ def texture_key_for_role(value, role):
         return None
     _old_role, relative_path = split_texture_key(value, role)
     return texture_key(relative_path, role)
-
-
-def set_texture_profile_hook(hook):
-    """Install an optional texture-stage callback and return the previous one."""
-    global _texture_profile_hook
-    previous = _texture_profile_hook
-    _texture_profile_hook = hook
-    return previous
-
-
-def _profile_texture(stage, seconds=0.0, **details):
-    hook = _texture_profile_hook
-    if hook is None:
-        return
-    try:
-        hook(stage, seconds, details)
-    except Exception:
-        pass
-
-
-def _profile_started():
-    return time.perf_counter() if _texture_profile_hook is not None else None
-
-
-def _profile_elapsed(stage, started, **details):
-    if started is not None:
-        _profile_texture(stage, time.perf_counter() - started, **details)
-
-
-def _begin_texture_cache(mod_dir):
-    global _texture_cache_mod, _texture_cache_bytes
-    root = os.path.normcase(os.path.abspath(mod_dir))
-    with _texture_cache_lock:
-        if root != _texture_cache_mod:
-            _texture_cache.clear()
-            _texture_cache_bytes = 0
-            _texture_cache_mod = root
-
-
-def reset_texture_cache():
-    """Clear the process-local rendered-PNG cache."""
-    global _texture_cache_bytes, _texture_cache_mod
-    with _texture_cache_lock:
-        _texture_cache.clear()
-        _texture_cache_bytes = 0
-        _texture_cache_mod = None
-
-
-def texture_cache_stats():
-    """Return the process-local rendered-PNG cache footprint."""
-    with _texture_cache_lock:
-        return {
-            "rendered_png_cache_entry_count": len(_texture_cache),
-            "rendered_png_cache_bytes": _texture_cache_bytes,
-        }
-
-
-def _cache_texture(key, png):
-    global _texture_cache_bytes
-    size = len(png)
-    if size > _TEXTURE_CACHE_LIMIT:
-        return
-    with _texture_cache_lock:
-        previous = _texture_cache.pop(key, None)
-        if previous is not None:
-            _texture_cache_bytes -= previous[1]
-        _texture_cache[key] = (png, size)
-        _texture_cache_bytes += size
-        while _texture_cache_bytes > _TEXTURE_CACHE_LIMIT:
-            _old_key, (_old_png, old_size) = _texture_cache.popitem(last=False)
-            _texture_cache_bytes -= old_size
 
 
 def _srgb_dds_as_unorm(data):
@@ -232,87 +151,10 @@ def load_texture_image_full(path, preserve_alpha=True, source_name=None):
         path, None, preserve_alpha, source_name=source_name)
 
 
-def render_texture_png(path, max_size=2048, preserve_alpha=False,
-                       texture_role=None, source_name=None):
-    """Decode an image into PNG bytes."""
-    try:
-        texture_role = normalize_texture_role(texture_role)
-        if isinstance(path, (bytes, bytearray, memoryview)):
-            cache_identity = ("bytes", source_name or "", hash(bytes(path)))
-            cache_size = len(path)
-            cache_mtime = None
-        else:
-            stat = os.stat(path)
-            cache_identity = os.path.normcase(os.path.abspath(path))
-            cache_size = stat.st_size
-            cache_mtime = stat.st_mtime_ns
-        cache_key = (cache_identity, cache_size, cache_mtime, max_size,
-                     preserve_alpha, texture_role)
-        cache_started = _profile_started()
-        with _texture_cache_lock:
-            cached = _texture_cache.pop(cache_key, None)
-            if cached is not None:
-                _texture_cache[cache_key] = cached
-                _profile_elapsed(
-                    "cache_hit", cache_started,
-                    path=cache_key[0], role=texture_role,
-                    bytes=len(cached[0]))
-                return cached[0]
-        _profile_elapsed("cache_miss", cache_started,
-                         path=cache_key[0], role=texture_role)
-        keep_source_alpha = preserve_alpha or texture_role != "diffuse"
-        stage_started = _profile_started()
-        img = load_texture_image(
-            path, max_size=max_size, preserve_alpha=keep_source_alpha,
-            source_name=source_name)
-        if img is None:
-            return None
-        _profile_elapsed("decode", stage_started,
-                         path=cache_key[0], role=texture_role)
-        stage_started = _profile_started()
-        try:
-            if preserve_alpha and img.getchannel('A').getextrema()[1] == 0:
-                return None
-        finally:
-            _profile_elapsed(
-                "rgb_rgba_conversion", stage_started,
-                path=cache_key[0], role=texture_role)
-        stage_started = _profile_started()
-        try:
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            png = buf.getvalue()
-        finally:
-            _profile_elapsed(
-                "png_encoding", stage_started,
-                path=cache_key[0], role=texture_role,
-                bytes=len(png) if "png" in locals() else 0)
-        _cache_texture(cache_key, png)
-        _profile_texture(
-            "encoded", 0.0, path=cache_key[0], role=texture_role,
-            bytes=len(png))
-        return png
-    except Exception as error:
-        print(f"  texture skipped: {error}")
-        return None
-
-
-def encode_texture_data_uri(path, max_size=2048, preserve_alpha=False,
-                            texture_role=None, source_name=None):
-    """Return the rendered PNG as a base64 data URI."""
-    png = render_texture_png(
-        path, max_size=max_size, preserve_alpha=preserve_alpha,
-        texture_role=texture_role, source_name=source_name)
-    if png is None:
-        return None
-    return "data:image/png;base64," + base64.b64encode(png).decode()
-
-
 def encode_texture_file(mod_dir, abs_path, texture_role=None,
                         texture_source=None, source=None):
     """Resolve a picked file into ``{tex_key, file, role, uri}``."""
     texture_role = normalize_texture_role(texture_role)
-    _begin_texture_cache(mod_dir)
     if source is not None and source.is_resource_reference(abs_path):
         resolved = abs_path
         rel = source.logical_path(abs_path)
@@ -329,19 +171,7 @@ def encode_texture_file(mod_dir, abs_path, texture_role=None,
         exists = os.path.isfile(abs_path)
     if not exists:
         return {"error": "Selected file does not exist."}
-    if texture_source is None:
-        if (source is not None and getattr(source, "virtual", False)
-                and source.is_resource_reference(resolved)):
-            uri = encode_texture_data_uri(
-                source.read_bytes(resolved), texture_role=texture_role,
-                source_name=source.logical_path(resolved))
-        else:
-            uri = encode_texture_data_uri(
-                resolved, texture_role=texture_role,
-                source_name=(source.logical_path(resolved)
-                             if source is not None else None))
-    else:
-        uri = texture_source(resolved, texture_role)
+    uri = texture_source(resolved, texture_role) if texture_source else None
     if not uri:
         return {"error": "Could not read this file as an image.",
                 "error_code": "texture_load_failed",

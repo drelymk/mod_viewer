@@ -7,14 +7,39 @@ import pytest
 
 from app.mods.analysis import ParsedModAnalysis, build_mod_ini_snapshot
 from app.mods.controls import (
-    _gating_vars, _gating_vars_from_groups, load_control_state,
+    _gating_vars, _gating_vars_from_groups, build_menu_panel, load_control_state,
     load_present_state, unwired_pending_sections,
 )
 from app.mods.loader import load_mod, load_semantic_state
 from core.ini.document import IniDocument
 from tests.support_snapshot import snapshot_context
+from tests.support.dds_data import write_bc7_dds
 
 from app.mods.controls import build_toggle_panel
+
+
+def test_menu_dds_projection_requires_native_publication_without_png(tmp_path, monkeypatch):
+    from app.runtime import server
+
+    image = tmp_path / 'icon.dds'
+    write_bc7_dds(image)
+    info = {'name': 'Option01', 'slot': 1, 'source': None, 'section': 'CommandListMenu',
+            'var': 'option01', 'values': ['0', '1'], 'effects': [], 'image_file': image.name}
+
+    def reject_conversion(*_args, **_kwargs):
+        raise AssertionError('DDS menu preview converted to PNG')
+
+    monkeypatch.setattr('PIL.Image.Image.save', reject_conversion)
+    detached = build_menu_panel({'Menu01': info}, {}, mod_dir=str(tmp_path))
+    assert 'image' not in detached['Menu01']
+    publication = server.begin_texture_publication(str(tmp_path))
+    try:
+        displayed = build_menu_panel({'Menu01': info}, {}, mod_dir=str(tmp_path),
+                                     image_source=publication.register_menu_image)
+        assert displayed['Menu01']['image'].endswith('.dds')
+        assert displayed['Menu01']['values'] == ['0', '1']
+    finally:
+        publication.discard()
 
 
 def test_unwired_pending_sections_uses_full_staged_snapshot(tmp_path,

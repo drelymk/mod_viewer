@@ -120,7 +120,9 @@ def test_root_texture_picker_accepts_windows_case_variation():
 
         # Root-level files retain a role-aware key; the differently-cased path
         # must still pass containment validation on case-insensitive Windows.
-        result = encode_texture_file(tmp.swapcase(), path)
+        result = encode_texture_file(
+            tmp.swapcase(), path,
+            texture_source=lambda _path, _role: "/texture/test/0.png")
         assert (not result.get("error")), (f"root-level picked texture accepts equivalent path casing ({result})")
         assert (result.get("tex_key") == "diffuse::RootDiffuse.png"
               and result.get("file") == "RootDiffuse.png"), (f"root-level picked texture keeps role and source path ({result})")

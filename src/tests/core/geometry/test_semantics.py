@@ -17,7 +17,7 @@ def test_mesh_semantics_does_not_read_buffers_or_publish_textures(tmp_path):
     groups = [{"draws": [draw]}]
 
     with patch("builtins.open", side_effect=AssertionError("buffer read")), \
-            patch("core.textures.pipeline.encode_texture_data_uri",
+            patch("core.textures.pipeline._open_texture_image",
                   side_effect=AssertionError("texture encoding")):
         result = build_mesh_semantics(groups, str(tmp_path))
 

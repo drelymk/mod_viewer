@@ -3,8 +3,7 @@
 import os
 import struct
 import tempfile
-import base64
-import io
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -25,10 +24,12 @@ from core.ini.document import IniDocument
 from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.ini.sections import (extract_resources, sections_from_document)
 from core.geometry.draw_call import DrawCall
+from core.geometry.texture_bindings import build_texture_options
 from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_result,
                                build_mesh_semantics)
 from tests.support_snapshot import snapshot_context
+from tests.support.model_data import standard_component_resources, triangle_geometry
 
 
 def test_nested_ini_resources_are_relative_to_their_ini():
@@ -376,6 +377,130 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         "existing.dds", "Components-0 t=candidate.dds"]
 
 
+def test_hash_replacement_choices_reach_manager_with_ini_local_identity(
+        tmp_path, monkeypatch):
+    mod_dir = tmp_path / "mod"
+    paths = []
+    for name in ("source01", "source02"):
+        folder = mod_dir / name
+        folder.mkdir(parents=True)
+        for filename, raw in triangle_geometry().items():
+            (folder / filename).write_bytes(raw)
+        for filename in ("base.dds", "variant.dds", "data.dds", "loose.dds"):
+            (folder / filename).write_bytes(b"synthetic texture")
+        path = folder / "mod.ini"
+        path.write_text("""[KeyVariant]
+type = cycle
+$variant = 0,1
+[TextureOverrideComponent01]
+hash = 10101010
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+drawindexed = 3, 0, 0
+[TextureOverrideColor]
+hash = 11111111
+this = ResourceBase
+if $variant == 1
+this = ResourceVariant
+endif
+[TextureOverrideData]
+hash = 22222222
+this = ResourceData
+[ResourceBase]
+filename = base.dds
+[ResourceVariant]
+filename = variant.dds
+[ResourceData]
+filename = data.dds
+""" + standard_component_resources(
+            position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf"),
+            encoding="utf-8")
+        paths.append(path)
+    asset_dir = tmp_path / "assets" / "Asset01"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "hash.json").write_text(json.dumps([{
+        "ib": "10101010", "object_indexes": [0],
+        "object_classifications": ["A"],
+        "texture_hashes": [[["Diffuse", ".dds", "11111111"]]],
+    }]), encoding="utf-8")
+    binding = AssetComponentBinding(
+        status="exact", asset_type="ZZMI", asset="Asset01",
+        root=str(asset_dir.parent), component_status="exact", range_status="exact",
+        geometry_hash="10101010", component_name="Body", classification="A",
+        first_index=0, metadata="Asset01/hash.json")
+    context = snapshot_context(str(mod_dir), paths)
+    parsed = mod_analysis.analyze_mod_inis(context.ini)
+    assert all(not group["diffuse_pool_files"] for group in parsed.groups)
+    mod_enrichment._apply_texture_enrichment(
+        parsed, context, [[binding] for _ in parsed.groups], complete_index=True)
+    assert [[item["file"].replace("\\", "/")
+             for item in group["diffuse_pool_files"]]
+            for group in parsed.groups] == [
+        [f"{folder}/base.dds", f"{folder}/variant.dds"]
+        for folder in ("source01", "source02")]
+    before = [draw.render_identity() for group in parsed.groups
+              for draw in group["draws"]]
+
+    def register(path, role):
+        return f"/texture/{role}/{context.source.logical_path(path)}"
+
+    def read_final_pool(group, registry, *, entries):
+        assert entries and all(entry.get("tex_key") and entry.get("identity")
+                               for entry in entries)
+        return build_texture_options(group, registry, entries=entries)
+
+    with patch("core.geometry.mesh_builder.build_texture_options",
+               side_effect=read_final_pool) as read_pool:
+        built = build_mesh_result(
+            parsed.groups, str(mod_dir), geometry=GeometryBlob(),
+            texture_source=register, game_profile="zzz", source=context.source)
+    assert read_pool.call_count == len(parsed.groups)
+    payload = {"meshes": built.meshes, "textures": built.textures}
+    metadata.hydrate_textures(
+        str(mod_dir), payload, data={}, texture_source=register,
+        texture_profile="zzz", source=context.source)
+
+    assert len(payload["meshes"]) == 2
+    for mesh in payload["meshes"].values():
+        folder = mesh["identity"]["source"].split("/", 1)[0]
+        pool = payload["texture_pools"][mesh["texture_pool_id"]]
+        assert [item["file"] for item in pool] == [
+            f"{folder}/base.dds", f"{folder}/variant.dds"]
+        assert mesh["tex_key"] in {item["tex_key"] for item in pool}
+        assert all(item["tex_key"] in payload["textures"] for item in pool)
+    assert [draw.render_identity() for group in parsed.groups
+            for draw in group["draws"]] == before
+
+    def resolve_bindings(groups, *_args, availability, **_kwargs):
+        availability.update(configured_roots=1, ready_roots=1,
+                            unavailable_roots=0)
+        return [[binding for _draw in group["draws"]] for group in groups]
+
+    monkeypatch.setattr(
+        mod_enrichment.asset_resolver, "resolve_groups", resolve_bindings)
+    full = mod_loader.load_mod(
+        context=context, geometry=GeometryBlob(), texture_source=register)
+    assert not full.get("error")
+    toggles = full["controls"]["toggles"]
+    assert set(toggles) == {"source01/mod::KeyVariant", "source02/mod::KeyVariant"}
+    for source, item in toggles.items():
+        assert item["wired"] is True
+        assert item["cycle_vars"] == [{
+            "var": source.split("::")[0] + "::variant",
+            "values": ["0", "1"], "default": "0"}]
+    for mesh in full["meshes"].values():
+        assert len(mesh["texture_variants"]) == 2
+        folder = mesh["identity"]["source"].split("/", 1)[0]
+        assert mesh["texture_variants"][1]["conditions"] == [[{
+            "var": f"{folder}/mod::variant", "value": "1", "negate": False}]]
+    for state in (
+            mod_loader.load_control_state(context, active_mesh_keys=set(full["meshes"])),
+            mod_loader.load_semantic_state(context, active_mesh_keys=set(full["meshes"]))):
+        assert state["controls"] == full["controls"]
+
+
 def _migration_payload(ambiguous=False):
     meshes = {}
     for ordinal in range(2 if ambiguous else 1):
@@ -665,10 +790,6 @@ def test_present_state_read_uses_staged_documents_without_geometry(
 def test_wuwa_publishes_one_intact_normal_data_source():
     from PIL import Image
 
-    def uri_mode(uri):
-        payload = base64.b64decode(uri.split(",", 1)[1])
-        return Image.open(io.BytesIO(payload)).mode
-
     with tempfile.TemporaryDirectory() as root:
         Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(
             os.path.join(root, "normal.png"))
@@ -687,16 +808,27 @@ def test_wuwa_publishes_one_intact_normal_data_source():
                         "start": 0, "base": 0, "conditions": [],
                         "normal_map_default_file": "normal.png"}],
         }]
-        built = build_mesh_result(group, root, geometry=GeometryBlob(),
-                                  game_profile="wuwa")
-        entry = built.meshes["Component01-1"]
+        publication = server.begin_texture_publication(root)
+        try:
+            built = build_mesh_result(
+                group, root, geometry=GeometryBlob(), game_profile="wuwa",
+                texture_source=publication.register)
+            entry = built.meshes["Component01-1"]
 
-        assert entry["normal_data_key"] == "normal_data::normal.png"
-        assert "normal_map_key" not in entry
-        assert entry["normal_map_enabled"] is False
-        assert "ao_map_key" not in entry
-        assert set(built.textures) == {"normal_data::normal.png"}
-        assert uri_mode(built.textures[entry["normal_data_key"]]) == "RGBA"
+            assert entry["normal_data_key"] == "normal_data::normal.png"
+            assert "normal_map_key" not in entry
+            assert entry["normal_map_enabled"] is False
+            assert "ao_map_key" not in entry
+            assert set(built.textures) == {"normal_data::normal.png"}
+            uri = built.textures[entry["normal_data_key"]]
+            assert uri.startswith("/texture/") and uri.endswith(".png")
+            source = next(iter(publication._sources.values()))
+            assert source.role == "normal_data"
+            with Image.open(server._texture_source_data(source)) as image:
+                assert image.mode == "RGBA"
+                assert image.getpixel((0, 0)) == (128, 128, 12, 34)
+        finally:
+            server.release_texture_publication(publication)
 
 
 

@@ -1,7 +1,5 @@
 """Public menu contracts: state transitions, conservative discovery and artwork."""
 
-import base64
-import io
 from textwrap import dedent
 
 import pytest
@@ -140,15 +138,14 @@ stride = 20
     assert variables <= analysis.gating_vars
     assert analysis.draw_groups[0]["draws"][0].conditions == [[
         {"var": "piece::Mode", "value": "1", "negate": False}]]
-    panel = build_menu_panel(analysis.menu, analysis.defaults, mod_dir=str(tmp_path))
+    panel = build_menu_panel(analysis.menu, analysis.defaults, mod_dir=str(tmp_path),
+                             image_source=lambda _path: "/texture/test/0.png")
     displayed = panel["piece::CommandListChoose#41"]
     assert displayed["default"] == "1"
     assert displayed["effects"] == mode["effects"]
     assert displayed["ini"] == "config.ini"
-    decoded = Image.open(io.BytesIO(base64.b64decode(displayed["image"].split(",", 1)[1])))
-    assert decoded.mode == "RGBA"
-    assert decoded.getpixel((0, 0))[3] == 0
-    assert decoded.getpixel((1, 1))[3] == 255
+    assert displayed["image"] == "/texture/test/0.png"
+
 
 
 @pytest.mark.parametrize("layout", ["separate", "shared", "paged"])

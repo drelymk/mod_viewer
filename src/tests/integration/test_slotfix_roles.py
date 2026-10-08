@@ -34,7 +34,10 @@ def _draw(tmp_path, assignments, resources, prefix=""):
 
 
 @pytest.mark.parametrize("variant_count", [1, 2], ids=["singleton", "variants"])
-def test_legacy_roles_stay_with_their_component(tmp_path, variant_count):
+@pytest.mark.parametrize("diffuse_slots", [(0,), (3, 9)],
+                         ids=["single-slot", "duplicate-slots"])
+def test_legacy_roles_stay_with_their_component(
+        tmp_path, variant_count, diffuse_slots):
     components = ("Component01", "Component02")
     lines = ["[KeyStyle]", "type = cycle", "$style = 0,1"]
     for component in components:
@@ -51,10 +54,9 @@ def test_legacy_roles_stay_with_their_component(tmp_path, variant_count):
             if variant_count > 1:
                 lines.append("if $style == 0" if variant == 0 else "else")
             suffix = f".{variant}" if variant_count > 1 else ""
-            lines.extend([
-                f"ps-t0 = Resource{component}Diffuse{suffix}",
-                f"ps-t1 = Resource{component}LightMap{suffix}",
-            ])
+            lines.extend(f"ps-t{slot} = Resource{component}Diffuse{suffix}"
+                         for slot in diffuse_slots)
+            lines.append(f"ps-t1 = Resource{component}LightMap{suffix}")
         if variant_count > 1:
             lines.append("endif")
         lines.append(standard_component_resources(
@@ -80,7 +82,51 @@ def test_legacy_roles_stay_with_their_component(tmp_path, variant_count):
             expected = [f"{group['name']}-{role}-{variant}.dds"
                         for variant in range(variant_count)]
             files = [item["file"] for item in draw.texture_rules(channel)]
-            assert (files or [draw.texture_default(channel)]) == expected
+            if channel == "diffuse":
+                expected_history = [filename for filename in expected
+                                    for _ in diffuse_slots]
+            else:
+                expected_history = expected
+            assert (files or [draw.texture_default(channel)]) == expected_history
+            if variant_count > 1:
+                for value, filename in enumerate(expected):
+                    applicable = [item["file"]
+                                  for item in draw.texture_rules(channel)
+                                  if visible(item["conditions"],
+                                             {"style": str(value)})]
+                    assert applicable and set(applicable) == {filename}
+        assert {item.slot: item.role_hint for item in draw.slot_textures} == {
+            1: "light_map", **dict.fromkeys(diffuse_slots, "diffuse")}
+
+
+@pytest.mark.parametrize("assignments, resources", [
+    ("ps-t3 = ResourceComponent01Diffuse.0\n"
+     "ps-t9 = ResourceComponent01Diffuse.1",
+     {"ResourceComponent01Diffuse.0": "diffuse-0.dds",
+      "ResourceComponent01Diffuse.1": "diffuse-1.dds"}),
+    ("ps-t3 = ResourceComponent01Diffuse.0\n"
+     "ps-t9 = ResourceComponent01Diffuse.0\n"
+     "ps-t3 = ResourceComponent01Diffuse.1",
+     {"ResourceComponent01Diffuse.0": "diffuse-0.dds",
+      "ResourceComponent01Diffuse.1": "diffuse-1.dds"}),
+    ("ps-t3 = ResourceComponent01Diffuse\n"
+     "ps-t9 = ResourceComponent01Diffuse\n"
+     "ps-t9 = ResourceComponent01NormalMap",
+     {"ResourceComponent01Diffuse": "diffuse.dds",
+      "ResourceComponent01NormalMap": "normal.dds"}),
+    ("ps-t3 = ResourceComponent01Diffuse\n"
+     "ps-t9 = ResourceComponent01Diffuse\n"
+     "ps-t3 = ResourceComponent01DiffuseExtra",
+     {"ResourceComponent01Diffuse": "diffuse.dds",
+      "ResourceComponent01DiffuseExtra": "extra.dds"}),
+], ids=["split-variants", "partial-duplicate", "role-conflict", "prefix-conflict"])
+def test_inconsistent_legacy_slot_sets_are_rejected(
+        tmp_path, assignments, resources):
+    draw = _draw(tmp_path, assignments, resources)
+
+    assert all(item.role_hint is None for item in draw.slot_textures)
+    assert draw.texture_default("diffuse") is None
+    assert draw.texture_default("normal_map") is None
 
 
 def test_resource_name_alone_does_not_imply_diffuse(tmp_path):

@@ -124,7 +124,7 @@ class AssetPreview:
                 return {"error": "Unknown texture role."}
             result = window.create_file_dialog(
                 webview.FileDialog.OPEN, directory=selected,
-                file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg;*.tga)",))
+                file_types=("Textures (*.dds;*.png;*.jpg;*.jpeg)",))
             if not result:
                 return None
             chosen = asset_folders.normalize_path(result[0])

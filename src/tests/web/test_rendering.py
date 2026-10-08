@@ -4,11 +4,13 @@ import base64
 import io
 import struct
 
+import pytest
 from PIL import Image
 from app.assets.loader import AssetLoadResult, AssetMeshPart
 from app.assets.loader.models import AssetTexture
 from app.runtime import server
 from core.geometry.transport import GeometryBlob
+from tests.support.dds_data import dx10_dds, mode6_block
 
 from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
 from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, project_mesh_points, wait_loaded, wait_texture
@@ -601,6 +603,112 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
     assert compressed[1][0] > compressed[1][2] + 60
     assert all(max(abs(a-b) for a,b in zip(left, right)) < 40
                for left, right in zip(compressed, reference_pixels))
+
+
+@pytest.mark.parametrize('format_name', ['bc1', 'bc7', 'rgba8'])
+def test_lazy_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path, format_name):
+    path = tmp_path / 'menu.dds'
+    compressed = format_name != 'rgba8'
+    if format_name == 'bc1':
+        data = split_color_dds()
+        expected = [(255, 0, 0, 255), (0, 0, 255, 255)]
+    elif format_name == 'bc7':
+        bits = int.from_bytes(mode6_block(((96, 96), (144, 144), (192, 192))), 'little')
+        for offset in (49, 56):
+            bits = (bits & ~(127 << offset)) | (64 << offset)
+        data = dx10_dds(bits.to_bytes(16, 'little'), dxgi_format=99)
+        expected = [(96, 144, 192, 128)] * 2
+    else:
+        header = bytearray(128)
+        header[:4] = b'DDS '
+        for offset, value in {4: 124, 12: 4, 16: 8, 28: 1, 76: 32,
+                              80: 0x41, 88: 32, 92: 0xff, 96: 0xff00,
+                              100: 0xff0000, 104: 0xff000000}.items():
+            struct.pack_into('<I', header, offset, value)
+        expected = [(96, 144, 192, 128), (192, 96, 48, 255)]
+        data = bytes(header) + b''.join(
+            bytes((*expected[int(y >= 2)][:3], 0 if x < 2 else expected[int(y >= 2)][3]))
+            for y in range(4) for x in range(8))
+    path.write_bytes(data)
+    publication = server.begin_texture_publication(str(tmp_path))
+    url = publication.register_menu_image(str(path))
+    publication.commit()
+    payload = textured_payload()
+    payload['controls']['menu'] = {
+        'option01': {'name': 'Option01', 'var': 'option01', 'values': ['0', '1'],
+                     'default': '0', 'image': url},
+        'option02': {'name': 'Option02', 'var': 'option02', 'kind': 'shape_slider',
+                     'min': 0, 'max': 1, 'step': 0.1, 'default': '0', 'image': url},
+    }
+    page = viewer({'fixture-01': payload})
+    requests = []
+    page.on('request', lambda request: requests.append(request.url) if url in request.url else None)
+    page.evaluate("""() => {
+      window.IntersectionObserver = class {
+        constructor(callback) {this.callback = callback; window.previewObserver = this;}
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      };
+    }""")
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    wait_texture(page)
+    before = mesh_pixel(page)
+    assert requests == []
+    page.evaluate("""async () => {
+      const {renderer} = await import('./js/scene/scene.js');
+      window.previewState = () => ({target: renderer.getRenderTarget()?.uuid || null,
+        clear: renderer.getClearAlpha(), space: renderer.outputColorSpace,
+        tone: renderer.toneMapping, ratio: renderer.getPixelRatio(),
+        scissor: renderer.getScissorTest(), mrt: renderer.getMRT(), auto: renderer.autoClear});
+      window.beforePreview = previewState();
+      window.previewDisposed = {target: 0, material: 0, geometry: 0, texture: 0};
+      const originalRender = renderer.render;
+      renderer.render = function(scene, camera) {
+        const target = renderer.getRenderTarget();
+        if (target?.width === 256 && target?.height === 256
+            && scene.children[0]?.geometry?.type === 'PlaneGeometry' && scene.children[0]?.material?.map) {
+          target.addEventListener('dispose', () => previewDisposed.target++);
+          for (const mesh of scene.children) {
+            mesh.material.addEventListener('dispose', () => previewDisposed.material++);
+            mesh.geometry.addEventListener('dispose', () => previewDisposed.geometry++);
+            mesh.material.map.addEventListener('dispose', () => previewDisposed.texture++);
+          }
+        }
+        return originalRender.call(this, scene, camera);
+      };
+      for (const image of document.querySelectorAll('#menu-list canvas')) {
+        previewObserver.callback([{target: image, isIntersecting: true}], previewObserver);
+      }
+    }""")
+    page.wait_for_function("document.querySelectorAll('#menu-list canvas[data-preview-ready]').length === 2")
+    result = page.evaluate("""compressed => {
+      const canvases = [...document.querySelectorAll('#menu-list canvas')];
+      return {state: previewState(), before: beforePreview, disposed: previewDisposed,
+        pixels: canvases.map(canvas => {
+          const context = canvas.getContext('2d');
+          return [[192, compressed ? 64 : 96], [192, compressed ? 192 : 160], [32, 96], [128, 32]]
+            .map(([x, y]) => [...context.getImageData(x, y, 1, 1).data]);
+        })};
+    }""", compressed)
+    assert result['state'] == result['before']
+    assert result['disposed'] == {'target': 2, 'material': 2, 'geometry': 2, 'texture': 2}
+    assert len(requests) == 2 and all(request.endswith('.dds') for request in requests)
+    for samples in result['pixels']:
+        assert all(max(abs(left - right) for left, right in zip(sample, reference)) <= 4
+                   for sample, reference in zip(samples[:2], expected)), (samples, expected)
+        if not compressed:
+            assert samples[2][3] == 0
+            assert samples[3][3] == 0
+    after = mesh_pixel(page)
+    assert max(abs(left - right) for left, right in zip(before, after)) < 5
+    page.evaluate("""async () => {
+      const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
+      buildMenuPanel({});
+    }""")
+    assert page.locator('#menu-list canvas').count() == 0
+    publication.discard()
 
 
 def test_weight_rig_lazy_load_pose_deforms_vertices_and_ui_reset_restores_them(viewer):
