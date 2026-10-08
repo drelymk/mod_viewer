@@ -8,7 +8,7 @@ layout is a convention — `$clickedSlot` is not.
 import re
 
 from . import condition
-from .sections import canonical_var_names, first_source, line_source
+from .sections import ResourceTable, canonical_var_names, first_source, line_source
 
 # A branch head that dispatches on an integer slot: `$clickedSlot == 3`.
 _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
@@ -178,11 +178,7 @@ def _wrap_ranges(nodes, variable, *, decrement=False):
 def _resource_file(resources, name):
     if not resources or not name:
         return None
-    lookup = getattr(resources, "get_ci", None)
-    if lookup is not None:
-        return (lookup(name) or {}).get("filename")
-    return next((info.get("filename") for key, info in resources.items()
-                 if key.casefold() == name.casefold()), None)
+    return resources.get_ci(name).get("filename")
 
 
 def _branch_image(nodes, resources):
@@ -686,6 +682,7 @@ def extract_controller_toggles(sections, forwarded_vars, var_prefix=None,
     variable. Its payload mirrors a normal menu entry; the caller can remap
     ``var`` to the resolved destination identity after checking model gates.
     """
+    resources = ResourceTable.normalize(resources)
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
 
@@ -774,6 +771,7 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     The ini carries no human-readable label for a slot (its on-screen caption
     is a .dds image), so the variable name doubles as the display name.
     """
+    resources = ResourceTable.normalize(resources)
     menu = {}
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))

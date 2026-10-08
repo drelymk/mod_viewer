@@ -1,4 +1,5 @@
 export default {
+  'errors.viewerPersistence': '뷰어 설정을 저장할 수 없습니다. 다시 시도해 주세요.',
   'mesh.rename': '이름 바꾸기',
   'mesh.selectionSameComponent': '메시 {count}개 선택 · {component}',
   'mesh.selectionMultipleComponents': '메시 {count}개 선택 · 컴포넌트 {components}개',

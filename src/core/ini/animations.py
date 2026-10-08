@@ -17,7 +17,7 @@ from .condition import compile_expression
 from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
                   normalize_dnf, ordered_conditions_supported,
                   parse_condition_dnf)
-from .sections import canonical_var_names
+from .sections import ResourceTable, canonical_var_names
 
 
 _ASSIGN_RE = re.compile(
@@ -495,15 +495,7 @@ def frame_condition(conditions, frame_vars):
 
 
 def _resource_get(resources, name):
-    if not name:
-        return {}
-    getter = getattr(resources, "get_ci", None)
-    if getter is not None:
-        return getter(name)
-    for key, value in (resources or {}).items():
-        if str(key).casefold() == str(name).casefold():
-            return value
-    return {}
+    return resources.get_ci(name)
 
 
 def _read_resource_bytes(path, source):
@@ -813,11 +805,12 @@ class _AnimationResources:
 
     def __init__(self, mod_dir, ini_path, source, resources=None, copy_sources=None):
         self.mod_dir, self.ini_path, self.source = mod_dir, ini_path, source
-        self.resources, self.copy_sources = resources, copy_sources
+        self.resources = ResourceTable.normalize(resources)
+        self.copy_sources = copy_sources
         self._resolved, self._sizes, self._texts, self._adapters = {}, {}, {}, {}
 
     def resource(self, name):
-        key = str(name).casefold()
+        key = str(name)
         if key not in self._resolved:
             self._resolved[key] = _resolved_resource(
                 self.resources, self.copy_sources, name)
@@ -1374,6 +1367,7 @@ def discover_compute_animations(sections, resources, *, mod_dir=None,
                                ini_path=None, source=None, var_prefix=None,
                                canonical_vars=None, condition_aliases=None):
     """Capture bindings, resolve chains, validate tracks, then compile a program."""
+    resources = ResourceTable.normalize(resources)
     from .draw_resources import _collect_resource_copy_sources
     canonical = (canonical_vars if canonical_vars is not None
                  else canonical_var_names(sections))

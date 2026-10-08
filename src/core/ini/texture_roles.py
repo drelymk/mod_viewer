@@ -5,6 +5,7 @@ import re
 
 from ..geometry.identity import normalize_geometry_hash
 from .dnf import DNF_TRUE, dnf_and, dnf_not, dnf_or, normalize_dnf, parse_condition_dnf
+from .sections import ResourceTable
 
 
 def _freeze_dnf(dnf):
@@ -48,13 +49,12 @@ class TextureOverrideIndex:
     replacements_by_hash: dict = field(default_factory=dict)
 
     def with_resource_files(self, resources):
-        lookup = {str(name).casefold(): info
-                  for name, info in (resources or {}).items()}
+        resources = ResourceTable.normalize(resources)
         replacements = {}
         for texture_hash, items in self.replacements_by_hash.items():
             resolved = []
             for item in items:
-                info = lookup.get(item.resource.casefold(), {})
+                info = resources.get_ci(item.resource)
                 resolved.append(replace(
                     item, file=info.get("filename")))
             replacements[texture_hash] = tuple(resolved)

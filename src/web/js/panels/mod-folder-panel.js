@@ -1,6 +1,7 @@
 // Mod Library registry and its feature-specific editor.
 
 import { confirmDialog } from '../ui/dialogs.js';
+import { bridgeReady } from '../app/bridge.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
@@ -43,10 +44,10 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     listElement: list,
     emptyElement: empty,
     errorElement: error,
-    listChildren: (path) => window.pywebview.api.list_subfolders(path),
+    listChildren: async (path) => (await bridgeReady()).list_subfolders(path),
     onRootSelected: (path) => selectFolder(path),
     onChildSelected: (path) => selectFolder(path),
-    onOpenFolder: (entry) => window.pywebview.api.open_mod_folder(entry.path),
+    onOpenFolder: async (entry) => (await bridgeReady()).open_mod_folder(entry.path),
     onEdit: (entry) => openEditor('edit', entry),
     onDelete: (entry) => removeFolder(entry),
     renderLabel: (entry) => entry.name,
@@ -98,7 +99,7 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
   async function removeFolder(entry) {
     const confirmed = await confirmDialog(t('folder.removeMod', { name: entry.name }));
     if (!confirmed) return;
-    const response = await window.pywebview.api.delete_mod_folder(entry.path);
+    const response = await (await bridgeReady()).delete_mod_folder(entry.path);
     applyRegistryResponse(response);
   }
 
@@ -108,7 +109,7 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     if (event.target === backdrop) closeEditor();
   });
   browse.addEventListener('click', async () => {
-    const picked = await window.pywebview.api.select_folder();
+    const picked = await (await bridgeReady()).select_folder();
     if (!picked) return;
     selectedPath = picked;
     pathInput.value = picked;
@@ -132,8 +133,8 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     try {
       const response =
         editorMode === 'edit'
-          ? await window.pywebview.api.edit_mod_folder(originalPath, name, path)
-          : await window.pywebview.api.add_mod_folder(name, path);
+          ? await (await bridgeReady()).edit_mod_folder(originalPath, name, path)
+          : await (await bridgeReady()).add_mod_folder(name, path);
       if (response?.error) {
         setTextError(modalError, response.error);
         return;
@@ -154,13 +155,14 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     tree.setActivePath(null);
   });
 
-  window.pywebview.api
-    .get_mod_folders()
-    .then(applyRegistryResponse)
-    .catch((caught) => setTextError(error, caught.message || String(caught)));
+  const refresh = () =>
+    bridgeReady()
+      .then((api) => api.get_mod_folders())
+      .then(applyRegistryResponse);
+  void refresh().catch((caught) => setTextError(error, caught.message || String(caught)));
 
   return {
-    refresh: () => window.pywebview.api.get_mod_folders().then(applyRegistryResponse),
+    refresh,
     setActivePath: tree.setActivePath,
     openAddDialog,
   };

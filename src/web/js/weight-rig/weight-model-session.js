@@ -2,6 +2,7 @@
 // supplies per-mesh installation and deformation mechanics.
 
 import * as THREE from 'three';
+import { bridgeReady } from '../app/bridge.js';
 import { createWeightPickController } from '../scene/weight-pick-controller.js';
 import { computeModelBounds } from '../scene/model-bounds.js';
 import { sampleSkinningAtIntersection } from './weight-selection.js';
@@ -206,11 +207,9 @@ export function createWeightModelSession({
     modelWeightState.noWeights = false;
     notifyChanged();
     modelWeightState.promise = (async () => {
-      const api = window.pywebview?.api?.get_model_skinning_preview;
-      if (typeof api !== 'function') {
-        throw new Error('Model skin-weight preview is unavailable.');
-      }
-      const preview = await api(folderPath);
+      const api = await bridgeReady();
+      if (generation !== getGeneration()) return modelWeightSnapshot();
+      const preview = await api.get_model_skinning_preview(folderPath);
       if (generation !== getGeneration()) return modelWeightSnapshot();
       modelWeightState.savedBonesBySource = selectionMapFromEntries(preview?.saved_bones);
       const bufferResponse = preview?.data?.url ? await fetch(preview.data.url, { cache: 'no-store' }) : null;
@@ -425,15 +424,18 @@ export function createWeightModelSession({
     if (selectionSavePromise) return selectionSavePromise;
     const selectedBones = serializeBoneSelection(sourceSelectionEntries(modelWeightState.selectedBonesBySource));
     const mesh = [...knownMeshes].find(eligibleSkinningMesh);
-    const api = window.pywebview?.api?.save_weight_selection;
-    if (!selectedBones.length || !mesh || typeof api !== 'function') {
+    if (!selectedBones.length || !mesh) {
       return Promise.resolve(modelWeightSnapshot());
     }
     const generation = getGeneration();
     modelWeightState.savingSelection = true;
     modelWeightState.selectionSaveError = null;
     notifyChanged();
-    selectionSavePromise = Promise.resolve(api(mesh.userData.modPath, selectedBones))
+    selectionSavePromise = bridgeReady()
+      .then((api) => {
+        if (generation !== getGeneration()) return null;
+        return api.save_weight_selection(mesh.userData.modPath, selectedBones);
+      })
       .then((result) => {
         if (generation !== getGeneration()) return modelWeightSnapshot();
         if (!result?.saved) throw new Error('The bone selection was not saved.');

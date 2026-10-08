@@ -1,6 +1,5 @@
 """Public facade for semantic projection and mesh payload construction."""
 
-import base64
 import hashlib
 import os
 import struct
@@ -39,14 +38,14 @@ class MeshBuildResult:
     """Named intermediate produced by the mesh-building pipeline.
 
     ``meshes`` contains only draw entries and ``textures`` is the shared
-    texture registry. ``geometry`` records the optional caller-owned blob
+    texture registry. ``geometry`` records the shared binary blob
     writer used to produce offset/length references. ``skinning_manifest`` is
     private backend state and is never included in the public payload.
     """
 
     meshes: dict
     textures: dict
-    geometry: GeometryBlob | None = None
+    geometry: GeometryBlob
     skinning_manifest: dict[str, SkinningManifestEntry] | None = None
     animations: dict | None = None
     diagnostics: dict | None = None
@@ -398,7 +397,7 @@ def _translated_frame_vertices(draw, canonical, *, mod_dir, buffers,
 def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                               mod_dir, group, default_streams,
                               default_index_size, buffers,
-                              geometry_convention, source, geometry=None,
+                              geometry_convention, source, geometry,
                               diagnostics=None):
     """Validate and pack changing attributes for one draw family."""
     start = int(family["frame_start"])
@@ -419,17 +418,13 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
 
     frame_count = end - start + 1
     frame_bytes = len(canonical_packed.positions)
-    checkpoint = len(geometry) if geometry is not None else None
+    checkpoint = len(geometry)
 
     def reject():
-        if geometry is not None:
-            geometry.truncate(checkpoint)
+        geometry.truncate(checkpoint)
         return None
 
-    position_ref = (geometry.reserve(frame_count * frame_bytes)
-                    if geometry is not None else None)
-    packed_frames = []
-    normals = []
+    position_ref = geometry.reserve(frame_count * frame_bytes)
     normal_ref = None
     normal_possible = canonical_packed.normals is not None
     normal_frame_bytes = (len(canonical_packed.normals)
@@ -495,18 +490,13 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         for index in range(3):
             bounds_min[index] = min(bounds_min[index], frame_bounds[0][index])
             bounds_max[index] = max(bounds_max[index], frame_bounds[1][index])
-        if position_ref is not None:
-            geometry.write(
-                position_ref["offset"] + frame_index * frame_bytes,
-                packed_frame.positions)
-        else:
-            packed_frames.append(packed_frame.positions)
+        geometry.write(
+            position_ref["offset"] + frame_index * frame_bytes,
+            packed_frame.positions)
         if normal_possible:
             if (packed_frame.normals is None
                     or len(packed_frame.normals) != normal_frame_bytes):
                 normal_possible = False
-            elif geometry is None:
-                normals.append(packed_frame.normals)
             else:
                 if normal_ref is None:
                     normal_ref = geometry.reserve(frame_count * normal_frame_bytes)
@@ -517,21 +507,16 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         diagnostics["animation_pack_seconds"] += (
             time.perf_counter() - pack_started)
         diagnostics["animation_frame_count"] += frame_count
-    has_normals = normal_possible and (
-        len(normals) == frame_count if geometry is None else normal_ref is not None)
+    has_normals = normal_possible and normal_ref is not None
     if not has_normals:
-        if geometry is not None and normal_ref is not None:
+        if normal_ref is not None:
             geometry.truncate(normal_ref["offset"])
         normal_ref = None
     return {
         "track_id": family["track_id"],
         "clock_ids": list(family["clock_ids"]),
         "draws": frames,
-        "positions": (b"".join(packed_frames)
-                      if position_ref is None else None),
         "positions_ref": position_ref,
-        "normals": (b"".join(normals) if has_normals and geometry is None
-                    else None),
         "normals_ref": normal_ref,
         "position_frame_bytes": frame_bytes,
         "normal_frame_bytes": (normal_frame_bytes if has_normals else 0),
@@ -542,10 +527,8 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
 
 
 def _geometry_ref(raw, geometry):
-    """Serialize bytes into the caller-owned geometry store or base64."""
-    if geometry is not None:
-        return geometry.add(raw)
-    return base64.b64encode(raw).decode()
+    """Append bytes to the shared geometry store."""
+    return geometry.add(raw)
 
 
 def _gimi_path(mod_dir, value, source):
@@ -698,10 +681,12 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     """Build mesh draw entries and a shared texture registry.
 
     Geometry packing and texture publication are delegated to focused stages;
-    this facade keeps transport compatibility and final payload metadata.
+    this facade owns one binary blob and final payload metadata.
     """
     from ..textures.profiles import texture_profile_for
 
+    if geometry is None:
+        geometry = GeometryBlob()
     texture_profile = texture_profile_for(game_profile)
     geometry_convention = geometry_convention_for(game_profile)
     validate_draw_count(groups)
@@ -873,11 +858,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 animation_id = animation_payload["track_id"]
                 entry["animation_id"] = animation_id
                 animation_geometry = {
-                    "positions": (animation_payload["positions_ref"]
-                                   if animation_payload["positions_ref"]
-                                   is not None else _geometry_ref(
-                                       animation_payload["positions"],
-                                       geometry)),
+                    "positions": animation_payload["positions_ref"],
                     "position_frame_bytes": animation_payload[
                         "position_frame_bytes"],
                     "frames": animation_payload["frame_count"],
@@ -885,12 +866,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     "clock_ids": animation_payload["clock_ids"],
                     "bounds": animation_payload["bounds"],
                 }
-                if animation_payload["normals"] is not None:
-                    animation_geometry["normals"] = _geometry_ref(
-                        animation_payload["normals"], geometry)
-                    animation_geometry["normal_frame_bytes"] = \
-                        animation_payload["normal_frame_bytes"]
-                elif animation_payload["normals_ref"] is not None:
+                if animation_payload["normals_ref"] is not None:
                     animation_geometry["normals"] = animation_payload[
                         "normals_ref"]
                     animation_geometry["normal_frame_bytes"] = \
@@ -903,8 +879,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     * animation_payload["frame_count"]
                     + (animation_payload["normal_frame_bytes"]
                        * animation_payload["frame_count"]
-                       if animation_payload["normals"] is not None
-                       or animation_payload["normals_ref"] is not None else 0))
+                       if animation_payload["normals_ref"] is not None else 0))
             if gimi_payload is not None:
                 entry["animation_id"] = gimi_payload["track_id"]
                 entry["animation_geometry"] = gimi_payload
@@ -949,13 +924,13 @@ def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
                        texture_source=None, game_profile=None, source=None,
                        animations=None):
     """Legacy flat payload wrapper retaining the ``__textures__`` field."""
+    from .legacy_transport import flat_mesh_payload
+
     built = build_mesh_result(
         groups, mod_dir, max_draws=max_draws, geometry=geometry,
         texture_source=texture_source, game_profile=game_profile,
         source=source, animations=animations)
-    payload = dict(built.meshes)
-    payload["__textures__"] = built.textures
-    return payload
+    return flat_mesh_payload(built, encode_geometry=geometry is None)
 
 
 __all__ = [

@@ -120,6 +120,10 @@ of documentation, comments and tests; use portable fixtures instead.
   fields explicitly as render identity, visibility or provenance; do not derive
   identity reflectively from every field. Preserve numeric VB slots and the
   distinction between untouched and explicit null; VB changes need no IB change.
+- Keep one `DrawCall` representation for resolved draws, including its existing
+  external mapping contract. `build_mesh_result` always owns a binary blob; only
+  the external `build_mesh_payload` adapter may encode geometry for older scripts.
+  Direct `load_mod` calls publish geometry; callers supplying a blob own publication.
 - Viewer geometry is produced by authored `drawindexed` commands. Literal and
   immutable-variable ranges resolve directly; `drawindexed = auto` uses the full
   replacement IB for the applicable geometry-hash family. An IB binding alone

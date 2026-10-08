@@ -1,4 +1,5 @@
 export default {
+  'errors.viewerPersistence': 'ビューアー設定を保存できませんでした。もう一度お試しください。',
   'mesh.rename': '名前を変更',
   'mesh.selectionSameComponent': '{count} 個のメッシュを選択 · {component}',
   'mesh.selectionMultipleComponents': '{count} 個のメッシュを選択 · {components} 個のコンポーネント',

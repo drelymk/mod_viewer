@@ -12,6 +12,7 @@ from .draw_resources import (
     _hash_wide_overrides, _select_draw_sections,
 )
 from .draw_scan import _scan_sections_for_draws
+from .sections import ResourceTable
 from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
 
 
@@ -119,6 +120,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                       gating_vars=None, animation_vars=None,
                       qualified_vars=None, *, section_info=None):
     """Build resolved component groups while preserving authored draw snapshots."""
+    resources = ResourceTable.normalize(resources)
     if seen is None:
         seen = {}
     if section_info is None:

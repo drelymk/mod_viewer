@@ -1551,3 +1551,19 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   .dock-tab { font-size: 10px; }
   .dock-tab .ui-icon { display: none; }
 }
+#persistence-feedback {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid #da3633;
+  border-radius: 8px;
+  background: #321b1b;
+  color: #f0f6fc;
+}

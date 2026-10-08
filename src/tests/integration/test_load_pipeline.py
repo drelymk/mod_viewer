@@ -250,8 +250,16 @@ def test_geometry_blob_bypasses_base64_intermediate():
         server.publish_payload_geometry(view_payload, geometry)
         assert (view_payload["geometry"]["length"] == len(geometry)), ("the server publishes the builder-owned binary blob directly")
 
+        owned = build_mesh_result(groups, root)
+        assert isinstance(owned.geometry, GeometryBlob)
+        assert owned.geometry.data == geometry.data
+        assert owned.meshes["Body-1"]["pos"] == entry["pos"]
+
         legacy = build_mesh_payload(groups, root)
         assert (isinstance(legacy["Body-1"]["pos"], str)), ("direct callers retain the legacy base64 geometry contract")
+        reference = entry["pos"]
+        assert base64.b64decode(legacy["Body-1"]["pos"]) == geometry.data[
+            reference["offset"]:reference["offset"] + reference["length"]]
 
         context = snapshot_context(
             root, [ini_path], {ini_path: IniDocument.load(ini_path)}, {})
@@ -293,7 +301,7 @@ def test_full_and_semantic_material_resolution_are_in_parity(tmp_path):
                          side_effect=semantic_meshes), \
             patch.object(mod_loader, "build_mesh_result",
                          return_value=SimpleNamespace(
-                             meshes=semantic_meshes(), textures={})):
+                             meshes=semantic_meshes(), textures={}, geometry=b"")):
         semantic_result = mod_loader.load_mesh_semantics(context)
         full_result = mod_loader.load_mod(context=context)
 

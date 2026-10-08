@@ -1,6 +1,7 @@
 // Asset Folder registry UI. Category rows browse; indexed Asset rows load.
 
 import { confirmDialog } from '../ui/dialogs.js';
+import { bridgeReady } from '../app/bridge.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
@@ -80,7 +81,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     listElement: list,
     emptyElement: empty,
     errorElement: error,
-    listChildren: (path) => window.pywebview.api.list_asset_subfolders(path),
+    listChildren: async (path) => (await bridgeReady()).list_asset_subfolders(path),
     onRootSelected: (path) => tree.setActivePath(path),
     onChildSelected: (path, entry) => {
       if (!entry?.asset) {
@@ -93,7 +94,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
       });
     },
     onEdit: (entry) => openEditor('edit', entry),
-    onOpenFolder: (entry) => window.pywebview.api.open_asset_folder(entry.path),
+    onOpenFolder: async (entry) => (await bridgeReady()).open_asset_folder(entry.path),
     onDelete: (entry) => removeFolder(entry),
     rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],
     renderRootExtras: (entry) => {
@@ -118,10 +119,9 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
         if (toggle.disabled) return;
         tree.setRootBusy(entry.path, true);
         try {
-          const response = await window.pywebview.api.set_asset_folder_enabled(
-            entry.path,
-            !isAssetMatchingEnabled(entry),
-          );
+          const response = await (
+            await bridgeReady()
+          ).set_asset_folder_enabled(entry.path, !isAssetMatchingEnabled(entry));
           if (response?.error) {
             setTextError(error, response.error);
             return;
@@ -155,7 +155,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
         if (rebuild.disabled) return;
         tree.setRootBusy(entry.path, true);
         try {
-          const response = await window.pywebview.api.rebuild_asset_index(entry.path);
+          const response = await (await bridgeReady()).rebuild_asset_index(entry.path);
           if (response?.error) {
             const suffix = response.indexPreserved ? t('folder.previousIndexAvailable') : '';
             setTextError(error, `${response.error}${suffix}`);
@@ -238,7 +238,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
   async function removeFolder(entry) {
     const confirmed = await confirmDialog(t('folder.removeAsset'));
     if (!confirmed) return;
-    const response = await window.pywebview.api.delete_asset_folder(entry.path);
+    const response = await (await bridgeReady()).delete_asset_folder(entry.path);
     applyRegistryResponse(response);
   }
 
@@ -248,7 +248,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     if (event.target === backdrop) closeEditor();
   });
   browse.addEventListener('click', async () => {
-    const picked = await window.pywebview.api.select_asset_folder();
+    const picked = await (await bridgeReady()).select_asset_folder();
     if (!picked) return;
     selectedPath = picked;
     pathInput.value = picked;
@@ -271,8 +271,8 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     try {
       const response =
         editorMode === 'edit'
-          ? await window.pywebview.api.edit_asset_folder(originalPath, typeInput.value, path)
-          : await window.pywebview.api.add_asset_folder(typeInput.value, path);
+          ? await (await bridgeReady()).edit_asset_folder(originalPath, typeInput.value, path)
+          : await (await bridgeReady()).add_asset_folder(typeInput.value, path);
       if (response?.error) {
         setTextError(modalError, response.error);
         return;
@@ -292,17 +292,14 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     }
   });
 
-  const getAssetFolders = window.pywebview.api.get_asset_folders;
-  if (typeof getAssetFolders === 'function') {
-    getAssetFolders()
-      .then(applyRegistryResponse)
-      .catch((caught) => setTextError(error, caught.message || String(caught)));
-  } else {
-    applyRegistryResponse({ folders: [] });
-  }
+  const refresh = () =>
+    bridgeReady()
+      .then((api) => api.get_asset_folders())
+      .then(applyRegistryResponse);
+  void refresh().catch((caught) => setTextError(error, caught.message || String(caught)));
 
   return {
-    refresh: () => window.pywebview.api.get_asset_folders().then(applyRegistryResponse),
+    refresh,
     openAddDialog,
     setActivePath: tree.setActivePath,
   };

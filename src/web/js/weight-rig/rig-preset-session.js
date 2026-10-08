@@ -2,6 +2,7 @@
 // separate from model-joint pose and deformation transactions.
 
 import { rigPresetSnapshot } from './weight-rig-snapshots.js';
+import { bridgeReady } from '../app/bridge.js';
 import { createRigPreset, normalizeRigPreset, serializeRigPose, validateRigPresetName } from './weight-rig-presets.js';
 import { weightRigStatus } from './weight-rig-status.js';
 
@@ -58,15 +59,20 @@ export function createRigPresetSession({
 
   function queueWrite(operation) {
     const token = ++writeToken;
+    const requestGeneration = generation;
     state.loading = true;
     state.error = null;
     notify();
     const queued = writeQueue.then(operation, operation);
     writeQueue = queued.catch(() => {});
     return queued
-      .catch((error) => ({ saved: false, error: error instanceof Error ? error.message : String(error) }))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (token === writeToken && requestGeneration === generation) state.error = message;
+        return { saved: false, error: message };
+      })
       .finally(() => {
-        if (token === writeToken) {
+        if (token === writeToken && requestGeneration === generation) {
           state.loading = false;
           notify();
         }
@@ -172,14 +178,15 @@ export function createRigPresetSession({
     if (state.presets.some((item) => item.name.trim().toLocaleLowerCase() === preset.name.toLocaleLowerCase())) {
       return Promise.resolve({ saved: false, error: 'A pose with this name already exists.' });
     }
-    const api = window.pywebview?.api?.save_rig_pose_preset;
     const path = currentModPath();
-    if (typeof api !== 'function' || !path) {
+    if (!path) {
       return Promise.resolve({ saved: false, error: 'Pose presets are unavailable.' });
     }
     const requestGeneration = generation;
     return queueWrite(async () => {
-      const result = await api(path, preset);
+      const api = await bridgeReady();
+      if (requestGeneration !== generation) return { saved: false, stale: true };
+      const result = await api.save_rig_pose_preset(path, preset);
       if (!result?.saved) throw new Error(result?.error || 'The pose was not saved.');
       if (requestGeneration !== generation) return { saved: true, preset, stale: true };
       setPresetList(result.presets || [...state.presets, preset]);
@@ -201,14 +208,15 @@ export function createRigPresetSession({
     ) {
       return Promise.resolve({ saved: false, error: 'A pose with this name already exists.' });
     }
-    const api = window.pywebview?.api?.rename_rig_pose_preset;
     const path = currentModPath();
-    if (typeof api !== 'function' || !path) {
+    if (!path) {
       return Promise.resolve({ saved: false, error: 'Pose presets are unavailable.' });
     }
     const requestGeneration = generation;
     return queueWrite(async () => {
-      const result = await api(path, preset.id, checked.value);
+      const api = await bridgeReady();
+      if (requestGeneration !== generation) return { saved: false, stale: true };
+      const result = await api.rename_rig_pose_preset(path, preset.id, checked.value);
       if (!result?.saved) throw new Error(result?.error || 'The pose was not renamed.');
       if (requestGeneration !== generation) return { saved: true, stale: true };
       setPresetList(result.presets || state.presets);
@@ -221,14 +229,15 @@ export function createRigPresetSession({
     const id = String(presetId || '');
     const preset = state.presets.find((item) => item.id === id);
     if (!preset) return Promise.resolve({ saved: false, error: 'Pose preset was not found.' });
-    const api = window.pywebview?.api?.delete_rig_pose_preset;
     const path = currentModPath();
-    if (typeof api !== 'function' || !path) {
+    if (!path) {
       return Promise.resolve({ saved: false, error: 'Pose presets are unavailable.' });
     }
     const requestGeneration = generation;
     return queueWrite(async () => {
-      const result = await api(path, preset.id);
+      const api = await bridgeReady();
+      if (requestGeneration !== generation) return { saved: false, stale: true };
+      const result = await api.delete_rig_pose_preset(path, preset.id);
       if (!result?.saved) throw new Error(result?.error || 'The pose was not deleted.');
       if (requestGeneration !== generation) return { saved: true, stale: true };
       setPresetList(result.presets || state.presets.filter((item) => item.id !== preset.id));

@@ -200,6 +200,7 @@ export default {
   'status.interactionHelp': 'LMB Orbit · RMB Pan · Wheel Zoom',
   'status.githubRepository': 'GitHub Repository',
   'errors.loadMod': 'Could not load mod:\n\n{detail}',
+  'errors.viewerPersistence': 'Could not save viewer settings. Please try again.',
   'errors.loadAsset': 'Could not load Asset:\n\n{detail}',
   'errors.loadGeometry': 'Could not load mod geometry:\n\n{detail}',
   'errors.loadAssetGeometry': 'Could not load Asset geometry:\n\n{detail}',

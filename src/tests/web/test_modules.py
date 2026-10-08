@@ -257,6 +257,7 @@ def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(m
         },
       }};
       window.dispatchEvent(new Event('pywebviewready'));
+      await Promise.resolve();
       loadResolve({value:{grid:true,environment:'indoor',bloom:true}});
       await firstWrite;
       const panel = createPreferencePersistence({getMethod:'get_panel_opacity',
@@ -267,12 +268,12 @@ def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(m
       prefs.change('grid',true);
       prefs.change('wireframe',true);
       prefs.change('environment','studio');
-      writeResolve(); await finished;
+      writeResolve(); await finished; await prefs.ready; await panel.ready;
       const count = writes.length, restored = {};
       window.pywebview.api.get_viewer_preferences = async()=>({value:{...stored}});
-      createPreferencePersistence({getMethod:'get_viewer_preferences',
+      const restoredPrefs = createPreferencePersistence({getMethod:'get_viewer_preferences',
         setMethod:'set_viewer_preferences', apply:(key,value)=>restored[key]=value});
-      await Promise.resolve();
+      await restoredPrefs.ready;
       return {applied,writes,stored,restored,maxActive,opacity,noStartupSave:writes.length===count};
     }""")
     assert result == {
@@ -282,6 +283,179 @@ def test_preference_bridge_readiness_and_serial_writes_preserve_latest_choices(m
         'restored': {'grid': True, 'wireframe': True, 'environment': 'studio'},
         'maxActive': 1, 'opacity': 58, 'noStartupSave': True,
     }
+
+
+def test_required_persistence_reports_failures_and_retains_pending_choices(module_page):
+    _stub_mesh_scene(module_page)
+    result = module_page.evaluate("""async () => {
+      const {createPreferencePersistence} = await import('./js/ui/preference-persistence.js');
+      const {saveTextureState} = await import('./js/mesh/mesh-texture-state.js');
+      const {persistCurrentMeshColorAdjustment, flushMeshColorAdjustmentPersistence} =
+        await import('./js/mesh/mesh-color-session.js');
+      const {viewerState} = await import('./js/app/state.js');
+      const {initPersistenceFeedback} = await import('./js/ui/persistence-feedback.js');
+      document.body.innerHTML = '<div id="dialog-backdrop" class="show"></div>';
+      initPersistenceFeedback();
+      const errors = [], writes = [];
+      window.addEventListener('viewer-persistence-error', event => errors.push(event.detail.message));
+      window.pywebview = {api:{}};
+      const api = window.pywebview.api;
+      const preferences = createPreferencePersistence({getMethod:'get_viewer_preferences',
+        setMethod:'set_viewer_preferences', apply:()=>{}});
+      preferences.change('grid', false);
+      await preferences.ready;
+      Object.assign(viewerState, {currentModPath:'mod-01', currentSource:{kind:'mod', readOnly:false}});
+      const mesh = {userData:{modPath:'mod-01', metadataKey:'mesh-01'}};
+      const rejected = async request => {try {await request; return false;} catch {return true;}};
+      const missingTexture = await rejected(saveTextureState('mod-01'));
+      const missingColor = await rejected(persistCurrentMeshColorAdjustment(mesh));
+      const flushRejected = await rejected(flushMeshColorAdjustmentPersistence(mesh));
+      let resolveWrite;
+      const saved = new Promise(resolve => resolveWrite=resolve);
+      api.get_viewer_preferences = async()=>({value:{grid:true}});
+      api.set_viewer_preferences = async changes=>{writes.push(changes); resolveWrite(); return {};};
+      preferences.change('wireframe', true); await saved;
+      api.save_mesh_textures = async()=>({error:'fixture backend error'});
+      const backendError = await rejected(saveTextureState('mod-01'));
+      api.save_mesh_color_adjustment = async()=>{throw new Error('fixture rejected write');};
+      const writeError = await rejected(persistCurrentMeshColorAdjustment(mesh));
+      const count = errors.length;
+      const notice = document.getElementById('persistence-feedback');
+      const {setLocale, t} = await import('./js/i18n/index.js');
+      setLocale('ja');
+      const feedback = notice.querySelector('span').textContent === t('errors.viewerPersistence') &&
+        document.querySelectorAll('#persistence-feedback').length === 1 &&
+        document.getElementById('dialog-backdrop').classList.contains('show');
+      notice.querySelector('button').click();
+      const dismissed = document.getElementById('persistence-feedback') === null;
+      viewerState.currentSource = {kind:'mod', readOnly:true};
+      const archiveBlocked = saveTextureState('mod-01') === undefined &&
+        persistCurrentMeshColorAdjustment(mesh) === null;
+      viewerState.currentSource = {kind:'asset'};
+      const assetBlocked = saveTextureState('mod-01') === undefined &&
+        persistCurrentMeshColorAdjustment(mesh) === null;
+      return {missingTexture, missingColor, flushRejected, backendError, writeError,
+        writes, archiveBlocked, assetBlocked, feedback, dismissed, errorCount:count, unchanged:errors.length===count};
+    }""")
+    assert result == {
+        'missingTexture': True, 'missingColor': True, 'flushRejected': True,
+        'backendError': True, 'writeError': True,
+        'writes': [{'grid': False, 'wireframe': True}],
+        'feedback': True, 'dismissed': True,
+        'archiveBlocked': True, 'assetBlocked': True, 'errorCount': 5, 'unchanged': True,
+    }
+
+
+def test_bridge_readiness_is_shared_by_folders_and_presets_and_reports_failures(module_page):
+    result = module_page.evaluate("""async () => {
+      const html = await (await fetch('./index.html')).text();
+      document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
+      const {bridgeReady} = await import('./js/app/bridge.js');
+      const {initModFolderPanel} = await import('./js/panels/mod-folder-panel.js');
+      const {initAssetFolderPanel} = await import('./js/panels/asset-folder-panel.js');
+      const {createRigPresetSession} = await import('./js/weight-rig/rig-preset-session.js');
+      const {createRigRuntimeState} = await import('./js/weight-rig/weight-runtime.js');
+      const calls = [];
+      const nativeAdd = window.addEventListener.bind(window);
+      let listeners = 0;
+      window.addEventListener = (name, ...args) => {
+        if (name === 'pywebviewready') listeners++;
+        return nativeAdd(name, ...args);
+      };
+      const folders = initModFolderPanel({switchMod:()=>{}, onRegistryChanged:()=>{}});
+      const assets = initAssetFolderPanel();
+      const runtime = createRigRuntimeState();
+      const signature = JSON.stringify(['source-01#bone=1']);
+      const rig = {joints:[{jointId:1,signature}], poseRotationByJointId:new Map()};
+      Object.assign(runtime.modelRigState, {loaded:true,explicitRootSignatures:new Set([signature])});
+      const presets = createRigPresetSession({state:runtime.rigPresetState,
+        getModelRig:()=>rig, getModelRigState:()=>runtime.modelRigState,
+        getKnownMeshes:()=>[{userData:{modPath:'mod-01'}}]});
+      const queued = presets.save('pose-01');
+      const shared = bridgeReady() === bridgeReady();
+      await Promise.resolve();
+      const waiting = calls.length === 0 && runtime.rigPresetState.loading;
+      const api = {
+        get_mod_folders:async()=>{calls.push('folders');return {folders:[]};},
+        get_asset_folders:async()=>{calls.push('assets');return {folders:[]};},
+        save_rig_pose_preset:async(path,preset)=>{calls.push('save');return {saved:true};},
+      };
+      window.pywebview = {api};
+      window.dispatchEvent(new Event('pywebviewready'));
+      const saved = await queued;
+      await Promise.all([folders.refresh(),assets.refresh()]);
+      const id = saved.preset.id;
+      const missing = await presets.remove(id);
+      const presetFailure = !missing.saved && !!runtime.rigPresetState.error;
+      delete api.get_asset_folders;
+      let folderFailure = false;
+      try {await assets.refresh();} catch {folderFailure=true;}
+      api.delete_rig_pose_preset = async()=>({saved:true});
+      const retried = await presets.remove(id);
+      const retry = retried.saved && runtime.rigPresetState.presets.length===0;
+      presets.setMetadata({version:1,presets:[saved.preset]});
+      let releaseWrite, entered;
+      const started = new Promise(resolve=>entered=resolve);
+      api.rename_rig_pose_preset = async()=>{entered();return new Promise(resolve=>releaseWrite=resolve);};
+      const oldRename = presets.rename(id,'pose-renamed');
+      await started;
+      presets.setMetadata({version:1,presets:[]});
+      releaseWrite({saved:true,presets:[saved.preset]});
+      const staleCompletion = (await oldRename).stale && runtime.rigPresetState.presets.length===0;
+      presets.setMetadata({version:1,presets:[saved.preset]});
+      let rejectWrite, deleting;
+      const deleteStarted = new Promise(resolve=>deleting=resolve);
+      api.delete_rig_pose_preset = async()=>{deleting();return new Promise((resolve,reject)=>rejectWrite=reject);};
+      const oldDelete = presets.remove(id);
+      await deleteStarted;
+      presets.setMetadata({version:1,presets:[]});
+      rejectWrite(new Error('fixture failure'));
+      await oldDelete;
+      const staleFailure = runtime.rigPresetState.error===null && !runtime.rigPresetState.loading;
+      const staleWrite = presets.save('pose-02');
+      presets.reset();
+      const stale = await staleWrite;
+      return {listeners,shared,waiting,saved:saved.saved,folderFailure,presetFailure,
+        retry,staleCompletion,staleFailure,
+        stale:stale.stale && !stale.saved, writes:calls.filter(call=>call==='save').length};
+    }""")
+    assert result == {'listeners': 1, 'shared': True, 'waiting': True, 'saved': True,
+                      'folderFailure': True, 'presetFailure': True, 'retry': True,
+                      'stale': True, 'staleCompletion': True, 'staleFailure': True, 'writes': 1}
+
+
+def test_geometry_decoder_rejects_invalid_references_and_uses_shared_views(module_page):
+    result = module_page.evaluate("""async () => {
+      const {setGeometryBlob, decodeF32, decodeU32, decodeI32} = await import('./js/textures/decode.js');
+      const rejected = action => {try {action(); return false;} catch {return true;}};
+      const unloaded = rejected(()=>decodeF32({offset:0,length:4}));
+      const blob = new ArrayBuffer(16); new Float32Array(blob).set([1,2,3,4]);
+      setGeometryBlob(blob);
+      const invalid = ['AAAA', null, {}, {offset:-4,length:4}, {offset:1,length:4},
+        {offset:0,length:3}, {offset:0,length:20}, {offset:Infinity,length:4}];
+      const refs = invalid.map(value => rejected(()=>decodeF32(value)));
+      const view = decodeF32({offset:4,length:8});
+      const shared = [decodeU32,decodeI32].every(decode=>decode({offset:0,length:4}).buffer===blob);
+      new Float32Array(blob)[1] = 7;
+      return {unloaded, refs, shared:shared && view.buffer===blob, values:[...view]};
+    }""")
+    assert result == {'unloaded': True, 'refs': [True] * 8, 'shared': True, 'values': [7, 3]}
+
+
+def test_refresh_meshes_requires_options_and_accepts_explicit_intent(module_page):
+    _stub_mesh_scene(module_page)
+    result = module_page.evaluate("""async () => {
+      const {refreshMeshes} = await import('./js/mesh/mesh-state.js');
+      let omitted = false, nullOptions = false;
+      try {refreshMeshes();} catch (error) {omitted=error instanceof TypeError;}
+      try {refreshMeshes(null);} catch (error) {nullOptions=error instanceof TypeError;}
+      const empty = refreshMeshes({});
+      const forced = refreshMeshes({force:{visibility:true,textures:true,shapes:true}});
+      return {omitted, nullOptions, empty, forced};
+    }""")
+    unchanged = {'visibilityChanged': False, 'texturesChanged': False,
+                 'shapesChanged': False, 'changedMeshes': []}
+    assert result == {'omitted': True, 'nullOptions': True, 'empty': unchanged, 'forced': unchanged}
 
 
 def test_appearance_controls_share_persistence_and_save_explicit_defaults(module_page):
@@ -738,11 +912,36 @@ def test_rig_overlay_picking_follows_runtime_fk_ik_and_reset(module_page):
     assert all(result.values()), result
 
 
+def _stub_mesh_scene(page):
+    page.route('**/js/panels/health-report.js', lambda route: route.fulfill(
+        content_type='text/javascript', body='export function setHealthReport() {}'))
+    page.route('**/js/scene/scene.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export const scene = {};
+export function invalidateCharacterShadowGeometry() {}
+export function invalidateCharacterShadowVisibility() {}
+export function forgetModelMeshes() {}
+export function resetCharacterShadows() {}
+export function resetModelOrientation() {}
+export function setAmbientOcclusionSuppressedByWireframe() {}
+export function setBloomSuppressedByWireframe() {}
+"""))
+
+
+def _set_geometry_blob(page, geometry):
+    page.evaluate("""async bytes => {
+      const {setGeometryBlob} = await import('./js/textures/decode.js');
+      setGeometryBlob(new Uint8Array(bytes).buffer);
+    }""", list(geometry.data))
+
+
 def _prepare_compute_clock(page):
     page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
       window.__animation = await import('./js/mesh/animation-runtime.js');
       window.__controls = await import('./js/editing/control-state.js');
+      const {setGeometryBlob} = await import('./js/textures/decode.js');
+      let blob = new Uint8Array();
       const pending = new Map();
       let serial = 0;
       window.requestAnimationFrame = callback => {pending.set(++serial, callback); return serial;};
@@ -753,7 +952,13 @@ def _prepare_compute_clock(page):
         pending.delete(id); callback(now);
       };
       window.__pendingFrames = () => pending.size;
-      window.__encode = array => btoa(String.fromCharCode(...new Uint8Array(array.buffer)));
+      window.__appendGeometry = array => {
+        const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+        const offset = blob.length, next = new Uint8Array(offset + bytes.length);
+        next.set(blob); next.set(bytes, offset); blob = next;
+        setGeometryBlob(blob.buffer);
+        return {offset, length: bytes.length};
+      };
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0], 3));
       geometry.setAttribute('normal', new THREE.Float32BufferAttribute([0,0,2, 0,0,2, 0,0,2], 3));
@@ -1210,6 +1415,8 @@ def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_
         notifyChanged: () => {}, requestRender: () => {}, getGeneration: () => 1,
       });
       const previousApi = window.pywebview?.api;
+      const loading = session.ensureLoaded();
+      const waitedForBridge = runtime.modelWeightState.loading && !runtime.modelWeightState.loaded;
       window.pywebview = {api: {
         get_model_skinning_preview: async () => ({
           saved_bones: [{source: descriptor.sourceFile, source_key: sourceKey, bone_id_offset: 7, bone_ids: [3]}],
@@ -1221,7 +1428,8 @@ def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_
         },
       }};
       try {
-        const ready = await session.ensureLoaded();
+        window.dispatchEvent(new Event('pywebviewready'));
+        const ready = await loading;
         const beforeMasks = {
           selected: ready.selectedBones[0]?.boneIds,
           descriptor: runtime.modelWeightState.sourceDescriptors.get(sourceKey)?.boneIdsModelWide,
@@ -1230,7 +1438,13 @@ def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_
         session.setBoneSelected(sourceKey, 5, true);
         await session.restoreSavedSelection();
         await session.saveSelection();
-        return {
+        const saver = window.pywebview.api.save_weight_selection;
+        delete window.pywebview.api.save_weight_selection;
+        await session.saveSelection();
+        const saveFailureReported = !!runtime.modelWeightState.selectionSaveError;
+        window.pywebview.api.save_weight_selection = saver;
+        await session.saveSelection();
+        return {waitedForBridge,saveFailureReported,
           beforeMasks,
           refreshedSelections,
           afterSave: selection.selectionRecordsFromMap(
@@ -1242,6 +1456,7 @@ def test_weight_session_preserves_model_wide_descriptor_through_saved_selection_
         window.pywebview = {api: previousApi};
       }
     }""")
+    assert result['waitedForBridge'] and result['saveFailureReported']
     assert result['beforeMasks'] == {'selected': [3], 'descriptor': True, 'masksRestored': False}
     assert result['refreshedSelections'] == [[3, 5], [3, 5]]
     assert result['afterSave'][0]['boneIds'] == [3, 5]
@@ -1478,6 +1693,7 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
     entries = list(built.meshes.values())
     assert len(entries) == 2
     _prepare_compute_clock(module_page)
+    _set_geometry_blob(module_page, built.geometry)
     result = module_page.evaluate("""async entries => {
       const THREE = await import('three/webgpu');
       const {decodeF32} = await import('./js/textures/decode.js');
@@ -1554,6 +1770,7 @@ def test_branched_compute_children_play_separately_together_and_keep_missing_ver
     _, built = load_mod(ini, ini.parent)
     entry = next(iter(built.meshes.values()))
     _prepare_compute_clock(module_page)
+    _set_geometry_blob(module_page, built.geometry)
     result = module_page.evaluate("""async entry => {
       const {decodeF32} = await import('./js/textures/decode.js');
       const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
@@ -1638,7 +1855,7 @@ def test_sparse_compute_overlay_retains_rest_geometry_and_independent_pass_state
     _prepare_compute_clock(module_page)
     result = module_page.evaluate("""() => {
       const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
-      const encode = window.__encode, variable = window.__variable;
+      const append = window.__appendGeometry, variable = window.__variable;
       mesh.userData.humanoidRestPositions = new Float32Array([10,0,0, 11,0,0, 10,1,0]);
       mesh.userData.humanoidRestNormals = new Float32Array([0,0,1, 0,0,1, 0,0,1]);
       window.__position.array.set(mesh.userData.humanoidRestPositions);
@@ -1654,7 +1871,7 @@ def test_sparse_compute_overlay_retains_rest_geometry_and_independent_pass_state
         program: {external_variables: ['input01','input02'], initials: {phase0: 0.2, phase1: 0.3}, commands},
         overlay: true, position_only: true, pose: null,
         shape_passes: [[1,0,0, 1,0,0, 1,0,0], [0,2,0, 0,2,0, 0,2,0]].map(deltas => ({
-          deltas: encode(new Float32Array(deltas)), weight_operation: {kind: 'linear'}})),
+          deltas: append(new Float32Array(deltas)), weight_operation: {kind: 'linear'}})),
       });
       window.__frame(0);
       const first = [...window.__position.array];

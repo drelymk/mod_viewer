@@ -1,4 +1,5 @@
 export default {
+  'errors.viewerPersistence': 'No se pudieron guardar los ajustes del visor. Inténtalo de nuevo.',
   'mesh.rename': 'Renombrar',
   'mesh.selectionSameComponent': '{count} mallas seleccionadas · {component}',
   'mesh.selectionMultipleComponents': '{count} mallas seleccionadas · {components} componentes',

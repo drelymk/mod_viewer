@@ -63,7 +63,7 @@ def _path_key(path):
 def _group_position_files(group):
     """Return every position buffer used by a group's draws."""
     position_files = {_path_key(group.get("position_file"))}
-    position_files.update(_path_key(draw.get("position_file"))
+    position_files.update(_path_key(draw.position_file)
                           for draw in group.get("draws", []))
     position_files.discard(None)
     return position_files
@@ -254,10 +254,10 @@ def _gating_vars_from_groups(groups):
     found = set()
     for group in groups:
         for entry in group.get("draws", []):
-            for clauses in entry.get("conditions", []):
+            for clauses in entry.conditions:
                 found.update(clause["var"] for clause in clauses)
             for field_name in _VARIANT_FIELDS:
-                for variant in entry.get(field_name, []):
+                for variant in getattr(entry, field_name, []):
                     for clauses in variant.get("conditions", []):
                         found.update(clause["var"] for clause in clauses)
     return found

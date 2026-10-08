@@ -23,6 +23,7 @@ import { activeMeshes, resetMeshState } from './mesh/visibility.js';
 import { refreshMeshTexture } from './mesh/mesh-factory.js';
 import { initSelection } from './scene/selection.js';
 import { initModFolderPanel } from './panels/mod-folder-panel.js';
+import { bridgeReady } from './app/bridge.js';
 import { initAssetFolderPanel } from './panels/asset-folder-panel.js';
 import { initLeftDock, setLeftDockTab } from './panels/left-dock.js';
 import { getMaterialDebugMode, setMaterialDebugMode } from './mesh/material-profile.js';
@@ -57,8 +58,11 @@ import { getLoadBenchmark } from './app/load-benchmark.js';
 import { initEnvironmentControl, initToolPopovers, initToolbarOverflow } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
 import { initViewerPreferences } from './ui/viewer-preferences.js';
+import { initPersistenceFeedback } from './ui/persistence-feedback.js';
 
 const $ = (id) => document.getElementById(id);
+
+initPersistenceFeedback();
 
 let weightRigActivationPromise = null;
 let rigOverlayController = null;
@@ -224,12 +228,10 @@ function switchMod(path) {
 }
 
 async function openStartupMod() {
-  const consume = window.pywebview?.api?.consume_startup_request;
-  if (typeof consume !== 'function') return false;
-
   let request;
   try {
-    request = await consume.call(window.pywebview.api);
+    const api = await bridgeReady();
+    request = await api.consume_startup_request();
   } catch (error) {
     await alertDialog(
       t('errors.startupMod', {
@@ -300,8 +302,14 @@ initPanelOpacityControl();
 initLanguageControl();
 initOpenModMenu();
 
-rendererReady.then((ready) => {
+rendererReady.then(async (ready) => {
   if (!ready || !isRendererAvailable()) return;
+  try {
+    await bridgeReady();
+  } catch (error) {
+    await alertDialog(t('errors.startupMod', { detail: error?.message || String(error) }));
+    return;
+  }
 
   $('open-btn').addEventListener('click', openMod);
   $('open-menu-btn').disabled = false;
@@ -456,9 +464,5 @@ rendererReady.then((ready) => {
     getOutlineState: (index) => getMeshOutlineState(activeMeshes[index]),
     getCurrentSource: () => (viewerState.currentSource ? { ...viewerState.currentSource } : null),
   };
-  void openStartupMod().then((apiReady) => {
-    if (!apiReady) {
-      window.addEventListener('pywebviewready', () => void openStartupMod(), { once: true });
-    }
-  });
+  void openStartupMod();
 });

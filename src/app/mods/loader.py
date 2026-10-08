@@ -221,6 +221,8 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
              texture_source=None, menu_image_source=None):
     """Parse a mod folder and return the structured application payload.
 
+    Without ``geometry``, publish the owned blob through the local server. A
+    caller supplying a blob owns publication, including any later enrichment.
     Errors are returned as ``{"error": ...}`` rather than raised, since this
     function is called across the JS bridge where an exception is opaque.
     """
@@ -281,13 +283,18 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
         menu = build_menu_panel(
             parsed.menu, parsed.defaults, context.mod_dir,
             source=context.source, image_source=menu_image_source)
-        return _structured_payload(
+        payload = _structured_payload(
             meshes=mesh_payload, textures=built.textures, toggles=toggles,
             menu=menu, present=parsed.present,
             state_rules=parsed.state_rules, state_defaults=parsed.defaults,
             game=parsed.game, material_profiles=material_profiles,
             asset_resolution=asset_resolution, source=context.source,
             animations=getattr(built, "animations", None))
+        if geometry is None:
+            from app.runtime.server import publish_payload_geometry
+            publish_payload_geometry(
+                payload, built.geometry, replace=False, auxiliary=True)
+        return payload
     except ModSourceError as error:
         context.skinning_manifest = {}
         return _structured_payload(

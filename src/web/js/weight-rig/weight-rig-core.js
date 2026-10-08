@@ -2,6 +2,7 @@
 // imported by the optional Weight/Rig feature boundary on first use.
 
 import * as THREE from 'three';
+import { bridgeReady } from '../app/bridge.js';
 import {
   camera,
   controls,
@@ -221,8 +222,8 @@ humanoidRigEditSession = createHumanoidRigEditSession({
   setPhysicsSuspended: (...args) => rigPoseRuntime?.setHumanoidEditPhysicsSuspended(...args) || false,
   getKnownMeshes: () => knownMeshes,
   resolveMappings: resolveHumanoidControlMappings,
-  persist: (path, value) => window.pywebview?.api?.save_humanoid_control_rig?.(path, value),
-  clearPersist: (path) => window.pywebview?.api?.clear_humanoid_control_rig?.(path),
+  persist: async (path, value) => (await bridgeReady()).save_humanoid_control_rig(path, value),
+  clearPersist: async (path) => (await bridgeReady()).clear_humanoid_control_rig(path),
   cancelWeightPicking: (...args) => weightPickingSession?.cancel(...args),
   cancelRigPicking: (...args) => rigModelSession?.cancelJointPicking(...args),
   refreshHumanoidRig: async (savedOverrides) => {

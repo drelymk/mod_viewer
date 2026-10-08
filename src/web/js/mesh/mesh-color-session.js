@@ -5,6 +5,7 @@ import { viewerState } from '../app/state.js';
 import { setGameMaterialColorAdjustment } from './material-profile.js';
 import { DEFAULT_COLOR_ADJUSTMENT, isNeutralColorAdjustment, normalizeColorAdjustment } from './color-adjustment.js';
 import { requestRender } from '../scene/render-scheduler.js';
+import { bridgeReady, reportPersistenceFailure } from '../app/bridge.js';
 
 const persistenceTails = new WeakMap();
 const persistenceResults = new WeakMap();
@@ -27,21 +28,21 @@ function persistenceValue(adjustment) {
 }
 
 function persistMeshColorAdjustment(mesh, adjustment = getMeshColorAdjustment(mesh)) {
-  if (viewerState.currentSource?.kind === 'mod' && viewerState.currentSource?.readOnly === true) return null;
+  if (viewerState.currentSource?.kind === 'asset' || viewerState.currentSource?.readOnly === true) return null;
   const path = mesh?.userData?.modPath;
   const key = mesh?.userData?.metadataKey;
-  const save = window.pywebview?.api?.save_mesh_color_adjustment;
-  if (!path || !key || typeof save !== 'function') return null;
+  if (!path || !key) return null;
   const value = persistenceValue(adjustment);
   const previous = persistenceTails.get(mesh) || Promise.resolve();
   const request = previous
     .catch(() => {})
-    .then(() => save(path, key, value))
+    .then(() => bridgeReady())
+    .then((api) => api.save_mesh_color_adjustment(path, key, value))
     .then((result) => {
       if (result?.error) throw new Error(result.error);
       return result;
     });
-  const settled = request.catch(() => {});
+  const settled = request.catch(reportPersistenceFailure);
   persistenceTails.set(mesh, settled);
   persistenceResults.set(mesh, request);
   return request;

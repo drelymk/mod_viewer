@@ -1,5 +1,7 @@
 // Shared bridge lifecycle and ordered writes for global app preferences.
 
+import { bridgeReady, reportPersistenceFailure } from '../app/bridge.js';
+
 let saveQueue = Promise.resolve();
 
 export function createPreferencePersistence({ getMethod, setMethod, key = null, apply }) {
@@ -11,10 +13,9 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
 
   async function flush() {
     if (!loaded || saving || !pending.size) return;
-    const api = window.pywebview?.api;
-    if (typeof api?.[setMethod] !== 'function') return;
     saving = true;
     try {
+      const api = await bridgeReady();
       while (pending.size) {
         const changes = Object.fromEntries(pending);
         pending.clear();
@@ -27,7 +28,7 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
           for (const [name, value] of Object.entries(changes)) {
             if (!pending.has(name)) pending.set(name, value);
           }
-          console.error(error);
+          reportPersistenceFailure(error);
           break;
         }
       }
@@ -38,10 +39,9 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
 
   async function load() {
     if (loaded || loading) return loading;
-    const api = window.pywebview?.api;
-    if (typeof api?.[getMethod] !== 'function') return;
     loading = (async () => {
       try {
+        const api = await bridgeReady();
         const result = await api[getMethod]();
         if (result?.error) throw new Error(result.error);
         const values = key ? { [key]: result?.value } : result?.value || {};
@@ -51,7 +51,7 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
         loaded = true;
         await flush();
       } catch (error) {
-        console.error(error);
+        reportPersistenceFailure(error);
       } finally {
         loading = null;
       }
@@ -59,14 +59,15 @@ export function createPreferencePersistence({ getMethod, setMethod, key = null, 
     return loading;
   }
 
-  window.addEventListener('pywebviewready', () => void load(), { once: true });
-  void load();
+  const ready = load();
   return {
+    ready,
     change(name, value, { persist = true } = {}) {
       touched.add(name);
       if (persist) {
         pending.set(name, value);
-        void flush();
+        if (loaded) void flush();
+        else void load();
       }
     },
   };

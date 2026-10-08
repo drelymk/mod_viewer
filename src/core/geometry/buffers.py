@@ -15,19 +15,8 @@ _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def _res_get(resources, name):
-    """Case-insensitive resource lookup (handles WWMI naming inconsistencies)."""
-    if not name:
-        return {}
-    lookup = getattr(resources, "get_ci", None)
-    if lookup is not None:
-        return lookup(name)
-    if name in resources:
-        return resources[name]
-    nl = name.lower()
-    for key, value in resources.items():
-        if key.lower() == nl:
-            return value
-    return {}
+    """Use the per-INI resource index shared by all resolvers."""
+    return resources.get_ci(name)
 
 
 def read_positions(buf_path, stride=POSITION_STRIDE):

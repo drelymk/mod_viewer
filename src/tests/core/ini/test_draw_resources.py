@@ -12,6 +12,27 @@ from core.ini.draw_scan import _scan_sections_for_draws
 from core.ini.sections import ResourceTable, extract_resources, parse_sections
 
 
+def test_resource_lookup_exact_spelling_and_sibling_isolation():
+    records = {
+        "ResourceStream": {"filename": "first.buf", "stride": 12},
+        "RESOURCESTREAM": {"filename": "second.buf", "stride": 40},
+        "ResourceEmpty": {},
+        "RESOURCEEMPTY": {"filename": "other.buf"},
+    }
+    resources = ResourceTable.normalize(records)
+    assert ResourceTable.normalize(resources) is resources
+    assert resources.get_ci("resourceStream")["filename"] == "first.buf"
+    assert resources.get_ci("ResourceEmpty") == {}
+    resolved = _resolve_component_buffers({}, resources, {})
+    for name, filename in [("ResourceStream", "first.buf"),
+                           ("RESOURCESTREAM", "second.buf"),
+                           ("resourcestream", "first.buf")]:
+        assert resolved["resolve_vertex_info"](name)["filename"] == filename
+    sibling = ResourceTable({"ResourceStream": {"filename": "sibling.buf"}})
+    assert sibling.get_ci("resourcestream")["filename"] == "sibling.buf"
+    assert resources.get_ci("resourcestream")["filename"] == "first.buf"
+
+
 def test_declaring_b_suffixed_resource_does_not_resolve_base_resource():
     resources = ResourceTable({
         "ResourcePosition.B": {

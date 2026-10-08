@@ -16,7 +16,6 @@ the vendored WebGPU and TSL entry points.
 """
 
 import functools
-import base64
 import http.server
 import os
 import secrets
@@ -40,6 +39,7 @@ _VENDOR_PREFIX = "/vendor/"
 _GEOMETRY_PREFIX = "/geometry/"
 _TEXTURE_PREFIX = "/texture/"
 _MAX_GEOMETRY_BYTES = 512 * 1024 * 1024
+_MAX_AUXILIARY_GEOMETRY_BLOBS = 2
 _TEXTURE_ENCODE_CONCURRENCY = 2
 _geometry_lock = threading.RLock()
 _geometry_blobs = {}
@@ -48,6 +48,12 @@ _texture_publications = {}
 _active_texture_publication = None
 _texture_encode_semaphore = threading.BoundedSemaphore(
     _TEXTURE_ENCODE_CONCURRENCY)
+
+
+@dataclass(frozen=True)
+class GeometryPublication:
+    data: bytes
+    auxiliary: bool
 
 
 @dataclass(frozen=True)
@@ -295,63 +301,35 @@ def _texture_source_data(source):
     return source.path
 
 
-def publish_geometry(blob, *, replace=True):
-    """Publish packed geometry, optionally retaining prior load blobs."""
+def publish_geometry(blob, *, replace=True, auxiliary=False):
+    """Publish geometry; auxiliary loads retain at most two blobs and 512 MiB."""
     if len(blob) > _MAX_GEOMETRY_BYTES:
         raise ValueError("Generated geometry exceeds the 512 MiB safety limit.")
     token = uuid.uuid4().hex
     with _geometry_lock:
         if replace:
             _geometry_blobs.clear()
-        _geometry_blobs[token] = bytes(blob)
+        if auxiliary:
+            pending = [key for key, item in _geometry_blobs.items()
+                       if item.auxiliary]
+            total_bytes = len(blob) + sum(
+                len(_geometry_blobs[key].data) for key in pending)
+            while pending and (len(pending) >= _MAX_AUXILIARY_GEOMETRY_BLOBS
+                               or total_bytes > _MAX_GEOMETRY_BYTES):
+                total_bytes -= len(_geometry_blobs.pop(pending.pop(0)).data)
+        _geometry_blobs[token] = GeometryPublication(bytes(blob), auxiliary)
     return f"{_GEOMETRY_PREFIX}{token}"
 
 
-def publish_payload_geometry(payload, geometry=None, *, replace=True):
+def publish_payload_geometry(payload, geometry, *, replace=True, auxiliary=False):
     """Publish the structured payload's packed geometry and its references.
 
-    Normal loads pass the builder's append-only blob, so no encoded geometry
-    string is created or decoded.  The structured mesh map also supports a
-    base64-to-blob fallback for tests that deliberately exercise the direct
-    builder form.
+    The builder owns one append-only binary blob for static and animated data.
     """
-    meshes = payload.setdefault("meshes", {})
-    if geometry is not None:
-        blob = (geometry.to_bytes() if hasattr(geometry, "to_bytes")
-                else bytes(geometry))
-        if blob:
-            payload["geometry"] = {
-                "url": publish_geometry(blob, replace=replace),
-                "length": len(blob),
-            }
-        else:
-            payload["geometry"] = None
-        return
-
-    blob = bytearray()
-    for _name, entry in meshes.items():
-        if not isinstance(entry, dict) or entry.get("error"):
-            continue
-        for field in ("pos", "uv", "idx", "normal"):
-            encoded = entry.get(field)
-            if not isinstance(encoded, str):
-                continue
-            raw = base64.b64decode(encoded)
-            offset = len(blob)
-            blob.extend(raw)
-            entry[field] = {"offset": offset, "length": len(raw)}
-        for target in entry.get("shape_targets") or []:
-            for field in ("pos", "low_pos"):
-                encoded = target.get(field)
-                if not isinstance(encoded, str):
-                    continue
-                raw = base64.b64decode(encoded)
-                offset = len(blob)
-                blob.extend(raw)
-                target[field] = {"offset": offset, "length": len(raw)}
+    blob = geometry.to_bytes() if hasattr(geometry, "to_bytes") else bytes(geometry)
     if blob:
         payload["geometry"] = {
-            "url": publish_geometry(blob, replace=replace),
+            "url": publish_geometry(blob, replace=replace, auxiliary=auxiliary),
             "length": len(blob),
         }
     else:
@@ -382,7 +360,7 @@ def geometry_stats():
         return {
             "pending_blob_count": len(_geometry_blobs),
             "pending_blob_bytes": sum(
-                len(blob) for blob in _geometry_blobs.values()),
+                len(item.data) for item in _geometry_blobs.values()),
         }
 
 
@@ -469,10 +447,11 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     def _send_geometry(self, token):
         with _geometry_lock:
-            blob = _geometry_blobs.pop(token, None)
-        if blob is None:
+            publication = _geometry_blobs.pop(token, None)
+        if publication is None:
             self.send_error(404, "Geometry load expired")
             return
+        blob = publication.data
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(blob)))
@@ -573,12 +552,13 @@ class _ThreadingTCPServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def start():
+def start(*, require_ui_assets=True):
     """Serve the UI on an ephemeral localhost port; return its base URL.
 
     Binds to 127.0.0.1 so the port is never reachable from off the machine.
+    Geometry clients may skip the UI asset check while using the same server.
     """
-    if not paths.has_vendored_three():
+    if require_ui_assets and not paths.has_vendored_three():
         raise RuntimeError("Vendored Three.js assets are required; run src/build.py to fetch them.")
     csp_nonce = secrets.token_urlsafe(32)
     three_url = f"{_VENDOR_PREFIX}three.webgpu.js"
