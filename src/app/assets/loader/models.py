@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 import os
 
 from core.materials.profiles import material_profile_for
-from app.assets.textures import asset_texture_key
+from core.geometry.identity import (
+    DrawOccurrence, MeshIdentity, make_geometry_match, normalize_identity_source,
+)
+from app.assets.textures import asset_root_id, asset_texture_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
                          warnings=(), asset_fill=False):
     game = {"GIMI": "genshin", "ZZMI": "zzz", "WWMI": "wuwa"}[asset_type]
     root_id = os.path.normcase(os.path.abspath(root))
+    identity_root = f"asset/{asset_root_id(root)}/{asset_type}"
     source = record.get("path", "") if isinstance(record, dict) else ""
     profile = material_profile_for(game, asset_type.lower())
     profiles = {profile.id: profile.to_metadata()}
@@ -105,7 +109,7 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
         for geometry_hash in hashes:
             component_labels[(base, geometry_hash)] = (
                 f"{base} [{geometry_hash or 'unknown'}]")
-    for ordinal, part in enumerate(parts):
+    for part in parts:
         mesh_key = (f"asset-fill::{part.key}" if asset_fill else part.key)
         for candidate in part.texture_candidates:
             # Candidate textures are published and selectable, but their
@@ -125,6 +129,16 @@ def _build_asset_payload(asset_type, root, record, parts, *, geometry,
             "conditions": [],
             "sources": [{"asset": part.asset_source}],
             "drawindexed": [part.index_count or 0, part.first_index or 0, 0],
+            "identity": MeshIdentity(
+                source=(f"{identity_root}/"
+                        f"{normalize_identity_source(part.asset_path)}"),
+                component=base_component,
+                geometry=make_geometry_match(
+                    part.geometry_hash, part.first_index, part.index_count),
+                count=part.index_count, start=part.first_index or 0, base=0,
+                occurrence=DrawOccurrence(
+                    normalize_identity_source(part.key), part.component_ordinal),
+            ).to_dict(),
             "tex_key": None,
             "normal_map_key": None,
             "normal_data_key": None,
@@ -213,6 +227,28 @@ def build_asset_fill_payload(asset_type, root, record, parts, *, geometry,
     return _build_asset_payload(
         asset_type, root, record, parts, geometry=geometry,
         warnings=warnings, asset_fill=True)
+
+
+def part_filter_matches(part_filter, geometry_hash, first, count, ordinal=None):
+    """Match requested Asset coverage without guessing absent range fields."""
+    if part_filter is None:
+        return True
+    for item in part_filter:
+        if getattr(item, "geometry_hash", None) != geometry_hash:
+            continue
+        expected_first = getattr(item, "first_index", None)
+        expected_count = getattr(item, "index_count", None)
+        expected_ordinal = getattr(item, "component_ordinal", None)
+        if expected_first is not None and expected_first != first:
+            continue
+        if (expected_count is not None and count is not None
+                and expected_count != count):
+            continue
+        if (expected_ordinal is not None and ordinal is not None
+                and expected_ordinal != ordinal):
+            continue
+        return True
+    return False
 
 
 def make_texture(root, path, role, *, texture_source=None, source="explicit"):

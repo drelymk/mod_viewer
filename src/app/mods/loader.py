@@ -37,12 +37,6 @@ from app.mods.enrichment import (
 )
 
 
-# Kept for scripts that still inspect the low-level mesh-builder result. These
-# keys are no longer emitted by load_mod's public application payload.
-RESERVED_KEYS = ("__textures__", "__toggles__", "__menu__", "__mesh_names__",
-                 "__geometry__", "__state_rules__", "__state_defaults__",
-                 "__health__", "__present__")
-
 # Re-export discovery under the helper name used by existing imports.
 find_inis = discover_ini_paths
 

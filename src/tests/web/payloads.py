@@ -5,6 +5,7 @@ import io
 import struct
 
 from PIL import Image
+from core.geometry.identity import DrawOccurrence, MeshIdentity
 
 
 def model_payload(count=1):
@@ -18,6 +19,11 @@ def model_payload(count=1):
     meshes = {}
     for index in range(count):
         meshes[f"mesh-{index:02d}"] = {
+            "identity": MeshIdentity(
+                source="source-01.ini", component=f"component-{index:02d}",
+                geometry=None, count=3, start=0, base=0,
+                occurrence=DrawOccurrence("TextureOverrideFixture", index),
+            ).to_dict(),
             "component": f"component-{index:02d}",
             "drawindexed": [3, 0, 0],
             "pos": append('f', [0, 0, 0, 1, 0, 0, 0, 1, 0]),

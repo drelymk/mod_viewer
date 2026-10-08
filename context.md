@@ -121,9 +121,13 @@ of documentation, comments and tests; use portable fixtures instead.
   identity reflectively from every field. Preserve numeric VB slots and the
   distinction between untouched and explicit null; VB changes need no IB change.
 - Keep one `DrawCall` representation for resolved draws, including its existing
-  external mapping contract. `build_mesh_result` always owns a binary blob; only
-  the external `build_mesh_payload` adapter may encode geometry for older scripts.
+  external mapping contract. `build_mesh_result` always owns a binary blob;
+  geometry transport uses offset/length references exclusively.
   Direct `load_mod` calls publish geometry; callers supplying a blob own publication.
+- Every generated mesh, including direct Assets and Asset Fill, carries a canonical
+  `MeshIdentity`. Asset identities retain root, type and part provenance across
+  preview, selective loads and filling. Legacy mesh keys are read only at the
+  metadata compatibility boundary, and only when ownership is unambiguous.
 - Viewer geometry is produced by authored `drawindexed` commands. Literal and
   immutable-variable ranges resolve directly; `drawindexed = auto` uses the full
   replacement IB for the applicable geometry-hash family. An IB binding alone

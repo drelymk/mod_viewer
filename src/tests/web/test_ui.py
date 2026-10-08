@@ -442,7 +442,7 @@ def test_keyboard_and_inspector_visibility_record_like_meshes_eye(viewer):
 def test_opaque_display_labels_render_as_text_in_panel_and_inspector(viewer):
     payload = model_payload()
     label = '<b data-fixture="marker-01">fixture-01</b>'
-    payload['metadata']['mesh_names'] = {'component-00::3,0,0': label}
+    payload['metadata']['mesh_names'] = {payload['meshes']['mesh-00']['identity']['key']: label}
     page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
     wait_loaded(page)

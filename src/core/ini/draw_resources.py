@@ -595,8 +595,11 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         "component_blend_vertex_resources": component_blend_vertex_resources,
         "component_animation_vertex_bindings": (
             component_animation_vertex_bindings),
-        "hash_positions": hash_positions,
-        "hash_texcoords": hash_texcoords,
+        "hash_buffers": {
+            value: {"position": position, "texcoord": hash_texcoords[value]}
+            for value, position in hash_positions.items()
+            if value in hash_texcoords
+        },
         "global_ib": global_ib,
         "global_position": global_position,
         "global_texcoord": global_texcoord,

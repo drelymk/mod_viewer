@@ -13,7 +13,7 @@ from core.textures import normalize_texture_role
 from app.assets import paths as asset_paths
 from . import gimi_face_alignment
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
-                     make_texture)
+                     make_texture, part_filter_matches)
 
 
 _ROLE_NAMES = {
@@ -359,27 +359,6 @@ def _cached_index_dump(path, vertex_count, cache):
     return cache[path]
 
 
-def _filter_matches(part_filter, geometry_hash, first, count, ordinal=None):
-    if part_filter is None:
-        return True
-    for item in part_filter:
-        if getattr(item, "geometry_hash", None) != geometry_hash:
-            continue
-        expected_first = getattr(item, "first_index", None)
-        expected_count = getattr(item, "index_count", None)
-        expected_ordinal = getattr(item, "component_ordinal", None)
-        if expected_first is not None and expected_first != first:
-            continue
-        if (expected_count is not None and count is not None
-                and expected_count != count):
-            continue
-        if (expected_ordinal is not None and ordinal is not None
-                and expected_ordinal != ordinal):
-            continue
-        return True
-    return False
-
-
 def _compact_name(value):
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
@@ -629,7 +608,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
     for item in records:
         selected_ranges = tuple(
             value for value in item.ranges
-            if _filter_matches(part_filter, item.geometry_hash,
+            if part_filter_matches(part_filter, item.geometry_hash,
                                value[1], value[2], value[0]))
         if selected_ranges:
             selected_records.append((item, selected_ranges))

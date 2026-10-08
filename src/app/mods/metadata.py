@@ -47,12 +47,12 @@ def _legacy_mesh_key(name, entry):
     return f"{component}::{draw_key}"
 
 
-def _canonical_mesh_key(name, entry):
+def _canonical_mesh_key(entry):
     """Return the key used to expose state for one displayed mesh."""
     identity = entry.get("identity") if isinstance(entry, dict) else None
     canonical = identity.get("key") if isinstance(identity, dict) else None
     if not isinstance(canonical, str) or not canonical:
-        return _legacy_mesh_key(name, entry)
+        raise ValueError("Mesh payload is missing a canonical identity.")
     return canonical
 
 
@@ -66,24 +66,13 @@ def _legacy_mesh_key_counts(meshes):
     return counts
 
 
-def _mesh_metadata_keys(name, entry, legacy_key_counts=None):
+def _mesh_metadata_keys(name, entry, legacy_key_counts):
     """Return safe canonical and legacy read keys for one mesh."""
-    canonical = _canonical_mesh_key(name, entry)
-    identity = entry.get("identity") if isinstance(entry, dict) else None
-    has_canonical = isinstance(identity, dict) and isinstance(
-        identity.get("key"), str) and bool(identity.get("key"))
+    canonical = _canonical_mesh_key(entry)
     legacy = _legacy_mesh_key(name, entry)
-    if has_canonical:
-        if canonical == legacy:
-            return (canonical,)
-        if (legacy_key_counts is None
-                or legacy_key_counts.get(legacy, 0) == 1):
-            return canonical, legacy
-        return (canonical,)
-    if (legacy_key_counts is not None
-            and legacy_key_counts.get(legacy, 0) != 1):
-        return ()
-    return (legacy,)
+    if canonical != legacy and legacy_key_counts.get(legacy, 0) == 1:
+        return canonical, legacy
+    return (canonical,)
 
 
 def load(folder_path, source=None):
@@ -253,11 +242,9 @@ def hydrate_mesh_color_adjustments(payload, data=None):
         if not isinstance(entry, dict) or entry.get("error"):
             continue
         keys = _mesh_metadata_keys(name, entry, legacy_key_counts)
-        if not keys:
-            continue
         value = next((saved[key] for key in keys if key in saved), None)
         if value is not None:
-            hydrated[_canonical_mesh_key(name, entry)] = value.copy()
+            hydrated[keys[0]] = value.copy()
     return hydrated
 
 
@@ -665,8 +652,6 @@ def hydrate_mesh_names(payload, data=None):
         if not isinstance(entry, dict) or entry.get("error"):
             continue
         keys = _mesh_metadata_keys(name, entry, legacy_key_counts)
-        if not keys:
-            continue
         value = next((saved[key] for key in keys
                       if isinstance(saved.get(key), str)
                       and saved[key].strip()), None)
@@ -986,7 +971,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         if not isinstance(entry, dict) or entry.get("error"):
             continue
         keys = _mesh_metadata_keys(name, entry, legacy_key_counts)
-        mesh_key = _canonical_mesh_key(name, entry)
+        mesh_key = keys[0]
         state = next((highlighted[key] for key in keys
                       if key in highlighted), None)
         if state:
@@ -1005,7 +990,7 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
         pool = pools.setdefault(group, [])
         options_by_key = pool_options.setdefault(group, {})
         candidates = list(entry.get("texture_options") or [])
-        mesh_key = _canonical_mesh_key(name, entry)
+        mesh_key = _canonical_mesh_key(entry)
         if mesh_key in restored:
             state = restored[mesh_key]
             candidates.append({key: value for key, value in state.items()

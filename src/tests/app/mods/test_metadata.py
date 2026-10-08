@@ -306,6 +306,7 @@ def test_clear_mesh_color_adjustments_if_unchanged_reports_save_failure(
 
 def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
     canonical = "mesh:[5,\"A.ini\",\"Component01\",null,null,[3,0,0],[]]"
+    second_canonical = canonical.replace("[3,0,0]", "[6,0,0]")
     payload = {"meshes": {
         "Component01-0": {
             "component": "Component01", "drawindexed": [3, 0, 0],
@@ -313,6 +314,7 @@ def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
         },
         "Component01-1": {
             "component": "Component01", "drawindexed": [6, 0, 0],
+            "identity": {"key": second_canonical},
         },
     }}
     adjustment = {
@@ -329,5 +331,25 @@ def test_hydrate_mesh_color_adjustments_uses_canonical_and_safe_legacy_keys():
 
     assert hydrated == {
         canonical: {**adjustment},
-        "Component01::6,0,0": {**adjustment},
+        second_canonical: {**adjustment},
     }
+
+
+@pytest.mark.parametrize("kind", ["mesh_names", "mesh_color_adjustments", "textures"])
+@pytest.mark.parametrize("identity", [None, {}, {"key": ""}, {"key": 5}])
+def test_metadata_hydration_requires_canonical_payload_identity(tmp_path, kind, identity):
+    entry = {"component": "Component01", "drawindexed": [3, 0, 0]}
+    if identity is not None:
+        entry["identity"] = identity
+    payload = {"meshes": {"mesh-01": entry}, "textures": {}}
+    value = {
+        "mesh_names": "Legacy",
+        "mesh_color_adjustments": {"hue": 30},
+        "textures": {"tex_key": "diffuse::texture-01.png", "manual": True},
+    }[kind]
+    data = {kind: {"Component01::3,0,0": value}}
+    with pytest.raises(ValueError, match="canonical identity"):
+        if kind == "textures":
+            metadata.hydrate_textures(str(tmp_path), payload, data)
+        else:
+            getattr(metadata, f"hydrate_{kind}")(payload, data)
