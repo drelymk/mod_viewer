@@ -5,6 +5,155 @@ import math
 import pytest
 
 
+def test_semantic_refresh_endpoints_and_stale_completion_lifecycle(module_page):
+    stubs = {
+        'mesh/visibility.js': """
+export const refreshAll = value => window.effects.push(['refresh', value]);
+export const setStateRules = () => window.effects.push(['controls']);
+export const updateMeshSemantics = () => {
+  window.effects.push(['meshes']);
+  return {success: window.meshUpdateSuccess, materialChangedMeshes: ['changed-01']};
+};
+""",
+        'panels/mesh-panel.js': """
+export const refreshAutomaticTextureBoundaries = () => {};
+export const refreshMeshAssetDiagnostics = () => {};
+""",
+        'panels/menu-panel.js': 'export const buildMenuPanel = () => {};',
+        'panels/toggle-panel.js': 'export const buildTogglePanel = () => {};',
+        'panels/present-panel.js': """
+export const buildPresentPanel = (value, context) => window.effects.push(['present', context]);
+""",
+        'panels/health-report.js': """
+export const refreshHealthReport = () => window.effects.push(['health']);
+export const setAssetResolution = () => {};
+""",
+        'i18n/index.js': 'export const t = key => key;',
+        'ui/dialogs.js': 'export const alertDialog = async text => window.effects.push(["alert", text]);',
+    }
+    for path, source in stubs.items():
+        module_page.route(f'**/js/{path}', lambda route, *, source=source: route.fulfill(
+            content_type='text/javascript', body=source))
+    result = module_page.evaluate("""async () => {
+      const refresh = await import('./js/app/semantic-refresh.js');
+      const {viewerState} = await import('./js/app/state.js');
+      viewerState.currentModPath = 'mod-01';
+      window.effects = [];
+      window.meshUpdateSuccess = true;
+      const requests = [];
+      const api = {};
+      for (const endpoint of ['get_present_state', 'get_control_state', 'get_mesh_semantics', 'get_semantic_state']) {
+        api[endpoint] = async path => {requests.push([endpoint, path]); return {present: {}, controls: {}, meshes: {}};};
+      }
+      window.pywebview = {api};
+      const handlers = {
+        syncViewportControlPlacement: () => effects.push(['placement']),
+        refreshPendingState: async (path, current) => {
+          await Promise.resolve(); effects.push(['pending', path, current()]);
+        },
+      };
+      const change = {selectedPosition: 2, applySelection: true};
+      const snapshots = [];
+      for (const [name, args] of [
+        ['refreshPresentState', [change, handlers]], ['refreshControlSemantics', [handlers]],
+        ['refreshMeshSemantics', [handlers]], ['refreshSemanticState', [handlers, change]],
+      ]) {
+        effects.length = 0;
+        const success = await refresh[name](...args);
+        snapshots.push({success, effects: structuredClone(effects), request: requests.at(-1)});
+      }
+      let release;
+      api.get_semantic_state = path => {requests.push(['get_semantic_state', path]); return new Promise(resolve => release = resolve);};
+      const obsolete = refresh.refreshSemanticState(handlers);
+      await refresh.refreshPresentState(change, handlers);
+      effects.length = 0;
+      release({controls: {}, meshes: {}});
+      const obsoleteResult = await obsolete;
+      const obsoleteEffects = structuredClone(effects);
+
+      api.get_mesh_semantics = async () => {throw new Error('fixture failure');};
+      const failure = await refresh.refreshMeshSemantics(handlers);
+      const failureEffects = structuredClone(effects);
+      effects.length = 0;
+      api.get_semantic_state = async () => ({controls: {}, meshes: {}});
+      window.meshUpdateSuccess = false;
+      const mismatch = await refresh.refreshSemanticState(handlers);
+      const mismatchEffects = structuredClone(effects);
+      effects.length = 0;
+      viewerState.currentModPath = null;
+      const absent = await refresh.refreshControlSemantics(handlers);
+      return {snapshots, obsoleteResult, obsoleteEffects, failure, failureEffects,
+        mismatch, mismatchEffects, absent, absentEffects: effects};
+    }""")
+    for snapshot, endpoint, mesh_updates, control_updates in zip(
+            result['snapshots'],
+            ['get_present_state', 'get_control_state', 'get_mesh_semantics', 'get_semantic_state'],
+            [0, 0, 1, 1], [0, 1, 0, 1]):
+        assert snapshot['success'] is True
+        assert snapshot['request'] == [endpoint, 'mod-01']
+        effects = snapshot['effects']
+        assert sum(item[0] == 'meshes' for item in effects) == mesh_updates
+        assert sum(item[0] == 'controls' for item in effects) == control_updates
+        assert effects[-2:] == [['pending', 'mod-01', True], ['health']]
+        if mesh_updates:
+            assert next(item[1] for item in effects if item[0] == 'refresh') == {
+                'force': {'visibility': True, 'textures': True},
+                'additionalMeshes': ['changed-01']}
+        else:
+            present = next(item[1] for item in effects if item[0] == 'present')
+            assert present['modPath'] == 'mod-01'
+    assert result['snapshots'][0]['effects'][0] == [
+        'present', {'modPath': 'mod-01', 'onChange': None,
+                    'selectedPosition': 2, 'applySelection': True}]
+    assert result['obsoleteResult'] is False and result['obsoleteEffects'] == []
+    assert result['failure'] is False
+    assert result['failureEffects'] == [
+        ['alert', 'errors.refreshSemantics'], ['pending', 'mod-01', True], ['health']]
+    assert result['mismatch'] is False
+    assert result['mismatchEffects'] == [
+        ['meshes'], ['alert', 'errors.refreshSemantics'],
+        ['pending', 'mod-01', True], ['health']]
+    assert result['absent'] is False and result['absentEffects'] == []
+
+
+def test_payload_meshes_consume_identity_for_mod_and_asset_choices(module_page):
+    stubs = {
+        'mesh-factory.js': 'export const buildMesh = () => {window.built++; return {userData: {}};};',
+        'mesh-state.js': 'export const addMesh = () => {};',
+        'color-adjustment.js': 'export const normalizeColorAdjustment = value => value || null;',
+        'mesh-color-session.js': 'export const syncMeshColorAdjustment = () => {};',
+        'animation-runtime.js': 'export const registerAnimatedMesh = () => {};',
+    }
+    for path, source in stubs.items():
+        module_page.route(f'**/js/mesh/{path}', lambda route, *, source=source: route.fulfill(
+            content_type='text/javascript', body=source))
+    result = module_page.evaluate("""async () => {
+      const {buildPayloadMeshes} = await import('./js/mesh/mesh-model-builder.js');
+      window.built = 0;
+      const entries = {
+        'mesh-01': {component: 'Component01', drawindexed: [3,0,0], identity: {key: 'identity-01'}},
+        'asset-01': {component: 'Component01', drawindexed: [3,0,0], identity: {key: 'identity-02'}, asset_fill: true},
+      };
+      const meshes = buildPayloadMeshes(entries, 'mod-01', {
+        'identity-01': 'Name01', 'identity-02': 'Name02', 'Component01::3,0,0': 'LegacyName',
+      }, {}, {colorAdjustments: {'identity-01': {hue: 30}}});
+      const choices = [...meshes].map(([key, mesh]) => ({key, metadataKey: mesh.userData.metadataKey,
+        name: mesh.userData.displayName, adjustment: mesh.userData.colorAdjustment,
+        identityShared: mesh.userData.identity === entries[key].identity}));
+      let rejected = false;
+      try {buildPayloadMeshes({'invalid-01': {component: 'Component01', drawindexed: [3,0,0]}});}
+      catch {rejected = true;}
+      return {choices, rejected, built};
+    }""")
+    assert result == {
+        'choices': [
+            {'key': 'mesh-01', 'metadataKey': 'identity-01', 'name': 'Name01',
+             'adjustment': {'hue': 30}, 'identityShared': True},
+            {'key': 'asset-01', 'metadataKey': 'identity-02', 'name': 'Name02',
+             'adjustment': None, 'identityShared': True},
+        ], 'rejected': True, 'built': 2}
+
+
 def test_menu_grid_keeps_four_columns_and_icon_fallback_through_rebuilds(module_page):
     module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
         content_type='text/javascript', body="""

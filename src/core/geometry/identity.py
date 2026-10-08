@@ -158,7 +158,7 @@ def make_mesh_geometry_identity(draw):
 
 @dataclass(frozen=True, slots=True)
 class MeshIdentity:
-    """Stable identity for one displayed, authored mod draw."""
+    """Stable identity for displayed geometry from an INI or an Asset."""
 
     source: str | None
     component: str | None

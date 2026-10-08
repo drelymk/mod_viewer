@@ -274,8 +274,8 @@ Use `build_mesh_result` for binary geometry: mesh fields contain offset/length
 references into `result.geometry`. Pass that blob to `publish_payload_geometry`.
 `load_mod` publishes its blob when none is supplied; MCP inspection returns an
 absolute localhost URL for fetching the binary data.
-The older `build_mesh_payload` flat API retains encoded geometry through a separate
-adapter; it is intended only for external scripts.
+The flat `build_mesh_payload` API has been removed; scripts should use
+`build_mesh_result` and publish its binary blob as above.
 
 ## License
 

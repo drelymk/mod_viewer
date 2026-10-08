@@ -15,7 +15,7 @@ from app.assets import textures as asset_textures
 from app.assets.wuwa_texture_names import texture_component_ordinals
 from .hash_asset import _file_list
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
-                     AssetTexture)
+                     AssetTexture, part_filter_matches)
 
 
 _IMAGE_EXTENSIONS = (".dds", ".png", ".jpg", ".jpeg", ".tga")
@@ -231,27 +231,6 @@ def _warning(component, ordinal, reason, message):
             "reason": reason, "message": message}
 
 
-def _filter_matches(part_filter, geometry_hash, first, count, ordinal=None):
-    if part_filter is None:
-        return True
-    for item in part_filter:
-        if getattr(item, "geometry_hash", None) != geometry_hash:
-            continue
-        expected_first = getattr(item, "first_index", None)
-        expected_count = getattr(item, "index_count", None)
-        expected_ordinal = getattr(item, "component_ordinal", None)
-        if expected_first is not None and expected_first != first:
-            continue
-        if (expected_count is not None and count is not None
-                and expected_count != count):
-            continue
-        if (expected_ordinal is not None and ordinal is not None
-                and expected_ordinal != ordinal):
-            continue
-        return True
-    return False
-
-
 def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
     parts = []
     warnings = []
@@ -298,7 +277,7 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
             name = str(name) if name else None
             first_index = _integer(component.get("index_offset"), 0)
             declared_index_count = _integer(component.get("index_count"))
-            if not _filter_matches(
+            if not part_filter_matches(
                     part_filter, geometry_hash, first_index,
                     declared_index_count, ordinal):
                 continue

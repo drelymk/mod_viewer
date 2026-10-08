@@ -26,7 +26,7 @@ from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.ini.sections import (extract_resources, sections_from_document)
 from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
-                               build_mesh_payload, build_mesh_result,
+                               build_mesh_result,
                                build_mesh_semantics)
 from tests.support_snapshot import snapshot_context
 
@@ -255,11 +255,11 @@ def test_geometry_blob_bypasses_base64_intermediate():
         assert owned.geometry.data == geometry.data
         assert owned.meshes["Body-1"]["pos"] == entry["pos"]
 
-        legacy = build_mesh_payload(groups, root)
-        assert (isinstance(legacy["Body-1"]["pos"], str)), ("direct callers retain the legacy base64 geometry contract")
         reference = entry["pos"]
-        assert base64.b64decode(legacy["Body-1"]["pos"]) == geometry.data[
+        positions = geometry.data[
             reference["offset"]:reference["offset"] + reference["length"]]
+        assert struct.unpack("<9f", positions) == (
+            0, 0, 0, 1, 0, 0, 0, 1, 0)
 
         context = snapshot_context(
             root, [ini_path], {ini_path: IniDocument.load(ini_path)}, {})

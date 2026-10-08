@@ -7,7 +7,6 @@ import tempfile
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
 from core.geometry.draw_call import DrawCall
-from core.geometry.legacy_transport import flat_mesh_payload
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
 
@@ -500,29 +499,3 @@ def test_section_classification_is_case_insensitive():
         assert groups[0]["position_file"] == "pos.buf"
         assert groups[0]["texcoord_file"] == "tc.buf"
         assert list(toggles) == ["keyswap"]
-def test_external_flat_adapter_preserves_nested_binary_streams():
-    import base64
-    from types import SimpleNamespace
-
-    geometry = GeometryBlob()
-    reference = geometry.add(struct.pack("<3f", 1, 2, 3))
-    meshes = {"mesh-01": {
-        "pos": reference,
-        "shape_targets": [{"pos": reference, "low_pos": reference}],
-        "animation_geometry": {
-            "positions": reference,
-            "pose": {"frames": reference},
-            "shape_passes": [{"deltas": reference}],
-        },
-    }}
-    built = SimpleNamespace(meshes=meshes, geometry=geometry, textures={})
-    flat = flat_mesh_payload(built)
-    entry = flat["mesh-01"]
-    streams = [entry["pos"], entry["shape_targets"][0]["pos"],
-               entry["shape_targets"][0]["low_pos"],
-               entry["animation_geometry"]["positions"],
-               entry["animation_geometry"]["pose"]["frames"],
-               entry["animation_geometry"]["shape_passes"][0]["deltas"]]
-    assert all(base64.b64decode(value) == geometry.data for value in streams)
-    assert meshes["mesh-01"]["pos"] == reference
-    assert flat_mesh_payload(built, encode_geometry=False)["mesh-01"] == meshes["mesh-01"]

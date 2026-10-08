@@ -139,8 +139,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         "component_blend_vertex_resources"]
     component_animation_vertex_bindings = resolved_buffers[
         "component_animation_vertex_bindings"]
-    hash_positions = resolved_buffers["hash_positions"]
-    hash_texcoords = resolved_buffers["hash_texcoords"]
+    hash_buffers = resolved_buffers["hash_buffers"]
     global_ib = resolved_buffers["global_ib"]
     global_position = resolved_buffers["global_position"]
     global_texcoord = resolved_buffers["global_texcoord"]
@@ -183,15 +182,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         return _lookup_component_value(component_buffers, component)
 
     def lookup_hash_buffers(value):
-        geometry_hash = _extract_hash(value) if value else None
-        if (geometry_hash
-                and geometry_hash in hash_positions
-                and geometry_hash in hash_texcoords):
-            return {
-                "position": hash_positions[geometry_hash],
-                "texcoord": hash_texcoords[geometry_hash],
-            }
-        return None
+        return hash_buffers.get(_extract_hash(value)) if value else None
 
     def lookup_component_vertex_resources(component):
         return _lookup_component_value(component_vertex_resources, component) or {}
@@ -221,6 +212,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 info.get("vertex_resources_at_end") or {}).items()
             if resource
         }
+        # Group defaults prefer paired component declarations, direct/inferred
+        # slots, hash families, then command-list globals. The authored state
+        # at each draw overrides these defaults below, including explicit nulls.
         buffers = lookup_component_buffers(component)
         if not buffers:
             position = (info["vb0"] or _lookup_component_value(

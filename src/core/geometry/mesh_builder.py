@@ -920,22 +920,9 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     )
 
 
-def build_mesh_payload(groups, mod_dir, max_draws=0, geometry=None,
-                       texture_source=None, game_profile=None, source=None,
-                       animations=None):
-    """Legacy flat payload wrapper retaining the ``__textures__`` field."""
-    from .legacy_transport import flat_mesh_payload
-
-    built = build_mesh_result(
-        groups, mod_dir, max_draws=max_draws, geometry=geometry,
-        texture_source=texture_source, game_profile=game_profile,
-        source=source, animations=animations)
-    return flat_mesh_payload(built, encode_geometry=geometry is None)
-
-
 __all__ = [
     "MeshBuildResult", "build_mesh_result", "build_mesh_semantics",
-    "build_mesh_payload", "GeometryBlob", "POSITION_STRIDE",
+    "GeometryBlob", "POSITION_STRIDE",
     "POSITION_OFFSET", "DEFAULT_UV_OFFSET", "INDEX_SIZE", "_res_get",
     "_deduplicate_draws", "read_positions", "read_texcoords", "read_indices",
 ]

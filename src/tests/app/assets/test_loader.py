@@ -4,6 +4,7 @@ import json
 import math
 import os
 import struct
+from dataclasses import replace
 
 import pytest
 
@@ -191,6 +192,43 @@ def test_asset_preview_and_fill_use_authoritative_material_profile(
         assert mesh["material_kind"] == "unknown"
         assert mesh["asset_source"] == part.asset_source
     assert preview["metadata"]["material_profiles"] == fill["metadata"]["material_profiles"]
+    preview_identity = next(iter(preview["meshes"].values()))["identity"]
+    assert preview_identity == next(iter(fill["meshes"].values()))["identity"]
+    assert preview_identity["source"].startswith("asset/")
+    assert preview_identity["geometry"] == {
+        "hash": "12345678", "first_index": 0, "index_count": 3}
+    assert json.loads(preview_identity["key"].removeprefix("mesh:"))[0] == 5
+
+
+@pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI", "WWMI"])
+def test_asset_identity_keeps_root_and_part_provenance_across_selective_fill(
+        tmp_path, asset_type):
+    part = AssetMeshPart(
+        key="Asset01/ObjectA/part-01", label="Component01", asset_type=asset_type,
+        asset_path="Asset01", geometry_hash="12345678",
+        component_name="Component01", classification="A",
+        component_ordinal=0, first_index=0, index_count=3,
+        positions=struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0),
+        indices=struct.pack("<3I", 0, 1, 2))
+    parts = [part, replace(part, key="Asset01/ObjectB/part-01"),
+             replace(part, key="Asset01/ObjectA/part-02", first_index=3),
+             replace(part, key="Asset01/ObjectC/part-01", geometry_hash="87654321")]
+    record = {"path": "Asset01"}
+
+    def identities(root, selected, fill=False):
+        payload = (build_asset_fill_payload(
+            asset_type, str(root), record, selected, geometry=GeometryBlob())
+            if fill else AssetLoadResult.from_parts(
+                asset_type, str(root), record, selected,
+                geometry=GeometryBlob()).payload)
+        return [entry["identity"] for entry in payload["meshes"].values()]
+
+    all_identities = identities(tmp_path, parts)
+    assert len({identity["key"] for identity in all_identities}) == len(parts)
+    assert all_identities == identities(tmp_path, list(reversed(parts)))[::-1]
+    assert identities(tmp_path, [part]) == [all_identities[0]]
+    assert identities(tmp_path, [part], fill=True) == [all_identities[0]]
+    assert identities(tmp_path / "other-root", [part])[0]["key"] != all_identities[0]["key"]
 
 
 def test_migoto_dump_uses_declared_semantics_and_streams_layouts(tmp_path):
@@ -829,6 +867,8 @@ def test_api_load_missing_asset_parts_is_incremental_and_reversible(
 
     preview = api.load_asset(str(asset))
     assert preview["metadata"]["source_kind"] == "asset"
+    assert entry["identity"] in [
+        mesh["identity"] for mesh in preview["meshes"].values()]
 
     replacement = api.load_missing_asset_parts(str(mod))
     assert replacement["status"] == "loaded"

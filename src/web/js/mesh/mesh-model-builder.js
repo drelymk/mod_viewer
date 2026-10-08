@@ -7,12 +7,6 @@ import { normalizeColorAdjustment } from './color-adjustment.js';
 import { syncMeshColorAdjustment } from './mesh-color-session.js';
 import { registerAnimatedMesh } from './animation-runtime.js';
 
-function legacyMeshMetadataKey(name, entry) {
-  const component = entry.component || name.replace(/-\d+$/, '');
-  const draw = entry.drawindexed ? entry.drawindexed.join(',') : 'whole';
-  return `${component}::${draw}`;
-}
-
 /** Build the registered live meshes represented by a payload. */
 export function buildPayloadMeshes(entries = {}, modPath = null, meshNames = {}, materialProfiles = {}, options = {}) {
   const texturePools = options.texturePools || {};
@@ -21,14 +15,14 @@ export function buildPayloadMeshes(entries = {}, modPath = null, meshNames = {},
   const liveMeshes = new Map();
   for (const [name, entry] of Object.entries(entries)) {
     if (entry?.error) continue;
+    const metadataKey = entry.identity.key;
     const materialProfile = materialProfiles?.[entry.material_profile_id] || null;
     const mesh = buildMesh(name, entry, materialProfile, {
       deferTextureRequests: options.deferTextureRequests === true,
     });
-    const metadataKey = entry.identity?.key || legacyMeshMetadataKey(name, entry);
     const texturePool = entry.texture_pool_id ? texturePools[entry.texture_pool_id] || [] : [];
     mesh.userData.semanticKey = name;
-    mesh.userData.identity = entry.identity || null;
+    mesh.userData.identity = entry.identity;
     mesh.userData.metadataKey = metadataKey;
     mesh.userData.colorAdjustment = normalizeColorAdjustment(colorAdjustments[metadataKey]);
     mesh.userData.texturePool = texturePool;
