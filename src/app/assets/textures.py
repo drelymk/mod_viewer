@@ -27,8 +27,9 @@ def component_texture_matches(filename, components, *, wwmi=False):
                 if not any(name != other and name in other for other in matches)}
     if len(specific) != 1:
         return set()
-    return {key for key, name in components.items()
-            if str(name).casefold() in specific}
+    identities = {key for key, name in components.items()
+                  if str(name).casefold() in specific}
+    return identities if len(identities) == 1 else set()
 
 
 def component_texture_name(group, *, wwmi=False):

@@ -87,17 +87,18 @@ def finalize_texture_candidates(group, *, draws=None):
             if filename:
                 maps[role] = {"file": filename, "path": asset.get("path"),
                               "identity": asset.get("key")}
-        asset = draw.asset_texture_defaults.get("diffuse") or {}
-        defaults = [{"file": asset.get("key") or draw.texture_default("diffuse"),
-                     "path": asset.get("path"), "identity": asset.get("key"),
-                     "source": "asset" if asset else "mod"}]
-        defaults.extend({"file": rule.get("file"), "source": "mod"}
-                        for rule in draw.texture_rules("diffuse"))
-        for candidate in defaults:
-            option = add(candidate)
-            if option is not None:
-                for role, value in maps.items():
-                    option.setdefault("maps", {}).setdefault(role, value)
+        for role in draw._TEXTURE_PREFIX:
+            asset = draw.asset_texture_defaults.get(role) or {}
+            defaults = [{"file": asset.get("key") or draw.texture_default(role),
+                         "path": asset.get("path"), "identity": asset.get("key"),
+                         "source": "asset" if asset else "mod"}]
+            defaults.extend({"file": rule.get("file"), "source": "mod"}
+                            for rule in draw.texture_rules(role))
+            for candidate in defaults:
+                option = add(candidate)
+                if option is not None and role == "diffuse":
+                    for channel, value in maps.items():
+                        option.setdefault("maps", {}).setdefault(channel, value)
     group["texture_candidates"] = list(candidates.values())
 
 

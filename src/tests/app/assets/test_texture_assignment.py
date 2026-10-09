@@ -32,57 +32,6 @@ def _write_geometry(root):
     (root / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
 
 
-def _group(root):
-    discovered = ("B.dds", "normal-a.dds", "normal-b.dds")
-    for filename in ("A.dds", *discovered):
-        (root / filename).write_bytes(b"synthetic dds")
-    return [{
-        "name": "Component4", "display_name": "Component4",
-        "position_file": "p.buf", "position_stride": 12,
-        "texcoord_file": "t.buf", "texcoord_stride": 8,
-        "ib_file": "i.buf", "index_size": 4,
-        "texture_candidates": [
-            {"res": "ResourceA", "file": "A.dds", "source": "mod"},
-            *[{"file": filename, "source": "mod"}
-              for filename in discovered],
-        ],
-        "draws": [{"label": "Component4-1", "count": 3,
-                   "start": 0, "base": 0}],
-    }]
-
-
-def _build(root):
-    _write_geometry(root)
-
-    def register(path, role):
-        return f"/texture/{role}/{os.path.basename(path)}"
-
-    return build_mesh_result(
-        _group(root), str(root), geometry=GeometryBlob(),
-        texture_source=register, game_profile="wuwa")
-
-
-def test_manage_texture_pool_preserves_candidate_only_roles(
-        tmp_path):
-    built = _build(tmp_path)
-    entry = built.meshes["Component4-1"]
-
-    assert [item["file"] for item in entry["texture_options"]] == [
-        "A.dds", "B.dds", "normal-a.dds", "normal-b.dds"]
-    assert all("normal_map" not in item for item in entry["texture_options"])
-    assert all("normal_data" not in item for item in entry["texture_options"])
-
-    payload = {"meshes": built.meshes, "textures": {}}
-    metadata.hydrate_textures(
-        str(tmp_path), payload, texture_profile="wuwa")
-
-    pool = payload["texture_pools"]["p0"]
-    assert [item["file"] for item in pool] == [
-        "A.dds", "B.dds", "normal-a.dds", "normal-b.dds"]
-    assert all("normal_map" not in item for item in pool)
-    assert all("normal_data" not in item for item in pool)
-
-
 @pytest.mark.parametrize("archived", [False, True], ids=["directory", "zip"])
 def test_cross_ini_candidates_keep_branch_references_manual_and_source_local(
         tmp_path, monkeypatch, archived):
@@ -540,6 +489,46 @@ filename = replacement.dds
     else:
         assert face["tex_key"] is None
         assert asset_key not in payload["textures"]
+
+    if game != "wuwa":
+        sibling_ini = rf"""[TextureOverrideBody]
+hash = 10101010
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+Resource\{asset_type}\Diffuse = ResourceOwned
+drawindexed = 3,0,0
+[ResourceOwned]
+filename = {loose[0]}
+""" + standard_component_resources(
+            position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+        if archived:
+            with zipfile.ZipFile(mod, "a") as archive:
+                archive.writestr("Wrapped/Other.ini", sibling_ini)
+            source = ZipModSource(mod)
+        else:
+            (mod / "Other.ini").write_text(sibling_ini, encoding="utf-8")
+            source = DirectoryModSource(mod)
+        reloaded_context = ModLoadContext(str(mod), build_mod_ini_snapshot(
+            discover_ini_paths(str(mod), source=source), str(mod), source=source),
+            asset_folders=context.asset_folders)
+        reloaded = load_mod(context=reloaded_context, geometry=GeometryBlob(),
+                            texture_source=publish)
+        assert not reloaded.get("error")
+        metadata.hydrate_textures(str(mod), reloaded, data={},
+                                  texture_source=publish, texture_profile=game,
+                                  source=reloaded_context.source)
+        original = next(entry for entry in reloaded["meshes"].values()
+                        if entry["identity"]["source"] == "mod.ini"
+                        and entry["tex_key"] == "diffuse::base.dds")
+        sibling = next(entry for entry in reloaded["meshes"].values()
+                       if entry["identity"]["source"] == "Other.ini")
+        for entry, owned in ((original, False), (sibling, True)):
+            choices = {item["file"] for item in reloaded["texture_pools"][entry["texture_pool_id"]]}
+            assert (loose[0] in choices) == owned
+            assert "variants/" + loose[0] not in choices
+        assert sibling["tex_key"] == "diffuse::" + loose[0]
 
 
 def test_wwmi_asset_candidates_keep_metadata_object_and_draw_scope(tmp_path):

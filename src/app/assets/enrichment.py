@@ -464,7 +464,7 @@ def _apply_slot_hashes(draw, evidence):
 
 def _associate_textures(group, records, inventory, filename_matches,
                         asset_names, texture_indexes):
-    """Put authored, slot, hash and filename evidence into one component pool."""
+    """Put discovery, slot, hash and filename evidence into one component pool."""
     candidates = {}
 
     def add_mod(filename, **metadata):
@@ -485,11 +485,11 @@ def _associate_textures(group, records, inventory, filename_matches,
     hashes = set()
     for raw_draw in group.get("draws", ()):
         draw = DrawCall.from_mapping(raw_draw, group)
-        for role in draw._TEXTURE_PREFIX:
-            add_mod(draw.texture_default(role))
-            for rule in draw.texture_rules(role):
-                add_mod(rule.get("file"))
-            hashes.update(draw.texture_hashes.get(role, ()))
+        hashes.update(value for values in draw.texture_hashes.values()
+                      for value in values)
+        hashes.update(value for role in draw._TEXTURE_PREFIX
+                      for rule in draw.texture_rules(role)
+                      for value in rule.get("texture_hashes", ()))
         for slot in draw.slot_textures:
             add_mod(slot.file)
             hashes.update(slot.texture_hashes)
@@ -508,11 +508,9 @@ def _associate_textures(group, records, inventory, filename_matches,
         for texture_hash in sorted(hashes):
             for replacement in index.replacements_by_hash.get(texture_hash, ()):
                 add_mod(replacement.file)
+    associated_assets = set()
     for raw_draw, binding, evidence, slots in exact_records:
-        directories = asset_textures.texture_asset_directories(binding)
         wwmi = binding.asset_type == "WWMI"
-        names = ({id(group): binding.component_ordinal} if wwmi else
-                 asset_names.get((binding.root, binding.asset), {}))
         asset_hashes = hashes
         if wwmi:
             draw = DrawCall.from_mapping(raw_draw, group)
@@ -522,6 +520,13 @@ def _associate_textures(group, records, inventory, filename_matches,
                                 for value in values)
             asset_hashes.update(value for slot in draw.slot_textures
                                 for value in slot.texture_hashes)
+        association = (binding, frozenset(asset_hashes))
+        if association in associated_assets:
+            continue
+        associated_assets.add(association)
+        directories = asset_textures.texture_asset_directories(binding)
+        names = ({id(group): binding.component_ordinal} if wwmi else
+                 asset_names.get((binding.root, binding.asset), {}))
         for identity, candidate in inventory.items():
             if candidate["source"] != "asset":
                 continue

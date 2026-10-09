@@ -54,22 +54,22 @@ def test_texture_pool_publication_and_reload_lifecycle(tmp_path):
             "texture_candidates": [
                 *[{"file": filename, "res": f"ResourceChoice{ordinal}"}
                 for ordinal, filename in enumerate((
-                    "pool.dds", "resolved.dds", "variant.dds", "inactive.dds",
-                    "missing.dds", "../outside.dds"))],
+                    "pool.dds", "missing.dds", "../outside.dds"))],
                 {"file": "discovered.dds", "source": "mod"}],
             "draws": [draw, conditional],
         }
         finalize_texture_candidates(group)
         options = build_texture_options(group, first)
         assert [item["tex_key"] for item in options] == [
-            "diffuse::pool.dds", "diffuse::resolved.dds", "diffuse::variant.dds",
-            "diffuse::inactive.dds", "diffuse::discovered.dds"]
+            "diffuse::pool.dds", "diffuse::discovered.dds",
+            "diffuse::resolved.dds", "diffuse::variant.dds",
+            "diffuse::data.dds", "diffuse::inactive.dds"]
         assert draw.render_identity() == before
         assert first.sources == rendered_sources
         publish.assert_not_called()
         assert [item.get("normal_map") for item in options] == [
-            None, "normal_map::data.dds", "normal_map::data.dds",
-            "normal_map::data.dds", None]
+            None, None, "normal_map::data.dds", "normal_map::data.dds",
+            None, "normal_map::data.dds"]
 
         resolve.reset_mock()
         for _ in range(2):
