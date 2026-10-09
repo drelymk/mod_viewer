@@ -508,10 +508,20 @@ def _associate_textures(group, records, inventory, filename_matches,
         for texture_hash in sorted(hashes):
             for replacement in index.replacements_by_hash.get(texture_hash, ()):
                 add_mod(replacement.file)
-    for _draw, binding, evidence, _slots in exact_records:
+    for raw_draw, binding, evidence, slots in exact_records:
         directories = asset_textures.texture_asset_directories(binding)
-        names = asset_names.get((binding.root, binding.asset), {})
         wwmi = binding.asset_type == "WWMI"
+        names = ({id(group): binding.component_ordinal} if wwmi else
+                 asset_names.get((binding.root, binding.asset), {}))
+        asset_hashes = hashes
+        if wwmi:
+            draw = DrawCall.from_mapping(raw_draw, group)
+            asset_hashes = {
+                usage["texture_hash"] for usages in slots.values() for usage in usages}
+            asset_hashes.update(value for values in draw.texture_hashes.values()
+                                for value in values)
+            asset_hashes.update(value for slot in draw.slot_textures
+                                for value in slot.texture_hashes)
         for identity, candidate in inventory.items():
             if candidate["source"] != "asset":
                 continue
@@ -520,14 +530,15 @@ def _associate_textures(group, records, inventory, filename_matches,
             if relative is None or identity != os.path.normcase(
                     asset_textures.asset_logical_key(binding.root, path)):
                 continue
-            if not any(os.path.commonpath((directory, path)) == directory
+            if not any((os.path.normcase(os.path.dirname(path)) == os.path.normcase(directory)
+                        if wwmi else os.path.commonpath((directory, path)) == directory)
                        for directory in directories):
                 continue
             filename = os.path.basename(path)
             matches = asset_textures.component_texture_matches(
                 filename, names, wwmi=wwmi)
             if (id(group) in matches
-                    or any(value in filename.casefold() for value in hashes)):
+                    or any(value in filename.casefold() for value in asset_hashes)):
                 candidates.setdefault(identity, dict(candidate))
         for item in evidence:
             if not item.role:
@@ -569,10 +580,10 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
     original_files = {}
     for group, group_bindings in zip(groups, bindings):
         for binding in group_bindings:
-            if asset_textures.exact_texture_binding(binding):
+            if (asset_textures.exact_texture_binding(binding)
+                    and binding.asset_type != "WWMI"):
                 asset_names.setdefault((binding.root, binding.asset), {})[id(group)] = (
-                    binding.component_ordinal if binding.asset_type == "WWMI"
-                    else binding.component_name or names[id(group)])
+                    binding.component_name or names[id(group)])
     for position, group in enumerate(groups):
         group_bindings = bindings[position] if position < len(bindings) else ()
         index = group.get("_texture_override_index") or texture_index

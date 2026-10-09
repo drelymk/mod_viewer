@@ -153,7 +153,9 @@ of documentation, comments and tests; use portable fixtures instead.
   component. Generic filenames use the original component name and prefer a
   unique most-specific match; WWMI retains `Components-N t=...dds`, including
   multi-component ordinals. Resolve every INI's references and replacement
-  index independently before aggregation. Filename associations supply choices,
+  index independently before aggregation. WWMI Asset ordinals and texture hash
+  evidence belong to each exact draw's metadata object; sibling objects do not
+  share candidate textures. Filename associations supply choices,
   never automatic roles. Apply semantic/slot/conditional selection once per
   draw, preserving authored execution order, no-mod-diffuse Asset eligibility
   and game-specific normal transport. Final picker assembly consumes that

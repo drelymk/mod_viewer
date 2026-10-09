@@ -50,13 +50,32 @@ def texture_asset_directories(binding):
     if not exact_texture_binding(binding) or not binding.root:
         return ()
     directories = []
-    for relative in (binding.asset, *[
+    metadata_directories = [
             os.path.dirname(value.replace("\\", "/")) or "."
-            for value in (binding.metadata, binding.detail_metadata) if value]):
+            for value in (binding.metadata, binding.detail_metadata) if value]
+    relatives = (metadata_directories if binding.asset_type == "WWMI"
+                 else [binding.asset, *metadata_directories])
+    for relative in relatives:
         directory = asset_paths.safe_asset_dir(binding.root, relative)
         if directory and directory not in directories:
             directories.append(directory)
     return tuple(directories)
+
+
+def texture_directory_files(directory, *, recursive):
+    """Enumerate supported images at the selected directory depth."""
+    if recursive:
+        files = DirectoryModSource(directory).list_files()
+    else:
+        try:
+            with os.scandir(directory) as entries:
+                files = [entry.name for entry in entries
+                         if entry.is_file(follow_symlinks=False)]
+        except OSError:
+            files = []
+    return sorted((filename for filename in files
+                   if filename.casefold().endswith(IMAGE_EXTENSIONS)),
+                  key=lambda value: (value.casefold(), value))
 
 
 def collect_texture_inventory(mod_dir, bindings=(), *, source=None, resource_files=()):
@@ -88,20 +107,11 @@ def collect_texture_inventory(mod_dir, bindings=(), *, source=None, resource_fil
                     continue
                 # A metadata file at the registered root permits immediate
                 # siblings only, never a traversal of the global library.
-                recursive = os.path.normcase(os.path.realpath(binding.root)) != os.path.normcase(directory)
+                # WWMI ordinals restart in each metadata object.
+                recursive = (binding.asset_type != "WWMI" and
+                             os.path.normcase(os.path.realpath(binding.root)) != os.path.normcase(directory))
                 scanned.append((*cache_key, recursive))
-                if not recursive:
-                    try:
-                        with os.scandir(directory) as entries:
-                            files = [entry.name for entry in entries
-                                     if entry.is_file(follow_symlinks=False)]
-                    except OSError:
-                        files = []
-                else:
-                    files = DirectoryModSource(directory).list_files()
-                for filename in sorted(files, key=lambda value: (value.casefold(), value)):
-                    if not filename.casefold().endswith(IMAGE_EXTENSIONS):
-                        continue
+                for filename in texture_directory_files(directory, recursive=recursive):
                     relative = os.path.relpath(os.path.join(directory, filename), binding.root)
                     path = asset_paths.safe_asset_path(binding.root, relative)
                     if not path:

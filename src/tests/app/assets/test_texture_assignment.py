@@ -16,6 +16,7 @@ from app.assets.textures import collect_texture_inventory
 from app.assets.resolver import AssetComponentBinding
 from app.assets.textures import asset_texture_key
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.geometry.draw_call import DrawCall
 from core.ini import draw_scan
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import DirectoryModSource, ZipModSource
@@ -539,6 +540,69 @@ filename = replacement.dds
     else:
         assert face["tex_key"] is None
         assert asset_key not in payload["textures"]
+
+
+def test_wwmi_asset_candidates_keep_metadata_object_and_draw_scope(tmp_path):
+    mod = tmp_path / "mod"
+    root = tmp_path / "assets"
+    asset = root / "Asset01"
+    mod.mkdir()
+    files = {
+        "ObjectA/Components-0 t=owned-a.dds": b"named",
+        "ObjectA/Components-1 t=unrelated.dds": b"other ordinal",
+        "ObjectA/opaque_aaaaaaaa.dds": b"hash",
+        "ObjectA/opaque_cccccccc.dds": b"other object hash",
+        "ObjectB/Components-0 t=owned-b.dds": b"named",
+        "ObjectB/Components-1-2 t=shared-b.dds": b"multi component",
+        "ObjectB/opaque_bbbbbbbb.dds": b"hash",
+        "ObjectB/opaque_cccccccc.dds": b"hash",
+        "ObjectB/opaque_aaaaaaaa.dds": b"other object hash",
+        "Components-0 t=parent.dds": b"parent object",
+        "ObjectA/Nested/Components-0 t=aaaaaaaa.dds": b"nested object",
+        "ObjectC/Components-0 t=aaaaaaaa.dds": b"sibling object",
+    }
+    for relative, data in files.items():
+        path = asset / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    for name, hashes in (("ObjectA", ("aaaaaaaa",)),
+                         ("ObjectB", ("bbbbbbbb", "cccccccc"))):
+        directory = asset / name
+        (directory / "Metadata.json").write_text("{}", encoding="utf-8")
+        (directory / "TextureUsage.json").write_text(json.dumps({
+            f"Component {ordinal}": {"ps-t0": [
+                f"{value}-vs=12345678-ps=87654321"]}
+            for ordinal, value in enumerate(hashes)}), encoding="utf-8")
+
+    def binding(object_name, ordinal):
+        return AssetComponentBinding(
+            status="exact", component_status="exact", range_status="exact",
+            asset_type="WWMI", root=str(root), asset="Asset01",
+            component_ordinal=ordinal,
+            metadata=f"Asset01/{object_name}/Metadata.json",
+            detail_metadata=f"Asset01/{object_name}/TextureUsage.json")
+
+    groups = [{"name": "Component0", "draws": [DrawCall(), DrawCall()]},
+              {"name": "Component0_2", "display_name": "Component0",
+               "draws": [DrawCall()]}]
+    parsed = SimpleNamespace(groups=groups, resource_files=[],
+                             texture_override_indexes=[],
+                             game=SimpleNamespace(game="wuwa"))
+    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod),
+                              dds_classification_cache={})
+    _apply_texture_enrichment(parsed, context, [
+        [binding("ObjectA", 0), binding("ObjectB", 1)],
+        [binding("ObjectB", 0)]], complete_index=True)
+
+    assert [{os.path.relpath(item["path"], asset).replace("\\", "/")
+             for item in group["texture_candidates"]} for group in groups] == [
+        {"ObjectA/Components-0 t=owned-a.dds", "ObjectA/opaque_aaaaaaaa.dds",
+         "ObjectB/Components-1-2 t=shared-b.dds", "ObjectB/opaque_cccccccc.dds"},
+        {"ObjectB/Components-0 t=owned-b.dds", "ObjectB/opaque_bbbbbbbb.dds"},
+    ]
+    assert all(draw.texture_default("diffuse") is None
+               and not draw.asset_texture_defaults
+               for group in groups for draw in group["draws"])
 
 
 def test_inventory_boundaries_and_matched_asset_scan_lifecycle(tmp_path):
