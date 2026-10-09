@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 from core.geometry.draw_call import DrawCall
 from core.geometry.texture_bindings import (
     TextureRegistry, apply_draw_texture_bindings, build_texture_options,
+    finalize_texture_candidates,
 )
 from core.mod_source import DirectoryModSource, ZipModSource
 from core.textures.profiles import texture_profile_for
@@ -49,14 +50,17 @@ def test_texture_pool_publication_and_reload_lifecycle(tmp_path):
         rendered_sources = first.sources
         assert len(rendered_sources) == 4
         publish.reset_mock()
-        options = build_texture_options({
-            "diffuse_pool_files": [
-                {"file": filename, "res": f"ResourceChoice{ordinal}"}
+        group = {
+            "texture_candidates": [
+                *[{"file": filename, "res": f"ResourceChoice{ordinal}"}
                 for ordinal, filename in enumerate((
                     "pool.dds", "resolved.dds", "variant.dds", "inactive.dds",
                     "missing.dds", "../outside.dds"))],
-            "discovered_textures": [{"file": "discovered.dds", "source": "scan"}],
-        }, first, entries=[entry, conditional_entry])
+                {"file": "discovered.dds", "source": "mod"}],
+            "draws": [draw, conditional],
+        }
+        finalize_texture_candidates(group)
+        options = build_texture_options(group, first)
         assert [item["tex_key"] for item in options] == [
             "diffuse::pool.dds", "diffuse::resolved.dds", "diffuse::variant.dds",
             "diffuse::inactive.dds", "diffuse::discovered.dds"]
@@ -100,7 +104,9 @@ def test_zip_texture_registry_and_picker_read_member_bytes(tmp_path):
     entry = {}
     apply_draw_texture_bindings(entry, DrawCall(
         texture_default_file="textures/component01.png"), registry=registry)
-    options = build_texture_options({}, registry, entries=[entry])
+    group = {"draws": [DrawCall(texture_default_file="textures/component01.png")]}
+    finalize_texture_candidates(group)
+    options = build_texture_options(group, registry)
     assert [item["tex_key"] for item in options] == [
         "diffuse::textures/component01.png"]
     assert registry.ensure(texture_path) == "diffuse::textures/component01.png"

@@ -8,8 +8,11 @@ from unittest.mock import patch
 import pytest
 
 from app.mods import metadata as metadata
-from app.mods.analysis import analyze_mod_inis
+from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.enrichment import _apply_texture_enrichment
+from app.mods.loader import ModLoadContext, load_mod
+from app.assets import index as asset_index
+from app.assets.textures import collect_texture_inventory
 from app.assets.resolver import AssetComponentBinding
 from app.assets.textures import asset_texture_key
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
@@ -17,6 +20,7 @@ from core.ini import draw_scan
 from core.mod_discovery import discover_ini_paths
 from core.mod_source import DirectoryModSource, ZipModSource
 from tests.support.model_data import standard_component_resources
+from core.materials.game_profile import GameDetection
 
 
 def _write_geometry(root):
@@ -36,10 +40,9 @@ def _group(root):
         "position_file": "p.buf", "position_stride": 12,
         "texcoord_file": "t.buf", "texcoord_stride": 8,
         "ib_file": "i.buf", "index_size": 4,
-        "diffuse_pool_files": [{"res": "ResourceA", "file": "A.dds"}],
-        "discovered_textures": [
-            {"file": "A.dds", "source": "wuwa_filename"},
-            *[{"file": filename, "source": "wuwa_filename"}
+        "texture_candidates": [
+            {"res": "ResourceA", "file": "A.dds", "source": "mod"},
+            *[{"file": filename, "source": "mod"}
               for filename in discovered],
         ],
         "draws": [{"label": "Component4-1", "count": 3,
@@ -58,7 +61,7 @@ def _build(root):
         texture_source=register, game_profile="wuwa")
 
 
-def test_manage_texture_pool_deduplicates_parser_and_discovered_files(
+def test_manage_texture_pool_preserves_candidate_only_roles(
         tmp_path):
     built = _build(tmp_path)
     entry = built.meshes["Component4-1"]
@@ -234,25 +237,25 @@ filename = sibling-map.dds
     parsed.game = SimpleNamespace(game="wuwa")
 
     def unexpected(*args, **kwargs):
-        raise AssertionError("Discovery must not scan the mod or decode textures")
+        raise AssertionError("Discovery must not decode textures")
 
-    monkeypatch.setattr(source, "list_files", unexpected)
     monkeypatch.setattr("core.textures.pipeline._open_texture_image",
                         unexpected)
     monkeypatch.setattr("app.assets.enrichment.classify_dds", unexpected)
-    _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
+    with patch.object(source, "list_files", wraps=source.list_files) as enumerate_files:
+        _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
+    enumerate_files.assert_called_once()
     expected_files = [
-        named, shared, foreign,
+        named, shared, "Textures/Components-2 t=loose.dds", foreign,
+        "Components-2 t=disabled.dds",
         "Textures/map-01.dds", "Textures/map-02.dds", "Textures/map-03.dds",
         "nested/custom_skin.png",
         "alternate/custom_skin.png"]
-    candidates = group["discovered_textures"]
-    assert [item["file"].replace("\\", "/") for item in candidates[:-1]] == (
-        expected_files)
-    assert [item["source"] for item in candidates] == [
-        "wuwa_filename", "wuwa_filename", "wuwa_filename",
-        "wuwa_reference", "wuwa_reference", "wuwa_reference",
-        "wuwa_hash", "wuwa_hash", "wuwa_asset_hash"]
+    candidates = group["texture_candidates"]
+    assert {item["file"].replace("\\", "/") for item in candidates[:-1]} == (
+        {"existing.dds", *expected_files})
+    assert candidates[-1]["source"] == "asset"
+    assert all(item["source"] == "mod" for item in candidates[:-1])
     draw = group["draws"][0]
     assert draw.texture_default("diffuse") == "existing.dds"
     assert draw.texture_provenance == {"diffuse": "mod_semantic"}
@@ -278,9 +281,9 @@ filename = sibling-map.dds
     assert entry["tex_key"] == "diffuse::existing.dds"
     assert list(payload["texture_pools"]) == [entry["texture_pool_id"]]
     pool = payload["texture_pools"][entry["texture_pool_id"]]
-    assert [item["tex_key"] for item in pool] == [
+    assert {item["tex_key"] for item in pool} == {
         "diffuse::existing.dds",
-        *["diffuse::" + filename for filename in expected_files], asset_key]
+        *["diffuse::" + filename for filename in expected_files], asset_key}
     assert pool[-1]["label"] == "Components-2 t=aaaaaaaa (Asset)"
     assert all(item["tex_key"] in payload["textures"] for item in pool)
     assert sum(os.path.normcase(str(path)) == os.path.normcase(str(asset_file))
@@ -369,8 +372,203 @@ filename = foreign.dds
         choices = entry["texture_options"]
         assert [choice["tex_key"] for choice in choices] == [
             "diffuse::" + filename for filename in filenames]
-        assert all(choice["candidate_source"] == "wuwa_reference"
+        assert all(choice["candidate_source"] == "mod"
                    for choice in choices)
         assert entry["tex_key"] is None
         assert all(entry.get(role + "_key") is None for role in (
             "normal_map", "normal_data", "light_map", "material_map", "emission_map"))
+
+
+@pytest.mark.parametrize("game, asset_type", [
+    ("genshin", "GIMI"), ("zzz", "ZZMI"), ("wuwa", "WWMI")])
+@pytest.mark.parametrize("configured_assets", [False, True], ids=["mod", "asset"])
+@pytest.mark.parametrize("archived", [False, True], ids=["directory", "zip"])
+def test_unified_texture_load_and_saved_choice_lifecycle(
+        tmp_path, monkeypatch, game, asset_type, configured_assets, archived):
+    names = ["Component0", "Component1", "Component2"] if game == "wuwa" else [
+        "Body", "BodySuit", "Face"]
+    loose = (["Components-0-1 t=loose.dds", "Components-1 t=detail.dds",
+              "Components-2 t=face.dds"] if game == "wuwa" else [
+        "CharacterBodyDiffuse.PNG", "CharacterBodySuitNormalMap.jpg",
+        "CharacterFaceNormalMap.jpeg"])
+    ini = "[Constants]\nglobal persist $variant = 0\n"
+    ini += "[KeyVariant]\nkey = x\ntype = cycle\n$variant = 0,1\n"
+    for ordinal, name in enumerate(names):
+        ini += f"""[TextureOverride{name}]
+hash = {0x10101010 if game == "wuwa" else (ordinal + 1) * 0x10101010:08x}
+match_first_index = {ordinal * 6 if game == "wuwa" else 0}
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+"""
+        if ordinal == 0:
+            ini += rf"""Resource\{asset_type}\Diffuse = ResourceFirst
+Resource\{asset_type}\NormalMap = ResourceNormal
+ps-t7 = ResourceSlot
+drawindexed = 3,0,0
+if $variant == 1
+Resource\{asset_type}\Diffuse = ResourceAlternate
+endif
+drawindexed = 3,3,0
+"""
+        else:
+            ini += "drawindexed = 3,0,0\n"
+    ini += standard_component_resources(
+        position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    ini += """[ResourceFirst]
+filename = base.dds
+[ResourceAlternate]
+filename = alternate.dds
+[ResourceNormal]
+filename = normal.dds
+[ResourceSlot]
+filename = slot.png
+[TextureOverrideSkin]
+hash = 11111111
+this = ResourceReplacement
+[ResourceReplacement]
+filename = replacement.dds
+"""
+    files = {"mod.ini": ini.encode(),
+             "p.buf": struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0),
+             "t.buf": struct.pack("<6f", 0, 0, 1, 0, 0, 1),
+             "i.buf": struct.pack("<6I", 0, 1, 2, 0, 1, 2)}
+    for filename in [*loose, "base.dds", "alternate.dds", "normal.dds",
+                     "slot.png", "replacement.dds", "unmatched.png",
+                     "CharacterBodyFace.png", "variants/" + loose[0]]:
+        files[filename] = b"synthetic texture"
+    mod = tmp_path / ("mod.zip" if archived else "mod")
+    if archived:
+        with zipfile.ZipFile(mod, "w") as archive:
+            for filename, data in files.items():
+                archive.writestr("Wrapped/" + filename, data)
+        source = ZipModSource(mod)
+    else:
+        for filename, data in files.items():
+            path = mod / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        source = DirectoryModSource(mod)
+    context = ModLoadContext(str(mod), build_mod_ini_snapshot(
+        discover_ini_paths(str(mod), source=source), str(mod), source=source))
+    monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
+        game=game, runtime="unknown", texture_api=asset_type.casefold(),
+        confidence="high", scores={}))
+    root = tmp_path / "assets"
+    asset = root / "Asset01"
+    asset.mkdir(parents=True)
+    asset_filename = "Components-0-2 t=original.dds" if game == "wuwa" else "Asset01FaceDiffuse.dds"
+    (asset / asset_filename).write_bytes(b"synthetic original")
+    (asset / "Asset01FaceNormalMap.dds").write_bytes(b"synthetic normal")
+    if game == "wuwa":
+        (asset / "Metadata.json").write_text(json.dumps({
+            "vb0_hash": "10101010", "components": [
+                {"name": name, "index_offset": ordinal * 6, "index_count": 6}
+                for ordinal, name in enumerate(names)]}), encoding="utf-8")
+        (asset / "TextureUsage.json").write_text(json.dumps({
+            "Component 0": {"ps-t7": ["11111111-vs=12345678-ps=87654321"]},
+        }), encoding="utf-8")
+    else:
+        (asset / "hash.json").write_text(json.dumps([
+            {"ib": f"{(ordinal + 1) * 0x10101010:08x}", "component_name": name,
+             "object_indexes": [0], "object_index_counts": [6],
+             "texture_hashes": [[
+                 ["Diffuse", ".dds", f"{(ordinal + 1) * 0x11111111:08x}"],
+                 ["NormalMap", ".dds", f"{(ordinal + 1) * 0x12121212:08x}"],
+             ]]}
+            for ordinal, name in enumerate(names)]), encoding="utf-8")
+    index = asset_index.build_index(asset_type, str(root))
+    monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
+    if configured_assets:
+        context.asset_folders = [{"type": asset_type, "path": str(root), "enabled": True}]
+    published = []
+
+    def publish(path, role):
+        published.append((path, role))
+        return f"/texture/{len(published)}"
+
+    def no_decode(*_args, **_kwargs):
+        raise AssertionError("Texture discovery and publication must stay lazy")
+
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
+    with patch.object(context.source, "list_files", wraps=context.source.list_files) as enumerate_files:
+        payload = load_mod(context=context, geometry=GeometryBlob(), texture_source=publish)
+    assert not payload.get("error")
+    enumerate_files.assert_called_once()
+    first = payload["meshes"][names[0] + "-1"]
+    second = payload["meshes"][names[0] + "-2"]
+    face = payload["meshes"][names[2] + "-1"]
+    assert first["tex_key"] == "diffuse::base.dds"
+    assert second["tex_key"] == "diffuse::alternate.dds"
+    assert {item["tex_key"] for item in second["texture_variants"]} == {
+        "diffuse::base.dds", "diffuse::alternate.dds"}
+    normal_role = "normal_data" if game == "wuwa" else "normal_map"
+    assert first[normal_role + "_key"] == normal_role + "::normal.dds"
+    saved_key = "diffuse::variants/" + loose[0]
+    saved = {"textures": {first["identity"]["key"]: {
+        "tex_key": saved_key, "label": "Saved choice", "manual": True}}}
+    metadata.hydrate_textures(str(mod), payload, data=saved,
+                              texture_source=publish, texture_profile=game,
+                              source=context.source)
+    pools = payload["texture_pools"]
+    assert first["texture_pool_id"] == second["texture_pool_id"]
+    assert first["saved_texture_override"] == saved_key
+    assert first["tex_key"] == "diffuse::base.dds"
+    component_files = [{item["file"] for item in pools[payload["meshes"][name + "-1"]["texture_pool_id"]]}
+                       for name in names]
+    assert loose[0] in component_files[0]
+    assert loose[1] in component_files[1]
+    assert loose[2] in component_files[2]
+    assert "slot.png" in component_files[0]
+    assert all("slot.png" not in pool for pool in component_files[1:])
+    assert loose[1] not in component_files[0]
+    assert all("unmatched.png" not in pool and "CharacterBodyFace.png" not in pool
+               for pool in component_files)
+    assert all(len(pool) == len({item["tex_key"] for item in pool}) for pool in pools.values())
+    asset_key = asset_texture_key(str(root), str(asset / asset_filename))
+    if configured_assets:
+        assert payload["asset_resolution"]["exact_draws"] == 4
+        assert "replacement.dds" in component_files[0]
+        assert all("replacement.dds" not in pool for pool in component_files[1:])
+        assert asset_key in payload["textures"]
+        assert face["tex_key"] == (None if game == "wuwa" else asset_key)
+        assert (face.get("normal_map_key") is not None) == (game != "wuwa")
+        assert not any("asset/" in str(first.get(role + "_key", "")) for role in (
+            "normal_map", "normal_data", "light_map", "material_map"))
+    else:
+        assert face["tex_key"] is None
+        assert asset_key not in payload["textures"]
+
+
+def test_inventory_boundaries_and_matched_asset_scan_lifecycle(tmp_path):
+    mod = tmp_path / "mod"
+    root = tmp_path / "assets"
+    matched = root / "Matched"
+    mod.mkdir()
+    (matched / "textures").mkdir(parents=True)
+    for filename in ("Body.dds", "buffer.buf"):
+        (mod / filename).write_bytes(b"synthetic")
+    for filename in ("Body.dds", "textures/Body.png"):
+        (matched / filename).write_bytes(b"synthetic")
+    (root / "Sibling").mkdir()
+    (root / "Sibling" / "Body.dds").write_bytes(b"unrelated")
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        asset_type="GIMI", root=str(root), asset="Matched",
+        metadata="Matched/textures/hash.json")
+    with patch.object(DirectoryModSource, "list_files", autospec=True,
+                      side_effect=DirectoryModSource.list_files) as scans:
+        inventory = collect_texture_inventory(str(mod), [[binding, binding]], resource_files=[
+            "./Body.dds", "Body.dds", "../../outside.dds", str(mod / "Body.dds"),
+            "buffer.buf", "missing.dds"])
+    assert [os.path.normcase(call.args[0].root) for call in scans.call_args_list] == [
+        os.path.normcase(str(mod)), os.path.normcase(str(matched.resolve()))]
+    assert len(inventory) == 3
+    assert {item["source"] for item in inventory.values()} == {"mod", "asset"}
+    invalid = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact",
+        root=str(root), asset="../", metadata="../hash.json")
+    assert len(collect_texture_inventory(str(mod), [[invalid]])) == 1
+    ambiguous = AssetComponentBinding(status="ambiguous", root=str(root), asset="Matched")
+    assert len(collect_texture_inventory(str(mod), [[ambiguous]])) == 1

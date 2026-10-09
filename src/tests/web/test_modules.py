@@ -123,6 +123,52 @@ def test_payload_meshes_consume_identity_for_mod_and_asset_choices(module_page):
         ], 'rejected': True, 'built': 2}
 
 
+def test_component_texture_runs_preserve_draw_boundaries_and_manual_lifecycle(module_page):
+    module_page.route('**/js/mesh/mesh-factory.js', lambda route: route.fulfill(
+        content_type='text/javascript', body='''
+          export function setMeshTextureState(mesh, state) {
+            mesh.userData.texKey = state.diffuse;
+            mesh.userData.maps = state;
+            return true;
+          }
+        '''))
+    module_page.route('**/js/mesh/material-profile.js', lambda route: route.fulfill(
+        content_type='text/javascript', body='export const usesPackedNormal = material => !!material.packed;'))
+    result = module_page.evaluate("""async () => {
+      const {recomputeTextureRuns} = await import('./js/mesh/mesh-texture-runs.js');
+      const pool = [{tex_key:'diffuse::base.png'}, {tex_key:'diffuse::alternate.png'},
+        {tex_key:'diffuse::loose.png', normal_data:'normal_data::manual.png'}];
+      const mesh = (key, boundary) => ({material:{packed:true}, userData:{
+        texturePool:pool, automaticTextureBoundary:boundary,
+        defaultTexKey:key, resolvedTexKey:key, resolvedNormalDataKey:'normal_data::normal.png'}});
+      const draws = [mesh('diffuse::base.png', true), mesh('diffuse::base.png', false),
+        mesh('diffuse::alternate.png', true), mesh('diffuse::base.png', true)];
+      const keys = () => draws.map(draw => draw.userData.texKey);
+      recomputeTextureRuns(draws, {render:false}); const initial = keys();
+      draws[0].userData.manualTexOverride = 'diffuse::loose.png';
+      recomputeTextureRuns(draws, {render:false}); const manual = keys();
+      const normal = draws[1].userData.maps.normal_data;
+      draws[0].userData.manualTexOverride = null;
+      recomputeTextureRuns(draws, {render:false}); const none = keys();
+      delete draws[0].userData.manualTexOverride;
+      draws[2].userData.resolvedTexKey = 'diffuse::base.png';
+      recomputeTextureRuns(draws, {render:false}); const conditional = keys();
+      draws[2].userData.resolvedTexKey = 'diffuse::alternate.png';
+      recomputeTextureRuns(draws, {render:false});
+      return {initial, manual, normal, none, conditional, restored:keys()};
+    }""")
+    initial = ['diffuse::base.png', 'diffuse::base.png',
+               'diffuse::alternate.png', 'diffuse::base.png']
+    assert result == {
+        'initial': initial, 'restored': initial,
+        'manual': ['diffuse::loose.png', 'diffuse::loose.png',
+                   'diffuse::alternate.png', 'diffuse::base.png'],
+        'normal': 'normal_data::manual.png',
+        'none': [None, None, 'diffuse::alternate.png', 'diffuse::base.png'],
+        'conditional': ['diffuse::base.png'] * 4,
+    }
+
+
 def test_menu_grid_keeps_four_columns_and_icon_fallback_through_rebuilds(module_page):
     module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
         content_type='text/javascript', body="""

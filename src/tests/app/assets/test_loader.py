@@ -620,12 +620,19 @@ def test_wwmi_texture_candidates_use_registered_asset_root(tmp_path):
     object_dir = asset / "ObjectA"
     object_dir.mkdir(parents=True)
     _wwmi_triangle(object_dir, image=True)
+    (object_dir / "Components-0-1 t=shared.dds").write_bytes(b"synthetic texture")
+    (object_dir / "Components-2 t=unrelated.dds").write_bytes(b"synthetic texture")
     record = {"path": "Asset01", "geometry": [{
         "hash": "11111111", "metadata": "Asset01/ObjectA/Metadata.json",
     }]}
 
     result = load_asset("WWMI", str(root), record, geometry=GeometryBlob())
-    candidate = result.parts[0].texture_candidates[0]
+    candidates = result.parts[0].texture_candidates
+    assert {os.path.basename(item.path) for item in candidates} == {
+        "Components-0 t=candidate.dds", "Components-0-1 t=shared.dds"}
+    assert result.payload["meshes"][result.parts[0].key]["tex_key"] is None
+    candidate = next(item for item in candidates
+                     if os.path.basename(item.path) == "Components-0 t=candidate.dds")
 
     assert candidate.key == asset_textures.asset_texture_key(
         str(root), str(object_dir / "Components-0 t=candidate.dds"),

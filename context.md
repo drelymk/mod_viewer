@@ -145,15 +145,19 @@ of documentation, comments and tests; use portable fixtures instead.
 - Original Asset texture fallback is available only when a draw has no mod
   diffuse default or conditional assignment after mod texture resolution.
   A mod diffuse suppresses all original Asset maps; retain mod-authored maps.
-- WWMI mod candidates use declared component-named Resource files across active
-  INIs, every component-local `ps-tN` resource reference (including branches and
-  called command lists), then replacements matching exact Asset TextureUsage
-  hashes, then images containing those hashes in the matched Asset metadata
-  directory. Resolve each INI's index against its own rebased resources;
-  aggregate only filenames and
-  resolved indexes. Keep these candidates in the existing texture pool, with
-  Asset identities and labels distinct from mod files, and never scan loose mod
-  files or infer automatic roles from these associations.
+- Collect one lightweight inventory of all DDS/PNG/JPG/JPEG images through
+  `ModSource`, including undeclared files, subfolders and compressed mods.
+  Collect Asset images only from exact matched Asset directories, never by
+  traversing the global library. Associate hash evidence, component-local
+  `ps-tN` resources and filenames into one canonical source-identity pool per
+  component. Generic filenames use the original component name and prefer a
+  unique most-specific match; WWMI retains `Components-N t=...dds`, including
+  multi-component ordinals. Resolve every INI's references and replacement
+  index independently before aggregation. Filename associations supply choices,
+  never automatic roles. Apply semantic/slot/conditional selection once per
+  draw, preserving authored execution order, no-mod-diffuse Asset eligibility
+  and game-specific normal transport. Final picker assembly consumes that
+  component pool; saved/manual choices remain metadata hydration's concern.
 - Texture pools and backend loading must not eagerly decode/render sources.
   Publish supported texture files as lazy URLs serving their original bytes;
   never encode PNG display copies or embed converted texture data. Detached

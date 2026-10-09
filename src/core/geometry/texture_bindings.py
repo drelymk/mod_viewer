@@ -2,9 +2,10 @@
 
 import os
 
+from .draw_call import DrawCall
 from ..resource_paths import safe_resource_path
 from ..textures.pipeline import (
-    normalize_texture_role, split_texture_key, texture_key,
+    normalize_texture_role, texture_key,
 )
 
 
@@ -64,30 +65,47 @@ class TextureRegistry:
         return path
 
 
-def build_texture_options(group, registry, *, entries=()):
-    """Build the lazy picker pool after the group's draw bindings are final."""
+def finalize_texture_candidates(group, *, draws=None):
+    """Fold final draw defaults and alternatives into the component's one pool."""
+    candidates = {}
+
+    def add(candidate):
+        filename = candidate.get("identity") or candidate.get("file")
+        if not filename:
+            return None
+        identity = os.path.normpath(filename.replace("\\", "/")).replace("\\", "/")
+        return candidates.setdefault(os.path.normcase(identity), dict(candidate))
+
+    for candidate in group.get("texture_candidates", ()):
+        add({key: value for key, value in candidate.items() if key != "maps"})
+    for raw_draw in draws if draws is not None else group.get("draws", ()):
+        draw = DrawCall.from_mapping(raw_draw, group)
+        maps = {}
+        for role in ("normal_map", "light_map", "material_map", "emission_map"):
+            asset = draw.asset_texture_defaults.get(role) or {}
+            filename = asset.get("key") or draw.texture_default(role)
+            if filename:
+                maps[role] = {"file": filename, "path": asset.get("path"),
+                              "identity": asset.get("key")}
+        asset = draw.asset_texture_defaults.get("diffuse") or {}
+        defaults = [{"file": asset.get("key") or draw.texture_default("diffuse"),
+                     "path": asset.get("path"), "identity": asset.get("key"),
+                     "source": "asset" if asset else "mod"}]
+        defaults.extend({"file": rule.get("file"), "source": "mod"}
+                        for rule in draw.texture_rules("diffuse"))
+        for candidate in defaults:
+            option = add(candidate)
+            if option is not None:
+                for role, value in maps.items():
+                    option.setdefault("maps", {}).setdefault(role, value)
+    group["texture_candidates"] = list(candidates.values())
+
+
+def build_texture_options(group, registry):
+    """Publish picker identities from the single finalized component pool."""
     texture_options = []
-    texture_option_keys = {}
-
-    def append_texture_option(key, filename, label, **metadata):
-        if not key:
-            return
-        if key in texture_option_keys:
-            return texture_option_keys[key]
-        option = {"tex_key": key, "file": filename, "label": label}
-        option.update(metadata)
-        texture_option_keys[key] = option
-        texture_options.append(option)
-        return option
-
-    for pool_entry in group.get("diffuse_pool_files") or []:
-        path = registry.resolve(pool_entry["file"])
-        key = registry.key(path)
-        res_name = pool_entry["res"]
-        label = res_name[8:] if res_name.startswith("Resource") else res_name
-        append_texture_option(key, pool_entry["file"], label)
-
-    for candidate in group.get("discovered_textures") or []:
+    seen = set()
+    for candidate in group.get("texture_candidates", ()):
         filename = candidate.get("file")
         identity = candidate.get("identity")
         path = candidate.get("path") or registry.resolve(filename)
@@ -95,33 +113,30 @@ def build_texture_options(group, registry, *, entries=()):
             continue
         # External candidates must publish their source before hydration,
         # which resolves ordinary candidate keys relative to the mod.
-        key = (registry.ensure(path, identity=identity) if identity
+        external = candidate.get("source") == "asset"
+        key = (registry.ensure(path, identity=identity) if external
                else registry.key(path))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        res_name = candidate.get("res") or ""
         label = candidate.get("label") or os.path.splitext(
             str(filename).replace("\\", "/").rsplit("/", 1)[-1]
         )[0]
-        append_texture_option(
-            key, filename, label, candidate_source=candidate.get("source"))
-
-    # Read the finished render bindings, including resolved defaults and
-    # alternatives, and attach their auxiliary maps to the manager's rows.
-    for entry in entries:
-        keys = [entry.get("tex_key"), *[
-            variant["tex_key"] for variant in entry.get("texture_variants", ())]]
-        for key in keys:
-            if not key:
-                continue
-            _role, filename = split_texture_key(key)
-            label = os.path.splitext(filename.replace("\\", "/").rsplit("/", 1)[-1])[0]
-            if (key == entry.get("tex_key") and entry.get(
-                    "texture_resolution", {}).get("diffuse") == "asset_original_fallback"):
-                label += " (Asset)"
-            option = append_texture_option(key, filename, label)
-            for channel in ("normal_map", "light_map", "normal_data",
-                            "material_map", "emission_map"):
-                map_key = entry.get(f"{channel}_key")
-                if map_key and not option.get(channel):
-                    option[channel] = map_key
+        if res_name:
+            label = res_name.removeprefix("Resource")
+        if external and not label.endswith(" (Asset)"):
+            label += " (Asset)"
+        option = {"tex_key": key, "file": filename, "label": label,
+                  "candidate_source": candidate.get("source", "mod")}
+        for role, value in candidate.get("maps", {}).items():
+            transport_role = (registry.profile.normal_transport_role
+                              if role == "normal_map" else role)
+            map_path = value.get("path") or registry.resolve(value["file"])
+            map_key = registry.key(map_path, transport_role, identity=value.get("identity"))
+            if map_key:
+                option[transport_role] = map_key
+        texture_options.append(option)
     return texture_options
 
 
@@ -198,4 +213,5 @@ def apply_draw_texture_bindings(entry, draw, *, registry):
 
 __all__ = [
     "TextureRegistry", "build_texture_options", "apply_draw_texture_bindings",
+    "finalize_texture_candidates",
 ]

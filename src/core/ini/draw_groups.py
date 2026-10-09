@@ -442,7 +442,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "normal_source": group_normal_source,
             "ib_file": ib_file,
             "diffuse_file": diffuse_info.get("filename"),
-            "diffuse_pool_files": pool_files,
+            "texture_candidates": pool_files,
             "referenced_texture_files": referenced_files,
             "index_size": index_size,
             "geometry_match": info.get("geometry_match_at_end"),

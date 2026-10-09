@@ -40,6 +40,7 @@ def test_load_mod_uses_the_normal_pipeline_for_7zip_formats(
         "Export/some/random/deep/mod.ini": ini.encode(),
         **{f"Export/some/random/deep/{name}": data
            for name, data in geometry.items()},
+        "Export/some/random/deep/Textures/Component01Choice.png": b"synthetic texture",
     }
     archive_path.write_bytes(b"mock archive")
     client = FakeSevenZipClient(members)
@@ -53,6 +54,10 @@ def test_load_mod_uses_the_normal_pipeline_for_7zip_formats(
     assert len(payload["meshes"]) == 1
     assert payload["meshes"]["Component01-1"]["identity"]["source"] == (
         "some/random/deep/mod.ini")
+    mesh = payload["meshes"]["Component01-1"]
+    assert mesh["tex_key"] is None
+    assert [option["tex_key"] for option in mesh["texture_options"]] == [
+        "diffuse::some/random/deep/Textures/Component01Choice.png"]
     assert client.calls == ["list", "extract"]
 
 
