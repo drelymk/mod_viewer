@@ -238,8 +238,9 @@ def test_present_state_does_not_build_geometry(
 def test_control_state_does_not_build_geometry(
         tmp_path, monkeypatch):
     (tmp_path / "icon.dds").write_bytes(b"texture source")
+    (tmp_path / "Component01Choice.png").write_bytes(b"synthetic texture")
     parsed = ParsedModAnalysis(
-        groups=[{"draws": [{"conditions": [[{
+        groups=[{"name": "Component01", "draws": [{"conditions": [[{
             "var": "Input01", "value": "1", "negate": False,
         }]], "texture_variants": []}]}],
         toggles={"KeyInput01": {
@@ -272,6 +273,9 @@ def test_control_state_does_not_build_geometry(
         menu_image_source=lambda _path: "/texture/test/0.dds")
 
     assert semantic_calls
+    assert [item["file"] for item in parsed.groups[0]["texture_candidates"]] == [
+        "Component01Choice.png"]
+    assert not parsed.groups[0]["draws"][0].get("texture_default_file")
     assert set(result["controls"]["toggles"]) == {"KeyInput01"}
     assert result["controls"]["menu"]["Menu01"]["image"] == "/texture/test/0.dds"
     detached = load_control_state(context, active_mesh_keys={"Component01-1"})

@@ -6,6 +6,7 @@ import os
 import re
 
 from core.geometry.identity import normalize_geometry_hash
+from core.geometry.draw_call import DrawCall
 from core.ini.parser import TextureOverrideIndex, _condition_difference
 from core.textures.classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
@@ -482,7 +483,8 @@ def _associate_textures(group, records, inventory, filename_matches,
     for filename in group.get("referenced_texture_files", ()):
         add_mod(filename)
     hashes = set()
-    for draw in group.get("draws", ()):
+    for raw_draw in group.get("draws", ()):
+        draw = DrawCall.from_mapping(raw_draw, group)
         for role in draw._TEXTURE_PREFIX:
             add_mod(draw.texture_default(role))
             for rule in draw.texture_rules(role):
