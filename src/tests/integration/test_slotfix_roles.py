@@ -33,12 +33,21 @@ def _draw(tmp_path, assignments, resources, prefix=""):
     return groups[0]["draws"][0]
 
 
-@pytest.mark.parametrize("variant_count", [1, 2], ids=["singleton", "variants"])
+@pytest.mark.parametrize("suffixes", [
+    ("",), (".0", ".1"), ("1", "2"), ("-1", "*2"), ("_A", "-First"),
+    ("A", "First"), ("Blue+Green[2]", "@next:3"),
+    ("FirstNormalMap", "SecondLightMap"), ("α", "β"),
+], ids=["singleton", "dotted", "numeric", "punctuation", "separators",
+        "words", "symbols", "role-words", "unicode"])
 @pytest.mark.parametrize("diffuse_slots", [(0,), (3, 9)],
                          ids=["single-slot", "duplicate-slots"])
 def test_legacy_roles_stay_with_their_component(
-        tmp_path, variant_count, diffuse_slots):
+        tmp_path, suffixes, diffuse_slots):
     components = ("Component01", "Component02")
+    roles = (("Diffuse", "diffuse", diffuse_slots),
+             ("NormalMap", "normal_map", (2,)),
+             ("LightMap", "light_map", (1,)),
+             ("MaterialMap", "material_map", (4,)))
     lines = ["[KeyStyle]", "type = cycle", "$style = 0,1"]
     for component in components:
         lines.extend([
@@ -50,22 +59,20 @@ def test_legacy_roles_stay_with_their_component(
             "drawindexed = 3, 0, 0",
             f"[CommandList{component}]",
         ])
-        for variant in range(variant_count):
-            if variant_count > 1:
+        for variant, suffix in enumerate(suffixes):
+            if len(suffixes) > 1:
                 lines.append("if $style == 0" if variant == 0 else "else")
-            suffix = f".{variant}" if variant_count > 1 else ""
-            lines.extend(f"ps-t{slot} = Resource{component}Diffuse{suffix}"
-                         for slot in diffuse_slots)
-            lines.append(f"ps-t1 = Resource{component}LightMap{suffix}")
-        if variant_count > 1:
+            for role, _channel, slots in roles:
+                lines.extend(f"ps-t{slot} = Resource{component}{role}{suffix}"
+                             for slot in slots)
+        if len(suffixes) > 1:
             lines.append("endif")
         lines.append(standard_component_resources(
             position_file=f"{component}-position.buf",
             texcoord_file=f"{component}-texcoord.buf",
             ib_file=f"{component}.ib").replace("Component01", component))
-        for variant in range(variant_count):
-            suffix = f".{variant}" if variant_count > 1 else ""
-            for role in ("Diffuse", "LightMap"):
+        for variant, suffix in enumerate(suffixes):
+            for role, _channel, _slots in roles:
                 lines.extend([
                     f"[Resource{component}{role}{suffix}]",
                     f"filename = {component}-{role}-{variant}.dds",
@@ -78,17 +85,17 @@ def test_legacy_roles_stay_with_their_component(
     assert [group["name"] for group in groups] == list(components)
     for group in groups:
         draw = group["draws"][0]
-        for role, channel in (("Diffuse", "diffuse"), ("LightMap", "light_map")):
+        for role, channel, slots in roles:
             expected = [f"{group['name']}-{role}-{variant}.dds"
-                        for variant in range(variant_count)]
+                        for variant in range(len(suffixes))]
             files = [item["file"] for item in draw.texture_rules(channel)]
             if channel == "diffuse":
                 expected_history = [filename for filename in expected
-                                    for _ in diffuse_slots]
+                                    for _ in slots]
             else:
                 expected_history = expected
             assert (files or [draw.texture_default(channel)]) == expected_history
-            if variant_count > 1:
+            if len(suffixes) > 1:
                 for value, filename in enumerate(expected):
                     applicable = [item["file"]
                                   for item in draw.texture_rules(channel)
@@ -96,7 +103,7 @@ def test_legacy_roles_stay_with_their_component(
                                              {"style": str(value)})]
                     assert applicable and set(applicable) == {filename}
         assert {item.slot: item.role_hint for item in draw.slot_textures} == {
-            1: "light_map", **dict.fromkeys(diffuse_slots, "diffuse")}
+            slot: channel for _role, channel, slots in roles for slot in slots}
 
 
 @pytest.mark.parametrize("assignments, resources", [
@@ -132,8 +139,9 @@ def test_inconsistent_legacy_slot_sets_are_rejected(
 def test_resource_name_alone_does_not_imply_diffuse(tmp_path):
     draw = _draw(
         tmp_path,
-        "ps-t0 = ResourceSuperDiffuseTexture",
-        {"ResourceSuperDiffuseTexture": "opaque.dds"},
+        "ps-t0 = ResourceOpaque",
+        {"ResourceSuperDiffuseTexture": "named.dds",
+         "ResourceOpaque": "opaque.dds"},
     )
 
     assert draw.texture_default("diffuse") is None
@@ -144,15 +152,15 @@ def test_repeated_legacy_slot_names_recover_texture_roles(tmp_path):
     draw = _draw(
         tmp_path,
         r"""run = CommandList\LegacySlots""",
-        {"ResourceComponent01Diffuse.0": "component01-diffuse-0.dds",
-         "ResourceComponent01Diffuse.1": "component01-diffuse-1.dds",
-         "ResourceComponent01LightMap.0": "component01-light-map-0.dds",
-         "ResourceComponent01LightMap.1": "component01-light-map-1.dds"},
+        {"ResourceDiffuseFirst": "component01-diffuse-0.dds",
+         "ResourceDiffuseA": "component01-diffuse-1.dds",
+         "ResourceLightMapFirst": "component01-light-map-0.dds",
+         "ResourceLightMapA": "component01-light-map-1.dds"},
         prefix=(r"[CommandList\LegacySlots]" "\n"
-                r"ps-t0 = ResourceComponent01Diffuse.0" "\n"
-                r"ps-t0 = ResourceComponent01Diffuse.1" "\n"
-                r"ps-t1 = ResourceComponent01LightMap.0" "\n"
-                r"ps-t1 = ResourceComponent01LightMap.1" "\n"),
+                r"ps-t0 = ResourceDiffuseFirst" "\n"
+                r"ps-t0 = ResourceDiffuseA" "\n"
+                r"ps-t1 = ResourceLightMapFirst" "\n"
+                r"ps-t1 = ResourceLightMapA" "\n"),
     )
 
     assert draw.texture_default("diffuse") == "component01-diffuse-1.dds"
