@@ -1,11 +1,12 @@
 """Lazy, conservative texture evidence for exact Asset component matches."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 import re
 
 from core.geometry.identity import normalize_geometry_hash
+from core.geometry.draw_call import DrawCall
 from core.ini.parser import TextureOverrideIndex, _condition_difference
 from core.textures.classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
@@ -151,7 +152,7 @@ def _texture_records(binding, raw):
     return records
 
 
-def _locate_texture(binding, evidence):
+def _locate_texture(binding, evidence, inventory):
     asset_dir = _safe_asset_path(binding.root, binding.asset)
     component = binding.component_name or evidence.component_name
     classification = binding.classification or evidence.classification
@@ -165,20 +166,17 @@ def _locate_texture(binding, evidence):
     if not suffix:
         return None
     candidates = []
-    try:
-        with os.scandir(asset_dir) as entries:
-            for entry in entries:
-                if not entry.is_file(follow_symlinks=False):
-                    continue
-                name = entry.name.casefold()
-                if extension and not name.endswith(extension):
-                    continue
-                stem, _extension = os.path.splitext(name)
-                if not stem.endswith(suffix):
-                    continue
-                candidates.append(os.path.abspath(entry.path))
-    except OSError:
-        return None
+    for candidate in inventory.values():
+        if candidate["source"] != "asset":
+            continue
+        path = candidate["path"]
+        if os.path.normcase(os.path.dirname(path)) != os.path.normcase(asset_dir):
+            continue
+        name = os.path.basename(path).casefold()
+        if extension and not name.endswith(extension):
+            continue
+        if os.path.splitext(name)[0].endswith(suffix):
+            candidates.append(path)
     return candidates[0] if len(candidates) == 1 else None
 
 
@@ -242,7 +240,7 @@ def _texture_variant_list(draw, role):
     }[role])
 
 
-def _apply_hash_replacements(draw, evidence, texture_index, diffuse_pool):
+def _apply_hash_replacements(draw, evidence, texture_index):
     """Apply exact Asset hash roles to conditional mod replacements."""
     if not isinstance(texture_index, TextureOverrideIndex):
         return
@@ -258,10 +256,6 @@ def _apply_hash_replacements(draw, evidence, texture_index, diffuse_pool):
         for replacement in replacements:
             if not replacement.file:
                 continue
-            if item.role == "diffuse":
-                diffuse_pool.setdefault(replacement.file, {
-                    "res": replacement.resource, "file": replacement.file,
-                })
             conditions = replacement.dnf
             # Authored role bindings outrank hash recovery. Replacements for
             # this hash share one ordered history: later matching writes win.
@@ -468,9 +462,103 @@ def _apply_slot_hashes(draw, evidence):
         draw.texture_provenance[item.role] = "mod_texture_hash"
 
 
+def _associate_textures(group, records, inventory, filename_matches,
+                        asset_names, texture_indexes):
+    """Put discovery, slot, hash and filename evidence into one component pool."""
+    candidates = {}
+
+    def add_mod(filename, **metadata):
+        if not isinstance(filename, str):
+            return
+        identity = os.path.normpath(filename.replace("\\", "/")).replace("\\", "/")
+        identity = os.path.normcase(identity)
+        candidate = inventory.get(identity)
+        if candidate and candidate["source"] == "mod":
+            candidates.setdefault(identity, {**candidate, **metadata})
+
+    for candidate in group.get("texture_candidates", ()):
+        add_mod(candidate.get("file"), **{
+            key: value for key, value in candidate.items()
+            if key not in ("file", "path", "identity", "source", "maps")})
+    for filename in group.get("referenced_texture_files", ()):
+        add_mod(filename)
+    hashes = set()
+    for raw_draw in group.get("draws", ()):
+        draw = DrawCall.from_mapping(raw_draw, group)
+        hashes.update(value for values in draw.texture_hashes.values()
+                      for value in values)
+        hashes.update(value for role in draw._TEXTURE_PREFIX
+                      for rule in draw.texture_rules(role)
+                      for value in rule.get("texture_hashes", ()))
+        for slot in draw.slot_textures:
+            add_mod(slot.file)
+            hashes.update(slot.texture_hashes)
+    exact_records = [record for record in records
+                     if asset_textures.exact_texture_binding(record[1])]
+    for _draw, _binding, evidence, slots in exact_records:
+        hashes.update(item.texture_hash for item in evidence)
+        hashes.update(usage["texture_hash"]
+                      for usages in slots.values() for usage in usages)
+    for identity, matches in filename_matches.items():
+        if id(group) in matches:
+            candidates.setdefault(identity, dict(inventory[identity]))
+    for index in texture_indexes:
+        if not isinstance(index, TextureOverrideIndex):
+            continue
+        for texture_hash in sorted(hashes):
+            for replacement in index.replacements_by_hash.get(texture_hash, ()):
+                add_mod(replacement.file)
+    associated_assets = set()
+    for raw_draw, binding, evidence, slots in exact_records:
+        wwmi = binding.asset_type == "WWMI"
+        asset_hashes = hashes
+        if wwmi:
+            draw = DrawCall.from_mapping(raw_draw, group)
+            asset_hashes = {
+                usage["texture_hash"] for usages in slots.values() for usage in usages}
+            asset_hashes.update(value for values in draw.texture_hashes.values()
+                                for value in values)
+            asset_hashes.update(value for slot in draw.slot_textures
+                                for value in slot.texture_hashes)
+        association = (binding, frozenset(asset_hashes))
+        if association in associated_assets:
+            continue
+        associated_assets.add(association)
+        directories = asset_textures.texture_asset_directories(binding)
+        names = ({id(group): binding.component_ordinal} if wwmi else
+                 asset_names.get((binding.root, binding.asset), {}))
+        for identity, candidate in inventory.items():
+            if candidate["source"] != "asset":
+                continue
+            path = candidate["path"]
+            relative = asset_paths.relative_asset_path(binding.root, path)
+            if relative is None or identity != os.path.normcase(
+                    asset_textures.asset_logical_key(binding.root, path)):
+                continue
+            if not any((os.path.normcase(os.path.dirname(path)) == os.path.normcase(directory)
+                        if wwmi else os.path.commonpath((directory, path)) == directory)
+                       for directory in directories):
+                continue
+            filename = os.path.basename(path)
+            matches = asset_textures.component_texture_matches(
+                filename, names, wwmi=wwmi)
+            if (id(group) in matches
+                    or any(value in filename.casefold() for value in asset_hashes)):
+                candidates.setdefault(identity, dict(candidate))
+        for item in evidence:
+            if not item.role:
+                continue
+            path = item.file
+            if path:
+                identity = _logical_key(binding, path)
+                identity = os.path.normcase(identity)
+                candidates.setdefault(identity, dict(inventory[identity]))
+    group["texture_candidates"] = list(candidates.values())
+
+
 def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
           texture_index=None, mod_dir=None, dds_classification_cache=None,
-          source=None):
+          source=None, inventory=None, texture_indexes=(), game=None):
     """Apply Asset diagnostics and exact-component texture evidence.
 
     A not-found binding is published only when at least one ready index was
@@ -482,11 +570,47 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
     dds_classification_cache = (
         dds_classification_cache
         if dds_classification_cache is not None else {})
+    inventory = (inventory if inventory is not None else
+                 asset_textures.collect_texture_inventory(
+                     mod_dir, bindings, source=source))
+    wwmi = str(getattr(game, "game", game) or "").casefold() == "wuwa"
+    names = {id(group): asset_textures.component_texture_name(group, wwmi=wwmi)
+             for group in groups}
+    filename_matches = {
+        identity: asset_textures.component_texture_matches(
+            candidate["file"], names, wwmi=wwmi)
+        for identity, candidate in inventory.items()
+        if candidate["source"] == "mod"}
+    asset_names = {}
+    original_files = {}
     for group, group_bindings in zip(groups, bindings):
+        for binding in group_bindings:
+            if (asset_textures.exact_texture_binding(binding)
+                    and binding.asset_type != "WWMI"):
+                asset_names.setdefault((binding.root, binding.asset), {})[id(group)] = (
+                    binding.component_name or names[id(group)])
+    for position, group in enumerate(groups):
+        group_bindings = bindings[position] if position < len(bindings) else ()
         index = group.get("_texture_override_index") or texture_index
-        diffuse_pool = {item["file"]: item
-                        for item in group.get("diffuse_pool_files", ())}
-        for draw, binding in zip(group.get("draws", []), group_bindings):
+        records = []
+        for draw, binding in zip(group.get("draws", ()), group_bindings):
+            exact = asset_textures.exact_texture_binding(binding)
+            evidence = (_gimi_evidence(binding, metadata_cache)
+                        if exact and binding.asset_type in ("GIMI", "ZZMI") else [])
+            located_evidence = []
+            for item in evidence:
+                cache_key = (binding, item)
+                if item.role and cache_key not in original_files:
+                    original_files[cache_key] = _locate_texture(binding, item, inventory)
+                located_evidence.append(replace(item, file=original_files.get(cache_key)))
+            evidence = located_evidence
+            slots = (_wwmi_slot_evidence(binding, metadata_cache)
+                     if exact and binding.asset_type == "WWMI" else {})
+            records.append((draw, binding, evidence, slots))
+        _associate_textures(
+            group, records, inventory, filename_matches, asset_names,
+            [index, *texture_indexes])
+        for draw, binding, evidence, slots in records:
             if binding.status == "not_found" and not include_not_found:
                 continue
             draw.asset_binding = binding
@@ -504,7 +628,6 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance.pop(role)
             draw.asset_texture_defaults.clear()
 
-            evidence = []
             role_hint_evidence = []
             roleless_evidence = []
             dds_evidence = []
@@ -520,12 +643,10 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                 if _has_mod_texture(draw, role)
             }
             if binding.asset_type in ("GIMI", "ZZMI"):
-                evidence = _gimi_evidence(binding, metadata_cache)
                 known_roles.update(item.role for item in evidence if item.role)
                 roleless_evidence.extend(
                     item for item in evidence if item.role is None)
             if binding.asset_type == "WWMI":
-                slots = _wwmi_slot_evidence(binding, metadata_cache)
                 for item in draw.slot_textures:
                     for usage in slots.get(item.slot, []):
                         texture_hash = usage["texture_hash"]
@@ -559,10 +680,8 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                                 and item.get("slot") == usage.get("slot")
                                 for item in draw.asset_slot_evidence):
                             draw.asset_slot_evidence.append(dict(usage))
-                        # WWMI TextureUsage is diagnostic context only. WuWa
-                        # render-role recovery is owned by direct draw
-                        # bindings and the component filename + DDS fallback,
-                        # not Asset JSON.
+                        # WWMI TextureUsage supplies candidate hashes and
+                        # diagnostics, without inventing rendering roles.
 
             # Raw slot hashes provide diagnostic context for every adapter.
             # Only an Asset-proven association may trigger DDS role recovery;
@@ -669,7 +788,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = _unique_evidence(
                 evidence + role_hint_evidence + dds_evidence)
-            _apply_hash_replacements(draw, all_evidence, index, diffuse_pool)
+            _apply_hash_replacements(draw, all_evidence, index)
             _apply_slot_hashes(draw, evidence + role_hint_evidence)
             # Resolve all mod bindings first. Original Asset maps belong to
             # the fallback material used only when the mod has no diffuse.
@@ -687,7 +806,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     continue
                 if _has_mod_texture(draw, item.role):
                     continue
-                filename = _locate_texture(binding, item)
+                filename = item.file
                 if not filename:
                     continue
                 draw.asset_texture_defaults[item.role] = {
@@ -696,4 +815,3 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                 }
                 draw.texture_provenance[item.role] = \
                     "asset_original_fallback"
-        group["diffuse_pool_files"] = list(diffuse_pool.values())

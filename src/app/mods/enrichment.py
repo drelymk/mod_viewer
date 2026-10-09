@@ -5,7 +5,7 @@ from core.materials.profiles import material_profile_for
 
 from app.assets import enrichment as asset_enrichment
 from app.assets import resolver as asset_resolver
-from app.assets import wuwa_texture_fallback
+from app.assets import textures as asset_textures
 
 
 def enrich_mod_analysis(parsed, context):
@@ -35,17 +35,16 @@ def _register_material_profile(table, profile):
 
 def _apply_texture_enrichment(parsed, context, bindings, complete_index):
     """Run all semantic texture enrichment in the shared load order."""
+    source = getattr(context, "source", None)
+    inventory = asset_textures.collect_texture_inventory(
+        context.mod_dir, bindings, source=source,
+        resource_files=parsed.resource_files)
     asset_enrichment.apply(
         parsed.groups, bindings, include_not_found=complete_index,
         mod_dir=context.mod_dir,
         dds_classification_cache=context.dds_classification_cache,
-        source=getattr(context, "source", None))
-    if str(getattr(parsed.game, "game", "")).casefold() == "wuwa":
-        wuwa_texture_fallback.apply(
-            parsed.groups, context.mod_dir,
-            resource_files=parsed.resource_files,
-            texture_indexes=parsed.texture_override_indexes,
-            source=getattr(context, "source", None))
+        source=source, inventory=inventory, game=parsed.game,
+        texture_indexes=parsed.texture_override_indexes)
 
 
 def _assign_material_profiles(meshes, game):

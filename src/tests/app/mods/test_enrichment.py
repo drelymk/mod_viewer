@@ -9,7 +9,7 @@ from core.materials.game_profile import GameDetection
 from tests.support_snapshot import snapshot_context
 
 
-def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
+def test_enrichment_collects_inventory_before_shared_assignment(tmp_path):
     events = []
     parsed = SimpleNamespace(
         groups=[{"name": "Component01", "draws": []}],
@@ -25,12 +25,15 @@ def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
     bindings = [[SimpleNamespace()]]
 
     def apply_assets(*args, **kwargs):
-        events.append("asset")
-
-    def apply_fallback(*args, **kwargs):
-        events.append("wuwa")
-        assert kwargs["resource_files"] is parsed.resource_files
+        events.append("assignment")
+        assert kwargs["inventory"] == inventory
         assert kwargs["texture_indexes"] is parsed.texture_override_indexes
+
+    inventory = {"choice.dds": {"file": "choice.dds", "source": "mod"}}
+
+    def collect(*args, **kwargs):
+        events.append("inventory")
+        return inventory
 
     summary = SimpleNamespace(to_dict=lambda: {
         "index_status": "unavailable",
@@ -42,15 +45,15 @@ def test_enrichment_runs_asset_before_wuwa_texture_fallback(tmp_path):
                   return_value=summary), \
             patch("app.mods.enrichment.asset_enrichment.apply",
                   side_effect=apply_assets), \
-            patch("app.mods.enrichment.wuwa_texture_fallback.apply",
-                  side_effect=apply_fallback):
+            patch("app.mods.enrichment.asset_textures.collect_texture_inventory",
+                  side_effect=collect):
         result = enrich_mod_analysis(parsed, context)
 
     assert result == (bindings, {
         "index_status": "unavailable",
         "exact_draws": 0,
     })
-    assert events == ["asset", "wuwa"]
+    assert events == ["inventory", "assignment"]
 
 
 def test_full_and_semantic_loads_share_enrichment_stage(tmp_path):

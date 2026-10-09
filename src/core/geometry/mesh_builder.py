@@ -26,6 +26,7 @@ from .semantics import (
 )
 from .texture_bindings import (
     TextureRegistry, apply_draw_texture_bindings, build_texture_options,
+    finalize_texture_candidates,
 )
 from .transport import GeometryBlob
 from .identity import mesh_identity_for_draw
@@ -908,8 +909,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             group_entries.append(entry)
 
         if group_entries:
-            texture_options = build_texture_options(
-                group, registry, entries=group_entries)
+            finalize_texture_candidates(group, draws=unique)
+            texture_options = build_texture_options(group, registry)
             if texture_options:
                 for entry in group_entries:
                     entry["texture_options"] = texture_options

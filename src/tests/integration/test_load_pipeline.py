@@ -344,7 +344,7 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         "position_file": "p.buf", "position_stride": 12,
         "texcoord_file": "t.buf", "texcoord_stride": 8,
         "ib_file": "i.buf", "index_size": 4,
-        "diffuse_pool_files": [{"res": "ResourceExisting",
+        "texture_candidates": [{"res": "ResourceExisting",
                                  "file": "existing.dds"}],
         "draws": [draw],
         "_texture_override_index": TextureOverrideIndex(

@@ -12,8 +12,6 @@ from core.geometry.vertex_attributes import VertexAttributeSource, decode_normal
 
 from app.assets import paths as asset_paths
 from app.assets import textures as asset_textures
-from app.assets.wuwa_texture_names import texture_component_ordinals
-from .hash_asset import _file_list
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
                      AssetTexture, part_filter_matches)
 
@@ -210,8 +208,8 @@ def _component_texture_candidates(files, root, ordinal, texture_source):
     for path in files:
         if not path.casefold().endswith(_IMAGE_EXTENSIONS):
             continue
-        components = texture_component_ordinals(path)
-        if components is None or ordinal not in components:
+        if not asset_textures.component_texture_matches(
+                path, {ordinal: ordinal}, wwmi=True):
             continue
         # Candidate-only associations deliberately carry no semantic role.
         key = asset_textures.asset_texture_key(root, path, "diffuse")
@@ -263,7 +261,9 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
             continue
 
         metadata_directory = os.path.dirname(metadata_file)
-        component_files = _file_list(metadata_directory)
+        component_files = [os.path.join(metadata_directory, filename)
+                           for filename in asset_textures.texture_directory_files(
+                               metadata_directory, recursive=False)]
         geometry = _metadata_geometry(record, metadata_relative)
         geometry_hash = geometry.get("hash") or raw.get("vb0_hash")
         for ordinal, component in enumerate(components):
