@@ -42,6 +42,8 @@ const {
   deleteRigPosePreset,
   renameRigPosePreset,
   saveRigPosePreset,
+  previewGeometryRig,
+  setGeometryRigPreviewMode,
 } = weightRigApi;
 import { HUMANOID_CONTROL_KEYS } from '../weight-rig/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
@@ -52,6 +54,7 @@ let ui = null;
 let loadingPromise = null;
 let latestWeightState = null;
 let latestRigState = null;
+const previewDisabledControls = new Map();
 
 const $ = (id) => document.getElementById(id);
 const HUMANOID_CONTROL_LABEL_KEYS = Object.freeze({
@@ -569,6 +572,39 @@ function buildRigSection(parent) {
   ui.presetStatus.setAttribute('aria-live', 'polite');
 
   const advanced = addAdvanced(parent);
+  const preview = document.createElement('button');
+  preview.type = 'button';
+  preview.className = 'ui-button rig-preview-geometry';
+  preview.dataset.i18n = 'weightRig.previewGeometry';
+  preview.dataset.geometryPreview = 'true';
+  preview.textContent = t('weightRig.previewGeometry');
+  preview.addEventListener('click', () => {
+    closePopover();
+    void previewGeometryRig();
+  });
+  advanced.content.appendChild(preview);
+  ui.geometryPreview = preview;
+  const comparison = document.createElement('select');
+  comparison.className = 'rig-preview-comparison';
+  comparison.dataset.geometryPreview = 'true';
+  comparison.dataset.i18nAriaLabel = 'weightRig.geometryComparison';
+  comparison.setAttribute('aria-label', t('weightRig.geometryComparison'));
+  for (const [value, key] of [
+    ['geometry', 'weightRig.geometrySkeleton'],
+    ['proportional', 'weightRig.proportionalSkeleton'],
+    ['current', 'weightRig.currentRig'],
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.dataset.i18n = key;
+    option.textContent = t(key);
+    comparison.appendChild(option);
+  }
+  comparison.addEventListener('change', () => setGeometryRigPreviewMode(comparison.value));
+  advanced.content.appendChild(comparison);
+  ui.geometryComparison = comparison;
+  ui.geometrySummary = addText(advanced.content, 'rig-hint');
+  ui.geometrySummary.setAttribute('aria-live', 'polite');
   const ikLabel = document.createElement('label');
   ikLabel.className = 'weight-checkbox';
   const ik = document.createElement('input');
@@ -627,6 +663,17 @@ function buildPanel() {
   heading.dataset.i18n = 'weightRig.title';
   heading.textContent = t('weightRig.title');
   header.appendChild(heading);
+  const load = document.createElement('button');
+  load.type = 'button';
+  load.className = 'ui-button rig-load-current';
+  load.dataset.i18n = 'weightRig.loadCurrentRig';
+  load.textContent = t('weightRig.loadCurrentRig');
+  load.addEventListener('click', () => {
+    setGeometryRigPreviewMode('current');
+    void loadOnDemand();
+  });
+  header.appendChild(load);
+  ui.loadCurrentRig = load;
   ui.status = addText(header, 'weight-rig-status');
   panel.appendChild(header);
   buildWeightSection(panel);
@@ -842,6 +889,7 @@ function syncHumanoidEditControls(state) {
 }
 
 function syncRigOptions(state = latestRigState || getModelRigState()) {
+  restorePreviewControls();
   if (!ui?.joint) return;
   latestRigState = state;
   const model = state?.model;
@@ -898,6 +946,51 @@ function syncRigOptions(state = latestRigState || getModelRigState()) {
   ui.resetJoint.disabled = editing || !hasSelected;
   ui.resetPose.disabled = editing || !state?.loaded;
   syncPresetControls(state);
+  syncGeometryPreview(state);
+}
+
+function syncGeometryPreview(state = latestRigState || getModelRigState()) {
+  if (!ui?.geometryPreview) return;
+  const preview = state?.geometryRigPreview;
+  const active = !!preview?.rig;
+  ui.geometryPreview.disabled = !!preview?.busy || !!state?.loading || !!state?.humanoidRigEdit?.editing;
+  ui.geometryComparison.disabled = !active;
+  ui.geometryComparison.value = active ? preview.mode : 'current';
+  ui.loadCurrentRig.disabled = !!state?.loading;
+  const diagnostics = preview?.diagnostics;
+  ui.geometrySummary.textContent = preview?.errorKey
+    ? t(preview.errorKey)
+    : preview?.busy
+      ? t('weightRig.geometryFitting')
+      : diagnostics
+        ? t('weightRig.geometrySummary', {
+            ms: Math.round(diagnostics.fitRuntimeMs),
+            samples: diagnostics.sampledPointCount,
+            strong:
+              Object.entries(diagnostics.regions || {})
+                .filter(([, level]) => level === 'high')
+                .map(([region]) => t(`weightRig.geometryRegion.${region}`))
+                .join(', ') || t('weightRig.geometryNone'),
+            weak:
+              Object.entries(diagnostics.regions || {})
+                .filter(([, level]) => level !== 'high')
+                .map(([region]) => t(`weightRig.geometryRegion.${region}`))
+                .join(', ') || t('weightRig.geometryNone'),
+          })
+        : '';
+  if (active || preview?.busy) {
+    for (const element of panel.querySelectorAll('button, input, select')) {
+      if (!element.dataset.geometryPreview && element !== ui.loadCurrentRig) {
+        if (!previewDisabledControls.has(element)) previewDisabledControls.set(element, element.disabled);
+        element.disabled = true;
+      }
+    }
+  } else restorePreviewControls();
+}
+
+function restorePreviewControls() {
+  for (const [element, disabled] of previewDisabledControls) element.disabled = disabled;
+  previewDisabledControls.clear();
 }
 
 function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
@@ -1104,11 +1197,14 @@ export function initWeightRigPanel() {
   if (!panel) return;
   buildPanel();
   window.addEventListener('mod-viewer-model-weight-changed', (event) => {
+    restorePreviewControls();
     latestWeightState = event.detail;
     syncWeightControls(event.detail);
+    syncGeometryPreview();
     syncStatus();
   });
   window.addEventListener('mod-viewer-model-physics-changed', (event) => {
+    restorePreviewControls();
     syncPhysicsControls(event.detail);
     syncRigOptions(latestRigState);
   });
@@ -1116,12 +1212,16 @@ export function initWeightRigPanel() {
     latestRigState = event.detail;
     if (!event.detail?.loading && !event.detail?.loaded) loadingPromise = null;
     syncRigOptions(event.detail);
+    syncWeightControls(latestWeightState || getModelWeightState());
+    syncPhysicsControls();
+    syncGeometryPreview(event.detail);
     syncStatus();
   });
   window.addEventListener('mod-viewer-model-rig-pose-changed', () => {
     if (latestRigState) syncRigOptions(latestRigState);
   });
   window.addEventListener(LANGUAGE_CHANGED, () => {
+    restorePreviewControls();
     applyTranslations(panel);
     syncWeightControls(latestWeightState || getModelWeightState());
     syncPhysicsControls();
@@ -1144,7 +1244,7 @@ export function initWeightRigPanel() {
       closePopover();
       if (latestWeightState?.picking) cancelWeightModelPicking();
       if (latestRigState?.jointPickIntent) cancelRigJointPicking();
-    } else void loadOnDemand();
+    }
   });
   document.addEventListener('pointerdown', (event) => {
     if (ui?.popover?.hidden || ui.picker.contains(event.target)) return;

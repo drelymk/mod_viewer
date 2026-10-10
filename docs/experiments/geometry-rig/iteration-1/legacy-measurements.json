@@ -1,0 +1,354 @@
+{
+  "remielle": {
+    "controls": {
+      "chest": {
+        "proportionalPercent": 1.1,
+        "geometryPercent": 2.48,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "pelvis": {
+        "proportionalPercent": 0.59,
+        "geometryPercent": 0.35,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "neck": {
+        "proportionalPercent": 1.18,
+        "geometryPercent": 3.6,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "head": {
+        "proportionalPercent": 0.25,
+        "geometryPercent": 0.26,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "leftShoulder": {
+        "proportionalPercent": 5.28,
+        "geometryPercent": 1.52,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightShoulder": {
+        "proportionalPercent": 5.16,
+        "geometryPercent": 1.2,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "leftElbow": {
+        "proportionalPercent": 2.26,
+        "geometryPercent": 0.88,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "rightElbow": {
+        "proportionalPercent": 2.05,
+        "geometryPercent": 1.12,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "leftHand": {
+        "proportionalPercent": 2.87,
+        "geometryPercent": 1.08,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightHand": {
+        "proportionalPercent": 2.8,
+        "geometryPercent": 1.49,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "leftHip": {
+        "proportionalPercent": 1.42,
+        "geometryPercent": 1.42,
+        "visibleGuide": false,
+        "confidence": "low"
+      },
+      "rightHip": {
+        "proportionalPercent": 1.07,
+        "geometryPercent": 1.07,
+        "visibleGuide": false,
+        "confidence": "low"
+      },
+      "leftKnee": {
+        "proportionalPercent": 1.35,
+        "geometryPercent": 1.12,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "rightKnee": {
+        "proportionalPercent": 1.01,
+        "geometryPercent": 1.18,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "leftFoot": {
+        "proportionalPercent": 0.82,
+        "geometryPercent": 0.66,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightFoot": {
+        "proportionalPercent": 0.46,
+        "geometryPercent": 0.54,
+        "visibleGuide": true,
+        "confidence": "high"
+      }
+    },
+    "displayedMeshes": 10,
+    "inactiveMeshes": 2,
+    "triangles": 45285,
+    "visitedTriangles": 45285,
+    "uniqueTriangles": 45279,
+    "surfaceSamples": 15706,
+    "observedFitMs": 383,
+    "weightRequests": 0,
+    "maxDuplicateDeviationHeight": null,
+    "hiddenAccessoryCheck": {
+      "displayedMeshes": 9,
+      "surfaceSamples": 15447,
+      "characterHeightChangePercent": 0.8879,
+      "maxControlShiftPercent": 2.2515,
+      "controlShiftPercent": {
+        "chest": 2.2515,
+        "pelvis": 1.5806,
+        "neck": 0.3253,
+        "head": 0.4706,
+        "leftShoulder": 1.6794,
+        "leftElbow": 0.5945,
+        "leftHand": 1.3308,
+        "rightShoulder": 2.0167,
+        "rightElbow": 1.0928,
+        "rightHand": 1.0908,
+        "leftHip": 0.7784,
+        "leftKnee": 0.4868,
+        "leftFoot": 0.5703,
+        "rightHip": 0.811,
+        "rightKnee": 0.4732,
+        "rightFoot": 0.4515
+      },
+      "weightRequests": 0
+    }
+  },
+  "odette": {
+    "controls": {
+      "chest": {
+        "proportionalPercent": 2.0,
+        "geometryPercent": 0.98,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "pelvis": {
+        "proportionalPercent": 0.8,
+        "geometryPercent": 0.8,
+        "visibleGuide": false,
+        "confidence": "low"
+      },
+      "neck": {
+        "proportionalPercent": 0.21,
+        "geometryPercent": 1.05,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "head": {
+        "proportionalPercent": 0.28,
+        "geometryPercent": 0.3,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "leftShoulder": {
+        "proportionalPercent": 5.16,
+        "geometryPercent": 1.09,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightShoulder": {
+        "proportionalPercent": 5.16,
+        "geometryPercent": 1.13,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "leftElbow": {
+        "proportionalPercent": 3.65,
+        "geometryPercent": 1.02,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "rightElbow": {
+        "proportionalPercent": 3.59,
+        "geometryPercent": 1.31,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "leftHand": {
+        "proportionalPercent": 0.57,
+        "geometryPercent": 1.36,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightHand": {
+        "proportionalPercent": 0.76,
+        "geometryPercent": 1.31,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "leftHip": {
+        "proportionalPercent": 1.39,
+        "geometryPercent": 1.39,
+        "visibleGuide": false,
+        "confidence": "low"
+      },
+      "rightHip": {
+        "proportionalPercent": 1.29,
+        "geometryPercent": 1.29,
+        "visibleGuide": false,
+        "confidence": "low"
+      },
+      "leftKnee": {
+        "proportionalPercent": 0.19,
+        "geometryPercent": 1.44,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "rightKnee": {
+        "proportionalPercent": 0.23,
+        "geometryPercent": 1.4,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "leftFoot": {
+        "proportionalPercent": 0.46,
+        "geometryPercent": 0.36,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightFoot": {
+        "proportionalPercent": 0.69,
+        "geometryPercent": 0.32,
+        "visibleGuide": true,
+        "confidence": "high"
+      }
+    },
+    "displayedMeshes": 35,
+    "inactiveMeshes": 10,
+    "triangles": 72346,
+    "visitedTriangles": 72346,
+    "uniqueTriangles": 72165,
+    "surfaceSamples": 15554,
+    "observedFitMs": 870,
+    "weightRequests": 0,
+    "maxDuplicateDeviationHeight": null
+  },
+  "chisa": {
+    "controls": {
+      "chest": {
+        "proportionalPercent": 1.94,
+        "geometryPercent": 1.11,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "pelvis": {
+        "proportionalPercent": 0.34,
+        "geometryPercent": 0.35,
+        "visibleGuide": false,
+        "confidence": "low"
+      },
+      "neck": {
+        "proportionalPercent": 1.17,
+        "geometryPercent": 2.52,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "head": {
+        "proportionalPercent": 0.5,
+        "geometryPercent": 0.41,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "leftShoulder": {
+        "proportionalPercent": 3.28,
+        "geometryPercent": 0.5,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightShoulder": {
+        "proportionalPercent": 3.07,
+        "geometryPercent": 0.56,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "leftElbow": {
+        "proportionalPercent": 0.77,
+        "geometryPercent": 0.9,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "rightElbow": {
+        "proportionalPercent": 0.72,
+        "geometryPercent": 0.8,
+        "visibleGuide": true,
+        "confidence": "medium"
+      },
+      "leftHand": {
+        "proportionalPercent": 5.15,
+        "geometryPercent": 0.47,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightHand": {
+        "proportionalPercent": 5.07,
+        "geometryPercent": 0.44,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "leftHip": {
+        "proportionalPercent": 0.99,
+        "geometryPercent": 1.9,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "rightHip": {
+        "proportionalPercent": 1.04,
+        "geometryPercent": 1.84,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "leftKnee": {
+        "proportionalPercent": 1.24,
+        "geometryPercent": 1.53,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "rightKnee": {
+        "proportionalPercent": 1.24,
+        "geometryPercent": 1.47,
+        "visibleGuide": false,
+        "confidence": "medium"
+      },
+      "leftFoot": {
+        "proportionalPercent": 1.71,
+        "geometryPercent": 1.63,
+        "visibleGuide": true,
+        "confidence": "high"
+      },
+      "rightFoot": {
+        "proportionalPercent": 1.7,
+        "geometryPercent": 1.62,
+        "visibleGuide": true,
+        "confidence": "high"
+      }
+    },
+    "displayedMeshes": 19,
+    "inactiveMeshes": 24,
+    "triangles": 145749,
+    "visitedTriangles": 90000,
+    "uniqueTriangles": 90000,
+    "surfaceSamples": 15619,
+    "observedFitMs": 786,
+    "weightRequests": 0,
+    "maxDuplicateDeviationHeight": 0
+  }
+}

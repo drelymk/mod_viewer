@@ -1,0 +1,1277 @@
+{
+  "remielle": {
+    "views": {
+      "front": {
+        "chest": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.8686449707505199,
+          "proportionalErrorPercent": 0.9394054922838888,
+          "iteration1ErrorPercent": 3.399472533441993,
+          "changePercent": -2.5308275626914734,
+          "assessment": "improved"
+        },
+        "head": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.12684232536191525,
+          "proportionalErrorPercent": 0.2261838224561717,
+          "iteration1ErrorPercent": 0.12684232536191525,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.9960798397407091,
+          "proportionalErrorPercent": 4.637086466779776,
+          "iteration1ErrorPercent": 0.9960798397407091,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.0443699832302384,
+          "proportionalErrorPercent": 2.3631322456915136,
+          "iteration1ErrorPercent": 1.0443699832302384,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.3895970452532298,
+          "proportionalErrorPercent": 3.1077410553139453,
+          "iteration1ErrorPercent": 1.232683673167283,
+          "changePercent": 0.1569133720859468,
+          "assessment": "stable"
+        },
+        "rightShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.7049123107920149,
+          "proportionalErrorPercent": 4.592609137064243,
+          "iteration1ErrorPercent": 0.7049123107920149,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.340179833280589,
+          "proportionalErrorPercent": 2.288696504780023,
+          "iteration1ErrorPercent": 1.340179833280589,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.2823204633627694,
+          "proportionalErrorPercent": 3.1313777500541145,
+          "iteration1ErrorPercent": 1.3684285354711976,
+          "changePercent": -0.08610807210842819,
+          "assessment": "stable"
+        },
+        "leftHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.2868647712186636,
+          "proportionalErrorPercent": 0.3735627411386085,
+          "iteration1ErrorPercent": 0.2868647712186636,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.1721108498213564,
+          "proportionalErrorPercent": 0.1499195939968971,
+          "iteration1ErrorPercent": 0.1721108498213564,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        }
+      },
+      "side": {
+        "chest": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain",
+          "outsideSurfaceEnvelope": false
+        },
+        "head": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHand": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightHand": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.3027367061075668,
+          "proportionalErrorPercent": 1.4982872144231825,
+          "iteration1ErrorPercent": 1.3027367061075668,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        }
+      }
+    },
+    "summary": {
+      "improved": [
+        "front:neck"
+      ],
+      "regressed": [],
+      "stable": [
+        "front:head",
+        "front:leftShoulder",
+        "front:leftElbow",
+        "front:leftHand",
+        "front:rightShoulder",
+        "front:rightElbow",
+        "front:rightHand",
+        "front:leftFoot",
+        "front:rightFoot",
+        "side:leftFoot"
+      ],
+      "uncertain": [
+        "front:chest",
+        "front:pelvis",
+        "front:leftHip",
+        "front:leftKnee",
+        "front:rightHip",
+        "front:rightKnee",
+        "side:chest",
+        "side:pelvis",
+        "side:neck",
+        "side:head",
+        "side:leftShoulder",
+        "side:leftElbow",
+        "side:leftHand",
+        "side:rightShoulder",
+        "side:rightElbow",
+        "side:rightHand",
+        "side:leftHip",
+        "side:leftKnee",
+        "side:rightHip",
+        "side:rightKnee",
+        "side:rightFoot"
+      ]
+    },
+    "workload": {
+      "visibleMeshCount": 10,
+      "inputTriangleCount": 45285,
+      "displayedTriangleCount": 45285,
+      "visitedTriangleCount": 45285,
+      "uniqueTriangleCount": 45279,
+      "areaSampleCount": 16000,
+      "sampledPointCount": 15706
+    },
+    "observedFitMs": 416.20000000298023,
+    "iteration1ObservedFitMs": 413.3999999985099,
+    "weightRequests": 0,
+    "duplicateCheck": null,
+    "plausibility": {
+      "leftArm": {
+        "segmentLengthsHeight": [
+          0.13639236280897205,
+          0.12465016037032699
+        ],
+        "segmentRatio": 1.094201262186585,
+        "jointLineDistanceHeight": 0.006114605336188809
+      },
+      "leftLeg": {
+        "segmentLengthsHeight": [
+          0.2065155178467252,
+          0.3097172400401475
+        ],
+        "segmentRatio": 0.6667872857834951,
+        "jointLineDistanceHeight": 0.0036532501445536913
+      },
+      "rightArm": {
+        "segmentLengthsHeight": [
+          0.13044958280575994,
+          0.1296422293659073
+        ],
+        "segmentRatio": 1.0062275498022633,
+        "jointLineDistanceHeight": 0.004667482765631635
+      },
+      "rightLeg": {
+        "segmentLengthsHeight": [
+          0.20557440042576236,
+          0.3083083042388416
+        ],
+        "segmentRatio": 0.6667819114807466,
+        "jointLineDistanceHeight": 0.003617945080363731
+      },
+      "ShoulderSymmetry": {
+        "sideSumHeight": 0.0009941043399182836,
+        "heightDifference": 0.0031994598078772807,
+        "depthDifference": -0.001145860471152782
+      },
+      "ElbowSymmetry": {
+        "sideSumHeight": -0.0009323151818824704,
+        "heightDifference": -0.0028652193908238477,
+        "depthDifference": -0.0004356283225092558
+      },
+      "HandSymmetry": {
+        "sideSumHeight": 0.0023441043480087465,
+        "heightDifference": 0.0009393050602155562,
+        "depthDifference": -0.0014090157413984283
+      },
+      "HipSymmetry": {
+        "sideSumHeight": 0.000827512124145835,
+        "heightDifference": 0.003480938951567869,
+        "depthDifference": 0.0
+      },
+      "KneeSymmetry": {
+        "sideSumHeight": 0.000875466456969981,
+        "heightDifference": 0.0025410854346443745,
+        "depthDifference": 5.168917837802128e-05
+      },
+      "FootSymmetry": {
+        "sideSumHeight": 0.0010315330560496105,
+        "heightDifference": 0.0011313051592595907,
+        "depthDifference": -0.00013905249768299266
+      }
+    },
+    "changes": {
+      "Shoulder": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.04188358412984033
+      },
+      "Elbow": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.016208671317718647
+      },
+      "Hand": {
+        "maxShiftHeight": 0.024619050468295066,
+        "maxProportionalDeviationHeight": 0.04365162961172749
+      },
+      "Hip": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 6.795151978893448e-17
+      },
+      "Knee": {
+        "maxShiftHeight": 0.0065162691570217375,
+        "maxProportionalDeviationHeight": 0.004364548890192316
+      },
+      "Foot": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.0024407536325755626
+      }
+    },
+    "accessoryCheck": {
+      "characterHeightChangePercent": 0.8878596540143446,
+      "maxControlShiftHeight": 0.022524270244027256,
+      "maxShoulderChangeFromIteration1HiddenHeight": 0.0,
+      "summaryAgainstIteration1Hidden": {
+        "improved": [
+          "front:neck"
+        ],
+        "regressed": [],
+        "stable": [
+          "front:head",
+          "front:leftShoulder",
+          "front:leftElbow",
+          "front:leftHand",
+          "front:rightShoulder",
+          "front:rightElbow",
+          "front:rightHand",
+          "front:leftFoot",
+          "front:rightFoot",
+          "side:leftFoot"
+        ],
+        "uncertain": [
+          "front:chest",
+          "front:pelvis",
+          "front:leftHip",
+          "front:leftKnee",
+          "front:rightHip",
+          "front:rightKnee",
+          "side:chest",
+          "side:pelvis",
+          "side:neck",
+          "side:head",
+          "side:leftShoulder",
+          "side:leftElbow",
+          "side:leftHand",
+          "side:rightShoulder",
+          "side:rightElbow",
+          "side:rightHand",
+          "side:leftHip",
+          "side:leftKnee",
+          "side:rightHip",
+          "side:rightKnee",
+          "side:rightFoot"
+        ]
+      },
+      "weightRequests": 0
+    }
+  },
+  "odette": {
+    "views": {
+      "front": {
+        "chest": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.30301823574039727,
+          "proportionalErrorPercent": 0.12820701123671985,
+          "iteration1ErrorPercent": 1.080293311032265,
+          "changePercent": -0.7772750752918678,
+          "assessment": "stable"
+        },
+        "head": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.10074656836878715,
+          "proportionalErrorPercent": 0.17231169782958697,
+          "iteration1ErrorPercent": 0.10074656836878715,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.7637470176031652,
+          "proportionalErrorPercent": 4.968533118673769,
+          "iteration1ErrorPercent": 0.7637470176031652,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.9405533881713322,
+          "proportionalErrorPercent": 1.758119655654038,
+          "iteration1ErrorPercent": 0.9405533881713322,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.1852259580800357,
+          "proportionalErrorPercent": 1.16061140849722,
+          "iteration1ErrorPercent": 1.825226379395113,
+          "changePercent": -0.6400004213150772,
+          "assessment": "stable"
+        },
+        "rightShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.8407100795287228,
+          "proportionalErrorPercent": 4.950088267853926,
+          "iteration1ErrorPercent": 0.8407100795287228,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.6526162841018037,
+          "proportionalErrorPercent": 1.6740730871829035,
+          "iteration1ErrorPercent": 0.6526162841018037,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.9428524680741799,
+          "proportionalErrorPercent": 1.0445114598298826,
+          "iteration1ErrorPercent": 1.5305322526295002,
+          "changePercent": -0.5876797845553203,
+          "assessment": "stable"
+        },
+        "leftHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.4137622033368593,
+          "proportionalErrorPercent": 0.717706022243365,
+          "iteration1ErrorPercent": 0.4137622033368593,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.4790002683152337,
+          "proportionalErrorPercent": 1.1112141719583335,
+          "iteration1ErrorPercent": 0.4790002683152337,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        }
+      },
+      "side": {
+        "chest": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain",
+          "outsideSurfaceEnvelope": false
+        },
+        "head": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.3086636358969352,
+          "proportionalErrorPercent": 2.0101837749199314,
+          "iteration1ErrorPercent": 1.2848816340992406,
+          "changePercent": 0.02378200179769463,
+          "assessment": "stable"
+        },
+        "rightShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightHand": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.5790843596611803,
+          "proportionalErrorPercent": 0.895205372084127,
+          "iteration1ErrorPercent": 0.5790843596611803,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        }
+      }
+    },
+    "summary": {
+      "improved": [],
+      "regressed": [],
+      "stable": [
+        "front:neck",
+        "front:head",
+        "front:leftShoulder",
+        "front:leftElbow",
+        "front:leftHand",
+        "front:rightShoulder",
+        "front:rightElbow",
+        "front:rightHand",
+        "front:leftFoot",
+        "front:rightFoot",
+        "side:leftHand",
+        "side:leftFoot"
+      ],
+      "uncertain": [
+        "front:chest",
+        "front:pelvis",
+        "front:leftHip",
+        "front:leftKnee",
+        "front:rightHip",
+        "front:rightKnee",
+        "side:chest",
+        "side:pelvis",
+        "side:neck",
+        "side:head",
+        "side:leftShoulder",
+        "side:leftElbow",
+        "side:rightShoulder",
+        "side:rightElbow",
+        "side:rightHand",
+        "side:leftHip",
+        "side:leftKnee",
+        "side:rightHip",
+        "side:rightKnee",
+        "side:rightFoot"
+      ]
+    },
+    "workload": {
+      "visibleMeshCount": 35,
+      "inputTriangleCount": 72346,
+      "displayedTriangleCount": 75131,
+      "visitedTriangleCount": 72346,
+      "uniqueTriangleCount": 72165,
+      "areaSampleCount": 16000,
+      "sampledPointCount": 15554
+    },
+    "observedFitMs": 611.7000000029802,
+    "iteration1ObservedFitMs": 644.6000000014901,
+    "weightRequests": 0,
+    "duplicateCheck": null,
+    "plausibility": {
+      "leftArm": {
+        "segmentLengthsHeight": [
+          0.14744715042237835,
+          0.12670798970610167
+        ],
+        "segmentRatio": 1.1636768191522968,
+        "jointLineDistanceHeight": 0.006115173130904958
+      },
+      "leftLeg": {
+        "segmentLengthsHeight": [
+          0.20616931065838287,
+          0.30973133494404737
+        ],
+        "segmentRatio": 0.665639176273938,
+        "jointLineDistanceHeight": 0.008374156507865332
+      },
+      "rightArm": {
+        "segmentLengthsHeight": [
+          0.14556712924268148,
+          0.13667027817567556
+        ],
+        "segmentRatio": 1.0650971900091541,
+        "jointLineDistanceHeight": 0.008689046698104042
+      },
+      "rightLeg": {
+        "segmentLengthsHeight": [
+          0.20585334143219342,
+          0.3092908452838199
+        ],
+        "segmentRatio": 0.6655655819469621,
+        "jointLineDistanceHeight": 0.008373136167529004
+      },
+      "ShoulderSymmetry": {
+        "sideSumHeight": -0.005315094459659053,
+        "heightDifference": -0.0006733069719162543,
+        "depthDifference": 0.00010613373703890344
+      },
+      "ElbowSymmetry": {
+        "sideSumHeight": -0.0053775749974948606,
+        "heightDifference": -0.00282786906215704,
+        "depthDifference": 2.4156490397435554e-05
+      },
+      "HandSymmetry": {
+        "sideSumHeight": 0.0027387412035640157,
+        "heightDifference": 0.0036588430524201465,
+        "depthDifference": -0.008758817963855713
+      },
+      "HipSymmetry": {
+        "sideSumHeight": -0.002802536171309121,
+        "heightDifference": 0.0011604246972150012,
+        "depthDifference": -1.7867651802561113e-16
+      },
+      "KneeSymmetry": {
+        "sideSumHeight": -0.003558943900376657,
+        "heightDifference": 0.0008471100289669797,
+        "depthDifference": 2.5118621440186825e-05
+      },
+      "FootSymmetry": {
+        "sideSumHeight": -0.004784320473698464,
+        "heightDifference": 0.000377138026594781,
+        "depthDifference": 2.2056162932149008e-05
+      }
+    },
+    "changes": {
+      "Shoulder": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.044137921773953856
+      },
+      "Elbow": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.02788826180614631
+      },
+      "Hand": {
+        "maxShiftHeight": 0.027290145033932726,
+        "maxProportionalDeviationHeight": 0.019434478501093876
+      },
+      "Hip": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 7.098280914346916e-17
+      },
+      "Knee": {
+        "maxShiftHeight": 0.013593557048394631,
+        "maxProportionalDeviationHeight": 0.002289505556599202
+      },
+      "Foot": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.016114989494646553
+      }
+    }
+  },
+  "chisa": {
+    "views": {
+      "front": {
+        "chest": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.5387238752910304,
+          "proportionalErrorPercent": 1.052485801582498,
+          "iteration1ErrorPercent": 2.7899386701935645,
+          "changePercent": -2.251214794902534,
+          "assessment": "improved"
+        },
+        "head": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.1181185098598991,
+          "proportionalErrorPercent": 0.41019992086817786,
+          "iteration1ErrorPercent": 0.1181185098598991,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.3864571883870297,
+          "proportionalErrorPercent": 3.4810512683791597,
+          "iteration1ErrorPercent": 0.3864571883870297,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.13911160101636202,
+          "proportionalErrorPercent": 1.3671943694258957,
+          "iteration1ErrorPercent": 0.13911160101636202,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.5756829289078322,
+          "proportionalErrorPercent": 4.81352422036308,
+          "iteration1ErrorPercent": 0.5756829289078322,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.581147499700189,
+          "proportionalErrorPercent": 3.103900393669373,
+          "iteration1ErrorPercent": 0.581147499700189,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.10587438876657539,
+          "proportionalErrorPercent": 1.3387673069853827,
+          "iteration1ErrorPercent": 0.10587438876657539,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.7281423288897269,
+          "proportionalErrorPercent": 5.2948583247017105,
+          "iteration1ErrorPercent": 0.7281423288897269,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.5339279066368756,
+          "proportionalErrorPercent": 0.6643815447702867,
+          "iteration1ErrorPercent": 0.5339279066368756,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.6059572857430251,
+          "proportionalErrorPercent": 0.6108152580425199,
+          "iteration1ErrorPercent": 0.6059572857430251,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        }
+      },
+      "side": {
+        "chest": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain",
+          "outsideSurfaceEnvelope": false
+        },
+        "head": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.2545280143649241,
+          "proportionalErrorPercent": 8.24167334182698,
+          "iteration1ErrorPercent": 0.2545280143649241,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightHand": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.9104933286152495,
+          "proportionalErrorPercent": 1.1914765463787649,
+          "iteration1ErrorPercent": 0.9104933286152495,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        }
+      }
+    },
+    "summary": {
+      "improved": [
+        "front:neck"
+      ],
+      "regressed": [],
+      "stable": [
+        "front:head",
+        "front:leftShoulder",
+        "front:leftElbow",
+        "front:leftHand",
+        "front:rightShoulder",
+        "front:rightElbow",
+        "front:rightHand",
+        "front:leftFoot",
+        "front:rightFoot",
+        "side:leftHand",
+        "side:leftFoot"
+      ],
+      "uncertain": [
+        "front:chest",
+        "front:pelvis",
+        "front:leftHip",
+        "front:leftKnee",
+        "front:rightHip",
+        "front:rightKnee",
+        "side:chest",
+        "side:pelvis",
+        "side:neck",
+        "side:head",
+        "side:leftShoulder",
+        "side:leftElbow",
+        "side:rightShoulder",
+        "side:rightElbow",
+        "side:rightHand",
+        "side:leftHip",
+        "side:leftKnee",
+        "side:rightHip",
+        "side:rightKnee",
+        "side:rightFoot"
+      ]
+    },
+    "workload": {
+      "visibleMeshCount": 19,
+      "inputTriangleCount": 145749,
+      "displayedTriangleCount": 145749,
+      "visitedTriangleCount": 90000,
+      "uniqueTriangleCount": 90000,
+      "areaSampleCount": 16000,
+      "sampledPointCount": 15619
+    },
+    "observedFitMs": 701.0999999940395,
+    "iteration1ObservedFitMs": 760.5,
+    "weightRequests": 0,
+    "duplicateCheck": {
+      "maxDeviationHeight": 0
+    },
+    "plausibility": {
+      "leftArm": {
+        "segmentLengthsHeight": [
+          0.1377027480181079,
+          0.12082683858272011
+        ],
+        "segmentRatio": 1.1396702060017423,
+        "jointLineDistanceHeight": 0.019378195934582582
+      },
+      "leftLeg": {
+        "segmentLengthsHeight": [
+          0.20614417105218932,
+          0.3090554853898061
+        ],
+        "segmentRatio": 0.6670134677991022,
+        "jointLineDistanceHeight": 0.006412567797646587
+      },
+      "rightArm": {
+        "segmentLengthsHeight": [
+          0.13868638661393637,
+          0.12299673238531088
+        ],
+        "segmentRatio": 1.12756155325716,
+        "jointLineDistanceHeight": 0.020031921164019004
+      },
+      "rightLeg": {
+        "segmentLengthsHeight": [
+          0.20612956917499195,
+          0.30902325593067753
+        ],
+        "segmentRatio": 0.6670357819970434,
+        "jointLineDistanceHeight": 0.006389987072108917
+      },
+      "ShoulderSymmetry": {
+        "sideSumHeight": 0.0017088329608385827,
+        "heightDifference": -0.0012396808667293202,
+        "depthDifference": -0.0006440275503764858
+      },
+      "ElbowSymmetry": {
+        "sideSumHeight": 0.0028079852642646508,
+        "heightDifference": -0.0006951804726835764,
+        "depthDifference": 0.00014551649912209104
+      },
+      "HandSymmetry": {
+        "sideSumHeight": 0.001708832960838652,
+        "heightDifference": 0.0027286260255644512,
+        "depthDifference": 0.00023851806852205615
+      },
+      "HipSymmetry": {
+        "sideSumHeight": 0.005006289871116079,
+        "heightDifference": 6.013311465380422e-05,
+        "depthDifference": 0.0
+      },
+      "KneeSymmetry": {
+        "sideSumHeight": 0.004004086833505213,
+        "heightDifference": 4.389717369718271e-05,
+        "depthDifference": 2.87509828619803e-06
+      },
+      "FootSymmetry": {
+        "sideSumHeight": 0.0025393866309336433,
+        "heightDifference": 1.954326226250025e-05,
+        "depthDifference": -5.4553323855326824e-05
+      }
+    },
+    "changes": {
+      "Shoulder": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.03427827839112809
+      },
+      "Elbow": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.02428657820784002
+      },
+      "Hand": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.08515728910107687
+      },
+      "Hip": {
+        "maxShiftHeight": 0.010520807655755028,
+        "maxProportionalDeviationHeight": 0.0
+      },
+      "Knee": {
+        "maxShiftHeight": 0.014567008845391057,
+        "maxProportionalDeviationHeight": 0.007532854180509988
+      },
+      "Foot": {
+        "maxShiftHeight": 0.0,
+        "maxProportionalDeviationHeight": 0.0036684911569996406
+      }
+    }
+  }
+}

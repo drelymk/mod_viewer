@@ -30,6 +30,7 @@ def _activate_rig(page, *, humanoid=False):
           ]);
         }""")
     page.locator('#weight-rig-tab').click()
+    page.locator('.rig-load-current').click()
     page.evaluate("""async () => {
       const {weightRigApi} = await import('./js/weight-rig/weight-rig-core.js');
       window.__rigApi = weightRigApi;
