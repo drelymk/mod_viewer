@@ -54,6 +54,7 @@ let ui = null;
 let loadingPromise = null;
 let latestWeightState = null;
 let latestRigState = null;
+const previewDisabledControls = new Map();
 
 const $ = (id) => document.getElementById(id);
 const HUMANOID_CONTROL_LABEL_KEYS = Object.freeze({
@@ -888,6 +889,7 @@ function syncHumanoidEditControls(state) {
 }
 
 function syncRigOptions(state = latestRigState || getModelRigState()) {
+  restorePreviewControls();
   if (!ui?.joint) return;
   latestRigState = state;
   const model = state?.model;
@@ -978,9 +980,17 @@ function syncGeometryPreview(state = latestRigState || getModelRigState()) {
         : '';
   if (active || preview?.busy) {
     for (const element of panel.querySelectorAll('button, input, select')) {
-      if (!element.dataset.geometryPreview && element !== ui.loadCurrentRig) element.disabled = true;
+      if (!element.dataset.geometryPreview && element !== ui.loadCurrentRig) {
+        if (!previewDisabledControls.has(element)) previewDisabledControls.set(element, element.disabled);
+        element.disabled = true;
+      }
     }
-  }
+  } else restorePreviewControls();
+}
+
+function restorePreviewControls() {
+  for (const [element, disabled] of previewDisabledControls) element.disabled = disabled;
+  previewDisabledControls.clear();
 }
 
 function selectedPreset(state = latestRigState, id = ui?.preset?.value) {
@@ -1187,12 +1197,14 @@ export function initWeightRigPanel() {
   if (!panel) return;
   buildPanel();
   window.addEventListener('mod-viewer-model-weight-changed', (event) => {
+    restorePreviewControls();
     latestWeightState = event.detail;
     syncWeightControls(event.detail);
     syncGeometryPreview();
     syncStatus();
   });
   window.addEventListener('mod-viewer-model-physics-changed', (event) => {
+    restorePreviewControls();
     syncPhysicsControls(event.detail);
     syncRigOptions(latestRigState);
   });
@@ -1209,6 +1221,7 @@ export function initWeightRigPanel() {
     if (latestRigState) syncRigOptions(latestRigState);
   });
   window.addEventListener(LANGUAGE_CHANGED, () => {
+    restorePreviewControls();
     applyTranslations(panel);
     syncWeightControls(latestWeightState || getModelWeightState());
     syncPhysicsControls();

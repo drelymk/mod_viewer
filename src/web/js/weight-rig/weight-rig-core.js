@@ -47,7 +47,7 @@ import {
 } from './humanoid-control-rig.js';
 import { mergeHumanoidLimbPose, solveHumanoidControlIk } from './humanoid-rig-ik.js';
 import { createHumanoidRigEditSession } from './humanoid-rig-edit-session.js';
-import { fitHumanoidGeometryRig } from './humanoid-geometry-fit.js';
+import { fitHumanoidGeometryRig, isHumanoidMeshDisplayed } from './humanoid-geometry-fit.js';
 
 const weightRuntime = createWeightRuntimeState();
 const { states, knownMeshes, modelWeightState, stateFor } = weightRuntime;
@@ -292,15 +292,13 @@ async function previewGeometryRig() {
   const meshes = [...knownMeshes];
   // Preview only a rest-pose model. Never reset a pose, edit, or simulation on
   // the user's behalf, and never acquire a deformation/animation owner.
-  const atRest = meshes
-    .filter((mesh) => mesh.visible)
-    .every((mesh) => {
-      const rest = mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions;
-      const positions = mesh.geometry?.attributes?.position?.array;
-      return (
-        rest && positions && rest.length === positions.length && rest.every((v, i) => Math.abs(v - positions[i]) < 1e-6)
-      );
-    });
+  const atRest = meshes.filter(isHumanoidMeshDisplayed).every((mesh) => {
+    const rest = mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions;
+    const positions = mesh.geometry?.attributes?.position?.array;
+    return (
+      rest && positions && rest.length === positions.length && rest.every((v, i) => Math.abs(v - positions[i]) < 1e-6)
+    );
+  });
   if (
     !atRest ||
     humanoidRigEditSession.snapshot()?.editing ||
@@ -312,10 +310,10 @@ async function previewGeometryRig() {
     notifyModelRigChanged();
     return false;
   }
-  const visibility = meshes.map((mesh) => mesh.visible);
+  const visibility = meshes.map(isHumanoidMeshDisplayed);
   const isCurrent = () =>
     serial === geometryPreviewSerial &&
-    meshes.every((mesh, i) => knownMeshes.has(mesh) && mesh.visible === visibility[i]);
+    meshes.every((mesh, i) => knownMeshes.has(mesh) && isHumanoidMeshDisplayed(mesh) === visibility[i]);
   try {
     const result = await fitHumanoidGeometryRig({ meshes, orientationState: getModelTransformState(), isCurrent });
     if (!isCurrent()) {

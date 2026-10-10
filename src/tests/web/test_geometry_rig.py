@@ -129,6 +129,11 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
       const {weightRigApi,registerWeightRigMesh}=await import('./js/weight-rig/weight-rig-core.js');
       window.previewApi=weightRigApi;
       fixture.meshes.forEach(registerWeightRigMesh);
+      window.hiddenPreviewGroup=new fixture.THREE.Group(); hiddenPreviewGroup.visible=false;
+      const hiddenChild=new fixture.THREE.Mesh(fixture.meshes[0].geometry.clone());
+      hiddenChild.userData.humanoidRestPositions=new Float32Array(hiddenChild.geometry.attributes.position.array);
+      hiddenChild.geometry.attributes.position.array.fill(99);
+      hiddenPreviewGroup.add(hiddenChild);registerWeightRigMesh(hiddenChild);
       window.beforePreview=JSON.stringify(weightRigApi.getModelRigState());
       window.beforeRest=fixture.meshes.map(mesh=>[...mesh.geometry.attributes.position.array]);
     }""")
@@ -142,8 +147,21 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
     assert page.evaluate("previewApi.getModelRigState().geometryRigPreview.rig.mode") == 'proportional_template'
     page.locator('.rig-preview-comparison').select_option('geometry')
     page.locator('.rig-preview-comparison').select_option('current')
+    assert page.locator('.weight-rig-advanced input[type="range"]').first.is_enabled()
     assert page.evaluate("JSON.stringify(previewApi.getModelRigState()) === beforePreview")
     assert page.evaluate("beforeRest.every((rest,i)=>JSON.stringify(rest)===JSON.stringify([...fixture.meshes[i].geometry.attributes.position.array]))")
+    result = page.evaluate("""async () => {
+      fixture.meshes[0].geometry.attributes.position.array[0]+=0.1;
+      const rejected=await previewApi.previewGeometryRig();
+      const reason=previewApi.getModelRigState().geometryRigPreview.errorKey;
+      fixture.meshes[0].geometry.attributes.position.array[0]=beforeRest[0][0];
+      previewApi.clearGeometryRigPreview();
+      const pending=previewApi.previewGeometryRig();previewApi.clearGeometryRigPreview();await pending;
+      const visibilityPending=previewApi.previewGeometryRig();hiddenPreviewGroup.visible=true;await visibilityPending;
+      hiddenPreviewGroup.visible=false;
+      return {rejected,reason,preview:previewApi.getModelRigState().geometryRigPreview};
+    }""")
+    assert result == {'rejected': False, 'reason': 'weightRig.geometryRequiresRest', 'preview': None}
     page.evaluate('previewApi.previewGeometryRig()')
     open_model(page, 'fixture-02')
     wait_loaded(page)

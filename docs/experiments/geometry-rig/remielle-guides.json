@@ -1,0 +1,82 @@
+{
+  "chest": {
+    "sideN": -0.002375,
+    "height01": 0.702215,
+    "visible": false
+  },
+  "pelvis": {
+    "sideN": 0.000884,
+    "height01": 0.549058,
+    "visible": false
+  },
+  "neck": {
+    "sideN": 0.000884,
+    "height01": 0.816267,
+    "visible": true
+  },
+  "head": {
+    "sideN": 0.000884,
+    "height01": 0.914027,
+    "visible": true
+  },
+  "leftShoulder": {
+    "sideN": -0.083841,
+    "height01": 0.783681,
+    "visible": true
+  },
+  "rightShoulder": {
+    "sideN": 0.08235,
+    "height01": 0.783681,
+    "visible": true
+  },
+  "leftElbow": {
+    "sideN": -0.171824,
+    "height01": 0.682663,
+    "visible": true
+  },
+  "rightElbow": {
+    "sideN": 0.170333,
+    "height01": 0.682663,
+    "visible": true
+  },
+  "leftHand": {
+    "sideN": -0.256549,
+    "height01": 0.581645,
+    "visible": true
+  },
+  "rightHand": {
+    "sideN": 0.255058,
+    "height01": 0.581645,
+    "visible": true
+  },
+  "leftHip": {
+    "sideN": -0.070806,
+    "height01": 0.542541,
+    "visible": false
+  },
+  "rightHip": {
+    "sideN": 0.072574,
+    "height01": 0.542541,
+    "visible": false
+  },
+  "leftKnee": {
+    "sideN": -0.064289,
+    "height01": 0.337246,
+    "visible": false
+  },
+  "rightKnee": {
+    "sideN": 0.066057,
+    "height01": 0.337246,
+    "visible": false
+  },
+  "leftFoot": {
+    "sideN": -0.070806,
+    "height01": 0.027675,
+    "visible": true
+  },
+  "rightFoot": {
+    "sideN": 0.072574,
+    "height01": 0.027675,
+    "visible": true
+  }
+}

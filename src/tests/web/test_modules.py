@@ -700,6 +700,34 @@ def _prepare_rig_overlay(page, orthographic=False):
     }""", orthographic)
 
 
+def test_rig_overlay_geometry_preview_without_model_rig_then_restores_current(module_page):
+    _prepare_rig_overlay(module_page)
+    result = module_page.evaluate("""() => {
+      const ctx=window.__overlay;
+      const original=structuredClone(ctx.snapshot);
+      const rig=structuredClone(original.model.humanoidControlRig);
+      ctx.snapshot={geometryRigPreview:{rig,mode:'geometry',revision:1},ik:{enabled:false}};
+      ctx.notify();
+      const preview=ctx.controller.getDebugState();
+      ctx.snapshot.geometryRigPreview={rig:{...rig,controls:{...rig.controls,
+        leftHand:{position:[-1.1,0,0]}}},mode:'proportional',revision:2};
+      ctx.notify();
+      const compared=ctx.controller.getDebugState();
+      ctx.snapshot=original;ctx.notify();
+      const restored=ctx.controller.getDebugState();
+      ctx.controller.dispose();
+      return {preview,compared,restored,calls:ctx.calls};
+    }""")
+    for state in [result['preview'], result['compared']]:
+        assert state['humanoidOverlayVisible'] and state['groupVisible']
+        assert state['humanoidLandmarkCount'] == 16
+        assert state['humanoidSegmentCount'] == 15
+        assert state['nodeCount'] == 0
+        assert not state['staticVisible'] and not state['controlsAttached']
+    assert result['restored']['nodeCount'] == 3
+    assert result['calls']['rotations'] == [] and result['calls']['solves'] == []
+
+
 def test_rig_overlay_pose_edit_and_disposal_restore_interaction_ownership(module_page):
     _prepare_rig_overlay(module_page)
     result = module_page.evaluate("""async () => {

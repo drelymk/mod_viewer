@@ -25,7 +25,7 @@ const quantile = (values, t) => {
 const median = (values) => quantile(values, 0.5);
 const yieldFrame = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function visible(mesh) {
+export function isHumanoidMeshDisplayed(mesh) {
   for (let item = mesh; item; item = item.parent) if (item.visible === false) return false;
   return true;
 }
@@ -34,7 +34,7 @@ function visible(mesh) {
 export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {}, isCurrent = () => true } = {}) {
   const maxTriangles = clamp(Math.floor(options.maxTriangles || MAX_TRIANGLES), 1, MAX_TRIANGLES);
   const maxSamples = clamp(Math.floor(options.maxSamples || MAX_SAMPLES), 1, MAX_SAMPLES);
-  const active = [...meshes].filter(visible);
+  const active = [...meshes].filter(isHumanoidMeshDisplayed);
   active[0]?.updateWorldMatrix?.(true, false);
   const inverseModel = active[0]?.matrixWorld?.clone().invert() || new THREE.Matrix4();
   const sources = [];
@@ -42,6 +42,7 @@ export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {
   const semanticKey = (v) =>
     [semanticFrame.right, semanticFrame.up, semanticFrame.forward].map((axis) => Math.round(dot(v, axis) * 1e5));
   const identities = new Map();
+  const surfaceSignatures = new Map();
   for (const mesh of active) {
     const geometry = mesh.geometry;
     const rest = mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions;
@@ -62,7 +63,39 @@ export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {
     if (!entries) identities.set(rest, (entries = []));
     if (entries.some((entry) => entry.indices === indices && entry.signature === signature)) continue;
     entries.push({ indices, signature });
-    sources.push({ rest, indices, start, triangles, matrix });
+    const source = { rest, indices, start, triangles, matrix };
+    const fingerprint = (array, first, size) => {
+      let hash = 2166136261;
+      for (let i = 0; i < Math.min(size, 256); i += 1) {
+        const value = array[first + Math.floor((i * size) / Math.min(size, 256))];
+        hash = Math.imul(hash ^ Math.round(value * 1e5), 16777619);
+      }
+      return hash;
+    };
+    const contentKey = `${signature}:${rest.length}:${fingerprint(rest, 0, rest.length)}:${indices ? fingerprint(indices, start, triangles * 3) : 'unindexed'}`;
+    let matches = surfaceSignatures.get(contentKey);
+    if (!matches) surfaceSignatures.set(contentKey, (matches = []));
+    let duplicate = false;
+    for (const match of matches) {
+      // Fingerprints only shortlist candidates; exact comparison prevents hash
+      // collisions from discarding distinct visible geometry.
+      let equal = true;
+      for (let i = 0; i < rest.length && equal; i += 1) {
+        equal = rest[i] === match.rest[i];
+        if (i % 16384 === 0) {
+          await yieldFrame();
+          if (!isCurrent()) return null;
+        }
+      }
+      for (let i = start; indices && i < end && equal; i += 1) equal = indices[i] === match.indices?.[i];
+      if (equal) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) continue;
+    matches.push(source);
+    sources.push(source);
   }
   const total = sources.reduce((sum, source) => sum + source.triangles, 0);
   const triangles = new Map();
@@ -97,8 +130,6 @@ export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {
           return first[0] - second[0] || first[1] - second[1] || first[2] - second[2];
         });
         const key = vertices.map((v) => semanticKey(v).join(',')).join('/');
-        cross.fromArray(vertices[1]).sub(point.fromArray(vertices[0]));
-        edge.fromArray(vertices[2]).sub(point.fromArray(vertices[0]));
         const semanticVertices = vertices.map((v) => semanticKey(v).map((n) => n / 1e5));
         cross.fromArray(semanticVertices[1]).sub(point.fromArray(semanticVertices[0]));
         edge.fromArray(semanticVertices[2]).sub(point.fromArray(semanticVertices[0]));
@@ -363,7 +394,23 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
     const slice = section(points, p, [key === 'head' ? 0.09 : 0.13, 0, 0.09]);
     if (slice) {
       targets[key] = slice.center;
-      evidence[key] = { ...slice, strength: key === 'pelvis' && slice.width[0] > 0.2 ? 0.2 : 0.75 };
+      evidence[key] = { ...slice, strength: key === 'pelvis' && slice.width[0] > 0.2 ? 0.2 : 0.55 };
+    }
+  }
+  for (const key of ['chest', 'pelvis']) {
+    const prior = priors[key];
+    const slices = [];
+    for (let y = prior[1] - 0.025; y <= prior[1] + 0.025; y += 0.008) {
+      const slice = section(points, [prior[0], y, prior[2]], [0.13, 0, 0.09]);
+      if (slice && slice.width[0] > 0.06 && slice.width[0] < 0.2) slices.push(slice);
+    }
+    const best = slices.sort((a, b) => {
+      const score = (slice) => slice.width[0] - Math.abs(slice.center[1] - prior[1]) * 0.6;
+      return score(b) - score(a);
+    })[0];
+    if (best) {
+      targets[key] = best.center;
+      evidence[key] = { ...best, strength: 0.55 };
     }
   }
   // A narrow neck section is stronger evidence than a fixed head/torso ratio.
@@ -388,23 +435,43 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
       const key = `${prefix}${suffix}`;
       if (arm?.[suffix]) {
         targets[key] = arm[suffix].center;
-        evidence[key] = { ...arm[suffix], strength: suffix === 'Elbow' ? 0.7 : 0.9 };
+        evidence[key] = {
+          ...arm[suffix],
+          strength: (suffix === 'Elbow' ? 0.6 : 0.9) * Math.min(1, arm[suffix].support / 16),
+        };
       }
     }
     for (const suffix of ['Hip', 'Knee', 'Foot']) {
       const key = `${prefix}${suffix}`,
         prior = priors[key];
-      const slice = section(points, prior, [suffix === 'Hip' ? 0.075 : 0.06, 0, 0.09]);
+      const sidePoints = points.filter((p) => side * p[0] > 0.012);
+      const slice = section(sidePoints, prior, [suffix === 'Hip' ? 0.075 : 0.06, 0, 0.09]);
       // A wide cross-section cannot reveal a knee hidden by a skirt. Keep the
       // anatomical estimate and explicitly report the missing local evidence.
       if (
         slice &&
         slice.width[0] < (suffix === 'Hip' ? 0.12 : 0.09) &&
         slice.width[2] < 0.14 &&
-        side * slice.center[0] > 0.025
+        side * slice.center[0] > 0.015
       ) {
         targets[key] = slice.center;
-        evidence[key] = { ...slice, strength: suffix === 'Hip' ? 0.35 : 0.75 };
+        evidence[key] = { ...slice, strength: suffix === 'Hip' ? 0.35 : suffix === 'Knee' ? 0.55 : 0.75 };
+      }
+      if (suffix === 'Knee' && evidence[key]) {
+        const transitions = [];
+        for (let y = prior[1] - 0.06; y <= prior[1] + 0.025; y += 0.008) {
+          const lower = section(sidePoints, [prior[0], y - 0.022, prior[2]], [0.06, 0, 0.09]);
+          const upper = section(sidePoints, [prior[0], y + 0.022, prior[2]], [0.06, 0, 0.09]);
+          const middle = section(sidePoints, [prior[0], y, prior[2]], [0.06, 0, 0.09]);
+          if (!lower || !upper || !middle || Math.max(lower.width[0], upper.width[0]) >= 0.095) continue;
+          const taper = upper.width[0] - lower.width[0];
+          if (taper > 0.006) transitions.push({ ...middle, score: taper - Math.abs(y - prior[1]) * 0.07 });
+        }
+        const knee = transitions.sort((a, b) => b.score - a.score)[0];
+        if (knee) {
+          targets[key] = knee.center;
+          evidence[key] = { ...knee, strength: 0.65 };
+        }
       }
     }
   }
