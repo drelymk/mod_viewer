@@ -30,6 +30,13 @@ function vector(value) {
 }
 
 function sourceFor(snapshot) {
+  if (snapshot?.geometryRigPreview?.rig) {
+    return {
+      key: 'geometry-preview',
+      structureRevision: snapshot.geometryRigPreview.revision,
+      humanoidControlRig: snapshot.geometryRigPreview.rig,
+    };
+  }
   if (snapshot?.model) {
     if (snapshot.model.humanoidControlRig) return snapshot.model;
     if (snapshot.humanoidControlRig) {
@@ -170,6 +177,7 @@ function humanoidRigAvailable(source) {
 }
 
 function manipulationMode(snapshot, source, jointId = selectedBoneFor(snapshot)) {
+  if (snapshot?.geometryRigPreview?.rig || snapshot?.geometryRigPreview?.busy) return null;
   if (snapshot?.humanoidRigEdit?.editing || snapshot?.jointPickIntent || !source) return null;
   if (snapshot?.ik?.enabled) {
     return snapshot.ik.available &&
@@ -560,7 +568,9 @@ export function createRigOverlayController({
     const rig = humanoidControlRigFor(currentSource);
     const available = editing ? Object.keys(rig?.controls || {}).length > 0 : humanoidRigAvailable(currentSource);
     humanoidGroup.visible =
-      (editing || currentSnapshot?.ik?.enabled === true) && available && humanoidLinePairs.length > 0;
+      (editing || !!currentSnapshot?.geometryRigPreview?.rig || currentSnapshot?.ik?.enabled === true) &&
+      available &&
+      humanoidLinePairs.length > 0;
   }
 
   function setHumanoidSpriteColor(sprite, color) {
@@ -673,7 +683,11 @@ export function createRigOverlayController({
 
   function updateSelectedJointIndicator(source = currentSource, pivots = null, sizing = markerFrame()) {
     const point = source && Number.isInteger(selectedJointId) ? posedPivot(selectedJointId, pivots) : null;
-    selectedJointIndicator.visible = !!point && !humanoidEditActive() && !currentSnapshot?.jointPickIntent;
+    selectedJointIndicator.visible =
+      !!point &&
+      !currentSnapshot?.geometryRigPreview?.rig &&
+      !humanoidEditActive() &&
+      !currentSnapshot?.jointPickIntent;
     if (!selectedJointIndicator.visible) return;
     selectedJointIndicator.position.copy(vector(point));
     const size = sizing.sizeFor(point, SELECTED_JOINT_INDICATOR_SIZE_PX);

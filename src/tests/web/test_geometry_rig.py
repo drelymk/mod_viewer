@@ -111,3 +111,44 @@ def test_geometry_rig_sampling_visibility_duplicates_transforms_and_determinism(
     assert result['capped']['scanCapped']
     assert not result['noEvidence']
     assert result['maxAsymmetry'] < 0.035
+
+
+def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(viewer):
+    from .payloads import model_payload
+    from .support import bridge_calls, open_model, wait_loaded
+
+    payload = model_payload()
+    payload['meshes']['mesh-00']['skinning_available'] = True
+    page = viewer({'fixture-01': payload, 'fixture-02': payload, 'fixture-weights': {'meshes': {}}})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    prepare_surface(page)
+    page.locator('#weight-rig-tab').click()
+    page.locator('.rig-preview-geometry').evaluate("button => button.closest('details').open = true")
+    page.evaluate("""async () => {
+      const {weightRigApi,registerWeightRigMesh}=await import('./js/weight-rig/weight-rig-core.js');
+      window.previewApi=weightRigApi;
+      fixture.meshes.forEach(registerWeightRigMesh);
+      window.beforePreview=JSON.stringify(weightRigApi.getModelRigState());
+      window.beforeRest=fixture.meshes.map(mesh=>[...mesh.geometry.attributes.position.array]);
+    }""")
+    page.locator('.rig-preview-geometry').evaluate("button => button.click()")
+    page.wait_for_function('previewApi.getModelRigState().geometryRigPreview?.rig?.available')
+    assert bridge_calls(page, 'weights') == []
+    assert page.locator('.rig-preview-comparison').is_enabled()
+    summary = page.locator('.rig-preview-geometry').locator('..').inner_text()
+    assert 'samples' in summary
+    page.locator('.rig-preview-comparison').select_option('proportional')
+    assert page.evaluate("previewApi.getModelRigState().geometryRigPreview.rig.mode") == 'proportional_template'
+    page.locator('.rig-preview-comparison').select_option('geometry')
+    page.locator('.rig-preview-comparison').select_option('current')
+    assert page.evaluate("JSON.stringify(previewApi.getModelRigState()) === beforePreview")
+    assert page.evaluate("beforeRest.every((rest,i)=>JSON.stringify(rest)===JSON.stringify([...fixture.meshes[i].geometry.attributes.position.array]))")
+    page.evaluate('previewApi.previewGeometryRig()')
+    open_model(page, 'fixture-02')
+    wait_loaded(page)
+    assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
+    assert bridge_calls(page, 'weights') == []
+    page.locator('.rig-load-current').click()
+    page.wait_for_function('previewApi.getModelWeightState().loaded')
+    assert len(bridge_calls(page, 'weights')) == 1

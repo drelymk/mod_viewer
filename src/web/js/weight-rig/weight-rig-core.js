@@ -47,6 +47,7 @@ import {
 } from './humanoid-control-rig.js';
 import { mergeHumanoidLimbPose, solveHumanoidControlIk } from './humanoid-rig-ik.js';
 import { createHumanoidRigEditSession } from './humanoid-rig-edit-session.js';
+import { fitHumanoidGeometryRig } from './humanoid-geometry-fit.js';
 
 const weightRuntime = createWeightRuntimeState();
 const { states, knownMeshes, modelWeightState, stateFor } = weightRuntime;
@@ -79,12 +80,16 @@ let modelWeightGeneration = 0;
 let humanoidControlRigCacheKey = '';
 let humanoidControlRigSnapshotCache = null;
 let humanoidRigEditSession = null;
+let geometryRigPreview = null;
+let geometryPreviewSerial = 0;
 
 function clockNow() {
   return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
 }
 
 function invalidateHumanoidDetection() {
+  geometryRigPreview = null;
+  geometryPreviewSerial += 1;
   humanoidControlRigCacheKey = '';
   humanoidControlRigSnapshotCache = null;
   modelRigState.humanoidControlRig = null;
@@ -279,6 +284,76 @@ function beginRigJointPicking(...args) {
   return rigModelSession?.beginJointPicking(...args) || false;
 }
 
+async function previewGeometryRig() {
+  const serial = ++geometryPreviewSerial;
+  geometryRigPreview = { busy: true, mode: 'geometry', revision: serial, rig: null, result: null, errorKey: null };
+  notifyModelRigChanged();
+  requestRender();
+  const meshes = [...knownMeshes];
+  // Preview only a rest-pose model. Never reset a pose, edit, or simulation on
+  // the user's behalf, and never acquire a deformation/animation owner.
+  const atRest = meshes
+    .filter((mesh) => mesh.visible)
+    .every((mesh) => {
+      const rest = mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions;
+      const positions = mesh.geometry?.attributes?.position?.array;
+      return (
+        rest && positions && rest.length === positions.length && rest.every((v, i) => Math.abs(v - positions[i]) < 1e-6)
+      );
+    });
+  if (
+    !atRest ||
+    humanoidRigEditSession.snapshot()?.editing ||
+    physicsRuntime.getState().enabled ||
+    modelSkinningRig?.poseRotationByJointId?.size
+  ) {
+    geometryRigPreview.busy = false;
+    geometryRigPreview.errorKey = 'weightRig.geometryRequiresRest';
+    notifyModelRigChanged();
+    return false;
+  }
+  const visibility = meshes.map((mesh) => mesh.visible);
+  const isCurrent = () =>
+    serial === geometryPreviewSerial &&
+    meshes.every((mesh, i) => knownMeshes.has(mesh) && mesh.visible === visibility[i]);
+  try {
+    const result = await fitHumanoidGeometryRig({ meshes, orientationState: getModelTransformState(), isCurrent });
+    if (!isCurrent()) {
+      if (serial === geometryPreviewSerial) clearGeometryRigPreview();
+      return false;
+    }
+    geometryRigPreview.result = result;
+    geometryRigPreview.rig = result?.available ? result : null;
+    geometryRigPreview.errorKey = result?.available ? null : 'weightRig.geometryInsufficient';
+  } catch {
+    if (!isCurrent()) return false;
+    geometryRigPreview.errorKey = 'weightRig.geometryInsufficient';
+  }
+  geometryRigPreview.busy = false;
+  notifyModelRigChanged();
+  requestRender();
+  return !!geometryRigPreview.rig;
+}
+
+function setGeometryRigPreviewMode(mode) {
+  if (mode === 'current') return clearGeometryRigPreview();
+  if (!geometryRigPreview?.result?.available || !['geometry', 'proportional'].includes(mode)) return false;
+  geometryRigPreview.mode = mode;
+  geometryRigPreview.rig = mode === 'geometry' ? geometryRigPreview.result : geometryRigPreview.result.proportionalRig;
+  geometryRigPreview.revision += 1;
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+function clearGeometryRigPreview() {
+  geometryPreviewSerial += 1;
+  geometryRigPreview = null;
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
 export const weightRigApi = Object.freeze({
   getModelWeightState: weightModelSession.getState,
   activateWeightRig: weightRigActivationSession.activate,
@@ -293,6 +368,9 @@ export const weightRigApi = Object.freeze({
   setWeightPickerViewMode: weightPickingSession.setViewMode,
 
   getModelRigState: rigModelSession.getState,
+  previewGeometryRig,
+  setGeometryRigPreviewMode,
+  clearGeometryRigPreview,
   beginRigJointPicking,
   cancelRigJointPicking: rigModelSession.cancelJointPicking,
   clearRigJointSelection: rigModelSession.clearJointSelection,
@@ -535,6 +613,14 @@ function ikSnapshot() {
 
 function rigSnapshot() {
   return {
+    geometryRigPreview: geometryRigPreview && {
+      busy: geometryRigPreview.busy,
+      mode: geometryRigPreview.mode,
+      revision: geometryRigPreview.revision,
+      rig: geometryRigPreview.rig,
+      errorKey: geometryRigPreview.errorKey,
+      diagnostics: geometryRigPreview.result?.diagnostics,
+    },
     loaded: modelRigState.loaded,
     loading: modelRigState.loading,
     error: modelRigState.error,
@@ -723,6 +809,8 @@ export function disposeWeightRigMesh(mesh, { preserveRegistration = false } = {}
 }
 
 export function destroyWeightRigModel() {
+  geometryRigPreview = null;
+  geometryPreviewSerial += 1;
   physicsRuntime.destroy();
   for (const mesh of knownMeshes) skinningRuntime.disposeMesh(mesh);
   knownMeshes.clear();
