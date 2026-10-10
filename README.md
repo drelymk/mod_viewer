@@ -3,25 +3,39 @@
 3DMigoto Mod Viewer is a desktop app for opening character mods and inspecting
 them in 3D without launching the game. Select a mod folder and the app reads its
 active INIs, buffers, and texture bindings, reconstructs the model, and presents
-it in an interactive viewport.
+it in an interactive WebGPU viewport. Preview variants and supported animations,
+inspect textures and skin weights, pose the model, and stage INI or mesh edits.
 
-It supports mods made for ZZMI, GIMI, and WWMI.
+It supports Zenless Zone Zero (ZZMI), Genshin Impact (GIMI), and Wuthering Waves
+(WWMI) mods, with conservative support for Honkai: Star Rail (SRMI) mods.
 
 ![3DMigoto Mod Viewer](https://github.com/drelymk/mod_viewer/blob/main/media/3DMigoto%20Mod%20Viewer.jpg)
 
 ## What the app can do
+
+The instructions below use the English UI labels. Use `Language` in the top
+toolbar to switch between English, Simplified Chinese, Japanese, Korean,
+Spanish, and Russian. Optional actions can be hidden in portable builds; source
+runs enable all features. See [Compatibility and limitations](#compatibility-and-limitations).
 
 ### 1. Open the app and load a mod
 
 1. Launch the portable executable, or follow [Running the app](#running-the-app)
    to start from source.
 2. Click `Open Mod` and select the mod folder containing its INI, buffers, and
-   textures. To preview a disabled mod, first enable the `Open disabled mod`
-   checkbox beside the button.
-3. For quick access later, open `Mod Library` on the left and click `+` or
+   textures. If available in your build, enable the `Open disabled mod`
+   checkbox beside the button to preview a disabled mod.
+3. To preview a compressed mod, open the arrow beside `Open Mod` and choose
+   `Open Archive...`. Select a ZIP, 7z, or RAR file without manually extracting
+   it. ZIP works directly; 7z and RAR require an installed 7-Zip. Archive previews
+   are read-only: controls and diagnostics work, but changes cannot be exported
+   or saved back to the archive. Extract the mod to a folder to edit it.
+4. For quick access later, open `Mod Library` on the left and click `+` or
    `Add Mod Folder`. Enter a name, use `Browse` to choose a folder, and click
    `Add`. Expand folders with their arrows, then click a mod folder's name to
-   load it. The folder's menu lets you edit or remove its library entry.
+   load it. Supported archives also appear in the library. The folder's menu
+   includes `Open Folder` to open its location in the file manager; registered
+   library roots also have `Edit` and `Remove` actions.
 
 ### 2. Explore the model and its appearance
 
@@ -30,18 +44,27 @@ It supports mods made for ZZMI, GIMI, and WWMI.
    toolbar to adjust the view, or click a navigation-gizmo axis to snap to it.
 2. Open `Meshes` on the left. Expand components and use their checkboxes or
    individual mesh visibility buttons to isolate parts. `Reset mesh visibility`
-   restores visibility from the current controls. Double-click a mesh name to
-   rename it in the viewer.
-3. Select a component or mesh and open `Inspector` on the right. Choose a
+   restores visibility from the current controls. Right-click a mesh row or the
+   mesh in the viewport and choose `Rename` to change its viewer name; press
+   Enter to confirm or Escape to cancel.
+3. Click a mesh row or the model to select a mesh. Ctrl-click toggles meshes in
+   the selection, and Ctrl-drag in the viewport adds meshes crossing the selection
+   rectangle. Double-click a mesh row or the model to frame it and open
+   `Inspector`. Press `F` to frame the selection or `H` to toggle its visibility.
+4. Select a component or mesh and open `Inspector` on the right. Choose a
    material kind under `Material`, or leave it on `Auto`. For a selected mesh,
    choose a texture, `Automatic`, or `None` under `Texture`. Use
    `Manage textures` to add existing texture files and assign their maps for
-   preview; these choices are saved separately from the INI bindings.
-4. Hover over the viewport tools to find wireframe, outlines, smooth shading,
+   preview; these choices are saved separately from the INI bindings. Texture
+   choices include discovered DDS, PNG, JPG, and JPEG files, including images
+   not declared by the INIs.
+5. Hover over the viewport tools to find wireframe, outlines, smooth shading,
    toon shadows, glossy materials, grid, and emission bloom. Use the texture
    display menu to compare maps, and adjust key light or ambient occlusion.
    The top-bar environment and panel-opacity controls change lighting presets
-   and panel transparency.
+   and panel transparency. Language, environment, panel opacity, and viewport
+   tool preferences persist between launches; camera and model orientation do
+   not.
 
 ### 3. Preview existing controls and save combinations
 
@@ -49,6 +72,13 @@ It supports mods made for ZZMI, GIMI, and WWMI.
    preview the mod's existing variants.
 2. If `Menu Toggle` is available, click its buttons or images to cycle menu
    options. Move any supported shape sliders to preview shape changes.
+
+Recognized animations play automatically while their mod conditions are active.
+The viewer supports baked mesh animation, supported GIMI compute-driven pose
+and shape animation, and narrow WWMI sparse shape animation patterns. Toggle
+and menu changes can activate or stop these tracks. Custom shader programs may
+remain static; this is a reconstruction of supported patterns, so playback can
+differ from the game.
 
 #### Create and manage PRESENT combinations
 
@@ -90,6 +120,21 @@ entries, then check every combination. Conflicting entries need review in
 Use a Key Toggle when you want one keyboard shortcut to switch between mesh
 variants.
 
+#### Create a show/hide toggle from selected meshes
+
+1. Select one or more authored meshes from the same INI. Ctrl-click adds meshes
+   to the selection.
+2. Right-click a selected mesh in the viewport or `Meshes` panel and choose
+   `Create Toggle` when offered.
+3. Review the prefilled name, variable name, and suggested unused key. The INI
+   and two values (`0,1`) are fixed for this shortcut. Click `Save` to create a
+   toggle already assigned to the selected draws.
+4. Cycle it in `Controls` to check the show/hide result, then use `Export` to
+   write the change. The action is available only for supported editable draws;
+   finish any active recording or mesh edit first.
+
+#### Create a custom cycle and record its mesh visibility
+
 1. Open the `Controls` tab on the right.
 2. In `Key Toggle`, click the `+` button.
 3. Fill in the form:
@@ -119,12 +164,44 @@ Use the pencil or delete button beside an existing toggle to edit or remove
 it. Its record button lets you update which meshes appear at each position.
 All these INI changes stay in memory until `Export`.
 
-### 5. Inspect weights and preview secondary motion
+### 5. Separate and merge mesh parts (run from source only)
+
+Mesh editing is optional and may be hidden in portable builds. It requires a
+writable mod folder and supported authored draws; archive previews and original
+Assets cannot be edited this way.
+
+1. Right-click a mesh row or the mesh in the viewport and choose a separation
+   method:
+
+   - `Separate by Loose Parts`: adjust `Connection tolerance` from 0 to 0.01
+     and click `Separate`. Zero uses exact vertex positions; a small tolerance
+     can connect nearby positions into the same part.
+   - `Separate by Selection`: click faces to select them, Ctrl-click to add or
+     remove faces, or Ctrl-drag to add faces crossing a rectangle. Leave at
+     least one face unselected, then right-click and choose `Apply Selection`.
+     `Cancel Selection` or Escape exits face selection without splitting.
+
+2. Inspect the resulting part rows and use their visibility buttons to isolate
+   them. To combine parts, Ctrl-select two or more parts from the same original
+   mesh, right-click one, and choose `Merge Meshes`. Parts from different source
+   meshes cannot be merged.
+3. When the layout is ready, right-click its component header in `Meshes` and
+   choose `Apply Mesh Changes`. This stages the new draw ranges and index-buffer
+   layout in memory, then reloads the preview. To abandon an unapplied layout,
+   use `Cancel Mesh Changes` from that component menu.
+4. Check the reloaded parts, then click `Export` to write the staged buffer and
+   INI changes with backups. Apply or cancel the current layout before starting
+   another mesh edit; unapplied layouts block Export.
+
+Separation, merging, and `Apply Selection` affect the preview first.
+`Apply Mesh Changes` stages an edit, and `Export` writes it to disk.
+
+### 6. Inspect weights and preview secondary motion
 
 Weight tools preview authored skinning; they do not rewrite the mod's weight
 buffers.
 
-1. Open the `Weight` tab on the right. The first time it opens, the app loads
+1. Open the `Weight/Rig` tab on the right. The first time it opens, the app loads
    the model's weight data.
 2. Click `Select bones` to open the bone list. Search by bone ID, optionally
    enable `Selected bones only`, and check the IDs you want. IDs are grouped
@@ -135,14 +212,45 @@ buffers.
 4. Turn on `Show Weight Heatmap` to see the selected bones' influence on the
    model.
 5. With one or more bones selected, hold the right mouse button and drag the
-   model to test the secondary motion. Under `Character physics`, adjust
-   `Frequency (Hz)`, `Damping`, the response sliders, and optional `Gravity`
-   or `Joint limits`. Use `Reset` to restart the physics preview.
+   model to test the secondary motion. Enable optional `Gravity`, then open
+   `Advanced Settings` under `WEIGHT` to adjust `Frequency`, `Damping`, the
+   response sliders, and `Joint limits`. Use `Reset physics` to restart the
+   motion without resetting a manual pose.
 6. Click `Save` beside the bone selection to store the selected IDs in the
    mod's `.mod_viewer.json`. Use `Load` to restore them or `Clear` to disable
    the selection. These choices are viewer metadata, not INI edits.
 
-### 6. Adjust a mesh color and save it to a texture
+### 7. Pose the model and save Rig presets
+
+The `RIG` section in `Weight/Rig` provides an inferred rig and a fitted humanoid
+control rig when usable skin weights and geometry are available. These are
+viewer posing tools; they do not recover the game's original named skeleton or
+write poses into the mod's buffers.
+
+1. Choose a `Selected Joint`, or use `Pick from model` in the `RIG` section to
+   select a joint from the viewport. Drag the rotation gizmo to pose it.
+   `Reset Joint` clears that joint's manual rotation; `Reset Pose` clears the
+   manual pose.
+2. Open `Advanced Settings` under `RIG` to set `Rotation snap`, change the
+   root with `Set selected as root`, or enable `Enable Inverse Kinematics`.
+   With IK enabled, select a supported hand or foot control point and drag its
+   move gizmo to pose the limb.
+3. If the fitted control points need correction, choose `Main Rig` > `Edit Rig`.
+   Click a point, move it, and click again to release it. Use `Save` to store
+   the corrections or `Cancel` to abandon them. `Reset Rig` removes saved
+   corrections after confirmation.
+4. Use `Save` under `Pose presets` to name and store a pose. Choose it from
+   the preset list to apply it later; `Rename` and `Delete` manage saved entries.
+   Presets are saved in `.mod_viewer.json` and are not applied automatically
+   when loading the mod. They store pose and root choices, not live physics
+   motion.
+
+Rig posing and weight-driven physics can work together. Geometry-changing shape
+controls rebuild the affected rig, and Rig/Physics temporarily takes control
+of affected geometry from animation playback. Inferred joints and connections
+can differ from the authored skeleton, so some poses may stretch unexpectedly.
+
+### 8. Adjust a mesh color and save it to a texture
 
 Color sliders first create a viewer preview. `Save to Texture...` is the step
 that modifies the source texture file.
@@ -159,13 +267,14 @@ that modifies the source texture file.
    on the slider. The model updates immediately, and the preview settings are
    saved in `.mod_viewer.json`. Use `Reset Color` to remove the preview
    adjustment.
-4. To bake the preview into a supported DDS texture, click `Save to Texture...`.
+4. To bake the preview into a BC7 UNORM or BC7 sRGB DDS texture owned by the
+   mod, click `Save to Texture...`. Other texture formats remain preview-only.
 5. Review the texture and the list of meshes with color changes. Saving
    includes the changed meshes sharing that texture. Click `Save` to write
    the texture immediately, create a backup, and reload the result. The color
    controls reset after saving; `Reset Color` does not undo a texture save.
 
-### 7. Preview original Assets or fill missing parts (optional)
+### 9. Preview original Assets or fill missing parts (optional)
 
 1. Open `Assets` on the left and click `Add Asset Folder` or `+`. Choose its
    type (`ZZMI`, `GIMI`, or `WWMI`), browse to the extracted Asset folder, and
@@ -176,7 +285,11 @@ that modifies the source texture file.
    `Load missing parts` in the `Meshes` header to preview original components
    the mod does not replace. Click it again to remove them from the preview.
 
-### 8. Check the INIs and export your edits
+Direct Asset previews and missing-part fills leave the original files untouched.
+Filled parts last only for the current session and are removed on reload or
+when switching models. Automatic filling requires a unique matching Asset.
+
+### 10. Check the INIs and export your edits
 
 #### Read and act on Diagnostics
 
@@ -221,14 +334,29 @@ prevents the model from loading.
    when the mod has several. Edit its text and click `Save` to apply it to
    the same in-memory session used by toggles and recording.
 2. Recheck `Diagnostics` and preview the affected controls or meshes.
-3. Click `Export` to write pending INI changes and
-   create timestamped `.BAK` backups. If a file fails to export, its changes
-   remain pending. Export before switching mods or closing the app to keep
-   your staged work; switching mods warns before discarding it.
+3. Click `Export` to write pending INI changes and applied mesh-buffer changes
+   with timestamped `.BAK` backups. A failed buffer write blocks its dependent
+   INIs, and failed changes remain pending for retry. Export before switching
+   mods or closing the app to keep your staged work; switching mods warns before
+   discarding it.
 
 In a narrow window, `View INI`, `Diagnostics`, and `Export` may be under the
-toolbar's `...` menu. Bone selections and color previews are saved in
-`.mod_viewer.json`; texture color saves use their own confirmation in step 6.
+toolbar's `...` menu. Texture color saves use their own confirmation in step 8.
+
+### What is saved, and when
+
+| Change | Save behavior |
+| --- | --- |
+| INI text, Toggle CRUD/Record, and PRESENT combinations | Staged in memory until `Export`. |
+| Mesh separation and merging | Preview-only until `Apply Mesh Changes`, then staged until `Export`. |
+| Mesh names, material/texture choices, and color previews | Saved as viewer metadata in `.mod_viewer.json` for writable mod folders. |
+| Bone selections, Rig corrections, and pose presets | Saved to `.mod_viewer.json` by their own `Save` actions. |
+| `Save to Texture...` | Writes the supported source DDS immediately after confirmation, with a backup. |
+| Language, environment, panel opacity, and viewport tool preferences | Saved globally as app settings. |
+
+Archive previews cannot persist edits or metadata. Direct Asset texture choices,
+manual visibility, camera/model orientation, and live physics motion are
+session-only.
 
 ## Compatibility and limitations
 
@@ -236,6 +364,13 @@ The app requires a WebGPU-capable system. Texture preview works best with mods
 that use SlotFix/Stable Texture conventions. Unusual or highly customized mod
 layouts may not be reconstructed completely; diagnostics remain available for
 examining those folders.
+Original Asset indexing currently offers ZZMI, GIMI, and WWMI types.
+
+Animation, shapes, Rig tools, mesh editing, and texture saving depend on the
+recognized source layout. Texture saving supports mod-owned BC7 DDS files only
+and may reject overlapping color edits or a file also used as an auxiliary map.
+Password-protected archives are not supported; 7z and RAR previews require
+7-Zip to be installed.
 
 ## Running the app
 
@@ -259,23 +394,11 @@ python src/build.py
 
 Build output is written to `dist/`.
 
-## Repository layout
+Before building, `src/features.ini` can hide optional Export, Toggle editing,
+disabled-mod loading, and mesh-editing actions in the portable executable. The
+checked-in settings hide disabled-mod loading and mesh editing. These are
+build-time UI settings; running from source enables every feature.
 
-- `src/`: application, browser assets, tests, build scripts, and runtime dependencies.
-- `tools/`: development scripts, dependencies, and JavaScript tool configuration.
-- `docs/`: [quality checks](docs/QUALITY.md) and [third-party notices](docs/THIRD_PARTY_NOTICES.md).
-- `media/`: README images.
-
-Python tool settings live in `pyproject.toml`; npm scripts, the lockfile, and
-Prettier settings live under `tools/`. Use `npm --prefix tools` for npm commands
-from the repository root. [context.md](context.md) records the project contracts.
-
-Use `build_mesh_result` for binary geometry: mesh fields contain offset/length
-references into `result.geometry`. Pass that blob to `publish_payload_geometry`.
-`load_mod` publishes its blob when none is supplied; MCP inspection returns an
-absolute localhost URL for fetching the binary data.
-The flat `build_mesh_payload` API has been removed; scripts should use
-`build_mesh_result` and publish its binary blob as above.
 
 ## License
 
