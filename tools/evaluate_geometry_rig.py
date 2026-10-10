@@ -138,9 +138,19 @@ def add_comparison(result, guides, baseline=None):
         ):
             a, b, c = [controls[side + key] for key in keys]
             lengths = [dist(a, b) / scale, dist(b, c) / scale]
+            direction = [last - first for first, last in zip(a, c)]
+            offset = [joint - first for first, joint in zip(a, b)]
+            squared = sum(value * value for value in direction)
+            along = (
+                sum(x * y for x, y in zip(direction, offset)) / squared
+                if squared
+                else 0
+            )
+            aligned = [first + along * delta for first, delta in zip(a, direction)]
             plausibility[side + limb.title()] = {
                 "segmentLengthsHeight": lengths,
                 "segmentRatio": lengths[0] / lengths[1] if lengths[1] else None,
+                "jointLineDistanceHeight": dist(b, aligned) / scale,
             }
     for suffix in ("Shoulder", "Elbow", "Hand", "Hip", "Knee", "Foot"):
         a = result["views"]["front"]["geometry"]["positions"]["left" + suffix]

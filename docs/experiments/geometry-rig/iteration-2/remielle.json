@@ -1,0 +1,1667 @@
+{
+  "schemaVersion": 2,
+  "frame": {
+    "up": [
+      0,
+      2.220446049250313e-16,
+      1
+    ],
+    "right": [
+      1,
+      0,
+      0
+    ],
+    "forward": [
+      0,
+      -1,
+      2.220446049250313e-16
+    ],
+    "lowHeight": -0.028839303180575367,
+    "highHeight": 1.605006456375122,
+    "height": 1.6338457595556974,
+    "sideCenter": -0.0014440976665355265,
+    "depthCenter": -0.10501838102936717,
+    "bodyDepth": -0.045116151496767995,
+    "bodyDepthN": 0.036663332008089175
+  },
+  "diagnostics": {
+    "visibleMeshCount": 10,
+    "sourceCount": 10,
+    "inputTriangleCount": 45285,
+    "displayedTriangleCount": 45285,
+    "visitedTriangleCount": 45285,
+    "uniqueTriangleCount": 45279,
+    "sampledPointCount": 15706,
+    "scanCapped": false,
+    "areaSampleCount": 16000,
+    "characterHeight": 1.6338457693474298,
+    "fitRuntimeMs": 416.20000000298023,
+    "joints": {
+      "chest": {
+        "position": [
+          -0.0007038900434089999,
+          0.04839086117235316,
+          1.0989575148932635
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.55,
+        "support": 294,
+        "deviationHeight": 0.002004680535627557
+      },
+      "pelvis": {
+        "position": [
+          -0.00016932009128277532,
+          0.04740231496337458,
+          0.8783883373532444
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.55,
+        "support": 295,
+        "deviationHeight": 0.00144644834894315
+      },
+      "neck": {
+        "position": [
+          -0.0015907132766185678,
+          0.0517195753841143,
+          1.3185087552392476
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.55,
+        "support": 803,
+        "deviationHeight": 0.004120262580008003
+      },
+      "head": {
+        "position": [
+          -0.0029568599383327193,
+          0.05434557285373147,
+          1.4622665744042025
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.55,
+        "support": 412,
+        "deviationHeight": 0.005805571022134844
+      },
+      "leftShoulder": {
+        "position": [
+          -0.13387211352279815,
+          0.042976690256715085,
+          1.2720927171652996
+        ],
+        "geometryDetected": true,
+        "confidence": "high",
+        "evidence": 0.9,
+        "support": 17,
+        "deviationHeight": 0.0393073022355388
+      },
+      "leftElbow": {
+        "position": [
+          -0.27146564356140684,
+          0.04182291291243979,
+          1.09680388440668
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.4875,
+        "support": 13,
+        "deviationHeight": 0.016208671220579143
+      },
+      "leftHand": {
+        "position": [
+          -0.4107322170881567,
+          0.04753343053391282,
+          0.9483139684456795
+        ],
+        "geometryDetected": true,
+        "confidence": "high",
+        "evidence": 0.9,
+        "support": 30,
+        "deviationHeight": 0.043651629350120756
+      },
+      "rightShoulder": {
+        "position": [
+          0.1326081313500586,
+          0.04110453098487989,
+          1.2668652933253306
+        ],
+        "geometryDetected": true,
+        "confidence": "high",
+        "evidence": 0.9,
+        "support": 19,
+        "deviationHeight": 0.04188358387882958
+      },
+      "rightElbow": {
+        "position": [
+          0.2670541890218477,
+          0.041111163424965395,
+          1.1014852109585742
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.525,
+        "support": 14,
+        "deviationHeight": 0.014590343349560117
+      },
+      "rightHand": {
+        "position": [
+          0.411673926704036,
+          0.045231316139681906,
+          0.9467792888561171
+        ],
+        "geometryDetected": true,
+        "confidence": "high",
+        "evidence": 0.9,
+        "support": 27,
+        "deviationHeight": 0.04296043978871279
+      },
+      "leftHip": {
+        "position": [
+          -0.11757895350456238,
+          0.04511615149676819,
+          0.8812319960258901
+        ],
+        "geometryDetected": false,
+        "confidence": "low",
+        "evidence": 0,
+        "support": 0,
+        "deviationHeight": 0
+      },
+      "leftKnee": {
+        "position": [
+          -0.11239741323250187,
+          0.0402774224371496,
+          0.5438919817158021
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.3,
+        "support": 106,
+        "deviationHeight": 0.004364548864035322
+      },
+      "leftFoot": {
+        "position": [
+          -0.11661282936676941,
+          0.04190562640753741,
+          0.037881960250670095
+        ],
+        "geometryDetected": true,
+        "confidence": "high",
+        "evidence": 0.75,
+        "support": 61,
+        "deviationHeight": 0.002364555267333055
+      },
+      "rightHip": {
+        "position": [
+          0.11604278534650803,
+          0.04511615149676819,
+          0.8755446786805986
+        ],
+        "geometryDetected": false,
+        "confidence": "low",
+        "evidence": 0,
+        "support": 0,
+        "deviationHeight": 6.795151938169708e-17
+      },
+      "rightKnee": {
+        "position": [
+          0.11093959505778461,
+          0.04036187458205722,
+          0.5397402400537394
+        ],
+        "geometryDetected": true,
+        "confidence": "medium",
+        "evidence": 0.3,
+        "support": 120,
+        "deviationHeight": 0.0042946402267086915
+      },
+      "rightFoot": {
+        "position": [
+          0.1154099999431668,
+          0.04167843607384234,
+          0.0360335821134504
+        ],
+        "geometryDetected": true,
+        "confidence": "high",
+        "evidence": 0.75,
+        "support": 52,
+        "deviationHeight": 0.0024407536179479852
+      }
+    },
+    "regions": {
+      "torso": "medium",
+      "head": "medium",
+      "left_arm": "medium",
+      "right_arm": "medium",
+      "left_leg": "low",
+      "right_leg": "low"
+    },
+    "failureReasons": []
+  },
+  "confidenceDefinition": "Available anatomical surface evidence, not verified joint accuracy",
+  "controls": {
+    "geometry": {
+      "chest": [
+        -0.0007038900434089999,
+        0.04839086117235316,
+        1.0989575148932635
+      ],
+      "pelvis": [
+        -0.00016932009128277532,
+        0.04740231496337458,
+        0.8783883373532444
+      ],
+      "neck": [
+        -0.0015907132766185678,
+        0.0517195753841143,
+        1.3185087552392476
+      ],
+      "head": [
+        -0.0029568599383327193,
+        0.05434557285373147,
+        1.4622665744042025
+      ],
+      "leftShoulder": [
+        -0.13387211352279815,
+        0.042976690256715085,
+        1.2720927171652996
+      ],
+      "leftElbow": [
+        -0.27146564356140684,
+        0.04182291291243979,
+        1.09680388440668
+      ],
+      "leftHand": [
+        -0.4107322170881567,
+        0.04753343053391282,
+        0.9483139684456795
+      ],
+      "rightShoulder": [
+        0.1326081313500586,
+        0.04110453098487989,
+        1.2668652933253306
+      ],
+      "rightElbow": [
+        0.2670541890218477,
+        0.041111163424965395,
+        1.1014852109585742
+      ],
+      "rightHand": [
+        0.411673926704036,
+        0.045231316139681906,
+        0.9467792888561171
+      ],
+      "leftHip": [
+        -0.11757895350456238,
+        0.04511615149676819,
+        0.8812319960258901
+      ],
+      "leftKnee": [
+        -0.11239741323250187,
+        0.0402774224371496,
+        0.5438919817158021
+      ],
+      "leftFoot": [
+        -0.11661282936676941,
+        0.04190562640753741,
+        0.037881960250670095
+      ],
+      "rightHip": [
+        0.11604278534650803,
+        0.04511615149676819,
+        0.8755446786805986
+      ],
+      "rightKnee": [
+        0.11093959505778461,
+        0.04036187458205722,
+        0.5397402400537394
+      ],
+      "rightFoot": [
+        0.1154099999431668,
+        0.04167843607384234,
+        0.0360335821134504
+      ]
+    },
+    "proportional": {
+      "chest": [
+        -0.0007680840790271759,
+        0.04511615149676824,
+        1.0989575148932635
+      ],
+      "pelvis": [
+        -0.0007680840790271759,
+        0.04511615149676819,
+        0.8783883373532444
+      ],
+      "neck": [
+        -0.0007680840790271759,
+        0.045116151496768286,
+        1.3195266924332827
+      ],
+      "head": [
+        -0.0007680840790271759,
+        0.04511615149676832,
+        1.4622665744042025
+      ],
+      "leftShoulder": [
+        -0.09062960085459054,
+        0.045116151496768286,
+        1.3195266924332827
+      ],
+      "leftElbow": [
+        -0.2452569465262727,
+        0.04511615149676824,
+        1.0986959569244459
+      ],
+      "leftHand": [
+        -0.39988429219795485,
+        0.04511615149676819,
+        0.8778652214156091
+      ],
+      "rightShoulder": [
+        0.08909343269653619,
+        0.045116151496768286,
+        1.3195266924332827
+      ],
+      "rightElbow": [
+        0.24372077836821834,
+        0.04511615149676824,
+        1.0986959569244459
+      ],
+      "rightHand": [
+        0.3983481240399005,
+        0.04511615149676819,
+        0.8778652214156091
+      ],
+      "leftHip": [
+        -0.11757895350456238,
+        0.04511615149676819,
+        0.8812319960258901
+      ],
+      "leftKnee": [
+        -0.11757895350456238,
+        0.04511615149676811,
+        0.5446597695574165
+      ],
+      "leftFoot": [
+        -0.11757895350456238,
+        0.045116151496768,
+        0.03980142985470594
+      ],
+      "rightHip": [
+        0.11604278534650803,
+        0.04511615149676819,
+        0.8755446786805987
+      ],
+      "rightKnee": [
+        0.11604278534650803,
+        0.04511615149676811,
+        0.5389724522121251
+      ],
+      "rightFoot": [
+        0.11604278534650803,
+        0.045116151496768,
+        0.03411411250941456
+      ]
+    }
+  },
+  "inactiveMeshes": 2,
+  "displayedTriangles": 45285,
+  "weightRequests": 0,
+  "views": {
+    "front": {
+      "proportional": {
+        "positions": {
+          "chest": {
+            "horizontalN": 0.0004137560620728278,
+            "height01": 0.6902712887540426,
+            "pixels": [
+              626.2644159834184,
+              287.40475453061964
+            ]
+          },
+          "pelvis": {
+            "horizontalN": 0.0004137560620728278,
+            "height01": 0.5552712887540426,
+            "pixels": [
+              626.2644159834184,
+              373.67819203061964
+            ]
+          },
+          "neck": {
+            "horizontalN": 0.0004137560620728278,
+            "height01": 0.8252712887540425,
+            "pixels": [
+              626.2644159834184,
+              201.13131703061967
+            ]
+          },
+          "head": {
+            "horizontalN": 0.0004137560620728278,
+            "height01": 0.9126356443770214,
+            "pixels": [
+              626.2644159834184,
+              145.3000335153098
+            ]
+          },
+          "leftShoulder": {
+            "horizontalN": -0.05458624393792717,
+            "height01": 0.8252712887540425,
+            "pixels": [
+              591.1159784834184,
+              201.13131703061967
+            ]
+          },
+          "leftElbow": {
+            "horizontalN": -0.14922635593584982,
+            "height01": 0.690111201446359,
+            "pixels": [
+              530.635031909746,
+              287.5070603256862
+            ]
+          },
+          "leftHand": {
+            "horizontalN": -0.2438664679337722,
+            "height01": 0.5549511141386753,
+            "pixels": [
+              470.1540853360737,
+              373.88280362075284
+            ]
+          },
+          "rightShoulder": {
+            "horizontalN": 0.05541375606207283,
+            "height01": 0.8252712887540425,
+            "pixels": [
+              661.4128534834184,
+              201.13131703061967
+            ]
+          },
+          "rightElbow": {
+            "horizontalN": 0.15005386805999546,
+            "height01": 0.690111201446359,
+            "pixels": [
+              721.8938000570909,
+              287.5070603256862
+            ]
+          },
+          "rightHand": {
+            "horizontalN": 0.24469398005791812,
+            "height01": 0.5549511141386753,
+            "pixels": [
+              782.3747466307633,
+              373.88280362075284
+            ]
+          },
+          "leftHip": {
+            "horizontalN": -0.07108067279839696,
+            "height01": 0.5570117582298265,
+            "pixels": [
+              580.5750075397744,
+              372.5659232562515
+            ]
+          },
+          "leftKnee": {
+            "horizontalN": -0.07108067279839696,
+            "height01": 0.35101175822982655,
+            "pixels": [
+              580.5750075397744,
+              504.21279825625146
+            ]
+          },
+          "leftFoot": {
+            "horizontalN": -0.07108067279839696,
+            "height01": 0.04201175822982669,
+            "pixels": [
+              580.5750075397744,
+              701.6831107562514
+            ]
+          },
+          "rightHip": {
+            "horizontalN": 0.07190818492254279,
+            "height01": 0.5535308192782588,
+            "pixels": [
+              671.9538244270625,
+              374.7904608049878
+            ]
+          },
+          "rightKnee": {
+            "horizontalN": 0.07190818492254279,
+            "height01": 0.3475308192782588,
+            "pixels": [
+              671.9538244270625,
+              506.43733580498775
+            ]
+          },
+          "rightFoot": {
+            "horizontalN": 0.07190818492254279,
+            "height01": 0.038530819278258896,
+            "pixels": [
+              671.9538244270625,
+              703.9076483049877
+            ]
+          }
+        },
+        "heightPixels": 639.0625,
+        "bottom": [
+          626,
+          728.53125
+        ],
+        "top": [
+          626,
+          89.46875000000004
+        ],
+        "viewport": {
+          "width": 1280,
+          "height": 818
+        },
+        "projection": "orthographic",
+        "horizontalAxis": "right"
+      },
+      "geometry": {
+        "positions": {
+          "chest": {
+            "horizontalN": 0.00045304620634914006,
+            "height01": 0.6902712887540426,
+            "pixels": [
+              626.289524841245,
+              287.40475453061964
+            ]
+          },
+          "pelvis": {
+            "horizontalN": 0.0007802312842548969,
+            "height01": 0.5552712887540426,
+            "pixels": [
+              626.4986165550941,
+              373.67819203061964
+            ]
+          },
+          "neck": {
+            "horizontalN": -8.97365061699727e-05,
+            "height01": 0.8246482573644015,
+            "pixels": [
+              625.9426527640258,
+              201.52947302806214
+            ]
+          },
+          "head": {
+            "horizontalN": -0.0009258905027905925,
+            "height01": 0.9126356443770214,
+            "pixels": [
+              625.4082981005604,
+              145.3000335153098
+            ]
+          },
+          "leftShoulder": {
+            "horizontalN": -0.08105294828581282,
+            "height01": 0.7962391876572524,
+            "pixels": [
+              574.2021002360977,
+              219.68464413778716
+            ]
+          },
+          "leftElbow": {
+            "horizontalN": -0.1652674643953539,
+            "height01": 0.6889531530157161,
+            "pixels": [
+              520.3837610348442,
+              288.2471256508939
+            ]
+          },
+          "leftHand": {
+            "horizontalN": -0.25050597158750265,
+            "height01": 0.5980694725382025,
+            "pixels": [
+              465.9110275323616,
+              346.32747770605494
+            ]
+          },
+          "rightShoulder": {
+            "horizontalN": 0.0820470526257311,
+            "height01": 0.7930397278493752,
+            "pixels": [
+              678.4331945686313,
+              221.7292989212587
+            ]
+          },
+          "rightElbow": {
+            "horizontalN": 0.16433514921347142,
+            "height01": 0.69181837240654,
+            "pixels": [
+              731.0204312942341,
+              286.41607138394556
+            ]
+          },
+          "rightHand": {
+            "horizontalN": 0.2528500759355114,
+            "height01": 0.597130167477987,
+            "pixels": [
+              787.5870016525378,
+              346.92775234609894
+            ]
+          },
+          "leftHip": {
+            "horizontalN": -0.07108067279839696,
+            "height01": 0.5570117582298265,
+            "pixels": [
+              580.5750075397744,
+              372.5659232562515
+            ]
+          },
+          "leftKnee": {
+            "horizontalN": -0.06790929616032951,
+            "height01": 0.35054183147136486,
+            "pixels": [
+              582.6017154225394,
+              504.5131108253309
+            ]
+          },
+          "leftFoot": {
+            "horizontalN": -0.0704893537389678,
+            "height01": 0.0408369413336725,
+            "pixels": [
+              580.9528973761909,
+              702.4338921789499
+            ]
+          },
+          "rightHip": {
+            "horizontalN": 0.07190818492254279,
+            "height01": 0.5535308192782586,
+            "pixels": [
+              671.9538244270625,
+              374.79046080498784
+            ]
+          },
+          "rightKnee": {
+            "horizontalN": 0.06878476261729949,
+            "height01": 0.3480007460367205,
+            "pixels": [
+              669.957762360118,
+              506.1370232359083
+            ]
+          },
+          "rightFoot": {
+            "horizontalN": 0.0715208867950174,
+            "height01": 0.03970563617441291,
+            "pixels": [
+              671.7063167174408,
+              703.1568668822893
+            ]
+          }
+        },
+        "heightPixels": 639.0625,
+        "bottom": [
+          626,
+          728.53125
+        ],
+        "top": [
+          626,
+          89.46875000000004
+        ],
+        "viewport": {
+          "width": 1280,
+          "height": 818
+        },
+        "projection": "orthographic",
+        "horizontalAxis": "right"
+      },
+      "iteration1": {
+        "positions": {
+          "chest": {
+            "horizontalN": 0.00045304620634914006,
+            "height01": 0.6765212886716381,
+            "pixels": [
+              626.289524841245,
+              296.1918639582813
+            ]
+          },
+          "pelvis": {
+            "horizontalN": 0.0007802312842548969,
+            "height01": 0.5459212886980076,
+            "pixels": [
+              626.4986165550941,
+              379.65342644142953
+            ]
+          },
+          "neck": {
+            "horizontalN": -0.0006832824033195245,
+            "height01": 0.8500712889026704,
+            "pixels": [
+              625.5633398391286,
+              185.28256693563716
+            ]
+          },
+          "head": {
+            "horizontalN": -0.0009258905027905925,
+            "height01": 0.9126356443770214,
+            "pixels": [
+              625.4082981005604,
+              145.3000335153098
+            ]
+          },
+          "leftShoulder": {
+            "horizontalN": -0.08105294828581282,
+            "height01": 0.7962391876572524,
+            "pixels": [
+              574.2021002360977,
+              219.68464413778716
+            ]
+          },
+          "leftElbow": {
+            "horizontalN": -0.1652674643953539,
+            "height01": 0.6889531530157161,
+            "pixels": [
+              520.3837610348442,
+              288.2471256508939
+            ]
+          },
+          "leftHand": {
+            "horizontalN": -0.2640059716684089,
+            "height01": 0.5780576182120168,
+            "pixels": [
+              457.28368373065746,
+              359.11630336138296
+            ]
+          },
+          "rightShoulder": {
+            "horizontalN": 0.0820470526257311,
+            "height01": 0.7930397278493752,
+            "pixels": [
+              678.4331945686313,
+              221.7292989212587
+            ]
+          },
+          "rightElbow": {
+            "horizontalN": 0.16433514921347142,
+            "height01": 0.69181837240654,
+            "pixels": [
+              731.0204312942341,
+              286.41607138394556
+            ]
+          },
+          "rightHand": {
+            "horizontalN": 0.2663500760164178,
+            "height01": 0.5767648918830466,
+            "pixels": [
+              796.214345454242,
+              359.94243628099053
+            ]
+          },
+          "leftHip": {
+            "horizontalN": -0.07108067279839696,
+            "height01": 0.5570117582298265,
+            "pixels": [
+              580.5750075397744,
+              372.5659232562515
+            ]
+          },
+          "leftKnee": {
+            "horizontalN": -0.06450678237619428,
+            "height01": 0.35155358359584227,
+            "pixels": [
+              584.7761343877133,
+              503.86653798328206
+            ]
+          },
+          "leftFoot": {
+            "horizontalN": -0.0704893537389678,
+            "height01": 0.0408369413336725,
+            "pixels": [
+              580.9528973761909,
+              702.4338921789499
+            ]
+          },
+          "rightHip": {
+            "horizontalN": 0.07190818492254279,
+            "height01": 0.5535308192782586,
+            "pixels": [
+              671.9538244270625,
+              374.79046080498784
+            ]
+          },
+          "rightKnee": {
+            "horizontalN": 0.06532632585918269,
+            "height01": 0.35218899394340714,
+            "pixels": [
+              667.7476051193839,
+              503.4604710580414
+            ]
+          },
+          "rightFoot": {
+            "horizontalN": 0.0715208867950174,
+            "height01": 0.03970563617441291,
+            "pixels": [
+              671.7063167174408,
+              703.1568668822893
+            ]
+          }
+        },
+        "heightPixels": 639.0625,
+        "bottom": [
+          626,
+          728.53125
+        ],
+        "top": [
+          626,
+          89.46875000000004
+        ],
+        "viewport": {
+          "width": 1280,
+          "height": 818
+        },
+        "projection": "orthographic",
+        "horizontalAxis": "right"
+      },
+      "comparison": {
+        "chest": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.8686449707505199,
+          "proportionalErrorPercent": 0.9394054922838888,
+          "iteration1ErrorPercent": 3.399472533441993,
+          "changePercent": -2.5308275626914734,
+          "assessment": "improved"
+        },
+        "head": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.12684232536191525,
+          "proportionalErrorPercent": 0.2261838224561717,
+          "iteration1ErrorPercent": 0.12684232536191525,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.9960798397407091,
+          "proportionalErrorPercent": 4.637086466779776,
+          "iteration1ErrorPercent": 0.9960798397407091,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.0443699832302384,
+          "proportionalErrorPercent": 2.3631322456915136,
+          "iteration1ErrorPercent": 1.0443699832302384,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "leftHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.3895970452532298,
+          "proportionalErrorPercent": 3.1077410553139453,
+          "iteration1ErrorPercent": 1.232683673167283,
+          "changePercent": 0.1569133720859468,
+          "assessment": "stable"
+        },
+        "rightShoulder": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.7049123107920149,
+          "proportionalErrorPercent": 4.592609137064243,
+          "iteration1ErrorPercent": 0.7049123107920149,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightElbow": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.340179833280589,
+          "proportionalErrorPercent": 2.288696504780023,
+          "iteration1ErrorPercent": 1.340179833280589,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHand": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.2823204633627694,
+          "proportionalErrorPercent": 3.1313777500541145,
+          "iteration1ErrorPercent": 1.3684285354711976,
+          "changePercent": -0.08610807210842819,
+          "assessment": "stable"
+        },
+        "leftHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.2868647712186636,
+          "proportionalErrorPercent": 0.3735627411386085,
+          "iteration1ErrorPercent": 0.2868647712186636,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 0.1721108498213564,
+          "proportionalErrorPercent": 0.1499195939968971,
+          "iteration1ErrorPercent": 0.1721108498213564,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        }
+      }
+    },
+    "side": {
+      "proportional": {
+        "positions": {
+          "chest": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.6902712887540426,
+            "pixels": [
+              649.43016061142,
+              287.40475453061964
+            ]
+          },
+          "pelvis": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5552712887540426,
+            "pixels": [
+              649.43016061142,
+              373.67819203061964
+            ]
+          },
+          "neck": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.8252712887540425,
+            "pixels": [
+              649.43016061142,
+              201.13131703061967
+            ]
+          },
+          "head": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.9126356443770214,
+            "pixels": [
+              649.43016061142,
+              145.3000335153098
+            ]
+          },
+          "leftShoulder": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.8252712887540425,
+            "pixels": [
+              649.43016061142,
+              201.13131703061967
+            ]
+          },
+          "leftElbow": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.690111201446359,
+            "pixels": [
+              649.43016061142,
+              287.5070603256862
+            ]
+          },
+          "leftHand": {
+            "horizontalN": 0.03666333200808905,
+            "height01": 0.5549511141386753,
+            "pixels": [
+              649.4301606114199,
+              373.88280362075284
+            ]
+          },
+          "rightShoulder": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.8252712887540425,
+            "pixels": [
+              649.43016061142,
+              201.13131703061967
+            ]
+          },
+          "rightElbow": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.690111201446359,
+            "pixels": [
+              649.43016061142,
+              287.5070603256862
+            ]
+          },
+          "rightHand": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5549511141386753,
+            "pixels": [
+              649.43016061142,
+              373.88280362075284
+            ]
+          },
+          "leftHip": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5570117582298265,
+            "pixels": [
+              649.43016061142,
+              372.5659232562515
+            ]
+          },
+          "leftKnee": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.35101175822982655,
+            "pixels": [
+              649.43016061142,
+              504.21279825625146
+            ]
+          },
+          "leftFoot": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.04201175822982669,
+            "pixels": [
+              649.43016061142,
+              701.6831107562514
+            ]
+          },
+          "rightHip": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5535308192782588,
+            "pixels": [
+              649.43016061142,
+              374.7904608049878
+            ]
+          },
+          "rightKnee": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.3475308192782588,
+            "pixels": [
+              649.43016061142,
+              506.43733580498775
+            ]
+          },
+          "rightFoot": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.038530819278258896,
+            "pixels": [
+              649.43016061142,
+              703.9076483049877
+            ]
+          }
+        },
+        "heightPixels": 639.0625,
+        "bottom": [
+          626.0000000000005,
+          728.53125
+        ],
+        "top": [
+          626.0000000000005,
+          89.46875000000004
+        ],
+        "viewport": {
+          "width": 1280,
+          "height": 818
+        },
+        "projection": "orthographic",
+        "horizontalAxis": "forward"
+      },
+      "geometry": {
+        "positions": {
+          "chest": {
+            "horizontalN": 0.03465903652521839,
+            "height01": 0.6902712887540426,
+            "pixels": [
+              648.1492905293978,
+              287.40475453061964
+            ]
+          },
+          "pelvis": {
+            "horizontalN": 0.03526407907785669,
+            "height01": 0.5552712887540426,
+            "pixels": [
+              648.5359505356932,
+              373.67819203061964
+            ]
+          },
+          "neck": {
+            "horizontalN": 0.03262168741053445,
+            "height01": 0.8246482573644015,
+            "pixels": [
+              646.8472971107951,
+              201.52947302806214
+            ]
+          },
+          "head": {
+            "horizontalN": 0.03101443810058057,
+            "height01": 0.9126356443770214,
+            "pixels": [
+              645.8201643486527,
+              145.3000335153098
+            ]
+          },
+          "leftShoulder": {
+            "horizontalN": 0.037972795418291974,
+            "height01": 0.7962391876572524,
+            "pixels": [
+              650.2669895720027,
+              219.68464413778716
+            ]
+          },
+          "leftElbow": {
+            "horizontalN": 0.038678968162890126,
+            "height01": 0.6889531530157161,
+            "pixels": [
+              650.7182780915974,
+              288.2471256508939
+            ]
+          },
+          "leftHand": {
+            "horizontalN": 0.03518382941550553,
+            "height01": 0.5980694725382025,
+            "pixels": [
+              648.484665985847,
+              346.32747770605494
+            ]
+          },
+          "rightShoulder": {
+            "horizontalN": 0.039118655889444756,
+            "height01": 0.7930397278493752,
+            "pixels": [
+              650.9992660293487,
+              221.7292989212587
+            ]
+          },
+          "rightElbow": {
+            "horizontalN": 0.03911459648539938,
+            "height01": 0.69181837240654,
+            "pixels": [
+              650.996671816451,
+              286.41607138394556
+            ]
+          },
+          "rightHand": {
+            "horizontalN": 0.03659284515690396,
+            "height01": 0.597130167477987,
+            "pixels": [
+              649.3851151080844,
+              346.92775234609894
+            ]
+          },
+          "leftHip": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5570117582298265,
+            "pixels": [
+              649.43016061142,
+              372.5659232562515
+            ]
+          },
+          "leftKnee": {
+            "horizontalN": 0.03962489005683332,
+            "height01": 0.35054183147136486,
+            "pixels": [
+              651.3227813019455,
+              504.5131108253309
+            ]
+          },
+          "leftFoot": {
+            "horizontalN": 0.038628343130132727,
+            "height01": 0.0408369413336725,
+            "pixels": [
+              650.6859255316009,
+              702.4338921789499
+            ]
+          },
+          "rightHip": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5535308192782586,
+            "pixels": [
+              649.43016061142,
+              374.79046080498784
+            ]
+          },
+          "rightKnee": {
+            "horizontalN": 0.0395732008784553,
+            "height01": 0.3480007460367205,
+            "pixels": [
+              651.2897486863883,
+              506.1370232359083
+            ]
+          },
+          "rightFoot": {
+            "horizontalN": 0.03876739562781572,
+            "height01": 0.03970563617441291,
+            "pixels": [
+              650.7747887684014,
+              703.1568668822893
+            ]
+          }
+        },
+        "heightPixels": 639.0625,
+        "bottom": [
+          626.0000000000005,
+          728.53125
+        ],
+        "top": [
+          626.0000000000005,
+          89.46875000000004
+        ],
+        "viewport": {
+          "width": 1280,
+          "height": 818
+        },
+        "projection": "orthographic",
+        "horizontalAxis": "forward"
+      },
+      "iteration1": {
+        "positions": {
+          "chest": {
+            "horizontalN": 0.03465903652521839,
+            "height01": 0.6765212886716381,
+            "pixels": [
+              648.1492905293978,
+              296.1918639582813
+            ]
+          },
+          "pelvis": {
+            "horizontalN": 0.03526407907785669,
+            "height01": 0.5459212886980076,
+            "pixels": [
+              648.5359505356932,
+              379.65342644142953
+            ]
+          },
+          "neck": {
+            "horizontalN": 0.02526537882985183,
+            "height01": 0.8500712889026704,
+            "pixels": [
+              642.1461561584526,
+              185.28256693563716
+            ]
+          },
+          "head": {
+            "horizontalN": 0.03101443810058057,
+            "height01": 0.9126356443770214,
+            "pixels": [
+              645.8201643486527,
+              145.3000335153098
+            ]
+          },
+          "leftShoulder": {
+            "horizontalN": 0.037972795418291974,
+            "height01": 0.7962391876572524,
+            "pixels": [
+              650.2669895720027,
+              219.68464413778716
+            ]
+          },
+          "leftElbow": {
+            "horizontalN": 0.038678968162890126,
+            "height01": 0.6889531530157161,
+            "pixels": [
+              650.7182780915974,
+              288.2471256508939
+            ]
+          },
+          "leftHand": {
+            "horizontalN": 0.03323161241399468,
+            "height01": 0.5780576182120168,
+            "pixels": [
+              647.2370773083189,
+              359.11630336138296
+            ]
+          },
+          "rightShoulder": {
+            "horizontalN": 0.039118655889444756,
+            "height01": 0.7930397278493752,
+            "pixels": [
+              650.9992660293487,
+              221.7292989212587
+            ]
+          },
+          "rightElbow": {
+            "horizontalN": 0.03911459648539938,
+            "height01": 0.69181837240654,
+            "pixels": [
+              650.996671816451,
+              286.41607138394556
+            ]
+          },
+          "rightHand": {
+            "horizontalN": 0.03357569522391838,
+            "height01": 0.5767648918830466,
+            "pixels": [
+              647.4569677290358,
+              359.94243628099053
+            ]
+          },
+          "leftHip": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5570117582298265,
+            "pixels": [
+              649.43016061142,
+              372.5659232562515
+            ]
+          },
+          "leftKnee": {
+            "horizontalN": 0.04315973939669272,
+            "height01": 0.35155358359584227,
+            "pixels": [
+              653.5817709581994,
+              503.86653798328206
+            ]
+          },
+          "leftFoot": {
+            "horizontalN": 0.038628343130132727,
+            "height01": 0.0408369413336725,
+            "pixels": [
+              650.6859255316009,
+              702.4338921789499
+            ]
+          },
+          "rightHip": {
+            "horizontalN": 0.03666333200808923,
+            "height01": 0.5535308192782586,
+            "pixels": [
+              649.43016061142,
+              374.79046080498784
+            ]
+          },
+          "rightKnee": {
+            "horizontalN": 0.04317313954307114,
+            "height01": 0.35218899394340714,
+            "pixels": [
+              653.5903344892444,
+              503.4604710580414
+            ]
+          },
+          "rightFoot": {
+            "horizontalN": 0.03876739562781572,
+            "height01": 0.03970563617441291,
+            "pixels": [
+              650.7747887684014,
+              703.1568668822893
+            ]
+          }
+        },
+        "heightPixels": 639.0625,
+        "bottom": [
+          626.0000000000005,
+          728.53125
+        ],
+        "top": [
+          626.0000000000005,
+          89.46875000000004
+        ],
+        "viewport": {
+          "width": 1280,
+          "height": 818
+        },
+        "projection": "orthographic",
+        "horizontalAxis": "forward"
+      },
+      "comparison": {
+        "chest": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "pelvis": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "neck": {
+          "referenceKind": "estimated",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain",
+          "outsideSurfaceEnvelope": false
+        },
+        "head": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHand": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightShoulder": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightElbow": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightHand": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "leftFoot": {
+          "referenceKind": "visible",
+          "geometryErrorPercent": 1.3027367061075668,
+          "proportionalErrorPercent": 1.4982872144231825,
+          "iteration1ErrorPercent": 1.3027367061075668,
+          "changePercent": 0.0,
+          "assessment": "stable"
+        },
+        "rightHip": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightKnee": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        },
+        "rightFoot": {
+          "referenceKind": "indeterminate",
+          "geometryErrorPercent": null,
+          "proportionalErrorPercent": null,
+          "iteration1ErrorPercent": null,
+          "changePercent": null,
+          "assessment": "uncertain"
+        }
+      }
+    }
+  },
+  "summary": {
+    "improved": [
+      "front:neck"
+    ],
+    "regressed": [],
+    "stable": [
+      "front:head",
+      "front:leftShoulder",
+      "front:leftElbow",
+      "front:leftHand",
+      "front:rightShoulder",
+      "front:rightElbow",
+      "front:rightHand",
+      "front:leftFoot",
+      "front:rightFoot",
+      "side:leftFoot"
+    ],
+    "uncertain": [
+      "front:chest",
+      "front:pelvis",
+      "front:leftHip",
+      "front:leftKnee",
+      "front:rightHip",
+      "front:rightKnee",
+      "side:chest",
+      "side:pelvis",
+      "side:neck",
+      "side:head",
+      "side:leftShoulder",
+      "side:leftElbow",
+      "side:leftHand",
+      "side:rightShoulder",
+      "side:rightElbow",
+      "side:rightHand",
+      "side:leftHip",
+      "side:leftKnee",
+      "side:rightHip",
+      "side:rightKnee",
+      "side:rightFoot"
+    ]
+  },
+  "plausibility": {
+    "leftArm": {
+      "segmentLengthsHeight": [
+        0.13639236280897205,
+        0.12465016037032699
+      ],
+      "segmentRatio": 1.094201262186585,
+      "jointLineDistanceHeight": 0.006114605336188809
+    },
+    "leftLeg": {
+      "segmentLengthsHeight": [
+        0.2065155178467252,
+        0.3097172400401475
+      ],
+      "segmentRatio": 0.6667872857834951,
+      "jointLineDistanceHeight": 0.0036532501445536913
+    },
+    "rightArm": {
+      "segmentLengthsHeight": [
+        0.13044958280575994,
+        0.1296422293659073
+      ],
+      "segmentRatio": 1.0062275498022633,
+      "jointLineDistanceHeight": 0.004667482765631635
+    },
+    "rightLeg": {
+      "segmentLengthsHeight": [
+        0.20557440042576236,
+        0.3083083042388416
+      ],
+      "segmentRatio": 0.6667819114807466,
+      "jointLineDistanceHeight": 0.003617945080363731
+    },
+    "ShoulderSymmetry": {
+      "sideSumHeight": 0.0009941043399182836,
+      "heightDifference": 0.0031994598078772807,
+      "depthDifference": -0.001145860471152782
+    },
+    "ElbowSymmetry": {
+      "sideSumHeight": -0.0009323151818824704,
+      "heightDifference": -0.0028652193908238477,
+      "depthDifference": -0.0004356283225092558
+    },
+    "HandSymmetry": {
+      "sideSumHeight": 0.0023441043480087465,
+      "heightDifference": 0.0009393050602155562,
+      "depthDifference": -0.0014090157413984283
+    },
+    "HipSymmetry": {
+      "sideSumHeight": 0.000827512124145835,
+      "heightDifference": 0.003480938951567869,
+      "depthDifference": 0.0
+    },
+    "KneeSymmetry": {
+      "sideSumHeight": 0.000875466456969981,
+      "heightDifference": 0.0025410854346443745,
+      "depthDifference": 5.168917837802128e-05
+    },
+    "FootSymmetry": {
+      "sideSumHeight": 0.0010315330560496105,
+      "heightDifference": 0.0011313051592595907,
+      "depthDifference": -0.00013905249768299266
+    }
+  }
+}
