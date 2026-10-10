@@ -54,12 +54,20 @@ def test_geometry_rig_orientation_accuracy_and_topology_without_weights(module_p
         baseOrientation:rotation.clone().invert().toArray()}});
       const error=(rig,key)=>new THREE.Vector3(...rig.controls[key].position)
         .distanceTo(new THREE.Vector3(...reference[key]))/rig.frame.height;
+      const neck=first.controls.neck.position;
+      const elbow=new THREE.Vector3(...first.controls.leftElbow.position);
+      const extremity=new THREE.Vector3(...reference.leftHand);
+      const wrist=new THREE.Vector3(...first.controls.leftHand.position);
+      const forearm=extremity.clone().sub(elbow);
+      const along=wrist.clone().sub(elbow).dot(forearm)/forearm.lengthSq();
       return {available:fit.available, keys:Object.keys(fit.controls), paths:fit.paths,
         maxOrientationError:Math.max(...Object.keys(first.controls).map(key=>
           new THREE.Vector3(...fit.controls[key].position).applyQuaternion(rotation.clone().invert())
             .distanceTo(new THREE.Vector3(...first.controls[key].position)))),
         armError:['leftShoulder','leftElbow','leftHand'].map(key=>[error(first.proportionalRig,key),error(first,key)]),
-        joints:first.diagnostics.joints};
+        joints:first.diagnostics.joints,neckError:Math.abs(neck[1]-1.665)/first.frame.height,
+        neckBetween:neck[1]>first.controls.leftShoulder.position[1] && neck[1]<first.controls.head.position[1],
+        wristAlong:along,wristAlignment:wrist.distanceTo(elbow.clone().addScaledVector(forearm,along))/first.frame.height};
     }""", z_up)
     assert result['available']
     assert len(result['keys']) == 16
@@ -68,6 +76,34 @@ def test_geometry_rig_orientation_accuracy_and_topology_without_weights(module_p
     assert sum(row[1] for row in result['armError']) < sum(row[0] for row in result['armError'])
     assert all(item['support'] >= 0 and item['deviationHeight'] >= 0
                for item in result['joints'].values())
+    assert result['neckBetween'] and result['neckError'] < 0.025
+    assert 0 < result['wristAlong'] < 1.05
+    assert result['wristAlignment'] < 0.025
+
+
+def test_geometry_rig_obscured_legs_preserve_anatomical_estimates(module_page):
+    prepare_surface(module_page)
+    result = module_page.evaluate("""async () => {
+      const {THREE,api,meshes,axes}=fixture;
+      const before=await api.fitHumanoidGeometryRig({meshes,axes});
+      meshes[5].visible=false;meshes[10].visible=false;
+      const geometry=new THREE.CylinderGeometry(0.14,0.5,0.56,32,8);
+      geometry.translate(0,0.96,0);
+      const skirt=new THREE.Mesh(geometry);
+      skirt.userData.humanoidRestPositions=new Float32Array(geometry.attributes.position.array);
+      const after=await api.fitHumanoidGeometryRig({meshes:[...meshes,skirt],axes});
+      const hidden=['leftHip','rightHip','leftKnee','rightKnee'];
+      return {available:after.available,
+        hiddenDeviation:Math.max(...hidden.map(key=>new THREE.Vector3(...after.controls[key].position)
+          .distanceTo(new THREE.Vector3(...after.proportionalRig.controls[key].position))/after.frame.height)),
+        evidence:hidden.map(key=>after.diagnostics.joints[key].geometryDetected),
+        footDisplacement:Math.max(...['leftFoot','rightFoot'].map(key=>new THREE.Vector3(...before.controls[key].position)
+          .distanceTo(new THREE.Vector3(...after.controls[key].position))/after.frame.height))};
+    }""")
+    assert result['available']
+    assert result['hiddenDeviation'] < 0.005
+    assert not any(result['evidence'])
+    assert result['footDisplacement'] < 0.025
 
 
 def test_geometry_rig_sampling_visibility_duplicates_transforms_and_determinism(module_page):

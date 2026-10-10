@@ -335,13 +335,105 @@ function fitArm(points, priorShoulder, side) {
     };
     return score(a) - score(b);
   })[0];
-  // Locate the wrist before the terminal hand surface, using the narrow section.
-  const wrist =
-    path
-      .map((item, i) => ({ ...item, fraction: cumulative[i] / best.length }))
-      .filter((item) => item.fraction >= 0.82 && item.fraction <= 0.96)
-      .sort((a, b) => a.width[1] + a.width[2] - b.width[1] - b.width[2])[0] || path.at(-2);
-  return { Shoulder: { ...path[1], center: mix(path[0].center, path[1].center, 0.3) }, Elbow: elbow, Hand: wrist };
+  // The distal forearm establishes a direction in three dimensions. A hand
+  // expansion can refine its endpoint, but a narrow sleeve cannot select it.
+  const forearm = path.filter((_, i) => cumulative[i] / best.length >= 0.6 && cumulative[i] / best.length <= 0.8);
+  const shoulder = { ...path[1], center: mix(path[0].center, path[1].center, 0.3) };
+  if (forearm.length < 2) return { Shoulder: shoulder, Elbow: elbow };
+  const direction = forearm.at(-1).center.map((v, i) => v - forearm[0].center[i]);
+  const lengthSquared = dot(direction, direction);
+  if (lengthSquared < 1e-12) return { Shoulder: shoulder, Elbow: elbow };
+  const wrist = path
+    .map((item, i) => ({ ...item, i, fraction: cumulative[i] / best.length }))
+    .filter((item) => item.fraction >= 0.8 && item.fraction <= 0.94)
+    .sort((a, b) => {
+      const score = (item) => {
+        const delta = item.center.map((v, i) => v - forearm[0].center[i]);
+        const projected = forearm[0].center.map((v, i) => v + (direction[i] * dot(delta, direction)) / lengthSquared);
+        const later = path.slice(item.i + 1, item.i + 4);
+        const expansion = median(later.map((p) => p.width[1] + p.width[2])) - item.width[1] - item.width[2];
+        return (
+          distance(item.center, projected) * 0.8 +
+          Math.abs(item.fraction - 0.87) * 0.05 -
+          clamp(expansion, 0, 0.015) * 0.2
+        );
+      };
+      return score(a) - score(b);
+    })[0];
+  return { Shoulder: shoulder, Elbow: elbow, Hand: wrist };
+}
+
+function fitLeg(points, hip, knee, foot, side) {
+  const region = points.filter((p) => side * p[0] > 0.012);
+  const path = [];
+  for (let y = foot[1] + 0.045; y <= hip[1] + 0.035; y += 0.022) {
+    const expected = mix(foot, hip, clamp((y - foot[1]) / (hip[1] - foot[1]), 0, 1));
+    expected[1] = y;
+    const slice = section(region, expected, [0.06, 0, 0.075]);
+    const previous = path.at(-1);
+    // Trace a bounded, continuous leg from the foot. Broad cloth, disconnected
+    // panels, and clipped sections cannot establish an internal limb center.
+    if (
+      !slice ||
+      slice.width[0] > 0.085 ||
+      slice.width[2] > 0.12 ||
+      (previous &&
+        (distance(slice.center, previous.center) > 0.035 ||
+          slice.width[0] > previous.width[0] * 1.6 ||
+          slice.width[2] > previous.width[2] * 1.6))
+    )
+      break;
+    path.push(slice);
+  }
+  const candidate = (prior, clearance) => {
+    if ((path.at(-1)?.center[1] ?? 0) < prior[1] + clearance) return null;
+    const near = path.filter((item) => Math.abs(item.center[1] - prior[1]) < 0.025);
+    if (near.length < 2) return null;
+    const center = [0, 1, 2].map((i) => median(near.map((item) => item.center[i])));
+    // The segment relationship sets joint height; taper never identifies it.
+    center[1] = prior[1];
+    const displacement = distance(center, prior);
+    return {
+      center: mix(prior, center, Math.min(1, 0.025 / (displacement || 1))),
+      support: near.reduce((sum, item) => sum + item.support, 0),
+      strength: 0.3,
+    };
+  };
+  return { Hip: candidate(hip, 0.025), Knee: candidate(knee, 0.045) };
+}
+
+function fitNeck(points, priors, targets, evidence) {
+  const shoulders = ['leftShoulder', 'rightShoulder'].map((key) =>
+    mix(priors[key], targets[key] || priors[key], evidence[key]?.strength || 0),
+  );
+  const shoulderHeight = (shoulders[0][1] + shoulders[1][1]) * 0.5;
+  const head = targets.head || priors.head;
+  const torso = targets.chest || priors.chest;
+  const height = clamp(
+    shoulderHeight + (head[1] - shoulderHeight) * 0.25,
+    priors.neck[1] - 0.02,
+    priors.neck[1] + 0.02,
+  );
+  const slices = [];
+  for (let y = shoulderHeight + 0.012; y <= height + 0.012; y += 0.008) {
+    const centerline = mix(torso, head, clamp((y - torso[1]) / (head[1] - torso[1]), 0, 1));
+    centerline[1] = y;
+    const slice = section(points, centerline, [0.07, 0, 0.065]);
+    if (
+      slice &&
+      slice.width[0] > 0.025 &&
+      slice.width[0] < 0.12 &&
+      distance(slice.center, centerline) < 0.025 &&
+      (!slices.length || distance(slice.center, slices.at(-1).center) < 0.02)
+    )
+      slices.push(slice);
+  }
+  if (slices.length < 3) return null;
+  return {
+    center: [median(slices.map((s) => s.center[0])), height, median(slices.map((s) => s.center[2]))],
+    support: slices.reduce((sum, s) => sum + s.support, 0),
+    strength: 0.55,
+  };
 }
 
 /** Fit the existing 16-control topology without changing any active Rig. */
@@ -392,7 +484,7 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
   );
   const evidence = {};
   const targets = {};
-  for (const key of ['pelvis', 'chest', 'neck', 'head']) {
+  for (const key of ['pelvis', 'chest', 'head']) {
     const p = priors[key];
     const slice = section(points, p, [key === 'head' ? 0.09 : 0.13, 0, 0.09]);
     if (slice) {
@@ -413,19 +505,9 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
     })[0];
     if (best) {
       targets[key] = best.center;
+      targets[key][1] = prior[1];
       evidence[key] = { ...best, strength: 0.55 };
     }
-  }
-  // A narrow neck section is stronger evidence than a fixed head/torso ratio.
-  const neckSlices = [];
-  for (let y = priors.neck[1] - 0.025; y < priors.neck[1] + 0.055; y += 0.008) {
-    const slice = section(points, [0, y, targets.neck?.[2] ?? priors.neck[2]], [0.075, 0, 0.075]);
-    if (slice && slice.width[0] > 0.025) neckSlices.push(slice);
-  }
-  const neck = neckSlices.sort((a, b) => a.width[0] + a.width[2] * 0.25 - b.width[0] - b.width[2] * 0.25)[0];
-  if (neck) {
-    targets.neck = neck.center;
-    evidence.neck = { ...neck, strength: 0.8 };
   }
   for (const [prefix, side] of [
     ['left', -1],
@@ -444,39 +526,33 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
         };
       }
     }
-    for (const suffix of ['Hip', 'Knee', 'Foot']) {
-      const key = `${prefix}${suffix}`,
-        prior = priors[key];
-      const sidePoints = points.filter((p) => side * p[0] > 0.012);
-      const slice = section(sidePoints, prior, [suffix === 'Hip' ? 0.075 : 0.06, 0, 0.09]);
-      // A wide cross-section cannot reveal a knee hidden by a skirt. Keep the
-      // anatomical estimate and explicitly report the missing local evidence.
-      if (
-        slice &&
-        slice.width[0] < (suffix === 'Hip' ? 0.12 : 0.09) &&
-        slice.width[2] < 0.14 &&
-        side * slice.center[0] > 0.015
-      ) {
-        targets[key] = slice.center;
-        evidence[key] = { ...slice, strength: suffix === 'Hip' ? 0.35 : suffix === 'Knee' ? 0.55 : 0.75 };
-      }
-      if (suffix === 'Knee' && evidence[key]) {
-        const transitions = [];
-        for (let y = prior[1] - 0.06; y <= prior[1] + 0.025; y += 0.008) {
-          const lower = section(sidePoints, [prior[0], y - 0.022, prior[2]], [0.06, 0, 0.09]);
-          const upper = section(sidePoints, [prior[0], y + 0.022, prior[2]], [0.06, 0, 0.09]);
-          const middle = section(sidePoints, [prior[0], y, prior[2]], [0.06, 0, 0.09]);
-          if (!lower || !upper || !middle || Math.max(lower.width[0], upper.width[0]) >= 0.095) continue;
-          const taper = upper.width[0] - lower.width[0];
-          if (taper > 0.006) transitions.push({ ...middle, score: taper - Math.abs(y - prior[1]) * 0.07 });
-        }
-        const knee = transitions.sort((a, b) => b.score - a.score)[0];
-        if (knee) {
-          targets[key] = knee.center;
-          evidence[key] = { ...knee, strength: 0.65 };
-        }
-      }
+    const footKey = `${prefix}Foot`;
+    const foot = section(
+      points.filter((p) => side * p[0] > 0.012),
+      priors[footKey],
+      [0.06, 0, 0.09],
+    );
+    if (foot && foot.width[0] < 0.09 && foot.width[2] < 0.14 && side * foot.center[0] > 0.015) {
+      targets[footKey] = foot.center;
+      evidence[footKey] = { ...foot, strength: 0.75 };
     }
+    const leg = fitLeg(
+      points,
+      priors[`${prefix}Hip`],
+      priors[`${prefix}Knee`],
+      targets[footKey] || priors[footKey],
+      side,
+    );
+    for (const suffix of ['Hip', 'Knee']) {
+      if (!leg[suffix]) continue;
+      targets[prefix + suffix] = leg[suffix].center;
+      evidence[prefix + suffix] = leg[suffix];
+    }
+  }
+  const neck = fitNeck(points, priors, targets, evidence);
+  if (neck) {
+    targets.neck = neck.center;
+    evidence.neck = neck;
   }
   // Symmetry is a soft constraint. A well supported side may guide an obscured
   // side, while reliable differences retain their geometric contribution.
@@ -496,7 +572,7 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
         : priors[key];
       const mirrorSupport = points.filter((p) => distance(p, mirrored) < 0.04).length;
       const symmetry = remote > local ? 0.3 * remote : mirrorSupport >= 10 ? 0.45 : 0.06 * remote;
-      targets[key] = mix(own, mirrored, symmetry);
+      if (local || remote) targets[key] = mix(own, mirrored, symmetry);
     }
   }
   const joints = {};
