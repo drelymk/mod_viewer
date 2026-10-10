@@ -1,5 +1,9 @@
 # Geometry rig experiment
 
+The [frozen Iteration 1 baseline](iteration-1/README.md) adds consistent front
+and side orthographic captures before anatomical changes for Iteration 2.
+It preserves the original perspective guides and measurements separately.
+
 The geometry preview improves shoulder placement on all three evaluated models,
 but it is not ready to replace the existing Rig. Wrist, knee, hip, and neck
 placement still have consequential failures. The preview remains temporary;
@@ -77,11 +81,17 @@ have identical samples. This is a bounded surface experiment, not mesh repair.
 
 ## Workload and performance
 
-| Model | Displayed / inactive meshes | Displayed triangles | Examined triangles | Surface samples | Observed fit time |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Remielle | 10 / 2 | 45,285 | 45,285 | 15,706 | about 0.4 s |
-| Odette | 35 / 10 | 75,131 | 75,131 | 15,554 | about 0.6–0.9 s |
-| Chisa | 19 / 32 | 145,749 | 90,000 | 15,619 | about 0.8 s |
+| Model | Displayed / inactive meshes | Displayed triangles | Deduplicated draw triangles | Examined triangles | Unique examined triangles | Area samples / retained points | Observed fit time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Remielle | 10 / 2 | 45,285 | 45,285 | 45,285 | 45,279 | 16,000 / 15,706 | about 0.4 s |
+| Odette | 35 / 10 | 75,131 | 72,346 | 72,346 | 72,165 | 16,000 / 15,554 | about 0.6–0.9 s |
+| Chisa | 19 / 32 | 145,749 | 145,749 | 90,000 | 90,000 | 16,000 / 15,619 | about 0.8 s |
+
+Displayed counts include repeated draws; identical draws are removed before
+the capped scan. Triangle-corner deduplication follows the scan, and spatial
+occupancy reduces the 16,000 area samples to the retained fitting points.
+The former report incorrectly used Odette's displayed count as its examined
+count; these distinct counters now match the recorded diagnostics.
 
 Timing is illustrative and depends on browser/runtime load. The algorithm caps
 triangle analysis at 90,000 and area samples at 16,000, yielding during the

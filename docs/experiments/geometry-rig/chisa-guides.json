@@ -1,82 +1,208 @@
 {
   "chest": {
-    "sideN": 0.001127,
-    "height01": 0.711893,
-    "visible": false
+    "front": {
+      "kind": "estimated",
+      "note": "Anatomical estimate; no accuracy error",
+      "horizontalN": 0.001127,
+      "height01": 0.711893
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "pelvis": {
-    "sideN": 0.001127,
-    "height01": 0.56181,
-    "visible": false
+    "front": {
+      "kind": "estimated",
+      "note": "Anatomical estimate; no accuracy error",
+      "horizontalN": 0.001127,
+      "height01": 0.56181
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "neck": {
-    "sideN": 0.001127,
-    "height01": 0.838048,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": -0.001565,
+      "height01": 0.837995,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "estimated",
+      "note": "Broad neck silhouette envelope, not a measured internal joint",
+      "surfaceEnvelope": {
+        "horizontalN": [
+          -0.015,
+          0.055
+        ],
+        "height01": [
+          0.817995,
+          0.8579950000000001
+        ]
+      }
+    }
   },
   "head": {
-    "sideN": 0.001127,
-    "height01": 0.916352,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": -0.001565,
+      "height01": 0.91467,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "leftShoulder": {
-    "sideN": -0.077177,
-    "height01": 0.805422,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": -0.079804,
+      "height01": 0.806699,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "rightShoulder": {
-    "sideN": 0.07943,
-    "height01": 0.805422,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": 0.079804,
+      "height01": 0.806699,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "leftElbow": {
-    "sideN": -0.153306,
-    "height01": 0.694492,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": -0.159609,
+      "height01": 0.698729,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "rightElbow": {
-    "sideN": 0.157734,
-    "height01": 0.694492,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": 0.164303,
+      "height01": 0.698729,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "leftHand": {
-    "sideN": -0.218559,
-    "height01": 0.605313,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": -0.215941,
+      "height01": 0.598582,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "visible",
+      "horizontalN": 0.048509,
+      "height01": 0.606406,
+      "uncertaintyHeight": 0.015
+    }
   },
   "rightHand": {
-    "sideN": 0.220812,
-    "height01": 0.603137,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": 0.212812,
+      "height01": 0.598582,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "leftHip": {
-    "sideN": -0.03585,
-    "height01": 0.56181,
-    "visible": false
+    "front": {
+      "kind": "estimated",
+      "note": "Anatomical estimate; no accuracy error",
+      "horizontalN": -0.03585,
+      "height01": 0.56181
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "rightHip": {
-    "sideN": 0.040278,
-    "height01": 0.56181,
-    "visible": false
+    "front": {
+      "kind": "estimated",
+      "note": "Anatomical estimate; no accuracy error",
+      "horizontalN": 0.040278,
+      "height01": 0.56181
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "leftKnee": {
-    "sideN": -0.046726,
-    "height01": 0.342125,
-    "visible": false
+    "front": {
+      "kind": "estimated",
+      "note": "Anatomical estimate; no accuracy error",
+      "horizontalN": -0.046726,
+      "height01": 0.342125
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "rightKnee": {
-    "sideN": 0.048979,
-    "height01": 0.342125,
-    "visible": false
+    "front": {
+      "kind": "estimated",
+      "note": "Anatomical estimate; no accuracy error",
+      "horizontalN": 0.048979,
+      "height01": 0.342125
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   },
   "leftFoot": {
-    "sideN": -0.046726,
-    "height01": 0.031085,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": -0.050073,
+      "height01": 0.038386,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "visible",
+      "horizontalN": -0.006259,
+      "height01": 0.043081,
+      "uncertaintyHeight": 0.015
+    }
   },
   "rightFoot": {
-    "sideN": 0.048979,
-    "height01": 0.031085,
-    "visible": true
+    "front": {
+      "kind": "visible",
+      "horizontalN": 0.046944,
+      "height01": 0.038386,
+      "uncertaintyHeight": 0.01
+    },
+    "side": {
+      "kind": "indeterminate",
+      "note": "Occlusion or clothing prevents a reliable joint-depth guide"
+    }
   }
 }

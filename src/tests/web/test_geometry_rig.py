@@ -152,16 +152,28 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
     assert page.evaluate("beforeRest.every((rest,i)=>JSON.stringify(rest)===JSON.stringify([...fixture.meshes[i].geometry.attributes.position.array]))")
     result = page.evaluate("""async () => {
       fixture.meshes[0].geometry.attributes.position.array[0]+=0.1;
+      fixture.meshes[0].userData.animationState={lastFrame:1};
       const rejected=await previewApi.previewGeometryRig();
       const reason=previewApi.getModelRigState().geometryRigPreview.errorKey;
       fixture.meshes[0].geometry.attributes.position.array[0]=beforeRest[0][0];
+      delete fixture.meshes[0].userData.animationState;
       previewApi.clearGeometryRigPreview();
       const pending=previewApi.previewGeometryRig();previewApi.clearGeometryRigPreview();await pending;
       const visibilityPending=previewApi.previewGeometryRig();hiddenPreviewGroup.visible=true;await visibilityPending;
       hiddenPreviewGroup.visible=false;
+      const geometryPending=previewApi.previewGeometryRig();fixture.meshes[0].geometry.attributes.position.needsUpdate=true;
+      await geometryPending;
+      const transformPending=previewApi.previewGeometryRig();fixture.meshes[0].position.x+=0.1;await transformPending;
+      fixture.meshes[0].position.x-=0.1;
       return {rejected,reason,preview:previewApi.getModelRigState().geometryRigPreview};
     }""")
     assert result == {'rejected': False, 'reason': 'weightRig.geometryRequiresRest', 'preview': None}
+    page.evaluate('previewApi.previewGeometryRig()')
+    page.evaluate("window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed',{detail:{meshes:fixture.meshes}}))")
+    assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
+    page.evaluate('previewApi.previewGeometryRig()')
+    page.evaluate("window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed',{detail:{meshes:fixture.meshes}}))")
+    assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
     page.evaluate('previewApi.previewGeometryRig()')
     open_model(page, 'fixture-02')
     wait_loaded(page)

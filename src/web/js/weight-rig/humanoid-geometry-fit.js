@@ -43,6 +43,7 @@ export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {
     [semanticFrame.right, semanticFrame.up, semanticFrame.forward].map((axis) => Math.round(dot(v, axis) * 1e5));
   const identities = new Map();
   const surfaceSignatures = new Map();
+  let displayedTriangleCount = 0;
   for (const mesh of active) {
     const geometry = mesh.geometry;
     const rest = mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions;
@@ -58,6 +59,7 @@ export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {
     const end = Math.min(count, start + (geometry.drawRange?.count ?? Infinity));
     const triangles = Math.floor((end - start) / 3);
     if (triangles <= 0) continue;
+    displayedTriangleCount += triangles;
     const signature = `${start}:${end}:${matrix.elements.join(',')}`;
     let entries = identities.get(rest);
     if (!entries) identities.set(rest, (entries = []));
@@ -175,6 +177,7 @@ export async function sampleHumanoidRestSurface({ meshes = [], axes, options = {
       visibleMeshCount: active.length,
       sourceCount: sources.length,
       inputTriangleCount: total,
+      displayedTriangleCount,
       visitedTriangleCount: visited,
       uniqueTriangleCount: surface.length,
       sampledPointCount: points.length,
@@ -544,6 +547,7 @@ export async function fitHumanoidGeometryRig({ meshes = [], axes, orientationSta
   rebuildHumanoidControlPaths(rig);
   rig.diagnostics = {
     ...sampled.diagnostics,
+    areaSampleCount: sampled.points.length,
     sampledPointCount: points.length,
     characterHeight: height,
     fitRuntimeMs: clock() - started,
