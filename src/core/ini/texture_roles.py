@@ -75,8 +75,8 @@ _SEMANTIC_TEXTURE_RESOURCE_RE = re.compile(
     r"(?P<namespace>GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
     r"(?P<role>Diffuse|NormalMap|LightMap|MaterialMap|GlowMap)$", re.I)
 _LEGACY_TEXTURE_RESOURCE_RE = re.compile(
-    r"^Resource.+(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
-    r"(?P<variant>\.\d+)?$", re.I)
+    r"^Resource.*?(?P<role>Diffuse|NormalMap|LightMap|MaterialMap)"
+    r"(?P<variant>.*)$", re.I)
 
 
 def _collect_texture_override_index(sections, toggle_vars, alias_map,
@@ -159,7 +159,7 @@ def _semantic_texture_role(resource):
 
 
 def _legacy_texture_evidence(resource, sections, section_lookup):
-    """Return ``(role, family)`` for a declared legacy texture resource."""
+    """Use the first role marker as the family; any suffix is a variant label."""
     match = _LEGACY_TEXTURE_RESOURCE_RE.fullmatch(str(resource or ""))
     if not match or _semantic_texture_role(resource):
         return None
