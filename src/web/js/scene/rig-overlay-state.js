@@ -2,6 +2,15 @@
 
 let transformInteractionActive = false;
 let jointPickingActive = false;
+let previewInteractionActive = false;
+
+export function isRigPreviewInteractionActive() {
+  return previewInteractionActive;
+}
+
+export function setRigPreviewInteractionActive(value) {
+  previewInteractionActive = !!value;
+}
 
 export function isRigTransformInteractionActive() {
   return transformInteractionActive;

@@ -25,7 +25,11 @@ import {
   setLoosePartSelectionCleanup,
   separateSelectedTriangles,
 } from '../mesh/loose-parts.js';
-import { isRigTransformInteractionActive, isRigJointPickingActive } from './rig-overlay-state.js';
+import {
+  isRigTransformInteractionActive,
+  isRigJointPickingActive,
+  isRigPreviewInteractionActive,
+} from './rig-overlay-state.js';
 
 const DRAG_THRESHOLD_PIXELS = 5;
 
@@ -363,6 +367,7 @@ function onPointerDown(event) {
     event.button !== 0 ||
     !event.ctrlKey ||
     event.defaultPrevented ||
+    isRigPreviewInteractionActive() ||
     isRigTransformInteractionActive() ||
     isRigJointPickingActive()
   )
@@ -398,7 +403,7 @@ function onPointerMove(event) {
 
 function onPointerUp(event) {
   if (event.button !== 0) return;
-  if (isRigTransformInteractionActive() || isRigJointPickingActive()) return;
+  if (isRigPreviewInteractionActive() || isRigTransformInteractionActive() || isRigJointPickingActive()) return;
   if (boxGesture && event.pointerId === boxGesture.pointerId) {
     const gesture = boxGesture;
     const rect = gesture.dragging ? updateSelectionBox(event) : null;
@@ -491,6 +496,7 @@ function onViewportDoubleClick(event) {
     event.defaultPrevented ||
     faceSelection ||
     boxGesture ||
+    isRigPreviewInteractionActive() ||
     isRigTransformInteractionActive() ||
     isRigJointPickingActive()
   )
@@ -509,7 +515,7 @@ function onViewportDoubleClick(event) {
 }
 
 function onViewportContextMenu(event) {
-  if (isRigTransformInteractionActive() || isRigJointPickingActive()) return;
+  if (isRigPreviewInteractionActive() || isRigTransformInteractionActive() || isRigJointPickingActive()) return;
   const hit = raycastModelAtClientPoint({
     clientX: event.clientX,
     clientY: event.clientY,
@@ -546,6 +552,7 @@ function onKeyDown(event) {
     event.metaKey ||
     event.altKey ||
     faceSelection ||
+    isRigPreviewInteractionActive() ||
     isRigTransformInteractionActive() ||
     isRigJointPickingActive()
   )

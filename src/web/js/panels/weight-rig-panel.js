@@ -44,8 +44,12 @@ const {
   saveRigPosePreset,
   previewGeometryRig,
   setGeometryRigPreviewMode,
+  clearGeometryRigPreview,
+  setGeometryRigPreviewIkEnabled,
+  resetGeometryRigPreviewPose,
+  flipGeometryRigPreviewBend,
 } = weightRigApi;
-import { HUMANOID_CONTROL_KEYS } from '../weight-rig/humanoid-control-rig.js';
+import { HUMANOID_CONTROL_KEYS, HUMANOID_CONTROL_LIMB_ROLES } from '../weight-rig/humanoid-control-rig.js';
 import { confirmDialog, inputConfirmDialog } from '../ui/dialogs.js';
 import { LANGUAGE_CHANGED, applyTranslations, getLocale, t } from '../i18n/index.js';
 
@@ -605,6 +609,31 @@ function buildRigSection(parent) {
   ui.geometryComparison = comparison;
   ui.geometrySummary = addText(advanced.content, 'rig-hint');
   ui.geometrySummary.setAttribute('aria-live', 'polite');
+  const poseActions = document.createElement('div');
+  poseActions.className = 'rig-actions';
+  for (const [name, className, key, action] of [
+    [
+      'geometryTestIk',
+      'test-ik',
+      'weightRig.geometryTestIk',
+      () => setGeometryRigPreviewIkEnabled(!getModelRigState().geometryRigPreview?.pose?.enabled),
+    ],
+    ['geometryResetPose', 'reset-pose', 'weightRig.resetPose', resetGeometryRigPreviewPose],
+    ['geometryFlipBend', 'flip-bend', 'weightRig.geometryFlipBend', flipGeometryRigPreviewBend],
+  ]) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `ui-button rig-preview-${className}`;
+    button.dataset.geometryPreview = 'true';
+    button.dataset.i18n = key;
+    button.textContent = t(key);
+    button.addEventListener('click', action);
+    poseActions.appendChild(button);
+    ui[name] = button;
+  }
+  advanced.content.appendChild(poseActions);
+  ui.geometryPoseStatus = addText(advanced.content, 'rig-hint');
+  ui.geometryPoseStatus.setAttribute('aria-live', 'polite');
   const ikLabel = document.createElement('label');
   ikLabel.className = 'weight-checkbox';
   const ik = document.createElement('input');
@@ -957,6 +986,22 @@ function syncGeometryPreview(state = latestRigState || getModelRigState()) {
   ui.geometryComparison.disabled = !active;
   ui.geometryComparison.value = active ? preview.mode : 'current';
   ui.loadCurrentRig.disabled = !!state?.loading;
+  const pose = preview?.pose;
+  ui.geometryTestIk.disabled = !active;
+  ui.geometryTestIk.classList.toggle('active', !!pose?.enabled);
+  ui.geometryTestIk.setAttribute('aria-pressed', String(!!pose?.enabled));
+  ui.geometryResetPose.disabled = !pose?.enabled;
+  ui.geometryFlipBend.disabled = !pose?.enabled || !pose.selectedControlKey;
+  const limb = pose?.limbs[HUMANOID_CONTROL_LIMB_ROLES[pose.selectedControlKey]];
+  ui.geometryPoseStatus.textContent = pose?.enabled
+    ? limb?.target
+      ? t('weightRig.geometryIkStatus', {
+          name: humanoidControlLabel(pose.selectedControlKey),
+          reach: t(limb.reached ? 'weightRig.geometryIkReached' : 'weightRig.geometryIkClamped'),
+          percent: ((limb.residual / preview.rig.frame.height) * 100).toFixed(2),
+        })
+      : t('weightRig.geometryIkHint')
+    : '';
   const diagnostics = preview?.diagnostics;
   ui.geometrySummary.textContent = preview?.errorKey
     ? t(preview.errorKey)
@@ -1242,6 +1287,7 @@ export function initWeightRigPanel() {
     const active = event.detail?.tab === 'weight-rig' && event.detail?.open;
     if (!active) {
       closePopover();
+      if (latestRigState?.geometryRigPreview) clearGeometryRigPreview();
       if (latestWeightState?.picking) cancelWeightModelPicking();
       if (latestRigState?.jointPickIntent) cancelRigJointPicking();
     }

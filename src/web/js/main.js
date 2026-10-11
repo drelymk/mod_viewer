@@ -81,6 +81,8 @@ function initializeWeightRigOverlay(feature) {
     getRigJointPoseFrame: runtime.getRigJointPoseFrame,
     setRigJointRotation: runtime.setRigJointRotation,
     solveRigIkTarget: runtime.solveRigIkTarget,
+    solveGeometryRigPreviewIk: runtime.solveGeometryRigPreviewIk,
+    selectGeometryRigPreviewControl: runtime.selectGeometryRigPreviewControl,
     finishRigJointPose: runtime.finishRigJointPose,
     onRigJointPicked: runtime.handleRigJointPicked,
     onRigSurfacePickRequested: runtime.pickRigJointFromModelSurface,

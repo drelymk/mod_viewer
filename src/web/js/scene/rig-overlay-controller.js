@@ -10,6 +10,7 @@ import {
   isRigTransformInteractionActive,
   setRigJointPickingActive,
   setRigTransformInteractionActive,
+  setRigPreviewInteractionActive,
 } from './rig-overlay-state.js';
 
 const PICK_ACQUIRE_RADIUS = 9;
@@ -270,6 +271,8 @@ export function createRigOverlayController({
   finishHumanoidControlCarry,
   cancelHumanoidControlCarry,
   onHumanoidControlSelected,
+  selectGeometryRigPreviewControl,
+  solveGeometryRigPreviewIk,
   requestRender,
 } = {}) {
   const selectedIdFor = (snapshot) => selectedBoneFor(snapshot);
@@ -434,6 +437,7 @@ export function createRigOverlayController({
   let humanoidCarryControlKey = null;
   let humanoidCarryPointerId = null;
   let humanoidNavigationGesture = false;
+  let previewDrag = null;
   let humanoidLeftRotateBlocked = false;
   let pickPointer = null;
   let pickCandidateCache = [];
@@ -539,6 +543,8 @@ export function createRigOverlayController({
   }
 
   function humanoidDisplayPoint(source, key) {
+    const posed = currentSnapshot?.geometryRigPreview?.pose?.positions?.[key];
+    if (posed) return posed;
     const edit = currentSnapshot?.humanoidRigEdit;
     if (edit?.editing) {
       const displayed = edit.controls?.[key];
@@ -718,7 +724,10 @@ export function createRigOverlayController({
     const edit = currentSnapshot?.humanoidRigEdit;
     const base = humanoidRoleColor(role);
     if (!edit?.editing) {
-      return currentSnapshot?.ik?.selectedHumanoidControlKey === key ? [1, 0.78, 0.08] : base;
+      return (currentSnapshot?.geometryRigPreview?.pose?.selectedControlKey ||
+        currentSnapshot?.ik?.selectedHumanoidControlKey) === key
+        ? [1, 0.78, 0.08]
+        : base;
     }
     if (edit.carryingControlKey === key) return [1, 0.96, 0.28];
     if (edit.selectedControlKey === key) return [1, 0.78, 0.08];
@@ -864,10 +873,10 @@ export function createRigOverlayController({
     return humanoidControlRigFor(currentSource)?.controls || {};
   }
 
-  function nearestHumanoidControl(clientX, clientY) {
+  function nearestHumanoidControl(clientX, clientY, controls = humanoidEditControls()) {
     group.updateMatrixWorld?.(true);
     return findNearestHumanoidControl({
-      controls: humanoidEditControls(),
+      controls,
       pointer: { x: clientX, y: clientY },
       camera,
       canvas,
@@ -951,6 +960,31 @@ export function createRigOverlayController({
     world.add(humanoidCarryOffset);
     group.updateMatrixWorld?.(true);
     return world.applyMatrix4(group.matrixWorld.clone().invert()).toArray();
+  }
+
+  function previewIkActive() {
+    return !!currentSnapshot?.geometryRigPreview?.rig && currentSnapshot.geometryRigPreview.pose?.enabled === true;
+  }
+
+  function nearestPreviewEndpoint(clientX, clientY) {
+    const endpoints = Object.fromEntries(
+      ['leftHand', 'rightHand', 'leftFoot', 'rightFoot'].map((key) => [
+        key,
+        { position: humanoidDisplayPoint(currentSource, key) },
+      ]),
+    );
+    return nearestHumanoidControl(clientX, clientY, endpoints);
+  }
+
+  function resetPreviewDrag() {
+    const drag = previewDrag;
+    previewDrag = null;
+    if (!drag) return;
+    releasePointerCapture(drag.pointerId);
+    if (arcballControls) arcballControls.enabled = drag.controlsEnabled;
+    humanoidCarryPlane = null;
+    humanoidCarryOffset.set(0, 0, 0);
+    setPickCursor('');
   }
 
   function syncAfterEditCallback({ refreshState = false } = {}) {
@@ -1218,6 +1252,19 @@ export function createRigOverlayController({
   }
 
   function onPickPointerMove(event) {
+    if (previewDrag) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.pointerId !== previewDrag.pointerId) return;
+      const point = freeHumanoidPointAt(event.clientX, event.clientY);
+      if (point) solveGeometryRigPreviewIk?.(previewDrag.key, point);
+      return;
+    }
+    if (previewIkActive()) {
+      const nearest = nearestPreviewEndpoint(event.clientX, event.clientY);
+      setPickCursor(nearest ? 'pointer' : '');
+      return;
+    }
     if (poseDrag && transformPointerId !== null && event.pointerId !== transformPointerId) {
       event.stopImmediatePropagation();
       return;
@@ -1253,6 +1300,32 @@ export function createRigOverlayController({
   }
 
   function onPickPointerDown(event) {
+    if (previewIkActive()) {
+      if (previewDrag) {
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (event.button !== 0 || event.altKey) return;
+      const nearest = nearestPreviewEndpoint(event.clientX, event.clientY);
+      if (!nearest || !selectGeometryRigPreviewControl?.(nearest.key)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setHumanoidCarryPlane(nearest.point, event.clientX, event.clientY);
+      previewDrag = {
+        key: nearest.key,
+        pointerId: event.pointerId,
+        pose: currentSnapshot.geometryRigPreview.pose,
+        controlsEnabled: arcballControls?.enabled,
+      };
+      if (arcballControls) arcballControls.enabled = false;
+      setPickCursor('grabbing');
+      try {
+        canvas?.setPointerCapture?.(event.pointerId);
+      } catch {
+        /* best effort */
+      }
+      return;
+    }
     if (poseDrag && transformPointerId !== null && event.pointerId !== transformPointerId) {
       event.stopImmediatePropagation();
       return;
@@ -1314,6 +1387,15 @@ export function createRigOverlayController({
   }
 
   function onPickPointerUp(event) {
+    if (previewDrag) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.pointerId !== previewDrag.pointerId || event.button !== 0) return;
+      const point = freeHumanoidPointAt(event.clientX, event.clientY);
+      if (point) solveGeometryRigPreviewIk?.(previewDrag.key, point);
+      resetPreviewDrag();
+      return;
+    }
     if (poseDrag && transformPointerId !== null && event.pointerId !== transformPointerId) {
       event.stopImmediatePropagation();
       return;
@@ -1356,6 +1438,10 @@ export function createRigOverlayController({
   }
 
   function onPickPointerCancel(event) {
+    if (previewDrag) {
+      if (event.pointerId === previewDrag.pointerId) resetPreviewDrag();
+      return;
+    }
     if (event.pointerId === transformPointerId) {
       releasePointerCapture(transformPointerId);
       transformPointerId = null;
@@ -1394,6 +1480,11 @@ export function createRigOverlayController({
   }
 
   function onPickKeyDown(event) {
+    if (previewDrag && event.key === 'Escape') {
+      event.preventDefault();
+      resetPreviewDrag();
+      return;
+    }
     if (humanoidEditActive() && event.key === 'Escape') {
       event.preventDefault();
       cancelHumanoidCarry();
@@ -1559,6 +1650,14 @@ export function createRigOverlayController({
     const wasJointPicking = isRigJointPickingActive();
     currentSnapshot = snapshot || {};
     currentSource = sourceFor(currentSnapshot);
+    setRigPreviewInteractionActive(previewIkActive());
+    if (
+      previewDrag &&
+      (!previewIkActive() ||
+        previewDrag.pose !== currentSnapshot.geometryRigPreview.pose ||
+        topologyKey(currentSource) !== currentTopologyKey)
+    )
+      resetPreviewDrag();
     invalidateHumanoidJointCandidates();
     setRigJointPickingActive(!!currentSnapshot.jointPickIntent);
     const humanoidEditing = humanoidEditActive();
@@ -1635,6 +1734,10 @@ export function createRigOverlayController({
   canvas?.addEventListener('pointerdown', onPickPointerDown, true);
   canvas?.addEventListener('pointerup', onPickPointerUp, true);
   canvas?.addEventListener('pointercancel', onPickPointerCancel, true);
+  const onPreviewCaptureLost = (event) => {
+    if (previewDrag?.pointerId === event.pointerId) resetPreviewDrag();
+  };
+  canvas?.addEventListener('lostpointercapture', onPreviewCaptureLost);
   canvas?.addEventListener('contextmenu', onPickContextMenu);
   if (typeof document !== 'undefined') document.addEventListener('keydown', onPickKeyDown);
   if (typeof document !== 'undefined') document.addEventListener('keyup', onPickKeyUp);
@@ -1688,6 +1791,7 @@ export function createRigOverlayController({
         arcballEnabled: arcballControls?.enabled,
         arcballWasEnabled,
         poseDragActive: !!poseDrag,
+        previewDragActive: !!previewDrag,
         hoveredJointId,
         pickCandidateCount,
         pickLabelVisible: !!pickLabel && !pickLabel.hidden,
@@ -1696,6 +1800,8 @@ export function createRigOverlayController({
     dispose() {
       if (disposed) return;
       disposed = true;
+      resetPreviewDrag();
+      setRigPreviewInteractionActive(false);
       cancelHumanoidCarry();
       clearPickPointer();
       setPickCursor('');
@@ -1708,6 +1814,7 @@ export function createRigOverlayController({
       canvas?.removeEventListener('pointerdown', onPickPointerDown, true);
       canvas?.removeEventListener('pointerup', onPickPointerUp, true);
       canvas?.removeEventListener('pointercancel', onPickPointerCancel, true);
+      canvas?.removeEventListener('lostpointercapture', onPreviewCaptureLost);
       canvas?.removeEventListener('contextmenu', onPickContextMenu);
       if (typeof document !== 'undefined') {
         document.removeEventListener('keydown', onPickKeyDown);

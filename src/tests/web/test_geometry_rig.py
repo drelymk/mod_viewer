@@ -176,6 +176,85 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
     page.locator('.rig-preview-geometry').evaluate("button => button.click()")
     page.wait_for_function('previewApi.getModelRigState().geometryRigPreview?.rig?.available')
     assert bridge_calls(page, 'weights') == []
+    page.locator('.rig-preview-test-ik').click()
+    page.wait_for_function('previewApi.getModelRigState().geometryRigPreview.pose?.enabled')
+    page.evaluate("""async () => {
+      window.previewScene=await import('./js/scene/scene.js');
+      window.previewOverlay=previewScene.scene.getObjectByName('viewer-inferred-rig-overlay');
+      window.previewMarkers=previewOverlay.getObjectByName('viewer-humanoid-control-rig-overlay')
+        .children.map(child=>child.uuid);
+      const rig=previewApi.getModelRigState().geometryRigPreview.rig;
+      previewOverlay.updateMatrixWorld(true);
+      const points=Object.values(rig.controls).map(control=>new fixture.THREE.Vector3(...control.position)
+        .applyMatrix4(previewOverlay.matrixWorld));
+      const center=new fixture.THREE.Box3().setFromPoints(points).getCenter(new fixture.THREE.Vector3());
+      const forward=new fixture.THREE.Vector3(...rig.frame.forward).transformDirection(previewOverlay.matrixWorld);
+      previewScene.camera.position.copy(center).addScaledVector(forward,rig.frame.height*3);
+      previewScene.camera.up.set(...rig.frame.up).transformDirection(previewOverlay.matrixWorld);
+      previewScene.camera.lookAt(center);previewScene.camera.updateMatrixWorld();
+      previewScene.controls.target.copy(center);previewScene.controls.setCamera(previewScene.camera);
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      window.previewEndpoint=async key=>{
+        const {projectRigPointToClient}=await import('./js/scene/rig-overlay-controller.js');
+        const state=previewApi.getModelRigState().geometryRigPreview;
+        previewOverlay.updateMatrixWorld(true);
+        return projectRigPointToClient({point:state.pose?.positions[key]||state.rig.controls[key].position,
+          camera:previewScene.camera,canvas:previewScene.renderer.domElement,worldMatrix:previewOverlay.matrixWorld});
+      };
+    }""")
+    for key in ('leftHand', 'rightHand', 'leftFoot', 'rightFoot'):
+        point = page.evaluate('previewEndpoint', key)
+        page.mouse.move(point['x'], point['y'])
+        page.mouse.down()
+        assert page.evaluate('previewScene.controls.enabled') is False, (key, point)
+        page.mouse.move(point['x'] + 15, point['y'] - 30, steps=5)
+        page.mouse.up()
+        assert page.evaluate('previewScene.controls.enabled') is True
+        assert page.evaluate('previewApi.getModelRigState().geometryRigPreview.pose.selectedControlKey') == key
+        assert page.locator('.rig-preview-flip-bend').is_enabled()
+    assert page.evaluate("JSON.stringify(previewMarkers)===JSON.stringify(previewOverlay.getObjectByName('viewer-humanoid-control-rig-overlay').children.map(child=>child.uuid))")
+    orbit_before = page.evaluate('previewScene.camera.quaternion.toArray()')
+    viewport = page.locator('#canvas-container canvas').first.bounding_box()
+    page.mouse.move(viewport['x'] + viewport['width'] / 2, viewport['y'] + 45)
+    page.mouse.down()
+    page.mouse.move(viewport['x'] + viewport['width'] / 2 + 60, viewport['y'] + 65, steps=5)
+    page.mouse.up()
+    assert page.evaluate('previewScene.camera.quaternion.toArray()') != orbit_before
+    page.locator('.rig-preview-flip-bend').click()
+    page.locator('.rig-preview-reset-pose').click()
+    assert page.evaluate('Object.keys(previewApi.getModelRigState().geometryRigPreview.pose.positions).length') == 0
+    for action in ('reset', 'mode', 'disable', 'current', 'regenerate', 'capture-loss', 'cancel',
+                   'geometry', 'transform', 'panel-close'):
+        page.evaluate("""async () => {
+          if (!previewApi.getModelRigState().geometryRigPreview?.rig) await previewApi.previewGeometryRig();
+          previewApi.setGeometryRigPreviewMode('geometry'); previewApi.setGeometryRigPreviewIkEnabled(true);
+        }""")
+        point = page.evaluate('previewEndpoint', 'leftHand')
+        page.mouse.move(point['x'], point['y'])
+        page.mouse.down()
+        page.mouse.move(point['x'] + 10, point['y'] - 15)
+        assert page.evaluate('previewScene.controls.enabled') is False
+        page.evaluate("""async action => {
+          const click=selector=>document.querySelector(selector).click();
+          if (action==='reset') click('.rig-preview-reset-pose');
+          if (action==='mode') {
+            const select=document.querySelector('.rig-preview-comparison');select.value='proportional';
+            select.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+          if (action==='disable') click('.rig-preview-test-ik');
+          if (action==='current') previewApi.setGeometryRigPreviewMode('current');
+          if (action==='regenerate') await previewApi.previewGeometryRig();
+          if (action==='geometry'||action==='transform') window.dispatchEvent(new CustomEvent(
+            action==='geometry'?'mod-viewer-mesh-state-changed':'mod-viewer-model-transform-changed',
+            {detail:{meshes:fixture.meshes}}));
+          if (action==='panel-close') window.dispatchEvent(new CustomEvent('mod-viewer-right-dock-tab-changed',
+            {detail:{tab:'weight-rig',open:false}}));
+          if (action==='capture-loss'||action==='cancel') previewScene.renderer.domElement.dispatchEvent(
+            new PointerEvent(action==='cancel'?'pointercancel':'lostpointercapture',{pointerId:1}));
+        }""", action)
+        assert page.evaluate('previewScene.controls.enabled') is True
+        page.mouse.up()
+    page.evaluate('previewApi.previewGeometryRig()')
     assert page.locator('.rig-preview-comparison').is_enabled()
     summary = page.locator('.rig-preview-geometry').locator('..').inner_text()
     assert 'samples' in summary
@@ -277,6 +356,7 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
     page.evaluate("window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed',{detail:{meshes:fixture.meshes}}))")
     assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
     page.evaluate('previewApi.previewGeometryRig()')
+    page.evaluate('previewApi.setGeometryRigPreviewIkEnabled(true)')
     open_model(page, 'fixture-02')
     wait_loaded(page)
     assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
