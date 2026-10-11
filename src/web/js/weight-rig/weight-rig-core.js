@@ -45,7 +45,7 @@ import {
   buildHumanoidControlRig,
   resolveHumanoidControlMappings,
 } from './humanoid-control-rig.js';
-import { mergeHumanoidLimbPose, solveHumanoidControlIk } from './humanoid-rig-ik.js';
+import { HUMANOID_LIMB_CONTROLS, mergeHumanoidLimbPose, solveHumanoidControlIk } from './humanoid-rig-ik.js';
 import { createHumanoidRigEditSession } from './humanoid-rig-edit-session.js';
 import { fitHumanoidGeometryRig, isHumanoidMeshDisplayed } from './humanoid-geometry-fit.js';
 
@@ -374,10 +374,95 @@ function setGeometryRigPreviewMode(mode) {
   if (!geometryRigPreview?.result?.available || !['geometry', 'proportional'].includes(mode)) return false;
   geometryRigPreview.mode = mode;
   geometryRigPreview.rig = mode === 'geometry' ? geometryRigPreview.result : geometryRigPreview.result.proportionalRig;
+  if (geometryRigPreview.pose?.enabled) geometryRigPreview.pose = geometryPreviewRestPose();
   geometryRigPreview.revision += 1;
   notifyModelRigChanged();
   requestRender();
   return true;
+}
+
+function geometryPreviewRestPose() {
+  const rig = geometryRigPreview.rig;
+  const limbs = Object.fromEntries(
+    Object.entries(HUMANOID_LIMB_CONTROLS).map(([role, keys]) => {
+      const [anchor, bend, end] = keys.map((key) => new THREE.Vector3(...rig.controls[key].position));
+      const direction = end.clone().sub(anchor).normalize();
+      const plane = bend.clone().sub(anchor);
+      plane.addScaledVector(direction, -plane.dot(direction));
+      // Freeze the rest plane for the whole gesture. Nearly straight limbs use
+      // anatomical forward/backward, independent of camera and current pose.
+      const fromRest = plane.length() > rig.frame.height * 0.008;
+      const bendDirection = fromRest
+        ? plane.normalize().toArray()
+        : rig.frame.forward.map((value) => value * (role.endsWith('_arm') ? -1 : 1));
+      return [role, { bendDirection, bendSign: 1, target: null, reached: null, residual: null }];
+    }),
+  );
+  return { enabled: true, positions: {}, selectedControlKey: null, limbs };
+}
+
+function setGeometryRigPreviewIkEnabled(enabled) {
+  if (!geometryRigPreview?.rig) return false;
+  geometryRigPreview.pose = enabled ? geometryPreviewRestPose() : null;
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+function resetGeometryRigPreviewPose() {
+  if (!geometryRigPreview?.pose?.enabled) return false;
+  geometryRigPreview.pose = geometryPreviewRestPose();
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+function geometryPreviewLimbRole(controlKey) {
+  return Object.keys(HUMANOID_LIMB_CONTROLS).find((role) => HUMANOID_LIMB_CONTROLS[role][2] === controlKey);
+}
+
+function selectGeometryRigPreviewControl(controlKey) {
+  if (!geometryRigPreview?.pose?.enabled || !geometryPreviewLimbRole(controlKey)) return false;
+  geometryRigPreview.pose.selectedControlKey = controlKey;
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+function solveGeometryRigPreviewIk(controlKey, target) {
+  const pose = geometryRigPreview?.pose;
+  const role = geometryPreviewLimbRole(controlKey);
+  if (!pose?.enabled || !role || !Array.isArray(target) || target.length !== 3 || !target.every(Number.isFinite))
+    return false;
+  const limb = pose.limbs[role];
+  // Always solve from the immutable selected rest skeleton, then merge only
+  // this limb. Repeated target updates cannot accumulate length drift.
+  const solved = solveHumanoidControlIk({
+    controlRig: geometryRigPreview.rig,
+    role,
+    target,
+    bendDirection: limb.bendDirection,
+    bendSign: limb.bendSign,
+  });
+  if (!solved.positions || ![...solved.bend, ...solved.end].every(Number.isFinite)) return false;
+  pose.positions = mergeHumanoidLimbPose(pose.positions, solved.positions, solved.keys);
+  pose.selectedControlKey = controlKey;
+  Object.assign(limb, { target: [...target], reached: solved.reached, residual: solved.residual });
+  notifyModelRigChanged();
+  requestRender();
+  return true;
+}
+
+function flipGeometryRigPreviewBend() {
+  const pose = geometryRigPreview?.pose;
+  const role = geometryPreviewLimbRole(pose?.selectedControlKey);
+  if (!pose?.enabled || !role) return false;
+  const limb = pose.limbs[role];
+  limb.bendSign *= -1;
+  return solveGeometryRigPreviewIk(
+    pose.selectedControlKey,
+    limb.target || geometryRigPreview.rig.controls[pose.selectedControlKey].position,
+  );
 }
 
 function clearGeometryRigPreview() {
@@ -405,6 +490,11 @@ export const weightRigApi = Object.freeze({
   previewGeometryRig,
   setGeometryRigPreviewMode,
   clearGeometryRigPreview,
+  setGeometryRigPreviewIkEnabled,
+  resetGeometryRigPreviewPose,
+  selectGeometryRigPreviewControl,
+  solveGeometryRigPreviewIk,
+  flipGeometryRigPreviewBend,
   beginRigJointPicking,
   cancelRigJointPicking: rigModelSession.cancelJointPicking,
   clearRigJointSelection: rigModelSession.clearJointSelection,
@@ -652,6 +742,7 @@ function rigSnapshot() {
       mode: geometryRigPreview.mode,
       revision: geometryRigPreview.revision,
       rig: geometryRigPreview.rig,
+      pose: geometryRigPreview.pose || null,
       errorKey: geometryRigPreview.errorKey,
       diagnostics: geometryRigPreview.result?.diagnostics,
     },

@@ -179,6 +179,72 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
     assert page.locator('.rig-preview-comparison').is_enabled()
     summary = page.locator('.rig-preview-geometry').locator('..').inner_text()
     assert 'samples' in summary
+    posing = page.evaluate("""() => {
+      const rest=previewApi.getModelRigState().geometryRigPreview.rig;
+      const saved=JSON.stringify(rest), height=rest.frame.height;
+      const distance=(a,b)=>Math.hypot(...a.map((v,i)=>v-b[i]));
+      const roles={left_arm:['leftShoulder','leftElbow','leftHand'],
+        right_arm:['rightShoulder','rightElbow','rightHand'],
+        left_leg:['leftHip','leftKnee','leftFoot'],right_leg:['rightHip','rightKnee','rightFoot']};
+      previewApi.setGeometryRigPreviewIkEnabled(true);
+      const checks=[];
+      for (const [role,keys] of Object.entries(roles)) {
+        const before=structuredClone(previewApi.getModelRigState().geometryRigPreview.pose.positions);
+        const points=keys.map(key=>rest.controls[key].position);
+        const lengths=[distance(points[0],points[1]),distance(points[1],points[2])];
+        const end=points[2], toward=role.startsWith('left')?1:-1;
+        previewApi.solveGeometryRigPreviewIk(keys[2],end.map((v,i)=>v+height*(i===1?0.1:i===2?0.06*toward:0)));
+        const preview=previewApi.getModelRigState().geometryRigPreview;
+        const posed=keys.map(key=>preview.pose.positions[key]||rest.controls[key].position);
+        checks.push({lengthError:Math.max(Math.abs(distance(posed[0],posed[1])-lengths[0]),
+          Math.abs(distance(posed[1],posed[2])-lengths[1]))/height,
+          reached:preview.pose.limbs[role].reached, anchor:distance(posed[0],points[0]),
+          isolated:Object.keys(before).every(key=>keys.includes(key)||JSON.stringify(before[key])===JSON.stringify(preview.pose.positions[key]))});
+        const direction=end.map((v,i)=>v-points[0][i]), length=Math.hypot(...direction);
+        let previousBend=null;
+        for (const fraction of [0.96,0.99,0.999,1,1.01,1.02]) {
+          const target=points[0].map((v,i)=>v+direction[i]/length*(lengths[0]+lengths[1])*fraction);
+          previewApi.solveGeometryRigPreviewIk(keys[2],target);
+          const state=previewApi.getModelRigState().geometryRigPreview.pose;
+          const bend=state.positions[keys[1]], a=points[0];
+          const delta=bend.map((v,i)=>v-a[i]);
+          const along=delta.reduce((sum,v,i)=>sum+v*direction[i]/length,0);
+          const perpendicular=delta.map((v,i)=>v-direction[i]/length*along);
+          const sign=perpendicular.reduce((sum,v,i)=>sum+v*state.limbs[role].bendDirection[i],0);
+          checks.push({sign,finite:[...bend,...state.positions[keys[2]]].every(Number.isFinite),
+            jump:previousBend?distance(bend,previousBend)/height:0});
+          previousBend=bend;
+        }
+        const clamped=previewApi.getModelRigState().geometryRigPreview.pose.limbs[role];
+        checks.push({clamped:!clamped.reached && clamped.residual>0});
+      }
+      const beforeFlip=structuredClone(previewApi.getModelRigState().geometryRigPreview.pose);
+      previewApi.flipGeometryRigPreviewBend();
+      const afterFlip=previewApi.getModelRigState().geometryRigPreview.pose;
+      const flip=afterFlip.limbs.right_leg.bendSign===-beforeFlip.limbs.right_leg.bendSign;
+      const invalid=!previewApi.solveGeometryRigPreviewIk('head',[0,0,0])
+        && !previewApi.solveGeometryRigPreviewIk('leftHand',[NaN,0,0]);
+      previewApi.resetGeometryRigPreviewPose();
+      const reset=Object.keys(previewApi.getModelRigState().geometryRigPreview.pose.positions).length===0;
+      previewApi.solveGeometryRigPreviewIk('leftHand',rest.controls.leftElbow.position);
+      previewApi.setGeometryRigPreviewMode('proportional');
+      const modeReset=Object.keys(previewApi.getModelRigState().geometryRigPreview.pose.positions).length===0;
+      previewApi.setGeometryRigPreviewMode('geometry');
+      previewApi.setGeometryRigPreviewIkEnabled(false);
+      return {checks,flip,invalid,reset,modeReset,disabled:!previewApi.getModelRigState().geometryRigPreview.pose,
+        immutable:JSON.stringify(rest)===saved,loaded:previewApi.getModelRigState().loaded};
+    }""")
+    assert posing['flip'] and posing['invalid'] and posing['reset'] and posing['modeReset']
+    assert posing['disabled'] and posing['immutable'] and not posing['loaded']
+    for check in posing['checks']:
+        if 'lengthError' in check:
+            assert check['lengthError'] < 1e-9 and check['anchor'] == 0
+            assert check['reached'] and check['isolated']
+        elif 'sign' in check:
+            assert check['sign'] >= -1e-9 and check['finite'] and check['jump'] < 0.08
+        else:
+            assert check['clamped']
+    assert bridge_calls(page, 'weights') == []
     page.locator('.rig-preview-comparison').select_option('proportional')
     assert page.evaluate("previewApi.getModelRigState().geometryRigPreview.rig.mode") == 'proportional_template'
     page.locator('.rig-preview-comparison').select_option('geometry')
