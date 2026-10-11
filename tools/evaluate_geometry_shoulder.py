@@ -414,35 +414,85 @@ TORSO_POSE = """() => {
 }"""
 
 
+PIVOT_ARM_OWNERSHIP = """async () => {
+  const {buildHumanoidDriverFrames}=await import('./js/weight-rig/humanoid-rig-binding.js');
+  const d=__armDeform,rig=d.controls.geometry,drivers=buildHumanoidDriverFrames(rig),facts=[],overrides=[];
+  for(const [jointId,owner] of d.allJointBindings.geometry) {
+    if(!['left_upper_arm','left_lower_arm','right_upper_arm','right_lower_arm'].includes(owner.driverId)) continue;
+    const side=owner.driverId.split('_')[0],raw=d.model.jointPivotByJointId.get(jointId);
+    const point=raw?.isVector3?raw.clone():new d.THREE.Vector3(...(Array.isArray(raw)?raw:[raw.x,raw.y,raw.z]));
+    const scores=['upper','lower'].map(part=>{
+      const driver=drivers.get(`${side}_${part}_arm`),delta=driver.end.clone().sub(driver.start);
+      const at=d.THREE.MathUtils.clamp(point.clone().sub(driver.start).dot(delta)/delta.lengthSq(),0,1);
+      return {driverId:driver.id,pivotScoreHeightSquared:
+        point.distanceToSquared(driver.start.clone().addScaledVector(delta,at))/rig.frame.height**2};
+    }).sort((a,b)=>a.pivotScoreHeightSquared-b.pivotScoreHeightSquared||a.driverId.localeCompare(b.driverId));
+    const joint=d.model.joints.find(j=>j.jointId===jointId);
+    facts.push({jointId,jointMembers:joint.members,originalDriver:owner.driverId,
+      originalBindingMethod:owner.bindingMethod,restJointPivot:point.toArray(),armSegmentScores:scores,
+      armSegmentChoice:scores[0].driverId});
+    if(scores[0].driverId!==owner.driverId) overrides.push({sourceKey:joint.members[0].sourceKey,
+      boneId:joint.members[0].boneId,driverId:scores[0].driverId,group:'pivot_arm_segments'});
+  }
+  return {definition:'inferred_pivot_squared_distance_to_existing_same_arm_rest_segments',
+    scope:'existing_upper_or_lower_arm_owners_only',facts,armSegmentOverrides:overrides};
+}"""
+
+
 def evaluate_binding_study(
-    page, context, output, *, overrides=(), capture_views=("front",)
+    page, context, output, *, overrides=(), capture_views=("front",), pivot_only=False
 ):
-    """Evaluate one fixed support metric on both arms and a coupled torso pose."""
+    """Compare original owners with diagnostic segment choices on both arms."""
     report = {}
     for side in ("left", "right"):
         baseline = evaluate_deformation(
             page, context, output, capture_views=(), side=side
         )
-        evidence = page.evaluate(SUPPORT_OWNERSHIP)
-        candidates = [
-            ("original", []),
-            ("pivot_segments", evidence["pivotOverrides"]),
-            ("support_segments", evidence["supportOverrides"]),
-            ("support_within_arm", evidence["armSegmentOverrides"]),
-        ]
-        if overrides:
+        evidence = page.evaluate(
+            PIVOT_ARM_OWNERSHIP if pivot_only else SUPPORT_OWNERSHIP
+        )
+        candidates = (
+            [("original", []), ("pivot_within_arm", evidence["armSegmentOverrides"])]
+            if pivot_only
+            else [
+                ("original", []),
+                ("pivot_segments", evidence["pivotOverrides"]),
+                ("support_segments", evidence["supportOverrides"]),
+                ("support_within_arm", evidence["armSegmentOverrides"]),
+            ]
+        )
+        if overrides and not pivot_only:
             candidates.append(("diagnostic_six", overrides))
+        changed_joint_ids = {
+            fact["jointId"]
+            for fact in evidence["facts"]
+            if fact["originalDriver"] != fact["armSegmentChoice"]
+        }
+        poses = (
+            [
+                (f"{direction}_{label}", forward, scale)
+                for direction, forward in (("forward", 0.12), ("backward", -0.12))
+                for label, scale in (
+                    ("quarter", 0.25),
+                    ("half", 0.5),
+                    ("three_quarter", 0.75),
+                    ("full", 1),
+                )
+            ]
+            if pivot_only
+            else [
+                ("forward_half", 0.12, 0.5),
+                ("forward_full", 0.12, 1),
+                ("backward_half", -0.12, 0.5),
+                ("backward_full", -0.12, 1),
+                ("torso_small", 0, 0),
+            ]
+        )
         study = {"setup": baseline["setup"], "evidence": evidence, "cases": {}}
         try:
             for name, changes in candidates:
                 cases = {}
-                for movement, forward, scale in (
-                    ("forward_half", 0.12, 0.5),
-                    ("forward_full", 0.12, 1),
-                    ("backward_half", -0.12, 0.5),
-                    ("backward_full", -0.12, 1),
-                    ("torso_small", 0, 0),
-                ):
+                for movement, forward, scale in poses:
                     selection = page.evaluate(
                         SELECT_SCENARIO,
                         {
@@ -487,9 +537,40 @@ def evaluate_binding_study(
                                 for change in overrides
                             )
                         ]
+                    if pivot_only:
+                        row["changedInfluences"] = [
+                            {
+                                "mesh": mesh["mesh"],
+                                **{
+                                    key: trace[key]
+                                    for key in (
+                                        "sourceKey",
+                                        "boneId",
+                                        "jointId",
+                                        "driverId",
+                                        "vertexCount",
+                                        "samples",
+                                    )
+                                },
+                            }
+                            for mesh in row["displayedMeshes"]
+                            for trace in mesh["movingInfluences"]
+                            if trace["jointId"] in changed_joint_ids
+                        ]
+                        for trace in row["changedInfluences"]:
+                            manifest = context.skinning_manifest.get(trace["mesh"])
+                            if manifest:
+                                for sample in trace["samples"]:
+                                    sample["authoredVertex"] = manifest.used_vertices[
+                                        sample["vertex"]
+                                    ]
                     # Retain draw movement totals, without repeating full influence traces.
                     row["displayedMeshes"] = [
-                        {"mesh": mesh["mesh"], "movedVertices": mesh["movedVertices"]}
+                        {
+                            "mesh": mesh["mesh"],
+                            "movedVertices": mesh["movedVertices"],
+                            "changedEdges": mesh["changedEdges"],
+                        }
                         for mesh in row["displayedMeshes"]
                     ]
                     edges = page.evaluate(
@@ -515,13 +596,18 @@ def evaluate_binding_study(
                         "worstEdges": edges,
                     }
                     capture = (
-                        side == "right"
-                        and name in ("original", "support_within_arm")
-                        and movement == "backward_half"
-                    ) or (
-                        side == "left"
-                        and name in ("original", "diagnostic_six")
-                        and movement == "torso_small"
+                        movement in ("forward_full", "backward_full")
+                        if pivot_only
+                        else (
+                            side == "right"
+                            and name in ("original", "support_within_arm")
+                            and movement == "backward_half"
+                        )
+                        or (
+                            side == "left"
+                            and name in ("original", "diagnostic_six")
+                            and movement == "torso_small"
+                        )
                     )
                     if capture:
                         for view in capture_views:

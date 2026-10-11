@@ -1,4 +1,4 @@
-"""Check fine hand drags and one-arm deformation in the local viewer.
+"""Check fine hand drags and authored arm deformation in the local viewer.
 
 Requires a compatible browser/WebGPU runtime. Deformation is opt-in and uses
 existing authored influences and binding/deformation helpers in an isolated
@@ -315,6 +315,8 @@ DEFORMATION_SETUP = """async ({entries,url,side='left'}) => {
     commonEdges,commonRegion,
     buildHumanoidDriverBaseTransforms,applyWeightedTransformDeformationInto,applyWeightedNormalDeformationInto,sourceBoneKey};
   return {sourceCount:sources.length,jointCount:model.joints.length,
+    skinningSources:[...new Map(Object.values(entries).map(entry=>[entry.source.key,
+      {source:entry.source,encoding:entry.encoding,influenceCount:entry.influence_count}])).values()],
     authoredMeshCount:originalWeights.length,boundArmJoints:Object.fromEntries(Object.entries(bindings).map(([k,v])=>[k,v.jointBindings.size])),
     geometryIndependent:JSON.stringify(geometry)===geometryIdentity,
     currentControlSource:current.mode||current.source||'automatic_humanoid',
@@ -442,6 +444,7 @@ DEFORM_POSE = """async ({mode,positions}) => {
       }
       meshRows.push({mesh:mesh.userData.semanticKey,movedVertices:moved,
         movingInfluences:[...movingInfluences.values()].sort((a,b)=>a.boneId-b.boneId)});
+      let edgeCount=0,minRatio=Infinity,maxRatio=-Infinity,aboveDouble=0,belowHalf=0;
       for(let triangle=start;triangle+2<end;triangle+=3) {
         const vertices=[0,1,2].map(i=>indices?indices[triangle+i]:triangle+i);
         for(const [a,b] of [[vertices[0],vertices[1]],[vertices[1],vertices[2]],[vertices[2],vertices[0]]]) {
@@ -450,9 +453,15 @@ DEFORM_POSE = """async ({mode,positions}) => {
           const length=values=>Math.hypot(...[0,1,2].map(i=>values[a*3+i]-values[b*3+i]));
           const rest=length(base.positions), posed=length(position.array);
           const shifted=[a,b].some(v=>[0,1,2].some(i=>Math.abs(position.array[v*3+i]-base.positions[v*3+i])>height*1e-6));
-          if(shifted&&rest>height*1e-5) edgeRatios.push(posed/rest);
+          if(shifted&&rest>height*1e-5) {
+            const ratio=posed/rest;edgeRatios.push(ratio);edgeCount++;
+            minRatio=Math.min(minRatio,ratio);maxRatio=Math.max(maxRatio,ratio);
+            if(ratio>2) aboveDouble++;if(ratio<.5) belowHalf++;
+          }
         }
       }
+      meshRows.at(-1).changedEdges={edgeCount,minEdgeLengthRatio:edgeCount?minRatio:1,
+        maxEdgeLengthRatio:edgeCount?maxRatio:1,aboveDouble,belowHalf};
     }
     position.needsUpdate=true;if(normal) normal.needsUpdate=true;
     mesh.geometry.computeBoundingBox();mesh.geometry.computeBoundingSphere();
@@ -466,10 +475,11 @@ DEFORM_POSE = """async ({mode,positions}) => {
   invalidateCharacterShadowGeometry();
   return {movedVertices,maxDisplacementHeight,unaffectedShiftHeight,finite,displayedMeshes:meshRows,
     changedEdgeCount:edgeRatios.length,maxEdgeLengthRatio:edgeRatios.at(-1)||1,
+    minEdgeLengthRatio:edgeRatios[0]??1,
     p95EdgeLengthRatio:edgeRatios[Math.floor(edgeRatios.length*.95)]||1,
     commonRegion:{edgeCount:commonRatios.length,sampleDigest:d.commonRegion.sampleDigest,
       p95EdgeLengthRatio:commonRatios[Math.floor(commonRatios.length*.95)]||1,
-      maxEdgeLengthRatio:commonRatios.at(-1)||1,minEdgeLengthRatio:commonRatios[0]||1},
+      maxEdgeLengthRatio:commonRatios.at(-1)||1,minEdgeLengthRatio:commonRatios[0]??1},
     geometryRestUnchanged:JSON.stringify(d.geometry)===d.geometryIdentity,
     authoredInfluencesUnchanged:d.originalWeights.every(({state,indices,weights})=>
       state.indices.every((v,i)=>v===indices[i])&&state.weights.every((v,i)=>v===weights[i]))};
@@ -564,6 +574,7 @@ def main():
     parser.add_argument("--deform-left-arm", action="store_true")
     parser.add_argument("--diagnose-shoulder", action="store_true")
     parser.add_argument("--study-binding", action="store_true")
+    parser.add_argument("--compare-arm-segments", action="store_true")
     parser.add_argument("--ownership-overrides", type=Path)
     args = parser.parse_args()
     if not (
@@ -571,6 +582,7 @@ def main():
         or args.deform_left_arm
         or args.diagnose_shoulder
         or args.study_binding
+        or args.compare_arm_segments
     ):
         parser.error("Select an interaction, deformation or binding evaluation")
     if args.ownership_overrides and not (args.diagnose_shoulder or args.study_binding):
@@ -609,11 +621,20 @@ def main():
             normals:modViewer.activeMeshes.map(m=>m.geometry.attributes.normal&&[...m.geometry.attributes.normal.array])};
         }""")
         report = {"schemaVersion": 2}
+        if args.compare_arm_segments:
+            report["displayedVariant"] = page.evaluate("""() => ({
+              displayed:modViewer.activeMeshes.filter(mesh=>mesh.visible).map(mesh=>({
+                mesh:mesh.userData.semanticKey,vertexCount:mesh.geometry.attributes.position.count,
+                drawRange:{start:mesh.geometry.drawRange.start,count:Math.min(
+                  mesh.geometry.index?.count||mesh.geometry.attributes.position.count,
+                  mesh.geometry.drawRange.start+mesh.geometry.drawRange.count)-mesh.geometry.drawRange.start}})),
+              inactive:modViewer.activeMeshes.filter(mesh=>!mesh.visible).map(mesh=>mesh.userData.semanticKey)
+            })""")
         if args.near_rest:
             report["nearRest"] = evaluate_near_rest(page, args.output)
         if args.deform_left_arm:
             report["deformation"] = evaluate_deformation(page, context, args.output)
-        if args.diagnose_shoulder or args.study_binding:
+        if args.diagnose_shoulder or args.study_binding or args.compare_arm_segments:
             from evaluate_geometry_shoulder import (
                 evaluate_binding_study,
                 evaluate_shoulder,
@@ -632,6 +653,10 @@ def main():
                     report[key] = operation(
                         page, context, args.output, overrides=overrides
                     )
+            if args.compare_arm_segments:
+                report["armSegments"] = evaluate_binding_study(
+                    page, context, args.output, pivot_only=True
+                )
         report["invariants"] = page.evaluate("""() => ({
           restRigUnchanged:JSON.stringify(__evaluationRigApi.getModelRigState().geometryRigPreview.rig)===__armBefore.rest,
           positionsRestored:modViewer.activeMeshes.every((m,i)=>m.geometry.attributes.position.array.every((v,j)=>v===__armBefore.positions[i][j])),
@@ -650,6 +675,7 @@ def main():
                         report.get("shoulder", {}).get("scenarios", {})
                     ),
                     "bindingStudySides": list(report.get("bindingStudy", {})),
+                    "armSegmentSides": list(report.get("armSegments", {})),
                 }
             ),
             flush=True,

@@ -821,3 +821,152 @@ source buffers or metadata are written, and no Weight UI analysis is requested.
 The next production candidate can remain a small arm-segment assignment change;
 broader shoulder/torso ownership needs blend-boundary evidence before adoption.
 These results do not require another Weight-derived skeleton architecture.
+
+### Iteration 7 — reject blanket pivot-only arm refinement
+
+The simpler same-arm pivot rule **does not generalize across the three models**.
+It reduces some Remielle forward extrema, but adds ownership changes beyond the
+four supported in Iteration 6, introduces stretch and compression regressions
+on Odette, and substantially worsens Chisa's arm/sleeve blend boundaries.
+Keep PR #180 open and unmerged. Production binding and Weight remain unchanged;
+these results do not justify promoting this candidate or the six diagnostic
+Remielle assignments.
+
+#### Fixed rule and displayed variants
+
+For every ModelJoint already owned by an upper-arm or forearm driver, compare
+its existing inferred rest pivot's squared distance to the two finite rest
+segments of that same arm. Clamp the segment projection to its endpoints,
+normalize by character height squared, and select the smaller score, breaking
+ties by driver ID. Preserve all source aliases and rebuild driver-relative rest
+matrices with the existing diagnostic helper. Other owners remain fixed. This
+operation runs no vertex-support scoring pass and adds no hierarchy, threshold,
+component exclusion, character mapping or game detection rule.
+
+| Model | Displayed / inactive draws | Arm-owned ModelJoints | Changed left / right | Authored source convention |
+| --- | ---: | ---: | ---: | --- |
+| Remielle | 10 / 2 | 92 | 3 / 3 | Four float/u32 streams, four influences, source-local IDs |
+| Odette | 35 / 10 | 55 | 3 / 3 | Two float/u32 streams, four influences, source-local IDs |
+| Chisa | 19 / 24 | 136 | 10 / 11 | Seven u8 streams, eight influences, existing WWMI VertexVG model-wide remapping |
+
+The recorded variants include displayed mesh identities, vertex counts, active
+draw ranges, inactive identities and a digest. Chisa's source offsets remain
+0, 27, 141, 142, 270, 391 and 419; reconciled joints with multiple source aliases
+still change as one joint. Decoding and reconciliation use the existing paths.
+
+Iteration 6's broad pivot comparison agreed on four narrow support corrections;
+it did not evaluate this exact same-arm pivot argmin. The simpler rule recovers
+Remielle influences 170–173 but also changes left 83 → joint 198 and right
+114 → joint 18 from forearm to upper arm. Their pivots project at 0.859 and 0.883
+along the upper arm, where shoulder is 0 and elbow is 1, yet the first five moved
+displayed samples project beyond the elbow at 1.213–1.342. Each carries 663 moved
+displayed vertices. These deterministic trace samples are inspection evidence,
+not complete support proportions. No filter is added to force the result back
+to four changes.
+
+#### Both arms, stretching and compression
+
+Original and candidate use the same fitted skeleton, authored arrays, target,
+independent IK solution and frozen arm/shoulder edge set. Full displacement is
+12% of height upward and 12% forward or backward; quarter, half and three-quarter
+displacements supply intermediate solved poses, rather than interpolated joint
+angles. All 96 compared cases reach their targets, preserve arm segment lengths,
+keep unaffected controls fixed and return exactly to rest. The edge samples are
+16,785 / 16,996 left/right for Remielle, 31,260 / 32,659 for Odette, and
+35,881 / 36,469 for Chisa. Sample digests and baseline extreme edge identities
+remain fixed across candidates.
+
+The full-displacement table reports the **common arm sample**, including
+unchanged edges. Smaller maxima indicate less stretching; larger minima
+indicate less compression. Severity counts are edges above twice or below half
+their rest length; percentages dominated by unchanged edges cannot conceal
+these regressions.
+
+| Model / arm / direction | Original max / min | Pivot-only max / min | Above 2×, original → candidate | Below 0.5×, original → candidate |
+| --- | ---: | ---: | ---: | ---: |
+| Remielle left forward | 4.558 / 0.382× | 2.681 / 0.614× | 20 → 24 | 2 → 0 |
+| Remielle right forward | 4.215 / 0.448× | 2.613 / 0.583× | 19 → 26 | 1 → 0 |
+| Remielle left backward | 5.725 / 0.234× | 5.725 / 0.234× | 122 → 126 | 12 → 10 |
+| Remielle right backward | 5.578 / 0.202× | 5.578 / 0.202× | 113 → 118 | 13 → 12 |
+| Odette left forward | 3.210 / 0.431× | 2.442 / 0.376× | 30 → 23 | 3 → 5 |
+| Odette right forward | 2.923 / 0.433× | 5.071 / 0.433× | 18 → 72 | 3 → 3 |
+| Odette left backward | 4.140 / 0.072× | 4.140 / 0.072× | 226 → 217 | 120 → 121 |
+| Odette right backward | 4.115 / 0.068× | 4.929 / 0.068× | 212 → 267 | 112 → 112 |
+| Chisa left forward | 5.530 / 0.207× | 5.530 / 0.151× | 8 → 14 | 40 → 72 |
+| Chisa right forward | 4.933 / 0.174× | 10.562 / 0.116× | 12 → 33 | 36 → 71 |
+| Chisa left backward | 10.833 / 0.056× | 13.303 / 0.116× | 773 → 1,151 | 315 → 291 |
+| Chisa right backward | 10.374 / 0.054× | 28.267 / 0.097× | 775 → 1,196 | 267 → 257 |
+
+Intermediate poses also fail. Odette left forward at three-quarter displacement
+reduces maximum stretch from 3.129× to 2.187× but creates a newly compressed
+0.404× edge, versus 0.647× originally. Chisa left forward half changes max/min
+from 2.483 / 0.234× to 5.906 / 0.128×; right backward half changes them from
+6.981 / 0.119× to 21.249 / 0.054×. Improved compression on Chisa's full backward
+sample therefore cannot establish an overall improvement.
+
+Every displayed draw also records changed-edge extrema and severity counts,
+including changes outside the fixed arm envelope. These reuse the evaluator's
+existing minimum rest length of 0.00001 height and movement tolerance of
+0.000001 height; per-draw counts retain triangle-edge occurrences.
+Remielle's left/right full
+backward maxima there remain 10.131 / 9.970×, above the common sample's maxima.
+Its left full forward changed-draw maximum is 4.222× after reassignment, rather
+than the sampled 2.681×. The common sample and whole changed-draw statistics
+answer different questions; neither proves full-body anatomical quality.
+
+#### New blend-boundary failures
+
+Odette's new right-forward maximum is body-source vertices 14552 / 14668.
+Influence 49 → joint 115 changes to upper arm, while neighboring 50 → 117 and
+64 → 132 stay on forearm. Influence 49's pivot favors upper arm with normalized
+squared scores 0.0005884 versus 0.0012986, so this is not merely a near tie.
+The changed owner splits an authored blend across two moving drivers and raises
+the worst ratio to 5.071×. On the opposite arm, body vertices 16288 / 16289 mix
+the newly upper-arm-owned 26 → joint 90 with forearm-owned 63 → 131, producing
+the 0.404× intermediate compression. Proximity alone does not validate either
+change anatomically.
+
+Chisa's new right-backward maximum is Component1-2 vertices 22780 / 22782.
+Source-offset-27 influence 89 → joint 88 becomes upper arm while neighboring
+91 → joint 90 remains forearm. Its pivot projects at 0.932 along the upper arm,
+but the first five moved samples project at 1.341–1.350, beyond the elbow.
+The entire changed draw's maximum increases from 1.875× to 28.267×, rather than
+only renaming the original shoulder extreme in another draw. This edge is very
+short: 0.0167% of height at rest and 0.4733% after deformation. Its 28.267× ratio
+is a local discontinuity measurement, not displacement by 28 character heights.
+
+On Chisa's left forward half pose, Component3-1 vertices 40586 / 40589 combine
+newly upper-arm-owned 242 → joint 238 with forearm-owned 253, 254, 255 and 243,
+causing the new 0.128× compression. Joint 238 retains all three source aliases
+at offsets 142, 270 and 391; moved samples span both proximal Component3-1 and
+distal Component3-6 geometry. These arm/sleeve boundaries demonstrate why a
+single inferred pivot can misrepresent an influence's displayed support.
+The front crops show the affected shoulder, sleeve and torso neighborhood;
+they do not supply independent anatomical labels or full-body pose validation.
+
+![Original and pivot-only ownership at fixed cross-model poses](iteration-7/cross-model-comparison.png)
+
+The compact [Remielle](iteration-7/remielle.json),
+[Odette](iteration-7/odette.json) and [Chisa](iteration-7/chisa.json) records
+retain joint facts and source aliases once, sixteen actual poses per model,
+all comparisons, per-draw changes, tracked edges and exact restoration checks.
+Column schemas describe their compact tuples. The eight
+[signed regression traces](iteration-7/regression-traces.json) reconstruct
+stretching and compression from endpoint weights and moving drivers. Each
+candidate's trace records its own extreme; endpoint pairs may differ, while
+baseline edge identities are tracked separately in the model records.
+Only these compact results and one representative montage are retained.
+
+```text
+python tools/evaluate_geometry_arm.py <mod-folder> --compare-arm-segments --output <output-folder>
+```
+
+Use the recorded displayed variant in a compatible browser/WebGPU environment.
+The operation reuses the current evaluator and measurements without expanding
+the test suite. Existing focused checks and two explicit plan-verification
+passes cover the experiment; browser/WebGPU work remains outside normal CI.
+No source buffers or metadata are saved, no Weight UI analysis is requested,
+and positions, normals, fitted rest controls and authored influences restore
+exactly. The cross-model acceptance condition fails: reject blanket adoption
+of this simple rule and keep the remaining shoulder blend-boundary problem
+separate. No further binding architecture is introduced.
