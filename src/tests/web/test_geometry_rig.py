@@ -347,6 +347,25 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
         previewApi.solveGeometryRigPreviewIk(keys[2],points[0]);
         previewApi.solveGeometryRigPreviewIk(keys[2],near);
         checks.push({deterministic:first===JSON.stringify(previewApi.getModelRigState().geometryRigPreview.pose.positions[keys[1]])});
+        for (const flipped of [false,true]) {
+          previewApi.resetGeometryRigPreviewPose();
+          previewApi.selectGeometryRigPreviewControl(keys[2]);
+          if(flipped) previewApi.flipGeometryRigPreviewBend();
+          const axis=points[2].map((v,i)=>v-points[0][i]), size=Math.hypot(...axis);
+          const unit=axis.map(v=>v/size), offset=points[1].map((v,i)=>v-points[0][i]);
+          const dot=(a,b)=>a.reduce((sum,v,i)=>sum+v*b[i],0);
+          const restPlane=offset.map((v,i)=>v-unit[i]*dot(offset,unit));
+          const reach=distance(points[0],points[1])+distance(points[1],points[2]);
+          const at=points[2].map((v,i)=>v-unit[i]*reach*.05);
+          previewApi.solveGeometryRigPreviewIk(keys[2],at);
+          const bend=previewApi.getModelRigState().geometryRigPreview.pose.positions[keys[1]];
+          const moved=bend.map((v,i)=>v-points[0][i]);
+          const plane=moved.map((v,i)=>v-unit[i]*dot(moved,unit));
+          checks.push({fineAdjustment:dot(plane,restPlane)/Math.hypot(...plane)/Math.hypot(...restPlane)>
+            Math.cos(Math.PI/7)});
+          previewApi.solveGeometryRigPreviewIk(keys[2],points[2]);
+          checks.push({fineReturn:distance(previewApi.getModelRigState().geometryRigPreview.pose.positions[keys[1]],points[1])===0});
+        }
       }
       previewApi.solveGeometryRigPreviewIk('rightFoot',rest.controls.rightFoot.position
         .map((v,i)=>v+height*(i===1?0.12:i===2?0.08:0)));
@@ -384,6 +403,10 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
             assert check['returnError'] == 0 and check['maxReturnJump'] < 0.02
         elif 'deterministic' in check:
             assert check['deterministic']
+        elif 'fineAdjustment' in check:
+            assert check['fineAdjustment']
+        elif 'fineReturn' in check:
+            assert check['fineReturn']
         else:
             assert check['clamped']
     assert bridge_calls(page, 'weights') == []
@@ -440,3 +463,56 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
     page.locator('.rig-load-current').click()
     page.wait_for_function('previewApi.getModelWeightState().loaded')
     assert len(bridge_calls(page, 'weights')) == 1
+
+
+def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "tools"))
+    from evaluate_geometry_arm import DEFORMATION_SETUP, DEFORM_POSE
+
+    from .payloads import model_payload
+    from .support import open_model, wait_loaded
+
+    page = viewer({"fixture-01": model_payload()})
+    open_model(page, "fixture-01")
+    wait_loaded(page)
+    prepare_surface(page)
+    inputs = page.evaluate("""async () => {
+      const geometry=await fixture.api.fitHumanoidGeometryRig({meshes:fixture.meshes,axes:fixture.axes});
+      window.__evaluationRigApi={getModelRigState:()=>({geometryRigPreview:{rig:geometry}})};
+      window.modViewer.activeMeshes=fixture.meshes;
+      const entries={},pieces=[];let offset=0;
+      fixture.meshes.forEach((mesh,i)=>mesh.userData.semanticKey=`mesh-${i}`);
+      for(const [boneId,mesh] of [[0,fixture.meshes[3]],[1,fixture.meshes[4]]]) {
+        const count=mesh.geometry.attributes.position.count;
+        const indices=new Uint32Array(count).fill(boneId), weights=new Float32Array(count).fill(1);
+        entries[mesh.userData.semanticKey]={bone_ids:[boneId],vertex_count:count,influence_count:1,
+          weight_stats:{[boneId]:{affected_vertex_count:count,total_weight:count}},
+          source:{key:'stream-01.buf|offset=0',file:'stream-01.buf',bone_id_offset:0,bone_ids_model_wide:false},
+          data:{indices:{offset,length:indices.byteLength,type:'u32'},
+            weights:{offset:offset+indices.byteLength,length:weights.byteLength,type:'f32'}}};
+        pieces.push(indices,weights);offset+=indices.byteLength+weights.byteLength;
+      }
+      window.__experimentRest=fixture.meshes.map(mesh=>({positions:[...mesh.geometry.attributes.position.array],
+        normals:[...mesh.geometry.attributes.normal.array]}));
+      return {entries,url:URL.createObjectURL(new Blob(pieces))};
+    }""")
+    setup = page.evaluate(DEFORMATION_SETUP, inputs)
+    assert setup["geometryIndependent"] and setup["boundArmJoints"]["geometry"] > 0
+    positions = page.evaluate("""async () => {
+      const {solveHumanoidControlIk}=await import('./js/weight-rig/humanoid-rig-ik.js');
+      const rig=__armDeform.geometry;
+      return solveHumanoidControlIk({controlRig:rig,role:'left_arm',
+        target:rig.controls.leftHand.position.map((v,i)=>v+rig.frame.height*(i===1?.12:i===2?.12:0))}).positions;
+    }""")
+    moved = page.evaluate(DEFORM_POSE, {"mode": "geometry", "positions": positions})
+    assert moved["movedVertices"] > 0 and moved["finite"]
+    assert moved["unaffectedShiftHeight"] == 0
+    assert moved["geometryRestUnchanged"] and moved["authoredInfluencesUnchanged"]
+    restored = page.evaluate(DEFORM_POSE, {"mode": "geometry", "positions": {}})
+    assert restored["movedVertices"] == 0 and restored["maxDisplacementHeight"] == 0
+    assert page.evaluate("""() => fixture.meshes.every((mesh,i)=>
+      mesh.geometry.attributes.position.array.every((v,j)=>v===__experimentRest[i].positions[j])&&
+      mesh.geometry.attributes.normal.array.every((v,j)=>v===__experimentRest[i].normals[j]))""")
+    page.evaluate("url=>URL.revokeObjectURL(url)", inputs["url"])

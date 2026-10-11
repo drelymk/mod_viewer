@@ -408,6 +408,7 @@ function geometryPreviewRestPose() {
           bendDirection,
           restBendDirection: restBendDirection?.toArray() || null,
           restDirection: direction.toArray(),
+          restTransitionDistance: (anchor.distanceTo(bend) + bend.distanceTo(end)) * 0.25,
           bendSign: 1,
           target: null,
           reached: null,
@@ -458,14 +459,15 @@ function solveGeometryRigPreviewIk(controlKey, target) {
   const restDistance = new THREE.Vector3(...target).distanceTo(new THREE.Vector3(...restEnd));
   let bendDirection = limb.bendDirection;
   let bendSign = limb.bendSign;
-  if (limb.restBendDirection && restDistance < rig.frame.height * 0.02) {
+  if (limb.restBendDirection && restDistance < limb.restTransitionDistance) {
     // Rotate from fitted rest evidence to the frozen preferred plane near the
-    // rest endpoint. This is target-dependent, never pose-history-dependent.
+    // rest endpoint over a quarter of limb reach, so fine hand/foot adjustments
+    // do not sweep through the whole plane. This never uses pose history.
     const axis = new THREE.Vector3(...limb.restDirection);
     const restPlane = new THREE.Vector3(...limb.restBendDirection);
     const preferred = new THREE.Vector3(...limb.bendDirection).multiplyScalar(bendSign);
     const angle = Math.atan2(axis.dot(restPlane.clone().cross(preferred)), restPlane.dot(preferred));
-    const blend = THREE.MathUtils.smoothstep(restDistance, 0, rig.frame.height * 0.02);
+    const blend = THREE.MathUtils.smoothstep(restDistance, 0, limb.restTransitionDistance);
     bendDirection = restPlane.applyAxisAngle(axis, angle * blend).toArray();
     bendSign = 1;
   }

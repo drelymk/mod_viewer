@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 
-CAPTURE_VIEW = """async ({view, mode, baseline, preservePose=false}) => {
+CAPTURE_VIEW = """async ({view, mode, baseline, preservePose=false, referenceFrame=null}) => {
   const THREE=await import('three');
   const {camera,renderer,scene,controls}=await import('./js/scene/scene.js');
   const {weightRigApi}=await import('./js/weight-rig/weight-rig-core.js');
@@ -24,6 +24,7 @@ CAPTURE_VIEW = """async ({view, mode, baseline, preservePose=false}) => {
     await import('./js/weight-rig/humanoid-control-rig.js');
   if (!preservePose) weightRigApi.setGeometryRigPreviewMode(mode==='proportional'?'proportional':'geometry');
   const rig=weightRigApi.getModelRigState().geometryRigPreview.rig;
+  const frameRig=referenceFrame?{frame:referenceFrame}:rig;
   const saved=structuredClone(rig.controls);
   if (baseline) {
     for (const [key,control] of Object.entries(rig.controls)) control.position=[...baseline[key]];
@@ -33,13 +34,13 @@ CAPTURE_VIEW = """async ({view, mode, baseline, preservePose=false}) => {
   mesh.updateWorldMatrix(true,false);
   const matrix=mesh.matrixWorld;
   const rect=renderer.domElement.getBoundingClientRect();
-  const point=semantic=>new THREE.Vector3(...semanticToHumanoidControlPosition(semantic,rig)).applyMatrix4(matrix);
+  const point=semantic=>new THREE.Vector3(...semanticToHumanoidControlPosition(semantic,frameRig)).applyMatrix4(matrix);
   const bottom=point({sideN:0,height01:0,depthN:0});
   const top=point({sideN:0,height01:1,depthN:0});
   const height=top.distanceTo(bottom);
   const center=top.clone().add(bottom).multiplyScalar(0.5);
-  const up=new THREE.Vector3(...rig.frame.up).transformDirection(matrix);
-  const direction=new THREE.Vector3(...(view==='front'?rig.frame.forward:rig.frame.right.map(v=>-v)))
+  const up=new THREE.Vector3(...frameRig.frame.up).transformDirection(matrix);
+  const direction=new THREE.Vector3(...(view==='front'?frameRig.frame.forward:frameRig.frame.right.map(v=>-v)))
     .transformDirection(matrix);
   controls.enabled=false;
   // Retain the camera identity used by the existing overlay controller, while
@@ -58,8 +59,8 @@ CAPTURE_VIEW = """async ({view, mode, baseline, preservePose=false}) => {
     const p=new THREE.Vector3(...position).applyMatrix4(matrix).project(camera);
     return [(p.x+1)*rect.width/2,(1-p.y)*rect.height/2];
   };
-  const projectedBottom=project(semanticToHumanoidControlPosition({sideN:0,height01:0,depthN:0},rig));
-  const projectedTop=project(semanticToHumanoidControlPosition({sideN:0,height01:1,depthN:0},rig));
+  const projectedBottom=project(semanticToHumanoidControlPosition({sideN:0,height01:0,depthN:0},frameRig));
+  const projectedTop=project(semanticToHumanoidControlPosition({sideN:0,height01:1,depthN:0},frameRig));
   const pixels=Math.abs(projectedBottom[1]-projectedTop[1]);
   const positions=Object.fromEntries(Object.entries(rig.controls).map(([key,c])=>{
     const p=project(weightRigApi.getModelRigState().geometryRigPreview.pose?.positions[key] || c.position);
@@ -237,7 +238,7 @@ POSE_CASE = """async ({name, displacements}) => {
       if (size>height*1e-6 && projectedSize>1e-6) {
         const normal=perpendicular.map(v=>v/size);
         // The preferred plane is fully applied outside the rest-return region.
-        if(distance(at,rest[2])>=height*0.02)
+        if(distance(at,rest[2])>=pose.limbs[role].restTransitionDistance)
           row.minBendAlignment=Math.min(row.minBendAlignment,dot(normal,projected)/projectedSize);
         if (previousPerpendicular) {
           const alignment=dot(previousPerpendicular,normal);

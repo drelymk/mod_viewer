@@ -267,6 +267,10 @@ Keep PR #180 open and unmerged for review.
 
 ## Iteration 3 review — preferred planes and exact rest return
 
+This section records `faee3b5`. The fine-interaction check in Iteration 4 below
+supersedes its 2%-of-height transition distance; these measurements and captures
+remain the review baseline.
+
 Preferred planes now require rest-joint evidence with perpendicular displacement
 of at least 10% of **each** segment length and at least 0.5 alignment with the
 projected anatomical bend direction. Weak, nearly straight or anatomically
@@ -331,3 +335,108 @@ UI or production Weight, skinning, deformation, reconciliation or persistence
 behavior is introduced. The bend-plane issue is addressed in these comparisons;
 occluded internal pivots and natural mesh deformation still require separate
 evaluation. Keep PR #180 open and unmerged.
+
+## Iteration 4 — fine hand interaction and one-arm deformation
+
+The updated review requested actual hand drags near rest before deformation.
+The check uses both hands on Remielle and Odette, front and oblique views, four
+screen directions, and both default and flipped bends. Each of the 32 paths per
+model moves the pointer through 2% of character height in 20 steps and returns
+in 20 steps. Selection, drag acquisition and camera release are checked through
+the existing pointer handlers. The model remains in its A-pose for this check.
+
+The `faee3b5` captures show the elbow sweeping back across its initial arc while
+the hand continues inward. The fitted and preferred planes can differ by roughly
+90–111 degrees; completing that rotation inside a 2%-of-height neighborhood is
+too abrupt for fine adjustments. The existing smooth transition now spans one
+quarter of the limb's total reach. It retains the same preferred-plane criterion,
+exact rest restoration and history independence. No fitter, solver, camera-based
+rule or additional interaction UI is introduced. This is a preview transition
+scale, not an anatomical accuracy claim or a universal motion guarantee.
+
+| Fine-drag check                              | Remielle             | Odette               |
+| -------------------------------------------- | -------------------- | -------------------- |
+| Pointer paths, including Flip Bend           | 32                   | 32                   |
+| Largest bend-plane turn in the revised paths | 24.87°               | 24.19°               |
+| Largest elbow displacement, before → after   | 4.82% → 4.45% height | 5.49% → 4.12% height |
+| Rest-return error                            | 0                    | 0                    |
+| Weight requests / loaded ModelRig            | 0 / no               | 0 / no               |
+
+The before/after strips show the same inward hand movement from rest through
+0.5%, 1%, 1.5% and 2% of height, including Flip Bend. The revised elbow motion is
+more gradual. Near full extension, even a small inward target change can still
+produce a larger joint displacement because fixed-length segments must bend.
+
+![Fine hand interaction before and after](iteration-4/fine-hand-comparison.png)
+
+The repeated skeleton-only comparisons retain Odette's 8.11% / 8.06% forward
+elbow offsets and zero rest-return error on all three models. The saved paths
+remain finite, preserve segment lengths and anchors, and show no unexpected
+bend-sign changes. Chisa's duplicate displacement remains zero. The existing
+lifecycle coverage also checks a fine inward adjustment before and after a flip.
+
+### Controlled left-arm deformation
+
+After inspecting the revised hand drags, the experiment proceeds with only
+Remielle's left arm. `tools/evaluate_geometry_arm.py --deform-left-arm` first
+fits the independent geometry skeleton, then decodes the retained authored Blend
+streams. It reuses the existing source-graph construction, ModelJoint
+reconciliation, binding and position/normal deformation helpers in a disposable
+evaluation session. Authored indices and weights are unchanged and unnormalized.
+Only transforms belonging to `left_upper_arm` and `left_lower_arm` are applied;
+other influences retain their authored rest contribution.
+
+The comparator is the current automatic humanoid Rig, constructed with the same
+anatomical axes and the existing weight-inferred ModelJoint binding. Its control
+positions currently use the proportional geometry template; it is not a new
+skeleton inferred from weights for this experiment. Both rigs use the same
+authored streams, binding rules and height-normalized up/forward or up/backward
+target displacement. Geometry generates its controls before skinning data is
+loaded. The camera frame and image crop are shared, and the overlay is hidden
+only in these mesh-quality captures.
+
+| Deformation check                                 | Current automatic Rig | Geometry Rig |
+| ------------------------------------------------- | --------------------- | ------------ |
+| Arm-bound ModelJoints                             | 57                    | 46           |
+| Moved vertices, including inactive draws          | 11,880                | 9,418        |
+| Moved displayed hair vertices                     | 951                   | 0            |
+| Moved displayed leg vertices                      | 5                     | 5            |
+| Forward changed-edge length ratio, p95 / maximum  | 1.49 / 4.91           | 1.38 / 4.56  |
+| Backward changed-edge length ratio, p95 / maximum | 1.87 / 9.27           | 2.77 / 10.13 |
+
+Edge ratios compare posed and authored rest lengths on displayed triangles,
+deduplicating edges per draw and excluding rest edges shorter than 0.001% of
+height. The percentile covers changed edges rather than all edges. These are
+distortion diagnostics, not anatomical ground truth. Moved-vertex counts use a
+0.0001%-of-height cutoff; displayed draws are listed separately in the raw data.
+
+![Current and geometry left-arm deformation](iteration-4/one-arm-deformation.png)
+
+Both forward and backward targets are reached and all output positions/normals
+are finite. Vertices with no bound-arm influence remain fixed. Returning to rest
+restores positions and normals exactly, and neither fitted controls nor authored
+influences change. A neutral synthetic lifecycle checks these contracts through
+the experiment's helpers. The production Weight UI and ModelRig remain inactive;
+the evaluation explicitly reads skinning data outside that UI.
+
+The geometry binding avoids the comparator's hair movement and has a smaller
+forward edge-stretch percentile, but backward stretching is worse. The shared
+leg leakage and visible shoulder/cloth pulling show that automatic deformation
+ownership still needs review. The experiment does not establish an overall
+quality improvement. Keep it limited to this arm and model; review binding
+boundaries before expanding to other limbs or games. No production deformation,
+Weight assignment, pose persistence or ModelJoint algorithm changes are made.
+PR #180 remains open and unmerged.
+
+The [compact measurements](iteration-4/measurements.json) retain the interaction
+aggregates, regression checks, arm controls, binding counts and deformation
+diagnostics. To reproduce with the same displayed mod variant:
+
+```text
+python tools/evaluate_geometry_arm.py <mod-folder> --near-rest --output <capture-folder>
+python tools/evaluate_geometry_arm.py <mod-folder> --deform-left-arm --output <capture-folder>
+```
+
+Use a compatible browser/WebGPU environment. The first command drives the
+existing viewport controls; the second is an explicit evaluation operation.
+Browser/rendering tests remain outside the normal GitHub CI selection.
