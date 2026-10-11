@@ -672,3 +672,152 @@ ownership/skeleton and pivot controls. It never saves metadata or edits source
 buffers. Production Weight, binding rules, reconciliation, deformation and IK
 remain unchanged. Keep PR #180 open and unmerged, and report this result before
 expanding beyond this arm or model.
+
+### Iteration 6 — test generic ownership on both arms
+
+The evidence supports a small **within-limb segment ownership refinement** as
+an experimental candidate. The same fixed rule independently corrects two
+forearm-owned influences on each arm and improves forward deformation on both.
+It does not establish that vertex support is better than pivot-to-segment
+distance, and does not solve the shoulder/cloth boundary. All assignments stay
+in the evaluator; production binding, Weight, geometry fitting and IK are
+unchanged. Keep PR #180 open and unmerged.
+
+#### Why the shoulder edge collapses
+
+The original backward-compressed edge is still source-body vertices
+13332 / 13352, sample index 8895, at 0.234×. Its moving influences 71, 70 and 127
+all receive the **same rigid upper-arm transform**; influences 66 and 63 remain
+on the stationary neck. With rest edge `e`, midpoint `m`, transform `T`, rotation
+`R` and total moving endpoint weights `wA`, `wB`, the posed edge decomposes as
+`e + mean(wA,wB)*(R*e-e) + (wB-wA)*(T*m-m)`. The saved trace also accounts for
+the existing helper's over-unit weight behavior; that term is zero here.
+
+| Component | Recorded result |
+| --- | ---: |
+| Rigid arm rotation alone | 1.000× edge length |
+| Uniform average arm weight alone | 0.914× |
+| Endpoint arm weights | 0.768870 / 0.918188 |
+| Opposing weight-gradient vector magnitude / rest edge length | 0.748× |
+| Reconstructed / displayed length | 0.234083 / 0.234086× |
+
+The differential-weight term cancels much of the rotated edge. This is a blend
+boundary interacting with simplified driver motion, rather than a stretching
+arm matrix. Individual inferred ModelJoint pivots cancel after correct rest
+rebasing when their owner is the same rigid driver. The driver's pivot still
+affects `T*m-m`: Iteration 5's position-only translation moves this particular
+edge to 1.684×, but creates a different 0.241× compressed edge and worsens the
+backward maximum to 7.617×. It therefore does not supply a general pivot fix.
+The [two signed compression traces](iteration-6/compression-trace.json) retain
+source aliases, joint pivots, drivers, weights and vectors.
+
+#### Compare support with pivot proximity
+
+Using already decoded authored influences, the evaluator gives each displayed
+rest triangle's vertices one third of its area. For each existing arm-owned
+ModelJoint, it accumulates `area * authoredWeight * squaredDistanceToSegment`
+over those vertices and source aliases, divides by its total support mass, and
+normalizes by height squared. This is area-lumped vertex quadrature, not an
+exact surface integral. Displayed duplicate draws, tessellation and the fitted
+skeleton can bias it; it supplies proximity evidence, not anatomical labels.
+No additional Weight system or source hierarchy is built.
+
+Three candidates use existing driver segments: nearest inferred pivot across
+all 15 drivers, lowest support score across those same drivers, and lowest
+support score between the **already assigned limb's upper and lower arm**.
+They change respectively 24, 20 and 4 of the 92 supported arm-owned joints.
+All other owners stay fixed, including source aliases. Ties use driver IDs;
+there are no new distance cutoffs, margin thresholds or component exclusions.
+The broad pivot comparison separates segment representation from support data.
+
+All IDs below are measurement evidence from
+`remielle2bodyblend.buf|offset=0`; none selects implementation behavior:
+
+| Source influences → ModelJoints | Original driver | Pivot segment / support segment |
+| --- | --- | --- |
+| Left 170–171 → 80–81 | Left forearm | Both select left upper arm |
+| Right 172–173 → 82–83 | Right forearm | Both select right upper arm |
+| Left 70 → 184 | Left upper arm | Both keep upper arm |
+| Left 71 → 185 | Left upper arm | Connector / upper arm |
+| Left 127 → 32 | Left upper arm | Both select chest–shoulder connector |
+| Left 72–75 → 186–189 | Left upper arm | Both select chest–shoulder connector |
+
+Influence 71's pivot scores tie at the common shoulder endpoint, while its
+support favors upper arm. Influence 127's support scores are nearly tied:
+0.00155974 for the connector versus 0.00156150 for upper arm. Moving 127 to the
+stationary connector increases the problematic edge's weight-gradient term
+from 0.748× to 0.818× and worsens its compression to 0.201×. Thus an unconstrained
+argmin can reduce stretch while damaging a shared blend boundary.
+
+#### Opposite arm and intermediate flexion
+
+Both arms use unchanged controls, authored weights, independent IK and frozen
+samples: 16,785 left edges (the prior digest) and 16,996 right edges. Four original
+extreme identities per pose remain tracked for every candidate. Half targets
+move the hand 6% of height up and forward/backward; full targets move it 12%.
+The resulting flexion angles are 58.4–60.1° at half displacement and 61.5–64.9°
+at full displacement, compared with 4.1–5.4° at rest. These are intermediate
+solved angles, not half-angle interpolation; both targets are reached and arm
+segment lengths are preserved.
+
+| Arm / pose | Original max / min | Within-arm support max / min | Edges above 2×, original → candidate |
+| --- | ---: | ---: | ---: |
+| Left forward half | 4.303 / 0.417× | 2.899 / 0.543× | 15 → 8 |
+| Left forward full | 4.558 / 0.382× | 3.056 / 0.540× | 20 → 16 |
+| Left backward half | 4.233 / 0.306× | 3.905 / 0.306× | 58 → 51 |
+| Left backward full | 5.725 / 0.234× | 5.725 / 0.234× | 122 → 118 |
+| Right forward half | 4.029 / 0.482× | 2.735 / 0.561× | 15 → 8 |
+| Right forward full | 4.215 / 0.448× | 2.865 / 0.583× | 19 → 13 |
+| Right backward half | 3.976 / 0.332× | 3.825 / 0.332× | 54 → 47 |
+| Right backward full | 5.578 / 0.202× | 5.578 / 0.202× | 113 → 106 |
+
+The narrow rule reduces full forward maxima by 33% left and 32% right without
+worsening these measured arm extrema. It leaves the worst backward cloth
+stretch and shoulder compression unresolved. The prior six left-only inputs
+leave right-arm-only results unchanged. Pivot-to-segment distance independently
+agrees on all four narrow corrections, so this result supports **segment-aware
+ownership**, not a claim that support distribution alone is more reliable.
+
+The broad candidates offer larger backward stretch reductions but regress
+compression: left full backward minima become 0.217× with pivot segments and
+0.201× with support segments; the pivot candidate raises below-half edges from
+12 to 47. Right pivot segments similarly raise below-half edges from 13 to 56.
+Those assignments are unsuitable for blanket adoption despite lower maxima.
+
+#### Small torso movement and retained evidence
+
+A 6° forward torso bend rotates chest, neck, head and both arm control chains
+about the pelvis, with the existing upper-body drivers active. The previous
+72–75 torso assignments participate in 1,434 / 272 / 474 / 225 moved body-draw
+vertices respectively, plus small sibling-draw overlaps. These are vertices
+carrying each influence, not disjoint counts. Clothing therefore moves during
+this pose instead of merely being frozen by an arm-only test.
+
+On the fixed left shoulder sample, original / six diagnostic torso results are
+1.309 / 0.899× and 1.043 / 0.899× max/min. Broad support gives 1.072 / 0.869× left
+and 1.073 / 0.864× right: reduced stretch again does not imply better compression.
+The narrow candidate leaves these torso extrema unchanged. This is a small
+controlled movement, not full-body anatomical validation; changed edges outside
+the arm samples still stretch as much as 2.526× with the six diagnostic inputs.
+
+![Opposite-arm intermediate pose and small torso movement](iteration-6/binding-comparison.png)
+
+The [compact measurements](iteration-6/measurements.json) store the 92 joint
+facts once, candidate inputs once, ten actual poses once, all fifty comparisons,
+fixed edge identities, moving clothing references and restoration checks.
+`factColumns` and `scoreColumns` describe the compact tables. Only this cropped
+comparison image and the compression trace are added; raw repeated captures
+and intermediate browser reports are not retained. The existing neutral arm
+lifecycle now exercises both sides, support evaluation, torso motion and exact
+restoration, without adding test cases or CI browser jobs.
+
+```text
+python tools/evaluate_geometry_arm.py <mod-folder> --study-binding --ownership-overrides docs/experiments/geometry-rig/iteration-5/ownership-overrides.json --output <output-folder>
+```
+
+Use the same displayed variant in a compatible browser/WebGPU environment.
+Omitting the optional override file still runs all generic comparisons. No
+source buffers or metadata are written, and no Weight UI analysis is requested.
+The next production candidate can remain a small arm-segment assignment change;
+broader shoulder/torso ownership needs blend-boundary evidence before adoption.
+These results do not require another Weight-derived skeleton architecture.

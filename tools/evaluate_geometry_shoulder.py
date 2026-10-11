@@ -12,13 +12,13 @@ from evaluate_geometry_arm import (
 )
 
 
-SELECT_SCENARIO = """async ({skeleton,ownership,overrides=[],translateShoulder=false}) => {
+SELECT_SCENARIO = """async ({skeleton,ownership,overrides=[],translateShoulder=false,includeUpperBody=false}) => {
   const {buildHumanoidDriverFrames,restJointWorldMatrix}=await import('./js/weight-rig/humanoid-rig-binding.js');
   const {rebuildHumanoidControlPaths}=await import('./js/weight-rig/humanoid-control-rig.js');
-  const d=__armDeform,rig=structuredClone(d.controls[skeleton]);
+  const d=__armDeform,rig=structuredClone(d.controls[skeleton]),side=d.side||'left';
   if(translateShoulder) {
-    const delta=d.controls.current.controls.leftShoulder.position.map((v,i)=>v-rig.controls.leftShoulder.position[i]);
-    for(const key of ['leftShoulder','leftElbow','leftHand'])
+    const delta=d.controls.current.controls[side+'Shoulder'].position.map((v,i)=>v-rig.controls[side+'Shoulder'].position[i]);
+    for(const key of ['Shoulder','Elbow','Hand'].map(key=>side+key))
       rig.controls[key].position=rig.controls[key].position.map((v,i)=>v+delta[i]);
     rebuildHumanoidControlPaths(rig);
   }
@@ -28,7 +28,7 @@ SELECT_SCENARIO = """async ({skeleton,ownership,overrides=[],translateShoulder=f
     const jointId=d.reconciled.sourceBoneToModelJointMap.get(d.sourceBoneKey(change.sourceKey,change.boneId));
     const before=owners.get(jointId),driver=drivers.get(change.driverId);
     if(jointId===undefined||!before||!driver||changedJoints.has(jointId)||
-      !['left_upper_arm','left_lower_arm'].includes(before.driverId))
+      !['left_upper_arm','left_lower_arm','right_upper_arm','right_lower_arm'].includes(before.driverId))
       throw new Error('Invalid diagnostic arm influence override');
     changedJoints.add(jointId);
     owners.set(jointId,{...before,driverId:change.driverId,bindingMethod:'diagnostic_override',
@@ -42,8 +42,9 @@ SELECT_SCENARIO = """async ({skeleton,ownership,overrides=[],translateShoulder=f
     rebased.set(jointId,{...owner,localMatrix:driver.matrix.clone().invert().multiply(rest),restJointWorld:rest});
   }
   d.controls.diagnostic=rig;d.allJointBindings.diagnostic=rebased;
-  d.bindings.diagnostic={jointBindings:new Map([...rebased].filter(([,owner])=>
-    ['left_upper_arm','left_lower_arm'].includes(owner.driverId)))};
+  d.bindings.diagnostic={jointBindings:new Map([...rebased].filter(([,owner])=>includeUpperBody
+    ? !owner.driverId.includes('leg')&&!owner.driverId.includes('hip')
+    : [`${side}_upper_arm`,`${side}_lower_arm`].includes(owner.driverId)))};
   const restTransforms=d.buildHumanoidDriverBaseTransforms({binding:d.bindings.diagnostic,controlRig:rig,modelRig:d.model}).result;
   const identity=new d.THREE.Matrix4().elements;
   const restTransformMaxError=Math.max(0,...[...restTransforms.values()].flatMap(matrix=>
@@ -101,9 +102,27 @@ EDGE_DIAGNOSTICS = """({positions,movement,freezeTracked=false,limit=8}) => {
         projectedContributionRestLength:row.vector.dot(posedVector.clone().normalize())/edge.rest,
         withoutInfluenceRatio:posedVector.clone().sub(row.vector).length()/edge.rest};
     }).sort((a,b)=>b.contributionRestLength-a.contributionRestLength);
+    const active=influences.filter(row=>result.has(row.jointId));
+    let singleDriverBlend=null;
+    if(active.length&&new Set(active.map(row=>row.driverId)).size===1) {
+      const matrix=result.get(active[0].jointId),midpoint=restPoints[0].clone().add(restPoints[1]).multiplyScalar(.5);
+      const weights=[0,1].map(endpoint=>active.reduce((sum,row)=>sum+row.endpointWeights[endpoint],0));
+      const restEdge=restPoints[1].clone().sub(restPoints[0]);
+      const rotated=restEdge.clone().applyMatrix3(new d.THREE.Matrix3().setFromMatrix4(matrix));
+      const uniform=restEdge.clone().addScaledVector(rotated.clone().sub(restEdge),(weights[0]+weights[1])*.5);
+      const gradient=midpoint.clone().applyMatrix4(matrix).sub(midpoint).multiplyScalar(weights[1]-weights[0]);
+      const overUnit=restPoints[1].clone().multiplyScalar(Math.max(0,weights[1]-1))
+        .addScaledVector(restPoints[0],-Math.max(0,weights[0]-1));
+      singleDriverBlend={driverId:active[0].driverId,endpointMovingWeights:weights,
+        rigidRatio:rotated.length()/edge.rest,uniformWeightRatio:uniform.length()/edge.rest,
+        uniformVector:uniform.toArray(),weightGradientVector:gradient.toArray(),
+        overUnitVector:overUnit.toArray(),
+        gradientRestLength:gradient.length()/edge.rest,
+        reconstructedRatio:uniform.clone().add(gradient).add(overUnit).length()/edge.rest};
+    }
     return {sampleIndex:edge.index,mesh:mesh.userData.semanticKey,vertices:[edge.a,edge.b],
       restPoints:restPoints.map(p=>p.toArray()),restLengthHeight:edge.rest/d.geometry.frame.height,
-      ratio:edge.ratio,reconstructionErrorHeight:reconstructed.distanceTo(posedVector)/d.geometry.frame.height,influences};
+      ratio:edge.ratio,reconstructionErrorHeight:reconstructed.distanceTo(posedVector)/d.geometry.frame.height,influences,singleDriverBlend};
   };
   rows.sort((a,b)=>b.ratio-a.ratio);
   if(freezeTracked) {
@@ -168,12 +187,12 @@ SHOULDER_CAPTURE = """async () => {
   const d=__armDeform,mesh=d.meshes.find(m=>m.visible);
   mesh.updateWorldMatrix(true,false);
   const canvas=renderer.domElement.getBoundingClientRect();
-  const frame=d.geometry.frame,shoulder=d.geometry.controls.leftShoulder.position;
+  const frame=d.geometry.frame,side=d.side||'left',shoulder=d.geometry.controls[side+'Shoulder'].position;
   const center=new d.THREE.Vector3(...shoulder);
   const points=[];
   // One frozen anatomical crop covers the shoulder, nearby cloth and elbow.
-  for(const side of [-.19,.13]) for(const up of [-.18,.11]) for(const depth of [-.14,.14])
-    points.push(center.clone().addScaledVector(new d.THREE.Vector3(...frame.right),side*frame.height)
+  for(const lateral of side==='left'?[-.19,.13]:[-.13,.19]) for(const up of [-.18,.11]) for(const depth of [-.14,.14])
+    points.push(center.clone().addScaledVector(new d.THREE.Vector3(...frame.right),lateral*frame.height)
       .addScaledVector(new d.THREE.Vector3(...frame.up),up*frame.height)
       .addScaledVector(new d.THREE.Vector3(...frame.forward),depth*frame.height)
       .applyMatrix4(mesh.matrixWorld).project(camera));
@@ -313,4 +332,228 @@ def evaluate_shoulder(
         }
     )
     report["influenceSupport"] = page.evaluate(INFLUENCE_SUPPORT, joint_ids)
+    return report
+
+
+SUPPORT_OWNERSHIP = """async () => {
+  const {buildHumanoidDriverFrames}=await import('./js/weight-rig/humanoid-rig-binding.js');
+  const d=__armDeform,rig=d.controls.geometry,drivers=[...buildHumanoidDriverFrames(rig).values()];
+  const armIds=new Set(['left_upper_arm','left_lower_arm','right_upper_arm','right_lower_arm']);
+  const candidates=new Map([...d.allJointBindings.geometry].filter(([,owner])=>armIds.has(owner.driverId))
+    .map(([jointId,owner])=>[jointId,{jointId,owner,mass:0,scores:new Array(drivers.length).fill(0)}]));
+  const distance=(point,driver)=>{
+    const delta=driver.end.clone().sub(driver.start),at=d.THREE.MathUtils.clamp(
+      point.clone().sub(driver.start).dot(delta)/delta.lengthSq(),0,1);
+    return point.distanceToSquared(driver.start.clone().addScaledVector(delta,at));
+  };
+  let displayedTriangles=0;
+  for(let meshIndex=0;meshIndex<d.meshes.length;meshIndex++) {
+    const mesh=d.meshes[meshIndex],state=d.runtime.stateFor(mesh);
+    if(!mesh.visible||!state.loaded) continue;
+    const base=d.baselines[meshIndex].positions,indices=mesh.geometry.index?.array;
+    const count=indices?.length||base.length/3,start=mesh.geometry.drawRange.start;
+    const end=Math.min(count,start+mesh.geometry.drawRange.count),areas=new Float64Array(base.length/3);
+    const point=v=>new d.THREE.Vector3(...base.slice(v*3,v*3+3));
+    for(let at=start;at+2<end;at+=3) {
+      const vertices=[0,1,2].map(i=>indices?indices[at+i]:at+i),points=vertices.map(point);
+      const area=points[1].clone().sub(points[0]).cross(points[2].clone().sub(points[0])).length()/2;
+      if(!(area>0)) continue;displayedTriangles++;
+      for(const vertex of vertices) areas[vertex]+=area/3;
+    }
+    for(let vertex=0;vertex<areas.length;vertex++) {
+      if(!(areas[vertex]>0)) continue;
+      const distances=drivers.map(driver=>distance(point(vertex),driver));
+      for(let slot=0;slot<state.influenceCount;slot++) {
+        const at=vertex*state.influenceCount+slot,weight=state.weights[at];
+        const jointId=d.reconciled.sourceBoneToModelJointMap.get(d.sourceBoneKey(state.skinningSourceKey,state.indices[at]));
+        const row=candidates.get(jointId);
+        if(!row||!(weight>0)) continue;
+        const mass=areas[vertex]*weight;row.mass+=mass;
+        distances.forEach((value,i)=>row.scores[i]+=mass*value);
+      }
+    }
+  }
+  const facts=[],support=[],pivot=[],withinArm=[];
+  for(const row of candidates.values()) {
+    if(!(row.mass>0)) continue;
+    const joint=d.model.joints.find(j=>j.jointId===row.jointId),member=joint.members[0];
+    const raw=d.model.jointPivotByJointId.get(row.jointId);
+    const point=raw?.isVector3?raw.clone():new d.THREE.Vector3(...(Array.isArray(raw)?raw:[raw.x,raw.y,raw.z]));
+    const scores=drivers.map((driver,i)=>({driverId:driver.id,
+      supportScoreHeightSquared:row.scores[i]/row.mass/rig.frame.height**2,
+      pivotScoreHeightSquared:distance(point,driver)/rig.frame.height**2}));
+    const bySupport=[...scores].sort((a,b)=>a.supportScoreHeightSquared-b.supportScoreHeightSquared||a.driverId.localeCompare(b.driverId));
+    const byPivot=[...scores].sort((a,b)=>a.pivotScoreHeightSquared-b.pivotScoreHeightSquared||a.driverId.localeCompare(b.driverId));
+    const side=row.owner.driverId.startsWith('left_')?'left':'right';
+    const armScores=bySupport.filter(score=>[`${side}_upper_arm`,`${side}_lower_arm`].includes(score.driverId));
+    const input={sourceKey:member.sourceKey,boneId:member.boneId,group:'spatial_support'};
+    if(bySupport[0].driverId!==row.owner.driverId) support.push({...input,driverId:bySupport[0].driverId});
+    if(byPivot[0].driverId!==row.owner.driverId) pivot.push({...input,driverId:byPivot[0].driverId});
+    if(armScores[0].driverId!==row.owner.driverId) withinArm.push({...input,driverId:armScores[0].driverId});
+    facts.push({jointId:row.jointId,jointMembers:joint.members,originalDriver:row.owner.driverId,
+      originalBindingMethod:row.owner.bindingMethod,restJointPivot:point.toArray(),supportMass:row.mass,
+      supportChoice:bySupport[0].driverId,pivotChoice:byPivot[0].driverId,
+      originalScores:scores.find(score=>score.driverId===row.owner.driverId),
+      armSegmentChoice:armScores[0].driverId,armSegmentScores:armScores,
+      supportRanking:bySupport.slice(0,3),pivotRanking:byPivot.slice(0,3)});
+  }
+  return {definition:'area_lumped_authored_weight_mean_squared_distance_to_existing_rest_driver_segments',
+    scope:'existing_upper_or_lower_arm_owners_only',displayedTriangles,
+    facts,supportOverrides:support,pivotOverrides:pivot,armSegmentOverrides:withinArm};
+}"""
+
+
+TORSO_POSE = """() => {
+  const d=__armDeform,rig=d.controls.diagnostic,pivot=new d.THREE.Vector3(...rig.controls.pelvis.position);
+  const rotation=new d.THREE.Quaternion().setFromAxisAngle(new d.THREE.Vector3(...rig.frame.right),6*Math.PI/180);
+  const keys=['chest','neck','head',...['left','right'].flatMap(side=>['Shoulder','Elbow','Hand'].map(key=>side+key))];
+  const positions=Object.fromEntries(keys.map(key=>[key,new d.THREE.Vector3(...rig.controls[key].position)
+    .sub(pivot).applyQuaternion(rotation).add(pivot).toArray()]));
+  return {positions,pose:{rotationDegrees:6,axis:rig.frame.right,pivot:pivot.toArray(),
+    restControls:Object.fromEntries(keys.map(key=>[key,rig.controls[key].position])),solvedControls:positions}};
+}"""
+
+
+def evaluate_binding_study(
+    page, context, output, *, overrides=(), capture_views=("front",)
+):
+    """Evaluate one fixed support metric on both arms and a coupled torso pose."""
+    report = {}
+    for side in ("left", "right"):
+        baseline = evaluate_deformation(
+            page, context, output, capture_views=(), side=side
+        )
+        evidence = page.evaluate(SUPPORT_OWNERSHIP)
+        candidates = [
+            ("original", []),
+            ("pivot_segments", evidence["pivotOverrides"]),
+            ("support_segments", evidence["supportOverrides"]),
+            ("support_within_arm", evidence["armSegmentOverrides"]),
+        ]
+        if overrides:
+            candidates.append(("diagnostic_six", overrides))
+        study = {"setup": baseline["setup"], "evidence": evidence, "cases": {}}
+        try:
+            for name, changes in candidates:
+                cases = {}
+                for movement, forward, scale in (
+                    ("forward_half", 0.12, 0.5),
+                    ("forward_full", 0.12, 1),
+                    ("backward_half", -0.12, 0.5),
+                    ("backward_full", -0.12, 1),
+                    ("torso_small", 0, 0),
+                ):
+                    selection = page.evaluate(
+                        SELECT_SCENARIO,
+                        {
+                            "skeleton": "geometry",
+                            "ownership": "geometry",
+                            "overrides": changes,
+                            "includeUpperBody": movement == "torso_small",
+                        },
+                    )
+                    solved = (
+                        page.evaluate(TORSO_POSE)
+                        if movement == "torso_small"
+                        else page.evaluate(
+                            SOLVE_ARM_POSE,
+                            {"mode": "diagnostic", "forward": forward, "scale": scale},
+                        )
+                    )
+                    positions = solved.pop("positions")
+                    row = page.evaluate(
+                        DEFORM_POSE, {"mode": "diagnostic", "positions": positions}
+                    )
+                    if movement == "torso_small":
+                        row["diagnosticInfluences"] = [
+                            {
+                                "mesh": mesh["mesh"],
+                                **{
+                                    key: trace[key]
+                                    for key in (
+                                        "sourceKey",
+                                        "boneId",
+                                        "jointId",
+                                        "driverId",
+                                        "vertexCount",
+                                    )
+                                },
+                            }
+                            for mesh in row["displayedMeshes"]
+                            for trace in mesh["movingInfluences"]
+                            if any(
+                                trace["sourceKey"] == change["sourceKey"]
+                                and trace["boneId"] == change["boneId"]
+                                for change in overrides
+                            )
+                        ]
+                    # Retain draw movement totals, without repeating full influence traces.
+                    row["displayedMeshes"] = [
+                        {"mesh": mesh["mesh"], "movedVertices": mesh["movedVertices"]}
+                        for mesh in row["displayedMeshes"]
+                    ]
+                    edges = page.evaluate(
+                        EDGE_DIAGNOSTICS,
+                        {
+                            "positions": positions,
+                            "movement": movement,
+                            "freezeTracked": name == "original",
+                            "limit": 2,
+                        },
+                    )
+                    for kind in ("stretched", "compressed"):
+                        for edge in edges[kind]:
+                            manifest = context.skinning_manifest.get(edge["mesh"])
+                            if manifest:
+                                edge["authoredVertices"] = [
+                                    manifest.used_vertices[v] for v in edge["vertices"]
+                                ]
+                    cases[movement] = {
+                        **solved,
+                        **row,
+                        "selection": selection,
+                        "worstEdges": edges,
+                    }
+                    capture = (
+                        side == "right"
+                        and name in ("original", "support_within_arm")
+                        and movement == "backward_half"
+                    ) or (
+                        side == "left"
+                        and name in ("original", "diagnostic_six")
+                        and movement == "torso_small"
+                    )
+                    if capture:
+                        for view in capture_views:
+                            page.evaluate(
+                                CAPTURE_VIEW,
+                                {
+                                    "view": view,
+                                    "mode": "geometry",
+                                    "baseline": None,
+                                    "preservePose": True,
+                                    "referenceFrame": baseline["setup"][
+                                        "referenceFrame"
+                                    ],
+                                },
+                            )
+                            clip = page.evaluate(SHOULDER_CAPTURE)
+                            page.screenshot(
+                                path=str(
+                                    output
+                                    / f"study-{side}-{name}-{movement}-{view}.png"
+                                ),
+                                clip=clip,
+                            )
+                cases["returnToRest"] = page.evaluate(
+                    DEFORM_POSE, {"mode": "diagnostic", "positions": {}}
+                )
+                study["cases"][name] = cases
+        finally:
+            page.evaluate(DEFORM_POSE, {"mode": "geometry", "positions": {}})
+            page.evaluate("""() => {
+              delete __armDeform.controls.diagnostic;delete __armDeform.bindings.diagnostic;
+              delete __armDeform.allJointBindings.diagnostic;delete __armDeform.shoulderTracked;
+            }""")
+        report[side] = study
     return report

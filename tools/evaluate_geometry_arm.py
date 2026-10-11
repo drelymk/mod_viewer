@@ -220,7 +220,7 @@ def authored_skin_payload(context):
     return meshes, b"".join(pieces)
 
 
-DEFORMATION_SETUP = """async ({entries,url}) => {
+DEFORMATION_SETUP = """async ({entries,url,side='left'}) => {
   const THREE=await import('three');
   const {createWeightRuntimeState}=await import('./js/weight-rig/weight-runtime.js');
   const {createSkinningRuntime}=await import('./js/weight-rig/skinning-runtime.js');
@@ -266,7 +266,7 @@ DEFORMATION_SETUP = """async ({entries,url}) => {
     const binding=buildHumanoidRigBinding({controlRig,modelRig:model});
     allJointBindings[name]=new Map(binding.jointBindings);
     binding.jointBindings=new Map([...binding.jointBindings].filter(([,v])=>
-      ['left_upper_arm','left_lower_arm'].includes(v.driverId)));
+      [`${side}_upper_arm`,`${side}_lower_arm`].includes(v.driverId)));
     return [name,binding];
   }));
   const baselines=meshes.map(mesh=>({positions:new Float32Array(mesh.geometry.attributes.position.array),
@@ -277,7 +277,7 @@ DEFORMATION_SETUP = """async ({entries,url}) => {
   // Freeze one rest-space arm envelope and its displayed edges for both modes.
   // This sampling radius measures a region; it never changes influence ownership.
   const radius=geometry.frame.height*.08;
-  const chains=Object.values(controls).map(r=>['leftShoulder','leftElbow','leftHand']
+  const chains=Object.values(controls).map(r=>['Shoulder','Elbow','Hand'].map(key=>side+key)
     .map(key=>new THREE.Vector3(...r.controls[key].position)));
   const inRegion=point=>chains.some(chain=>[0,1].some(i=>{
     const delta=chain[i+1].clone().sub(chain[i]);
@@ -311,7 +311,7 @@ DEFORMATION_SETUP = """async ({entries,url}) => {
     .map(v=>v.toString(16).padStart(2,'0')).join('');
   const commonRegion={definition:'union_of_both_rest_arm_capsules',radiusHeight:.08,
     minimumRestEdgeHeight:1e-5,edgeCount:commonEdges.length,sampleDigest,edgesByMesh};
-  window.__armDeform={THREE,geometry,geometryIdentity,controls,bindings,allJointBindings,model,reconciled,runtime,meshes,baselines,originalWeights,
+  window.__armDeform={THREE,side,geometry,geometryIdentity,controls,bindings,allJointBindings,model,reconciled,runtime,meshes,baselines,originalWeights,
     commonEdges,commonRegion,
     buildHumanoidDriverBaseTransforms,applyWeightedTransformDeformationInto,applyWeightedNormalDeformationInto,sourceBoneKey};
   return {sourceCount:sources.length,jointCount:model.joints.length,
@@ -323,28 +323,28 @@ DEFORMATION_SETUP = """async ({entries,url}) => {
 }"""
 
 
-SOLVE_ARM_POSE = """async ({mode,forward}) => {
+SOLVE_ARM_POSE = """async ({mode,forward,scale=1}) => {
   const {solveHumanoidControlIk}=await import('./js/weight-rig/humanoid-rig-ik.js');
   const d=__armDeform,rig=d.controls[mode],height=d.geometry.frame.height;
-  const keys=['leftShoulder','leftElbow','leftHand'];
+  const side=d.side||'left',keys=['Shoulder','Elbow','Hand'].map(key=>side+key);
   const restControls=Object.fromEntries(keys.map(key=>[key,[...rig.controls[key].position]]));
-  const displacement=rig.frame.up.map((v,i)=>height*(v*.12+rig.frame.forward[i]*forward));
-  const target=restControls.leftHand.map((v,i)=>v+displacement[i]);
-  const restAxis=new d.THREE.Vector3(...restControls.leftHand)
-    .sub(new d.THREE.Vector3(...restControls.leftShoulder)).normalize();
+  const displacement=rig.frame.up.map((v,i)=>height*scale*(v*.12+rig.frame.forward[i]*forward));
+  const target=restControls[keys[2]].map((v,i)=>v+displacement[i]);
+  const restAxis=new d.THREE.Vector3(...restControls[keys[2]])
+    .sub(new d.THREE.Vector3(...restControls[keys[0]])).normalize();
   const anatomical=new d.THREE.Vector3(...rig.frame.forward).negate();
   anatomical.addScaledVector(restAxis,-anatomical.dot(restAxis)).normalize();
   // Use the same anatomical arm policy in each skeleton's own rest frame.
   // The solver takes that skeleton directly; no preview snapshot is modified.
   const bendDirection=anatomical.lengthSq()>1e-8?anatomical.toArray():null;
-  const solved=solveHumanoidControlIk({controlRig:rig,role:'left_arm',target,bendDirection});
+  const solved=solveHumanoidControlIk({controlRig:rig,role:`${side}_arm`,target,bendDirection});
   if(!solved.positions) throw new Error('The evaluated arm cannot be solved');
   const positions=Object.fromEntries(Object.entries(solved.positions).map(([key,v])=>
     [key,v.isVector3?v.toArray():v]));
   const anchor=new d.THREE.Vector3(...solved.anchor),axis=new d.THREE.Vector3(...solved.end).sub(anchor).normalize();
   const plane=new d.THREE.Vector3(...solved.bend).sub(anchor);
   plane.addScaledVector(axis,-plane.dot(axis)).normalize();
-  const restPlane=new d.THREE.Vector3(...restControls.leftElbow).sub(anchor);
+  const restPlane=new d.THREE.Vector3(...restControls[keys[1]]).sub(anchor);
   restPlane.addScaledVector(restAxis,-restPlane.dot(restAxis)).normalize();
   return {positions,reached:solved.reached,pose:{mode,restControls,
     solvedControls:Object.fromEntries(keys.map(key=>[key,positions[key]])),
@@ -418,7 +418,7 @@ DEFORM_POSE = """async ({mode,positions}) => {
               const assigned=d.allJointBindings[name].get(jointId);
               return [name,{driverId:assigned?.driverId||null,controlKey:assigned?.controlKey||null,
                 bindingMethod:assigned?.bindingMethod||null,
-                leftShoulderDistanceHeight:point.distanceTo(new d.THREE.Vector3(...controlRig.controls.leftShoulder.position))/controlRig.frame.height}];
+                [`${d.side||'left'}ShoulderDistanceHeight`]:point.distanceTo(new d.THREE.Vector3(...controlRig.controls[(d.side||'left')+'Shoulder'].position))/controlRig.frame.height}];
             }));
             let parent=jointId;
             while(parent!==null&&parent!==undefined&&!visited.has(parent)) {
@@ -476,14 +476,20 @@ DEFORM_POSE = """async ({mode,positions}) => {
 }"""
 
 
-def evaluate_deformation(page, context, output, *, capture_views=("front", "side")):
+def evaluate_deformation(
+    page, context, output, *, capture_views=("front", "side"), side="left"
+):
     from app.runtime import server
     from core.geometry.skinning import skinning_source_descriptor
 
     entries, blob = authored_skin_payload(context)
     setup = page.evaluate(
         DEFORMATION_SETUP,
-        {"entries": entries, "url": server.publish_geometry(blob, replace=False)},
+        {
+            "entries": entries,
+            "url": server.publish_geometry(blob, replace=False),
+            "side": side,
+        },
     )
     report = {"setup": setup, "modes": {}}
     for mode in ("current", "geometry"):
@@ -557,12 +563,18 @@ def main():
     parser.add_argument("--near-rest", action="store_true")
     parser.add_argument("--deform-left-arm", action="store_true")
     parser.add_argument("--diagnose-shoulder", action="store_true")
+    parser.add_argument("--study-binding", action="store_true")
     parser.add_argument("--ownership-overrides", type=Path)
     args = parser.parse_args()
-    if not (args.near_rest or args.deform_left_arm or args.diagnose_shoulder):
-        parser.error("Select --near-rest, --deform-left-arm or --diagnose-shoulder")
-    if args.ownership_overrides and not args.diagnose_shoulder:
-        parser.error("Ownership overrides require --diagnose-shoulder")
+    if not (
+        args.near_rest
+        or args.deform_left_arm
+        or args.diagnose_shoulder
+        or args.study_binding
+    ):
+        parser.error("Select an interaction, deformation or binding evaluation")
+    if args.ownership_overrides and not (args.diagnose_shoulder or args.study_binding):
+        parser.error("Ownership overrides require a binding diagnostic")
     args.output.mkdir(parents=True, exist_ok=True)
     mod = str(args.mod)
     source = mod_source_for_path(mod)
@@ -601,17 +613,25 @@ def main():
             report["nearRest"] = evaluate_near_rest(page, args.output)
         if args.deform_left_arm:
             report["deformation"] = evaluate_deformation(page, context, args.output)
-        if args.diagnose_shoulder:
-            from evaluate_geometry_shoulder import evaluate_shoulder
+        if args.diagnose_shoulder or args.study_binding:
+            from evaluate_geometry_shoulder import (
+                evaluate_binding_study,
+                evaluate_shoulder,
+            )
 
             overrides = (
                 json.loads(args.ownership_overrides.read_text(encoding="utf-8"))
                 if args.ownership_overrides
                 else []
             )
-            report["shoulder"] = evaluate_shoulder(
-                page, context, args.output, overrides=overrides
-            )
+            for enabled, key, operation in (
+                (args.diagnose_shoulder, "shoulder", evaluate_shoulder),
+                (args.study_binding, "bindingStudy", evaluate_binding_study),
+            ):
+                if enabled:
+                    report[key] = operation(
+                        page, context, args.output, overrides=overrides
+                    )
         report["invariants"] = page.evaluate("""() => ({
           restRigUnchanged:JSON.stringify(__evaluationRigApi.getModelRigState().geometryRigPreview.rig)===__armBefore.rest,
           positionsRestored:modViewer.activeMeshes.every((m,i)=>m.geometry.attributes.position.array.every((v,j)=>v===__armBefore.positions[i][j])),
@@ -629,6 +649,7 @@ def main():
                     "shoulderScenarios": list(
                         report.get("shoulder", {}).get("scenarios", {})
                     ),
+                    "bindingStudySides": list(report.get("bindingStudy", {})),
                 }
             ),
             flush=True,

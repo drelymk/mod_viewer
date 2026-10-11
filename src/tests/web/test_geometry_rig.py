@@ -488,7 +488,8 @@ def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monke
       window.modViewer.activeMeshes=fixture.meshes;
       const entries={},pieces=[];let offset=0;
       fixture.meshes.forEach((mesh,i)=>mesh.userData.semanticKey=`mesh-${i}`);
-      for(const [boneId,mesh] of [[0,fixture.meshes[3]],[1,fixture.meshes[4]]]) {
+      for(const [boneId,mesh] of [[0,fixture.meshes[3]],[1,fixture.meshes[4]],
+                                  [2,fixture.meshes[8]],[3,fixture.meshes[9]]]) {
         const count=mesh.geometry.attributes.position.count;
         const indices=new Uint32Array(count).fill(boneId), weights=new Float32Array(count).fill(1);
         entries[mesh.userData.semanticKey]={bone_ids:[boneId],vertex_count:count,influence_count:1,
@@ -569,6 +570,21 @@ def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monke
     correction = diagnostic["scenarios"]["geometry_corrected_owners"]["selection"]["overrides"]
     assert correction[0]["boneId"] == 0 and correction[0]["previousDriver"] == "left_lower_arm"
     assert page.evaluate("""() => !__armDeform.controls.diagnostic && fixture.meshes.every((mesh,i)=>
+      mesh.geometry.attributes.position.array.every((v,j)=>v===__experimentRest[i].positions[j])&&
+      mesh.geometry.attributes.normal.array.every((v,j)=>v===__experimentRest[i].normals[j]))""")
+    from evaluate_geometry_shoulder import evaluate_binding_study
+
+    study = evaluate_binding_study(page, SimpleNamespace(skinning_manifest={}), None, capture_views=())
+    for side, result in study.items():
+        assert result["setup"]["boundArmJoints"]["geometry"] > 0
+        for cases in result["cases"].values():
+            assert cases["backward_half"]["pose"]["restControls"][side + "Hand"] == result["setup"]["controls"]["geometry"][side + "Hand"]
+            assert cases["backward_full"]["reached"]
+            assert cases["torso_small"]["pose"]["rotationDegrees"] == 6
+            assert cases["torso_small"]["movedVertices"] > 0
+            assert cases["returnToRest"]["maxDisplacementHeight"] == 0
+            assert cases["backward_full"]["commonRegion"]["sampleDigest"] == result["setup"]["commonRegion"]["sampleDigest"]
+    assert page.evaluate("""() => fixture.meshes.every((mesh,i)=>
       mesh.geometry.attributes.position.array.every((v,j)=>v===__experimentRest[i].positions[j])&&
       mesh.geometry.attributes.normal.array.every((v,j)=>v===__experimentRest[i].normals[j]))""")
     page.evaluate("url=>URL.revokeObjectURL(url)", inputs["url"])
