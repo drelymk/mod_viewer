@@ -282,6 +282,20 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
         left_leg:['leftHip','leftKnee','leftFoot'],right_leg:['rightHip','rightKnee','rightFoot']};
       previewApi.setGeometryRigPreviewIkEnabled(true);
       const checks=[];
+      const original=roles.left_arm.map(key=>rest.controls[key].position);
+      const a=original[0], axis=rest.frame.right, back=rest.frame.forward.map(v=>-v);
+      const expectedPlanes=[];
+      for (const [depth,up,reliable] of [[0,0.009,false],[0.04,0.02,true],[-0.04,0.01,false]]) {
+        rest.controls.leftHand.position=a.map((v,i)=>v+height*0.25*axis[i]);
+        rest.controls.leftElbow.position=a.map((v,i)=>v+height*(0.125*axis[i]+depth*back[i]+up*rest.frame.up[i]));
+        previewApi.resetGeometryRigPreviewPose();
+        const preferred=previewApi.getModelRigState().geometryRigPreview.pose.limbs.left_arm.bendDirection;
+        const expected=reliable?back.map((v,i)=>v*depth+rest.frame.up[i]*up):back;
+        const size=Math.hypot(...expected);
+        expectedPlanes.push(distance(preferred,expected.map(v=>v/size))<1e-9);
+      }
+      roles.left_arm.forEach((key,i)=>rest.controls[key].position=original[i]);
+      previewApi.resetGeometryRigPreviewPose();
       for (const [role,keys] of Object.entries(roles)) {
         const before=structuredClone(previewApi.getModelRigState().geometryRigPreview.pose.positions);
         const points=keys.map(key=>rest.controls[key].position);
@@ -295,8 +309,9 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
           reached:preview.pose.limbs[role].reached, anchor:distance(posed[0],points[0]),
           isolated:Object.keys(before).every(key=>keys.includes(key)||JSON.stringify(before[key])===JSON.stringify(preview.pose.positions[key]))});
         const direction=end.map((v,i)=>v-points[0][i]), length=Math.hypot(...direction);
-        let previousBend=null;
-        for (const fraction of [0.96,0.99,0.999,1,1.01,1.02]) {
+        const preferred=JSON.stringify(previewApi.getModelRigState().geometryRigPreview.pose.limbs[role].bendDirection);
+        let previousBend=null, previousNormal=null;
+        for (const fraction of Array.from({length:81},(_,i)=>0.96+i*0.06/80)) {
           const target=points[0].map((v,i)=>v+direction[i]/length*(lengths[0]+lengths[1])*fraction);
           previewApi.solveGeometryRigPreviewIk(keys[2],target);
           const state=previewApi.getModelRigState().geometryRigPreview.pose;
@@ -304,13 +319,34 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
           const delta=bend.map((v,i)=>v-a[i]);
           const along=delta.reduce((sum,v,i)=>sum+v*direction[i]/length,0);
           const perpendicular=delta.map((v,i)=>v-direction[i]/length*along);
-          const sign=perpendicular.reduce((sum,v,i)=>sum+v*state.limbs[role].bendDirection[i],0);
-          checks.push({sign,finite:[...bend,...state.positions[keys[2]]].every(Number.isFinite),
+          const size=Math.hypot(...perpendicular);
+          const normal=size>height*1e-6?perpendicular.map(v=>v/size):null;
+          const alignment=normal&&previousNormal?normal.reduce((sum,v,i)=>sum+v*previousNormal[i],0):1;
+          checks.push({alignment,preferredStable:JSON.stringify(state.limbs[role].bendDirection)===preferred,
+            finite:[...bend,...state.positions[keys[2]]].every(Number.isFinite),
             jump:previousBend?distance(bend,previousBend)/height:0});
-          previousBend=bend;
+          previousBend=bend;if(normal) previousNormal=normal;
         }
         const clamped=previewApi.getModelRigState().geometryRigPreview.pose.limbs[role];
         checks.push({clamped:!clamped.reached && clamped.residual>0});
+        previousBend=null;
+        let maxReturnJump=0;
+        for(let step=80;step>=0;step--) {
+          const at=end.map((v,i)=>v+height*0.03*step/80*rest.frame.up[i]);
+          previewApi.solveGeometryRigPreviewIk(keys[2],at);
+          const bend=previewApi.getModelRigState().geometryRigPreview.pose.positions[keys[1]];
+          if(previousBend) maxReturnJump=Math.max(maxReturnJump,distance(previousBend,bend)/height);
+          previousBend=bend;
+        }
+        const returned=previewApi.getModelRigState().geometryRigPreview.pose.positions;
+        checks.push({returnError:Math.max(distance(returned[keys[1]],points[1]),distance(returned[keys[2]],end))/height,
+          maxReturnJump});
+        const near=end.map((v,i)=>v+height*0.005*rest.frame.up[i]);
+        previewApi.solveGeometryRigPreviewIk(keys[2],near);
+        const first=JSON.stringify(previewApi.getModelRigState().geometryRigPreview.pose.positions[keys[1]]);
+        previewApi.solveGeometryRigPreviewIk(keys[2],points[0]);
+        previewApi.solveGeometryRigPreviewIk(keys[2],near);
+        checks.push({deterministic:first===JSON.stringify(previewApi.getModelRigState().geometryRigPreview.pose.positions[keys[1]])});
       }
       previewApi.solveGeometryRigPreviewIk('rightFoot',rest.controls.rightFoot.position
         .map((v,i)=>v+height*(i===1?0.12:i===2?0.08:0)));
@@ -320,6 +356,9 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
       const flip=afterFlip.limbs.right_leg.bendSign===-beforeFlip.limbs.right_leg.bendSign
         && distance(afterFlip.positions.rightKnee,beforeFlip.positions.rightKnee)>height*0.05
         && distance(afterFlip.positions.rightFoot,beforeFlip.positions.rightFoot)<height*1e-9;
+      previewApi.solveGeometryRigPreviewIk('rightFoot',rest.controls.rightFoot.position);
+      const flippedReturn=distance(previewApi.getModelRigState().geometryRigPreview.pose.positions.rightKnee,
+        rest.controls.rightKnee.position)===0;
       const invalid=!previewApi.solveGeometryRigPreviewIk('head',[0,0,0])
         && !previewApi.solveGeometryRigPreviewIk('leftHand',[NaN,0,0]);
       previewApi.resetGeometryRigPreviewPose();
@@ -329,17 +368,22 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
       const modeReset=Object.keys(previewApi.getModelRigState().geometryRigPreview.pose.positions).length===0;
       previewApi.setGeometryRigPreviewMode('geometry');
       previewApi.setGeometryRigPreviewIkEnabled(false);
-      return {checks,flip,invalid,reset,modeReset,disabled:!previewApi.getModelRigState().geometryRigPreview.pose,
+      return {checks,expectedPlanes,flip,flippedReturn,invalid,reset,modeReset,disabled:!previewApi.getModelRigState().geometryRigPreview.pose,
         immutable:JSON.stringify(rest)===saved,loaded:previewApi.getModelRigState().loaded};
     }""")
-    assert posing['flip'] and posing['invalid'] and posing['reset'] and posing['modeReset']
+    assert posing['flip'] and posing['flippedReturn'] and posing['invalid'] and posing['reset'] and posing['modeReset']
     assert posing['disabled'] and posing['immutable'] and not posing['loaded']
+    assert all(posing['expectedPlanes'])
     for check in posing['checks']:
         if 'lengthError' in check:
             assert check['lengthError'] < 1e-9 and check['anchor'] == 0
             assert check['reached'] and check['isolated']
-        elif 'sign' in check:
-            assert check['sign'] >= -1e-9 and check['finite'] and check['jump'] < 0.08
+        elif 'alignment' in check:
+            assert check['alignment'] >= 0 and check['preferredStable'] and check['finite'] and check['jump'] < 0.02
+        elif 'returnError' in check:
+            assert check['returnError'] == 0 and check['maxReturnJump'] < 0.02
+        elif 'deterministic' in check:
+            assert check['deterministic']
         else:
             assert check['clamped']
     assert bridge_calls(page, 'weights') == []

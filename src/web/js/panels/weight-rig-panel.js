@@ -1254,12 +1254,13 @@ export function initWeightRigPanel() {
     syncRigOptions(latestRigState);
   });
   window.addEventListener('mod-viewer-model-rig-changed', (event) => {
+    restorePreviewControls();
     latestRigState = event.detail;
     if (!event.detail?.loading && !event.detail?.loaded) loadingPromise = null;
-    syncRigOptions(event.detail);
     syncWeightControls(latestWeightState || getModelWeightState());
     syncPhysicsControls();
-    syncGeometryPreview(event.detail);
+    // Apply preview disabling once, after Weight and Physics update their controls.
+    syncRigOptions(event.detail);
     syncStatus();
   });
   window.addEventListener('mod-viewer-model-rig-pose-changed', () => {

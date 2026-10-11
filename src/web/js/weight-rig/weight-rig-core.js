@@ -389,13 +389,31 @@ function geometryPreviewRestPose() {
       const direction = end.clone().sub(anchor).normalize();
       const plane = bend.clone().sub(anchor);
       plane.addScaledVector(direction, -plane.dot(direction));
-      // Freeze the rest plane for the whole gesture. Nearly straight limbs use
-      // anatomical forward/backward, independent of camera and current pose.
-      const fromRest = plane.length() > rig.frame.height * 0.008;
-      const bendDirection = fromRest
-        ? plane.normalize().toArray()
-        : rig.frame.forward.map((value) => value * (role.endsWith('_arm') ? -1 : 1));
-      return [role, { bendDirection, bendSign: 1, target: null, reached: null, residual: null }];
+      const anatomical = new THREE.Vector3(...rig.frame.forward).multiplyScalar(role.endsWith('_arm') ? -1 : 1);
+      anatomical.addScaledVector(direction, -anatomical.dot(direction));
+      if (anatomical.lengthSq() < 1e-8) {
+        anatomical.set(...rig.frame.right).addScaledVector(direction, -anatomical.dot(direction));
+      }
+      anatomical.normalize();
+      const restBendDirection = plane.length() > rig.frame.height * 1e-8 ? plane.clone().normalize() : null;
+      // A small absolute offset is not reliable orientation evidence. Require
+      // appreciable bending relative to both segments and anatomical agreement.
+      const fromRest =
+        plane.length() >= Math.max(anchor.distanceTo(bend), bend.distanceTo(end)) * 0.1 &&
+        restBendDirection?.dot(anatomical) >= 0.5;
+      const bendDirection = (fromRest ? restBendDirection : anatomical).toArray();
+      return [
+        role,
+        {
+          bendDirection,
+          restBendDirection: restBendDirection?.toArray() || null,
+          restDirection: direction.toArray(),
+          bendSign: 1,
+          target: null,
+          reached: null,
+          residual: null,
+        },
+      ];
     }),
   );
   return { enabled: true, positions: {}, selectedControlKey: null, limbs };
@@ -435,16 +453,37 @@ function solveGeometryRigPreviewIk(controlKey, target) {
   if (!pose?.enabled || !role || !Array.isArray(target) || target.length !== 3 || !target.every(Number.isFinite))
     return false;
   const limb = pose.limbs[role];
+  const rig = geometryRigPreview.rig;
+  const restEnd = rig.controls[controlKey].position;
+  const restDistance = new THREE.Vector3(...target).distanceTo(new THREE.Vector3(...restEnd));
+  let bendDirection = limb.bendDirection;
+  let bendSign = limb.bendSign;
+  if (limb.restBendDirection && restDistance < rig.frame.height * 0.02) {
+    // Rotate from fitted rest evidence to the frozen preferred plane near the
+    // rest endpoint. This is target-dependent, never pose-history-dependent.
+    const axis = new THREE.Vector3(...limb.restDirection);
+    const restPlane = new THREE.Vector3(...limb.restBendDirection);
+    const preferred = new THREE.Vector3(...limb.bendDirection).multiplyScalar(bendSign);
+    const angle = Math.atan2(axis.dot(restPlane.clone().cross(preferred)), restPlane.dot(preferred));
+    const blend = THREE.MathUtils.smoothstep(restDistance, 0, rig.frame.height * 0.02);
+    bendDirection = restPlane.applyAxisAngle(axis, angle * blend).toArray();
+    bendSign = 1;
+  }
   // Always solve from the immutable selected rest skeleton, then merge only
   // this limb. Repeated target updates cannot accumulate length drift.
   const solved = solveHumanoidControlIk({
-    controlRig: geometryRigPreview.rig,
+    controlRig: rig,
     role,
     target,
-    bendDirection: limb.bendDirection,
-    bendSign: limb.bendSign,
+    bendDirection,
+    bendSign,
   });
   if (!solved.positions || ![...solved.bend, ...solved.end].every(Number.isFinite)) return false;
+  if (restDistance <= rig.frame.height * 1e-9) {
+    for (const key of solved.keys.slice(1)) solved.positions[key] = [...rig.controls[key].position];
+    solved.residual = restDistance;
+    solved.reached = true;
+  }
   pose.positions = mergeHumanoidLimbPose(pose.positions, solved.positions, solved.keys);
   pose.selectedControlKey = controlKey;
   Object.assign(limb, { target: [...target], reached: solved.reached, residual: solved.residual });

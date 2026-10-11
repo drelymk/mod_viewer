@@ -158,6 +158,9 @@ audit and unit/core/app/integration selection are unchanged.
 
 ## Iteration 3 — skeleton-only posing
 
+This section preserves the initial `a5f2cbe` evaluation. The review follow-up
+below records the revised preferred planes and return-to-rest behavior.
+
 **Test IK**, **Reset Pose**, and **Flip Bend** extend the existing preview under
 Rig Advanced Settings. Drag a hand or foot to solve its two-bone chain with
 `solveHumanoidControlIk()`. The shoulder/hip stays fixed, other temporary limb
@@ -261,3 +264,70 @@ camera orbit, reset/flip, reach clamping, rest/geometry immutability, mode chang
 capture cleanup, model switching and rest-geometry invalidation. Production
 overlay, Weight activation and locale checks remain separate existing coverage.
 Keep PR #180 open and unmerged for review.
+
+## Iteration 3 review — preferred planes and exact rest return
+
+Preferred planes now require rest-joint evidence with perpendicular displacement
+of at least 10% of **each** segment length and at least 0.5 alignment with the
+projected anatomical bend direction. Weak, nearly straight or anatomically
+conflicting evidence uses the anatomical orientation instead. This avoids the
+old character-height cutoff accepting a misleading small elbow offset. Chisa's
+stronger, anatomically consistent arm evidence remains usable. The preferred
+directions stay fixed throughout posing and do not depend on camera or pose
+history. The fitter and existing two-bone solver remain unchanged.
+
+Within 2% of character height of the rest endpoint, the plane rotates smoothly
+from fitted rest evidence toward the preferred direction as target distance
+increases. This deterministic transition preserves continuity while allowing the
+original rest joint to be recovered. Returning exactly to the rest endpoint
+restores the fitted middle joint and endpoint exactly, including after Flip Bend;
+the flipped preference applies again when moving away. Reset Pose still clears
+all temporary poses. Segment lengths, anchors and unrelated limbs remain intact.
+
+The Rig event handler restores disabled-control state before synchronizing Weight
+and Physics, then synchronizes Rig and Geometry Preview once. This removes the
+duplicate preview refresh while retaining the existing event and panel ownership.
+The 200-solve probe in `tools/evaluate_geometry_rig.py --poses` records one pose
+status write per solve, down from two. In the paired probe, median synchronous
+solver/panel/overlay update cost was about 0.4 ms before and after; the observed
+95th percentile was about 0.5 and 0.6 ms. These timings exclude rendering and vary
+with the browser runtime; the result supports removing duplication without
+introducing another event architecture.
+
+### Repeated movement evaluation
+
+The [compact review measurements](iteration-3-review/measurements.json) use the
+same normalized targets, rest fits, camera scale and displayed variants as the
+initial comparison. Each movement now includes 40 outward and 40 return steps,
+so continuity checks cover the rest transition as well as full extension.
+
+| Geometry check | Remielle | Odette | Chisa |
+| --- | ---: | ---: | ---: |
+| Forward-target elbow offsets backward, left / right | 7.00% / 6.95% | 8.11% / 8.06% | 3.51% / 3.60% |
+| Largest rest-return joint error / height | 0 | 0 | 0 |
+| Largest joint step / height, outward and return | 2.49% | 2.14% | 2.27% |
+| Unexpected bend-sign changes | 0 | 0 | 0 |
+
+Geometry and Proportional still reach 8/8 forward/backward targets and clamp 4/4
+overextension targets per model. Segment-length errors remain below 3e-16 height;
+anchor and unrelated-limb displacement remain zero. All controls remain finite,
+including the corrected-reference comparisons. Consecutive bend directions stay
+aligned throughout the sampled paths; preferred-plane alignment is measured
+outside the rest-transition neighborhood. These are sampled continuity results,
+not a guarantee for arbitrary targets. Rest controls and active mesh geometry
+remain unchanged, Weight requests remain zero, and no ModelRig is loaded. Chisa
+still has 19 displayed and 24 inactive meshes, with zero duplicate displacement.
+
+Odette's original 8.11% / 3.15% elbow response becomes 8.11% / 8.06% without
+correcting any joint position. The image preserves the same viewport crop and
+scale: original front/side views above, revised front/side views below.
+
+![Odette original and revised geometry poses](iteration-3-review/odette-bend-comparison.png)
+
+The existing lifecycle scenario now also checks weak, strong and conflicting
+rest-plane evidence, exact rest return after a flip, a continuous rest approach,
+near-full-extension continuity and history-independent target solutions. No new
+UI or production Weight, skinning, deformation, reconciliation or persistence
+behavior is introduced. The bend-plane issue is addressed in these comparisons;
+occluded internal pivots and natural mesh deformation still require separate
+evaluation. Keep PR #180 open and unmerged.

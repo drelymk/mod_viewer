@@ -1,0 +1,736 @@
+{
+  "baselineRevision": "a5f2cbe",
+  "stepsPerDirection": 40,
+  "uiComparison": {
+    "before": {
+      "solves": 200,
+      "poseStatusWritesPerSolve": 2,
+      "medianUpdateMs": 0.39999999990686774,
+      "p95UpdateMs": 0.5
+    },
+    "after": {
+      "solves": 200,
+      "poseStatusWritesPerSolve": 1,
+      "medianUpdateMs": 0.39999999944120646,
+      "p95UpdateMs": 0.599999999627471
+    }
+  },
+  "models": {
+    "remielle": {
+      "restUnchanged": true,
+      "modelGeometryUnchanged": true,
+      "weightRequests": 0,
+      "modelRigLoaded": false,
+      "dragUpdates": {
+        "solves": 200,
+        "poseStatusWritesPerSolve": 1,
+        "medianUpdateMs": 0.40000000037252903,
+        "p95UpdateMs": 0.5
+      },
+      "targetDisplacementsHeight": {
+        "left_arm": {
+          "toward": [
+            0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -0.16246362458676472,
+            -0.1899958441239943,
+            -0.0026739300180868794
+          ]
+        },
+        "right_arm": {
+          "toward": [
+            -0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            -0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            0.16428154805280387,
+            -0.18842948580473404,
+            -0.0024293720871534016
+          ]
+        },
+        "left_leg": {
+          "toward": [
+            0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            0.00028639250082634774,
+            -0.249998024445811,
+            0.0009517103168242292
+          ]
+        },
+        "right_leg": {
+          "toward": [
+            -0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            -0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -0.00018843703225018474,
+            -0.24999783298241526,
+            0.0010237165531890048
+          ]
+        }
+      },
+      "meshCounts": {
+        "displayed": 10,
+        "inactive": 2,
+        "total": 12
+      },
+      "duplicateCheck": null,
+      "modes": {
+        "proportional": {
+          "maxSegmentErrorHeight": 1.3590303957786896e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.028408288621835844,
+          "maxStepTargetHeight": 0.006250000000000069,
+          "maxReturnStepBendHeight": 0.028408288621835844,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999996,
+          "minStepBendAlignment": 0.9998605170109375,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 4.8048980434687446e-17,
+            "away": 3.397575989446724e-17,
+            "extension": 0.2499986700505991
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.09690994379641524,
+              "right_arm": -0.09690994379641524,
+              "left_leg": 0.14153773268032915,
+              "right_leg": 0.14153773268032915
+            },
+            "away": {
+              "left_arm": -0.09690994379641522,
+              "right_arm": -0.09690994379641522,
+              "left_leg": 0.14153773268032918,
+              "right_leg": 0.14153773268032918
+            }
+          }
+        },
+        "geometry": {
+          "maxSegmentErrorHeight": 1.5289091952510257e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.02493983512532074,
+          "maxStepTargetHeight": 0.006250000000000069,
+          "maxReturnStepBendHeight": 0.02493983512532074,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999997,
+          "minStepBendAlignment": 0.8157200336279233,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 1.8993027177809958e-17,
+            "away": 3.7986054355619916e-17,
+            "extension": 0.2499469323506776
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.07004685938299884,
+              "right_arm": -0.06949555731013028,
+              "left_leg": 0.14126329343217234,
+              "right_leg": 0.14072741219587803
+            },
+            "away": {
+              "left_arm": -0.06732853501506243,
+              "right_arm": -0.06702308114054738,
+              "left_leg": 0.14233978350047338,
+              "right_leg": 0.1418847213938766
+            }
+          }
+        },
+        "reference": {
+          "maxSegmentErrorHeight": 1.3590303957786896e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.0291537090188378,
+          "maxStepTargetHeight": 0.006250000000000069,
+          "maxReturnStepBendHeight": 0.0291537090188378,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999997,
+          "minStepBendAlignment": 0.609519040479106,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 6.84803333658749e-17,
+            "away": 3.7986054355619916e-17,
+            "extension": 0.24997541383963037
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.07216668214880552,
+              "right_arm": -0.07241503982331857,
+              "left_leg": 0.1357732861073945,
+              "right_leg": 0.13922775113328928
+            },
+            "away": {
+              "left_arm": -0.0694730972906698,
+              "right_arm": -0.06997854068434374,
+              "left_leg": 0.14420546283007873,
+              "right_leg": 0.14041415938321716
+            }
+          }
+        },
+        "reference-fixed-plane": {
+          "maxSegmentErrorHeight": 2.0385455936680343e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.029153998014943495,
+          "maxStepTargetHeight": 0.006250000000000069,
+          "maxReturnStepBendHeight": 0.029153998014943495,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999996,
+          "minStepBendAlignment": 0.6095106474841583,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 6.84803333658749e-17,
+            "away": 3.7986054355619916e-17,
+            "extension": 0.24997541383963037
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.07216664486918298,
+              "right_arm": -0.07241501844788238,
+              "left_leg": 0.13577397203495956,
+              "right_leg": 0.13922775072013793
+            },
+            "away": {
+              "left_arm": -0.06947306163825513,
+              "right_arm": -0.06997852034199692,
+              "left_leg": 0.14420618647302363,
+              "right_leg": 0.14041415896846413
+            }
+          }
+        }
+      }
+    },
+    "odette": {
+      "restUnchanged": true,
+      "modelGeometryUnchanged": true,
+      "weightRequests": 0,
+      "modelRigLoaded": false,
+      "dragUpdates": {
+        "solves": 200,
+        "poseStatusWritesPerSolve": 1,
+        "medianUpdateMs": 0.40000000037252903,
+        "p95UpdateMs": 0.599999999627471
+      },
+      "targetDisplacementsHeight": {
+        "left_arm": {
+          "toward": [
+            0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -0.1368096205701108,
+            -0.20895199957078,
+            -0.011053940240252491
+          ]
+        },
+        "right_arm": {
+          "toward": [
+            -0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            -0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            0.14015893909364396,
+            -0.20699560135963732,
+            -0.0028797239288396114
+          ]
+        },
+        "left_leg": {
+          "toward": [
+            0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            0.002734504298328753,
+            -0.24989059916730824,
+            -0.006871021324817793
+          ]
+        },
+        "right_leg": {
+          "toward": [
+            -0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            -0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -0.003700815783574869,
+            -0.2498775832823864,
+            -0.006891831069468126
+          ]
+        }
+      },
+      "meshCounts": {
+        "displayed": 35,
+        "inactive": 10,
+        "total": 45
+      },
+      "duplicateCheck": null,
+      "modes": {
+        "proportional": {
+          "maxSegmentErrorHeight": 2.1243043000199242e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.02840828862183569,
+          "maxStepTargetHeight": 0.006250000000000078,
+          "maxReturnStepBendHeight": 0.02840828862183569,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999998,
+          "minStepBendAlignment": 0.9998605170109376,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 1.9792036748915246e-17,
+            "away": 1.9792036748915246e-17,
+            "extension": 0.24997310711931298
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.09690994379641524,
+              "right_arm": -0.09690994379641524,
+              "left_leg": 0.14153773268032915,
+              "right_leg": 0.14153773268032915
+            },
+            "away": {
+              "left_arm": -0.0969099437964152,
+              "right_arm": -0.09690994379641522,
+              "left_leg": 0.14153773268032915,
+              "right_leg": 0.14153773268032915
+            }
+          }
+        },
+        "geometry": {
+          "maxSegmentErrorHeight": 2.4783550166899117e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.02142558352654605,
+          "maxStepTargetHeight": 0.006250000000000066,
+          "maxReturnStepBendHeight": 0.02142558352654605,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999996,
+          "minStepBendAlignment": 0.8781152654693078,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 1.770253583349937e-17,
+            "away": 1.770253583349937e-17,
+            "extension": 0.24972548503349132
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.08109826827541387,
+              "right_arm": -0.08057972485133011,
+              "left_leg": 0.14531017967707052,
+              "right_leg": 0.1450410115314659
+            },
+            "away": {
+              "left_arm": -0.06950826883792594,
+              "right_arm": -0.07748854186384449,
+              "left_leg": 0.13754841597851267,
+              "right_leg": 0.13725678893982582
+            }
+          }
+        },
+        "reference": {
+          "maxSegmentErrorHeight": 1.4162028666799495e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.023227706291383172,
+          "maxStepTargetHeight": 0.006250000000000078,
+          "maxReturnStepBendHeight": 0.023227706291383172,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999997,
+          "minStepBendAlignment": 0.7971493493923376,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 1.9792036748915246e-17,
+            "away": 5.3107607500498105e-17,
+            "extension": 0.24985954247967
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.08569820566723631,
+              "right_arm": -0.07897359922583647,
+              "left_leg": 0.14019854093148906,
+              "right_leg": 0.14142910668369268
+            },
+            "away": {
+              "left_arm": -0.06877007678854874,
+              "right_arm": -0.07586848696212531,
+              "left_leg": 0.1353854776921869,
+              "right_leg": 0.13365812310691616
+            }
+          }
+        },
+        "reference-fixed-plane": {
+          "maxSegmentErrorHeight": 1.4162028666799495e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.023227697947964154,
+          "maxStepTargetHeight": 0.006250000000000078,
+          "maxReturnStepBendHeight": 0.023227697947964154,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999997,
+          "minStepBendAlignment": 0.7970866527084572,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 1.9792036748915246e-17,
+            "away": 5.3107607500498105e-17,
+            "extension": 0.24985954247967
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.08570415950647758,
+              "right_arm": -0.07897366355368435,
+              "left_leg": 0.14019799870993674,
+              "right_leg": 0.14142891079825215
+            },
+            "away": {
+              "left_arm": -0.06877475702034373,
+              "right_arm": -0.07586854897448411,
+              "left_leg": 0.13538496165536643,
+              "right_leg": 0.13365793619301347
+            }
+          }
+        }
+      }
+    },
+    "chisa": {
+      "restUnchanged": true,
+      "modelGeometryUnchanged": true,
+      "weightRequests": 0,
+      "modelRigLoaded": false,
+      "dragUpdates": {
+        "solves": 200,
+        "poseStatusWritesPerSolve": 1,
+        "medianUpdateMs": 0.2999999998137355,
+        "p95UpdateMs": 0.5
+      },
+      "targetDisplacementsHeight": {
+        "left_arm": {
+          "toward": [
+            0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -0.1333925887639574,
+            -0.20165657745671864,
+            0.06356919089694447
+          ]
+        },
+        "right_arm": {
+          "toward": [
+            -0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            -0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            0.13184949039834137,
+            -0.203160330867907,
+            0.06198057633920684
+          ]
+        },
+        "left_leg": {
+          "toward": [
+            0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -0.0011446727862823342,
+            -0.24999365828877254,
+            0.0013640159855233143
+          ]
+        },
+        "right_leg": {
+          "toward": [
+            -0.04,
+            0.12,
+            0.12
+          ],
+          "away": [
+            -0.04,
+            0.12,
+            -0.12
+          ],
+          "extension": [
+            -5.27801732519901e-05,
+            -0.24999612675168015,
+            0.001390619793895172
+          ]
+        }
+      },
+      "meshCounts": {
+        "displayed": 19,
+        "inactive": 24,
+        "total": 43
+      },
+      "duplicateCheck": {
+        "maxDeviationHeight": 0
+      },
+      "modes": {
+        "proportional": {
+          "maxSegmentErrorHeight": 1.435867694166312e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.02840828862183586,
+          "maxStepTargetHeight": 0.006250000000000067,
+          "maxReturnStepBendHeight": 0.02840828862183586,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999996,
+          "minStepBendAlignment": 0.9998605170109374,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 2.4667642364415747e-17,
+            "away": 4.823473101176633e-17,
+            "extension": 0.24999739251466113
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.09690994379641528,
+              "right_arm": -0.09690994379641531,
+              "left_leg": 0.14153773268032913,
+              "right_leg": 0.1415377326803291
+            },
+            "away": {
+              "left_arm": -0.09690994379641527,
+              "right_arm": -0.09690994379641527,
+              "left_leg": 0.14153773268032907,
+              "right_leg": 0.14153773268032907
+            }
+          }
+        },
+        "geometry": {
+          "maxSegmentErrorHeight": 1.435867694166312e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.02274996605055435,
+          "maxStepTargetHeight": 0.0062500000000000645,
+          "maxReturnStepBendHeight": 0.02274996605055435,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999996,
+          "minStepBendAlignment": 0.999151502986488,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 4.78622564722104e-17,
+            "away": 2.39311282361052e-17,
+            "extension": 0.2498348586688584
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.03506178225376093,
+              "right_arm": -0.03596783322287769,
+              "left_leg": 0.14103831706227646,
+              "right_leg": 0.14087710977902673
+            },
+            "away": {
+              "left_arm": -0.09620750655461761,
+              "right_arm": -0.09376048194413317,
+              "left_leg": 0.14258040719667162,
+              "right_leg": 0.14244939838919252
+            }
+          }
+        },
+        "reference": {
+          "maxSegmentErrorHeight": 1.914490258888416e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.023146465301390116,
+          "maxStepTargetHeight": 0.006250000000000068,
+          "maxReturnStepBendHeight": 0.023146465301390116,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999996,
+          "minStepBendAlignment": 0.938768627475513,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 5.3845038531236695e-17,
+            "away": 4.78622564722104e-17,
+            "extension": 0.24981312347387175
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.03404964768016425,
+              "right_arm": -0.03064951086618721,
+              "left_leg": 0.1425967179277528,
+              "right_leg": 0.1448283492379467
+            },
+            "away": {
+              "left_arm": -0.08966757629093142,
+              "right_arm": -0.07625795438719282,
+              "left_leg": 0.1491673933703834,
+              "right_leg": 0.1464091106994123
+            }
+          }
+        },
+        "reference-fixed-plane": {
+          "maxSegmentErrorHeight": 1.914490258888416e-16,
+          "maxAnchorShiftHeight": 0,
+          "maxOtherLimbShiftHeight": 0,
+          "maxStepBendHeight": 0.023146465306158173,
+          "maxStepTargetHeight": 0.006250000000000068,
+          "maxReturnStepBendHeight": 0.023146465306158173,
+          "restTargetJointShiftHeight": 0,
+          "minBendAlignment": 0.9999999999999997,
+          "minStepBendAlignment": 0.9387821800661781,
+          "bendSignChanges": 0,
+          "allFinite": true,
+          "reached": {
+            "toward": 4,
+            "away": 4,
+            "extension": 0
+          },
+          "maxResidualHeight": {
+            "toward": 5.3845038531236695e-17,
+            "away": 4.78622564722104e-17,
+            "extension": 0.24981312347387175
+          },
+          "bendOffsetsForwardHeight": {
+            "toward": {
+              "left_arm": -0.036062392209639554,
+              "right_arm": -0.03494807561388183,
+              "left_leg": 0.14259703908056287,
+              "right_leg": 0.14482835410249317
+            },
+            "away": {
+              "left_arm": -0.09660089290693512,
+              "right_arm": -0.09281845036821766,
+              "left_leg": 0.14916772779239088,
+              "right_leg": 0.14640911560899844
+            }
+          }
+        }
+      }
+    }
+  }
+}

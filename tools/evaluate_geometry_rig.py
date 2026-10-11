@@ -165,7 +165,33 @@ def add_comparison(result, guides, baseline=None):
     result["plausibility"] = plausibility
 
 
-POSE_CASE = """async ({name, displacements, measure=true}) => {
+PREVIEW_UPDATE_COST = """() => {
+  const api=window.__evaluationRigApi;
+  api.setGeometryRigPreviewIkEnabled(true);
+  const rig=api.getModelRigState().geometryRigPreview.rig;
+  const status=document.querySelector('.rig-preview-test-ik').parentElement.nextElementSibling;
+  const descriptor=Object.getOwnPropertyDescriptor(Node.prototype,'textContent');
+  let writes=0;
+  Object.defineProperty(status,'textContent',{configurable:true,
+    get(){return descriptor.get.call(this);},set(value){writes++;descriptor.set.call(this,value);}});
+  const times=[];
+  try {
+    for(let i=0;i<210;i++) {
+      const key=['leftHand','rightHand','leftFoot','rightFoot'][i%4];
+      const target=rig.controls[key].position.map((v,j)=>v+rig.frame.height*
+        (rig.frame.up[j]*0.12+rig.frame.forward[j]*(i%2?0.12:-0.12)));
+      const start=performance.now();api.solveGeometryRigPreviewIk(key,target);
+      if(i>=10) times.push(performance.now()-start);
+      else writes=0;
+    }
+    times.sort((a,b)=>a-b);
+    return {solves:times.length,poseStatusWritesPerSolve:writes/times.length,
+      medianUpdateMs:times[Math.floor(times.length/2)],p95UpdateMs:times[Math.floor(times.length*.95)]};
+  } finally {delete status.textContent;api.setGeometryRigPreviewIkEnabled(false);}
+}"""
+
+
+POSE_CASE = """async ({name, displacements}) => {
   const api=window.__evaluationRigApi;
   api.resetGeometryRigPreviewPose();
   if (window.__evaluationKeepGeometryPlanes) {
@@ -186,9 +212,9 @@ POSE_CASE = """async ({name, displacements, measure=true}) => {
     const before=structuredClone(api.getModelRigState().geometryRigPreview.pose.positions);
     let previous=rest[1], previousTarget=rest[2], previousPerpendicular=null;
     const row={maxSegmentErrorHeight:0,maxAnchorShiftHeight:0,maxOtherLimbShiftHeight:0,
-      maxStepBendHeight:0,maxStepTargetHeight:0,minBendAlignment:1,bendSignChanges:0,finite:true};
-    for (let step=1;step<=40;step++) {
-      const at=rest[2].map((v,i)=>v+(target[i]-v)*step/40);
+      maxStepBendHeight:0,maxStepTargetHeight:0,minBendAlignment:1,minStepBendAlignment:1,
+      maxReturnStepBendHeight:0,bendSignChanges:0,finite:true};
+    const sample=(at,returning=false)=>{
       api.solveGeometryRigPreviewIk(keys[2],at);
       const pose=api.getModelRigState().geometryRigPreview.pose;
       const points=keys.map(key=>pose.positions[key]||rig.controls[key].position);
@@ -200,6 +226,7 @@ POSE_CASE = """async ({name, displacements, measure=true}) => {
         .filter(key=>!keys.includes(key)).map(key=>distance(before[key],pose.positions[key])/height));
       row.finite &&= points.flat().every(Number.isFinite);
       row.maxStepBendHeight=Math.max(row.maxStepBendHeight,distance(previous,points[1])/height);
+      if(returning) row.maxReturnStepBendHeight=Math.max(row.maxReturnStepBendHeight,distance(previous,points[1])/height);
       row.maxStepTargetHeight=Math.max(row.maxStepTargetHeight,distance(previousTarget,at)/height);
       const axis=points[2].map((v,i)=>v-points[0][i]);const axisLength=Math.hypot(...axis);
       const unit=axis.map(v=>v/axisLength), offset=points[1].map((v,i)=>v-points[0][i]);
@@ -209,12 +236,19 @@ POSE_CASE = """async ({name, displacements, measure=true}) => {
       const projectedSize=Math.hypot(...projected);
       if (size>height*1e-6 && projectedSize>1e-6) {
         const normal=perpendicular.map(v=>v/size);
-        row.minBendAlignment=Math.min(row.minBendAlignment,dot(normal,projected)/projectedSize);
-        if (previousPerpendicular && dot(previousPerpendicular,normal)<0) row.bendSignChanges++;
+        // The preferred plane is fully applied outside the rest-return region.
+        if(distance(at,rest[2])>=height*0.02)
+          row.minBendAlignment=Math.min(row.minBendAlignment,dot(normal,projected)/projectedSize);
+        if (previousPerpendicular) {
+          const alignment=dot(previousPerpendicular,normal);
+          row.minStepBendAlignment=Math.min(row.minStepBendAlignment,alignment);
+          if(alignment<0) row.bendSignChanges++;
+        }
         previousPerpendicular=normal;
       }
       previous=points[1];previousTarget=at;
-    }
+    };
+    for (let step=1;step<=40;step++) sample(rest[2].map((v,i)=>v+(target[i]-v)*step/40));
     const pose=api.getModelRigState().geometryRigPreview.pose;
     const state=pose.limbs[role];
     const end=pose.positions[keys[2]], bend=pose.positions[keys[1]];
@@ -223,11 +257,9 @@ POSE_CASE = """async ({name, displacements, measure=true}) => {
     row.bendOffsetForwardHeight=dot(offset.map((v,i)=>v-axis[i]*along),rig.frame.forward)/height;
     Object.assign(row,{reached:state.reached,residualHeight:state.residual/height,
       segmentLengthsHeight:lengths.map(v=>v/height)});
-    if (measure) {
-      api.solveGeometryRigPreviewIk(keys[2],rest[2]);
-      row.restTargetJointShiftHeight=distance(api.getModelRigState().geometryRigPreview.pose.positions[keys[1]],rest[1])/height;
-      api.solveGeometryRigPreviewIk(keys[2],target);
-    }
+    for (let step=39;step>=0;step--) sample(rest[2].map((v,i)=>v+(target[i]-v)*step/40),true);
+    row.restTargetJointShiftHeight=distance(api.getModelRigState().geometryRigPreview.pose.positions[keys[1]],rest[1])/height;
+    api.solveGeometryRigPreviewIk(keys[2],target);
     result[role]=row;
   }
   return result;
@@ -248,7 +280,11 @@ def evaluate_poses(page, output, guides):
           extension:[radial(rest.frame.right),radial(rest.frame.up),radial(rest.frame.forward)]}];
       }));
     }""")
-    report = {"targetDisplacementsHeight": displacements, "modes": {}}
+    report = {
+        "targetDisplacementsHeight": displacements,
+        "dragUpdates": page.evaluate(PREVIEW_UPDATE_COST),
+        "modes": {},
+    }
     corrected = {}
     for key, entry in guides.items():
         guide = entry.get("front", {})
