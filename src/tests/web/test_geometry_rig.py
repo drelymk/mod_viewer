@@ -466,10 +466,14 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
 
 
 def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monkeypatch):
+    from math import dist
     from pathlib import Path
+    from types import SimpleNamespace
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3] / "tools"))
-    from evaluate_geometry_arm import DEFORMATION_SETUP, DEFORM_POSE
+    import evaluate_geometry_arm as experiment
+
+    from app.runtime import server
 
     from .payloads import model_payload
     from .support import open_model, wait_loaded
@@ -480,7 +484,7 @@ def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monke
     prepare_surface(page)
     inputs = page.evaluate("""async () => {
       const geometry=await fixture.api.fitHumanoidGeometryRig({meshes:fixture.meshes,axes:fixture.axes});
-      window.__evaluationRigApi={getModelRigState:()=>({geometryRigPreview:{rig:geometry}})};
+      window.__evaluationRigApi={getModelRigState:()=>structuredClone({geometryRigPreview:{rig:geometry}})};
       window.modViewer.activeMeshes=fixture.meshes;
       const entries={},pieces=[];let offset=0;
       fixture.meshes.forEach((mesh,i)=>mesh.userData.semanticKey=`mesh-${i}`);
@@ -498,21 +502,45 @@ def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monke
         normals:[...mesh.geometry.attributes.normal.array]}));
       return {entries,url:URL.createObjectURL(new Blob(pieces))};
     }""")
-    setup = page.evaluate(DEFORMATION_SETUP, inputs)
+    monkeypatch.setattr(experiment, "authored_skin_payload", lambda context: (inputs["entries"], b""))
+    monkeypatch.setattr(server, "publish_geometry", lambda data, replace: inputs["url"])
+    report = experiment.evaluate_deformation(page, SimpleNamespace(skinning_manifest={}),
+                                             None, capture_views=())
+    setup = report["setup"]
     assert setup["geometryIndependent"] and setup["boundArmJoints"]["geometry"] > 0
-    positions = page.evaluate("""async () => {
-      const {solveHumanoidControlIk}=await import('./js/weight-rig/humanoid-rig-ik.js');
-      const rig=__armDeform.geometry;
-      return solveHumanoidControlIk({controlRig:rig,role:'left_arm',
-        target:rig.controls.leftHand.position.map((v,i)=>v+rig.frame.height*(i===1?.12:i===2?.12:0))}).positions;
-    }""")
-    moved = page.evaluate(DEFORM_POSE, {"mode": "geometry", "positions": positions})
-    assert moved["movedVertices"] > 0 and moved["finite"]
-    assert moved["unaffectedShiftHeight"] == 0
-    assert moved["geometryRestUnchanged"] and moved["authoredInfluencesUnchanged"]
-    restored = page.evaluate(DEFORM_POSE, {"mode": "geometry", "positions": {}})
-    assert restored["movedVertices"] == 0 and restored["maxDisplacementHeight"] == 0
+    assert setup["controls"]["current"]["leftShoulder"] != setup["controls"]["geometry"]["leftShoulder"]
+    assert setup["commonRegion"]["edgeCount"] > 0
+    for mode in ("current", "geometry"):
+        for movement in ("forward", "backward"):
+            moved = report["modes"][mode][movement]
+            pose = moved["pose"]
+            rest = {key: setup["controls"][mode][key]
+                    for key in ("leftShoulder", "leftElbow", "leftHand")}
+            assert pose["restControls"] == rest
+            assert pose["upperLength"] == pytest.approx(dist(rest["leftShoulder"], rest["leftElbow"]))
+            assert pose["lowerLength"] == pytest.approx(dist(rest["leftElbow"], rest["leftHand"]))
+            positions = pose["solvedControls"]
+            assert positions["leftShoulder"] == rest["leftShoulder"]
+            assert dist(positions["leftShoulder"], positions["leftElbow"]) == pytest.approx(pose["upperLength"])
+            assert dist(positions["leftElbow"], positions["leftHand"]) == pytest.approx(pose["lowerLength"])
+            assert moved["reached"] and dist(positions["leftHand"], pose["target"]) < 1e-8
+            assert moved["movedVertices"] > 0 and moved["finite"]
+            assert moved["unaffectedShiftHeight"] == 0
+            assert moved["geometryRestUnchanged"] and moved["authoredInfluencesUnchanged"]
+            assert moved["commonRegion"]["edgeCount"] == setup["commonRegion"]["edgeCount"]
+            assert moved["commonRegion"]["sampleDigest"] == setup["commonRegion"]["sampleDigest"]
+            for mesh in moved["displayedMeshes"]:
+                for trace in mesh["movingInfluences"]:
+                    assert trace["sourceKey"] == "stream-01.buf|offset=0"
+                    assert trace["boneId"] in (0, 1) and trace["jointId"] is not None
+                    assert trace["driverId"] in ("left_upper_arm", "left_lower_arm")
+                    assert trace["vertexCount"] > 0 and trace["samples"]
+        restored = report["modes"][mode]["returnToRest"]
+        assert restored["movedVertices"] == 0 and restored["maxDisplacementHeight"] == 0
+        assert restored["commonRegion"]["maxEdgeLengthRatio"] == pytest.approx(1)
     assert page.evaluate("""() => fixture.meshes.every((mesh,i)=>
       mesh.geometry.attributes.position.array.every((v,j)=>v===__experimentRest[i].positions[j])&&
       mesh.geometry.attributes.normal.array.every((v,j)=>v===__experimentRest[i].normals[j]))""")
+    assert page.evaluate("""() => JSON.stringify(__evaluationRigApi.getModelRigState().geometryRigPreview.rig)
+      ===__armDeform.geometryIdentity""")
     page.evaluate("url=>URL.revokeObjectURL(url)", inputs["url"])

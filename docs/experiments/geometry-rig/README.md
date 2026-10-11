@@ -386,51 +386,139 @@ evaluation session. Authored indices and weights are unchanged and unnormalized.
 Only transforms belonging to `left_upper_arm` and `left_lower_arm` are applied;
 other influences retain their authored rest contribution.
 
+#### Review correction — independent IK and fixed edge samples
+
+The `08b1791` evaluator incorrectly assigned a selected rig to the snapshot
+returned by `getModelRigState()`. The real preview continued solving the Geometry
+Rig, so the Current comparison applied geometry-derived poses to proportional
+rest drivers. Those earlier deformation results are invalid as a comparison of
+skeletons. The near-rest interaction correction above remains unchanged.
+
 The comparator is the current automatic humanoid Rig, constructed with the same
 anatomical axes and the existing weight-inferred ModelJoint binding. Its control
 positions currently use the proportional geometry template; it is not a new
-skeleton inferred from weights for this experiment. Both rigs use the same
-authored streams, binding rules and height-normalized up/forward or up/backward
-target displacement. Geometry generates its controls before skinning data is
-loaded. The camera frame and image crop are shared, and the overlay is hidden
-only in these mesh-quality captures.
+skeleton inferred from weights for this experiment. Geometry generates its
+controls before skinning data is loaded; deformation still relies on the existing
+weight-inferred ModelRig for influence mapping. This does not establish an
+independent geometry-to-deformation pipeline.
 
-| Deformation check                                 | Current automatic Rig | Geometry Rig |
-| ------------------------------------------------- | --------------------- | ------------ |
-| Arm-bound ModelJoints                             | 57                    | 46           |
-| Moved vertices, including inactive draws          | 11,880                | 9,418        |
-| Moved displayed hair vertices                     | 951                   | 0            |
-| Moved displayed leg vertices                      | 5                     | 5            |
-| Forward changed-edge length ratio, p95 / maximum  | 1.49 / 4.91           | 1.38 / 4.56  |
-| Backward changed-edge length ratio, p95 / maximum | 1.87 / 9.27           | 2.77 / 10.13 |
+Each mode now calls the unchanged `solveHumanoidControlIk()` directly with its
+own immutable control rig. Its shoulder, elbow and hand define its own segment
+lengths. Both calls use the same anatomical arm policy: negative forward,
+projected perpendicular to that rig's resting shoulder-to-hand direction. This
+keeps the large-pose bend policy comparable without introducing fitting rules.
+The shared Geometry frame height normalizes the target displacement: 0.12 up
+plus or minus 0.12 forward from each rig's own hand. The solver's existing fallback
+remains available if that bend input degenerates. No preview state is assigned or
+posed by the deformation evaluator.
 
-Edge ratios compare posed and authored rest lengths on displayed triangles,
-deduplicating edges per draw and excluding rest edges shorter than 0.001% of
-height. The percentile covers changed edges rather than all edges. These are
-distortion diagnostics, not anatomical ground truth. Moved-vertex counts use a
-0.0001%-of-height cutoff; displayed draws are listed separately in the raw data.
+The measurements record each mode's actual rest controls, target, bend input,
+solved controls, segment lengths and residual. Current's upper/lower lengths are
+0.27537 / 0.27537 model units; Geometry's are 0.22284 / 0.20366. Both targets are
+reached with fixed anchors and lengths. The Geometry deformation results match
+its earlier run; Current now uses its own pose. Its changed-edge p95 shifts from
+1.49 to 1.46 forward and from 1.87 to 2.11 backward. These separate changed-edge
+sets remain debugging diagnostics, not the basis for comparing quality.
+
+![Before and after correcting the comparator](iteration-4/comparator-correction.png)
+
+For comparison, both modes now use one frozen rest-space arm region: the union of
+capsules around both skeletons' shoulder/elbow/hand chains, with radius 8% of the
+shared height. This is a geometric proxy for the arm and shoulder region, not an
+authored anatomical label. An edge qualifies when both endpoints lie inside the
+region. Only displayed triangles participate; edges are deduplicated per draw,
+and rest edges shorter than 0.001% of height are excluded. The same 16,785 edges,
+including unchanged edges, are evaluated for every pose. Counts by draw and a
+SHA-256 digest of mesh/vertex edge identities verify the common sample. The
+envelope also intersects nearby hair and face geometry; its percentile must be
+read alongside local extrema and the images. The camera frame and crop are
+shared, and the overlay is hidden only in mesh-quality captures.
+
+| Corrected deformation check                          | Current automatic Rig | Geometry Rig |
+| ---------------------------------------------------- | --------------------- | ------------ |
+| Arm-bound ModelJoints                                | 57                    | 46           |
+| Moved vertices, including inactive draws             | 11,880                | 9,418        |
+| Moved displayed hair vertices                        | 951                   | 0            |
+| Moved vertices in the draw labeled LegsA              | 5                     | 5            |
+| Forward common-region edge ratio, p95 / maximum       | 1.21 / 3.35           | 1.02 / 4.56  |
+| Backward common-region edge ratio, p95 / maximum      | 1.45 / 7.71           | 1.02 / 5.73  |
+| Forward / backward minimum common-region edge ratio | 0.40 / 0.11           | 0.38 / 0.23  |
+
+Edge ratios compare posed and authored rest lengths. Ratios below one also
+identify compression. These diagnostics are not anatomical ground truth or a
+natural-deformation score. Moved vertices use a 0.0001%-of-height cutoff;
+displayed counts cover vertices actually referenced by the displayed draw range.
 
 ![Current and geometry left-arm deformation](iteration-4/one-arm-deformation.png)
 
 Both forward and backward targets are reached and all output positions/normals
 are finite. Vertices with no bound-arm influence remain fixed. Returning to rest
 restores positions and normals exactly, and neither fitted controls nor authored
-influences change. A neutral synthetic lifecycle checks these contracts through
-the experiment's helpers. The production Weight UI and ModelRig remain inactive;
-the evaluation explicitly reads skinning data outside that UI.
+influences change. A neutral scenario exercises the evaluator itself with two
+different rest skeletons, checks each solved chain and the common edge identities,
+traces source-scoped influences, and verifies exact position/normal restoration.
+The production Weight UI and ModelRig remain inactive; the evaluation explicitly
+reads skinning data outside that UI.
 
-The geometry binding avoids the comparator's hair movement and has a smaller
-forward edge-stretch percentile, but backward stretching is worse. The shared
-leg leakage and visible shoulder/cloth pulling show that automatic deformation
-ownership still needs review. The experiment does not establish an overall
-quality improvement. Keep it limited to this arm and model; review binding
-boundaries before expanding to other limbs or games. No production deformation,
-Weight assignment, pose persistence or ModelJoint algorithm changes are made.
-PR #180 remains open and unmerged.
+#### Influence ownership findings
+
+The [source-to-driver trace](iteration-4/ownership-trace.json) records every
+moving displayed influence, its source descriptor, ModelJoint members and pivot,
+both modes' assigned drivers, inheritance chain, per-pose counts and up to five
+authored vertex samples. It keeps source identity with each numeric bone ID.
+
+The five vertices in `Remielle2LegsA-1` are authored vertices 128, 135, 141, 142
+and 738. They carry source influence 14 in `remielle2legsblend.buf|offset=0`,
+with weights of 0.38–1.21%. Reconciliation groups it with influence 131 in
+`remielle2bodyblend.buf|offset=0` as ModelJoint 37. Both bindings assign this joint
+directly to `leftShoulder` / `left_upper_arm`. Their rest positions are at
+76.9–78.9% of height, near the upper torso; the draw's name is not evidence of
+leg anatomy. The earlier description of these five vertices as leg leakage was
+unsupported. No mesh-name exclusion is warranted by this observation.
+
+The Current binding assigns ten influences from `remiellehairblend.buf|offset=0`
+directly to the upper-arm driver. Their pivots lie within 2.98–7.57% of height from its shoulder control,
+inside the existing point-ownership radius. Geometry assigns those same
+ModelJoints to head or neck drivers, which remain at rest in this arm experiment.
+This traces the 951 moving hair vertices to ownership, independently of the
+comparator mistake. The differing head/neck versus shoulder ownership remains a
+semantic binding concern; Blend streams do not provide verified anatomical labels.
+
+| Hair source influence | ModelJoint | Current driver | Geometry driver |
+| --------------------- | ---------- | -------------- | --------------- |
+| 11                    | 247        | left_upper_arm | neck            |
+| 46                    | 279        | left_upper_arm | head            |
+| 49                    | 282        | left_upper_arm | head            |
+| 50                    | 284        | left_upper_arm | neck            |
+| 55                    | 289        | left_upper_arm | head            |
+| 61                    | 296        | left_upper_arm | head            |
+| 62                    | 297        | left_upper_arm | head            |
+| 63                    | 298        | left_upper_arm | head            |
+| 64                    | 299        | left_upper_arm | head            |
+| 67                    | 301        | left_upper_arm | head            |
+
+For the secondary body/clothing draw, Current moves 32 vertices through body
+influences 66, 72, 74 and 75. Geometry leaves influence 66 / ModelJoint 179 with
+the neck driver; influence 72 / joint 186 is a direct shoulder assignment in
+both modes. Influences 74 and 75 / joints 188 and 189 inherit arm ownership from
+joint 186, accounting for the remaining 15 moving vertices. The full body trace
+also records each directly owned or inherited arm influence. This identifies
+which drivers move the cloth; it does not prove that every cloth assignment is
+wrong or isolate all stretching from the skeleton's rest geometry.
+
+Geometry has lower common-sample stretch percentiles in both directions, but its
+forward maximum is higher and the images still show shoulder/cloth distortion.
+The corrected experiment does not establish natural deformation or a complete
+quality improvement. Keep it limited to this arm and model, with no new binding
+thresholds, exclusions or special cases. Production Weight, reconciliation,
+deformation and IK remain unchanged by this correction. PR #180 stays open and
+unmerged.
 
 The [compact measurements](iteration-4/measurements.json) retain the interaction
-aggregates, regression checks, arm controls, binding counts and deformation
-diagnostics. To reproduce with the same displayed mod variant:
+aggregates, regression checks, per-mode rest/solved controls, binding counts and
+fixed-region diagnostics. The comparator image preserves the useful invalid
+baseline alongside its correction; the main deformation image now uses corrected
+poses. To reproduce with the same displayed mod variant:
 
 ```text
 python tools/evaluate_geometry_arm.py <mod-folder> --near-rest --output <capture-folder>

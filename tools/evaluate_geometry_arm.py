@@ -261,8 +261,10 @@ DEFORMATION_SETUP = """async ({entries,url}) => {
   if(!current.accepted) throw new Error('The current automatic humanoid Rig is unavailable');
   current.available=true;
   const controls={geometry,current};
+  const allJointBindings={};
   const bindings=Object.fromEntries(Object.entries(controls).map(([name,controlRig])=>{
     const binding=buildHumanoidRigBinding({controlRig,modelRig:model});
+    allJointBindings[name]=new Map(binding.jointBindings);
     binding.jointBindings=new Map([...binding.jointBindings].filter(([,v])=>
       ['left_upper_arm','left_lower_arm'].includes(v.driverId)));
     return [name,binding];
@@ -272,14 +274,85 @@ DEFORMATION_SETUP = """async ({entries,url}) => {
   const originalWeights=[...runtime.knownMeshes].filter(m=>runtime.stateFor(m).loaded).map(m=>{
     const state=runtime.stateFor(m);return {state,indices:new Uint32Array(state.indices),weights:new Float32Array(state.weights)};
   });
-  window.__armDeform={THREE,geometry,geometryIdentity,controls,bindings,model,reconciled,runtime,meshes,baselines,originalWeights,
+  // Freeze one rest-space arm envelope and its displayed edges for both modes.
+  // This sampling radius measures a region; it never changes influence ownership.
+  const radius=geometry.frame.height*.08;
+  const chains=Object.values(controls).map(r=>['leftShoulder','leftElbow','leftHand']
+    .map(key=>new THREE.Vector3(...r.controls[key].position)));
+  const inRegion=point=>chains.some(chain=>[0,1].some(i=>{
+    const delta=chain[i+1].clone().sub(chain[i]);
+    const at=THREE.MathUtils.clamp(point.clone().sub(chain[i]).dot(delta)/delta.lengthSq(),0,1);
+    return point.distanceTo(chain[i].clone().addScaledVector(delta,at))<=radius;
+  }));
+  const commonEdges=[],edgesByMesh=[];
+  meshes.forEach((mesh,meshIndex)=>{
+    if(!mesh.visible) return;
+    const values=baselines[meshIndex].positions, indices=mesh.geometry.index?.array;
+    const count=indices?.length||values.length/3, seen=new Set();
+    const start=mesh.geometry.drawRange.start,end=Math.min(count,start+mesh.geometry.drawRange.count);
+    const point=vertex=>new THREE.Vector3(...values.slice(vertex*3,vertex*3+3));
+    let edgeCount=0;
+    for(let triangle=start;triangle+2<end;triangle+=3) {
+      const vertices=[0,1,2].map(i=>indices?indices[triangle+i]:triangle+i);
+      for(const [left,right] of [[vertices[0],vertices[1]],[vertices[1],vertices[2]],[vertices[2],vertices[0]]]) {
+        const a=Math.min(left,right),b=Math.max(left,right),key=`${a}:${b}`;
+        if(seen.has(key)) continue;seen.add(key);
+        const first=point(a),second=point(b),rest=first.distanceTo(second);
+        if(rest>geometry.frame.height*1e-5&&inRegion(first)&&inRegion(second)) {
+          commonEdges.push({meshIndex,a,b,rest});edgeCount++;
+        }
+      }
+    }
+    if(edgeCount) edgesByMesh.push({mesh:mesh.userData.semanticKey,edgeCount});
+  });
+  const sampleBytes=new TextEncoder().encode(JSON.stringify(commonEdges.map(({meshIndex,a,b})=>
+    [meshes[meshIndex].userData.semanticKey,a,b])));
+  const sampleDigest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',sampleBytes))]
+    .map(v=>v.toString(16).padStart(2,'0')).join('');
+  const commonRegion={definition:'union_of_both_rest_arm_capsules',radiusHeight:.08,
+    minimumRestEdgeHeight:1e-5,edgeCount:commonEdges.length,sampleDigest,edgesByMesh};
+  window.__armDeform={THREE,geometry,geometryIdentity,controls,bindings,allJointBindings,model,reconciled,runtime,meshes,baselines,originalWeights,
+    commonEdges,commonRegion,
     buildHumanoidDriverBaseTransforms,applyWeightedTransformDeformationInto,applyWeightedNormalDeformationInto,sourceBoneKey};
   return {sourceCount:sources.length,jointCount:model.joints.length,
     authoredMeshCount:originalWeights.length,boundArmJoints:Object.fromEntries(Object.entries(bindings).map(([k,v])=>[k,v.jointBindings.size])),
     geometryIndependent:JSON.stringify(geometry)===geometryIdentity,
     currentControlSource:current.mode||current.source||'automatic_humanoid',
-    referenceFrame:geometry.frame,
+    referenceFrame:geometry.frame,commonRegion,
     controls:Object.fromEntries(Object.entries(controls).map(([name,r])=>[name,Object.fromEntries(Object.entries(r.controls).map(([k,v])=>[k,v.position]))]))};
+}"""
+
+
+SOLVE_ARM_POSE = """async ({mode,forward}) => {
+  const {solveHumanoidControlIk}=await import('./js/weight-rig/humanoid-rig-ik.js');
+  const d=__armDeform,rig=d.controls[mode],height=d.geometry.frame.height;
+  const keys=['leftShoulder','leftElbow','leftHand'];
+  const restControls=Object.fromEntries(keys.map(key=>[key,[...rig.controls[key].position]]));
+  const displacement=rig.frame.up.map((v,i)=>height*(v*.12+rig.frame.forward[i]*forward));
+  const target=restControls.leftHand.map((v,i)=>v+displacement[i]);
+  const restAxis=new d.THREE.Vector3(...restControls.leftHand)
+    .sub(new d.THREE.Vector3(...restControls.leftShoulder)).normalize();
+  const anatomical=new d.THREE.Vector3(...rig.frame.forward).negate();
+  anatomical.addScaledVector(restAxis,-anatomical.dot(restAxis)).normalize();
+  // Use the same anatomical arm policy in each skeleton's own rest frame.
+  // The solver takes that skeleton directly; no preview snapshot is modified.
+  const bendDirection=anatomical.lengthSq()>1e-8?anatomical.toArray():null;
+  const solved=solveHumanoidControlIk({controlRig:rig,role:'left_arm',target,bendDirection});
+  if(!solved.positions) throw new Error('The evaluated arm cannot be solved');
+  const positions=Object.fromEntries(Object.entries(solved.positions).map(([key,v])=>
+    [key,v.isVector3?v.toArray():v]));
+  const anchor=new d.THREE.Vector3(...solved.anchor),axis=new d.THREE.Vector3(...solved.end).sub(anchor).normalize();
+  const plane=new d.THREE.Vector3(...solved.bend).sub(anchor);
+  plane.addScaledVector(axis,-plane.dot(axis)).normalize();
+  const restPlane=new d.THREE.Vector3(...restControls.leftElbow).sub(anchor);
+  restPlane.addScaledVector(restAxis,-restPlane.dot(restAxis)).normalize();
+  return {positions,reached:solved.reached,pose:{mode,restControls,
+    solvedControls:Object.fromEntries(keys.map(key=>[key,positions[key]])),
+    target,displacementHeight:displacement.map(v=>v/height),normalizationHeight:height,
+    upperLength:solved.upperLength,lowerLength:solved.lowerLength,residual:solved.residual,
+    bendPolicy:'anatomical_arm_direction_from_own_rest_frame',bendDirection,
+    restBendDirection:restPlane.toArray(),
+    solvedBendDirection:plane.toArray()}};
 }"""
 
 
@@ -318,12 +391,57 @@ DEFORM_POSE = """async ({mode,positions}) => {
       const seen=new Set(), indices=mesh.geometry.index?.array;
       const count=indices?.length||position.count;
       const start=mesh.geometry.drawRange.start, end=Math.min(count,start+mesh.geometry.drawRange.count);
-      let moved=0;
+      const displayedVertices=new Set(Array.from({length:end-start},(_,i)=>indices?indices[start+i]:start+i));
+      let moved=0;const movingInfluences=new Map();
       for(let vertex=0;vertex<position.count;vertex++) {
+        if(!displayedVertices.has(vertex)) continue;
         const delta=Math.hypot(...[0,1,2].map(i=>position.array[vertex*3+i]-base.positions[vertex*3+i]))/height;
-        if(delta>1e-6) moved++;
+        if(delta<=1e-6) continue;
+        moved++;
+        const vertexWeights=new Map();
+        for(let slot=0;state.loaded&&slot<state.influenceCount;slot++) {
+          const at=vertex*state.influenceCount+slot,boneId=state.indices[at],weight=state.weights[at];
+          if(weight>0) vertexWeights.set(boneId,(vertexWeights.get(boneId)||0)+weight);
+        }
+        for(const [boneId,weight] of vertexWeights) {
+          const sourceKey=state.skinningSourceKey;
+          const jointId=d.reconciled.sourceBoneToModelJointMap.get(d.sourceBoneKey(sourceKey,boneId));
+          const owner=binding.jointBindings.get(jointId);
+          if(!owner) continue;
+          let trace=movingInfluences.get(boneId);
+          if(!trace) {
+            const joint=d.model.joints.find(j=>j.jointId===jointId),ownerChain=[],visited=new Set();
+            const pivot=d.model.jointPivotByJointId.get(jointId)||joint?.restPivot;
+            const point=pivot?.isVector3?pivot.clone():Array.isArray(pivot)?new d.THREE.Vector3(...pivot):
+              new d.THREE.Vector3(pivot?.x||0,pivot?.y||0,pivot?.z||0);
+            const ownershipByMode=Object.fromEntries(Object.entries(d.controls).map(([name,controlRig])=>{
+              const assigned=d.allJointBindings[name].get(jointId);
+              return [name,{driverId:assigned?.driverId||null,controlKey:assigned?.controlKey||null,
+                bindingMethod:assigned?.bindingMethod||null,
+                leftShoulderDistanceHeight:point.distanceTo(new d.THREE.Vector3(...controlRig.controls.leftShoulder.position))/controlRig.frame.height}];
+            }));
+            let parent=jointId;
+            while(parent!==null&&parent!==undefined&&!visited.has(parent)) {
+              visited.add(parent);
+              const entry=binding.jointBindings.get(parent);
+              if(!entry) break;
+              ownerChain.push({jointId:parent,driverId:entry.driverId,bindingMethod:entry.bindingMethod});
+              parent=entry.inheritedFromJointId;
+            }
+            trace={sourceKey,boneId,jointId,driverId:owner.driverId,bindingMethod:owner.bindingMethod,
+              controlKey:owner.controlKey,anchorJointId:owner.anchorJointId,
+              inheritedFromJointId:owner.inheritedFromJointId,jointMembers:joint?.members||[],
+              restJointPivot:point.toArray(),ownershipByMode,
+              ownerChain,vertexCount:0,totalWeight:0,maxWeight:0,samples:[]};
+            movingInfluences.set(boneId,trace);
+          }
+          trace.vertexCount++;trace.totalWeight+=weight;trace.maxWeight=Math.max(trace.maxWeight,weight);
+          if(trace.samples.length<5) trace.samples.push({vertex,weight,displacementHeight:delta,
+            restPosition:[...base.positions.slice(vertex*3,vertex*3+3)]});
+        }
       }
-      meshRows.push({mesh:mesh.userData.semanticKey,movedVertices:moved});
+      meshRows.push({mesh:mesh.userData.semanticKey,movedVertices:moved,
+        movingInfluences:[...movingInfluences.values()].sort((a,b)=>a.boneId-b.boneId)});
       for(let triangle=start;triangle+2<end;triangle+=3) {
         const vertices=[0,1,2].map(i=>indices?indices[triangle+i]:triangle+i);
         for(const [a,b] of [[vertices[0],vertices[1]],[vertices[1],vertices[2]],[vertices[2],vertices[0]]]) {
@@ -340,19 +458,27 @@ DEFORM_POSE = """async ({mode,positions}) => {
     mesh.geometry.computeBoundingBox();mesh.geometry.computeBoundingSphere();
   }
   edgeRatios.sort((a,b)=>a-b);
+  const commonRatios=d.commonEdges.map(({meshIndex,a,b,rest})=>{
+    const values=d.meshes[meshIndex].geometry.attributes.position.array;
+    return Math.hypot(...[0,1,2].map(i=>values[a*3+i]-values[b*3+i]))/rest;
+  }).sort((a,b)=>a-b);
   const {invalidateCharacterShadowGeometry}=await import('./js/scene/scene.js');
   invalidateCharacterShadowGeometry();
   return {movedVertices,maxDisplacementHeight,unaffectedShiftHeight,finite,displayedMeshes:meshRows,
     changedEdgeCount:edgeRatios.length,maxEdgeLengthRatio:edgeRatios.at(-1)||1,
     p95EdgeLengthRatio:edgeRatios[Math.floor(edgeRatios.length*.95)]||1,
+    commonRegion:{edgeCount:commonRatios.length,sampleDigest:d.commonRegion.sampleDigest,
+      p95EdgeLengthRatio:commonRatios[Math.floor(commonRatios.length*.95)]||1,
+      maxEdgeLengthRatio:commonRatios.at(-1)||1,minEdgeLengthRatio:commonRatios[0]||1},
     geometryRestUnchanged:JSON.stringify(d.geometry)===d.geometryIdentity,
     authoredInfluencesUnchanged:d.originalWeights.every(({state,indices,weights})=>
       state.indices.every((v,i)=>v===indices[i])&&state.weights.every((v,i)=>v===weights[i]))};
 }"""
 
 
-def evaluate_deformation(page, context, output):
+def evaluate_deformation(page, context, output, *, capture_views=("front", "side")):
     from app.runtime import server
+    from core.geometry.skinning import skinning_source_descriptor
 
     entries, blob = authored_skin_payload(context)
     setup = page.evaluate(
@@ -361,35 +487,28 @@ def evaluate_deformation(page, context, output):
     )
     report = {"setup": setup, "modes": {}}
     for mode in ("current", "geometry"):
-        # Select the evaluated controls only in the disposable overlay fixture.
-        page.evaluate(
-            """mode => {
-          const preview=__evaluationRigApi.getModelRigState().geometryRigPreview;
-          preview.rig=__armDeform.controls[mode];
-          __evaluationRigApi.setGeometryRigPreviewIkEnabled(true);
-          __evaluationRigApi.resetGeometryRigPreviewPose();
-        }""",
-            mode,
-        )
         mode_report = {}
         for name, forward in (("forward", 0.12), ("backward", -0.12)):
-            row = page.evaluate(
-                """async forward => {
-              const api=__evaluationRigApi, rig=api.getModelRigState().geometryRigPreview.rig;
-              const target=rig.controls.leftHand.position.map((v,i)=>v+__armDeform.geometry.frame.height*(rig.frame.up[i]*.12+rig.frame.forward[i]*forward));
-              api.solveGeometryRigPreviewIk('leftHand',target);
-              return {positions:structuredClone(api.getModelRigState().geometryRigPreview.pose.positions),
-                reached:api.getModelRigState().geometryRigPreview.pose.limbs.left_arm.reached};
-            }""",
-                forward,
-            )
+            row = page.evaluate(SOLVE_ARM_POSE, {"mode": mode, "forward": forward})
             row.update(
                 page.evaluate(
                     DEFORM_POSE, {"mode": mode, "positions": row.pop("positions")}
                 )
             )
+            for mesh in row["displayedMeshes"]:
+                manifest = context.skinning_manifest.get(mesh["mesh"])
+                if not manifest:
+                    continue
+                for influence in mesh["movingInfluences"]:
+                    influence["source"] = skinning_source_descriptor(
+                        manifest.skinning_source
+                    )
+                    for sample in influence["samples"]:
+                        sample["authoredVertex"] = manifest.used_vertices[
+                            sample["vertex"]
+                        ]
             mode_report[name] = row
-            for view in ("front", "side"):
+            for view in capture_views:
                 page.evaluate(
                     CAPTURE_VIEW,
                     {
@@ -416,10 +535,6 @@ def evaluate_deformation(page, context, output):
             DEFORM_POSE, {"mode": mode, "positions": {}}
         )
         report["modes"][mode] = mode_report
-    page.evaluate("""() => {
-      __evaluationRigApi.getModelRigState().geometryRigPreview.rig=__armDeform.geometry;
-      __evaluationRigApi.setGeometryRigPreviewIkEnabled(false);
-    }""")
     return report
 
 
@@ -477,7 +592,7 @@ def main():
             positions:modViewer.activeMeshes.map(m=>[...m.geometry.attributes.position.array]),
             normals:modViewer.activeMeshes.map(m=>m.geometry.attributes.normal&&[...m.geometry.attributes.normal.array])};
         }""")
-        report = {"schemaVersion": 1}
+        report = {"schemaVersion": 2}
         if args.near_rest:
             report["nearRest"] = evaluate_near_rest(page, args.output)
         if args.deform_left_arm:
@@ -495,7 +610,7 @@ def main():
             json.dumps(
                 {
                     "invariants": report["invariants"],
-                    "deformation": report.get("deformation", {}).get("modes"),
+                    "modes": list(report.get("deformation", {}).get("modes", {})),
                 }
             ),
             flush=True,
