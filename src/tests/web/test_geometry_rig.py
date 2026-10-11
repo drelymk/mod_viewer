@@ -213,6 +213,21 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
         assert page.evaluate('previewApi.getModelRigState().geometryRigPreview.pose.selectedControlKey') == key
         assert page.locator('.rig-preview-flip-bend').is_enabled()
     assert page.evaluate("JSON.stringify(previewMarkers)===JSON.stringify(previewOverlay.getObjectByName('viewer-humanoid-control-rig-overlay').children.map(child=>child.uuid))")
+    page.locator('.rig-preview-comparison').select_option('proportional')
+    for key in ('leftHand', 'rightHand', 'leftFoot', 'rightFoot'):
+        point = page.evaluate('previewEndpoint', key)
+        page.mouse.move(point['x'], point['y'])
+        page.mouse.down()
+        page.mouse.move(point['x'] - 10, point['y'] - 20, steps=4)
+        page.mouse.up()
+        assert page.evaluate('previewApi.getModelRigState().geometryRigPreview.pose.selectedControlKey') == key
+        assert page.evaluate('previewScene.controls.enabled') is True
+    page.locator('.rig-preview-comparison').select_option('geometry')
+    point = page.evaluate('previewEndpoint', 'rightFoot')
+    page.mouse.move(point['x'], point['y'])
+    page.mouse.down()
+    page.mouse.move(point['x'] + 10, point['y'] - 20)
+    page.mouse.up()
     orbit_before = page.evaluate('previewScene.camera.quaternion.toArray()')
     viewport = page.locator('#canvas-container canvas').first.bounding_box()
     page.mouse.move(viewport['x'] + viewport['width'] / 2, viewport['y'] + 45)
@@ -297,10 +312,14 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
         const clamped=previewApi.getModelRigState().geometryRigPreview.pose.limbs[role];
         checks.push({clamped:!clamped.reached && clamped.residual>0});
       }
+      previewApi.solveGeometryRigPreviewIk('rightFoot',rest.controls.rightFoot.position
+        .map((v,i)=>v+height*(i===1?0.12:i===2?0.08:0)));
       const beforeFlip=structuredClone(previewApi.getModelRigState().geometryRigPreview.pose);
       previewApi.flipGeometryRigPreviewBend();
       const afterFlip=previewApi.getModelRigState().geometryRigPreview.pose;
-      const flip=afterFlip.limbs.right_leg.bendSign===-beforeFlip.limbs.right_leg.bendSign;
+      const flip=afterFlip.limbs.right_leg.bendSign===-beforeFlip.limbs.right_leg.bendSign
+        && distance(afterFlip.positions.rightKnee,beforeFlip.positions.rightKnee)>height*0.05
+        && distance(afterFlip.positions.rightFoot,beforeFlip.positions.rightFoot)<height*1e-9;
       const invalid=!previewApi.solveGeometryRigPreviewIk('head',[0,0,0])
         && !previewApi.solveGeometryRigPreviewIk('leftHand',[NaN,0,0]);
       previewApi.resetGeometryRigPreviewPose();
@@ -339,18 +358,31 @@ def test_geometry_preview_lifecycle_is_weight_free_and_preserves_active_state(vi
       fixture.meshes[0].geometry.attributes.position.array[0]=beforeRest[0][0];
       delete fixture.meshes[0].userData.animationState;
       previewApi.clearGeometryRigPreview();
-      const pending=previewApi.previewGeometryRig();previewApi.clearGeometryRigPreview();await pending;
-      const visibilityPending=previewApi.previewGeometryRig();hiddenPreviewGroup.visible=true;await visibilityPending;
+      const stale=[];
+      const pending=previewApi.previewGeometryRig();previewApi.clearGeometryRigPreview();stale.push(await pending);
+      const visibilityPending=previewApi.previewGeometryRig();hiddenPreviewGroup.visible=true;stale.push(await visibilityPending);
       hiddenPreviewGroup.visible=false;
       const geometryPending=previewApi.previewGeometryRig();fixture.meshes[0].geometry.attributes.position.needsUpdate=true;
-      await geometryPending;
-      const transformPending=previewApi.previewGeometryRig();fixture.meshes[0].position.x+=0.1;await transformPending;
+      stale.push(await geometryPending);
+      const transformPending=previewApi.previewGeometryRig();fixture.meshes[0].position.x+=0.1;stale.push(await transformPending);
       fixture.meshes[0].position.x-=0.1;
-      return {rejected,reason,preview:previewApi.getModelRigState().geometryRigPreview};
+      const rest=fixture.meshes[0].userData.humanoidRestPositions;
+      const restPending=previewApi.previewGeometryRig();fixture.meshes[0].userData.humanoidRestPositions=new Float32Array(rest);
+      stale.push(await restPending);fixture.meshes[0].userData.humanoidRestPositions=rest;
+      const range=fixture.meshes[0].geometry.drawRange.count;
+      const rangePending=previewApi.previewGeometryRig();fixture.meshes[0].geometry.drawRange.count=3;stale.push(await rangePending);
+      fixture.meshes[0].geometry.drawRange.count=range;
+      return {rejected,reason,staleRejected:stale.every(value=>value===false),preview:previewApi.getModelRigState().geometryRigPreview};
     }""")
-    assert result == {'rejected': False, 'reason': 'weightRig.geometryRequiresRest', 'preview': None}
+    assert result == {'rejected': False, 'reason': 'weightRig.geometryRequiresRest', 'staleRejected': True, 'preview': None}
     page.evaluate('previewApi.previewGeometryRig()')
     page.evaluate("window.dispatchEvent(new CustomEvent('mod-viewer-model-transform-changed',{detail:{meshes:fixture.meshes}}))")
+    assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
+    page.evaluate('previewApi.previewGeometryRig()')
+    page.evaluate("""async () => {
+      const {refreshWeightRigAfterShapeChange}=await import('./js/weight-rig/weight-rig-core.js');
+      refreshWeightRigAfterShapeChange(fixture.meshes[0]);
+    }""")
     assert page.evaluate('previewApi.getModelRigState().geometryRigPreview') is None
     page.evaluate('previewApi.previewGeometryRig()')
     page.evaluate("window.dispatchEvent(new CustomEvent('mod-viewer-mesh-state-changed',{detail:{meshes:fixture.meshes}}))")

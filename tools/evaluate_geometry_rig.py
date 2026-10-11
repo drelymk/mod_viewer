@@ -16,13 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 
-CAPTURE_VIEW = """async ({view, mode, baseline}) => {
+CAPTURE_VIEW = """async ({view, mode, baseline, preservePose=false}) => {
   const THREE=await import('three');
   const {camera,renderer,scene,controls}=await import('./js/scene/scene.js');
   const {weightRigApi}=await import('./js/weight-rig/weight-rig-core.js');
   const {semanticToHumanoidControlPosition,rebuildHumanoidControlPaths}=
     await import('./js/weight-rig/humanoid-control-rig.js');
-  weightRigApi.setGeometryRigPreviewMode(mode==='proportional'?'proportional':'geometry');
+  if (!preservePose) weightRigApi.setGeometryRigPreviewMode(mode==='proportional'?'proportional':'geometry');
   const rig=weightRigApi.getModelRigState().geometryRigPreview.rig;
   const saved=structuredClone(rig.controls);
   if (baseline) {
@@ -62,7 +62,7 @@ CAPTURE_VIEW = """async ({view, mode, baseline}) => {
   const projectedTop=project(semanticToHumanoidControlPosition({sideN:0,height01:1,depthN:0},rig));
   const pixels=Math.abs(projectedBottom[1]-projectedTop[1]);
   const positions=Object.fromEntries(Object.entries(rig.controls).map(([key,c])=>{
-    const p=project(c.position);
+    const p=project(weightRigApi.getModelRigState().geometryRigPreview.pose?.positions[key] || c.position);
     return [key,{horizontalN:(p[0]-projectedBottom[0])/pixels,
       height01:(projectedBottom[1]-p[1])/pixels,pixels:p}];
   }));
@@ -165,6 +165,169 @@ def add_comparison(result, guides, baseline=None):
     result["plausibility"] = plausibility
 
 
+POSE_CASE = """async ({name, displacements, measure=true}) => {
+  const api=window.__evaluationRigApi;
+  api.resetGeometryRigPreviewPose();
+  if (window.__evaluationKeepGeometryPlanes) {
+    const pose=api.getModelRigState().geometryRigPreview.pose;
+    for (const [role,limb] of Object.entries(pose.limbs))
+      limb.bendDirection=[...window.__evaluationGeometryPlanes[role].bendDirection];
+  }
+  const rig=api.getModelRigState().geometryRigPreview.rig, height=rig.frame.height;
+  const {HUMANOID_LIMB_CONTROLS}=await import('./js/weight-rig/humanoid-rig-ik.js');
+  const distance=(a,b)=>Math.hypot(...a.map((v,i)=>v-b[i]));
+  const dot=(a,b)=>a.reduce((sum,v,i)=>sum+v*b[i],0);
+  const result={};
+  for (const [role,keys] of Object.entries(HUMANOID_LIMB_CONTROLS)) {
+    const rest=keys.map(key=>rig.controls[key].position);
+    const lengths=[distance(rest[0],rest[1]),distance(rest[1],rest[2])];
+    const delta=displacements[role][name];
+    const target=rest[2].map((v,i)=>v+height*(rig.frame.right[i]*delta[0]+rig.frame.up[i]*delta[1]+rig.frame.forward[i]*delta[2]));
+    const before=structuredClone(api.getModelRigState().geometryRigPreview.pose.positions);
+    let previous=rest[1], previousTarget=rest[2], previousPerpendicular=null;
+    const row={maxSegmentErrorHeight:0,maxAnchorShiftHeight:0,maxOtherLimbShiftHeight:0,
+      maxStepBendHeight:0,maxStepTargetHeight:0,minBendAlignment:1,bendSignChanges:0,finite:true};
+    for (let step=1;step<=40;step++) {
+      const at=rest[2].map((v,i)=>v+(target[i]-v)*step/40);
+      api.solveGeometryRigPreviewIk(keys[2],at);
+      const pose=api.getModelRigState().geometryRigPreview.pose;
+      const points=keys.map(key=>pose.positions[key]||rig.controls[key].position);
+      row.maxSegmentErrorHeight=Math.max(row.maxSegmentErrorHeight,
+        Math.abs(distance(points[0],points[1])-lengths[0])/height,
+        Math.abs(distance(points[1],points[2])-lengths[1])/height);
+      row.maxAnchorShiftHeight=Math.max(row.maxAnchorShiftHeight,distance(points[0],rest[0])/height);
+      row.maxOtherLimbShiftHeight=Math.max(row.maxOtherLimbShiftHeight,0,...Object.keys(before)
+        .filter(key=>!keys.includes(key)).map(key=>distance(before[key],pose.positions[key])/height));
+      row.finite &&= points.flat().every(Number.isFinite);
+      row.maxStepBendHeight=Math.max(row.maxStepBendHeight,distance(previous,points[1])/height);
+      row.maxStepTargetHeight=Math.max(row.maxStepTargetHeight,distance(previousTarget,at)/height);
+      const axis=points[2].map((v,i)=>v-points[0][i]);const axisLength=Math.hypot(...axis);
+      const unit=axis.map(v=>v/axisLength), offset=points[1].map((v,i)=>v-points[0][i]);
+      const perpendicular=offset.map((v,i)=>v-unit[i]*dot(offset,unit));
+      const size=Math.hypot(...perpendicular), frozen=pose.limbs[role].bendDirection;
+      const projected=frozen.map((v,i)=>v-unit[i]*dot(frozen,unit));
+      const projectedSize=Math.hypot(...projected);
+      if (size>height*1e-6 && projectedSize>1e-6) {
+        const normal=perpendicular.map(v=>v/size);
+        row.minBendAlignment=Math.min(row.minBendAlignment,dot(normal,projected)/projectedSize);
+        if (previousPerpendicular && dot(previousPerpendicular,normal)<0) row.bendSignChanges++;
+        previousPerpendicular=normal;
+      }
+      previous=points[1];previousTarget=at;
+    }
+    const pose=api.getModelRigState().geometryRigPreview.pose;
+    const state=pose.limbs[role];
+    const end=pose.positions[keys[2]], bend=pose.positions[keys[1]];
+    const axis=end.map((v,i)=>v-rest[0][i]), offset=bend.map((v,i)=>v-rest[0][i]);
+    const along=dot(offset,axis)/dot(axis,axis);
+    row.bendOffsetForwardHeight=dot(offset.map((v,i)=>v-axis[i]*along),rig.frame.forward)/height;
+    Object.assign(row,{reached:state.reached,residualHeight:state.residual/height,
+      segmentLengthsHeight:lengths.map(v=>v/height)});
+    if (measure) {
+      api.solveGeometryRigPreviewIk(keys[2],rest[2]);
+      row.restTargetJointShiftHeight=distance(api.getModelRigState().geometryRigPreview.pose.positions[keys[1]],rest[1])/height;
+      api.solveGeometryRigPreviewIk(keys[2],target);
+    }
+    result[role]=row;
+  }
+  return result;
+}"""
+
+
+def evaluate_poses(page, output, guides):
+    """Use the preview API; reference edits live only in this isolated fixture."""
+    displacements = page.evaluate("""async () => {
+      const rest=window.__evaluationRigApi.getModelRigState().geometryRigPreview.rig;
+      const {HUMANOID_LIMB_CONTROLS}=await import('./js/weight-rig/humanoid-rig-ik.js');
+      return Object.fromEntries(Object.entries(HUMANOID_LIMB_CONTROLS).map(([role,keys])=>{
+        const first=rest.controls[keys[0]].position,last=rest.controls[keys[2]].position;
+        const direction=last.map((v,i)=>v-first[i]),length=Math.hypot(...direction);
+        const radial=axis=>direction.reduce((sum,v,i)=>sum+v*axis[i],0)/length*0.25;
+        const inward=role.startsWith('left')?0.04:-0.04;
+        return [role,{toward:[inward,0.12,0.12],away:[inward,0.12,-0.12],
+          extension:[radial(rest.frame.right),radial(rest.frame.up),radial(rest.frame.forward)]}];
+      }));
+    }""")
+    report = {"targetDisplacementsHeight": displacements, "modes": {}}
+    corrected = {}
+    for key, entry in guides.items():
+        guide = entry.get("front", {})
+        if guide.get("kind") not in ("visible", "estimated"):
+            continue
+        if not all(axis in guide for axis in ("horizontalN", "height01")):
+            continue
+        corrected[key] = {
+            "side": guide["horizontalN"],
+            "height": guide["height01"],
+        }
+        side = entry.get("side", {})
+        if side.get("kind") == "visible" and "horizontalN" in side:
+            corrected[key]["depth"] = side["horizontalN"]
+    for mode in (
+        "proportional",
+        "geometry",
+        *(["reference", "reference-fixed-plane"] if corrected else []),
+    ):
+        page.evaluate(
+            """async ({mode,corrected}) => {
+          const api=window.__evaluationRigApi;
+          api.setGeometryRigPreviewMode(mode==='proportional'?'proportional':'geometry');
+          const rig=api.getModelRigState().geometryRigPreview.rig;
+          window.__evaluationOriginalControls=rig.controls;
+          if (mode.startsWith('reference')) {
+            rig.controls=structuredClone(rig.controls);
+            for (const [key,value] of Object.entries(corrected)) {
+              const p=rig.controls[key].position, frame=rig.frame;
+              const side=p.reduce((sum,v,i)=>sum+v*frame.right[i],0);
+              const up=p.reduce((sum,v,i)=>sum+v*frame.up[i],0);
+              const depth=p.reduce((sum,v,i)=>sum+v*frame.forward[i],0);
+              rig.controls[key].position=p.map((v,i)=>v+frame.right[i]*(frame.sideCenter+value.side*frame.height-side)
+                +frame.up[i]*(frame.lowHeight+value.height*frame.height-up)
+                +(value.depth===undefined?0:frame.forward[i]*(frame.depthCenter+value.depth*frame.height-depth)));
+            }
+            const {rebuildHumanoidControlPaths}=await import('./js/weight-rig/humanoid-control-rig.js');
+            rebuildHumanoidControlPaths(rig);api.setGeometryRigPreviewMode('geometry');
+          }
+          api.setGeometryRigPreviewIkEnabled(true);
+          if (mode==='geometry') window.__evaluationGeometryPlanes=structuredClone(api.getModelRigState().geometryRigPreview.pose.limbs);
+          window.__evaluationKeepGeometryPlanes=mode==='reference-fixed-plane';
+        }""",
+            {"mode": mode, "corrected": corrected},
+        )
+        mode_report = {}
+        for movement in ("toward", "away", "extension"):
+            mode_report[movement] = page.evaluate(
+                POSE_CASE, {"name": movement, "displacements": displacements}
+            )
+            if (
+                mode == "reference-fixed-plane"
+                or movement == "extension"
+                or (mode == "reference" and movement == "away")
+            ):
+                continue
+            for view in ("front", "side") if movement == "toward" else ("side",):
+                page.evaluate(
+                    CAPTURE_VIEW,
+                    {"view": view, "mode": "geometry", "preservePose": True},
+                )
+                page.locator("#canvas-container").screenshot(
+                    path=str(output / f"pose-{mode}-{movement}-{view}.png")
+                )
+                page.evaluate("window.__evaluationRestore()")
+        report["modes"][mode] = mode_report
+        page.evaluate("""async () => {
+          const api=window.__evaluationRigApi,rig=api.getModelRigState().geometryRigPreview.rig;
+          rig.controls=window.__evaluationOriginalControls;
+          const {rebuildHumanoidControlPaths}=await import('./js/weight-rig/humanoid-control-rig.js');
+          rebuildHumanoidControlPaths(rig);api.setGeometryRigPreviewIkEnabled(false);
+        }""")
+    report["referenceMethod"] = (
+        "Temporary frontal visible/estimated guide corrections and visible side corrections; other depths retained. "
+        "Estimated leg pivots are diagnostic hypotheses, not ground truth."
+    )
+    return report
+
+
 def main():
     from app.mods.loader import load_mod
     from core.geometry.transport import GeometryBlob
@@ -183,6 +346,9 @@ def main():
     parser.add_argument("--guides", type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--check-duplicates", action="store_true")
+    parser.add_argument(
+        "--poses", action="store_true", help="Evaluate skeleton-only endpoint motions"
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     baseline = (
@@ -236,6 +402,12 @@ def main():
                 mesh.geometry.drawRange.count))/3);
             },0),weightRequests:window.__bridge.calls.filter(call=>call.name==='weights').length};
         }""")
+        result["meshCounts"] = {
+            "displayed": result["diagnostics"]["visibleMeshCount"],
+            "inactive": result["inactiveMeshes"],
+            "total": result["diagnostics"]["visibleMeshCount"]
+            + result["inactiveMeshes"],
+        }
         if args.check_duplicates:
             result["duplicateCheck"] = page.evaluate("""async () => {
               const THREE=await import('three');
@@ -279,6 +451,24 @@ def main():
                 page.evaluate("window.__evaluationRestore()")
                 result["views"][view][mode] = capture
         add_comparison(result, guides, baseline)
+        if args.poses:
+            page.evaluate(
+                "window.__evaluationRigApi.setGeometryRigPreviewMode('geometry')"
+            )
+            before = page.evaluate("""() => ({rest:JSON.stringify(window.__evaluationRigApi.getModelRigState().geometryRigPreview.rig),
+              geometry:window.modViewer.activeMeshes.map(mesh=>[...mesh.geometry.attributes.position.array])})""")
+            result["posing"] = evaluate_poses(page, args.output, guides)
+            result["posing"].update(
+                page.evaluate(
+                    """before => ({
+              restUnchanged:JSON.stringify(window.__evaluationRigApi.getModelRigState().geometryRigPreview.rig)===before.rest,
+              modelGeometryUnchanged:window.modViewer.activeMeshes.every((mesh,i)=>
+                mesh.geometry.attributes.position.array.every((v,j)=>v===before.geometry[i][j])),
+              weightRequests:window.__bridge.calls.filter(call=>call.name==='weights').length,
+              modelRigLoaded:window.__evaluationRigApi.getModelRigState().loaded})""",
+                    before,
+                )
+            )
         (args.output / "comparison.json").write_text(
             json.dumps(result, indent=2) + "\n", encoding="utf-8"
         )
