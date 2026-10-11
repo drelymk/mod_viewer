@@ -556,9 +556,13 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--near-rest", action="store_true")
     parser.add_argument("--deform-left-arm", action="store_true")
+    parser.add_argument("--diagnose-shoulder", action="store_true")
+    parser.add_argument("--ownership-overrides", type=Path)
     args = parser.parse_args()
-    if not (args.near_rest or args.deform_left_arm):
-        parser.error("Select --near-rest or --deform-left-arm")
+    if not (args.near_rest or args.deform_left_arm or args.diagnose_shoulder):
+        parser.error("Select --near-rest, --deform-left-arm or --diagnose-shoulder")
+    if args.ownership_overrides and not args.diagnose_shoulder:
+        parser.error("Ownership overrides require --diagnose-shoulder")
     args.output.mkdir(parents=True, exist_ok=True)
     mod = str(args.mod)
     source = mod_source_for_path(mod)
@@ -597,6 +601,17 @@ def main():
             report["nearRest"] = evaluate_near_rest(page, args.output)
         if args.deform_left_arm:
             report["deformation"] = evaluate_deformation(page, context, args.output)
+        if args.diagnose_shoulder:
+            from evaluate_geometry_shoulder import evaluate_shoulder
+
+            overrides = (
+                json.loads(args.ownership_overrides.read_text(encoding="utf-8"))
+                if args.ownership_overrides
+                else []
+            )
+            report["shoulder"] = evaluate_shoulder(
+                page, context, args.output, overrides=overrides
+            )
         report["invariants"] = page.evaluate("""() => ({
           restRigUnchanged:JSON.stringify(__evaluationRigApi.getModelRigState().geometryRigPreview.rig)===__armBefore.rest,
           positionsRestored:modViewer.activeMeshes.every((m,i)=>m.geometry.attributes.position.array.every((v,j)=>v===__armBefore.positions[i][j])),
@@ -611,6 +626,9 @@ def main():
                 {
                     "invariants": report["invariants"],
                     "modes": list(report.get("deformation", {}).get("modes", {})),
+                    "shoulderScenarios": list(
+                        report.get("shoulder", {}).get("scenarios", {})
+                    ),
                 }
             ),
             flush=True,

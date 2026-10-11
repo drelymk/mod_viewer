@@ -528,3 +528,147 @@ python tools/evaluate_geometry_arm.py <mod-folder> --deform-left-arm --output <c
 Use a compatible browser/WebGPU environment. The first command drives the
 existing viewport controls; the second is an explicit evaluation operation.
 Browser/rendering tests remain outside the normal GitHub CI selection.
+
+### Iteration 5 — isolate shoulder and cloth ownership
+
+The focused Remielle left-arm experiment shows that the existing authored
+weights can deform more usefully with the Geometry skeleton when a small set of
+influences receives different owners. It reduces visible torso-cloth pulling
+and the worst stretches, while leaving a severe shoulder compression unresolved.
+These are temporary diagnostic assignments, not production binding changes or
+proof of generally natural deformation.
+
+The evaluator reuses the corrected independent IK, authored position/normal
+deformation helpers and exactly the same 16,785 displayed edges and sample
+digest as Iteration 4. Every pose uses the same displacement from its own resting
+hand: 12% of reference height upward and 12% forward or backward. Authored
+influence IDs/weights, source reconciliation and the rest Geometry skeleton are
+unchanged. Only the left arm receives nonidentity transforms.
+
+#### Which influences distort the extreme edges?
+
+The [edge contribution records](iteration-5/edge-contributions.json) identify
+original vertex IDs, source-scoped influences, ModelJoint members, assigned
+drivers and endpoint weights. For each influence they reconstruct the signed
+change to the edge vector through the existing driver matrix. Their summed
+vectors agree with the displayed Float32 deformation to less than 0.000004% of
+character height in the retained records, including the original helper's
+handling of over-unit weight sums.
+
+Vector magnitudes and projections identify participating influences; they are
+not additive edge-length percentages. Cancellation matters: simply removing
+influence 171 makes the original worst forward edge slightly worse. The useful
+test changes its driver together with the related influence 170, preserving
+their authored weights.
+
+All influence IDs in this table belong to `remielle2bodyblend.buf|offset=0`:
+
+| Baseline extreme | Original vertex pair | Ratio | Principal influence → ModelJoint → driver |
+| --- | --- | ---: | --- |
+| Forward stretch | 12747 / 12846 | 4.558× | 171 → 81 → forearm, mixed with 69 → 182 → upper arm |
+| Forward compression | 12844 / 12845 | 0.382× | 170 → 80 → forearm, mixed with 171, 69 and 83 |
+| Backward stretch | 3655 / 3658 | 5.725× | 72 → 186 and 73 → 187 → upper arm, mixed with stationary neck/torso influences |
+| Backward compression | 13332 / 13352 | 0.234× | 71 → 185, 70 → 184 and 127 → 32 → upper arm, mixed with stationary neck influences |
+
+The displayed support of 170 and 171 lies overwhelmingly proximal to the
+Geometry elbow plane: respectively 98.54% and 99.56% of their weight. Their
+weighted upper-arm parameters are 0.775 and 0.769, where the shoulder is 0 and
+elbow is 1. This supports a diagnostic upper-arm owner. Influence 83, which
+drives the remaining extreme after correction, has 72.04% of its displayed
+weight distal to that plane; it remains assigned to the forearm.
+
+Influence 72 supports rear torso geometry crossing the centerline; its weighted
+center is medial and behind the shoulder. Influence 73 supports the adjoining
+rear cloth. Influences 74 and 75 inherit arm ownership from this cloth branch.
+The second diagnostic assigns all four to the stationary torso driver. This
+tests the visibly incorrect torso pulling without pretending that Blend data
+provides anatomical labels or that all shoulder-attached cloth should be rigid.
+The [explicit diagnostic input](iteration-5/ownership-overrides.json) records
+these six source references and their evidence; mesh/component names do not
+participate in selection. A correction resolves to the existing ModelJoint and
+therefore consistently changes all of its source aliases.
+
+#### Separate skeleton positions from ownership
+
+The evaluator crosses both skeletons with both original ownership maps.
+Ownership stays fixed when skeleton positions change, and positions stay fixed
+when owners change. It recomputes each driver-relative rest matrix as
+`inverse(restDriverWorld) * restJointWorld` for the chosen skeleton; copying the
+other skeleton's old matrices would confound this experiment. Rest deltas are
+identity to within 7 × 10⁻¹⁶. Each candidate is solved from its own rest controls
+and segment lengths.
+
+| Skeleton / frozen ownership | Forward p95 / maximum | Backward p95 / maximum |
+| --- | ---: | ---: |
+| Current / Current | 1.209 / 3.347× | 1.454 / 7.708× |
+| Current / Geometry | 1.015 / 4.084× | 1.012 / 7.962× |
+| Geometry / Current | 1.463 / 8.447× | 1.967 / 19.241× |
+| Geometry / Geometry | 1.024 / 4.558× | 1.021 / 5.725× |
+
+Much of the percentile improvement follows ownership, even with the Current
+skeleton held fixed. Geometry positions combined with Current ownership make
+the maxima worse. Joint positions and owners interact; neither factor alone
+explains all deformation.
+
+A further position-only control translates the Geometry shoulder, elbow and
+hand by the same offset until its shoulder coincides with Current's. It keeps
+Geometry's arm lengths, directions, relative IK pose and ownership. The maxima
+worsen to 5.207× forward and 7.617× backward. The minimum forward ratio improves
+to 0.555×, but backward compression remains 0.241×. This isolates pivot placement
+from segment lengths and does not support a simple shoulder translation as the
+general correction. It does not locate an anatomically correct pivot.
+
+#### Repeat the fixed poses with diagnostic owners
+
+| Geometry scenario | Forward max / min | Backward max / min | Edges above 2×, forward / backward |
+| --- | ---: | ---: | ---: |
+| Original owners | 4.558 / 0.382× | 5.725 / 0.234× | 20 / 122 |
+| 170–171 to upper arm | 3.056 / 0.540× | 5.725 / 0.234× | 16 / 118 |
+| 72–75 to torso | 4.558 / 0.382× | 4.420 / 0.234× | 17 / 19 |
+| Both corrections | 3.056 / 0.540× | 2.972 / 0.234× | 13 / 15 |
+
+The forward edge formerly stretched 4.558× now measures 0.982×; the formerly
+compressed 0.382× edge measures 0.885×. The backward 5.725× cloth edge returns to
+1.000×. The original worst backward compression stays exactly 0.234×. The
+evaluator also freezes sixteen baseline extreme edge identities per pose and
+tracks them through every scenario, alongside the complete common sample.
+
+Edges below half their rest length drop from 2 to 0 forward and from 12 to 6
+backward. The shared-sample mean absolute log length ratio drops from 0.01196 to
+0.00672 forward and from 0.02480 to 0.00837 backward. These are diagnostic severity
+statistics, not binding thresholds. The corrected p95 is 1.000× in both poses
+because much of the common region is unchanged; it does not establish uniformly
+good deformation.
+
+![Frozen shoulder crops before and after diagnostic ownership corrections](iteration-5/shoulder-ownership.png)
+
+The single new image compares the same front/side shoulder crops for each pose.
+The Geometry controls, camera and crop are identical across columns. The cloth
+pulling improves visibly, particularly backward, while the arm still follows
+the original IK solution. The retained image is cropped evidence; no additional
+full-model captures are added.
+
+The remaining compressed shoulder edge mixes upper-arm and stationary neck
+weights. The remaining stretch lies at the upper-arm/forearm transition, mainly
+involving influence 83. These results leave room for pivot, simplified-driver
+and authored-skinning limitations; they do not justify changing those owners
+from a percentile alone. Existing authored weights and the Geometry skeleton
+can improve meaningfully through ownership corrections in this controlled case,
+but complete anatomical quality is still unproven.
+
+The [measurements](iteration-5/measurements.json) retain all eight scenarios,
+actual rest/solved controls, support statistics, fixed edge identities and exact
+restoration checks. The existing neutral one-arm lifecycle also checks the
+diagnostic matrix rebasing, contribution reconstruction and cleanup; no new
+test cases or CI browser jobs are added.
+
+```text
+python tools/evaluate_geometry_arm.py <remielle-mod-folder> --diagnose-shoulder --ownership-overrides docs/experiments/geometry-rig/iteration-5/ownership-overrides.json --output <capture-folder>
+```
+
+This explicit operation requires a compatible browser/WebGPU environment and
+the same displayed mod variant. Omitting the override file runs only the
+ownership/skeleton and pivot controls. It never saves metadata or edits source
+buffers. Production Weight, binding rules, reconciliation, deformation and IK
+remain unchanged. Keep PR #180 open and unmerged, and report this result before
+expanding beyond this arm or model.

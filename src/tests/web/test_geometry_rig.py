@@ -543,4 +543,32 @@ def test_one_arm_experiment_preserves_authored_data_and_rest_state(viewer, monke
       mesh.geometry.attributes.normal.array.every((v,j)=>v===__experimentRest[i].normals[j]))""")
     assert page.evaluate("""() => JSON.stringify(__evaluationRigApi.getModelRigState().geometryRigPreview.rig)
       ===__armDeform.geometryIdentity""")
+    from evaluate_geometry_shoulder import evaluate_shoulder
+
+    diagnostic = evaluate_shoulder(
+        page, SimpleNamespace(skinning_manifest={}), None, baseline=report,
+        overrides=[{"sourceKey": "stream-01.buf|offset=0", "boneId": 0,
+                    "driverId": "torso", "group": "fixture_owner"}], capture_views=(),
+    )
+    for name, scenario in diagnostic["scenarios"].items():
+        assert scenario["selection"]["restTransformMaxError"] < 1e-8
+        for movement in ("forward", "backward"):
+            row = scenario[movement]
+            assert row["finite"] and row["authoredInfluencesUnchanged"] and row["geometryRestUnchanged"]
+            assert row["commonRegion"]["sampleDigest"] == setup["commonRegion"]["sampleDigest"]
+            tracked = row["worstEdges"]["trackedEdges"]
+            original = diagnostic["scenarios"]["geometry_geometry_owners"][movement]["worstEdges"]["trackedEdges"]
+            assert tracked["sampleIndices"] == original["sampleIndices"]
+            for kind in ("stretched", "compressed"):
+                assert all(edge["reconstructionErrorHeight"] < 1e-6 for edge in row["worstEdges"][kind])
+            if name in ("current_current_owners", "geometry_geometry_owners"):
+                skeleton = scenario["selection"]["skeleton"]
+                assert row["pose"] == {**report["modes"][skeleton][movement]["pose"], "mode": "diagnostic"}
+                assert row["commonRegion"] == report["modes"][skeleton][movement]["commonRegion"]
+        assert scenario["returnToRest"]["maxDisplacementHeight"] == 0
+    correction = diagnostic["scenarios"]["geometry_corrected_owners"]["selection"]["overrides"]
+    assert correction[0]["boneId"] == 0 and correction[0]["previousDriver"] == "left_lower_arm"
+    assert page.evaluate("""() => !__armDeform.controls.diagnostic && fixture.meshes.every((mesh,i)=>
+      mesh.geometry.attributes.position.array.every((v,j)=>v===__experimentRest[i].positions[j])&&
+      mesh.geometry.attributes.normal.array.every((v,j)=>v===__experimentRest[i].normals[j]))""")
     page.evaluate("url=>URL.revokeObjectURL(url)", inputs["url"])

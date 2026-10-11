@@ -1,0 +1,2995 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "bd7b210",
+  "scope": "Remielle left arm; fixed forward/backward height-normalized displacements",
+  "invariants": {
+    "restRigUnchanged": true,
+    "positionsRestored": true,
+    "normalsRestored": true,
+    "weightUiRequests": 0,
+    "productionModelRigLoaded": false
+  },
+  "commonRegion": {
+    "definition": "union_of_both_rest_arm_capsules",
+    "radiusHeight": 0.08,
+    "minimumRestEdgeHeight": 1e-05,
+    "edgeCount": 16785,
+    "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+    "edgesByMesh": [
+      {
+        "mesh": "Remielle2LegsA-1",
+        "edgeCount": 68
+      },
+      {
+        "mesh": "Remielle2BodyA-1",
+        "edgeCount": 12339
+      },
+      {
+        "mesh": "Remielle2BodyB-1",
+        "edgeCount": 49
+      },
+      {
+        "mesh": "RemielleHairA-1",
+        "edgeCount": 1939
+      },
+      {
+        "mesh": "RemielleHairB-1",
+        "edgeCount": 1261
+      },
+      {
+        "mesh": "RemielleFaceA-1",
+        "edgeCount": 1118
+      },
+      {
+        "mesh": "RemielleFaceB-1",
+        "edgeCount": 11
+      }
+    ]
+  },
+  "referenceFrame": {
+    "up": [
+      0,
+      2.220446049250313e-16,
+      1
+    ],
+    "right": [
+      1,
+      0,
+      0
+    ],
+    "forward": [
+      0,
+      -1,
+      2.220446049250313e-16
+    ],
+    "lowHeight": -0.028839303180575367,
+    "highHeight": 1.605006456375122,
+    "height": 1.6338457595556974,
+    "sideCenter": -0.0014440976665355265,
+    "depthCenter": -0.10501838102936717,
+    "bodyDepth": -0.045116151496767995,
+    "bodyDepthN": 0.036663332008089175
+  },
+  "sourceCount": 4,
+  "jointCount": 362,
+  "scenarios": {
+    "geometry_geometry_owners": {
+      "selection": {
+        "skeleton": "geometry",
+        "ownership": "geometry",
+        "translateShoulder": false,
+        "overrides": [],
+        "boundArmJoints": 46,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.33642285203560035,
+              0.03784218689129839,
+              1.1793224589807183
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              -0.14852806061277085,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            -0.14852806061277082,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            -0.4851870346434495,
+            0.8468070779576394,
+            -0.21797090203680958
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.24137641448357489,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 4.557655818785286,
+        "p95EdgeLengthRatio": 1.381047878229022,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.023763926751989,
+          "maxEdgeLengthRatio": 4.557655818785286,
+          "minEdgeLengthRatio": 0.3816206956171012
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 20,
+          "belowHalf": 2,
+          "meanAbsoluteLogRatio": 0.011961350251487162
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            4.557655818785286,
+            4.511078953099714,
+            3.8053827031627674,
+            3.771099873328085,
+            3.2331937489259066,
+            2.965409863530725,
+            2.965409863530725,
+            2.9640488357927857,
+            0.6212788790492979,
+            0.6201541153966932,
+            0.6139259372424742,
+            0.6071913056651332,
+            0.6040457043627001,
+            0.5304642998531466,
+            0.4392503978442859,
+            0.38162069561710116
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.22605768395363535,
+              0.2414894592571314,
+              1.230212092186039
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.24359492168059654,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            0.24359492168059654,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            0.4968862351978176,
+            0.8353713260609021,
+            0.23507193976778448
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.18491919104923468,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 10.13136439327062,
+        "p95EdgeLengthRatio": 2.7653643705534057,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0208941804168883,
+          "maxEdgeLengthRatio": 5.725215337084955,
+          "minEdgeLengthRatio": 0.23408584547551584
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 122,
+          "belowHalf": 12,
+          "meanAbsoluteLogRatio": 0.02480269946747546
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            5.725215337084955,
+            4.420188569102607,
+            4.39456115483447,
+            4.241024479492337,
+            3.969842121586586,
+            3.835611434542483,
+            3.7129367200075873,
+            3.675872937575009,
+            0.40563393408156057,
+            0.3997241485349215,
+            0.3809380071035084,
+            0.3552589257654053,
+            0.2750831400852436,
+            0.2601760727540138,
+            0.251380858588374,
+            0.23408584547551584
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "current_current_owners": {
+      "selection": {
+        "skeleton": "current",
+        "ownership": "current",
+        "translateShoulder": false,
+        "overrides": [],
+        "boundArmJoints": 57,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.24973956526356553,
+              0.03159053549170521,
+              1.1243709553011152
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              0.03159053549170516,
+              0.898797604716647
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.303237462648128,
+              0.07596057165036235,
+              1.1792023298054204
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              -0.1644709556549785,
+              1.0948590958633309
+            ]
+          },
+          "target": [
+            -0.40768772576203177,
+            -0.1644709556549785,
+            1.0948590958633309
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.27537421429529785,
+          "lowerLength": 0.27537421429529785,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            3.1557743487898663e-18,
+            1,
+            -2.1753769207907916e-16
+          ],
+          "restBendDirection": [
+            0,
+            0,
+            0
+          ],
+          "solvedBendDirection": [
+            -0.33830850904650933,
+            0.9005100856302366,
+            -0.27318297601598795
+          ]
+        },
+        "movedVertices": 11880,
+        "maxDisplacementHeight": 0.21454589913591907,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 14099,
+        "maxEdgeLengthRatio": 4.628724605685293,
+        "p95EdgeLengthRatio": 1.457687223288785,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.2089512857724574,
+          "maxEdgeLengthRatio": 3.346669034362443,
+          "minEdgeLengthRatio": 0.39704631747150176
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 15,
+          "belowHalf": 4,
+          "meanAbsoluteLogRatio": 0.034813266914651204
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            1.0000031368742566,
+            1.0000016793410205,
+            1.0329671783532417,
+            1.061682132064988,
+            1.0000008660952964,
+            0.9999998507725304,
+            0.9999998507725304,
+            1.0000007432179707,
+            0.9072807109179428,
+            1.0000007602683525,
+            1.0453105635939444,
+            1.0111143605113102,
+            1.0000005168013768,
+            1.022819855513175,
+            0.9999974822695561,
+            0.9999985509456383
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.24973956526356553,
+              0.03159053549170521,
+              1.1243709553011152
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              0.03159053549170516,
+              0.898797604716647
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.19624166787900316,
+              0.272022062797046,
+              1.2656010719434936
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              0.22765202663838885,
+              1.0948590958633306
+            ]
+          },
+          "target": [
+            -0.40768772576203177,
+            0.22765202663838888,
+            1.0948590958633306
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.27537421429529785,
+          "lowerLength": 0.27537421429529785,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            3.1557743487898663e-18,
+            1,
+            -2.1753769207907916e-16
+          ],
+          "restBendDirection": [
+            0,
+            0,
+            0
+          ],
+          "solvedBendDirection": [
+            0.33830850904650916,
+            0.9005100856302368,
+            0.2731829760159876
+          ]
+        },
+        "movedVertices": 11880,
+        "maxDisplacementHeight": 0.17770566070733163,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 14099,
+        "maxEdgeLengthRatio": 11.059185594888584,
+        "p95EdgeLengthRatio": 2.107382581956,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.453615388505139,
+          "maxEdgeLengthRatio": 7.707690462688081,
+          "minEdgeLengthRatio": 0.10759124672013497
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 207,
+          "belowHalf": 99,
+          "meanAbsoluteLogRatio": 0.0807058751407545
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            6.514458411708137,
+            1.0000015025237992,
+            0.9999969843231039,
+            4.994357666979492,
+            4.525141847914539,
+            2.3513588799647263,
+            1.0329705703767684,
+            1.06169152838038,
+            0.9467290285846484,
+            1.0000017985085066,
+            1.6699549034499477,
+            0.9948577653362897,
+            1.1652645314032402,
+            0.9988606304740767,
+            1.051740934040034,
+            1.1506396571700592
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "current_geometry_owners": {
+      "selection": {
+        "skeleton": "current",
+        "ownership": "geometry",
+        "translateShoulder": false,
+        "overrides": [],
+        "boundArmJoints": 46,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.24973956526356553,
+              0.03159053549170521,
+              1.1243709553011152
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              0.03159053549170516,
+              0.898797604716647
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.303237462648128,
+              0.07596057165036235,
+              1.1792023298054204
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              -0.1644709556549785,
+              1.0948590958633309
+            ]
+          },
+          "target": [
+            -0.40768772576203177,
+            -0.1644709556549785,
+            1.0948590958633309
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.27537421429529785,
+          "lowerLength": 0.27537421429529785,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            3.1557743487898663e-18,
+            1,
+            -2.1753769207907916e-16
+          ],
+          "restBendDirection": [
+            0,
+            0,
+            0
+          ],
+          "solvedBendDirection": [
+            -0.33830850904650933,
+            0.9005100856302366,
+            -0.27318297601598795
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.21454589913591907,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 4.628724605685293,
+        "p95EdgeLengthRatio": 1.4700661885750386,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0145863172903296,
+          "maxEdgeLengthRatio": 4.083880287041717,
+          "minEdgeLengthRatio": 0.39704631747150176
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 26,
+          "belowHalf": 4,
+          "meanAbsoluteLogRatio": 0.01040862942737646
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            4.083880287041717,
+            4.024954072858101,
+            3.3737601528634737,
+            3.022377221444725,
+            2.803831866461268,
+            2.6389319152470847,
+            2.6389319152470847,
+            2.6206365738756543,
+            0.7563532567761384,
+            0.8244002398654636,
+            1.0783535351454034,
+            0.747236279826846,
+            0.751336982178214,
+            0.7216953469720594,
+            0.7404963217873557,
+            0.6791313636935463
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.24973956526356553,
+              0.03159053549170521,
+              1.1243709553011152
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              0.03159053549170516,
+              0.898797604716647
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.19624166787900316,
+              0.272022062797046,
+              1.2656010719434936
+            ],
+            "leftHand": [
+              -0.40768772576203177,
+              0.22765202663838885,
+              1.0948590958633306
+            ]
+          },
+          "target": [
+            -0.40768772576203177,
+            0.22765202663838888,
+            1.0948590958633306
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.27537421429529785,
+          "lowerLength": 0.27537421429529785,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            3.1557743487898663e-18,
+            1,
+            -2.1753769207907916e-16
+          ],
+          "restBendDirection": [
+            0,
+            0,
+            0
+          ],
+          "solvedBendDirection": [
+            0.33830850904650916,
+            0.9005100856302368,
+            0.2731829760159876
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.17770566070733163,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 11.059185594888584,
+        "p95EdgeLengthRatio": 2.455763329341793,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.012006200569212,
+          "maxEdgeLengthRatio": 7.9621730357543266,
+          "minEdgeLengthRatio": 0.1240539559706637
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 92,
+          "belowHalf": 57,
+          "meanAbsoluteLogRatio": 0.026922964713406928
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            6.514458411708137,
+            4.083895964325368,
+            4.02495021459464,
+            4.994357666979492,
+            4.525141847914539,
+            2.576915648046601,
+            3.373755677410975,
+            3.0223737619193827,
+            0.7456997568499089,
+            0.6791349306674649,
+            3.0588711751567277,
+            1.3916953610722262,
+            1.1652645314032402,
+            0.9988606304740767,
+            1.051740934040034,
+            1.7184871609574612
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "geometry_current_owners": {
+      "selection": {
+        "skeleton": "geometry",
+        "ownership": "current",
+        "translateShoulder": false,
+        "overrides": [],
+        "boundArmJoints": 57,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.33642285203560035,
+              0.03784218689129839,
+              1.1793224589807183
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              -0.14852806061277085,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            -0.14852806061277082,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            -0.4851870346434495,
+            0.8468070779576394,
+            -0.21797090203680958
+          ]
+        },
+        "movedVertices": 11880,
+        "maxDisplacementHeight": 0.24137641448357489,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 14099,
+        "maxEdgeLengthRatio": 8.446597931896298,
+        "p95EdgeLengthRatio": 1.612108073229785,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.4626944433076547,
+          "maxEdgeLengthRatio": 8.4465979318963,
+          "minEdgeLengthRatio": 0.43547929514212774
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 112,
+          "belowHalf": 2,
+          "meanAbsoluteLogRatio": 0.06583612242328608
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            1.000000677106979,
+            0.9999979473755586,
+            1.0174223672541025,
+            1.0132332917447955,
+            0.9999988834669508,
+            1.000000006896397,
+            1.000000006896397,
+            1.0000014734830385,
+            0.9066518911462069,
+            1.0000000951418029,
+            0.7761559963764584,
+            1.0220212025874669,
+            0.9999983570711488,
+            1.045268265454602,
+            0.9999971164630034,
+            0.9999993414297238
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.22605768395363535,
+              0.2414894592571314,
+              1.230212092186039
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.24359492168059654,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            0.24359492168059654,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            0.4968862351978176,
+            0.8353713260609021,
+            0.23507193976778448
+          ]
+        },
+        "movedVertices": 11880,
+        "maxDisplacementHeight": 0.18491919104923468,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 14099,
+        "maxEdgeLengthRatio": 19.240511819960023,
+        "p95EdgeLengthRatio": 2.821059368569635,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.9667588913580243,
+          "maxEdgeLengthRatio": 19.240511819960027,
+          "minEdgeLengthRatio": 0.23729154238443967
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 790,
+          "belowHalf": 45,
+          "meanAbsoluteLogRatio": 0.11825790502662613
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            5.725215337084955,
+            1.0000112216792867,
+            0.9999962801973871,
+            4.241024479492337,
+            3.969842121586586,
+            3.3868454598402864,
+            1.0178836742147264,
+            1.0153510992737442,
+            0.7944777615498996,
+            0.9999989541257968,
+            0.5767319698239328,
+            0.650410946486596,
+            0.2750831400852436,
+            0.2601760727540138,
+            0.251380858588374,
+            0.6434600183656153
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "geometry_shifted_pivot": {
+      "selection": {
+        "skeleton": "geometry",
+        "ownership": "geometry",
+        "translateShoulder": true,
+        "overrides": [],
+        "boundArmJoints": 46,
+        "restTransformMaxError": 6.661338147750939e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.22938493480370797,
+              0.03043675814742996,
+              1.1746554731269638
+            ],
+            "leftHand": [
+              -0.36865150833045784,
+              0.03614727576890299,
+              1.0261655571659634
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.29434214327790154,
+              0.02645603212628847,
+              1.257174047701002
+            ],
+            "leftHand": [
+              -0.36865150833045784,
+              -0.15991421537778064,
+              1.2222270483126472
+            ]
+          },
+          "target": [
+            -0.36865150833045784,
+            -0.15991421537778067,
+            1.2222270483126472
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.20365913594899632,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581854,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929378,
+            -0.35382832496824473,
+            -0.610721901474195
+          ],
+          "solvedBendDirection": [
+            -0.48518703464344937,
+            0.8468070779576393,
+            -0.21797090203681024
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.2979247318589406,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 6.24670920136158,
+        "p95EdgeLengthRatio": 1.6030427517228416,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0539844351047496,
+          "maxEdgeLengthRatio": 5.207012088478337,
+          "minEdgeLengthRatio": 0.5546153688284733
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 44,
+          "belowHalf": 0,
+          "meanAbsoluteLogRatio": 0.014959853992420752
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            4.374893680447788,
+            3.9157772629863503,
+            3.199013108061121,
+            2.725739769389229,
+            2.9986446252037293,
+            2.956680892581083,
+            2.956680892581083,
+            2.9375835399658308,
+            0.9938208760154739,
+            1.2416202915467958,
+            1.1999345429085382,
+            1.0124736094586804,
+            1.0373588810622532,
+            1.1651140710992287,
+            1.324235902329196,
+            1.229124703279269
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.22938493480370797,
+              0.03043675814742996,
+              1.1746554731269638
+            ],
+            "leftHand": [
+              -0.36865150833045784,
+              0.03614727576890299,
+              1.0261655571659634
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.09179140476509928,
+              0.031590535491705256,
+              1.3499443058855833
+            ],
+            "leftElbow": [
+              -0.1839769751959365,
+              0.23010330449212157,
+              1.3080636809063229
+            ],
+            "leftHand": [
+              -0.36865150833045784,
+              0.23220876691558673,
+              1.222227048312647
+            ]
+          },
+          "target": [
+            -0.36865150833045784,
+            0.23220876691558673,
+            1.222227048312647
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.20365913594899632,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581854,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929378,
+            -0.35382832496824473,
+            -0.610721901474195
+          ],
+          "solvedBendDirection": [
+            0.49688623519781744,
+            0.8353713260609021,
+            0.23507193976778465
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.1962188091782427,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 12.212738231416058,
+        "p95EdgeLengthRatio": 2.7554304582057485,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0169281859088577,
+          "maxEdgeLengthRatio": 7.616929800845973,
+          "minEdgeLengthRatio": 0.24084571781924782
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 126,
+          "belowHalf": 45,
+          "meanAbsoluteLogRatio": 0.02800086393143637
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            7.165795396514402,
+            4.264202592768285,
+            3.8107602784243193,
+            5.524008084311665,
+            5.034673254929988,
+            2.944699551630253,
+            3.1167846829334893,
+            2.654752149807148,
+            0.7342381933499306,
+            1.227911594659009,
+            2.9339304761118754,
+            1.3592634088357354,
+            1.0869839057534967,
+            0.9874082635577701,
+            0.9711035367923907,
+            1.6835569994164852
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "geometry_arm_boundary": {
+      "selection": {
+        "skeleton": "geometry",
+        "ownership": "geometry",
+        "translateShoulder": false,
+        "overrides": [
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 170,
+            "driverId": "left_upper_arm",
+            "group": "arm_boundary",
+            "jointId": 80,
+            "previousDriver": "left_lower_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 171,
+            "driverId": "left_upper_arm",
+            "group": "arm_boundary",
+            "jointId": 81,
+            "previousDriver": "left_lower_arm"
+          }
+        ],
+        "boundArmJoints": 46,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.33642285203560035,
+              0.03784218689129839,
+              1.1793224589807183
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              -0.14852806061277085,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            -0.14852806061277082,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            -0.4851870346434495,
+            0.8468070779576394,
+            -0.21797090203680958
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.24137641448357489,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 4.221963471615077,
+        "p95EdgeLengthRatio": 1.366344591627297,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.021909543559164,
+          "maxEdgeLengthRatio": 3.0555997813424716,
+          "minEdgeLengthRatio": 0.5404328262105619
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 16,
+          "belowHalf": 0,
+          "meanAbsoluteLogRatio": 0.011057230962269106
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            0.9822457107186702,
+            1.1147360962798774,
+            1.2362946847228495,
+            1.712065337151117,
+            1.2343001745923974,
+            1.1981742996199087,
+            1.1981742996199087,
+            1.1428962697648573,
+            0.9772410034859524,
+            0.9027370608964642,
+            0.6139259372424742,
+            0.9567770580498067,
+            0.9504146054784307,
+            0.7820365439285838,
+            0.9514600566814919,
+            0.8852508272094255
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.22605768395363535,
+              0.2414894592571314,
+              1.230212092186039
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.24359492168059654,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            0.24359492168059654,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            0.4968862351978176,
+            0.8353713260609021,
+            0.23507193976778448
+          ]
+        },
+        "movedVertices": 9418,
+        "maxDisplacementHeight": 0.18491919104923468,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 10157,
+        "maxEdgeLengthRatio": 10.13136439327062,
+        "p95EdgeLengthRatio": 2.7013003318097915,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.017723018228542,
+          "maxEdgeLengthRatio": 5.725215337084955,
+          "minEdgeLengthRatio": 0.23408584547551584
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 118,
+          "belowHalf": 10,
+          "meanAbsoluteLogRatio": 0.023927139115766827
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            5.725215337084955,
+            0.9834819618006512,
+            1.1113817575462748,
+            4.241024479492337,
+            3.969842121586586,
+            3.835611434542483,
+            1.2282991410524922,
+            1.6845233134235937,
+            0.40563393408156057,
+            0.8922182389256731,
+            0.3809380071035084,
+            0.3552589257654053,
+            0.2750831400852436,
+            0.2601760727540138,
+            0.251380858588374,
+            0.23408584547551584
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "geometry_torso_cloth": {
+      "selection": {
+        "skeleton": "geometry",
+        "ownership": "geometry",
+        "translateShoulder": false,
+        "overrides": [
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 72,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 186,
+            "previousDriver": "left_upper_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 73,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 187,
+            "previousDriver": "left_upper_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 74,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 188,
+            "previousDriver": "left_upper_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 75,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 189,
+            "previousDriver": "left_upper_arm"
+          }
+        ],
+        "boundArmJoints": 42,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.33642285203560035,
+              0.03784218689129839,
+              1.1793224589807183
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              -0.14852806061277085,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            -0.14852806061277082,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            -0.4851870346434495,
+            0.8468070779576394,
+            -0.21797090203680958
+          ]
+        },
+        "movedVertices": 6549,
+        "maxDisplacementHeight": 0.24137641448357489,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 7164,
+        "maxEdgeLengthRatio": 4.557655818785286,
+        "p95EdgeLengthRatio": 1.0456806963682068,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000113445709264,
+          "maxEdgeLengthRatio": 4.557655818785286,
+          "minEdgeLengthRatio": 0.3816206956171012
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 17,
+          "belowHalf": 2,
+          "meanAbsoluteLogRatio": 0.007621873531285881
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            4.557655818785286,
+            4.511078953099714,
+            3.8053827031627674,
+            3.771099873328085,
+            3.2331937489259066,
+            2.965409863530725,
+            2.965409863530725,
+            2.9640488357927857,
+            0.6212788790492979,
+            0.6201541153966932,
+            0.6139259372424742,
+            0.6071913056651332,
+            0.6040457043627001,
+            0.5304642998531466,
+            0.4392503978442859,
+            0.38162069561710116
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.22605768395363535,
+              0.2414894592571314,
+              1.230212092186039
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.24359492168059654,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            0.24359492168059654,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            0.4968862351978176,
+            0.8353713260609021,
+            0.23507193976778448
+          ]
+        },
+        "movedVertices": 6549,
+        "maxDisplacementHeight": 0.18491919104923468,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 7164,
+        "maxEdgeLengthRatio": 4.420188569102607,
+        "p95EdgeLengthRatio": 1.023589111996548,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.000010402107944,
+          "maxEdgeLengthRatio": 4.420188569102607,
+          "minEdgeLengthRatio": 0.23408584547551584
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 19,
+          "belowHalf": 8,
+          "meanAbsoluteLogRatio": 0.009240772106169515
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            1,
+            4.420188569102607,
+            4.39456115483447,
+            1,
+            1,
+            1,
+            3.7129367200075873,
+            3.675872937575009,
+            0.40563393408156057,
+            0.3997241485349215,
+            0.3809380071035084,
+            0.3552589257654053,
+            1,
+            1,
+            1,
+            0.23408584547551584
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    },
+    "geometry_corrected_owners": {
+      "selection": {
+        "skeleton": "geometry",
+        "ownership": "geometry",
+        "translateShoulder": false,
+        "overrides": [
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 170,
+            "driverId": "left_upper_arm",
+            "group": "arm_boundary",
+            "jointId": 80,
+            "previousDriver": "left_lower_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 171,
+            "driverId": "left_upper_arm",
+            "group": "arm_boundary",
+            "jointId": 81,
+            "previousDriver": "left_lower_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 72,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 186,
+            "previousDriver": "left_upper_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 73,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 187,
+            "previousDriver": "left_upper_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 74,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 188,
+            "previousDriver": "left_upper_arm"
+          },
+          {
+            "sourceKey": "remielle2bodyblend.buf|offset=0",
+            "boneId": 75,
+            "driverId": "torso",
+            "group": "torso_cloth",
+            "jointId": 189,
+            "previousDriver": "left_upper_arm"
+          }
+        ],
+        "boundArmJoints": 42,
+        "restTransformMaxError": 4.440892098500626e-16
+      },
+      "forward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.33642285203560035,
+              0.03784218689129839,
+              1.1793224589807183
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              -0.14852806061277085,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            -0.14852806061277082,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            -0.11999999999999997,
+            0.12000000000000002
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 2.7755575615628914e-17,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            -0.4851870346434495,
+            0.8468070779576394,
+            -0.21797090203680958
+          ]
+        },
+        "movedVertices": 6549,
+        "maxDisplacementHeight": 0.24137641448357489,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 7164,
+        "maxEdgeLengthRatio": 3.0555997813424716,
+        "p95EdgeLengthRatio": 1.0376281263019047,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000118991379146,
+          "maxEdgeLengthRatio": 3.0555997813424716,
+          "minEdgeLengthRatio": 0.5404328262105619
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 13,
+          "belowHalf": 0,
+          "meanAbsoluteLogRatio": 0.006717754242067826
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            8228,
+            8238,
+            8216,
+            8215,
+            8442,
+            8412,
+            8443,
+            8274,
+            8250,
+            8299,
+            8703,
+            8247,
+            8053,
+            8190,
+            8075,
+            8223
+          ],
+          "ratios": [
+            0.9822457107186702,
+            1.1147360962798774,
+            1.2362946847228495,
+            1.712065337151117,
+            1.2343001745923974,
+            1.1981742996199087,
+            1.1981742996199087,
+            1.1428962697648573,
+            0.9772410034859524,
+            0.9027370608964642,
+            0.6139259372424742,
+            0.9567770580498067,
+            0.9504146054784307,
+            0.7820365439285838,
+            0.9514600566814919,
+            0.8852508272094255
+          ]
+        }
+      },
+      "backward": {
+        "reached": true,
+        "pose": {
+          "mode": "diagnostic",
+          "restControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.27146564356140684,
+              0.04182291291243979,
+              1.09680388440668
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.04753343053391282,
+              0.9483139684456795
+            ]
+          },
+          "solvedControls": {
+            "leftShoulder": [
+              -0.13387211352279815,
+              0.042976690256715085,
+              1.2720927171652996
+            ],
+            "leftElbow": [
+              -0.22605768395363535,
+              0.2414894592571314,
+              1.230212092186039
+            ],
+            "leftHand": [
+              -0.4107322170881567,
+              0.24359492168059654,
+              1.1443754595923632
+            ]
+          },
+          "target": [
+            -0.4107322170881567,
+            0.24359492168059654,
+            1.1443754595923632
+          ],
+          "displacementHeight": [
+            0,
+            0.12000000000000002,
+            0.11999999999999997
+          ],
+          "normalizationHeight": 1.6338457595556974,
+          "upperLength": 0.2228440836112212,
+          "lowerLength": 0.2036591359489964,
+          "residual": 0,
+          "bendPolicy": "anatomical_arm_direction_from_own_rest_frame",
+          "bendDirection": [
+            0.006951059408581851,
+            0.9999427991500983,
+            0.008129034442317221
+          ],
+          "restBendDirection": [
+            0.7083955642929403,
+            -0.35382832496824596,
+            -0.6107219014741916
+          ],
+          "solvedBendDirection": [
+            0.4968862351978176,
+            0.8353713260609021,
+            0.23507193976778448
+          ]
+        },
+        "movedVertices": 6549,
+        "maxDisplacementHeight": 0.18491919104923468,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 7164,
+        "maxEdgeLengthRatio": 2.9724497066290785,
+        "p95EdgeLengthRatio": 1.0190057560744652,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000107200452153,
+          "maxEdgeLengthRatio": 2.9724497066290785,
+          "minEdgeLengthRatio": 0.23408584547551584
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true,
+        "distribution": {
+          "edgeCount": 16785,
+          "aboveDouble": 15,
+          "belowHalf": 6,
+          "meanAbsoluteLogRatio": 0.008365211754460864
+        },
+        "trackedEdges": {
+          "sampleIndices": [
+            714,
+            8228,
+            8238,
+            704,
+            729,
+            12139,
+            8216,
+            8215,
+            8762,
+            8223,
+            8899,
+            8813,
+            6186,
+            6097,
+            6188,
+            8895
+          ],
+          "ratios": [
+            1,
+            0.9834819618006512,
+            1.1113817575462748,
+            1,
+            1,
+            1,
+            1.2282991410524922,
+            1.6845233134235937,
+            0.40563393408156057,
+            0.8922182389256731,
+            0.3809380071035084,
+            0.3552589257654053,
+            1,
+            1,
+            1,
+            0.23408584547551584
+          ]
+        }
+      },
+      "returnToRest": {
+        "movedVertices": 0,
+        "maxDisplacementHeight": 0,
+        "unaffectedShiftHeight": 0,
+        "finite": true,
+        "changedEdgeCount": 0,
+        "maxEdgeLengthRatio": 1,
+        "p95EdgeLengthRatio": 1,
+        "commonRegion": {
+          "edgeCount": 16785,
+          "sampleDigest": "220b6deca3293de420dd91a16d604da9751ef2f673c60b8525ae50b52481dee6",
+          "p95EdgeLengthRatio": 1.0000000000000002,
+          "maxEdgeLengthRatio": 1.0000000000000002,
+          "minEdgeLengthRatio": 0.9999999999999998
+        },
+        "geometryRestUnchanged": true,
+        "authoredInfluencesUnchanged": true
+      }
+    }
+  },
+  "influenceSupport": [
+    {
+      "sourceKey": "remielle2legsblend.buf|offset=0",
+      "boneId": 9,
+      "jointId": 176,
+      "displayedVertexCount": 100,
+      "totalWeight": 70.14956700475886,
+      "weightedRestCenter": [
+        -7.913256432144765e-19,
+        0.06742657615564232,
+        1.2228168063045768
+      ],
+      "bounds": {
+        "min": [
+          -0.09638738632202148,
+          0.03378777578473091,
+          1.0739445686340332
+        ],
+        "max": [
+          0.09638738632202148,
+          0.08856401592493057,
+          1.306135892868042
+        ]
+      },
+      "upperArmParameter": -0.1975580169874708,
+      "proximalWeight": 70.14956700475886,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2legsblend.buf|offset=0",
+      "boneId": 8,
+      "jointId": 180,
+      "displayedVertexCount": 302,
+      "totalWeight": 45.818381616147235,
+      "weightedRestCenter": [
+        5.549818734406044e-10,
+        0.013579197675170728,
+        1.0819832784160275
+      ],
+      "bounds": {
+        "min": [
+          -0.11104120314121246,
+          -0.07779192179441452,
+          0.9626642465591431
+        ],
+        "max": [
+          0.11104120314121246,
+          0.08546166867017746,
+          1.2406952381134033
+        ]
+      },
+      "upperArmParameter": 0.3008094595692768,
+      "proximalWeight": 45.818381616147235,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 63,
+      "jointId": 176,
+      "displayedVertexCount": 5293,
+      "totalWeight": 2414.701261279639,
+      "weightedRestCenter": [
+        -6.1560262794194305e-06,
+        0.021788296661346872,
+        1.2586931581453051
+      ],
+      "bounds": {
+        "min": [
+          -0.12469537556171417,
+          -0.12242209166288376,
+          1.0694338083267212
+        ],
+        "max": [
+          0.12469537556171417,
+          0.09815287590026855,
+          1.4128769636154175
+        ]
+      },
+      "upperArmParameter": -0.323117521281562,
+      "proximalWeight": 2414.701261279639,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 66,
+      "jointId": 179,
+      "displayedVertexCount": 1196,
+      "totalWeight": 172.7743381629698,
+      "weightedRestCenter": [
+        -0.05934205295039649,
+        0.04032743888917225,
+        1.3189633223193624
+      ],
+      "bounds": {
+        "min": [
+          -0.15021860599517822,
+          -0.0416676364839077,
+          1.2087091207504272
+        ],
+        "max": [
+          0.0020873784087598324,
+          0.09815287590026855,
+          1.383565068244934
+        ]
+      },
+      "upperArmParameter": -0.3718864770095704,
+      "proximalWeight": 172.7743381629698,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 68,
+      "jointId": 181,
+      "displayedVertexCount": 364,
+      "totalWeight": 98.14807753963396,
+      "weightedRestCenter": [
+        -0.06669411165829302,
+        -0.016007522099014106,
+        1.3044149517542687
+      ],
+      "bounds": {
+        "min": [
+          -0.10146121680736542,
+          -0.09085378795862198,
+          1.2576786279678345
+        ],
+        "max": [
+          -0.004175294656306505,
+          0.0361756756901741,
+          1.3614468574523926
+        ]
+      },
+      "upperArmParameter": -0.29885389192765655,
+      "proximalWeight": 98.14807753963396,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 67,
+      "jointId": 180,
+      "displayedVertexCount": 2688,
+      "totalWeight": 794.007372610271,
+      "weightedRestCenter": [
+        4.483999510733724e-06,
+        -0.01644559341683594,
+        1.1231498240203512
+      ],
+      "bounds": {
+        "min": [
+          -0.11715331673622131,
+          -0.09760316461324692,
+          0.9920541048049927
+        ],
+        "max": [
+          0.11715331673622131,
+          0.10267898440361023,
+          1.2646007537841797
+        ]
+      },
+      "upperArmParameter": 0.15618430668927896,
+      "proximalWeight": 794.007372610271,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 71,
+      "jointId": 185,
+      "displayedVertexCount": 826,
+      "totalWeight": 417.49048044881783,
+      "weightedRestCenter": [
+        -0.1516040117408526,
+        0.053939516053219325,
+        1.2589648364451236
+      ],
+      "bounds": {
+        "min": [
+          -0.2188175916671753,
+          0.010839926078915596,
+          1.1695002317428589
+        ],
+        "max": [
+          -0.04810670390725136,
+          0.09141649305820465,
+          1.3499914407730103
+        ]
+      },
+      "upperArmParameter": 0.09521477399391619,
+      "proximalWeight": 417.49048044881783,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 72,
+      "jointId": 186,
+      "displayedVertexCount": 1449,
+      "totalWeight": 329.9429276395822,
+      "weightedRestCenter": [
+        -0.03720844626062571,
+        -0.08304664702084003,
+        1.2304438475016366
+      ],
+      "bounds": {
+        "min": [
+          -0.11388613283634186,
+          -0.1289023905992508,
+          1.1349774599075317
+        ],
+        "max": [
+          0.04525573551654816,
+          0.025047382339835167,
+          1.3228081464767456
+        ]
+      },
+      "upperArmParameter": -0.117889070211342,
+      "proximalWeight": 329.9429276395822,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 73,
+      "jointId": 187,
+      "displayedVertexCount": 272,
+      "totalWeight": 34.74367794394493,
+      "weightedRestCenter": [
+        -0.10196405147243494,
+        -0.06797547859719043,
+        1.2182641395054783
+      ],
+      "bounds": {
+        "min": [
+          -0.11388613283634186,
+          -0.12525832653045654,
+          1.1603716611862183
+        ],
+        "max": [
+          -0.05077270790934563,
+          -0.00477847084403038,
+          1.279395580291748
+        ]
+      },
+      "upperArmParameter": 0.10417384894364386,
+      "proximalWeight": 34.74367794394493,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 74,
+      "jointId": 188,
+      "displayedVertexCount": 480,
+      "totalWeight": 131.34841409674846,
+      "weightedRestCenter": [
+        -0.05446652751365751,
+        -0.10993067344856212,
+        1.2333482889470504
+      ],
+      "bounds": {
+        "min": [
+          -0.11388613283634186,
+          -0.1289023905992508,
+          1.1580244302749634
+        ],
+        "max": [
+          -0.0005761718493886292,
+          -0.018177784979343414,
+          1.2861199378967285
+        ]
+      },
+      "upperArmParameter": -0.07969893738584091,
+      "proximalWeight": 131.34841409674846,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 75,
+      "jointId": 189,
+      "displayedVertexCount": 227,
+      "totalWeight": 37.704111834056675,
+      "weightedRestCenter": [
+        -0.06628140531711324,
+        -0.09362606019581406,
+        1.2576482840806167
+      ],
+      "bounds": {
+        "min": [
+          -0.11388613283634186,
+          -0.12435809522867203,
+          1.2076551914215088
+        ],
+        "max": [
+          -0.005350194405764341,
+          -0.029884198680520058,
+          1.2941279411315918
+        ]
+      },
+      "upperArmParameter": -0.133116303682535,
+      "proximalWeight": 37.704111834056675,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 70,
+      "jointId": 184,
+      "displayedVertexCount": 713,
+      "totalWeight": 221.90846906369552,
+      "weightedRestCenter": [
+        -0.16549615171277504,
+        0.052206486246266316,
+        1.2424134155785684
+      ],
+      "bounds": {
+        "min": [
+          -0.25434792041778564,
+          0.015128374099731445,
+          1.1359405517578125
+        ],
+        "max": [
+          -0.10670284181833267,
+          0.09141649305820465,
+          1.2976264953613281
+        ]
+      },
+      "upperArmParameter": 0.19217001416659638,
+      "proximalWeight": 221.90846906369552,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 69,
+      "jointId": 182,
+      "displayedVertexCount": 760,
+      "totalWeight": 117.48377507319674,
+      "weightedRestCenter": [
+        -0.19859517919442293,
+        0.05243005299194036,
+        1.2014560148013602
+      ],
+      "bounds": {
+        "min": [
+          -0.28573310375213623,
+          0.015128374099731445,
+          1.0956101417541504
+        ],
+        "max": [
+          -0.11398761719465256,
+          0.09141649305820465,
+          1.2837940454483032
+        ]
+      },
+      "upperArmParameter": 0.42844570085511235,
+      "proximalWeight": 117.48377507319674,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 83,
+      "jointId": 198,
+      "displayedVertexCount": 663,
+      "totalWeight": 106.17095527832862,
+      "weightedRestCenter": [
+        -0.3020038890827421,
+        0.05303048153643607,
+        1.089808954999622
+      ],
+      "bounds": {
+        "min": [
+          -0.36022424697875977,
+          0.025291530415415764,
+          1.0069990158081055
+        ],
+        "max": [
+          -0.20382224023342133,
+          0.08611224591732025,
+          1.180971622467041
+        ]
+      },
+      "upperArmParameter": 1.1090439602668487,
+      "proximalWeight": 29.69013491133228,
+      "distalWeight": 76.48082036699634,
+      "weightProximalToElbow": 0.2796446055656105,
+      "weightDistalToElbow": 0.7203553944343895,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 127,
+      "jointId": 32,
+      "displayedVertexCount": 63,
+      "totalWeight": 9.77362438896671,
+      "weightedRestCenter": [
+        -0.11405121046535581,
+        0.054250948345718655,
+        1.3209999851240932
+      ],
+      "bounds": {
+        "min": [
+          -0.15021860599517822,
+          0.014186047948896885,
+          1.271363377571106
+        ],
+        "max": [
+          -0.050183288753032684,
+          0.08914729207754135,
+          1.3499914407730103
+        ]
+      },
+      "upperArmParameter": -0.2278141583805195,
+      "proximalWeight": 9.77362438896671,
+      "distalWeight": 0,
+      "weightProximalToElbow": 1,
+      "weightDistalToElbow": 0,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 170,
+      "jointId": 80,
+      "displayedVertexCount": 90,
+      "totalWeight": 16.904697041609325,
+      "weightedRestCenter": [
+        -0.24859525746063527,
+        0.03705107200997175,
+        1.142671290338776
+      ],
+      "bounds": {
+        "min": [
+          -0.30735087394714355,
+          0.02061556465923786,
+          1.066602349281311
+        ],
+        "max": [
+          -0.16866733133792877,
+          0.06926069408655167,
+          1.2050197124481201
+        ]
+      },
+      "upperArmParameter": 0.7748394807695715,
+      "proximalWeight": 16.658295886707492,
+      "distalWeight": 0.24640115490183234,
+      "weightProximalToElbow": 0.9854241011066132,
+      "weightDistalToElbow": 0.014575898893386792,
+      "height": 1.6338457595556974
+    },
+    {
+      "sourceKey": "remielle2bodyblend.buf|offset=0",
+      "boneId": 171,
+      "jointId": 81,
+      "displayedVertexCount": 91,
+      "totalWeight": 21.920088559854776,
+      "weightedRestCenter": [
+        -0.25079557385536555,
+        0.07316416347372405,
+        1.1457402992679342
+      ],
+      "bounds": {
+        "min": [
+          -0.2993219196796417,
+          0.03790389373898506,
+          1.0824276208877563
+        ],
+        "max": [
+          -0.18112508952617645,
+          0.08611224591732025,
+          1.2014405727386475
+        ]
+      },
+      "upperArmParameter": 0.7692639063072179,
+      "proximalWeight": 21.823892556130886,
+      "distalWeight": 0.09619600372388959,
+      "weightProximalToElbow": 0.9956115139105749,
+      "weightDistalToElbow": 0.004388486089425129,
+      "height": 1.6338457595556974
+    }
+  ],
+  "edgeContributions": "edge-contributions.json",
+  "diagnosticOwnershipInputs": "ownership-overrides.json",
+  "capture": "shoulder-ownership.png"
+}
