@@ -46,6 +46,7 @@ const {
   setGeometryRigPreviewMode,
   clearGeometryRigPreview,
   setGeometryRigPreviewIkEnabled,
+  setGeometryRigPreviewArmSkinningEnabled,
   resetGeometryRigPreviewPose,
   flipGeometryRigPreviewBend,
 } = weightRigApi;
@@ -620,6 +621,12 @@ function buildRigSection(parent) {
     ],
     ['geometryResetPose', 'reset-pose', 'weightRig.resetPose', resetGeometryRigPreviewPose],
     ['geometryFlipBend', 'flip-bend', 'weightRig.geometryFlipBend', flipGeometryRigPreviewBend],
+    [
+      'geometryArmSkinning',
+      'arm-skinning',
+      'weightRig.geometryArmSkinning',
+      () => void setGeometryRigPreviewArmSkinningEnabled(!getModelRigState().geometryRigPreview?.armSkinning?.enabled),
+    ],
   ]) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -987,6 +994,10 @@ function syncGeometryPreview(state = latestRigState || getModelRigState()) {
   ui.geometryComparison.value = active ? preview.mode : 'current';
   ui.loadCurrentRig.disabled = !!state?.loading;
   const pose = preview?.pose;
+  const arm = preview?.armSkinning;
+  ui.geometryArmSkinning.disabled = !active || !!arm?.busy;
+  ui.geometryArmSkinning.classList.toggle('active', !!arm?.enabled);
+  ui.geometryArmSkinning.setAttribute('aria-pressed', String(!!arm?.enabled));
   ui.geometryTestIk.disabled = !active;
   ui.geometryTestIk.classList.toggle('active', !!pose?.enabled);
   ui.geometryTestIk.setAttribute('aria-pressed', String(!!pose?.enabled));
@@ -1000,8 +1011,13 @@ function syncGeometryPreview(state = latestRigState || getModelRigState()) {
           reach: t(limb.reached ? 'weightRig.geometryIkReached' : 'weightRig.geometryIkClamped'),
           percent: ((limb.residual / preview.rig.frame.height) * 100).toFixed(2),
         })
-      : t('weightRig.geometryIkHint')
+      : arm?.enabled
+        ? ''
+        : t('weightRig.geometryIkHint')
     : '';
+  if (arm?.enabled) ui.geometryPoseStatus.textContent += ` ${t('weightRig.geometryArmHint')}`;
+  if (arm?.busy || arm?.errorKey)
+    ui.geometryPoseStatus.textContent = t(arm.errorKey || 'weightRig.geometryArmBuilding');
   const diagnostics = preview?.diagnostics;
   ui.geometrySummary.textContent = preview?.errorKey
     ? t(preview.errorKey)

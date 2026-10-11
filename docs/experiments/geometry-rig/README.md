@@ -1,18 +1,21 @@
 # Geometry Rig experiment
 
-Geometry-first fitting provides a useful experimental skeleton and independent
-preview. Automatically binding authored influences to its simplified drivers
-remains unresolved. This branch retains the fitter and skeleton-only IK;
-automatic binding research stops here.
+Geometry-first fitting provides an independent skeleton and IK preview. The
+first direct vertex-skinning candidate now deforms its left arm without ModelRig
+reconciliation. It fails the three-game deformation gate, so full-body expansion
+and production replacement remain pending. PR #180 stays open and unmerged.
 
 ## Retained feature
 
 Open the Weight / Rig panel, expand Advanced, and choose **Preview Geometry Rig**.
 The preview works without loading Weight or constructing the production ModelRig.
 Compare Geometry and Proportional skeletons, enable **Test IK**, and drag a hand
-or foot. **Flip Bend** changes the selected limb's bend direction; **Reset Pose**
-restores its skeleton. **Current** exits the preview; **Load Weight / Rig** starts
-the existing authored-weight workflow explicitly.
+or foot. To deform the mesh, enable **Test Left Arm Deformation**, then drag the
+left hand. This explicit experiment reads authored skin streams independently
+of Weight analysis. Other limbs remain skeleton-only. **Flip Bend** changes the
+selected limb's bend direction; **Reset Pose** restores the skeleton and exact
+original positions/normals. **Current** exits the preview; **Load Weight / Rig**
+starts the existing authored-weight workflow explicitly.
 
 The fitter samples displayed immutable rest-pose triangles in model space,
 deduplicates exact draws/triangles, and uses character orientation rather than
@@ -21,11 +24,89 @@ evidence and anatomical estimates. Sampling is capped at 90,000 triangles and
 16,000 area samples, with cooperative cancellation when inputs change.
 
 Geometry and Proportional IK each use their own rest controls, segment lengths
-and bend frame through the existing two-bone solver. Poses remain temporary
-overlay state. The preview does not deform meshes, read authored weights, acquire
-animation ownership, save mappings or alter production Rig/Physics state. Reset,
-comparison changes, panel closure, model changes and input invalidation release
-active dragging and camera ownership.
+and bend frame through the existing two-bone solver. Skeleton-only IK does not
+read weights or acquire deformation ownership. The arm experiment temporarily
+suspends animation on affected members, uses immutable rest geometry and the
+existing position/normal kernels, and releases ownership on exit. Comparison
+changes, panel closure, model changes and input invalidation restore geometry
+and release dragging. A shape change preserves the newly edited member. Neither
+mode saves mappings or activates production Rig/Physics.
+
+## Direct skinning candidate and three-game gate
+
+The geometry skeleton remains authoritative. A compact squared distance kernel
+with radius 6% of character height estimates each vertex's relationship to the
+rest segments. Upper arm and forearm are moving drivers; other segments provide
+stationary torso/context support. Triangle-area-weighted spatial evidence is
+averaged for each exact authored source/influence, then combined with each
+vertex's original authored weights and normalized. An elbow-spanning influence
+can contribute to both drivers. WWMI indices are already remapped by the shared
+decoder; IDs from distinct source keys are never merged. No ModelJoint graph is
+built. Generated weights stay cached throughout dragging; unsupported geometry
+remains stationary. Authored decode failures stop activation.
+
+The displayed Remielle (Genshin), Odette (ZZZ) and Chisa (WuWa) variants were
+compared at 15°, 45°, 90°, forward/backward hand targets and exact return to rest.
+The old binding, soft transfer and spatial-only ablation received identical
+posed geometry controls. The old binding comparator uses the existing
+reconciliation and deformation functions with those common controls, rather
+than conflating binding changes with its different automatic skeleton. Visual
+comparisons use one fixed camera and material mode per model.
+
+Displayed unique edges longer than 0.001% of height include clothing and sleeves.
+The following 90° results show extreme compression/stretch ratios; 1 is unchanged.
+
+| Model | Existing binding min/max | Soft transfer min/max | Spatial-only min/max |
+| --- | ---: | ---: | ---: |
+| Remielle | 0.159 / 5.719 | 0.571 / 14.066 | 0.449 / 156.839 |
+| Odette | 0.327 / 3.540 | 0.462 / 2.550 | 0.373 / 2.390 |
+| Chisa | 0.064 / 6.477 | 0.070 / 52.653 | 0.113 / 201.833 |
+
+Affected-region 1st–99th percentile ratios at 90° expose compression as well as
+stretch, without diluting the result with the stationary model:
+
+| Model | Shoulder existing → soft | Elbow existing → soft |
+| --- | --- | --- |
+| Remielle | 0.679–1.769 → 0.852–1.183 | 0.689–2.167 → 0.683–2.302 |
+| Odette | 0.676–1.579 → 0.800–1.117 | 0.889–1.109 → 0.733–1.733 |
+| Chisa | 0.596–2.423 → 0.841–1.308 | 0.393–2.000 → 0.398–1.362 |
+
+Regions are fixed rest-space spheres of radius 8% height around the fitted
+shoulder/elbow, with 4,172/1,715 edges for Remielle, 12,019/2,929 for Odette and
+14,247/6,554 for Chisa. The remaining displayed edges were also checked, including
+short edges on hand, clothing and accessory boundaries.
+
+Soft transfer smooths the shoulder and reduces torso displacement, but visible
+hand/sleeve spikes remain on Remielle and Chisa. Odette improves global extremes
+while its elbow region compresses and stretches more. Chisa's worst backward
+stretch is 72.766×; its worst edge-length increase is 11.26% of character height,
+so this is consequential deformation rather than only a tiny-edge ratio.
+At 90°, maximum wrist-region lag relative to the forearm transform is 0.35%,
+0.31% and 1.33% height respectively. Central torso displacement is 0.14%, 0.06%
+and 0.35%; head-height vertices still move by 1.35%, 0.62% and 1.22%. Odette's
+bangs move by 0.46%, confirming unwanted hair motion. No topology is rewritten,
+but elongated triangles and poor wrist following fail acceptance.
+
+Manual semantic guide adjustments were applied through the existing control
+override helper, without source-bone mappings. These separate placement from
+binding: Remielle's 90° maximum improves from 14.066× to 2.450×, while Chisa's
+52.653× remains 50.332×. Guide depths remain uncertain; front guides have about
+1% height uncertainty. Chisa's binding failure survives that correction, so
+another fitting heuristic is not justified by these results.
+
+Authored information improves the worst spatial-only failures by spreading
+segment relationships across connected influences, but also spreads motion to
+unrelated support. The compact spatial support boundary and broad influence
+averaging remain weaknesses of this candidate. There is one candidate and a
+spatial-only diagnostic ablation, with no automatic fallback chain.
+
+Observed cached binding construction took approximately 50–70 ms, 80–90 ms and
+150–200 ms respectively, yielding cooperatively. Warm pose application took
+approximately 2–4 ms, 6–7 ms and 8–12 ms, excluding rendering and backend fetch/
+decode; initial application was slower. All three restored positions and normals
+exactly after actual candidate deformation. Responsiveness is promising, but
+mesh quality fails the gate. Do not expand this method, remove production Rig,
+or merge until a subsequent design decision resolves those failures.
 
 ## Fitting results and limitations
 
@@ -48,7 +129,7 @@ narrowness. Accessories and differently triangulated overlapping surfaces can
 still affect normalization and sampling. This remains an A-pose experiment,
 not a general skeleton extractor or a replacement for production Rig fitting.
 
-## Why automatic binding was deferred
+## Earlier hard-binding findings
 
 Authored-weight deformation was demonstrated, but geometry alone did not establish
 which simplified driver should own every authored influence. Pivot-to-segment
@@ -80,7 +161,8 @@ shared 83.33% of its support with forearm influence 91. Conversely, successful
 Remielle 170–173 corrections separated owners despite 96.63–98.30% overlap with
 forearm influences. Shared vertices describe blends; they do not establish a
 same-owner constraint. No reliable generic refinement was demonstrated, and no
-new threshold, fallback, special case or ownership rule is retained.
+new threshold, fallback, special case or hard-ownership rule from that study is
+retained.
 
 Binding complex authored skinning to a simplified humanoid Rig needs a separate
 design decision. These results do not prove automatic mapping impossible. The
@@ -91,7 +173,10 @@ the accumulated captures, standalone evaluators and deformation-only test.
 ## Focused verification
 
 `src/tests/web/test_geometry_rig.py` covers orientation, topology, visible rest
-sampling, duplicate geometry, obscured legs and the preview/IK lifecycle. The
+sampling, duplicate geometry, obscured legs and the preview/IK lifecycle. Its
+arm scenario covers source-isolated deformation, repeated cached IK, transformed
+members, exact reset, comparison changes, cancelled loading, decode failure and
+shape invalidation without Weight/ModelRig activation. The
 overlay contract in `src/tests/web/test_modules.py` verifies that preview works
 without a ModelRig and restores the current overlay. Existing Weight rendering
 tests exercise the explicit load action and production pose/reset behavior.

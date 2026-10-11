@@ -1,4 +1,4 @@
-"""Geometry-only fitting contracts using neutral generated surface fixtures."""
+"""Geometry fitting and experimental skinning on neutral surface fixtures."""
 
 import pytest
 
@@ -34,6 +34,118 @@ def prepare_surface(page):
           [prefix+'Hip']:hip,[prefix+'Knee']:knee,[prefix+'Foot']:foot});
       }
       window.fixture={THREE,api,meshes,reference,axes:{up:[0,1,0],right:[1,0,0],forward:[0,0,1]}};
+    }""")
+
+
+def test_geometry_arm_skinning_cached_pose_restore_and_invalidation(viewer):
+    from .payloads import model_payload
+    from .support import open_model, wait_loaded
+
+    page = viewer({'fixture-01': model_payload(), 'fixture-weights': {'meshes': {}}})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    prepare_surface(page)
+    page.locator('#weight-rig-tab').click()
+    page.evaluate("""async () => {
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      window.previewApi=core.weightRigApi;
+      const {THREE,meshes}=fixture;
+      const transform=new THREE.Matrix4().compose(new THREE.Vector3(.03,.02,0),
+        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),.2),new THREE.Vector3(2,.5,1));
+      meshes[4].geometry.applyMatrix4(transform.clone().invert());
+      meshes[4].matrixAutoUpdate=false; meshes[4].matrix.copy(transform);
+      meshes[4].userData.humanoidRestMatrix=transform.clone();
+      meshes[4].userData.humanoidRestPositions=new Float32Array(meshes[4].geometry.attributes.position.array);
+      const entries={},pieces=[]; let offset=0;
+      meshes.forEach((mesh,i)=>{
+        mesh.userData.semanticKey='surface-'+i;mesh.userData.modPath='fixture-01';
+        const count=mesh.geometry.attributes.position.count;
+        const indices=new Uint32Array(count), weights=new Float32Array(count).fill(1);
+        // Equal influence IDs in distinct streams must remain independent.
+        entries[mesh.userData.semanticKey]={status:'ok',vertex_count:count,influence_count:1,
+          source:{key:'shared.buf|offset='+i*4,file:'shared.buf',bone_id_offset:i*4,bone_ids_model_wide:true},
+          data:{indices:{type:'u32',offset,length:indices.byteLength},
+            weights:{type:'f32',offset:offset+indices.byteLength,length:weights.byteLength}}};
+        pieces.push(indices,weights);offset+=indices.byteLength+weights.byteLength;
+        core.registerWeightRigMesh(mesh);
+      });
+      window.armFetches=0;
+      window.pywebview.api.get_model_skinning_preview=async()=>{
+        armFetches++;if(window.armWait) await new Promise(resolve=>window.armResolve=resolve);
+        return {meshes:entries,data:{url:URL.createObjectURL(new Blob(pieces)),length:offset}};
+      };
+      window.armBaseline=meshes.map(mesh=>({positions:[...mesh.geometry.attributes.position.array],
+        normals:[...mesh.geometry.attributes.normal.array],matrix:mesh.matrix.toArray(),culled:mesh.frustumCulled}));
+      window.armExact=()=>meshes.every((mesh,i)=>
+        mesh.geometry.attributes.position.array.every((v,j)=>v===armBaseline[i].positions[j]) &&
+        mesh.geometry.attributes.normal.array.every((v,j)=>v===armBaseline[i].normals[j]) &&
+        mesh.matrix.toArray().every((v,j)=>v===armBaseline[i].matrix[j]));
+    }""")
+    page.locator('.rig-preview-geometry').evaluate("button=>button.closest('details').open=true")
+    page.locator('.rig-preview-geometry').click()
+    page.wait_for_function('previewApi.getModelRigState().geometryRigPreview?.rig?.available')
+    page.locator('.rig-preview-arm-skinning').click()
+    page.wait_for_function('previewApi.getModelRigState().geometryRigPreview.armSkinning?.enabled')
+    result = page.evaluate("""async () => {
+      const {meshes,THREE}=fixture;
+      const rig=previewApi.getModelRigState().geometryRigPreview.rig;
+      const target=new THREE.Vector3(...rig.controls.leftHand.position).add(new THREE.Vector3(.1,.1,.2));
+      for(let i=0;i<20;i++) previewApi.solveGeometryRigPreviewIk('leftHand',target.toArray());
+      const moved=meshes[4].geometry.attributes.position.array.some((v,j)=>v!==armBaseline[4].positions[j]);
+      const stationaryExact=meshes[10].geometry.attributes.position.array.every((v,j)=>v===armBaseline[10].positions[j]);
+      const finite=meshes.every(mesh=>[...mesh.geometry.attributes.position.array,
+        ...mesh.geometry.attributes.normal.array].every(Number.isFinite));
+      const suspended=meshes[4].userData.animationSuspended===true;
+      const independent=!previewApi.getModelRigState().loaded && !previewApi.getModelWeightState().loaded;
+      previewApi.solveGeometryRigPreviewIk('leftHand',rig.controls.leftHand.position);
+      const exactReturn=armExact();
+      previewApi.solveGeometryRigPreviewIk('leftHand',target.toArray());
+      previewApi.resetGeometryRigPreviewPose();const exactReset=armExact();
+      previewApi.solveGeometryRigPreviewIk('leftHand',target.toArray());
+      previewApi.setGeometryRigPreviewMode('proportional');const exactMode=armExact();
+      const released=meshes.every(mesh=>mesh.userData.animationSuspended===undefined &&
+        mesh.frustumCulled===armBaseline[meshes.indexOf(mesh)].culled);
+      return {moved,stationaryExact,finite,suspended,independent,exactReturn,exactReset,exactMode,released,fetches:armFetches};
+    }""")
+    assert result == dict.fromkeys(
+        ('moved', 'stationaryExact', 'finite', 'suspended', 'independent',
+         'exactReturn', 'exactReset', 'exactMode', 'released'), True) | {'fetches': 1}
+    page.evaluate("""() => {
+      window.armWait=true;
+      window.pendingArm=previewApi.setGeometryRigPreviewArmSkinningEnabled(true);
+    }""")
+    page.wait_for_function('window.armResolve !== undefined')
+    assert page.evaluate("""async () => {
+      previewApi.clearGeometryRigPreview();armResolve();
+      return !(await pendingArm) && !previewApi.getModelRigState().geometryRigPreview && armExact();
+    }""")
+    page.evaluate("""async () => {
+      delete window.armResolve;
+      await previewApi.previewGeometryRig();
+      window.pendingArm=previewApi.setGeometryRigPreviewArmSkinningEnabled(true);
+    }""")
+    page.wait_for_function('window.armResolve !== undefined')
+    assert page.evaluate("""async () => {
+      fixture.meshes[4].geometry.index.needsUpdate=true;
+      armResolve();
+      return !(await pendingArm) && !previewApi.getModelRigState().geometryRigPreview && armExact();
+    }""")
+    assert page.evaluate("""async () => {
+      window.armWait=false;
+      await previewApi.previewGeometryRig();
+      const fetchSkin=window.pywebview.api.get_model_skinning_preview;
+      window.pywebview.api.get_model_skinning_preview=async()=>({error:'Unavailable fixture stream'});
+      const failed=!(await previewApi.setGeometryRigPreviewArmSkinningEnabled(true)) && armExact() &&
+        previewApi.getModelRigState().geometryRigPreview.armSkinning.errorKey==='weightRig.geometryArmFailed';
+      window.pywebview.api.get_model_skinning_preview=fetchSkin;
+      await previewApi.setGeometryRigPreviewArmSkinningEnabled(true);
+      const rig=previewApi.getModelRigState().geometryRigPreview.rig;
+      previewApi.solveGeometryRigPreviewIk('leftHand',[...rig.controls.leftHand.position].map((v,i)=>v+(i===2?.2:0)));
+      const mesh=fixture.meshes[4];mesh.geometry.attributes.position.array[0]=7;
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      core.refreshWeightRigAfterShapeChange(mesh);
+      return failed && mesh.geometry.attributes.position.array[0]===7 && !previewApi.getModelRigState().geometryRigPreview &&
+        mesh.userData.animationSuspended===undefined;
     }""")
 
 

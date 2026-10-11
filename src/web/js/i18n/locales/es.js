@@ -372,6 +372,11 @@ export default {
   'weightRig.loadCurrentRig': 'Cargar Weight / Rig',
   'weightRig.previewGeometry': 'Previsualizar rig geométrico',
   'weightRig.geometryTestIk': 'Probar IK',
+  'weightRig.geometryArmSkinning': 'Probar deformación del brazo izquierdo',
+  'weightRig.geometryArmHint': 'Brazo izquierdo experimental · Arrastra la mano izquierda para deformar el modelo.',
+  'weightRig.geometryArmBuilding': 'Generando pesos del brazo izquierdo…',
+  'weightRig.geometryArmFailed':
+    'No se pudieron generar los pesos del brazo izquierdo. Vuelve al reposo e inténtalo de nuevo.',
   'weightRig.geometryFlipBend': 'Invertir flexión',
   'weightRig.geometryIkHint': 'Solo esqueleto · Arrastra una mano o un pie.',
   'weightRig.geometryIkReached': 'Objetivo alcanzado',

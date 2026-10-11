@@ -30,6 +30,48 @@ function typedView(buffer, descriptor, Type, typeName) {
   return new Type(buffer, offset, length / Type.BYTES_PER_ELEMENT);
 }
 
+/** Decode the shared runtime streams without constructing a Weight or Rig graph. */
+export function readSkinningEntryArrays(mesh, entry, buffer) {
+  const indices = typedView(buffer, entry.data?.indices, Uint32Array, 'u32');
+  const weights = typedView(buffer, entry.data?.weights, Float32Array, 'f32');
+  const position = mesh.geometry?.attributes?.position;
+  const influenceCount = Number(entry.influence_count);
+  if (
+    !position ||
+    !Number.isInteger(influenceCount) ||
+    influenceCount <= 0 ||
+    position.count !== Number(entry.vertex_count) ||
+    indices.length !== position.count * influenceCount ||
+    weights.length !== position.count * influenceCount
+  ) {
+    throw new Error('Skin data does not match rendered vertices.');
+  }
+  return { indices, weights, influenceCount };
+}
+
+export function skinningSourceDescriptorForEntry(entry) {
+  const source = entry?.source;
+  if (
+    source &&
+    typeof source === 'object' &&
+    typeof source.key === 'string' &&
+    source.key &&
+    typeof source.file === 'string' &&
+    source.file
+  ) {
+    const offset = Number(source.bone_id_offset);
+    if (Number.isInteger(offset) && offset >= 0) {
+      return {
+        sourceKey: source.key,
+        sourceFile: source.file,
+        boneIdOffset: offset,
+        boneIdsModelWide: source.bone_ids_model_wide === true,
+      };
+    }
+  }
+  return null;
+}
+
 export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRender } = {}) {
   const cooperativeGraphInFlight = new WeakMap();
 
@@ -243,29 +285,6 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     );
   }
 
-  function sourceDescriptorForEntry(entry) {
-    const source = entry?.source;
-    if (
-      source &&
-      typeof source === 'object' &&
-      typeof source.key === 'string' &&
-      source.key &&
-      typeof source.file === 'string' &&
-      source.file
-    ) {
-      const offset = Number(source.bone_id_offset);
-      if (Number.isInteger(offset) && offset >= 0) {
-        return {
-          sourceKey: source.key,
-          sourceFile: source.file,
-          boneIdOffset: offset,
-          boneIdsModelWide: source.bone_ids_model_wide === true,
-        };
-      }
-    }
-    return null;
-  }
-
   function refreshSelectedWeightMask(mesh, state, selectedBoneIds = []) {
     if (!state?.loaded) return null;
     const selected = new Set(selectedBoneIds || []);
@@ -289,7 +308,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
 
   function installSkinningEntry(mesh, entry, buffer) {
     const state = stateFor(mesh);
-    const source = sourceDescriptorForEntry(entry);
+    const source = skinningSourceDescriptorForEntry(entry);
     if (!source) throw new Error('The skin-weight source identity is unavailable for this draw.');
     if (!Array.isArray(entry.bone_ids) || !entry.bone_ids.every((id) => Number.isInteger(id) && id >= 0)) {
       throw new Error('Skin data has no valid bone-ID list.');
@@ -298,20 +317,7 @@ export function createSkinningRuntime({ states, knownMeshes, stateFor, requestRe
     state.skinningSourceKey = source.sourceKey;
     state.skinningSourceFile = source.sourceFile;
     state.skinningBoneOffset = source.boneIdOffset;
-    const indices = typedView(buffer, entry.data?.indices, Uint32Array, 'u32');
-    const weights = typedView(buffer, entry.data?.weights, Float32Array, 'f32');
-    const position = mesh.geometry?.attributes?.position;
-    const influenceCount = Number(entry.influence_count);
-    if (
-      !position ||
-      !Number.isInteger(influenceCount) ||
-      influenceCount <= 0 ||
-      position.count !== Number(entry.vertex_count) ||
-      indices.length !== position.count * influenceCount ||
-      weights.length !== position.count * influenceCount
-    ) {
-      throw new Error('Skin data does not match rendered vertices.');
-    }
+    const { indices, weights, influenceCount } = readSkinningEntryArrays(mesh, entry, buffer);
     state.originalMaterial = mesh.material;
     state.baselinePositions = null;
     state.baselineNormals = null;
