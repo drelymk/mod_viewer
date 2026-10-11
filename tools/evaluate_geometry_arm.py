@@ -575,6 +575,7 @@ def main():
     parser.add_argument("--diagnose-shoulder", action="store_true")
     parser.add_argument("--study-binding", action="store_true")
     parser.add_argument("--compare-arm-segments", action="store_true")
+    parser.add_argument("--compare-arm-support", action="store_true")
     parser.add_argument("--ownership-overrides", type=Path)
     args = parser.parse_args()
     if not (
@@ -583,6 +584,7 @@ def main():
         or args.diagnose_shoulder
         or args.study_binding
         or args.compare_arm_segments
+        or args.compare_arm_support
     ):
         parser.error("Select an interaction, deformation or binding evaluation")
     if args.ownership_overrides and not (args.diagnose_shoulder or args.study_binding):
@@ -621,7 +623,7 @@ def main():
             normals:modViewer.activeMeshes.map(m=>m.geometry.attributes.normal&&[...m.geometry.attributes.normal.array])};
         }""")
         report = {"schemaVersion": 2}
-        if args.compare_arm_segments:
+        if args.compare_arm_segments or args.compare_arm_support:
             report["displayedVariant"] = page.evaluate("""() => ({
               displayed:modViewer.activeMeshes.filter(mesh=>mesh.visible).map(mesh=>({
                 mesh:mesh.userData.semanticKey,vertexCount:mesh.geometry.attributes.position.count,
@@ -634,7 +636,12 @@ def main():
             report["nearRest"] = evaluate_near_rest(page, args.output)
         if args.deform_left_arm:
             report["deformation"] = evaluate_deformation(page, context, args.output)
-        if args.diagnose_shoulder or args.study_binding or args.compare_arm_segments:
+        if (
+            args.diagnose_shoulder
+            or args.study_binding
+            or args.compare_arm_segments
+            or args.compare_arm_support
+        ):
             from evaluate_geometry_shoulder import (
                 evaluate_binding_study,
                 evaluate_shoulder,
@@ -657,6 +664,10 @@ def main():
                 report["armSegments"] = evaluate_binding_study(
                     page, context, args.output, pivot_only=True
                 )
+            if args.compare_arm_support:
+                report["armSupport"] = evaluate_binding_study(
+                    page, context, args.output, support_only=True, capture_views=()
+                )
         report["invariants"] = page.evaluate("""() => ({
           restRigUnchanged:JSON.stringify(__evaluationRigApi.getModelRigState().geometryRigPreview.rig)===__armBefore.rest,
           positionsRestored:modViewer.activeMeshes.every((m,i)=>m.geometry.attributes.position.array.every((v,j)=>v===__armBefore.positions[i][j])),
@@ -676,6 +687,7 @@ def main():
                     ),
                     "bindingStudySides": list(report.get("bindingStudy", {})),
                     "armSegmentSides": list(report.get("armSegments", {})),
+                    "armSupportSides": list(report.get("armSupport", {})),
                 }
             ),
             flush=True,

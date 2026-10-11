@@ -970,3 +970,149 @@ and positions, normals, fitted rest controls and authored influences restore
 exactly. The cross-model acceptance condition fails: reject blanket adoption
 of this simple rule and keep the remaining shoulder blend-boundary problem
 separate. No further binding architecture is introduced.
+
+### Iteration 8 — authored relationships do not establish a reliable owner rule
+
+The existing support method avoids Odette 49's pivot-only reassignment but
+**does not avoid Chisa 89's failure**, and it introduces different regressions
+on Odette. Shared authored vertices identify blends, but do not establish that
+their influences should have identical simplified drivers: Remielle's successful
+170–173 changes also create a boundary with strongly overlapping forearm
+influences. No small reliable automatic ownership refinement is demonstrated.
+Stop automatic binding experimentation for this PR, preserve the validated
+geometry-fitting and skeleton-only IK work, and keep PR #180 open and unmerged.
+Production binding, Weight and deformation remain unchanged.
+
+#### Existing support versus inferred pivots
+
+This investigation reuses Iteration 6's exact area-lumped authored-weight
+mean-squared distance to the same arm's finite upper-arm/forearm segments.
+It adds measurements of shared positive weights to that existing displayed
+triangle pass, without changing its choices. The original source aliases and
+WWMI remapping remain authoritative. No new score for choosing owners, threshold,
+fallback, hierarchy, component exclusion or game rule is introduced.
+
+Distances below are normalized by height squared. Proximal means projection
+onto the fitted upper-arm line is at or before the elbow, rather than an
+anatomical ground-truth label. Vertex-weight statistics sum authored weights
+equally across displayed vertices; area-weight statistics use the existing
+triangle-area/3 quadrature. They answer different questions.
+
+| Influence | Pivot score upper / forearm | Support score upper / forearm | Support choice | Proximal vertex weight / area weight |
+| --- | ---: | ---: | --- | ---: |
+| Odette 49 → joint 115 | 0.0005884 / 0.0012986 | 0.0017062 / 0.0005030 | Keep forearm | 44.55% / 29.48% |
+| Chisa 89 → joint 88 | 0.0040832 / 0.0041726 | 0.0054276 / 0.0055742 | Change to upper arm | 23.28% / 38.31% |
+| Remielle 170 → joint 80 | 0.0000165 / 0.0017433 | 0.0001610 / 0.0013146 | Change to upper arm | 98.54% / 96.40% |
+| Remielle 171 → joint 81 | 0.0003508 / 0.0019808 | 0.0005632 / 0.0016366 | Change to upper arm | 99.56% / 98.52% |
+| Remielle 172 → joint 82 | 0.0000162 / 0.0014310 | 0.0001613 / 0.0010884 | Change to upper arm | 98.54% / 96.40% |
+| Remielle 173 → joint 83 | 0.0003829 / 0.0016994 | 0.0005945 / 0.0014349 | Change to upper arm | 99.56% / 98.52% |
+
+Odette 49's complete displayed support contains 209 vertices and favors forearm;
+the method leaves its neighbors 50 and 64 on forearm too. It avoids creating
+that particular split. Chisa 89's complete support contains 396 vertices in
+Component1-2. Although 61.69% of its area-weight support lies beyond the elbow,
+its mean squared distance still favors upper arm. Its area-weighted projection
+parameter is 1.047; its equally sampled authored-weight parameter is 1.148.
+A mean-distance argmin is not equivalent to the distribution's proximal/distal
+mass, and neither is an anatomical label. This failure is present in one draw;
+cross-source aliasing or duplicated sibling draws do not explain it.
+
+Support keeps Remielle 83 and 114 on forearm, unlike the pivot rule. Their
+vertex-weight support is 72.04% distal, while 170–173 is predominantly proximal.
+It therefore retains exactly the four prior successful corrections. This useful
+distinction on Remielle is insufficient to validate the method across models.
+
+#### Shared vertices describe blends, not ownership constraints
+
+For a pair of reconciled joints with positive weights on the same displayed
+vertex, accumulate `vertexArea * authoredWeight` separately for each joint.
+Divide each accumulated mass by that joint's entire displayed area-weight
+support. Repeated slots for one joint are summed before counting; source aliases
+remain reconciled. Counts are draw-vertex occurrences, rather than globally
+welded vertices. Pair coverages overlap and must not be summed as disjoint
+percentages. The quantities are diagnostics, not another assignment score.
+
+| Source influence pair | Shared draw vertices | Fraction of first / second joint's area-weight support |
+| --- | ---: | ---: |
+| Odette 49 / 50 | 92 | 7.62% / 27.29% |
+| Odette 49 / 64 | 104 | 45.61% / 100.00% |
+| Chisa 89 / 91 | 328 | 83.33% / 100.00% |
+| Chisa 89 / 88 | 278 | 94.73% / 86.84% |
+| Remielle 170 / 83 | 77 | 96.63% / 46.17% |
+| Remielle 170 / 69 | 79 | 96.40% / 44.06% |
+| Remielle 171 / 83 | 81 | 98.30% / 38.88% |
+| Remielle 172 / 114 | 77 | 96.63% / 46.17% |
+| Remielle 173 / 114 | 81 | 98.30% / 38.88% |
+
+Chisa 89 shares substantial support with both 88 and 91. Support moves 88 and
+89 to upper arm while leaving 91 on forearm, so moving one neighbor with it
+still leaves the harmful boundary. The same edge, vertices 22780 / 22782,
+reproduces Iteration 7's 28.267× right-backward ratio and identical signed trace.
+The existing short-edge qualification still applies.
+
+Remielle demonstrates the opposite consequence of treating overlap as a
+same-owner constraint. Its successful 170 / 171 changes agree with upper-arm
+neighbor 69 but split from forearm neighbor 83 on over 96% of their area-weight
+support. The right arm mirrors this with 172 / 173, upper-arm 105 and forearm
+114. Both proximal and distal influences blend at those vertices. Forcing all
+strongly shared influences onto one driver would erase this distinction;
+shared weights do not supply a binary ownership requirement or a validated
+source hierarchy. The measurements establish coexistence and mixed-driver
+motion, rather than proving a particular adjacency rule.
+
+#### The unchanged support rule still regresses across models
+
+The original and existing support candidate use the recorded Iteration 7
+variants, fitted controls, frozen samples and all sixteen poses per model.
+All 96 comparisons reach the same targets, preserve segment lengths and
+restore positions, normals and authored arrays exactly, with no Weight UI
+request. Support changes 4 / 4 / 19 joints on Remielle / Odette / Chisa.
+Chisa has positive displayed-area support for 131 of 136 arm-owned joints;
+the other five keep their existing owners under the unchanged method.
+
+| Model / arm / direction | Original max / min | Support max / min | Above 2×, original → support | Below 0.5×, original → support |
+| --- | ---: | ---: | ---: | ---: |
+| Remielle left forward | 4.558 / 0.382× | 3.056 / 0.540× | 20 → 16 | 2 → 0 |
+| Remielle right forward | 4.215 / 0.448× | 2.865 / 0.583× | 19 → 13 | 1 → 0 |
+| Remielle left backward | 5.725 / 0.234× | 5.725 / 0.234× | 122 → 118 | 12 → 10 |
+| Remielle right backward | 5.578 / 0.202× | 5.578 / 0.202× | 113 → 106 | 13 → 12 |
+| Odette left forward | 3.210 / 0.431× | 3.500 / 0.346× | 30 → 45 | 3 → 4 |
+| Odette right forward | 2.923 / 0.433× | 3.204 / 0.433× | 18 → 35 | 3 → 4 |
+| Odette left backward | 4.140 / 0.072× | 4.140 / 0.072× | 226 → 246 | 120 → 121 |
+| Odette right backward | 4.115 / 0.068× | 4.115 / 0.068× | 212 → 230 | 112 → 113 |
+| Chisa left forward | 5.530 / 0.207× | 5.530 / 0.200× | 8 → 8 | 40 → 38 |
+| Chisa right forward | 4.933 / 0.174× | 10.562 / 0.116× | 12 → 16 | 36 → 37 |
+| Chisa left backward | 10.833 / 0.056× | 10.833 / 0.111× | 773 → 414 | 315 → 347 |
+| Chisa right backward | 10.374 / 0.054× | 28.267 / 0.111× | 775 → 434 | 267 → 306 |
+
+These are full-displacement common-sample extrema and severity counts. Whole
+changed-draw extrema remain recorded separately with the existing tolerances.
+Odette's new left-forward stretch is body vertices 13633 / 13634: support moves
+30 and 59 to upper arm while 26 stays forearm. Its new 0.346× compressed edge,
+13584 / 13586, similarly mixes 30 and 26. Intermediate left forward at
+three-quarter displacement changes max/min from 3.129 / 0.647× to
+3.444 / 0.373×. Chisa right backward half changes 6.981 / 0.119× to
+21.249 / 0.044×, introducing another compression regression. Lower severe
+stretch counts or improved full-backward minima cannot establish overall
+quality when new extrema and compressed-edge counts regress.
+
+The single [compact evidence record](iteration-8/authored-relationships.json)
+retains focused joint scores, all candidate changes, pair coverages, source
+aliases, support distributions, all support-case metrics and three new signed
+counterexamples. It references Iteration 7's variant, controls, poses and samples
+instead of duplicating them, and reuses the existing Chisa failure trace and
+[comparison image](iteration-7/cross-model-comparison.png). No new captures or
+test cases are added. Existing focused checks and two explicit verification
+passes cover the investigation; normal CI still excludes browser/WebGPU work.
+
+```text
+python tools/evaluate_geometry_arm.py <mod-folder> --compare-arm-support --output <output-folder>
+```
+
+Use the recorded displayed variants in a compatible browser/WebGPU environment.
+This explicit evaluator operation does not save source buffers, metadata or
+poses. Automatic mapping of complex authored skinning onto the simplified rig
+remains unreliable with the demonstrated evidence. That does not prove such
+mapping impossible; it ends this experiment without adding more heuristics or
+promoting either distance method. Geometry fitting, skeleton-only IK and the
+feasibility of authored-weight deformation remain demonstrated separately.

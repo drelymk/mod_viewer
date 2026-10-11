@@ -140,8 +140,9 @@ EDGE_DIAGNOSTICS = """({positions,movement,freezeTracked=false,limit=8}) => {
 
 INFLUENCE_SUPPORT = """jointIds => {
   const d=__armDeform,wanted=new Set(jointIds),rows=new Map();
-  const shoulder=new d.THREE.Vector3(...d.controls.geometry.controls.leftShoulder.position);
-  const elbow=new d.THREE.Vector3(...d.controls.geometry.controls.leftElbow.position);
+  const side=d.side||'left';
+  const shoulder=new d.THREE.Vector3(...d.controls.geometry.controls[side+'Shoulder'].position);
+  const elbow=new d.THREE.Vector3(...d.controls.geometry.controls[side+'Elbow'].position);
   const upper=elbow.clone().sub(shoulder),height=d.geometry.frame.height;
   for(let meshIndex=0;meshIndex<d.meshes.length;meshIndex++) {
     const mesh=d.meshes[meshIndex],state=d.runtime.stateFor(mesh);
@@ -335,9 +336,11 @@ def evaluate_shoulder(
     return report
 
 
-SUPPORT_OWNERSHIP = """async () => {
+SUPPORT_OWNERSHIP = """async options => {
+  const {relationships=false}=options||{};
   const {buildHumanoidDriverFrames}=await import('./js/weight-rig/humanoid-rig-binding.js');
   const d=__armDeform,rig=d.controls.geometry,drivers=[...buildHumanoidDriverFrames(rig).values()];
+  const driverIndex=new Map(drivers.map((driver,i)=>[driver.id,i]));
   const armIds=new Set(['left_upper_arm','left_lower_arm','right_upper_arm','right_lower_arm']);
   const candidates=new Map([...d.allJointBindings.geometry].filter(([,owner])=>armIds.has(owner.driverId))
     .map(([jointId,owner])=>[jointId,{jointId,owner,mass:0,scores:new Array(drivers.length).fill(0)}]));
@@ -346,7 +349,8 @@ SUPPORT_OWNERSHIP = """async () => {
       point.clone().sub(driver.start).dot(delta)/delta.lengthSq(),0,1);
     return point.distanceToSquared(driver.start.clone().addScaledVector(delta,at));
   };
-  let displayedTriangles=0;
+  let displayedTriangles=0,unmappedPositiveSlots=0;
+  const shared=new Map(),jointSupport=new Map();
   for(let meshIndex=0;meshIndex<d.meshes.length;meshIndex++) {
     const mesh=d.meshes[meshIndex],state=d.runtime.stateFor(mesh);
     if(!mesh.visible||!state.loaded) continue;
@@ -363,13 +367,47 @@ SUPPORT_OWNERSHIP = """async () => {
     for(let vertex=0;vertex<areas.length;vertex++) {
       if(!(areas[vertex]>0)) continue;
       const distances=drivers.map(driver=>distance(point(vertex),driver));
+      const weights=new Map();
       for(let slot=0;slot<state.influenceCount;slot++) {
         const at=vertex*state.influenceCount+slot,weight=state.weights[at];
         const jointId=d.reconciled.sourceBoneToModelJointMap.get(d.sourceBoneKey(state.skinningSourceKey,state.indices[at]));
+        if(relationships&&weight>0) {
+          if(jointId===undefined) unmappedPositiveSlots++;
+          else weights.set(jointId,(weights.get(jointId)||0)+weight);
+        }
         const row=candidates.get(jointId);
         if(!row||!(weight>0)) continue;
         const mass=areas[vertex]*weight;row.mass+=mass;
         distances.forEach((value,i)=>row.scores[i]+=mass*value);
+      }
+      if(relationships) {
+        const entries=[...weights].sort((a,b)=>a[0]-b[0]);
+        for(const [jointId,weight] of entries) {
+          const row=jointSupport.get(jointId)||{jointId,displayedVertexCount:0,supportMass:0};
+          const mass=areas[vertex]*weight;row.displayedVertexCount++;row.supportMass+=mass;
+          if(candidates.has(jointId)) {
+            const side=candidates.get(jointId).owner.driverId.split('_')[0];
+            const shoulder=new d.THREE.Vector3(...rig.controls[side+'Shoulder'].position);
+            const upper=new d.THREE.Vector3(...rig.controls[side+'Elbow'].position).sub(shoulder);
+            const parameter=point(vertex).sub(shoulder).dot(upper)/upper.lengthSq();
+            row.parameterMass=(row.parameterMass||0)+mass*parameter;
+            row.proximalMass=(row.proximalMass||0)+(parameter<=1?mass:0);
+            row.draws??=new Map();
+            const draw=row.draws.get(meshIndex)||{mesh:mesh.userData.semanticKey,displayedVertexCount:0,
+              supportMass:0,proximalMass:0,upperDistanceMass:0,lowerDistanceMass:0};
+            draw.displayedVertexCount++;draw.supportMass+=mass;draw.proximalMass+=parameter<=1?mass:0;
+            draw.upperDistanceMass+=mass*distances[driverIndex.get(side+'_upper_arm')];
+            draw.lowerDistanceMass+=mass*distances[driverIndex.get(side+'_lower_arm')];row.draws.set(meshIndex,draw);
+          }
+          jointSupport.set(jointId,row);
+        }
+        for(let i=0;i<entries.length;i++) for(let j=i+1;j<entries.length;j++) {
+          const [a,wa]=entries[i],[b,wb]=entries[j];
+          if(!candidates.has(a)&&!candidates.has(b)) continue;
+          const key=`${a}:${b}`,row=shared.get(key)||{jointIds:[a,b],displayedVertexCount:0,areaWeightedWeights:[0,0]};
+          row.displayedVertexCount++;row.areaWeightedWeights[0]+=areas[vertex]*wa;
+          row.areaWeightedWeights[1]+=areas[vertex]*wb;shared.set(key,row);
+        }
       }
     }
   }
@@ -395,11 +433,19 @@ SUPPORT_OWNERSHIP = """async () => {
       supportChoice:bySupport[0].driverId,pivotChoice:byPivot[0].driverId,
       originalScores:scores.find(score=>score.driverId===row.owner.driverId),
       armSegmentChoice:armScores[0].driverId,armSegmentScores:armScores,
+      armPivotChoice:[...armScores].sort((a,b)=>a.pivotScoreHeightSquared-b.pivotScoreHeightSquared||a.driverId.localeCompare(b.driverId))[0].driverId,
       supportRanking:bySupport.slice(0,3),pivotRanking:byPivot.slice(0,3)});
   }
   return {definition:'area_lumped_authored_weight_mean_squared_distance_to_existing_rest_driver_segments',
     scope:'existing_upper_or_lower_arm_owners_only',displayedTriangles,
-    facts,supportOverrides:support,pivotOverrides:pivot,armSegmentOverrides:withinArm};
+    facts,supportOverrides:support,pivotOverrides:pivot,armSegmentOverrides:withinArm,
+    ...(relationships?{sharedInfluences:{definition:'area_lumped_authored_weight_on_vertices_with_both_positive_joint_weights',
+      unmappedPositiveSlots,joints:[...jointSupport.values()].map(({draws,parameterMass,proximalMass,...row})=>({...row,
+        ...(draws?{areaWeightedUpperArmParameter:parameterMass/row.supportMass,
+          areaWeightProximalToElbow:proximalMass/row.supportMass,supportDraws:[...draws.values()]}:{}),
+        jointMembers:d.model.joints.find(j=>j.jointId===row.jointId).members,
+        originalDriver:d.allJointBindings.geometry.get(row.jointId)?.driverId||null})),
+      pairs:[...shared.values()]}}:{})};
 }"""
 
 
@@ -440,20 +486,31 @@ PIVOT_ARM_OWNERSHIP = """async () => {
 
 
 def evaluate_binding_study(
-    page, context, output, *, overrides=(), capture_views=("front",), pivot_only=False
+    page,
+    context,
+    output,
+    *,
+    overrides=(),
+    capture_views=("front",),
+    pivot_only=False,
+    support_only=False,
 ):
     """Compare original owners with diagnostic segment choices on both arms."""
     report = {}
+    narrow = pivot_only or support_only
     for side in ("left", "right"):
         baseline = evaluate_deformation(
             page, context, output, capture_views=(), side=side
         )
-        evidence = page.evaluate(
-            PIVOT_ARM_OWNERSHIP if pivot_only else SUPPORT_OWNERSHIP
+        evidence = (
+            page.evaluate(SUPPORT_OWNERSHIP, {"relationships": True})
+            if support_only
+            else page.evaluate(PIVOT_ARM_OWNERSHIP if pivot_only else SUPPORT_OWNERSHIP)
         )
+        candidate_name = "support_within_arm" if support_only else "pivot_within_arm"
         candidates = (
-            [("original", []), ("pivot_within_arm", evidence["armSegmentOverrides"])]
-            if pivot_only
+            [("original", []), (candidate_name, evidence["armSegmentOverrides"])]
+            if narrow
             else [
                 ("original", []),
                 ("pivot_segments", evidence["pivotOverrides"]),
@@ -461,7 +518,7 @@ def evaluate_binding_study(
                 ("support_within_arm", evidence["armSegmentOverrides"]),
             ]
         )
-        if overrides and not pivot_only:
+        if overrides and not narrow:
             candidates.append(("diagnostic_six", overrides))
         changed_joint_ids = {
             fact["jointId"]
@@ -479,7 +536,7 @@ def evaluate_binding_study(
                     ("full", 1),
                 )
             ]
-            if pivot_only
+            if narrow
             else [
                 ("forward_half", 0.12, 0.5),
                 ("forward_full", 0.12, 1),
@@ -489,6 +546,21 @@ def evaluate_binding_study(
             ]
         )
         study = {"setup": baseline["setup"], "evidence": evidence, "cases": {}}
+        if support_only:
+            study["influenceSupport"] = page.evaluate(
+                INFLUENCE_SUPPORT,
+                sorted(
+                    {
+                        fact["jointId"]
+                        for fact in evidence["facts"]
+                        if fact["originalDriver"].startswith(f"{side}_")
+                        and (
+                            fact["originalDriver"] != fact["armSegmentChoice"]
+                            or fact["originalDriver"] != fact["armPivotChoice"]
+                        )
+                    }
+                ),
+            )
         try:
             for name, changes in candidates:
                 cases = {}

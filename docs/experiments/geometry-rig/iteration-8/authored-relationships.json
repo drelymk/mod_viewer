@@ -1,0 +1,268 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "9ef9653",
+  "scope": "Final focused authored influence relationship investigation; existing same-arm support method only",
+  "supportDefinition": "area_lumped_authored_weight_mean_squared_distance_to_existing_rest_driver_segments",
+  "relationshipDefinition": "For each positive-area displayed draw vertex shared by two ModelJoints, accumulate area/3 * each authored joint weight separately; duplicate slots sum before counting. Pair coverages overlap and are not disjoint percentages.",
+  "jointColumns": ["jointId","members_sourceIndex_boneId","originalDriver","pivotDriver","supportDriver","supportMass","supportUpperScore","supportLowerScore","pivotUpperScore","pivotLowerScore","areaWeightProximalToElbow","areaWeightedUpperArmParameter"],
+  "pairColumns": ["jointIds","sharedDisplayedVertices","areaWeightedWeights","fractionOfEachJointAreaWeight"],
+  "caseColumns": ["pose","sampleMax","sampleMin","aboveDouble","belowHalf","wholeChangedMax","wholeChangedMin","changedEdgeCount","meanAbsoluteLogRatio"],
+  "models": {
+    "remielle": {
+      "iteration7Reference": "../iteration-7/remielle.json",
+      "variantDigest": "4e588a13850bc460762d57c0440f124d9eae6936eb9df552b2aa664772ae7b90",
+      "invariants": {
+        "restRigUnchanged": true,
+        "positionsRestored": true,
+        "normalsRestored": true,
+        "weightUiRequests": 0,
+        "productionModelRigLoaded": false
+      },
+      "supportedArmJoints": 92,
+      "armJointsWithoutPositiveDisplayedAreaSupport": [],
+      "changedArmJoints": 4,
+      "displayedTriangles": 41731,
+      "unmappedPositiveSlots": 0,
+      "candidateOverrides": [
+        [0,170,"left_upper_arm"],
+        [0,171,"left_upper_arm"],
+        [0,172,"right_upper_arm"],
+        [0,173,"right_upper_arm"]
+      ],
+      "joints": [
+        [8,[[0,105]],"right_upper_arm","right_upper_arm","right_upper_arm",0.012787415450082657,0.0003763735104302071,0.004658180189187849,4.919973013650103e-05,0.005790108278936233,1,0.5360725142630139],
+        [18,[[0,114]],"right_lower_arm","right_upper_arm","right_lower_arm",0.008706127563737549,0.0006673290958657137,0.0004924209126970089,1.3944661709991233e-05,0.0002468271100348901,0.5013919890639529,1.0202259338651771],
+        [80,[[0,170]],"left_lower_arm","left_upper_arm","left_upper_arm",0.0023279494317325427,0.00016102317409862809,0.0013146487692353213,1.650458444305433e-05,0.001743293470979168,0.9639534394809326,0.7775200475479351],
+        [81,[[0,171]],"left_lower_arm","left_upper_arm","left_upper_arm",0.0024646619141373027,0.0005631789637593554,0.0016366328777405394,0.00035081996713386344,0.001980846205241806,0.9852046264478955,0.7775902556114367],
+        [82,[[0,172]],"right_lower_arm","right_upper_arm","right_upper_arm",0.0023279494357977175,0.00016133314107951073,0.0010883843422218272,1.6198758197119698e-05,0.0014310154408614854,0.9639534395438789,0.7976183485041974],
+        [83,[[0,173]],"right_lower_arm","right_upper_arm","right_upper_arm",0.0024646619191322564,0.0005945028701465645,0.0014349327537469742,0.00038293312291782426,0.0016994278239381845,0.9852046264778801,0.7988927993909214],
+        [182,[[0,69]],"left_upper_arm","left_upper_arm","left_upper_arm",0.012787415471635017,0.0003654387662888414,0.00514198733457411,3.905239935978773e-05,0.006394415401340467,1,0.5271920307746922],
+        [198,[[0,83]],"left_lower_arm","left_upper_arm","left_lower_arm",0.008706123562658985,0.0005845364114324186,0.0005513632120520766,1.4004422227582321e-05,0.00038302156985196243,0.5013922203187278,0.9898069273436322]
+      ],
+      "pairs": [
+        [[80,182],79,[0.002244034861656267,0.005634108093715082],[0.9639534394809326,0.4405978757953578]],
+        [[80,198],77,[0.00224939261922875,0.004019925371613803],[0.9662549317296262,0.46173539149564463]],
+        [[81,182],86,[0.0024281963204379965,0.005073207635084218],[0.9852046264478955,0.396734402376898]],
+        [[81,198],81,[0.002422654594559639,0.003385074647236412],[0.9829561534031465,0.3888153691908501]],
+        [[8,82],79,[0.005634108104721128,0.0022440348657214422],[0.44059787739865053,0.9639534395438789]],
+        [[18,82],77,[0.004019925374365314,0.0022493926247317735],[0.46173517961176713,0.9662549324061994]],
+        [[8,83],86,[0.005073207602525811,0.0024281963254329498],[0.3967344004994393,0.9852046264778801]],
+        [[18,83],81,[0.0033850746372609953,0.002422654600063318],[0.38881518935702103,0.9829561536440956]]
+      ],
+      "focusedVertexWeightSupport": [
+        {"side":"left","sourceIndex":0,"boneId":83,"jointId":198,"displayedVertexCount":663,"totalWeight":106.17095527832862,"upperArmParameter":1.1090439602668487,"weightProximalToElbow":0.2796446055656105,"weightDistalToElbow":0.7203553944343895},
+        {"side":"left","sourceIndex":0,"boneId":170,"jointId":80,"displayedVertexCount":90,"totalWeight":16.904697041609325,"upperArmParameter":0.7748394807695715,"weightProximalToElbow":0.9854241011066132,"weightDistalToElbow":0.014575898893386792},
+        {"side":"left","sourceIndex":0,"boneId":171,"jointId":81,"displayedVertexCount":91,"totalWeight":21.920088559854776,"upperArmParameter":0.7692639063072179,"weightProximalToElbow":0.9956115139105749,"weightDistalToElbow":0.004388486089425129},
+        {"side":"right","sourceIndex":0,"boneId":114,"jointId":18,"displayedVertexCount":663,"totalWeight":106.17095526622143,"upperArmParameter":1.1459495173541527,"weightProximalToElbow":0.27964460548346487,"weightDistalToElbow":0.7203553945165352},
+        {"side":"right","sourceIndex":0,"boneId":172,"jointId":82,"displayedVertexCount":90,"totalWeight":16.90469706756994,"upperArmParameter":0.7954244167122099,"weightProximalToElbow":0.9854241011289975,"weightDistalToElbow":0.014575898871002522},
+        {"side":"right","sourceIndex":0,"boneId":173,"jointId":83,"displayedVertexCount":91,"totalWeight":21.920088573824614,"upperArmParameter":0.7907687545730833,"weightProximalToElbow":0.9956115139133717,"weightDistalToElbow":0.0043884860866283135}
+      ],
+      "focusedDrawSupport": [
+        {"jointId":18,"draws":[{"mesh":"Remielle2BodyA-1","displayedVertexCount":663,"supportMass":0.008706127563737549,"proximalMass":0.0043651826162268755,"upperDistanceMass":1.550912147259873e-05,"lowerDistanceMass":1.1444152215120319e-05}]},
+        {"jointId":80,"draws":[{"mesh":"Remielle2BodyA-1","displayedVertexCount":90,"supportMass":0.0023279494317325427,"proximalMass":0.002244034861656267,"upperDistanceMass":1.0006542311009832e-06,"lowerDistanceMass":8.169686510720896e-06}]},
+        {"jointId":81,"draws":[{"mesh":"Remielle2BodyA-1","displayedVertexCount":91,"supportMass":0.0024646619141373027,"proximalMass":0.0024281963204379965,"upperDistanceMass":3.7053214370966076e-06,"lowerDistanceMass":1.0767893115305292e-05}]},
+        {"jointId":82,"draws":[{"mesh":"Remielle2BodyA-1","displayedVertexCount":90,"supportMass":0.0023279494357977175,"proximalMass":0.0022440348657214422,"upperDistanceMass":1.0025804759074833e-06,"lowerDistanceMass":6.7636003643989915e-06}]},
+        {"jointId":83,"draws":[{"mesh":"Remielle2BodyA-1","displayedVertexCount":91,"supportMass":0.0024646619191322564,"proximalMass":0.0024281963254329498,"upperDistanceMass":3.91141071557334e-06,"lowerDistanceMass":9.440848195988326e-06}]},
+        {"jointId":198,"draws":[{"mesh":"Remielle2BodyA-1","displayedVertexCount":663,"supportMass":0.008706123562658985,"proximalMass":0.004365182623450781,"upperDistanceMass":1.358496444995995e-05,"lowerDistanceMass":1.2814000100332806e-05}]}
+      ],
+      "supportCases": [
+        ["left/forward_quarter",2.4368922291716544,0.5713926796574178,3,0,3.1761907972533785,0.2801247808542868,10157,0.008699843318802665],
+        ["left/forward_half",2.8987308181256926,0.5428646111262785,8,0,3.661125610594698,0.3414281586842951,10157,0.010035838607037504],
+        ["left/forward_three_quarter",3.0833669373546835,0.5353935859879501,12,0,4.035150022284878,0.3459397994024241,10157,0.010563565240423829],
+        ["left/forward_full",3.0555997813424716,0.5404328262105619,16,0,4.221963471615077,0.34823914967691566,10157,0.011057230962269106],
+        ["left/backward_quarter",2.7323865370183524,0.39249089687299554,9,5,4.726556879766289,0.3727564182789249,10157,0.01291896351824854],
+        ["left/backward_half",3.905355865949074,0.30583224127653535,51,11,6.837555347383312,0.2004477281845652,10157,0.017881466824816408],
+        ["left/backward_three_quarter",4.8945798130724185,0.2505688756458775,92,9,8.596384865236002,0.22002520221098162,10157,0.021484662599152864],
+        ["left/backward_full",5.725215337084955,0.23408584547551584,118,10,10.13136439327062,0.23408584547551586,10157,0.023927139115766827],
+        ["right/forward_quarter",2.3132512070041513,0.5941474830809577,1,0,3.166616983307822,0.28032300067221055,9963,0.008122777643507063],
+        ["right/forward_half",2.7354053160478435,0.5611540640803903,8,0,3.6018138719105592,0.32741692738791306,9963,0.00931449257463075],
+        ["right/forward_three_quarter",2.8994857773163907,0.5966416997092525,9,0,3.961962792348881,0.34065403373934783,9963,0.00974538791092632],
+        ["right/forward_full",2.8648030908238877,0.5827264112279342,13,0,4.108796955724929,0.33463637496226517,9963,0.010118397316709027],
+        ["right/backward_quarter",2.6756556399916653,0.3821172367956062,9,7,4.719703217272334,0.22000175780943368,9963,0.012115987680229139],
+        ["right/backward_half",3.825280257912465,0.3323981241426033,47,10,6.843134326916531,0.15518459173274063,9963,0.01682872784981376],
+        ["right/backward_three_quarter",4.783811302710069,0.24187164981700443,81,9,8.583977319541152,0.24187164981700449,9963,0.0202221076650643],
+        ["right/backward_full",5.578169346591956,0.20179447376305362,106,12,9.969588842666818,0.20179447376305368,9963,0.022475041190891342]
+      ],
+      "restoration": [
+        {"side":"left","movedVertices":0,"maxDisplacementHeight":0,"finite":true,"geometryRestUnchanged":true,"authoredInfluencesUnchanged":true},
+        {"side":"right","movedVertices":0,"maxDisplacementHeight":0,"finite":true,"geometryRestUnchanged":true,"authoredInfluencesUnchanged":true}
+      ]
+    },
+    "odette": {
+      "iteration7Reference": "../iteration-7/odette.json",
+      "variantDigest": "9a60528fc43dcc64d389ff1d7cbd35c828a4b574b9ab717b43703d4bc74a89ab",
+      "invariants": {
+        "restRigUnchanged": true,
+        "positionsRestored": true,
+        "normalsRestored": true,
+        "weightUiRequests": 0,
+        "productionModelRigLoaded": false
+      },
+      "supportedArmJoints": 55,
+      "armJointsWithoutPositiveDisplayedAreaSupport": [],
+      "changedArmJoints": 4,
+      "displayedTriangles": 70019,
+      "unmappedPositiveSlots": 0,
+      "candidateOverrides": [
+        [1,30,"left_upper_arm"],
+        [1,53,"right_upper_arm"],
+        [1,59,"left_upper_arm"],
+        [1,60,"right_upper_arm"]
+      ],
+      "joints": [
+        [90,[[1,26]],"left_lower_arm","left_upper_arm","left_lower_arm",0.029310711385279967,0.001167473151084738,0.00045431782914937083,0.0005401478590235414,0.0013752149471707718,0.30511148178430225,1.1024899337060727],
+        [95,[[1,30]],"left_lower_arm","left_upper_arm","left_upper_arm",0.009156841821478637,0.0004513997406047962,0.003636783431186856,0.00016427628676393065,0.005005293014430458,1,0.6322319261486554],
+        [115,[[1,49]],"right_lower_arm","right_upper_arm","right_lower_arm",0.02390971532161983,0.0017061666012679465,0.0005029952192767016,0.0005883918211267764,0.0012986265568667834,0.2947647283038988,1.1271560146020478],
+        [117,[[1,50]],"right_lower_arm","right_lower_arm","right_lower_arm",0.009304398058478647,0.014445097415482833,0.0004564306287964869,0.009082643592698112,0.00021750697209177685,0,1.814709978579708],
+        [120,[[1,53]],"right_lower_arm","right_upper_arm","right_upper_arm",0.009556417847450054,0.0004965889680288934,0.0033837041400515706,0.00022137679784580897,0.004762100090406415,1,0.6469134245876312],
+        [126,[[1,59]],"left_lower_arm","left_upper_arm","left_upper_arm",0.0001325984160131188,0.0006324296387741014,0.0017694832995675468,0.0005649187661081329,0.001886324536902717,1,0.7748597835351243],
+        [128,[[1,60]],"right_lower_arm","right_upper_arm","right_upper_arm",0.00013259829142251738,0.0006878515154474607,0.0016807296802241716,0.0006235184500283467,0.0017868264325488757,1,0.787395833015591],
+        [132,[[1,64]],"right_lower_arm","right_lower_arm","right_lower_arm",0.0036448965388384035,0.005884733793658275,0.0003058592728587454,0.004105625497484975,0.00016267854581193986,0,1.5070171605375795]
+      ],
+      "pairs": [
+        [[90,95],66,[0.004634459736672848,0.0037274860615376373],[0.15811488420578917,0.4070711424537556]],
+        [[90,126],31,[0.0012396144812054789,0.0001325984160131188],[0.04229220044887827,1.0]],
+        [[95,126],28,[0.0011322619241758473,0.00013005248098843384],[0.12365201302483685,0.980799657332007]],
+        [[115,117],92,[0.0018218420704718438,0.0025387569001699695],[0.07619672781400637,0.27285557692327267]],
+        [[115,132],104,[0.010905161012878284,0.0036448965388384035],[0.45609748448228216,1.0]]
+      ],
+      "focusedVertexWeightSupport": [
+        {"side":"left","sourceIndex":1,"boneId":26,"jointId":90,"displayedVertexCount":1059,"totalWeight":637.7332511227578,"upperArmParameter":1.2076578693280529,"weightProximalToElbow":0.07648555700187494,"weightDistalToElbow":0.923514442998125},
+        {"side":"right","sourceIndex":1,"boneId":49,"jointId":115,"displayedVertexCount":209,"totalWeight":101.09438331983984,"upperArmParameter":1.1375460901994348,"weightProximalToElbow":0.44550052315451116,"weightDistalToElbow":0.5544994768454888}
+      ],
+      "focusedDrawSupport": [
+        {"jointId":90,"draws":[{"mesh":"OdettebodyB-1","displayedVertexCount":1059,"supportMass":0.029310711385279967,"proximalMass":0.00894303458291479,"upperDistanceMass":8.412067975418613e-05,"lowerDistanceMass":3.273524926631683e-05}]},
+        {"jointId":115,"draws":[{"mesh":"OdettebodyB-1","displayedVertexCount":209,"supportMass":0.02390971532161983,"proximalMass":0.007047740740600836,"upperDistanceMass":0.00010028254663666302,"lowerDistanceMass":2.9564311889383135e-05}]}
+      ],
+      "supportCases": [
+        ["left/forward_quarter",2.6497477850594886,0.20497140512700782,18,1,2.6497477850594886,0.20497140512700776,18265,0.013325795938502447],
+        ["left/forward_half",3.1898989995421623,0.319922929576377,32,2,3.1898989995421623,0.31992292957637697,18260,0.015708807438627688],
+        ["left/forward_three_quarter",3.444053843396733,0.37268705180137923,43,1,3.444053843396733,0.3726870518013792,18262,0.017807507426763774],
+        ["left/forward_full",3.499684012940109,0.345799363753186,45,4,3.499684012940109,0.34579936375318593,18262,0.021210625922708132],
+        ["left/backward_quarter",2.5450633626429027,0.3951776463450617,16,4,2.5450633626429027,0.3951776463450617,18265,0.02106602205326414],
+        ["left/backward_half",3.0350791761341593,0.1443965275191811,43,32,3.0350791761341593,0.14439652751918114,18265,0.032566268070641335],
+        ["left/backward_three_quarter",3.5228799515301628,0.07500750607425263,103,67,3.5228799515301628,0.07500750607425263,18296,0.04248513178584089],
+        ["left/backward_full",4.139556781236234,0.07174444523293146,246,121,4.139556781236234,0.07174444523293146,18299,0.050486953150345244],
+        ["right/forward_quarter",2.3862064441735886,0.2755871770246518,12,1,2.3862064441735886,0.27558717702465174,17369,0.011587196888059367],
+        ["right/forward_half",2.8918918670765312,0.3765544884498778,28,1,2.8918918670765312,0.37655448844987777,17386,0.014058910088446501],
+        ["right/forward_three_quarter",3.1379238885166263,0.46641372680321713,32,1,3.1379238885166263,0.46641372680321713,17396,0.016122737838893956],
+        ["right/forward_full",3.2037187812834835,0.4327180024575605,35,4,3.2037187812834835,0.4327180024575605,17411,0.01925569954939385],
+        ["right/backward_quarter",2.3602230296787092,0.4064452700713913,11,3,2.3602230296787092,0.40644527007139136,17390,0.019179429187558186],
+        ["right/backward_half",2.8526911294496404,0.13948888806418766,35,31,2.8526911294496404,0.1394888880641877,17423,0.030070423334419127],
+        ["right/backward_three_quarter",3.497928820614667,0.0584831289059322,90,67,3.497928820614667,0.0584831289059322,17423,0.039448156707206763],
+        ["right/backward_full",4.115067483251875,0.06790898096529223,230,113,4.115067483251875,0.06790898096529223,17437,0.04694662781888197]
+      ],
+      "restoration": [
+        {"side":"left","movedVertices":0,"maxDisplacementHeight":0,"finite":true,"geometryRestUnchanged":true,"authoredInfluencesUnchanged":true},
+        {"side":"right","movedVertices":0,"maxDisplacementHeight":0,"finite":true,"geometryRestUnchanged":true,"authoredInfluencesUnchanged":true}
+      ]
+    },
+    "chisa": {
+      "iteration7Reference": "../iteration-7/chisa.json",
+      "variantDigest": "71e8030ab0bcf5a3cf2d04b0be2efe418d04a6dc8e32f151c6c2bebb4ac17c04",
+      "invariants": {
+        "restRigUnchanged": true,
+        "positionsRestored": true,
+        "normalsRestored": true,
+        "weightUiRequests": 0,
+        "productionModelRigLoaded": false
+      },
+      "supportedArmJoints": 131,
+      "armJointsWithoutPositiveDisplayedAreaSupport": [227,228,231,235,237],
+      "changedArmJoints": 19,
+      "displayedTriangles": 145749,
+      "unmappedPositiveSlots": 0,
+      "candidateOverrides": [
+        [3,251,"left_upper_arm"],
+        [3,261,"right_upper_arm"],
+        [1,88,"right_upper_arm"],
+        [1,89,"right_upper_arm"],
+        [1,133,"left_upper_arm"],
+        [1,134,"left_upper_arm"],
+        [3,150,"right_upper_arm"],
+        [3,161,"left_upper_arm"],
+        [3,244,"left_upper_arm"],
+        [3,248,"right_upper_arm"],
+        [3,249,"right_upper_arm"],
+        [3,250,"left_upper_arm"],
+        [3,260,"right_upper_arm"],
+        [3,343,"left_upper_arm"],
+        [3,368,"right_upper_arm"],
+        [1,60,"right_lower_arm"],
+        [1,110,"right_lower_arm"],
+        [1,53,"left_lower_arm"],
+        [1,128,"left_lower_arm"]
+      ],
+      "joints": [
+        [52,[[1,53]],"left_upper_arm","left_lower_arm","left_lower_arm",31.27617087273084,0.011755291239685892,0.011734203316767564,0.010899376844432108,0.010899376844432108,0.23111776187540362,1.0736927770479054],
+        [59,[[1,60]],"right_upper_arm","right_lower_arm","right_lower_arm",26.503384425695003,0.011759632438875664,0.011692526822050148,0.0109706905106113,0.0109706905106113,0.26374006413942364,1.0815204612409703],
+        [86,[[1,87]],"right_upper_arm","right_upper_arm","right_upper_arm",63.64651302843735,0.002349734798883663,0.010433343779436999,0.001416973683625342,0.01506669827222958,0.9907581111199599,0.40797279493029964],
+        [87,[[1,88]],"right_lower_arm","right_upper_arm","right_upper_arm",58.191718800220485,0.003649581950622502,0.006115747883244313,0.0027396832351114443,0.006389628299696979,0.797637580182031,0.7497969572444257],
+        [88,[[1,89]],"right_lower_arm","right_upper_arm","right_upper_arm",56.66768309760069,0.005427631815099101,0.00557424970312541,0.004083154009805124,0.004172589597338624,0.38306989838039046,1.0468383913324446],
+        [90,[[1,91]],"right_lower_arm","right_lower_arm","right_lower_arm",45.861499082468086,0.00788610996138657,0.007326979812851068,0.006502554986664605,0.006363488528830982,0.03226484997172829,1.2531812626434928],
+        [109,[[1,110]],"right_upper_arm","right_lower_arm","right_lower_arm",111.30962672466815,0.016714248838945806,0.01664208507181573,0.014801535651607255,0.014801535651607255,0.2131902507096399,1.1264817610723157],
+        [127,[[1,128]],"left_upper_arm","left_lower_arm","left_lower_arm",52.752960425891295,0.011483797672494423,0.011347223359121368,0.010151989701609914,0.010151989701609914,0.10845353281742134,1.1759283426855105],
+        [132,[[1,133]],"left_lower_arm","left_upper_arm","left_upper_arm",34.869605145477415,0.0028566033746256015,0.0044845392006779925,0.002189363901047497,0.005074100124635969,0.8203737169019278,0.7973750162029802],
+        [133,[[1,134]],"left_lower_arm","left_upper_arm","left_upper_arm",33.87859631427798,0.004138697352179574,0.004171374046254674,0.0031890049506675495,0.003240861762928069,0.3438071980088656,1.0652544529702823],
+        [148,[[3,150]],"right_lower_arm","right_upper_arm","right_upper_arm",158.011990594706,0.004474361416492775,0.00842322319703854,0.004653333407659266,0.006237732426246972,0.9947164386572919,0.5726332023549185],
+        [159,[[3,161]],"left_lower_arm","left_upper_arm","left_upper_arm",154.53206622259165,0.0045303402043025045,0.00842477465930084,0.004708186228212675,0.006293457111443279,0.9951987533162653,0.5725998698788808],
+        [238,[[3,242],[4,242],[5,242]],"left_lower_arm","left_upper_arm","left_lower_arm",929.1724988691099,0.003377398804486401,0.0015881427268788816,0.0012143614337798605,0.001807548744412481,0.33210144175724404,1.1384135111472644],
+        [240,[[3,244]],"left_lower_arm","left_upper_arm","left_upper_arm",61.110077868319806,0.0020853201283870817,0.004929368483618364,0.002141750097154015,0.0028284254204300648,0.9838213463039226,0.6474128806504844],
+        [241,[[3,245],[4,245],[5,245]],"left_upper_arm","left_upper_arm","left_upper_arm",202.7661697687867,0.0010390754686122649,0.004149161746145427,0.00024461645096261124,0.005223190298216305,0.9837164477941557,0.6323414219355409],
+        [244,[[3,248]],"right_lower_arm","right_upper_arm","right_upper_arm",61.10928218632275,0.002067696419512359,0.004846959987120422,0.0021306280745384564,0.0027870723383850676,0.9834725789155031,0.654518019019971],
+        [245,[[3,249],[4,249],[5,249]],"right_lower_arm","right_upper_arm","right_upper_arm",201.08677148346723,0.0010274058136386936,0.004027659262014684,0.00023032064164046722,0.004993527024965844,0.9820818386527498,0.6422176727337676],
+        [246,[[3,250]],"left_lower_arm","left_upper_arm","left_upper_arm",26.521357422966886,0.0005638842940907393,0.0036407682612144866,0.00044668383422719255,0.004828580590940259,1,0.6208330329449481],
+        [247,[[3,251],[4,251],[5,251]],"left_lower_arm","left_upper_arm","left_upper_arm",80.57870816818513,0.0002692685523746969,0.0012560293103189163,4.3502978316586e-05,0.0008948561126197202,0.951756993885042,0.7993789688514696],
+        [249,[[3,253],[4,253],[5,253]],"left_lower_arm","left_lower_arm","left_lower_arm",228.19933517287234,0.011065003210693638,0.0012665464056489336,0.004330118389532962,0.0006115806092629434,0,1.616807501305945],
+        [256,[[3,260]],"right_lower_arm","right_upper_arm","right_upper_arm",26.52142605738081,0.0005690040043118109,0.003550666557654317,0.00045302633824438176,0.00471342525918562,1,0.6301496960424657],
+        [257,[[3,261],[4,261],[5,261]],"right_lower_arm","right_upper_arm","right_upper_arm",80.58225423504527,0.0002693533324701544,0.001206377166954014,4.2320076976771726e-05,0.000842916027574287,0.9490112887466663,0.8071551781666574],
+        [325,[[3,343],[4,343],[5,343]],"left_lower_arm","left_upper_arm","left_upper_arm",10.033371862117423,0.0011641512714306473,0.0027475666243557857,0.0009600655194884265,0.0030383534292566525,0.9986355353618562,0.738799972580321],
+        [341,[[3,368],[4,368],[5,368]],"right_lower_arm","right_upper_arm","right_upper_arm",10.012035913791395,0.0011527901298963553,0.0026707119262467257,0.0009508404288180077,0.002933785507291522,0.9970708561573183,0.7471067434192595]
+      ],
+      "pairs": [
+        [[88,90],328,[47.22262056259512,45.861499082468086],[0.8333254154976124,1.0]],
+        [[87,88],278,[50.53311295686383,53.678482143538574],[0.8683901077118961,0.9472503410998168]],
+        [[86,88],136,[29.044703681406027,30.379495505237955],[0.45634398962954675,0.5360991281911828]],
+        [[238,241],1157,[314.22249591997917,165.35609951046416],[0.3381745545659363,0.8155014206710071]],
+        [[238,249],972,[196.50746641813967,158.2924662741994],[0.21148652877405186,0.693658753012076]]
+      ],
+      "focusedVertexWeightSupport": [
+        {"side":"left","sourceIndex":3,"boneId":242,"jointId":238,"displayedVertexCount":3025,"totalWeight":1602.2078650034964,"upperArmParameter":1.1331518655850428,"weightProximalToElbow":0.3587671924271815,"weightDistalToElbow":0.6412328075728185},
+        {"side":"right","sourceIndex":1,"boneId":89,"jointId":88,"displayedVertexCount":396,"totalWeight":117.44313927646726,"upperArmParameter":1.1479715522195992,"weightProximalToElbow":0.2328035264277965,"weightDistalToElbow":0.7671964735722034}
+      ],
+      "focusedDrawSupport": [
+        {"jointId":88,"draws":[{"mesh":"Component1-2","displayedVertexCount":396,"supportMass":56.66768309760069,"proximalMass":21.707683605650065,"upperDistanceMass":6778.598393659713,"lowerDistanceMass":6961.7102579339435}]},
+        {"jointId":238,"draws":[{"mesh":"Component3-1","displayedVertexCount":2742,"supportMass":816.966054761202,"proximalMass":242.8357990207581,"upperDistanceMass":66277.7782131438,"lowerDistanceMass":29691.127780546423},{"mesh":"Component3-6","displayedVertexCount":283,"supportMass":112.2064441079082,"proximalMass":65.74372749485448,"upperDistanceMass":2885.0526717439952,"lowerDistanceMass":2831.0744226049974}]}
+      ],
+      "supportCases": [
+        ["left/forward_quarter",1.7155829048586058,0.30115695476207643,0,7,1.7155829048586058,0.30115695476207643,31722,0.013624063287484955],
+        ["left/forward_half",1.9211808960777543,0.22020334466693728,0,44,1.9211808960777543,0.22020334466693728,31722,0.019100637706598436],
+        ["left/forward_three_quarter",2.939263428421478,0.18611708975953783,1,48,2.939263428421477,0.1861170897595378,31722,0.027041381649045945],
+        ["left/forward_full",5.530272784272217,0.19999727365705744,8,38,5.530272784272215,0.16023014981397082,31722,0.03259359750326479],
+        ["left/backward_quarter",4.845447738775189,0.158448515011314,30,115,4.845447738775188,0.158448515011314,31722,0.03951129120664257],
+        ["left/backward_half",7.256964298883632,0.05354179125172417,127,240,7.25696429888363,0.05354179125172417,31722,0.05835925233046403],
+        ["left/backward_three_quarter",9.182636984240855,0.060186666842195195,257,306,9.182636984240853,0.06018666684219518,31722,0.07124342002961445],
+        ["left/backward_full",10.832894359135203,0.11063292049998993,414,347,10.8328943591352,0.11063292049998993,31722,0.08088531284891708],
+        ["right/forward_quarter",9.979554566158013,0.32182680006511694,5,10,9.979554566158011,0.32182680006511694,32370,0.014453976680196674],
+        ["right/forward_half",12.636387971235374,0.2497140411691921,5,47,12.636387971235372,0.2497140411691921,32370,0.01935796207094121],
+        ["right/forward_three_quarter",12.849670800359789,0.15347029300472304,7,51,12.849670800359787,0.15347029300472306,32370,0.0274244539613066],
+        ["right/forward_full",10.561805945927318,0.1160540731512939,16,37,10.561805945927318,0.1160540731512939,32370,0.033457149916019925],
+        ["right/backward_quarter",15.144585074233866,0.16688154532347899,40,110,15.144585074233865,0.166881545323479,32370,0.03921444859754056],
+        ["right/backward_half",21.24935762952523,0.04350699515240726,138,243,21.249357629525228,0.04350699515240726,32370,0.0578233819929678],
+        ["right/backward_three_quarter",25.299685363045114,0.01379524289815463,283,270,25.29968536304511,0.013795242898154628,32370,0.07067480164919487],
+        ["right/backward_full",28.267402278001168,0.11072505575477987,434,306,28.267402278001164,0.11072505575477987,32370,0.08031549000981157]
+      ],
+      "restoration": [
+        {"side":"left","movedVertices":0,"maxDisplacementHeight":0,"finite":true,"geometryRestUnchanged":true,"authoredInfluencesUnchanged":true},
+        {"side":"right","movedVertices":0,"maxDisplacementHeight":0,"finite":true,"geometryRestUnchanged":true,"authoredInfluencesUnchanged":true}
+      ]
+    }
+  },
+  "newRegressionTraces": [
+    {"model":"odette","pose":"left/forward_full","kind":"stretched","sampleIndex":6950,"mesh":"OdettebodyB-1","vertices":[135,136],"restPoints":[[-0.20372913777828217,1.02786123752594,-0.026995621621608734],[-0.2069413959980011,1.023131251335144,-0.027675388380885124]],"restLengthHeight":0.0036723971458834433,"ratio":3.499684012940109,"reconstructionErrorHeight":3.149845163134748e-08,"influences":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":26,"jointId":90,"driverId":"left_lower_arm","bindingMethod":"automatic_control_mapping","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":26,"sourceBoneKey":"odettebodyblend.buf|offset=0#bone=26"}],"restJointPivot":[-0.21638403283902533,1.0315459338351394,-0.025885731747978105],"endpointWeights":[0.33258765935897827,0.5613048672676086],"vector":[-0.02617347732781356,0.0035372407039920206,-0.004478691361915378],"contributionRestLength":4.652467765714649,"projectedContributionRestLength":3.5562475150720996,"withoutInfluenceRatio":3.00029321105968},{"sourceKey":"odettebodyblend.buf|offset=0","boneId":30,"jointId":95,"driverId":"left_upper_arm","bindingMethod":"diagnostic_override","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":30,"sourceBoneKey":"odettebodyblend.buf|offset=0#bone=30"}],"restJointPivot":[-0.17842319180411365,1.0819516924643584,-0.0010480905760564408],"endpointWeights":[0.5385442972183228,0.35417869687080383],"vector":[0.010282884874132783,-0.0077665187296855065,0.0013306554584184807],"contributionRestLength":2.249918305058288,"projectedContributionRestLength":-0.7890443309010151,"withoutInfluenceRatio":4.778360830930996},{"sourceKey":"odettebodyblend.buf|offset=0","boneId":59,"jointId":126,"driverId":"left_upper_arm","bindingMethod":"diagnostic_override","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":59,"sourceBoneKey":"odettebodyblend.buf|offset=0#bone=59"}],"restJointPivot":[-0.20780144348675056,1.0400212385932568,-0.025401785034425937],"endpointWeights":[0.12886804342269897,0.08451641350984573],"vector":[0.0024747886538987194,-0.0018695183330204868,0.0003202740238322417],"contributionRestLength":0.5415256902379858,"projectedContributionRestLength":-0.18986833705524042,"withoutInfluenceRatio":3.724244437617892}],"singleDriverBlend":null,"authoredVertices":[13633,13634]},
+    {"model":"odette","pose":"left/forward_full","kind":"compressed","sampleIndex":6846,"mesh":"OdettebodyB-1","vertices":[86,88],"restPoints":[[-0.19283877313137054,1.0197099447250366,-0.0006953834090381861],[-0.1948891282081604,1.0200390815734863,-0.013049609959125519]],"restLengthHeight":0.007990076948579243,"ratio":0.345799363753186,"reconstructionErrorHeight":3.9327386866754206e-08,"influences":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":26,"jointId":90,"driverId":"left_lower_arm","bindingMethod":"automatic_control_mapping","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":26,"sourceBoneKey":"odettebodyblend.buf|offset=0#bone=26"}],"restJointPivot":[-0.21638403283902533,1.0315459338351394,-0.025885731747978105],"endpointWeights":[0.6293484568595886,0.5410434603691101],"vector":[0.004246881865784612,-0.005306140416070572,0.01016037015414423],"contributionRestLength":0.9757640852705293,"projectedContributionRestLength":-0.7024039153618985,"withoutInfluenceRatio":1.2479881426262522},{"sourceKey":"odettebodyblend.buf|offset=0","boneId":30,"jointId":95,"driverId":"left_upper_arm","bindingMethod":"diagnostic_override","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"odettebodyblend.buf|offset=0","boneId":30,"sourceBoneKey":"odettebodyblend.buf|offset=0#bone=30"}],"restJointPivot":[-0.17842319180411365,1.0819516924643584,-0.0010480905760564408],"endpointWeights":[0.3706515431404114,0.4589565098285675],"vector":[-0.005311754044002876,0.004134135594429567,-0.0006959730758412212],"contributionRestLength":0.5401575973009776,"projectedContributionRestLength":0.2777589656284737,"withoutInfluenceRatio":0.4682410519293826}],"singleDriverBlend":null,"authoredVertices":[13584,13586]},
+    {"model":"chisa","pose":"right/backward_half","kind":"compressed","sampleIndex":27209,"mesh":"Component3-6","vertices":[8904,8906],"restPoints":[[-22.124427795410156,0.2966371178627014,108.25408935546875],[-22.4528751373291,0.5326430797576904,107.77265930175781]],"restLengthHeight":0.00423540152132263,"ratio":0.04350699515240726,"reconstructionErrorHeight":6.718919516787885e-09,"influences":[{"sourceKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":246,"jointId":242,"driverId":"right_lower_arm","bindingMethod":"automatic_control_mapping","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":246,"sourceBoneKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=246"},{"sourceKey":"meshes/blend.buf|offset=270|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":246,"sourceBoneKey":"meshes/blend.buf|offset=270|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=246"},{"sourceKey":"meshes/blend.buf|offset=391|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":246,"sourceBoneKey":"meshes/blend.buf|offset=391|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=246"}],"restJointPivot":[-21.550100201117285,-0.04228310457738159,107.57058708370639],"endpointWeights":[0.6627451181411743,0.7411764860153198],"vector":[0.2128805426715319,-1.1201441247375872,0.4684209676237212],"contributionRestLength":1.9604370313282584,"projectedContributionRestLength":-0.18520229143617153,"withoutInfluenceRatio":1.9650245298269948},{"sourceKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":249,"jointId":245,"driverId":"right_upper_arm","bindingMethod":"diagnostic_override","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":249,"sourceBoneKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=249"},{"sourceKey":"meshes/blend.buf|offset=270|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":249,"sourceBoneKey":"meshes/blend.buf|offset=270|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=249"},{"sourceKey":"meshes/blend.buf|offset=391|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":249,"sourceBoneKey":"meshes/blend.buf|offset=391|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=249"}],"restJointPivot":[-17.4676520318791,-3.801130393027621,112.42843597654718],"endpointWeights":[0.13725490868091583,0.08627451211214066],"vector":[0.0758002784344177,0.6057657835039862,-0.00993307864384092],"contributionRestLength":0.9710560754682467,"projectedContributionRestLength":-0.31187256160352894,"withoutInfluenceRatio":0.9858904788984891},{"sourceKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":368,"jointId":341,"driverId":"right_upper_arm","bindingMethod":"diagnostic_override","inheritedFromJointId":null,"jointMembers":[{"sourceKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":368,"sourceBoneKey":"meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=368"},{"sourceKey":"meshes/blend.buf|offset=270|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":368,"sourceBoneKey":"meshes/blend.buf|offset=270|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=368"},{"sourceKey":"meshes/blend.buf|offset=391|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf","boneId":368,"sourceBoneKey":"meshes/blend.buf|offset=391|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf#bone=368"}],"restJointPivot":[-19.861704817927677,-0.9932026077830436,110.03984603572461],"endpointWeights":[0.20000000298023224,0.1725490242242813],"vector":[0.035187945814003085,0.269671495067354,-0.002585406604584138],"contributionRestLength":0.43254282786136966,"projectedContributionRestLength":-0.1419475927855424,"withoutInfluenceRatio":0.4487065667270036}],"singleDriverBlend":null,"authoredVertices":[81656,81658]}
+  ],
+  "reusedRegressionTrace": "../iteration-7/regression-traces.json#/records/5",
+  "conclusion": "No small reliable automatic ownership method demonstrated; stop binding experimentation and preserve geometry fitting and skeleton-only IK without production promotion."
+}
