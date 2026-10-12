@@ -13,7 +13,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def components(triangles, count, positions=None, edge_seams=False, vectors=None):
+def components(
+    triangles, count, positions=None, edge_seams=False, vectors=None, seam_links=None
+):
     """Indexed connectivity, optionally joined at exactly coincident positions."""
     parents = list(range(count))
 
@@ -52,6 +54,8 @@ def components(triangles, count, positions=None, edge_seams=False, vectors=None)
                 if key in first_edge:
                     for (_, vertex), previous in zip(ends, first_edge[key]):
                         join(vertex, previous)
+                        if seam_links is not None:
+                            seam_links.append((vertex, previous))
                 else:
                     first_edge[key] = [v for _, v in ends]
     elif positions is not None:
@@ -223,7 +227,8 @@ def inspect_mesh(positions, triangles, indices, weights, probes, uv=None):
     }
 
 
-def load_inspection(path, mesh_key, probes):
+def read_surface(path, mesh_key):
+    """Read one resolved draw for detached inspection or the offline probe."""
     sys.path.insert(0, str(ROOT / "src"))
     from app.mods.analysis import build_mod_ini_snapshot
     from app.mods.loader import ModLoadContext, load_mod
@@ -271,17 +276,12 @@ def load_inspection(path, mesh_key, probes):
     positions = array("pos", "<f4", 3)
     triangles = array("idx", "<u4", 3)
     shape = (decoded.vertex_count, decoded.influence_count)
-    result = inspect_mesh(
-        positions,
-        triangles,
-        np.frombuffer(decoded.indices, "<u4").reshape(shape),
-        np.frombuffer(decoded.weights, "<f4").reshape(shape),
-        probes,
-        array("uv", "<f4", 2) if "uv" in entry else None,
-    )
     return {
-        "scope": "One resolved rest draw; no visibility or pose inference.",
-        "mesh": mesh_key,
+        "positions": positions,
+        "triangles": triangles,
+        "indices": np.frombuffer(decoded.indices, "<u4").reshape(shape),
+        "weights": np.frombuffer(decoded.weights, "<f4").reshape(shape),
+        "uv": array("uv", "<f4", 2) if "uv" in entry else None,
         "geometry_sha256": hashlib.sha256(
             positions.tobytes() + triangles.tobytes()
         ).hexdigest(),
@@ -289,8 +289,29 @@ def load_inspection(path, mesh_key, probes):
             decoded.indices + decoded.weights
         ).hexdigest(),
         "source": skinning_source_descriptor(skin_source),
+        "used_vertices": manifest.used_vertices,
+    }
+
+
+def load_inspection(path, mesh_key, probes):
+    surface = read_surface(path, mesh_key)
+    result = inspect_mesh(
+        surface["positions"],
+        surface["triangles"],
+        surface["indices"],
+        surface["weights"],
+        probes,
+        surface["uv"],
+    )
+    return {
+        "scope": "One resolved rest draw; no visibility or pose inference.",
+        "mesh": mesh_key,
+        **{
+            key: surface[key]
+            for key in ("geometry_sha256", "skinning_sha256", "source")
+        },
         "authored_vertices": [
-            [manifest.used_vertices[v] for v in pair] for pair in probes
+            [surface["used_vertices"][v] for v in pair] for pair in probes
         ],
         **result,
     }

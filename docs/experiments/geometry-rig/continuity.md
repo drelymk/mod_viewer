@@ -41,6 +41,13 @@ identical source-scoped authored vectors at both corresponding endpoints. These
 are diagnostic comparisons, not automatic attachment decisions. No distance
 tolerance is used, and geometry is never welded or rewritten.
 
+Duplicate-position pair counts are representative comparisons: each additional
+vertex is compared with the group's first vertex, yielding `n - 1` comparisons
+for an `n`-vertex group, rather than all `n * (n - 1) / 2` unordered pairs. UV
+differences, authored differences and the minimum overlap use those same
+representative comparisons. Matching every representative does establish that
+all group members share the same authored vector.
+
 | Case | Indexed islands | Position-only islands | Exact-edge islands | Authored-compatible edge islands |
 | --- | ---: | ---: | ---: | ---: |
 | Remielle hand | 24 | 2 | 2 | 2 |
@@ -127,5 +134,7 @@ backward and exact return to rest. Check the existing failure edges, shoulder an
 elbow compression/stretch, wrist following and hair/torso/clothing movement.
 Use inspected labels first to determine whether the graph can satisfy those
 constraints at all. Automatic label discovery is a separate unresolved problem.
-No graph-based deformation method has been implemented or accepted in this study;
-PR #180 remains open, with no full-body expansion or production replacement.
+The subsequent [bounded harmonic experiment](harmonic.md) tests this proposal
+with inspected vertex constraints and rejects it for the three-game gate. Its
+offline probe is not a production binding. PR #180 remains open, with no
+full-body expansion or production replacement.

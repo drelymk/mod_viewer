@@ -155,6 +155,9 @@ evidence and authored co-deformation relationships. It includes a reproducible
 read-only inspector and compact case artifact. Connectivity supports testing
 constrained propagation, but does not establish automatic attachment regions;
 the fitter, IK and current deformation implementation remain unchanged.
+The [bounded harmonic experiment](harmonic.md) subsequently tests a few manually
+inspected constraints. It fixes the hand case but fails wrist, elbow and
+whole-draw isolation checks; it is not retained in the viewer runtime.
 
 The completed investigation covered displayed Remielle (ZZZ), Odette (Genshin)
 and Chisa (WuWa) variants. Approximate front-view silhouette residuals below are
