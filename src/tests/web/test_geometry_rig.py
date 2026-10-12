@@ -3,6 +3,77 @@
 import pytest
 
 
+def test_direct_authored_arm_binding_source_scope_and_restore(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE=await import('three');
+      const {buildDirectAuthoredArmSkinning}=await import('./js/weight-rig/geometry-arm-skinning.js');
+      const rig={available:true,frame:{forward:[0,0,1],right:[1,0,0]},controls:{
+        leftShoulder:{position:[0,0,0]},leftElbow:{position:[1,0,0]},leftHand:{position:[2,0,0]}}};
+      const meshes=[],authoredByMesh=new Map();
+      for(const sourceKey of ['primary.buf|offset=0','secondary.buf|offset=0']) {
+        const geometry=new THREE.BufferGeometry();
+        geometry.setAttribute('position',new THREE.Float32BufferAttribute([1.5,0,0, 1.5,.1,0, 1.6,0,0],3));
+        geometry.setAttribute('normal',new THREE.Float32BufferAttribute([1,0,0, 1,0,0, 1,0,0],3));
+        geometry.setIndex([0,1,2]);
+        const mesh=new THREE.Mesh(geometry);meshes.push(mesh);
+        mesh.userData.humanoidRestPositions=new Float32Array(geometry.attributes.position.array);
+        const ids=new Uint32Array([7,9, 7,9, 9,9]),weights=new Float32Array([.25,.5, .5,.5, .5,.5]);
+        const buffer=new ArrayBuffer(ids.byteLength+weights.byteLength);
+        new Uint32Array(buffer,0,ids.length).set(ids);new Float32Array(buffer,ids.byteLength,weights.length).set(weights);
+        authoredByMesh.set(mesh,{buffer,vertex_count:3,influence_count:2,
+          source:{key:sourceKey,file:sourceKey.split('|')[0],bone_id_offset:0},
+          data:{indices:{type:'u32',offset:0,length:ids.byteLength},
+            weights:{type:'f32',offset:ids.byteLength,length:weights.byteLength}}});
+      }
+      const transform=new THREE.Matrix4().compose(new THREE.Vector3(.1,.2,0),
+        new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),.2),new THREE.Vector3(2,.5,1));
+      meshes[0].geometry.applyMatrix4(transform.clone().invert());
+      meshes[0].matrixAutoUpdate=false;meshes[0].matrix.copy(transform);
+      meshes[0].userData.humanoidRestMatrix=transform;
+      meshes[0].userData.humanoidRestPositions=new Float32Array(meshes[0].geometry.attributes.position.array);
+      meshes[0].userData.humanoidRestNormals=new Float32Array(meshes[0].geometry.attributes.normal.array);
+      meshes[0].userData.baseNormals=new Float32Array(meshes[0].geometry.attributes.normal.array.length).fill(-1);
+      const rest=meshes.map(m=>new Float32Array(m.geometry.attributes.position.array));
+      const normals=meshes.map(m=>new Float32Array(m.geometry.attributes.normal.array));
+      const streams=[...authoredByMesh.values()].map(e=>[...new Uint8Array(e.buffer)]);
+      const assignments=[{sourceKey:'primary.buf|offset=0',boneId:7,driverId:'left_lower_arm'}];
+      const binding=await buildDirectAuthoredArmSkinning({rig,meshes,authoredByMesh,assignments});
+      assignments[0].driverId='left_upper_arm';
+      binding.apply({leftHand:[1,1,0]});
+      const actual=new THREE.Vector3().fromArray(meshes[0].geometry.attributes.position.array).applyMatrix4(transform);
+      const unchanged=meshes[1].geometry.attributes.position.array.every((v,i)=>v===rest[1][i]);
+      const unresolvedVertex=meshes[0].geometry.attributes.position.array.slice(6).every((v,i)=>v===rest[0][i+6]);
+      const weighted=actual.distanceTo(new THREE.Vector3(1.375,.125,0))<1e-6;
+      const modelNormal=new THREE.Vector3().fromArray(meshes[0].geometry.attributes.normal.array)
+        .applyMatrix3(new THREE.Matrix3().getNormalMatrix(transform)).normalize();
+      const weightedNormal=modelNormal.distanceTo(new THREE.Vector3(3,1,0).normalize())<1e-6;
+      const exact=()=>meshes.every((m,j)=>m.geometry.attributes.position.array.every((v,i)=>v===rest[j][i]) &&
+        m.geometry.attributes.normal.array.every((v,i)=>v===normals[j][i]));
+      binding.apply({leftHand:[2,0,0]});const exactReturn=exact();
+      binding.apply({leftHand:[1,1,0]});binding.reset();const exactReset=exact();
+      binding.apply({leftHand:[1,1,0]});binding.dispose();const exactDispose=exact();
+      const unchangedStreams=[...authoredByMesh.values()].every((e,j)=>
+        new Uint8Array(e.buffer).every((v,i)=>v===streams[j][i]));
+      const released=meshes.every(m=>m.userData.animationSuspended===undefined && m.frustumCulled);
+      const cancelled=await buildDirectAuthoredArmSkinning({rig,meshes,authoredByMesh,assignments,isCurrent:()=>false});
+      let duplicate=false;
+      try {await buildDirectAuthoredArmSkinning({rig,meshes,authoredByMesh,assignments:[assignments[0],assignments[0]]});}
+      catch {duplicate=true;}
+      return {weighted,weightedNormal,unchanged,unresolvedVertex,unchangedStreams,exactReturn,exactReset,exactDispose,released,
+        cancelled:cancelled===null,duplicate,confirmed:binding.diagnostics.confirmedInfluenceCount,
+        unresolved:binding.diagnostics.unresolvedInfluences,unused:binding.diagnostics.unusedAssignments};
+    }""")
+    assert all(result[key] for key in (
+        'weighted', 'weightedNormal', 'unchanged', 'unresolvedVertex', 'unchangedStreams',
+        'exactReturn', 'exactReset', 'exactDispose', 'released', 'cancelled', 'duplicate'))
+    assert result['confirmed'] == 1 and result['unused'] == []
+    assert result['unresolved'] == [
+        {'sourceKey': 'primary.buf|offset=0', 'boneId': 9},
+        {'sourceKey': 'secondary.buf|offset=0', 'boneId': 7},
+        {'sourceKey': 'secondary.buf|offset=0', 'boneId': 9},
+    ]
+
+
 def prepare_surface(page):
     page.evaluate("""async () => {
       const THREE = await import('three');

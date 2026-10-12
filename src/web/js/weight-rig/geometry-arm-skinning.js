@@ -119,7 +119,15 @@ export async function buildGeometryArmSkinning({
         }
       }
     }
-    members.push({ mesh, rest: new Float32Array(rest), toModel, skin, sourceKey, geometryWeights, displayedVertices });
+    members.push({
+      mesh,
+      rest: new Float32Array(rest),
+      toModel,
+      skin,
+      sourceKey,
+      geometryWeights,
+      displayedVertices,
+    });
   }
   for (const source of distributions.values()) {
     for (const distribution of source.values()) {
@@ -128,7 +136,7 @@ export async function buildGeometryArmSkinning({
   }
   let activeVertexCount = 0;
   for (const member of members) {
-    const { mesh, skin, sourceKey, geometryWeights, displayedVertices } = member;
+    const { skin, sourceKey, geometryWeights, displayedVertices } = member;
     const vertexCount = member.rest.length / 3;
     const weights = new Float32Array(vertexCount * 3);
     const indices = new Uint32Array(vertexCount * 3);
@@ -157,11 +165,144 @@ export async function buildGeometryArmSkinning({
     member.indices = indices;
     member.active = Uint32Array.from(active);
     activeVertexCount += active.length;
+  }
+  if (!isCurrent()) return null;
+  return createArmSkinningRuntime(rig, members, drivers, invalidate, {
+    bindingMs: performance.now() - started,
+    activeVertexCount,
+    sourceCount: distributions.size,
+    ...budget.getStats(),
+  });
+}
+
+/** Temporary explicit source assignments, retaining the original skin streams. */
+export async function buildDirectAuthoredArmSkinning({
+  rig,
+  meshes,
+  authoredByMesh = new Map(),
+  assignments = [],
+  isCurrent = () => true,
+  invalidate = () => {},
+} = {}) {
+  const started = performance.now();
+  const budget = createWorkBudget();
+  const drivers = buildHumanoidDriverFrames(rig);
+  if (!rig?.available || MOVING_DRIVERS.some((id) => !drivers.has(id))) throw new Error('No usable rest arm.');
+  const sources = new Map();
+  for (const { sourceKey, boneId, driverId } of assignments) {
+    if (
+      typeof sourceKey !== 'string' ||
+      !sourceKey ||
+      !Number.isInteger(boneId) ||
+      boneId < 0 ||
+      !MOVING_DRIVERS.includes(driverId)
+    ) {
+      throw new Error('Invalid experimental arm assignment.');
+    }
+    if (!sources.has(sourceKey)) sources.set(sourceKey, new Map());
+    const source = sources.get(sourceKey);
+    if (source.has(boneId)) throw new Error('Duplicate experimental arm assignment.');
+    source.set(boneId, driverId);
+  }
+  const displayed = meshes.filter(isHumanoidMeshDisplayed);
+  displayed[0]?.updateWorldMatrix(true, false);
+  const inverseModel = displayed[0]?.matrixWorld.clone().invert() || new THREE.Matrix4();
+  const members = [];
+  const unresolved = new Map();
+  const used = new Map();
+  let activeVertexCount = 0;
+  for (const mesh of displayed) {
+    const entry = authoredByMesh.get(mesh);
+    if (!entry) continue;
+    const sourceKey = skinningSourceDescriptorForEntry(entry)?.sourceKey;
+    if (!sourceKey) throw new Error('Authored source identity is unavailable.');
+    const skin = readSkinningEntryArrays(mesh, entry, entry.buffer);
+    const rest = mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions;
+    if (!rest || rest.length !== mesh.geometry.attributes.position.array.length) {
+      throw new Error('Immutable rest geometry is unavailable.');
+    }
+    mesh.updateWorldMatrix(true, false);
+    const toModel = mesh.userData.humanoidRestMatrix?.clone() || inverseModel.clone().multiply(mesh.matrixWorld);
+    const driverIdsByBone = new Map(sources.get(sourceKey));
+    const displayedVertices = new Set();
+    const triangles = mesh.geometry.index?.array;
+    const count = triangles?.length ?? rest.length / 3;
+    const end = Math.min(count, mesh.geometry.drawRange.start + mesh.geometry.drawRange.count);
+    for (let i = mesh.geometry.drawRange.start; i + 2 < end; i += 3) {
+      for (let corner = 0; corner < 3; corner += 1)
+        displayedVertices.add(triangles ? triangles[i + corner] : i + corner);
+      if (i % 768 === 0) {
+        await budget.checkpoint();
+        if (!isCurrent()) return null;
+      }
+    }
+    if (!unresolved.has(sourceKey)) unresolved.set(sourceKey, new Set());
+    if (!used.has(sourceKey)) used.set(sourceKey, new Set());
+    const active = [];
+    for (const vertex of displayedVertices) {
+      let moving = false;
+      for (let slot = 0; slot < skin.influenceCount; slot += 1) {
+        const offset = vertex * skin.influenceCount + slot;
+        if (!(skin.weights[offset] > 0)) continue;
+        const boneId = skin.indices[offset];
+        if (driverIdsByBone.has(boneId)) {
+          used.get(sourceKey).add(boneId);
+          moving = true;
+        } else unresolved.get(sourceKey).add(boneId);
+      }
+      if (moving) active.push(vertex);
+      if (vertex % 256 === 0) {
+        await budget.checkpoint();
+        if (!isCurrent()) return null;
+      }
+    }
+    members.push({
+      mesh,
+      rest: new Float32Array(rest),
+      toModel,
+      skin,
+      sourceKey,
+      displayedVertices,
+      driverIdsByBone,
+      restNormals: mesh.userData.humanoidRestNormals,
+      indices: skin.indices,
+      weights: skin.weights,
+      influenceCount: skin.influenceCount,
+      active: Uint32Array.from(active),
+    });
+    activeVertexCount += active.length;
+  }
+  if (!isCurrent()) return null;
+  return createArmSkinningRuntime(rig, members, drivers, invalidate, {
+    bindingMs: performance.now() - started,
+    activeVertexCount,
+    sourceCount: unresolved.size,
+    unskinnedMeshCount: displayed.length - members.length,
+    confirmedInfluenceCount: [...used.values()].reduce((sum, ids) => sum + ids.size, 0),
+    unresolvedInfluences: [...unresolved].flatMap(([sourceKey, ids]) =>
+      [...ids].sort((a, b) => a - b).map((boneId) => ({ sourceKey, boneId })),
+    ),
+    unusedAssignments: assignments
+      .filter(({ sourceKey, boneId }) => !used.get(sourceKey)?.has(boneId))
+      .map((assignment) => ({ ...assignment })),
+    ...budget.getStats(),
+  });
+}
+
+function createArmSkinningRuntime(rig, members, drivers, invalidate, diagnostics) {
+  const preparedAt = performance.now();
+  const point = new THREE.Vector3();
+  for (const member of members) {
+    const { mesh } = member;
     const normal = mesh.geometry.attributes.normal;
     member.normals =
       normal &&
       new Float32Array(
-        mesh.userData.baseNormals?.length === normal.array.length ? mesh.userData.baseNormals : normal.array,
+        member.restNormals?.length === normal.array.length
+          ? member.restNormals
+          : mesh.userData.baseNormals?.length === normal.array.length
+            ? mesh.userData.baseNormals
+            : normal.array,
       );
     if (member.normals) {
       member.modelNormals = new Float32Array(member.normals.length);
@@ -176,19 +317,16 @@ export async function buildGeometryArmSkinning({
           .toArray(member.modelNormals, vertex * 3);
       }
     }
-    member.bounds = { box: mesh.geometry.boundingBox?.clone(), sphere: mesh.geometry.boundingSphere?.clone() };
+    member.bounds = {
+      box: mesh.geometry.boundingBox?.clone(),
+      sphere: mesh.geometry.boundingSphere?.clone(),
+    };
     member.frustumCulled = mesh.frustumCulled;
     member.animationSuspended = mesh.userData.animationSuspended;
   }
-  if (!isCurrent()) return null;
+  diagnostics.bindingMs += performance.now() - preparedAt;
   let owning = false;
   let boundsTimer = null;
-  const diagnostics = {
-    bindingMs: performance.now() - started,
-    activeVertexCount,
-    sourceCount: distributions.size,
-    ...budget.getStats(),
-  };
   const restore = (member) => {
     const { mesh } = member;
     mesh.geometry.attributes.position.array.set(member.rest);
@@ -237,20 +375,26 @@ export async function buildGeometryArmSkinning({
         if (!owning) restore(member);
         mesh.userData.animationSuspended = true;
         mesh.frustumCulled = false;
-        const transforms = new Map([[0, new THREE.Matrix4()]]);
-        const rotations = new Map([[0, new THREE.Quaternion()]]);
+        const transforms = new Map(member.driverIdsByBone ? [] : [[0, new THREE.Matrix4()]]);
+        const rotations = new Map(member.driverIdsByBone ? [] : [[0, new THREE.Quaternion()]]);
         MOVING_DRIVERS.forEach((id, index) => {
           const delta = posed.get(id).matrix.clone().multiply(drivers.get(id).matrix.clone().invert());
           const local = toModel.clone().invert().multiply(delta).multiply(toModel);
-          transforms.set(index + 1, local);
-          rotations.set(index + 1, new THREE.Quaternion().setFromRotationMatrix(delta).normalize());
+          const rotation = new THREE.Quaternion().setFromRotationMatrix(delta).normalize();
+          const ids = member.driverIdsByBone
+            ? [...member.driverIdsByBone].filter(([, driverId]) => driverId === id).map(([boneId]) => boneId)
+            : [index + 1];
+          ids.forEach((boneId) => {
+            transforms.set(boneId, local);
+            rotations.set(boneId, rotation);
+          });
         });
         applyWeightedTransformDeformationInto(
           mesh.geometry.attributes.position.array,
           member.rest,
           member.indices,
           member.weights,
-          3,
+          member.influenceCount || 3,
           transforms,
           member.active,
         );
@@ -261,7 +405,7 @@ export async function buildGeometryArmSkinning({
             member.modelNormals,
             member.indices,
             member.weights,
-            3,
+            member.influenceCount || 3,
             rotations,
             member.active,
           );

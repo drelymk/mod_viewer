@@ -219,6 +219,81 @@ design decision. These results do not prove automatic mapping impossible. The
 and detailed captures remain available in Git history; the active branch removes
 the accumulated captures, standalone evaluators and deformation-only test.
 
+## Direct authored-weight proof: Remielle left arm
+
+`buildDirectAuthoredArmSkinning` is an explicit, temporary module entry point;
+the viewer does not activate it through the production Rig or a mapping UI.
+It reads the retained skinning entries, keeps their original indices/weights,
+and shares the existing cached pose/reset runtime. Each confirmed influence
+receives `posedDriver * inverse(restDriver)` in mesh space. No source forest,
+ModelJoint reconciliation, generated weights or persisted assignments are used.
+The fitter, IK and soft-transfer binding rules are unchanged.
+
+The following two lists were checked against the original weighted surfaces
+and their rest coordinates. They are experimental anatomical assignments, not
+recovered author-provided bone labels or a generic mapping rule. Both use the
+exact source key `remiellemoonlightwhispersbodyblend.buf|offset=0`:
+
+| Driver | Confirmed influence IDs | Inspected support |
+| --- | --- | --- |
+| Upper arm | 69, 70, 71, 127, 170, 171 | Upper-arm strips, shoulder cap and proximal elbow sleeve |
+| Forearm | 81, 82, 83, 128, 165–169, 188–198 | Forearm strips, wrist, hand and fingers |
+
+There are 26 source-influence confirmations, grouped into two driver lists;
+this does not establish a two-action mapping workflow. The 16 displayed skinned
+members retain 110 unresolved references: body-source IDs 0–3, 42–68, 72–77,
+103–114, 129, 135, 153, 155–156, 172–173 and 199–214, and
+`remiellemoonlightwhisperslegblend.buf|offset=0` IDs 0–12, 18–34 and 37–44.
+They contribute unchanged rest geometry, without acquiring permanent stationary
+roles. Runtime diagnostics expose the exact references and unused assignments;
+none of these 26 assignments was unused.
+
+Triangle-area-integrated original weight coverage is 89.93% within a 4%-height
+tube around the fitted upper-arm/forearm segments, 41.01% within the 8%-height
+shoulder sphere, and 100% within the 8%-height elbow and 4%-height wrist spheres.
+These fixed diagnostic regions include nearby torso geometry; they are not
+automatic anatomical masks or assignment thresholds. Shoulder coverage is
+partial and cannot establish complete shoulder ownership.
+
+The comparison uses the current production ModelRig ownership builder with the
+same geometry-derived rest controls and posed controls, then the same original
+weights and cached deformation kernels. ModelRig is constructed only for that
+comparator. Its source-aliased driver deltas match the direct driver deltas within
+`4.5e-16`; rest bone pivots cancel from this rigid-driver operation.
+
+Recorded experimental sleeve/cuff edge extrema, including compression:
+
+| Pose | Current binding min/max | Confirmed binding min/max |
+| --- | ---: | ---: |
+| 15° | 0.830 / 1.314 | 0.898 / 1.424 |
+| 45° | 0.502 / 2.229 | 0.728 / 2.569 |
+| 90° | 0.449 / 3.481 | 0.641 / 4.029 |
+| Forward IK | 0.923 / 1.053 | 0.900 / 1.047 |
+| Backward IK | 0.923 / 1.053 | 0.900 / 1.047 |
+
+Forward/backward targets are 18% of model height from the rest hand along the
+semantic forward axis. The hand follows the forearm delta within `9e-8` of model
+height in every pose; opposite-side displacement is zero. Both candidates
+restore positions and canonical rest normals exactly after all five poses.
+Front and oblique rendering shows a coherent hand but an angular/pinched elbow
+transition, rather than a demonstrated natural arm/clothing result. At 90°,
+elbow-region 1st–99th percentile edge ratios are 0.709–2.856 for the confirmed
+mapping versus 0.656–2.935 for the current binding. Less compression does not
+compensate for the sleeve's larger maximum stretch.
+
+The worst confirmed sleeve edge is vertices 54–49 of `bodyA-17`. Original
+forearm influence 83 changes from weight 0.06825 to 0.46985 across that edge,
+while upper-arm influence 171 changes from 0.83318 to 0.47911. This is a fully
+mapped upper/forearm boundary, not an unresolved-weight fallback or source-ID
+collision. Its rest length is 0.696% of height; its 90° increase is 2.108%.
+The inspected region labels do not prove the original motion of these IDs.
+Fitted pivot placement and intermediate/twist/corrective influence behavior
+remain possible causes; the inspected mod has no pose track that distinguishes
+them. This proof therefore rejects the tested correspondence at the current
+fitted controls, not all possible authored-weight bindings. No extra degrees
+of freedom or mapping heuristic are added. Remielle does not pass, so the
+conditional Odette/Chisa expansion stops here and PR #180 remains unmerged.
+
 ## Focused verification
 
 `src/tests/web/test_geometry_rig.py` covers orientation, topology, visible rest
@@ -229,5 +304,9 @@ shape invalidation without Weight/ModelRig activation. The
 overlay contract in `src/tests/web/test_modules.py` verifies that preview works
 without a ModelRig and restores the current overlay. Existing Weight rendering
 tests exercise the explicit load action and production pose/reset behavior.
+The direct-authored scenario additionally checks exact source identity with
+colliding numeric IDs, mixed original weights without renormalization, unchanged
+unresolved vertices, canonical normals, transformed members, exact return/reset/
+disposal, assignment isolation and cancellation. It constructs no ModelRig.
 Browser/WebGPU tests remain local or dedicated-environment checks; normal CI
 continues to run the quality audit and unit/core/app/integration tests.
