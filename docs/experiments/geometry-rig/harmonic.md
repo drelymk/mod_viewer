@@ -50,6 +50,11 @@ validated by their remaining still.
 
 ## Results
 
+These are recorded experimental measurements. The offline probe reproduces the
+harmonic weights and solver diagnostics only; it does not replay the complete
+pose, deformation and measurement comparison. The complete comparison harness
+is not included in this repository.
+
 The 90° whole-draw edge extrema and maximum wrist lag show the tradeoff. Wrist
 lag is distance from the posed forearm transform, as a percentage of model height.
 
@@ -114,5 +119,7 @@ inspector's `read_surface(mod_folder, mesh_key)`. Match both evidence hashes.
 Load `harmonic_probe.py` with `runpy.run_path`, translate a recorded label set
 into `{vertex: driver_index}`, and call `propagate` with the returned positions,
 triangles, indices and weights. It returns generated weights plus diagnostics.
-The evidence supplies rest/posed controls for replay through the existing
-`buildHumanoidDriverFrames` and cached position/normal deformation kernels.
+The evidence supplies rest/posed controls and recorded measurements, but using
+them with `buildHumanoidDriverFrames` and the cached position/normal deformation
+kernels requires a separate replay harness. Running this probe alone does not
+independently reproduce the deformation metrics above.
