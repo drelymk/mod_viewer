@@ -1,5 +1,6 @@
 -r ../src/requirements.txt
 pytest>=8.0
+numpy>=2.0
 playwright>=1.40
 ruff==0.16.9
 codespell==2.4.3

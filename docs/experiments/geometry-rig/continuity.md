@@ -16,7 +16,8 @@ compares the original weight magnitudes, including their totals.
 
 The small [case artifact](continuity-cases.json) records the three failure cases,
 source identities, original vertex mappings and hashes of packed geometry and
-decoded skin streams. Supply the corresponding mod folders to reproduce:
+decoded skin streams. Install `tools/requirements-dev.txt` for the inspector's
+dependencies, then supply the corresponding mod folders to reproduce:
 
 ```text
 python tools/inspect_surface_continuity.py REMIELLE_FOLDER --mesh RemielleMoonlightWhispersbodyA-1 --edge 765 808 --edge 808 348
