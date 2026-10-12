@@ -149,6 +149,13 @@ wrist following and unrelated-geometry checks together.
 
 ## Fitting results and limitations
 
+The subsequent [surface continuity investigation](continuity.md) examines the
+same hand, sleeve and elbow failure edges using indexed connectivity, exact seam
+evidence and authored co-deformation relationships. It includes a reproducible
+read-only inspector and compact case artifact. Connectivity supports testing
+constrained propagation, but does not establish automatic attachment regions;
+the fitter, IK and current deformation implementation remain unchanged.
+
 The completed investigation covered displayed Remielle (ZZZ), Odette (Genshin)
 and Chisa (WuWa) variants. Approximate front-view silhouette residuals below are
 percentages of character height, shown as proportional to geometry-fitted:

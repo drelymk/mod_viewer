@@ -1,0 +1,381 @@
+{
+  "format_version": 1,
+  "cases": {
+    "Remielle": {
+      "scope": "One resolved rest draw; no visibility or pose inference.",
+      "mesh": "RemielleMoonlightWhispersbodyA-1",
+      "geometry_sha256": "7f65547e96104722e9726f72288fa5be932a818626e8088d3b0bbb86ccc9f803",
+      "skinning_sha256": "663e2b7adb719a3c9d45dea76fde38b9944273017ef747ff10372208521107a5",
+      "source": {
+        "key": "remiellemoonlightwhispersbodyblend.buf|offset=0",
+        "file": "RemielleMoonlightWhispersbodyBlend.buf",
+        "bone_id_offset": 0,
+        "bone_ids_model_wide": false
+      },
+      "authored_vertices": [
+        [
+          765,
+          808
+        ],
+        [
+          808,
+          348
+        ]
+      ],
+      "vertices": 2072,
+      "triangles": 3124,
+      "indexed_islands": 24,
+      "exact_position_islands": 2,
+      "exact_edge_islands": 2,
+      "authored_compatible_edge_islands": 2,
+      "duplicate_position_triangles": 0,
+      "duplicate_position_groups": 401,
+      "duplicate_position_pairs": 430,
+      "different_uv_pairs": 430,
+      "different_authored_pairs": 0,
+      "minimum_duplicate_authored_overlap": 1.0,
+      "probes": [
+        {
+          "vertices": [
+            765,
+            808
+          ],
+          "indexed_edge": true,
+          "same_indexed_island": true,
+          "same_compatible_edge_island": true,
+          "islands": [
+            14,
+            14
+          ],
+          "island_summary": {
+            "vertices": 402,
+            "triangles": 633,
+            "authored_influences": 20
+          },
+          "compatible_edge_island_summary": {
+            "vertices": 1036,
+            "indexed_islands_merged": 12
+          },
+          "authored_overlap": 0.3999998688697815,
+          "authored": [
+            {
+              "194": 0.8000001311302185,
+              "166": 0.1999998688697815
+            },
+            {
+              "166": 0.800000011920929,
+              "194": 0.20000000298023224
+            }
+          ],
+          "authored_weight_sums": [
+            1.0,
+            1.0000000149011612
+          ],
+          "influence_island_support": {
+            "166": {
+              "islands": 2,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.496286536893361
+            },
+            "194": {
+              "islands": 4,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.4639117581710118
+            }
+          }
+        },
+        {
+          "vertices": [
+            808,
+            348
+          ],
+          "indexed_edge": true,
+          "same_indexed_island": true,
+          "same_compatible_edge_island": true,
+          "islands": [
+            14,
+            14
+          ],
+          "island_summary": {
+            "vertices": 402,
+            "triangles": 633,
+            "authored_influences": 20
+          },
+          "compatible_edge_island_summary": {
+            "vertices": 1036,
+            "indexed_islands_merged": 12
+          },
+          "authored_overlap": 0.8200000004470349,
+          "authored": [
+            {
+              "166": 0.800000011920929,
+              "194": 0.20000000298023224
+            },
+            {
+              "166": 0.9604000449180603,
+              "194": 0.020000001415610313,
+              "165": 0.019600002095103264
+            }
+          ],
+          "authored_weight_sums": [
+            1.0000000149011612,
+            1.0000000484287739
+          ],
+          "influence_island_support": {
+            "165": {
+              "islands": 2,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.49072661730980077
+            },
+            "166": {
+              "islands": 2,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.496286536893361
+            },
+            "194": {
+              "islands": 4,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.4639117581710118
+            }
+          }
+        }
+      ]
+    },
+    "Odette": {
+      "scope": "One resolved rest draw; no visibility or pose inference.",
+      "mesh": "OdettebodyB-1",
+      "geometry_sha256": "9fe2aaf53f61c339a36be5d38e3153d8e3ea33d86f35f08de25f88f1c5b07291",
+      "skinning_sha256": "543cf681d4f8a756c0f926b513c7e701d1b7ac246c3f2c015bdba47bb6f3f458",
+      "source": {
+        "key": "odettebodyblend.buf|offset=0",
+        "file": "OdettebodyBlend.buf",
+        "bone_id_offset": 0,
+        "bone_ids_model_wide": false
+      },
+      "authored_vertices": [
+        [
+          13619,
+          13636
+        ],
+        [
+          13586,
+          13584
+        ]
+      ],
+      "vertices": 5671,
+      "triangles": 6751,
+      "indexed_islands": 212,
+      "exact_position_islands": 11,
+      "exact_edge_islands": 11,
+      "authored_compatible_edge_islands": 11,
+      "duplicate_position_triangles": 0,
+      "duplicate_position_groups": 1663,
+      "duplicate_position_pairs": 2088,
+      "different_uv_pairs": 1489,
+      "different_authored_pairs": 0,
+      "minimum_duplicate_authored_overlap": 1.0,
+      "probes": [
+        {
+          "vertices": [
+            121,
+            138
+          ],
+          "indexed_edge": true,
+          "same_indexed_island": true,
+          "same_compatible_edge_island": true,
+          "islands": [
+            55,
+            55
+          ],
+          "island_summary": {
+            "vertices": 218,
+            "triangles": 378,
+            "authored_influences": 7
+          },
+          "compatible_edge_island_summary": {
+            "vertices": 246,
+            "indexed_islands_merged": 2
+          },
+          "authored_overlap": 0.7343919476255623,
+          "authored": [
+            {
+              "26": 0.8003169298171997,
+              "30": 0.1875884085893631,
+              "59": 0.012094669044017792
+            },
+            {
+              "26": 0.5347088575363159,
+              "30": 0.4330805242061615,
+              "59": 0.032210592180490494
+            }
+          ],
+          "authored_weight_sums": [
+            1.0000000074505806,
+            0.9999999739229679
+          ],
+          "influence_island_support": {
+            "26": {
+              "islands": 81,
+              "compatible_edge_islands": 2,
+              "compatible_probe_area_fraction": 0.6491093942715833,
+              "probe_island_area_fraction": 0.6491093942715837
+            },
+            "30": {
+              "islands": 1,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 1.0
+            },
+            "59": {
+              "islands": 1,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 1.0
+            }
+          }
+        },
+        {
+          "vertices": [
+            88,
+            86
+          ],
+          "indexed_edge": true,
+          "same_indexed_island": true,
+          "same_compatible_edge_island": true,
+          "islands": [
+            55,
+            55
+          ],
+          "island_summary": {
+            "vertices": 218,
+            "triangles": 378,
+            "authored_influences": 7
+          },
+          "compatible_edge_island_summary": {
+            "vertices": 246,
+            "indexed_islands_merged": 2
+          },
+          "authored_overlap": 0.9116950196338736,
+          "authored": [
+            {
+              "26": 0.5410434603691101,
+              "30": 0.4589565098285675
+            },
+            {
+              "26": 0.6293484568595886,
+              "30": 0.3706515431404114
+            }
+          ],
+          "authored_weight_sums": [
+            0.9999999701976776,
+            1.0
+          ],
+          "influence_island_support": {
+            "26": {
+              "islands": 81,
+              "compatible_edge_islands": 2,
+              "compatible_probe_area_fraction": 0.6491093942715833,
+              "probe_island_area_fraction": 0.6491093942715837
+            },
+            "30": {
+              "islands": 1,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 1.0
+            }
+          }
+        }
+      ]
+    },
+    "Chisa": {
+      "scope": "One resolved rest draw; no visibility or pose inference.",
+      "mesh": "Component3-6",
+      "geometry_sha256": "1ba85323a564f9363299950d6c99c7048da14a8346eeb434be1e6a7fa7d44199",
+      "skinning_sha256": "246ed29450285da8a1aa95d26cdde7cb2d6a01779edaa4f041c656d3a70d5e9d",
+      "source": {
+        "key": "meshes/blend.buf|offset=142|namespace=wwmi_vertex_vg|vertex-vg=meshes/blendremapvertexvg.buf",
+        "file": "Meshes/Blend.buf",
+        "bone_id_offset": 142,
+        "bone_ids_model_wide": true,
+        "bone_id_namespace": "wwmi_vertex_vg",
+        "vertex_vg_source": "Meshes/BlendRemapVertexVG.buf"
+      },
+      "authored_vertices": [
+        [
+          79434,
+          79440
+        ]
+      ],
+      "vertices": 35014,
+      "triangles": 61851,
+      "indexed_islands": 323,
+      "exact_position_islands": 6,
+      "exact_edge_islands": 8,
+      "authored_compatible_edge_islands": 8,
+      "duplicate_position_triangles": 0,
+      "duplicate_position_groups": 3128,
+      "duplicate_position_pairs": 3694,
+      "different_uv_pairs": 2605,
+      "different_authored_pairs": 2,
+      "minimum_duplicate_authored_overlap": 0.9647058827546882,
+      "probes": [
+        {
+          "vertices": [
+            6682,
+            6688
+          ],
+          "indexed_edge": true,
+          "same_indexed_island": true,
+          "same_compatible_edge_island": true,
+          "islands": [
+            6672,
+            6672
+          ],
+          "island_summary": {
+            "vertices": 557,
+            "triangles": 972,
+            "authored_influences": 12
+          },
+          "compatible_edge_island_summary": {
+            "vertices": 33716,
+            "indexed_islands_merged": 298
+          },
+          "authored_overlap": 0.5686274394977331,
+          "authored": [
+            {
+              "358": 0.9058823585510254,
+              "357": 0.0941176488995552
+            },
+            {
+              "357": 0.5254902243614197,
+              "358": 0.4745098054409027
+            }
+          ],
+          "authored_weight_sums": [
+            1.0000000074505806,
+            1.0000000298023224
+          ],
+          "influence_island_support": {
+            "357": {
+              "islands": 2,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.421093577715401
+            },
+            "358": {
+              "islands": 4,
+              "compatible_edge_islands": 1,
+              "compatible_probe_area_fraction": 1.0,
+              "probe_island_area_fraction": 0.27016649716429625
+            }
+          }
+        }
+      ]
+    }
+  }
+}
