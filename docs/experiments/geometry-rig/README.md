@@ -45,7 +45,7 @@ decoder; IDs from distinct source keys are never merged. No ModelJoint graph is
 built. Generated weights stay cached throughout dragging; unsupported geometry
 remains stationary. Authored decode failures stop activation.
 
-The displayed Remielle (Genshin), Odette (ZZZ) and Chisa (WuWa) variants were
+The displayed Remielle (ZZZ), Odette (Genshin) and Chisa (WuWa) variants were
 compared at 15°, 45°, 90°, forward/backward hand targets and exact return to rest.
 The old binding, soft transfer and spatial-only ablation received identical
 posed geometry controls. The old binding comparator uses the existing
@@ -108,9 +108,48 @@ exactly after actual candidate deformation. Responsiveness is promising, but
 mesh quality fails the gate. Do not expand this method, remove production Rig,
 or merge until a subsequent design decision resolves those failures.
 
+## Locality review: binding limitation remains open
+
+The current transfer uses an influence-wide mean of spatial support. Its final
+vertex weights depend on authored weights but discard that vertex's own spatial
+support. Two nearby vertices with the same spatial classification can therefore
+receive different moving/stationary mixtures simply because their authored
+influence mixtures differ. Conversely, distant vertices sharing one influence
+receive the same driver distribution. Source-scoped IDs prevent cross-stream
+mixing; they do not prevent this mixing within one influence.
+
+The hand and sleeve failures illustrate both cases. A traced Remielle hand edge
+has pure forearm spatial support at both ends, but different authored mixtures
+introduce different stationary weights after transfer. A traced Chisa sleeve edge
+has stationary spatial support at both ends, yet influence-wide transfer gives
+its ends different forearm contributions. Their stretching is introduced by the
+transfer rather than by a spatial disagreement along those particular edges.
+Elbow edges can already mix upper-arm and forearm spatial support before transfer;
+their compression also needs investigation of the segmentation and joint frames.
+The spatial-only ablation also moves some head-height and central torso geometry
+under forward arm targets. Hair/accessories close to arm segments can receive
+moving support before transfer. Influence averaging is therefore not the sole
+cause of unintended movement; spatial proximity does not establish anatomy.
+
+Locality alone has not resolved the three-game gate. Local area-weighted influence
+averaging with a continuous tent lattice improved some elbow and wrist behavior,
+but retained sleeve leakage and worsened the Remielle hand spike. Conditioning
+the transferred distribution on each vertex's spatial support removed that
+particular hand mixture, but exposed the compact kernel's discontinuous switch
+to stationary weights outside all segment support. Replacing that boundary with
+a smooth distance kernel improved Remielle and Chisa stretching while worsening
+Odette stretching and compression. These candidates are not retained: none
+preserved smooth transitions and local anatomical behavior across all three models.
+
+The influence-wide transfer remains an experimental limitation, not a resolved
+binding. No extra threshold, model-specific exception or fallback chain is added.
+Production Rig, Weight and Physics remain unchanged. Full-body expansion and
+merging remain blocked on a binding design that passes shoulder/elbow quality,
+wrist following and unrelated-geometry checks together.
+
 ## Fitting results and limitations
 
-The completed investigation covered displayed Remielle (Genshin), Odette (ZZZ)
+The completed investigation covered displayed Remielle (ZZZ), Odette (Genshin)
 and Chisa (WuWa) variants. Approximate front-view silhouette residuals below are
 percentages of character height, shown as proportional to geometry-fitted:
 
