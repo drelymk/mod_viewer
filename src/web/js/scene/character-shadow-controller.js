@@ -101,6 +101,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
   let lastLightPosition = null;
   let lastLightTarget = null;
   let groundAvailable = false;
+  let groundLevel = null;
   let fitCount = 0;
   let shadowUpdateCount = 0;
 
@@ -170,13 +171,13 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     }
 
     const modelSize = Math.max(modelBounds.getSize(new THREE.Vector3()).length(), MIN_SIZE);
-    const floorY = casterBounds.min.y;
+    const floorY = groundLevel ?? casterBounds.min.y;
     const lightDirection = light.target.position.clone().sub(light.position);
     if (lightDirection.lengthSq() < 0.00000001) lightDirection.set(0, -1, 0);
     lightDirection.normalize();
     const casterCorners = boxCorners(casterBounds);
     const modelFootprint = projectGroundFootprint(casterCorners, floorY, modelSize, lightDirection);
-    const minimumDownward = Math.min((casterBounds.max.y - floorY) / (modelSize * MAX_GROUND_REACH), 1);
+    const minimumDownward = THREE.MathUtils.clamp((casterBounds.max.y - floorY) / (modelSize * MAX_GROUND_REACH), 0, 1);
     const needsFloorProjection = lightDirection.y > -minimumDownward;
     let footprint = modelFootprint;
     ground.material = groundMaterial;
@@ -250,6 +251,12 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     }
   }
 
+  function setGroundLevel(value) {
+    if (groundLevel === value) return;
+    groundLevel = value;
+    invalidateGeometry();
+  }
+
   function reset() {
     meshes = [];
     modelBounds = new THREE.Box3();
@@ -260,6 +267,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     lastLightPosition = null;
     lastLightTarget = null;
     groundAvailable = false;
+    groundLevel = null;
     ground.visible = false;
     if (grid) grid.position.y = 0;
   }
@@ -290,6 +298,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
     invalidateGeometry,
     invalidateVisibility,
     invalidateMap,
+    setGroundLevel,
     update,
     reset,
     getDebugState,
