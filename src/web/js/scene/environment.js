@@ -78,18 +78,18 @@ const SUNSET_ATMOSPHERE = makeAtmosphere(
 // even when the viewer's ambient light makes diffuse surfaces readable.
 const INDOOR_CAPTURE = freeze({
   room: freeze({
-    color: 0xb4a28e,
+    color: 0xb99a7b,
     size: freeze([18, 10, 18]),
     position: freeze([0, 2, 0]),
   }),
   floor: freeze({
-    color: 0x83715f,
+    color: 0x866044,
     size: freeze([18, 18]),
     position: freeze([0, -2.95, 0]),
   }),
   mainCard: freeze({
-    color: 0xe5f0ff,
-    intensity: 2.4,
+    color: 0xd8eaff,
+    intensity: 3.0,
     distance: 8,
     size: freeze([3.8, 3.2]),
   }),
@@ -101,14 +101,14 @@ const INDOOR_CAPTURE = freeze({
     target: freeze([0, 0, 0]),
   }),
   fillCard: freeze({
-    color: 0xffd9b5,
-    intensity: 1.1,
+    color: 0xffc58f,
+    intensity: 1.3,
     position: freeze([5.0, 1.0, 1.5]),
     size: freeze([6.0, 4.5]),
     target: freeze([0, 0, 0]),
   }),
   roomLight: freeze({
-    color: 0xffe7cd,
+    color: 0xffd6ab,
     intensity: 50,
     distance: 0,
     decay: 2,
@@ -201,9 +201,9 @@ export const ENVIRONMENT_PRESETS = freeze({
     'indoor',
     'Indoor',
     createIndoorBackgroundNode,
-    makeAmbient(0xffeddd, 0.28),
-    makeHemisphere(0xe6f0ff, 0x8b6f56, 0.36),
-    makeAccent(0xe5f0ff, 0.18, [-5, 2.5, -7]),
+    makeAmbient(0xffd4a6, 0.28),
+    makeHemisphere(0xe6f0ff, 0xb07b4b, 0.36),
+    makeAccent(0xd8eaff, 0.42, [-5, 2.5, -7]),
   ),
   outdoor: makePreset(
     'outdoor',
@@ -253,8 +253,8 @@ function createIndoorBackgroundNode() {
     // Suggest warm indoor bounce and broad daylight without architectural
     // edges or a physical floor that would need to track the model.
     const tone = smoothstep(-0.8, 0.8, direction.y);
-    const warmth = mix(color(capture.floor.color).mul(0.55), color(capture.room.color).mul(0.5), tone);
-    const daylight = smoothstep(-0.4, 1, direction.dot(daylightDirection)).mul(0.07);
+    const warmth = mix(color(capture.floor.color).mul(0.32), color(capture.room.color).mul(0.28), tone);
+    const daylight = smoothstep(-0.4, 1, direction.dot(daylightDirection)).mul(0.04);
     return vec4(warmth.add(color(capture.mainCard.color).mul(daylight)), 1);
   })();
 }
@@ -379,10 +379,12 @@ function createRoomCaptureScene(id, config) {
 
 const IBL_PROFILES = freeze({
   outdoor: freeze({
-    environmentIntensity: 0.65,
+    // The display-compressed sky needs a stronger IBL contribution than the
+    // former HDR capture; retain diffuse fill when preparation completes.
+    environmentIntensity: 1.2,
     lightIntensity: freeze({
-      ambient: 0.04,
-      hemisphere: 0.08,
+      ambient: 0.12,
+      hemisphere: 0.24,
       accent: OUTDOOR_ATMOSPHERE.sunIntensity,
     }),
     dominantDirection: OUTDOOR_ATMOSPHERE.sunDirection,
@@ -403,9 +405,9 @@ const IBL_PROFILES = freeze({
   indoor: freeze({
     environmentIntensity: 0.65,
     lightIntensity: freeze({
-      ambient: 0.1,
-      hemisphere: 0.2,
-      accent: 0.18,
+      ambient: 0.2,
+      hemisphere: 0.28,
+      accent: 0.42,
     }),
     dominantDirection: directionFromPresetAccent('indoor'),
     pmrem: DEFAULT_PMREM,
