@@ -1,7 +1,21 @@
 // Static viewer scenery; model state is supplied only at deliberate placement boundaries.
 
 import * as THREE from 'three/webgpu';
-import { color, mix, mx_noise_float, normalViewGeometry, positionGeometry, smoothstep, uv } from 'three/tsl';
+import {
+  attribute,
+  cameraPosition,
+  color,
+  Fn,
+  mix,
+  modelWorldMatrixInverse,
+  mx_noise_float,
+  output,
+  positionGeometry,
+  positionLocal,
+  smoothstep,
+  vec3,
+  vec4,
+} from 'three/tsl';
 import { computeModelBounds } from './model-bounds.js';
 
 function random(seed) {
@@ -9,107 +23,103 @@ function random(seed) {
   return value - Math.floor(value);
 }
 
-function createGrass() {
-  const positions = [],
-    colors = [];
-  const root = new THREE.Color(0x354d24),
-    tip = new THREE.Color(0x87984d);
-  for (const cross of [0, Math.PI / 2]) {
-    for (let blade = 0; blade < 3; blade++) {
-      const x = (blade - 1) * 0.3,
-        height = 0.7 + random(blade) * 0.3;
-      for (const [px, py, tint] of [
-        [x - 0.14, 0, root],
-        [x + 0.14, 0, root],
-        [x + 0.2, height, tip],
-      ]) {
-        positions.push(px * Math.cos(cross), py, px * Math.sin(cross));
-        colors.push(tint.r, tint.g, tint.b);
-      }
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  const grass = new THREE.InstancedMesh(
-    geometry,
-    new THREE.MeshBasicNodeMaterial({ vertexColors: true, side: THREE.DoubleSide }),
-    72,
-  );
-  const transform = new THREE.Object3D();
-  for (let i = 0; i < grass.count; i++) {
-    const angle = random(i * 5 + 1) * Math.PI * 2,
-      radius = 0.65 + random(i * 5 + 2) * 4;
-    transform.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
-    transform.rotation.y = random(i * 5 + 3) * Math.PI;
-    const height = 0.025 + random(i * 5 + 4) * 0.04;
-    transform.scale.set(height * 0.8, height, height * 0.8);
-    transform.updateMatrix();
-    grass.setMatrixAt(i, transform.matrix);
-    grass.setColorAt(i, new THREE.Color().setScalar(0.85 + random(i * 5 + 5) * 0.3));
-  }
-  grass.computeBoundingSphere();
-  return grass;
+function groundHeight(x, z) {
+  const edge = THREE.MathUtils.smoothstep(Math.hypot(x, z), 1.8, 6);
+  return edge * (0.22 + Math.sin(x * 0.43 + z * 0.21) * 0.28 + Math.cos(z * 0.36 - x * 0.18) * 0.19);
 }
 
-function createTrees(onLoad) {
-  const geometry = new THREE.BufferGeometry();
-  const positions = [],
-    uvs = [];
-  for (const angle of [0, Math.PI / 2]) {
-    for (const [x, y, u, v] of [
-      [-0.5, 0, 0, 0],
-      [0.5, 0, 1, 0],
-      [0.5, 1, 1, 1],
-      [-0.5, 0, 0, 0],
-      [0.5, 1, 1, 1],
-      [-0.5, 1, 0, 1],
-    ]) {
-      positions.push(x * Math.cos(angle), y, x * Math.sin(angle));
-      uvs.push(u, v);
-    }
-  }
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geometry.computeVertexNormals();
-  const texture = new THREE.TextureLoader().load(new URL('../../images/nature-tree.png', import.meta.url).href, onLoad);
+function createTrees(sprite, placements, onLoad) {
+  const geometry = new THREE.PlaneGeometry(1, 1);
+  geometry.translate(0, 0.5, 0);
+  const texture = new THREE.TextureLoader().load(new URL(`../../images/${sprite}`, import.meta.url).href, onLoad);
   texture.colorSpace = THREE.SRGBColorSpace;
   const trees = new THREE.InstancedMesh(
     geometry,
-    new THREE.MeshBasicNodeMaterial({ map: texture, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide }),
-    8,
+    new THREE.MeshBasicNodeMaterial({
+      map: texture,
+      alphaTest: 0.5,
+      alphaToCoverage: true,
+      side: THREE.DoubleSide,
+    }),
+    placements.length,
   );
-  // Edge-on cards should disappear rather than draw narrow foliage strips.
-  trees.material.opacityNode = smoothstep(0.25, 0.5, normalViewGeometry.z.abs());
+  const offsets = [],
+    sizes = [];
   const transform = new THREE.Object3D();
   for (let i = 0; i < trees.count; i++) {
-    const side = i % 2 ? 1 : -1;
-    transform.position.set(side * (5 + random(i * 3 + 1) * 5), 0, -8 - random(i * 3 + 2) * 6);
-    transform.rotation.y = random(i * 3 + 3) * Math.PI;
-    transform.scale.setScalar(2.2 + random(i * 3 + 4) * 1.8);
+    const [x, z, height] = placements[i];
+    const width = height * (0.65 + random(i + 1) * 0.35);
+    const y = groundHeight(x, z) - 0.012;
+    offsets.push(x, y, z);
+    sizes.push(width * (i % 2 ? -1 : 1), height);
+    transform.position.set(x, y, z);
+    transform.scale.set(width, height, width);
     transform.updateMatrix();
     trees.setMatrixAt(i, transform.matrix);
+    trees.setColorAt(i, new THREE.Color(0xd7d5bf).multiplyScalar(0.8 + random(i + 2) * 0.15));
   }
+  geometry.setAttribute('treeOffset', new THREE.InstancedBufferAttribute(new Float32Array(offsets), 3));
+  geometry.setAttribute('treeSize', new THREE.InstancedBufferAttribute(new Float32Array(sizes), 2));
+  // Face the camera around the trunk without CPU updates or angle-based alpha clipping.
+  trees.material.positionNode = Fn(() => {
+    const anchor = attribute('treeOffset', 'vec3');
+    const size = attribute('treeSize', 'vec2');
+    const view = modelWorldMatrixInverse.mul(vec4(cameraPosition, 1)).xyz.sub(anchor);
+    const right = vec3(view.z, 0, view.x.negate()).normalize();
+    return anchor.add(right.mul(positionGeometry.x.mul(size.x))).add(vec3(0, positionGeometry.y.mul(size.y), 0));
+  })();
+  trees.material.outputNode = vec4(
+    mix(output.rgb, color(0xc0e6ef), smoothstep(6, 25, positionLocal.xz.length()).mul(0.5)),
+    output.a,
+  );
   trees.computeBoundingSphere();
   return trees;
 }
 
 function createGround() {
-  const variation = mx_noise_float(positionGeometry.xy.mul(0.3)).mul(0.5).add(0.5).toVar();
-  const patches = smoothstep(0.64, 0.85, variation);
-  const material = new THREE.MeshBasicNodeMaterial({
+  const variation = mx_noise_float(positionGeometry.xz.mul(0.55)).mul(0.5).add(0.5).toVar();
+  const detail = mx_noise_float(positionGeometry.xz.mul(95)).mul(0.5).add(0.5).toVar();
+  const material = new THREE.MeshStandardNodeMaterial({
+    roughness: 1,
+    metalness: 0,
     transparent: true,
     forceSinglePass: true,
-    depthWrite: false,
+    depthWrite: true,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
     side: THREE.DoubleSide,
   });
-  material.colorNode = mix(mix(color(0x526b36), color(0x78864b), variation), color(0x706343), patches);
-  material.opacityNode = smoothstep(0.72, 1, uv().sub(0.5).length().mul(2)).oneMinus();
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(24, 64), material);
-  ground.rotation.x = -Math.PI / 2;
+  const turf = mix(color(0x596d3f), color(0x8c9160), variation);
+  const patches = mix(turf, color(0x88785c), smoothstep(0.56, 0.7, variation).mul(0.6));
+  material.colorNode = mix(patches, color(0x4a5838), detail.mul(0.4));
+  const radius = positionGeometry.xz.length();
+  material.outputNode = vec4(mix(output.rgb, color(0xc0e6ef), smoothstep(3.5, 20, radius).mul(0.95)), output.a);
+  material.opacityNode = smoothstep(12, 24, radius.add(variation.mul(2))).oneMinus();
+  const geometry = new THREE.BufferGeometry();
+  // Concentric rings give the distant edge gentle relief; the clearing stays exactly flat.
+  const positions = [0, 0, 0],
+    indices = [];
+  for (let ring = 1; ring <= 24; ring++) {
+    for (let segment = 0; segment < 96; segment++) {
+      const angle = (segment / 96) * Math.PI * 2,
+        x = Math.cos(angle) * ring,
+        z = Math.sin(angle) * ring;
+      positions.push(x, groundHeight(x, z), z);
+      const current = 1 + (ring - 1) * 96 + segment,
+        next = 1 + (ring - 1) * 96 + ((segment + 1) % 96);
+      if (ring === 1) indices.push(0, next, current);
+      else {
+        const previous = current - 96,
+          previousNext = next - 96;
+        indices.push(previous, previousNext, current, previousNext, next, current);
+      }
+    }
+  }
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const ground = new THREE.Mesh(geometry, material);
   ground.renderOrder = -2;
   return ground;
 }
@@ -136,12 +146,29 @@ export function createSceneryController({ scene, onVisualChange = null }) {
     const span = Math.max(size.x, size.y, size.z);
     if (!(span > 0)) return;
     if (!group.children.length) {
+      const onLoad = () => {
+        if (!disposed) onVisualChange?.();
+      };
       group.add(
         createGround(),
-        createGrass(),
-        createTrees(() => {
-          if (!disposed) onVisualChange?.();
-        }),
+        createTrees(
+          'nature-tree.png',
+          [
+            [-3.8, -4.8, 1.9],
+            [3.8, -14, 2.4],
+            [-8.8, -10, 3.4],
+          ],
+          onLoad,
+        ),
+        createTrees(
+          'nature-tree-slender.png',
+          [
+            [5.6, -6.4, 3.2],
+            [-5.4, -17, 4.2],
+            [11, -15, 4.5],
+          ],
+          onLoad,
+        ),
       );
       group.traverse((object) => {
         if (object.isMesh) object.raycast = () => {};
