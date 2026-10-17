@@ -28,6 +28,56 @@ function groundHeight(x, z) {
   return edge * (0.22 + Math.sin(x * 0.43 + z * 0.21) * 0.28 + Math.cos(z * 0.36 - x * 0.18) * 0.19);
 }
 
+function createGrass() {
+  const positions = [],
+    colors = [];
+  const root = new THREE.Color(0x596d3f),
+    tip = new THREE.Color(0x89945e);
+  for (let blade = 0; blade < 192; blade++) {
+    const angle = random(blade * 7 + 1) * Math.PI * 2;
+    const radius = Math.sqrt(random(blade * 7 + 2));
+    const x = Math.cos(angle) * radius,
+      z = Math.sin(angle) * radius;
+    const direction = random(blade * 7 + 3) * Math.PI * 2;
+    const height = 0.025 + random(blade * 7 + 4) * 0.035;
+    const width = 0.004 + random(blade * 7 + 5) * 0.004;
+    const bend = (random(blade * 7 + 6) - 0.5) * 0.04;
+    for (const [px, py] of [
+      [-width, 0],
+      [width, 0],
+      [bend * 0.5 + width * 0.6, height * 0.55],
+      [-width, 0],
+      [bend * 0.5 + width * 0.6, height * 0.55],
+      [bend * 0.5 - width * 0.6, height * 0.55],
+      [bend * 0.5 - width * 0.6, height * 0.55],
+      [bend * 0.5 + width * 0.6, height * 0.55],
+      [bend, height],
+    ]) {
+      positions.push(x + px * Math.cos(direction), py - 0.001, z + px * Math.sin(direction));
+      const tint = root.clone().lerp(tip, py / height);
+      colors.push(tint.r, tint.g, tint.b);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const material = new THREE.MeshBasicNodeMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const grass = new THREE.InstancedMesh(geometry, material, 48);
+  const transform = new THREE.Object3D();
+  for (let i = 0; i < grass.count; i++) {
+    const angle = i * 2.399963 + random(i + 1) * 0.25;
+    const radius = 0.72 + Math.sqrt(random(i * 3 + 2)) * 0.72;
+    transform.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+    transform.rotation.y = random(i * 3 + 3) * Math.PI * 2;
+    const width = 0.24 + random(i * 3 + 4) * 0.08;
+    transform.scale.set(width, 0.35 + random(i * 3 + 5) * 0.2, width);
+    transform.updateMatrix();
+    grass.setMatrixAt(i, transform.matrix);
+  }
+  grass.computeBoundingSphere();
+  return grass;
+}
+
 function createTrees(sprite, placements, onLoad) {
   const geometry = new THREE.PlaneGeometry(1, 1);
   geometry.translate(0, 0.5, 0);
@@ -151,6 +201,7 @@ export function createSceneryController({ scene, onVisualChange = null }) {
       };
       group.add(
         createGround(),
+        createGrass(),
         createTrees(
           'nature-tree.png',
           [
