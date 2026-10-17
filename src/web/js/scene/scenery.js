@@ -5,12 +5,16 @@ import {
   cameraPosition,
   color,
   context,
+  fwidth,
   mix,
+  modelPosition,
   modelScale,
   mx_noise_float,
+  normalView,
   normalWorld,
   output,
   positionGeometry,
+  positionView,
   positionWorld,
   smoothstep,
   vec3,
@@ -39,18 +43,42 @@ function terrainNoise(x, z) {
 
 function groundHeight(x, z) {
   return (
-    THREE.MathUtils.smoothstep(Math.hypot(x, z), 2.5, 7) *
-    (terrainNoise(x * 0.065 + 17, z * 0.065 + 31) * 0.6 + terrainNoise(x * 0.17 + 43, z * 0.17 + 11) * 0.14)
+    THREE.MathUtils.smoothstep(Math.hypot(x, z), 2, 8) *
+    (terrainNoise(x * 0.085 + 17, z * 0.085 + 31) * 1.5 + terrainNoise(x * 0.24 + 43, z * 0.24 + 11) * 0.2)
   );
 }
 
+// Surface-gradient bump, shared by the opaque foliage and ground materials.
+function surfaceNormal(height) {
+  const dx = positionView.dFdx(),
+    dy = positionView.dFdy();
+  const r1 = dy.cross(normalView),
+    r2 = normalView.cross(dx);
+  const det = dx.dot(r1);
+  const gradient = height.dFdx().mul(r1).add(height.dFdy().mul(r2)).mul(det.sign());
+  return normalView.mul(det.abs()).sub(gradient).normalize();
+}
+
+function surfaceNoise(position, frequency) {
+  const sample = position.mul(frequency);
+  // Remove subpixel detail before it can sparkle while the camera moves.
+  const resolved = smoothstep(0.35, 1.2, fwidth(sample).length()).oneMinus();
+  return mx_noise_float(sample).mul(resolved);
+}
+
 function sceneryMaterial(parameters = {}) {
-  const material = new THREE.MeshStandardNodeMaterial({ roughness: 1, metalness: 0, ...parameters });
+  const material = new THREE.MeshStandardNodeMaterial({
+    roughness: 1,
+    metalness: 0,
+    ...parameters,
+  });
   material.contextNode = context({ getAO: (input) => input });
   const { ambient, hemisphere, atmosphere } = ENVIRONMENT_PRESETS.outdoor;
   const ray = positionWorld.sub(cameraPosition);
   const direction = ray.normalize();
-  const haze = smoothstep(10, 44, ray.length().div(modelScale.x));
+  const height = positionWorld.y.sub(modelPosition.y).div(modelScale.x);
+  const lowMist = smoothstep(0.3, 3, height).oneMinus();
+  const haze = smoothstep(12, 65, ray.length().div(modelScale.x)).mul(lowMist.mul(0.35).add(0.3));
   const upper = mix(color(ambient.color), color(hemisphere.color), smoothstep(0, 0.5, direction.y));
   const sky = mix(color(atmosphere.groundColor), upper, smoothstep(-0.35, 0.02, direction.y));
   const sun = direction
@@ -63,26 +91,27 @@ function sceneryMaterial(parameters = {}) {
 }
 
 function canopyGeometry(shape) {
-  const sphere = new THREE.IcosahedronGeometry(1, 3);
+  const sphere = new THREE.IcosahedronGeometry(1, 1);
   const source = sphere.attributes.position;
   const positions = [],
     normals = [],
     colors = [];
-  const lobes = shape
-    ? [
-        [-0.08, 1, 0.04, 0.8, 0.65],
-        [0.08, 1.55, -0.06, 0.64, 0.65],
-        [-0.03, 2.05, 0.02, 0.43, 0.65],
-      ]
-    : [
-        [-0.55, 1.35, 0.04, 0.58, 0.5],
-        [0.48, 1.45, -0.12, 0.62, 0.58],
-        [-0.15, 1.8, -0.35, 0.6, 0.57],
-        [0.06, 1.6, 0.38, 0.57, 0.52],
-        [0.08, 2.03, 0.03, 0.48, 0.48],
-      ];
-  const deep = new THREE.Color(0x34472c),
-    bright = new THREE.Color(0x71834a);
+  const lobes = [];
+  // Offset overlapping branch masses leave a broken silhouette at every yaw.
+  for (let i = 0; i < 11; i++) {
+    const angle = i * 2.4 + shape;
+    const tier = i / 10;
+    const spread = shape ? 0.55 * (1 - tier) : 0.5 * Math.sin(tier * Math.PI);
+    lobes.push([
+      Math.cos(angle) * spread,
+      0.9 + tier * 1.55,
+      Math.sin(angle) * spread,
+      shape ? 0.52 - tier * 0.28 : 0.38 + Math.sin(tier * Math.PI) * 0.18,
+      0.32 + random(i + shape * 41) * 0.16,
+    ]);
+  }
+  const deep = new THREE.Color(0x20351a),
+    bright = new THREE.Color(0x657d3c);
   for (const [cx, cy, cz, width, height] of lobes) {
     for (let i = 0; i < source.count; i++) {
       const x = source.getX(i),
@@ -90,12 +119,12 @@ function canopyGeometry(shape) {
         z = source.getZ(i);
       const h = (y + 1) * 0.5;
       const lump = Math.sin(x * 8.3 + y * 5.7 + cx) * Math.sin(z * 9.9 - y * 4.1 + cz);
-      const radius = (1 - h * (shape ? 0.6 : 0.16)) * (1 + lump * 0.28);
+      const radius = (1 - h * 0.2) * (1 + lump * 0.35);
       const py = cy + y * height;
       positions.push(cx + x * width * radius, py, cz + z * width * radius);
       const normal = new THREE.Vector3(x, 0.35 + y * 0.65, z).normalize();
       normals.push(normal.x, normal.y, normal.z);
-      const tint = deep.clone().lerp(bright, THREE.MathUtils.clamp(py / 2.8 + lump * 0.17, 0, 1));
+      const tint = deep.clone().lerp(bright, THREE.MathUtils.clamp(py * 0.22 + h * 0.4 + lump * 0.17, 0, 1));
       colors.push(tint.r, tint.g, tint.b);
     }
   }
@@ -109,21 +138,26 @@ function canopyGeometry(shape) {
 
 function createTrees() {
   const placements = [];
-  for (let attempt = 0; attempt < 600 && placements.length < 18; attempt++) {
-    const x = (random(attempt * 4 + 1) - 0.5) * 32,
-      z = -8 - random(attempt * 4 + 2) * 14;
-    if (Math.abs(x) < 2.5 + Math.abs(z) * 0.12 || Math.hypot(x, z) > 22.5) continue;
-    const density = Math.max(
-      ...[
-        [-9, -11, 12],
-        [8, -15, 18],
-        [-11, -19, 16],
-      ].map(([cx, cz, spread]) => Math.exp(-((x - cx) ** 2 + (z - cz) ** 2) / spread)),
-    );
-    if (random(attempt * 4 + 3) > density || placements.some((p) => Math.hypot(x - p.x, z - p.z) < 1.25)) continue;
-    placements.push({ x, z, scale: 1 + random(attempt * 4 + 4) * 0.65, yaw: random(attempt + 31) * Math.PI * 2 });
+  for (let attempt = 0; attempt < 16000 && placements.length < 900; attempt++) {
+    const x = (random(attempt * 4 + 1) - 0.5) * 92,
+      z = (random(attempt * 4 + 2) - 0.5) * 92;
+    const distance = Math.hypot(x, z);
+    const clearing = 4.3 + terrainNoise(x * 0.14 + 13, z * 0.14 + 29) * 1.3;
+    if (distance < clearing || distance > 44) continue;
+    const density = 0.5 + terrainNoise(x * 0.12, z * 0.12) * 0.35;
+    if (random(attempt * 4 + 3) > density || placements.some((p) => Math.hypot(x - p.x, z - p.z) < 1.35)) continue;
+    placements.push({
+      x,
+      z,
+      scale: 1.25 + random(attempt * 4 + 4) ** 2 * 1.35,
+      yaw: random(attempt + 31) * Math.PI * 2,
+    });
   }
   const foliage = sceneryMaterial({ vertexColors: true });
+  const clumps = surfaceNoise(positionGeometry, 18).toVar();
+  const detailFade = smoothstep(10, 35, positionWorld.distance(cameraPosition).div(modelScale.x)).oneMinus();
+  foliage.colorNode = clumps.mul(0.55).add(0.85);
+  foliage.normalNode = surfaceNormal(clumps.mul(detailFade).mul(modelScale.x).mul(0.006));
   const bark = sceneryMaterial({ color: 0x66553b });
   const trunk = new THREE.CylinderGeometry(0.045, 0.075, 1, 6);
   trunk.translate(0, 0.5, 0);
@@ -150,8 +184,8 @@ function createTrees() {
 }
 
 function createGround() {
-  const variation = mx_noise_float(positionGeometry.xz.mul(0.4)).mul(0.5).add(0.5).toVar();
-  const detail = mx_noise_float(positionGeometry.xz.mul(70)).mul(0.5).add(0.5).toVar();
+  const variation = mx_noise_float(positionGeometry.xz.mul(0.65)).mul(0.5).add(0.5).toVar();
+  const detail = surfaceNoise(positionGeometry.xz, 55).mul(0.5).add(0.5).toVar();
   const material = sceneryMaterial({
     transparent: true,
     forceSinglePass: true,
@@ -161,17 +195,19 @@ function createGround() {
     polygonOffsetUnits: 1,
     side: THREE.DoubleSide,
   });
-  const turf = mix(color(0x606d45), color(0x7c835b), variation);
+  const turf = mix(color(0x465329), color(0x78804b), variation);
   const soil = smoothstep(0.002, 0.03, normalWorld.y.oneMinus())
     .mul(0.35)
     .add(smoothstep(0.6, 0.8, variation).mul(0.2));
   material.colorNode = mix(turf, color(0x786e55), soil).mul(detail.mul(0.12).add(0.9));
-  material.opacityNode = smoothstep(34, 47, positionGeometry.x.abs().max(positionGeometry.z.abs())).oneMinus();
+  const detailFade = smoothstep(3, 18, positionWorld.distance(cameraPosition).div(modelScale.x)).oneMinus();
+  material.normalNode = surfaceNormal(detail.mul(detailFade).mul(modelScale.x).mul(0.0015));
+  material.opacityNode = smoothstep(65, 94, positionGeometry.x.abs().max(positionGeometry.z.abs())).oneMinus();
   const geometry = new THREE.BufferGeometry();
   // Concentrate the heightfield's vertices near the flat inspection clearing.
   const positions = [],
     indices = [];
-  const coord = (i) => Math.sign(i / 48 - 1) * Math.abs(i / 48 - 1) ** 1.5 * 48;
+  const coord = (i) => Math.sign(i / 48 - 1) * Math.abs(i / 48 - 1) ** 2 * 96;
   for (let iz = 0; iz <= 96; iz++) {
     for (let ix = 0; ix <= 96; ix++) {
       const x = coord(ix),
