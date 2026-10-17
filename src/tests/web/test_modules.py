@@ -175,7 +175,9 @@ def test_scenery_placement_ownership_and_disposal_lifecycle(module_page):
       scenery.setMeshes([]);
       const cleared = !group.visible;
       const counts=[];
-      for(const child of children) for(const resource of [child.geometry,child.material]) {
+      const resources = new Set(children.flatMap(child=>[child.geometry,child.material,
+        ...(child.material.map?[child.material.map]:[]),...(child.isInstancedMesh?[child]:[])]));
+      for(const resource of resources) {
         const record={count:0};counts.push(record);resource.addEventListener('dispose',()=>record.count++);
       }
       scenery.dispose();scenery.dispose();scenery.setEnabled(true);
