@@ -35,8 +35,10 @@ export class CubeCamera {
 }
 export class PMREMGenerator {
   constructor() {probe.generators++;}
-  fromCubemap() {if(probe.fail) throw new Error('capture failed'); return target('pmrem');}
-  fromScene() {return target('pmrem');}
+  fromScene(scene) {
+    if(probe.fail && scene.background?.isCubeTexture) throw new Error('capture failed');
+    return target('pmrem');
+  }
   dispose() {probe.disposed++;}
 }
 """))
@@ -64,8 +66,10 @@ export class PMREMGenerator {
         && JSON.stringify(sun.sun) === JSON.stringify(controller.getDominantLightDirection());
       controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
       const skipped = !controller.getDebugState().resources.indoor.attempted;
+      controller.setPreset('sunset'); await controller.prepare();
+      const sunset = scene.background !== outdoor && controller.getDominantLightDirection()[1] < 0.2;
       for(let i=0;i<5;i++) {controller.setPreset('default'); controller.setPreset('outdoor'); await controller.prepare();}
-      const reused = scene.background === outdoor && controller.getDebugState().totalPmremGenerationCount === 2;
+      const reused = scene.background === outdoor && controller.getDebugState().totalPmremGenerationCount === 3;
       controller.dispose(); controller.dispose();
       const restored = scene.background === original && scene.environment === null
         && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
@@ -77,17 +81,17 @@ export class PMREMGenerator {
       const failing = create(); failing.setPreset('outdoor'); await failing.prepare();
       const failure = failing.getDebugState();
       failing.dispose();
-      return {cold, consistent, static:sun.speed === 0, skipped, reused, restored,
+      return {cold, consistent, static:sun.speed === 0, skipped, sunset, reused, restored,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
         allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
         generators:environmentProbe.generators, disposed:environmentProbe.disposed};
     }""")
     assert result == {
-        'cold': 0, 'consistent': True, 'static': True, 'skipped': True,
+        'cold': 0, 'consistent': True, 'static': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
-        'captures': 2, 'notifications': 2, 'failure': True, 'allDisposed': True,
-        'generators': 2, 'disposed': 6,
+        'captures': 3, 'notifications': 3, 'failure': True, 'allDisposed': True,
+        'generators': 2, 'disposed': 8,
     }
 
 

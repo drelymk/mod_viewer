@@ -2,36 +2,78 @@
 // about mods, meshes, INIs, or the Python bridge.
 
 import * as THREE from 'three/webgpu';
+import {
+  Fn,
+  cameraPosition,
+  color,
+  exp,
+  fwidth,
+  max,
+  mix,
+  mx_fractal_noise_float,
+  neutralToneMapping,
+  positionWorld,
+  smoothstep,
+  vec2,
+  vec3,
+  vec4,
+} from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 
 const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
 const freeze = Object.freeze;
-function makeAtmosphere(sunElevation, sunAzimuth, sky) {
+function makeAtmosphere(sunElevation, sunAzimuth, sky, exposure, groundColor) {
   const direction = new THREE.Vector3().setFromSphericalCoords(
     1,
     THREE.MathUtils.degToRad(90 - sunElevation),
     THREE.MathUtils.degToRad(sunAzimuth),
   );
   const daylight = THREE.MathUtils.smoothstep(direction.y, 0, 0.7);
+  const { cloudCoverage, cloudDensity, cloudElevation, cloudScale, ...scattering } = sky;
   return freeze({
-    sky: freeze(sky),
+    sky: freeze(scattering),
+    clouds: freeze({ coverage: cloudCoverage, density: cloudDensity, elevation: cloudElevation, scale: cloudScale }),
     sunDirection: freeze(direction.toArray()),
     sunColor: new THREE.Color(0xffa35c).lerp(new THREE.Color(0xfff2df), daylight).getHex(),
     sunIntensity: THREE.MathUtils.lerp(0.35, 0.7, daylight),
+    exposure,
+    groundColor,
   });
 }
 
-const OUTDOOR_ATMOSPHERE = makeAtmosphere(50, -45, {
-  turbidity: 2.5,
-  rayleigh: 0.8,
-  mieCoefficient: 0.003,
-  mieDirectionalG: 0.75,
-  cloudCoverage: 0.4,
-  cloudDensity: 0.65,
-  cloudElevation: 0.5,
-  cloudScale: 0.0004,
-});
+const OUTDOOR_ATMOSPHERE = makeAtmosphere(
+  50,
+  -45,
+  {
+    turbidity: 2.5,
+    rayleigh: 0.8,
+    mieCoefficient: 0.003,
+    mieDirectionalG: 0.75,
+    cloudCoverage: 0.4,
+    cloudDensity: 0.65,
+    cloudElevation: 0.5,
+    cloudScale: 0.0004,
+  },
+  0.25,
+  0x53605b,
+);
+const SUNSET_ATMOSPHERE = makeAtmosphere(
+  5,
+  -160,
+  {
+    turbidity: 6,
+    rayleigh: 2.5,
+    mieCoefficient: 0.006,
+    mieDirectionalG: 0.82,
+    cloudCoverage: 0.43,
+    cloudDensity: 0.6,
+    cloudElevation: 0.45,
+    cloudScale: 0.0004,
+  },
+  0.5,
+  0x514856,
+);
 // Bake broad room illumination as well as softbox highlights into PMREM.
 // Dark capture walls leave metals and shadow-facing surfaces almost black,
 // even when the viewer's ambient light makes diffuse surfaces readable.
@@ -216,6 +258,15 @@ export const ENVIRONMENT_PRESETS = freeze({
     makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
     OUTDOOR_ATMOSPHERE,
   ),
+  sunset: makePreset(
+    'sunset',
+    'Sunset',
+    null,
+    makeAmbient(0xc8bfdc, 0.22),
+    makeHemisphere(0xa9b3dd, 0x625468, 0.4),
+    makeAccent(SUNSET_ATMOSPHERE.sunColor, SUNSET_ATMOSPHERE.sunIntensity, SUNSET_ATMOSPHERE.sunDirection),
+    SUNSET_ATMOSPHERE,
+  ),
 });
 
 function directionFromPresetAccent(id) {
@@ -229,8 +280,37 @@ function configureAtmosphere(sky, atmosphere) {
   sky.frustumCulled = false;
   for (const [name, value] of Object.entries(atmosphere.sky)) sky[name].value = value;
   sky.cloudSpeed.value = 0;
+  sky.cloudCoverage.value = 0;
   sky.sunPosition.value.fromArray(atmosphere.sunDirection);
   sky.showSunDisc.value = true;
+  // Compress sky highlights in linear space before both background and IBL
+  // capture. Models keep the viewport's existing sRGB/NoToneMapping contract.
+  const scattering = sky.material.colorNode;
+  const cloudField = Fn(([p]) => mx_fractal_noise_float(vec3(p, 0), 5, 2.1, 0.5).mul(0.5).add(0.5));
+  sky.material.colorNode = Fn(() => {
+    const direction = positionWorld.sub(cameraPosition).normalize();
+    const skyColor = neutralToneMapping(scattering.rgb, atmosphere.exposure);
+    const { coverage, density, elevation, scale } = atmosphere.clouds;
+    const uv = direction.xz.div(max(direction.y, 0.05)).mul((scale * 1000) / (1 - elevation * 0.9));
+    const field = cloudField(uv).toVar();
+    const threshold = 1 - coverage;
+    // Filter the silhouette at capture resolution; fade distant clouds into
+    // the atmospheric horizon instead of adding fog to inspection geometry.
+    const edgeWidth = fwidth(field).mul(1.5).add(0.015);
+    const mask = smoothstep(threshold, edgeWidth.add(threshold + 0.12), field)
+      .mul(density)
+      .mul(smoothstep(0.02, 0.22, direction.y));
+    const sun = sky.sunPosition;
+    const towardSun = vec2(sun.x, sun.z).div(max(sun.y, 0.15)).mul(0.12);
+    const sunDensity = max(0, cloudField(uv.add(towardSun)).sub(threshold));
+    const transmission = exp(sunDensity.mul(-5));
+    const rim = max(0, field.sub(threshold).sub(sunDensity)).mul(2);
+    const forward = max(0, direction.dot(sun)).pow(6);
+    const illumination = transmission.mul(max(sun.y, 0).mul(0.5).add(0.3)).add(rim).add(forward.mul(0.25));
+    const cloudColor = color(0x7889aa).mul(0.25).add(color(atmosphere.sunColor).mul(illumination));
+    const cloudedSky = mix(skyColor, cloudColor, mask);
+    return vec4(mix(color(atmosphere.groundColor), cloudedSky, smoothstep(-0.35, 0.02, direction.y)), 1);
+  })();
 }
 
 function createAtmosphereCaptureScene(id, atmosphere) {
@@ -245,7 +325,7 @@ function createAtmosphereCaptureScene(id, atmosphere) {
 // Capture the static atmosphere once. A cube background follows camera rotation
 // without joining the model scene or depending on its clipping planes/layers.
 function captureSky(renderer, captureScene) {
-  const target = new THREE.CubeRenderTarget(512, {
+  const target = new THREE.CubeRenderTarget(1024, {
     type: THREE.HalfFloatType,
     generateMipmaps: false,
     minFilter: THREE.LinearFilter,
@@ -370,7 +450,7 @@ function createStudioCaptureScene() {
 
 const IBL_PROFILES = freeze({
   outdoor: freeze({
-    environmentIntensity: 0.1,
+    environmentIntensity: 0.65,
     lightIntensity: freeze({
       ambient: 0.04,
       hemisphere: 0.08,
@@ -379,6 +459,17 @@ const IBL_PROFILES = freeze({
     dominantDirection: OUTDOOR_ATMOSPHERE.sunDirection,
     pmrem: DEFAULT_PMREM,
     atmosphere: OUTDOOR_ATMOSPHERE,
+  }),
+  sunset: freeze({
+    environmentIntensity: 0.65,
+    lightIntensity: freeze({
+      ambient: 0.12,
+      hemisphere: 0.22,
+      accent: SUNSET_ATMOSPHERE.sunIntensity,
+    }),
+    dominantDirection: SUNSET_ATMOSPHERE.sunDirection,
+    pmrem: DEFAULT_PMREM,
+    atmosphere: SUNSET_ATMOSPHERE,
   }),
   indoor: freeze({
     environmentIntensity: 0.38,
@@ -621,8 +712,11 @@ export function createEnvironmentController({
       const { sigma, near, far, size } = profile.pmrem;
       if (profile.atmosphere) {
         skyTarget = captureSky(renderer, captureScene);
-        generatedTarget = pmremGenerator.fromCubemap(skyTarget.texture);
-      } else generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
+        // Refilter the same visible sky at the smaller reflection resolution.
+        for (const child of captureScene.children) child.visible = false;
+        captureScene.background = skyTarget.texture;
+      }
+      generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
       if (!generatedTarget?.texture) {
         throw new Error(`${id} PMREM generation returned no texture.`);
       }
