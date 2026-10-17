@@ -13,7 +13,6 @@ src/app/_baked_features.py
 # AI
 .codex/
 mod-analysis/
-graphify-out/
 
 __pycache__/
 *.pyc
