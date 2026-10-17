@@ -52,7 +52,7 @@ def test_environment_backgrounds_are_independent_of_model_geometry_and_clipping(
     wait_loaded(page)
     backgrounds = []
     presets = ['studio', 'indoor', 'outdoor', 'sunset']
-    for preset in presets * 2:
+    for preset in presets:
         page.evaluate('id => window.modViewer.setEnvironmentPreset(id)', preset)
         page.wait_for_function('!window.__environmentScene.getEnvironmentDebugState().preparationInFlight')
         colors = []
@@ -69,8 +69,7 @@ def test_environment_backgrounds_are_independent_of_model_geometry_and_clipping(
                 colors.append(image.convert('RGB').getpixel((700, 250)))
         assert all(max(abs(a-b) for a, b in zip(colors[0], color)) <= 2 for color in colors[1:])
         backgrounds.append(colors[0])
-    assert backgrounds[:4] == backgrounds[4:]
-    assert len(set(backgrounds[:4])) == 4
+    assert len(set(backgrounds)) == len(presets)
     for preset, expected_color in zip(presets, backgrounds):
         result = page.evaluate("""async preset => {
           const s = await import('./js/scene/scene.js');

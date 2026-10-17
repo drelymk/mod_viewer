@@ -4,13 +4,11 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn,
-  abs,
   cameraPosition,
   color,
   exp,
   fwidth,
   max,
-  min,
   mix,
   mx_fractal_noise_float,
   neutralToneMapping,
@@ -249,45 +247,15 @@ function createStudioBackgroundNode() {
 
 function createIndoorBackgroundNode() {
   const capture = INDOOR_CAPTURE;
-  const windowDirection = new THREE.Vector3().fromArray(directionFromPresetAccent('indoor'));
-  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), windowDirection).normalize();
-  const up = new THREE.Vector3().crossVectors(windowDirection, right);
-  const normal = vec3(...windowDirection.toArray());
+  const daylightDirection = vec3(...directionFromPresetAccent('indoor'));
   return Fn(() => {
     const direction = normalWorldGeometry.normalize();
-    // Intersect a fixed, distant room silhouette, independent of model bounds
-    // and camera translation. This is background shading, not a model floor.
-    const wallDistance = min(
-      max(abs(direction.x), 0.001)
-        .reciprocal()
-        .mul(capture.room.size[0] / 2),
-      max(abs(direction.z), 0.001)
-        .reciprocal()
-        .mul(capture.room.size[2] / 2),
-    );
-    const height = direction.y.mul(wallDistance);
-    const floorY = capture.floor.position[1];
-    const ceilingY = capture.room.position[1] + capture.room.size[1] / 2;
-    const floorBlend = smoothstep(floorY - 0.18, floorY + 0.18, height);
-    const corner = min(abs(direction.x), abs(direction.z)).div(max(max(abs(direction.x), abs(direction.z)), 0.001));
-    const walls = color(capture.room.color).mul(corner.mul(-0.08).add(0.55));
-    const room = mix(color(capture.floor.color).mul(0.7), walls, floorBlend);
-    const ceiling = mix(room, color(capture.room.color).mul(0.65), smoothstep(ceilingY - 0.2, ceilingY + 0.2, height));
-    const facing = direction.dot(normal);
-    const spill = max(0, facing).pow(3).mul(0.12);
-    const illuminated = ceiling.add(color(capture.mainCard.color).mul(spill));
-    const planeHit = direction.mul(capture.mainCard.distance).div(max(facing, 0.001));
-    const uv = vec2(planeHit.dot(vec3(...right.toArray())), planeHit.dot(vec3(...up.toArray()))).div(
-      vec2(...capture.mainCard.size).mul(0.5),
-    );
-    const edge = max(abs(uv.x), abs(uv.y));
-    const filter = max(fwidth(edge), 0.005);
-    const windowMask = smoothstep(filter.negate().add(1), filter.add(1), edge)
-      .oneMinus()
-      .mul(smoothstep(0, 0.08, facing));
-    const panes = smoothstep(0.015, 0.035, abs(uv.x)).mul(smoothstep(0.015, 0.035, abs(uv.y)));
-    const windowColor = color(capture.mainCard.color).mul(panes.mul(0.1).add(0.55));
-    return vec4(mix(illuminated, windowColor, windowMask), 1);
+    // Suggest warm indoor bounce and broad daylight without architectural
+    // edges or a physical floor that would need to track the model.
+    const tone = smoothstep(-0.8, 0.8, direction.y);
+    const warmth = mix(color(capture.floor.color).mul(0.55), color(capture.room.color).mul(0.5), tone);
+    const daylight = smoothstep(-0.4, 1, direction.dot(daylightDirection)).mul(0.07);
+    return vec4(warmth.add(color(capture.mainCard.color).mul(daylight)), 1);
   })();
 }
 
