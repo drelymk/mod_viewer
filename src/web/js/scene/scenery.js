@@ -264,7 +264,6 @@ export function createSceneryController({ scene }) {
     group.traverse((object) => {
       if (object.geometry) resources.add(object.geometry);
       if (object.material) resources.add(object.material);
-      if (object.material?.map) resources.add(object.material.map);
       if (object.isInstancedMesh) resources.add(object);
     });
     for (const resource of resources) resource.dispose();

@@ -159,7 +159,7 @@ const environmentController = createEnvironmentController({
   lightTarget: keyLight.target,
   onVisualChange: requestRender,
 });
-const sceneryController = createSceneryController({ scene, onVisualChange: requestRender });
+const sceneryController = createSceneryController({ scene });
 window.addEventListener('pagehide', (event) => {
   if (!event.persisted) {
     sceneryController.dispose();

@@ -134,16 +134,6 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
             """,
                 preset,
             )
-            data["drawCalls"], data["gpuMemory"] = evaluate(
-                page,
-                """
-              const autoReset=s.renderer.info.autoReset;
-              try {
-                s.renderer.info.autoReset=false; s.renderer.info.reset(); await frame();
-                return [s.renderer.info.render.drawCalls,{...s.renderer.info.memory}];
-              } finally {s.renderer.info.autoReset=autoReset;}
-            """,
-            )
             for mode in ["direct", "ao", "bloom", "ao-bloom"]:
                 evaluate(
                     page,
@@ -157,6 +147,18 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
             evaluate(
                 page,
                 "s.setAmbientOcclusionStrength(0); s.setBloomEnabled(false); await frame();",
+            )
+            # Warm the same output graphs before comparing allocations. Otherwise
+            # the second preset inherits post-process targets absent from the first.
+            data["drawCalls"], data["gpuMemory"] = evaluate(
+                page,
+                """
+              const autoReset=s.renderer.info.autoReset;
+              try {
+                s.renderer.info.autoReset=false; s.renderer.info.reset(); await frame();
+                return [s.renderer.info.render.drawCalls,{...s.renderer.info.memory}];
+              } finally {s.renderer.info.autoReset=autoReset;}
+            """,
             )
             before = evaluate(
                 page,
@@ -276,7 +278,9 @@ def main():
                 "skyTexelBytes": reports[0]["presets"][preset]["skyTexelBytes"],
                 "pmremTexelBytes": reports[0]["presets"][preset]["pmremTexelBytes"],
                 "drawCalls": reports[0]["presets"][preset]["drawCalls"],
-                "gpuMemoryBytes": reports[0]["presets"][preset]["gpuMemory"]["total"],
+                "gpuMemoryEstimateBytes": reports[0]["presets"][preset]["gpuMemory"][
+                    "total"
+                ],
                 "cameraMotionMs": statistics.median(
                     v for r in reports for v in r["presets"][preset]["cameraMotionMs"]
                 ),
