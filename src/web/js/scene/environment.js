@@ -4,11 +4,13 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn,
+  abs,
   cameraPosition,
   color,
   exp,
   fwidth,
   max,
+  min,
   mix,
   mx_fractal_noise_float,
   neutralToneMapping,
@@ -80,41 +82,41 @@ const SUNSET_ATMOSPHERE = makeAtmosphere(
 // even when the viewer's ambient light makes diffuse surfaces readable.
 const INDOOR_CAPTURE = freeze({
   room: freeze({
-    color: 0x998b7d,
-    size: freeze([18, 12, 18]),
-    position: freeze([0, 1, 0]),
+    color: 0xb4a28e,
+    size: freeze([18, 10, 18]),
+    position: freeze([0, 2, 0]),
   }),
   floor: freeze({
-    color: 0x6d6056,
+    color: 0x83715f,
     size: freeze([18, 18]),
-    position: freeze([0, -4.95, 0]),
+    position: freeze([0, -2.95, 0]),
   }),
   mainCard: freeze({
-    color: 0xffd6af,
-    intensity: 2.8,
-    distance: 6,
-    size: freeze([5.5, 4.0]),
+    color: 0xe5f0ff,
+    intensity: 2.4,
+    distance: 8,
+    size: freeze([3.8, 3.2]),
   }),
   ceilingCard: freeze({
-    color: 0xfff0de,
-    intensity: 1.4,
-    position: freeze([0, 4.75, 0]),
-    size: freeze([6.0, 5.0]),
+    color: 0xffe2bf,
+    intensity: 0.75,
+    position: freeze([0, 6.5, 0]),
+    size: freeze([7.0, 5.0]),
     target: freeze([0, 0, 0]),
   }),
   fillCard: freeze({
-    color: 0xeaf1f7,
-    intensity: 1.15,
-    position: freeze([-4.5, 1.2, 3.5]),
-    size: freeze([5.5, 4.5]),
+    color: 0xffd9b5,
+    intensity: 0.65,
+    position: freeze([5.0, 1.0, 1.5]),
+    size: freeze([6.0, 4.5]),
     target: freeze([0, 0, 0]),
   }),
   roomLight: freeze({
-    color: 0xffdfbf,
-    intensity: 85,
+    color: 0xffe7cd,
+    intensity: 50,
     distance: 0,
     decay: 2,
-    distanceFromOrigin: 2.5,
+    distanceFromOrigin: 1.5,
   }),
 });
 const STUDIO_CAPTURE = freeze({
@@ -164,23 +166,6 @@ const STUDIO_CAPTURE = freeze({
   }),
 });
 
-const makeStops = (entries) => freeze(entries.map(([offset, color]) => freeze({ offset, color })));
-
-const makeGradient = (type, entries, options = {}) =>
-  freeze({
-    type,
-    stops: makeStops(entries),
-    ...options,
-  });
-
-const radialBackground = (center, outerRadius, entries, overlay) =>
-  makeGradient('radial', entries, {
-    center: freeze(center),
-    innerRadius: 0.04,
-    outerRadius,
-    ...(overlay ? { overlay: makeGradient('vertical', overlay) } : {}),
-  });
-
 const makeAmbient = (color, intensity) => freeze({ color, intensity });
 const makeHemisphere = (color, groundColor, intensity) =>
   freeze({
@@ -219,23 +204,10 @@ export const ENVIRONMENT_PRESETS = freeze({
   indoor: makePreset(
     'indoor',
     'Indoor',
-    radialBackground(
-      [0.5, 0.43],
-      0.88,
-      [
-        [0, '#807165'],
-        [0.42, '#62564d'],
-        [1, '#36312e'],
-      ],
-      [
-        [0, 'rgba(24,12,8,0.10)'],
-        [0.66, 'rgba(0,0,0,0)'],
-        [1, 'rgba(0,0,0,0.12)'],
-      ],
-    ),
-    makeAmbient(0xfff2e5, 0.32),
-    makeHemisphere(0xfff0dc, 0x686868, 0.38),
-    makeAccent(0xffd2aa, 0.45, [4, 8, 5]),
+    () => createIndoorBackgroundNode(),
+    makeAmbient(0xffeddd, 0.28),
+    makeHemisphere(0xe6f0ff, 0x8b6f56, 0.36),
+    makeAccent(0xe5f0ff, 0.18, [-5, 2.5, -7]),
   ),
   outdoor: makePreset(
     'outdoor',
@@ -274,6 +246,50 @@ function createStudioBackgroundNode() {
     const keySpill = max(0, direction.dot(keyDirection)).pow(4).mul(0.22).add(0.78);
     const cove = exp(direction.y.add(0.25).mul(3).pow(2).negate()).mul(0.018);
     return vec4(backdrop.mul(keySpill).add(cove), 1);
+  })();
+}
+
+function createIndoorBackgroundNode() {
+  const capture = INDOOR_CAPTURE;
+  const windowDirection = new THREE.Vector3().fromArray(directionFromPresetAccent('indoor'));
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), windowDirection).normalize();
+  const up = new THREE.Vector3().crossVectors(windowDirection, right);
+  const normal = vec3(...windowDirection.toArray());
+  return Fn(() => {
+    const direction = normalWorldGeometry.normalize();
+    // Intersect a fixed, distant room silhouette, independent of model bounds
+    // and camera translation. This is background shading, not a model floor.
+    const wallDistance = min(
+      max(abs(direction.x), 0.001)
+        .reciprocal()
+        .mul(capture.room.size[0] / 2),
+      max(abs(direction.z), 0.001)
+        .reciprocal()
+        .mul(capture.room.size[2] / 2),
+    );
+    const height = direction.y.mul(wallDistance);
+    const floorY = capture.floor.position[1];
+    const ceilingY = capture.room.position[1] + capture.room.size[1] / 2;
+    const floorBlend = smoothstep(floorY - 0.18, floorY + 0.18, height);
+    const corner = min(abs(direction.x), abs(direction.z)).div(max(max(abs(direction.x), abs(direction.z)), 0.001));
+    const walls = color(capture.room.color).mul(corner.mul(-0.08).add(0.55));
+    const room = mix(color(capture.floor.color).mul(0.7), walls, floorBlend);
+    const ceiling = mix(room, color(capture.room.color).mul(0.65), smoothstep(ceilingY - 0.2, ceilingY + 0.2, height));
+    const facing = direction.dot(normal);
+    const spill = max(0, facing).pow(3).mul(0.12);
+    const illuminated = ceiling.add(color(capture.mainCard.color).mul(spill));
+    const planeHit = direction.mul(capture.mainCard.distance).div(max(facing, 0.001));
+    const uv = vec2(planeHit.dot(vec3(...right.toArray())), planeHit.dot(vec3(...up.toArray()))).div(
+      vec2(...capture.mainCard.size).mul(0.5),
+    );
+    const edge = max(abs(uv.x), abs(uv.y));
+    const filter = max(fwidth(edge), 0.005);
+    const windowMask = smoothstep(filter.negate().add(1), filter.add(1), edge)
+      .oneMinus()
+      .mul(smoothstep(0, 0.08, facing));
+    const panes = smoothstep(0.015, 0.035, abs(uv.x)).mul(smoothstep(0.015, 0.035, abs(uv.y)));
+    const windowColor = color(capture.mainCard.color).mul(panes.mul(0.1).add(0.55));
+    return vec4(mix(illuminated, windowColor, windowMask), 1);
   })();
 }
 
@@ -452,11 +468,11 @@ const IBL_PROFILES = freeze({
     atmosphere: SUNSET_ATMOSPHERE,
   }),
   indoor: freeze({
-    environmentIntensity: 0.38,
+    environmentIntensity: 0.5,
     lightIntensity: freeze({
-      ambient: 0.13,
-      hemisphere: 0.24,
-      accent: 0.3,
+      ambient: 0.1,
+      hemisphere: 0.2,
+      accent: 0.18,
     }),
     dominantDirection: directionFromPresetAccent('indoor'),
     pmrem: DEFAULT_PMREM,
