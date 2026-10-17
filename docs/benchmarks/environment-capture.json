@@ -1,0 +1,1389 @@
+{
+  "method": {
+    "repeats": 3,
+    "cachedSwitchesPerPresetPerRun": 5,
+    "devicePixelRatio": 1,
+    "browser": "Edge with the vendored Three.js WebGPU renderer",
+    "timing": "Wall-clock activation or switch through frame scheduling and GPU queue completion; includes shader preparation, not isolated GPU timestamps.",
+    "memory": "RGBA16F texel storage, six faces, no cubemap mipmaps; excludes transient targets, depth attachments and driver overhead.",
+    "materialMask": "Circular foreground region centered at modelSamples with the recorded projected 0.3-world-unit radius; mean absolute per-channel RGB difference on 8-bit screenshots.",
+    "skyRegions": {
+      "nearEmissionStandard": [
+        500,
+        180,
+        1000,
+        230
+      ],
+      "nearEmissionLarge": [
+        1100,
+        180,
+        2000,
+        230
+      ],
+      "farStandard": [
+        20,
+        200,
+        350,
+        250
+      ],
+      "farLarge": [
+        20,
+        200,
+        700,
+        280
+      ]
+    }
+  },
+  "cases": [
+    {
+      "viewport": [
+        1280,
+        900
+      ],
+      "skySize": 512,
+      "presets": {
+        "outdoor": {
+          "activationMs": 805.8000000007451,
+          "cachedSwitchMs": 77.80000000074506,
+          "skyTexelBytes": 12582912,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            839.5,
+            805.8,
+            802.6
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              82.9,
+              78.4,
+              73.4,
+              101.9,
+              76.5
+            ],
+            [
+              83.2,
+              75.1,
+              77.9,
+              80,
+              78.9
+            ],
+            [
+              73.5,
+              74.4,
+              75.4,
+              77.8,
+              75.9
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 20,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 1,
+            "ao-bloom": 1
+          }
+        },
+        "sunset": {
+          "activationMs": 420.5999999977648,
+          "cachedSwitchMs": 74.19999999925494,
+          "skyTexelBytes": 12582912,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            446.4,
+            420.6,
+            417.2
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              71.7,
+              72.7,
+              71.5,
+              71.6,
+              94.9
+            ],
+            [
+              78.8,
+              74.2,
+              76.8,
+              70.2,
+              72.6
+            ],
+            [
+              76,
+              80.3,
+              77.1,
+              71.5,
+              76.6
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 8,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 1,
+            "ao-bloom": 1
+          }
+        }
+      },
+      "cachedMemoryStable": true,
+      "idleUpdates": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "rendererMemorySamples": [
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 144561543,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 146102373
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 144561543,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 146102373
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 144561543,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 146102373
+        }
+      ]
+    },
+    {
+      "viewport": [
+        1280,
+        900
+      ],
+      "skySize": 1024,
+      "presets": {
+        "outdoor": {
+          "activationMs": 785.3000000007451,
+          "cachedSwitchMs": 76.10000000149012,
+          "skyTexelBytes": 50331648,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            816.5,
+            784.6,
+            785.3
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              90.6,
+              74.9,
+              72.9,
+              76.3,
+              76
+            ],
+            [
+              71.2,
+              78,
+              73.9,
+              76.7,
+              75
+            ],
+            [
+              86.8,
+              73.3,
+              76.1,
+              102.1,
+              76.2
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 19,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 1,
+            "ao-bloom": 1
+          }
+        },
+        "sunset": {
+          "activationMs": 427.5,
+          "cachedSwitchMs": 77.5,
+          "skyTexelBytes": 50331648,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            454.2,
+            427.5,
+            426.8
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              78.6,
+              77.5,
+              77.6,
+              76.5,
+              76.2
+            ],
+            [
+              78,
+              75,
+              80.5,
+              74.7,
+              102.7
+            ],
+            [
+              79.8,
+              75.8,
+              74.7,
+              78,
+              75.1
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 8,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 1,
+            "ao-bloom": 1
+          }
+        }
+      },
+      "cachedMemoryStable": true,
+      "idleUpdates": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "rendererMemorySamples": [
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 144561543,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 146102373
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 144561543,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 146102373
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 144561543,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 146102373
+        }
+      ]
+    },
+    {
+      "viewport": [
+        2560,
+        1440
+      ],
+      "skySize": 512,
+      "presets": {
+        "outdoor": {
+          "activationMs": 811.1999999992549,
+          "cachedSwitchMs": 75.89999999850988,
+          "skyTexelBytes": 12582912,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            783.4,
+            819.1,
+            811.2
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              70.5,
+              75.6,
+              80,
+              82.7,
+              78.3
+            ],
+            [
+              83.8,
+              75.8,
+              74.8,
+              76.9,
+              73.8
+            ],
+            [
+              79.6,
+              75.9,
+              74.3,
+              75.4,
+              78.9
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 9,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 0,
+            "ao-bloom": 0
+          }
+        },
+        "sunset": {
+          "activationMs": 431.29999999701977,
+          "cachedSwitchMs": 78,
+          "skyTexelBytes": 12582912,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            424.8,
+            438.3,
+            431.3
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              78.7,
+              74.4,
+              74.9,
+              76,
+              74.8
+            ],
+            [
+              77.7,
+              78.2,
+              78.5,
+              75.1,
+              80
+            ],
+            [
+              80.8,
+              78.2,
+              80.1,
+              73.1,
+              78
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 4,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 0,
+            "ao-bloom": 0
+          }
+        }
+      },
+      "cachedMemoryStable": true,
+      "idleUpdates": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "rendererMemorySamples": [
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 343531783,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 345072613
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 343531783,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 345072613
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 343531783,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 345072613
+        }
+      ]
+    },
+    {
+      "viewport": [
+        2560,
+        1440
+      ],
+      "skySize": 1024,
+      "presets": {
+        "outdoor": {
+          "activationMs": 793.6999999992549,
+          "cachedSwitchMs": 76.59999999776483,
+          "skyTexelBytes": 50331648,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            779.7,
+            813.9,
+            793.7
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              73.6,
+              78,
+              76.6,
+              75.9,
+              72.8
+            ],
+            [
+              85.6,
+              78.9,
+              77,
+              79.3,
+              82.2
+            ],
+            [
+              62.9,
+              63.3,
+              70,
+              84.8,
+              70
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 9,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 0,
+            "ao-bloom": 0
+          }
+        },
+        "sunset": {
+          "activationMs": 419.30000000074506,
+          "cachedSwitchMs": 76.89999999850988,
+          "skyTexelBytes": 50331648,
+          "pmremTexelBytes": 6291456,
+          "activationSamplesMs": [
+            448.9,
+            413.5,
+            419.3
+          ],
+          "cachedSwitchSamplesMs": [
+            [
+              72.8,
+              78.9,
+              76.6,
+              77.3,
+              80.2
+            ],
+            [
+              74.3,
+              76.9,
+              78.9,
+              76.9,
+              76
+            ],
+            [
+              62.3,
+              77.1,
+              68.7,
+              75.4,
+              84.5
+            ]
+          ],
+          "nearEmissionStripMaxDelta": 4,
+          "farSkyMaxDeltaByMode": {
+            "ao": 0,
+            "bloom": 0,
+            "ao-bloom": 0
+          }
+        }
+      },
+      "cachedMemoryStable": true,
+      "idleUpdates": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "rendererMemorySamples": [
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 343531783,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 345072613
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 343531783,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 345072613
+        },
+        {
+          "attributes": 64,
+          "attributesSize": 412908,
+          "geometries": 26,
+          "indexAttributes": 14,
+          "indexAttributesSize": 357192,
+          "indirectStorageAttributes": 0,
+          "indirectStorageAttributesSize": 0,
+          "programs": 100,
+          "programsSize": 733450,
+          "readbackBuffers": 0,
+          "readbackBuffersSize": 0,
+          "renderTargets": 34,
+          "storageAttributes": 0,
+          "storageAttributesSize": 0,
+          "textures": 49,
+          "texturesSize": 343531783,
+          "uniformBuffers": 170,
+          "uniformBuffersSize": 37280,
+          "total": 345072613
+        }
+      ]
+    }
+  ],
+  "materialComparisons": [
+    {
+      "viewport": [
+        1280,
+        900
+      ],
+      "preset": "outdoor",
+      "materials": [
+        {
+          "material": "normal-diffuse",
+          "meanRGB512": [
+            81.143,
+            103.328,
+            112.271
+          ],
+          "meanRGB1024": [
+            81.235,
+            103.368,
+            112.242
+          ],
+          "meanAbsoluteChannelDelta": 0.0532,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "metal",
+          "meanRGB512": [
+            75.395,
+            103.545,
+            130.255
+          ],
+          "meanRGB1024": [
+            75.555,
+            103.593,
+            130.216
+          ],
+          "meanAbsoluteChannelDelta": 0.086,
+          "whiteClippedFraction": {
+            "512": 0.02607,
+            "1024": 0.02607
+          }
+        },
+        {
+          "material": "glossy",
+          "meanRGB512": [
+            97.362,
+            84.191,
+            65.27
+          ],
+          "meanRGB1024": [
+            97.438,
+            84.212,
+            65.248
+          ],
+          "meanAbsoluteChannelDelta": 0.0395,
+          "whiteClippedFraction": {
+            "512": 0.00328,
+            "1024": 0.00328
+          }
+        },
+        {
+          "material": "transparent-hair",
+          "meanRGB512": [
+            107.894,
+            115.825,
+            127.524
+          ],
+          "meanRGB1024": [
+            107.928,
+            115.835,
+            127.51
+          ],
+          "meanAbsoluteChannelDelta": 0.0229,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "diffuse",
+          "meanRGB512": [
+            81.734,
+            103.47,
+            111.364
+          ],
+          "meanRGB1024": [
+            81.816,
+            103.503,
+            111.333
+          ],
+          "meanAbsoluteChannelDelta": 0.049,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "toon",
+          "meanRGB512": [
+            146.839,
+            94.594,
+            60.638
+          ],
+          "meanRGB1024": [
+            146.839,
+            94.594,
+            60.638
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "unlit",
+          "meanRGB512": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanRGB1024": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "emissive",
+          "meanRGB512": [
+            255.0,
+            143.69,
+            80.599
+          ],
+          "meanRGB1024": [
+            255.0,
+            143.692,
+            80.594
+          ],
+          "meanAbsoluteChannelDelta": 0.0023,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "viewport": [
+        1280,
+        900
+      ],
+      "preset": "sunset",
+      "materials": [
+        {
+          "material": "normal-diffuse",
+          "meanRGB512": [
+            61.949,
+            67.919,
+            71.434
+          ],
+          "meanRGB1024": [
+            62.098,
+            67.982,
+            71.452
+          ],
+          "meanAbsoluteChannelDelta": 0.0766,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "metal",
+          "meanRGB512": [
+            46.766,
+            52.941,
+            64.089
+          ],
+          "meanRGB1024": [
+            47.096,
+            53.046,
+            64.138
+          ],
+          "meanAbsoluteChannelDelta": 0.1623,
+          "whiteClippedFraction": {
+            "512": 0.0145,
+            "1024": 0.0145
+          }
+        },
+        {
+          "material": "glossy",
+          "meanRGB512": [
+            73.246,
+            55.664,
+            38.647
+          ],
+          "meanRGB1024": [
+            73.383,
+            55.699,
+            38.657
+          ],
+          "meanAbsoluteChannelDelta": 0.0605,
+          "whiteClippedFraction": {
+            "512": 0.00207,
+            "1024": 0.00207
+          }
+        },
+        {
+          "material": "transparent-hair",
+          "meanRGB512": [
+            79.537,
+            66.096,
+            73.054
+          ],
+          "meanRGB1024": [
+            79.588,
+            66.114,
+            73.064
+          ],
+          "meanAbsoluteChannelDelta": 0.0274,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "diffuse",
+          "meanRGB512": [
+            61.769,
+            67.352,
+            70.72
+          ],
+          "meanRGB1024": [
+            61.902,
+            67.405,
+            70.738
+          ],
+          "meanAbsoluteChannelDelta": 0.068,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "toon",
+          "meanRGB512": [
+            133.189,
+            80.041,
+            51.766
+          ],
+          "meanRGB1024": [
+            133.189,
+            80.041,
+            51.766
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "unlit",
+          "meanRGB512": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanRGB1024": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "emissive",
+          "meanRGB512": [
+            255.0,
+            142.054,
+            75.881
+          ],
+          "meanRGB1024": [
+            255.0,
+            142.055,
+            75.882
+          ],
+          "meanAbsoluteChannelDelta": 0.0007,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "viewport": [
+        2560,
+        1440
+      ],
+      "preset": "outdoor",
+      "materials": [
+        {
+          "material": "normal-diffuse",
+          "meanRGB512": [
+            81.356,
+            103.533,
+            112.481
+          ],
+          "meanRGB1024": [
+            81.449,
+            103.572,
+            112.453
+          ],
+          "meanAbsoluteChannelDelta": 0.0536,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "metal",
+          "meanRGB512": [
+            75.1,
+            103.509,
+            130.511
+          ],
+          "meanRGB1024": [
+            75.269,
+            103.561,
+            130.473
+          ],
+          "meanAbsoluteChannelDelta": 0.0897,
+          "whiteClippedFraction": {
+            "512": 0.02536,
+            "1024": 0.02536
+          }
+        },
+        {
+          "material": "glossy",
+          "meanRGB512": [
+            97.553,
+            84.305,
+            65.342
+          ],
+          "meanRGB1024": [
+            97.627,
+            84.33,
+            65.322
+          ],
+          "meanAbsoluteChannelDelta": 0.0393,
+          "whiteClippedFraction": {
+            "512": 0.00297,
+            "1024": 0.00297
+          }
+        },
+        {
+          "material": "transparent-hair",
+          "meanRGB512": [
+            107.896,
+            115.724,
+            127.459
+          ],
+          "meanRGB1024": [
+            107.928,
+            115.733,
+            127.445
+          ],
+          "meanAbsoluteChannelDelta": 0.0217,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "diffuse",
+          "meanRGB512": [
+            81.942,
+            103.666,
+            111.547
+          ],
+          "meanRGB1024": [
+            82.032,
+            103.702,
+            111.52
+          ],
+          "meanAbsoluteChannelDelta": 0.0512,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "toon",
+          "meanRGB512": [
+            146.924,
+            94.652,
+            60.679
+          ],
+          "meanRGB1024": [
+            146.924,
+            94.652,
+            60.679
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "unlit",
+          "meanRGB512": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanRGB1024": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "emissive",
+          "meanRGB512": [
+            255.0,
+            143.697,
+            80.62
+          ],
+          "meanRGB1024": [
+            255.0,
+            143.699,
+            80.616
+          ],
+          "meanAbsoluteChannelDelta": 0.0016,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "viewport": [
+        2560,
+        1440
+      ],
+      "preset": "sunset",
+      "materials": [
+        {
+          "material": "normal-diffuse",
+          "meanRGB512": [
+            62.079,
+            68.071,
+            71.566
+          ],
+          "meanRGB1024": [
+            62.222,
+            68.131,
+            71.585
+          ],
+          "meanAbsoluteChannelDelta": 0.0736,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "metal",
+          "meanRGB512": [
+            46.32,
+            52.647,
+            63.833
+          ],
+          "meanRGB1024": [
+            46.648,
+            52.756,
+            63.885
+          ],
+          "meanAbsoluteChannelDelta": 0.163,
+          "whiteClippedFraction": {
+            "512": 0.0141,
+            "1024": 0.0141
+          }
+        },
+        {
+          "material": "glossy",
+          "meanRGB512": [
+            73.389,
+            55.753,
+            38.652
+          ],
+          "meanRGB1024": [
+            73.515,
+            55.788,
+            38.664
+          ],
+          "meanAbsoluteChannelDelta": 0.0572,
+          "whiteClippedFraction": {
+            "512": 0.00177,
+            "1024": 0.00177
+          }
+        },
+        {
+          "material": "transparent-hair",
+          "meanRGB512": [
+            79.557,
+            66.121,
+            73.088
+          ],
+          "meanRGB1024": [
+            79.608,
+            66.138,
+            73.097
+          ],
+          "meanAbsoluteChannelDelta": 0.0267,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "diffuse",
+          "meanRGB512": [
+            61.966,
+            67.565,
+            70.915
+          ],
+          "meanRGB1024": [
+            62.095,
+            67.618,
+            70.933
+          ],
+          "meanAbsoluteChannelDelta": 0.0665,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "toon",
+          "meanRGB512": [
+            133.241,
+            80.077,
+            51.79
+          ],
+          "meanRGB1024": [
+            133.241,
+            80.077,
+            51.79
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "unlit",
+          "meanRGB512": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanRGB1024": [
+            99.0,
+            141.0,
+            190.0
+          ],
+          "meanAbsoluteChannelDelta": 0.0,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        },
+        {
+          "material": "emissive",
+          "meanRGB512": [
+            255.0,
+            142.059,
+            75.895
+          ],
+          "meanRGB1024": [
+            255.0,
+            142.061,
+            75.896
+          ],
+          "meanAbsoluteChannelDelta": 0.0008,
+          "whiteClippedFraction": {
+            "512": 0.0,
+            "1024": 0.0
+          }
+        }
+      ]
+    }
+  ],
+  "emissionDisabledSkyMaxDelta": {
+    "outdoor": {
+      "ao": 0,
+      "bloom": 0,
+      "ao-bloom": 0
+    },
+    "sunset": {
+      "ao": 0,
+      "bloom": 0,
+      "ao-bloom": 0
+    }
+  }
+}

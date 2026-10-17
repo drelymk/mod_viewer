@@ -42,7 +42,10 @@ export class PMREMGenerator {
   dispose() {probe.disposed++;}
 }
 export const RendererUtils = {
-  saveRendererState: renderer => ({...renderer.state}),
+  saveRendererState: renderer => {
+    if(probe.failState) throw new Error('renderer state failed');
+    return {...renderer.state};
+  },
   restoreRendererState: (renderer, state) => {renderer.state = state;},
 };
 """))
@@ -85,19 +88,40 @@ export const RendererUtils = {
       environmentProbe.fail = true;
       const failing = create(); failing.setPreset('outdoor'); await failing.prepare();
       const failure = failing.getDebugState();
+      const failedCaptures = environmentProbe.captures.length;
+      await failing.prepare();
+      const passive = environmentProbe.captures.length === failedCaptures;
+      environmentProbe.fail = false;
+      failing.setPreset('outdoor'); failing.setPreset('outdoor'); await failing.prepare();
+      const recovered = failing.getDebugState().environmentActive
+        && environmentProbe.captures.length === failedCaptures + 1;
+      failing.setPreset('outdoor'); await failing.prepare();
+      const cachedRecovery = environmentProbe.captures.length === failedCaptures + 1;
       failing.dispose();
+      const unhandled = [];
+      window.addEventListener('unhandledrejection', event => unhandled.push(String(event.reason)));
+      const unexpected = create(); await unexpected.prepare();
+      environmentProbe.failState = true;
+      unexpected.setPreset('outdoor');
+      while(unexpected.getDebugState().preparationInFlight) await new Promise(r => setTimeout(r,0));
+      await new Promise(r => setTimeout(r,0));
+      const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
+      unexpected.dispose();
       return {cold, consistent, static:sun.speed === 0, skipped, sunset, reused, restored,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
         allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
         generators:environmentProbe.generators, disposed:environmentProbe.disposed,
-        rendererRestored:renderer.state.mrt === 'original'};
+        rendererRestored:renderer.state.mrt === 'original', passive, recovered, cachedRecovery,
+        stateFailure, unhandled};
     }""")
     assert result == {
         'cold': 0, 'consistent': True, 'static': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
-        'captures': 3, 'notifications': 3, 'failure': True, 'allDisposed': True,
-        'generators': 2, 'disposed': 8, 'rendererRestored': True,
+        'captures': 4, 'notifications': 4, 'failure': True, 'allDisposed': True,
+        'generators': 2, 'disposed': 10, 'rendererRestored': True,
+        'passive': True, 'recovered': True, 'cachedRecovery': True,
+        'stateFailure': True, 'unhandled': [],
     }
 
 

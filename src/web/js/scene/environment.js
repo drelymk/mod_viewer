@@ -22,6 +22,7 @@ import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 
 const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
+const SKY_CAPTURE_SIZE = 512;
 const freeze = Object.freeze;
 function makeAtmosphere(sunElevation, sunAzimuth, sky, exposure, groundColor) {
   const direction = new THREE.Vector3().setFromSphericalCoords(
@@ -325,7 +326,7 @@ function createAtmosphereCaptureScene(id, atmosphere) {
 // Capture the static atmosphere once. A cube background follows camera rotation
 // without joining the model scene or depending on its clipping planes/layers.
 function captureSky(renderer, captureScene) {
-  const target = new THREE.CubeRenderTarget(1024, {
+  const target = new THREE.CubeRenderTarget(SKY_CAPTURE_SIZE, {
     type: THREE.HalfFloatType,
     generateMipmaps: false,
     minFilter: THREE.LinearFilter,
@@ -684,7 +685,7 @@ export function createEnvironmentController({
     if (!preset) return false;
     currentPresetId = preset.id;
     applyPreset(id);
-    if (preparationEnabled) void prepareResource(id);
+    if (preparationEnabled) void prepareResource(id, true);
     return true;
   }
 
@@ -696,8 +697,9 @@ export function createEnvironmentController({
     let captureScene = null;
     let generatedTarget = null;
     let skyTarget = null;
-    const rendererState = THREE.RendererUtils.saveRendererState(renderer);
+    let rendererState = null;
     try {
+      rendererState = THREE.RendererUtils.saveRendererState(renderer);
       renderer.setMRT(null);
       pmremGenerator ||= new THREE.PMREMGenerator(renderer);
       captureScene = profile.atmosphere
@@ -722,24 +724,21 @@ export function createEnvironmentController({
       generatedTarget = null;
       skyTarget = null;
       return true;
-    } catch (error) {
-      resource.available = false;
-      resource.error = error?.message || String(error);
-      console.debug(`${id} environment preparation failed; using baseline lighting.`, error);
-      return false;
     } finally {
-      THREE.RendererUtils.restoreRendererState(renderer, rendererState);
+      if (rendererState) THREE.RendererUtils.restoreRendererState(renderer, rendererState);
       generatedTarget?.dispose?.();
       skyTarget?.dispose();
       disposeCaptureScene(captureScene);
     }
   }
 
-  function prepareResource(id) {
+  function prepareResource(id, retry = false) {
     const resource = iblResources.get(id);
     if (disposed || !resource) return Promise.resolve(false);
     if (resource.promise) return resource.promise;
-    if (resource.attempted) return Promise.resolve(resource.available);
+    // Only another explicit selection retries a failure; passive preparation
+    // and repeated selections during one pending capture never schedule more work.
+    if (resource.available || (resource.attempted && !retry)) return Promise.resolve(resource.available);
     resource.promise = (async () => {
       try {
         // Let startup and rapid preset changes settle before expensive GPU work.
@@ -751,6 +750,10 @@ export function createEnvironmentController({
           onVisualChange?.();
         }
         return generated;
+      } catch (error) {
+        resource.error = error?.message || String(error);
+        console.debug(`${id} environment preparation failed; using baseline lighting.`, error);
+        return false;
       } finally {
         resource.promise = null;
       }
