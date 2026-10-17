@@ -134,6 +134,16 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
             """,
                 preset,
             )
+            data["drawCalls"], data["gpuMemory"] = evaluate(
+                page,
+                """
+              const autoReset=s.renderer.info.autoReset;
+              try {
+                s.renderer.info.autoReset=false; s.renderer.info.reset(); await frame();
+                return [s.renderer.info.render.drawCalls,{...s.renderer.info.memory}];
+              } finally {s.renderer.info.autoReset=autoReset;}
+            """,
+            )
             for mode in ["direct", "ao", "bloom", "ao-bloom"]:
                 evaluate(
                     page,
@@ -208,7 +218,7 @@ def main():
     parser.add_argument(
         "--presets",
         nargs="+",
-        choices=["studio", "indoor", "outdoor", "sunset"],
+        choices=["studio", "indoor", "outdoor", "nature", "sunset"],
         default=["outdoor", "sunset"],
     )
     parser.add_argument(
@@ -265,6 +275,8 @@ def main():
                 ),
                 "skyTexelBytes": reports[0]["presets"][preset]["skyTexelBytes"],
                 "pmremTexelBytes": reports[0]["presets"][preset]["pmremTexelBytes"],
+                "drawCalls": reports[0]["presets"][preset]["drawCalls"],
+                "gpuMemoryBytes": reports[0]["presets"][preset]["gpuMemory"]["total"],
                 "cameraMotionMs": statistics.median(
                     v for r in reports for v in r["presets"][preset]["cameraMotionMs"]
                 ),

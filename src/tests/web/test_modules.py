@@ -57,13 +57,16 @@ export const RendererUtils = {
       const controller = create();
       await controller.prepare();
       const cold = environmentProbe.generators;
-      controller.setPreset('outdoor'); await controller.prepare();
+      controller.setPreset('nature');
+      const nature = scene.backgroundNode;
+      const naturePreparation = controller.prepare();
+      controller.setPreset('outdoor'); await naturePreparation;
       const outdoor = scene.backgroundNode;
       const sun = controller.getDebugState().atmosphere.sunDirection;
       const direction = lightTarget.children[0].position.clone().normalize().toArray();
       const consistent = sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
         && JSON.stringify(sun) === JSON.stringify(controller.getDominantLightDirection())
-        && environmentProbe.captures[0].node === outdoor;
+        && environmentProbe.captures[0].node === outdoor && nature === outdoor;
       controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
       const skipped = !controller.getDebugState().resources.indoor.attempted;
       const rooms = {};
@@ -82,12 +85,14 @@ export const RendererUtils = {
       let roomReuse = true;
       for(let i=0;i<5;i++) {
         controller.setPreset('default');
-        for(const id of ['studio','indoor','outdoor']) {
+        for(const id of ['studio','indoor','outdoor','nature']) {
           controller.setPreset(id); await controller.prepare();
           if(rooms[id]) roomReuse &&= scene.backgroundNode === rooms[id].node && scene.environment === rooms[id].texture;
         }
       }
       const reused = scene.backgroundNode === outdoor && controller.getDebugState().totalPmremGenerationCount === 4;
+      const sharedNature = controller.getPreset().id === 'nature'
+        && controller.getDebugState().activeIblPreset === 'outdoor' && controller.getDebugState().skyActive;
       controller.dispose(); controller.dispose();
       const restored = scene.background === original && !scene.backgroundNode && scene.environment === null
         && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
@@ -117,7 +122,7 @@ export const RendererUtils = {
       await new Promise(r => setTimeout(r,0));
       const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
       unexpected.dispose();
-      return {cold, consistent, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
+      return {cold, consistent, sharedNature, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
         roomLighting, roomReuse, roomDisposals,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
@@ -127,7 +132,7 @@ export const RendererUtils = {
         stateFailure, unhandled};
     }""")
     assert result == {
-        'cold': 0, 'consistent': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
+        'cold': 0, 'consistent': True, 'sharedNature': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
         'captures': 4, 'notifications': 5, 'failure': True, 'allDisposed': True,
         'roomLighting': True, 'roomReuse': True, 'roomDisposals': 2,
@@ -155,6 +160,8 @@ def test_scenery_placement_ownership_and_disposal_lifecycle(module_page):
       const children = [...group.children];
       const y = group.position.y;
       model.position.y += 3;
+      scenery.setEnabled(true);
+      scenery.setEnabled(false);scenery.setEnabled(true);
       const stable = group.position.y === y && scenery.getGroundLevel() === 6;
       scenery.updatePlacement();
       const moved = scenery.getGroundLevel() === 9;

@@ -1,7 +1,7 @@
 // Static viewer scenery; model state is supplied only at deliberate placement boundaries.
 
 import * as THREE from 'three/webgpu';
-import { color, mix, mx_noise_float, positionGeometry, smoothstep, uv } from 'three/tsl';
+import { color, mix, mx_noise_float, normalViewGeometry, positionGeometry, smoothstep, uv } from 'three/tsl';
 import { computeModelBounds } from './model-bounds.js';
 
 function random(seed) {
@@ -39,10 +39,10 @@ function createGrass() {
   const transform = new THREE.Object3D();
   for (let i = 0; i < grass.count; i++) {
     const angle = random(i * 5 + 1) * Math.PI * 2,
-      radius = 1.1 + random(i * 5 + 2) * 4.5;
+      radius = 0.65 + random(i * 5 + 2) * 4;
     transform.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
     transform.rotation.y = random(i * 5 + 3) * Math.PI;
-    const height = 0.035 + random(i * 5 + 4) * 0.055;
+    const height = 0.025 + random(i * 5 + 4) * 0.04;
     transform.scale.set(height * 0.8, height, height * 0.8);
     transform.updateMatrix();
     grass.setMatrixAt(i, transform.matrix);
@@ -71,6 +71,7 @@ function createTrees(onLoad) {
   }
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeVertexNormals();
   const texture = new THREE.TextureLoader().load(new URL('../../images/nature-tree.png', import.meta.url).href, onLoad);
   texture.colorSpace = THREE.SRGBColorSpace;
   const trees = new THREE.InstancedMesh(
@@ -78,10 +79,12 @@ function createTrees(onLoad) {
     new THREE.MeshBasicNodeMaterial({ map: texture, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide }),
     8,
   );
+  // Edge-on cards should disappear rather than draw narrow foliage strips.
+  trees.material.opacityNode = smoothstep(0.25, 0.5, normalViewGeometry.z.abs());
   const transform = new THREE.Object3D();
   for (let i = 0; i < trees.count; i++) {
     const side = i % 2 ? 1 : -1;
-    transform.position.set(side * (3.5 + random(i * 3 + 1) * 4), 0, -3.5 - random(i * 3 + 2) * 5);
+    transform.position.set(side * (5 + random(i * 3 + 1) * 5), 0, -8 - random(i * 3 + 2) * 6);
     transform.rotation.y = random(i * 3 + 3) * Math.PI;
     transform.scale.setScalar(2.2 + random(i * 3 + 4) * 1.8);
     transform.updateMatrix();
@@ -92,10 +95,11 @@ function createTrees(onLoad) {
 }
 
 function createGround() {
-  const variation = mx_noise_float(positionGeometry.xz.mul(0.6)).mul(0.5).add(0.5);
-  const patches = smoothstep(0.64, 0.85, mx_noise_float(positionGeometry.xz.mul(0.2)).mul(0.5).add(0.5));
+  const variation = mx_noise_float(positionGeometry.xy.mul(0.3)).mul(0.5).add(0.5).toVar();
+  const patches = smoothstep(0.64, 0.85, variation);
   const material = new THREE.MeshBasicNodeMaterial({
     transparent: true,
+    forceSinglePass: true,
     depthWrite: false,
     polygonOffset: true,
     polygonOffsetFactor: 1,
@@ -104,7 +108,7 @@ function createGround() {
   });
   material.colorNode = mix(mix(color(0x526b36), color(0x78864b), variation), color(0x706343), patches);
   material.opacityNode = smoothstep(0.72, 1, uv().sub(0.5).length().mul(2)).oneMinus();
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(12, 64), material);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(24, 64), material);
   ground.rotation.x = -Math.PI / 2;
   ground.renderOrder = -2;
   return ground;
@@ -120,13 +124,13 @@ export function createSceneryController({ scene, onVisualChange = null }) {
   let enabled = false;
   let disposed = false;
   let groundLevel = null;
+  let bounds = new THREE.Box3();
 
-  function updatePlacement() {
+  function applyPlacement() {
     if (disposed) return;
     group.visible = false;
     groundLevel = null;
     if (!enabled) return;
-    const bounds = computeModelBounds([...meshes], { visibleOnly: true });
     if (bounds.isEmpty()) return;
     const size = bounds.getSize(new THREE.Vector3());
     const span = Math.max(size.x, size.y, size.z);
@@ -151,9 +155,16 @@ export function createSceneryController({ scene, onVisualChange = null }) {
     group.visible = true;
   }
 
+  function updatePlacement() {
+    if (disposed) return;
+    bounds = computeModelBounds([...meshes], { visibleOnly: true });
+    applyPlacement();
+  }
+
   function setEnabled(value) {
+    if (enabled === !!value) return;
     enabled = !!value;
-    updatePlacement();
+    applyPlacement();
   }
 
   function setMeshes(nextMeshes = []) {
@@ -185,6 +196,7 @@ export function createSceneryController({ scene, onVisualChange = null }) {
     group.removeFromParent();
     group.clear();
     meshes.clear();
+    bounds.makeEmpty();
     group.visible = false;
     groundLevel = null;
   }

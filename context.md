@@ -376,6 +376,10 @@ of documentation, comments and tests; use portable fixtures instead.
 - Environment, outlines and render modes are viewer state, never staged INI or
   material reinterpretation. Outlines use child inverted hulls sharing geometry;
   wireframe/debug suppression retains the user's preference.
+- Nature shares Outdoor's sky and PMREM cache. Its static scenery stays outside
+  model lists, picking, editing, camera bounds and character AO. Place it only at
+  model load or deliberate transforms; animation must not move the ground.
+  Nature suppresses the grid without changing its saved visibility preference.
 - MESHES provides navigation, Inspector owns mesh/material/texture/color editing,
   and Controls owns Present/Toggle/Menu. Group Meshes/Toggles by subfolder, root
   INI stem or None for a single INI; retain source INI rows. Selection is an

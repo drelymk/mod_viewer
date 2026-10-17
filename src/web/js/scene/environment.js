@@ -186,6 +186,16 @@ const makePreset = (id, label, createBackgroundNode, ambient, hemisphere, accent
     ...(atmosphere ? { atmosphere } : {}),
   });
 
+const OUTDOOR_PRESET = makePreset(
+  'outdoor',
+  'Outdoor',
+  () => createAtmosphereNode(OUTDOOR_ATMOSPHERE),
+  makeAmbient(0xdbeaff, 0.26),
+  makeHemisphere(0x78b5ed, 0x667068, 0.45),
+  makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
+  OUTDOOR_ATMOSPHERE,
+);
+
 // Keep the visual vocabulary in one declarative table.
 export const ENVIRONMENT_PRESETS = freeze({
   default: makePreset('default', 'Default'),
@@ -205,15 +215,8 @@ export const ENVIRONMENT_PRESETS = freeze({
     makeHemisphere(0xe6f0ff, 0xb07b4b, 0.36),
     makeAccent(0xd8eaff, 0.42, [-5, 2.5, -7]),
   ),
-  outdoor: makePreset(
-    'outdoor',
-    'Outdoor',
-    () => createAtmosphereNode(OUTDOOR_ATMOSPHERE),
-    makeAmbient(0xdbeaff, 0.26),
-    makeHemisphere(0x78b5ed, 0x667068, 0.45),
-    makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
-    OUTDOOR_ATMOSPHERE,
-  ),
+  outdoor: OUTDOOR_PRESET,
+  nature: freeze({ ...OUTDOOR_PRESET, id: 'nature', label: 'Nature' }),
   sunset: makePreset(
     'sunset',
     'Sunset',
@@ -228,6 +231,8 @@ export const ENVIRONMENT_PRESETS = freeze({
 function directionFromPresetAccent(id) {
   return freeze(new THREE.Vector3().fromArray(ENVIRONMENT_PRESETS[id].accent.position).normalize().toArray());
 }
+
+const lightingPresetId = (id) => (id === 'nature' ? 'outdoor' : id);
 
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
 
@@ -547,8 +552,9 @@ export function createEnvironmentController({
       return;
     }
 
-    const profile = IBL_PROFILES[id];
-    const resource = iblResources.get(id);
+    const resourceId = lightingPresetId(id);
+    const profile = IBL_PROFILES[resourceId];
+    const resource = iblResources.get(resourceId);
     resource.backgroundNode ||= preset.createBackgroundNode();
     scene.background = originalBackground;
     scene.backgroundNode = resource.backgroundNode;
@@ -608,7 +614,8 @@ export function createEnvironmentController({
     }
   }
 
-  function prepareResource(id, retry = false) {
+  function prepareResource(presetId, retry = false) {
+    const id = lightingPresetId(presetId);
     const resource = iblResources.get(id);
     if (disposed || !resource) return Promise.resolve(false);
     if (resource.promise) return resource.promise;
@@ -619,10 +626,10 @@ export function createEnvironmentController({
       try {
         // Let startup and rapid preset changes settle before expensive GPU work.
         await new Promise((resolve) => setTimeout(resolve, 0));
-        if (disposed || currentPresetId !== id) return false;
+        if (disposed || lightingPresetId(currentPresetId) !== id) return false;
         const generated = generateIblResource(id);
-        if (generated && !disposed && currentPresetId === id) {
-          applyPreset(id);
+        if (generated && !disposed && lightingPresetId(currentPresetId) === id) {
+          applyPreset(currentPresetId);
           onVisualChange?.();
         }
         return generated;
@@ -672,12 +679,12 @@ export function createEnvironmentController({
       ),
       activeDominantDirection: getDominantLightDirection(),
       atmosphere: getPreset().atmosphere || null,
-      skyActive: !!getPreset().atmosphere && !!iblResources.get(currentPresetId)?.backgroundNode,
+      skyActive: !!getPreset().atmosphere && !!iblResources.get(lightingPresetId(currentPresetId))?.backgroundNode,
     };
   }
 
   function getDominantLightDirection() {
-    const direction = IBL_PROFILES[currentPresetId]?.dominantDirection;
+    const direction = IBL_PROFILES[lightingPresetId(currentPresetId)]?.dominantDirection;
     return direction ? [...direction] : null;
   }
 

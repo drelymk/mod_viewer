@@ -52,6 +52,7 @@ export default {
   'environment.preset.studio': 'Studio',
   'environment.preset.indoor': 'Indoor',
   'environment.preset.outdoor': 'Outdoor',
+  'environment.preset.nature': 'Nature',
   'environment.preset.sunset': 'Sunset',
   'renderer.webgpuUnavailable': 'WebGPU unavailable',
   'renderer.webgpuRequired': 'WebGPU is required by this version of Mod Viewer.',
