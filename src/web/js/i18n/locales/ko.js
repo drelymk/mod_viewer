@@ -55,6 +55,7 @@ export default {
   'environment.preset.studio': '스튜디오',
   'environment.preset.indoor': '실내',
   'environment.preset.outdoor': '실외',
+  'environment.preset.sunset': '노을',
   'renderer.webgpuUnavailable': 'WebGPU를 사용할 수 없음',
   'renderer.webgpuRequired': '이 버전의 Mod Viewer에는 WebGPU가 필요합니다.',
   'renderer.failure':

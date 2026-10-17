@@ -55,6 +55,7 @@ export default {
   'environment.preset.studio': '摄影棚',
   'environment.preset.indoor': '室内',
   'environment.preset.outdoor': '室外',
+  'environment.preset.sunset': '日落',
   'renderer.webgpuUnavailable': 'WebGPU 不可用',
   'renderer.webgpuRequired': '此版本的 Mod Viewer 需要 WebGPU。',
   'renderer.failure': '此版本的 Mod Viewer 需要 WebGPU。请更新图形驱动，或使用支持 WebGPU 的浏览器{detail}',

@@ -157,6 +157,9 @@ const environmentController = createEnvironmentController({
   lightTarget: keyLight.target,
   onVisualChange: requestRender,
 });
+window.addEventListener('pagehide', (event) => {
+  if (!event.persisted) environmentController.dispose();
+});
 const keyLightController = createKeyLightController({
   scene,
   camera,
@@ -216,7 +219,7 @@ new ResizeObserver(() => {
 let renderCount = 0;
 
 function renderFrame() {
-  if (rendererStopped || renderer.backend?.isWebGPUBackend !== true) return;
+  if (rendererStopped || !renderer.hasInitialized() || renderer.backend?.isWebGPUBackend !== true) return;
   const snapActive = viewGizmoController.updateSnap();
   keyLightController.update();
   characterShadowController.update();

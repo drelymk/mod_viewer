@@ -2,20 +2,79 @@
 // about mods, meshes, INIs, or the Python bridge.
 
 import * as THREE from 'three/webgpu';
+import {
+  Fn,
+  cameraPosition,
+  color,
+  exp,
+  fwidth,
+  max,
+  mix,
+  mx_fractal_noise_float,
+  neutralToneMapping,
+  normalWorldGeometry,
+  smoothstep,
+  vec2,
+  vec3,
+  vec4,
+  varyingProperty,
+} from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 
 const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
 const freeze = Object.freeze;
-const OUTDOOR_SKY = freeze({
-  turbidity: 2.5,
-  rayleigh: 0.8,
-  mieCoefficient: 0.003,
-  mieDirectionalG: 0.75,
-  cloudCoverage: 0,
-  cloudDensity: 0,
-  cloudElevation: 0.5,
-});
+function makeAtmosphere(sunElevation, sunAzimuth, sky, exposure, groundColor) {
+  const direction = new THREE.Vector3().setFromSphericalCoords(
+    1,
+    THREE.MathUtils.degToRad(90 - sunElevation),
+    THREE.MathUtils.degToRad(sunAzimuth),
+  );
+  const daylight = THREE.MathUtils.smoothstep(direction.y, 0, 0.7);
+  const { cloudCoverage, cloudDensity, cloudElevation, cloudScale, ...scattering } = sky;
+  return freeze({
+    sky: freeze(scattering),
+    clouds: freeze({ coverage: cloudCoverage, density: cloudDensity, elevation: cloudElevation, scale: cloudScale }),
+    sunDirection: freeze(direction.toArray()),
+    sunColor: new THREE.Color(0xffa35c).lerp(new THREE.Color(0xfff2df), daylight).getHex(),
+    sunIntensity: THREE.MathUtils.lerp(0.35, 0.7, daylight),
+    exposure,
+    groundColor,
+  });
+}
+
+const OUTDOOR_ATMOSPHERE = makeAtmosphere(
+  50,
+  -45,
+  {
+    turbidity: 2.5,
+    rayleigh: 0.8,
+    mieCoefficient: 0.003,
+    mieDirectionalG: 0.75,
+    cloudCoverage: 0.4,
+    cloudDensity: 0.65,
+    cloudElevation: 0.5,
+    cloudScale: 0.0004,
+  },
+  0.25,
+  0x53605b,
+);
+const SUNSET_ATMOSPHERE = makeAtmosphere(
+  5,
+  -160,
+  {
+    turbidity: 6,
+    rayleigh: 2.5,
+    mieCoefficient: 0.006,
+    mieDirectionalG: 0.82,
+    cloudCoverage: 0.43,
+    cloudDensity: 0.6,
+    cloudElevation: 0.45,
+    cloudScale: 0.0004,
+  },
+  0.5,
+  0x514856,
+);
 // Bake broad room illumination as well as softbox highlights into PMREM.
 // Dark capture walls leave metals and shadow-facing surfaces almost black,
 // even when the viewer's ambient light makes diffuse surfaces readable.
@@ -122,7 +181,6 @@ const radialBackground = (center, outerRadius, entries, overlay) =>
     ...(overlay ? { overlay: makeGradient('vertical', overlay) } : {}),
   });
 
-const verticalBackground = (entries) => makeGradient('vertical', entries);
 const makeAmbient = (color, intensity) => freeze({ color, intensity });
 const makeHemisphere = (color, groundColor, intensity) =>
   freeze({
@@ -136,7 +194,7 @@ const makeAccent = (color, intensity, position) =>
     intensity,
     position: freeze(position),
   });
-const makePreset = (id, label, background, ambient, hemisphere, accent) =>
+const makePreset = (id, label, background, ambient, hemisphere, accent, atmosphere = null) =>
   freeze({
     id,
     label,
@@ -144,10 +202,10 @@ const makePreset = (id, label, background, ambient, hemisphere, accent) =>
     ...(ambient ? { ambient } : {}),
     ...(hemisphere ? { hemisphere } : {}),
     ...(accent ? { accent } : {}),
+    ...(atmosphere ? { atmosphere } : {}),
   });
 
-// Keep the visual vocabulary in one declarative table. These are presentation
-// moods, not attempts to reproduce literal rooms or outdoor photographs.
+// Keep the visual vocabulary in one declarative table.
 export const ENVIRONMENT_PRESETS = freeze({
   default: makePreset('default', 'Default'),
   studio: makePreset(
@@ -195,15 +253,20 @@ export const ENVIRONMENT_PRESETS = freeze({
   outdoor: makePreset(
     'outdoor',
     'Outdoor',
-    verticalBackground([
-      [0, '#285b8a'],
-      [0.42, '#75a8ce'],
-      [0.68, '#879eae'],
-      [1, '#46515a'],
-    ]),
+    null,
     makeAmbient(0xdbeaff, 0.26),
     makeHemisphere(0x78b5ed, 0x667068, 0.45),
-    makeAccent(0xffe6bd, 0.7, [-6, 10, 6]),
+    makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
+    OUTDOOR_ATMOSPHERE,
+  ),
+  sunset: makePreset(
+    'sunset',
+    'Sunset',
+    null,
+    makeAmbient(0xc8bfdc, 0.22),
+    makeHemisphere(0xa9b3dd, 0x625468, 0.4),
+    makeAccent(SUNSET_ATMOSPHERE.sunColor, SUNSET_ATMOSPHERE.sunIntensity, SUNSET_ATMOSPHERE.sunDirection),
+    SUNSET_ATMOSPHERE,
   ),
 });
 
@@ -213,26 +276,55 @@ function directionFromPresetAccent(id) {
 
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
 
-function configureOutdoorSky(sky) {
-  sky.scale.setScalar(10000);
-  sky.turbidity.value = OUTDOOR_SKY.turbidity;
-  sky.rayleigh.value = OUTDOOR_SKY.rayleigh;
-  sky.mieCoefficient.value = OUTDOOR_SKY.mieCoefficient;
-  sky.mieDirectionalG.value = OUTDOOR_SKY.mieDirectionalG;
-  sky.cloudCoverage.value = OUTDOOR_SKY.cloudCoverage;
-  sky.cloudDensity.value = OUTDOOR_SKY.cloudDensity;
-  sky.cloudElevation.value = OUTDOOR_SKY.cloudElevation;
-  sky.sunPosition.value.fromArray(IBL_PROFILES.outdoor.dominantDirection);
-  sky.showSunDisc.value = false;
-}
-
-function createOutdoorCaptureScene() {
-  const captureScene = new THREE.Scene();
-  captureScene.userData.iblPresetId = 'outdoor';
+function createAtmosphereNode(atmosphere) {
+  const direction = normalWorldGeometry.normalize();
   const sky = new SkyMesh();
-  configureOutdoorSky(sky);
-  captureScene.add(sky);
-  return captureScene;
+  for (const [name, value] of Object.entries(atmosphere.sky)) sky[name].value = value;
+  sky.cloudSpeed.value = 0;
+  sky.cloudCoverage.value = 0;
+  sky.sunPosition.value.fromArray(atmosphere.sunDirection);
+  sky.showSunDisc.value = true;
+  // SkyMesh initializes scattering varyings in its vertex node. Reuse that
+  // initialization and its r185 world-position varying for the background
+  // sphere, while Three.js keeps its own far-plane projection. The zero-valued
+  // dependency includes those vertex assignments without changing sky color.
+  const initializeSky = Fn(() => {
+    const projection = sky.material.vertexNode.toVar();
+    varyingProperty('vec3', 'v_positionWorld').assign(cameraPosition.add(normalWorldGeometry));
+    return projection;
+  })().toVertexStage();
+  const scattering = sky.material.colorNode.add(initializeSky.mul(0));
+  const cloudField = Fn(([p]) => mx_fractal_noise_float(vec3(p, 0), 5, 2.1, 0.5).mul(0.5).add(0.5));
+  const node = Fn(() => {
+    // Compress sky highlights in linear space for both background and IBL.
+    // Models retain the viewport's existing sRGB/NoToneMapping contract.
+    const skyColor = neutralToneMapping(scattering.rgb, atmosphere.exposure);
+    const { coverage, density, elevation, scale } = atmosphere.clouds;
+    const uv = direction.xz.div(max(direction.y, 0.05)).mul((scale * 1000) / (1 - elevation * 0.9));
+    const field = cloudField(uv).toVar();
+    const threshold = 1 - coverage;
+    // Filter at the current render resolution; fade distant clouds into
+    // the atmospheric horizon instead of adding fog to inspection geometry.
+    const edgeWidth = max(fwidth(field).mul(1.5), 0.015);
+    const mask = smoothstep(edgeWidth.negate().add(threshold), edgeWidth.add(threshold + 0.12), field)
+      .mul(density)
+      .mul(smoothstep(0.02, 0.22, direction.y));
+    const sun = sky.sunPosition;
+    const towardSun = vec2(sun.x, sun.z).div(max(sun.y, 0.15)).mul(0.12);
+    const sunDensity = max(0, cloudField(uv.add(towardSun)).sub(threshold));
+    const transmission = exp(sunDensity.mul(-5));
+    const rim = max(0, field.sub(threshold).sub(sunDensity)).mul(2);
+    const forward = max(0, direction.dot(sun)).pow(6);
+    const illumination = transmission.mul(max(sun.y, 0).mul(0.5).add(0.3)).add(rim).add(forward.mul(0.25));
+    const cloudColor = color(0x7889aa).mul(0.25).add(color(atmosphere.sunColor).mul(illumination));
+    const cloudedSky = mix(skyColor, cloudColor, mask);
+    return vec4(mix(color(atmosphere.groundColor), cloudedSky, smoothstep(-0.35, 0.02, direction.y)), 1);
+  })();
+  // SkyMesh supplies its existing scattering nodes; its unused mesh resources
+  // never enter the viewer scene. The renderer owns the background geometry.
+  sky.geometry.dispose();
+  sky.material.dispose();
+  return node;
 }
 
 function createLightCard({ color, intensity, position, size, target }) {
@@ -337,15 +429,26 @@ function createStudioCaptureScene() {
 
 const IBL_PROFILES = freeze({
   outdoor: freeze({
-    environmentIntensity: 0.1,
+    environmentIntensity: 0.65,
     lightIntensity: freeze({
       ambient: 0.04,
       hemisphere: 0.08,
-      accent: 0.4,
+      accent: OUTDOOR_ATMOSPHERE.sunIntensity,
     }),
-    dominantDirection: directionFromPresetAccent('outdoor'),
+    dominantDirection: OUTDOOR_ATMOSPHERE.sunDirection,
     pmrem: DEFAULT_PMREM,
-    createCaptureScene: createOutdoorCaptureScene,
+    atmosphere: OUTDOOR_ATMOSPHERE,
+  }),
+  sunset: freeze({
+    environmentIntensity: 0.65,
+    lightIntensity: freeze({
+      ambient: 0.12,
+      hemisphere: 0.22,
+      accent: SUNSET_ATMOSPHERE.sunIntensity,
+    }),
+    dominantDirection: SUNSET_ATMOSPHERE.sunDirection,
+    pmrem: DEFAULT_PMREM,
+    atmosphere: SUNSET_ATMOSPHERE,
   }),
   indoor: freeze({
     environmentIntensity: 0.38,
@@ -458,6 +561,7 @@ export function createEnvironmentController({
   }
 
   const originalBackground = scene.background;
+  const originalBackgroundNode = scene.backgroundNode;
   const originalEnvironment = scene.environment;
   const originalEnvironmentIntensity = scene.environmentIntensity;
   const originalAmbient = captureLightState(ambientLight);
@@ -472,13 +576,15 @@ export function createEnvironmentController({
 
   let currentPresetId = 'default';
   let disposed = false;
-  let preparationAttempted = false;
-  let preparePromise = null;
+  let preparationEnabled = false;
+  let pmremGenerator = null;
   const iblResources = new Map(
     Object.keys(IBL_PROFILES).map((id) => [
       id,
       {
+        promise: null,
         target: null,
+        skyNode: null,
         texture: null,
         attempted: false,
         available: false,
@@ -532,6 +638,7 @@ export function createEnvironmentController({
 
   function applyDefault() {
     scene.background = originalBackground;
+    scene.backgroundNode = originalBackgroundNode;
     restoreEnvironment();
     restoreLightState(ambientLight, originalAmbient);
     restoreLightState(hemisphereLight, originalHemisphere);
@@ -545,9 +652,11 @@ export function createEnvironmentController({
       return;
     }
 
-    drawBackground(preset);
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
+    if (preset.atmosphere) resource.skyNode ||= createAtmosphereNode(preset.atmosphere);
+    scene.backgroundNode = resource?.skyNode || null;
+    drawBackground(preset);
     if (profile && resource?.available && resource.texture) {
       applyLights(preset, profile.lightIntensity);
       scene.environment = resource.texture;
@@ -565,18 +674,27 @@ export function createEnvironmentController({
     if (!preset) return false;
     currentPresetId = preset.id;
     applyPreset(id);
+    if (preparationEnabled) void prepareResource(id, true);
     return true;
   }
 
-  function generateIblResource(id, pmremGenerator) {
+  function generateIblResource(id) {
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
     resource.attempted = true;
     resource.error = null;
     let captureScene = null;
     let generatedTarget = null;
+    let rendererState = null;
     try {
-      captureScene = profile.createCaptureScene();
+      rendererState = THREE.RendererUtils.saveRendererState(renderer);
+      renderer.setMRT(null);
+      pmremGenerator ||= new THREE.PMREMGenerator(renderer);
+      if (profile.atmosphere) {
+        captureScene = new THREE.Scene();
+        captureScene.userData.iblPresetId = id;
+        captureScene.backgroundNode = resource.skyNode;
+      } else captureScene = profile.createCaptureScene();
       const { sigma, near, far, size } = profile.pmrem;
       generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
       if (!generatedTarget?.texture) {
@@ -588,49 +706,46 @@ export function createEnvironmentController({
       resource.generationCount += 1;
       generatedTarget = null;
       return true;
-    } catch (error) {
-      resource.available = false;
-      resource.error = error?.message || String(error);
-      console.debug(`${id} environment preparation failed; using baseline lighting.`, error);
-      return false;
     } finally {
+      if (rendererState) THREE.RendererUtils.restoreRendererState(renderer, rendererState);
       generatedTarget?.dispose?.();
       disposeCaptureScene(captureScene);
     }
   }
 
-  async function prepare() {
-    if (disposed) return false;
-    if (preparePromise) return preparePromise;
-    if (preparationAttempted) {
-      return [...iblResources.values()].every((resource) => resource.available);
-    }
-    preparationAttempted = true;
-
-    preparePromise = (async () => {
-      let pmremGenerator = null;
+  function prepareResource(id, retry = false) {
+    const resource = iblResources.get(id);
+    if (disposed || !resource) return Promise.resolve(false);
+    if (resource.promise) return resource.promise;
+    // Only another explicit selection retries a failure; passive preparation
+    // and repeated selections during one pending capture never schedule more work.
+    if (resource.available || (resource.attempted && !retry)) return Promise.resolve(resource.available);
+    resource.promise = (async () => {
       try {
-        let allAvailable = true;
-        for (const id of Object.keys(IBL_PROFILES)) {
-          // Yield before each GPU-heavy capture so renderer startup and the
-          // intervals between resources remain available to browser work.
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          if (disposed) return false;
-          pmremGenerator ||= new THREE.PMREMGenerator(renderer);
-          const generated = generateIblResource(id, pmremGenerator);
-          allAvailable = generated && allAvailable;
-          if (generated && !disposed && currentPresetId === id) {
-            applyPreset(id);
-            onVisualChange?.();
-          }
+        // Let startup and rapid preset changes settle before expensive GPU work.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (disposed || currentPresetId !== id) return false;
+        const generated = generateIblResource(id);
+        if (generated && !disposed && currentPresetId === id) {
+          applyPreset(id);
+          onVisualChange?.();
         }
-        return allAvailable;
+        return generated;
+      } catch (error) {
+        resource.error = error?.message || String(error);
+        console.debug(`${id} environment preparation failed; using baseline lighting.`, error);
+        return false;
       } finally {
-        pmremGenerator?.dispose?.();
-        preparePromise = null;
+        resource.promise = null;
       }
     })();
-    return preparePromise;
+    return resource.promise;
+  }
+
+  function prepare() {
+    if (disposed) return Promise.resolve(false);
+    preparationEnabled = true;
+    return prepareResource(currentPresetId);
   }
 
   function getDebugState() {
@@ -654,13 +769,15 @@ export function createEnvironmentController({
       activeIblPreset,
       environmentActive: activeIblPreset !== null,
       environmentIntensity: scene.environmentIntensity,
-      preparationInFlight: preparePromise !== null,
+      preparationInFlight: [...iblResources.values()].some((resource) => resource.promise !== null),
       resources,
       totalPmremGenerationCount: [...iblResources.values()].reduce(
         (total, resource) => total + resource.generationCount,
         0,
       ),
       activeDominantDirection: getDominantLightDirection(),
+      atmosphere: getPreset().atmosphere || null,
+      skyActive: !!iblResources.get(currentPresetId)?.skyNode,
     };
   }
 
@@ -680,10 +797,14 @@ export function createEnvironmentController({
     applyDefault();
     for (const resource of iblResources.values()) {
       resource.target?.dispose?.();
+      resource.skyNode?.dispose();
       resource.target = null;
+      resource.skyNode = null;
       resource.texture = null;
       resource.available = false;
     }
+    pmremGenerator?.dispose();
+    pmremGenerator = null;
     background.texture.dispose();
     lightTarget.remove(accentLight);
   }

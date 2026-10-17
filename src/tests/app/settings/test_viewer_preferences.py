@@ -19,7 +19,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
     original["assetFolders"] = [{"name": "Library", "enabled": True}]
     filename.write_text(json.dumps(original), encoding="utf-8")
     settings = {
-        "environment": "studio", "wireframe": True, "outlines": True,
+        "environment": "sunset", "wireframe": True, "outlines": True,
         "ambientOcclusion": 0.4, "bloom": True, "glossy": True,
         "toonShading": True, "grid": False, "smoothShading": False,
         "textureMode": "diffuse", "keyLightIntensity": 0.75,

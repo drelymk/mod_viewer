@@ -123,6 +123,7 @@ def test_key_light_drag_restores_controls_after_capture_loss_and_release(viewer)
 def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
     payload = model_payload(3)
     payload['meshes']['mesh-01']['component'] = 'component-00'
+    payload['meshes']['mesh-01']['identity']['component'] = 'component-00'
     for index, mesh in enumerate(payload['meshes'].values()):
         x = index * 2
         mesh['pos'] = append_stream(payload, 'f', [x,0,0, x+1,0,0, x,1,0])
@@ -513,14 +514,16 @@ def test_library_folder_context_menus_open_native_folders_without_loading(viewer
 
 def test_environment_and_tools_restore_and_save_without_orientation_or_source_edits(viewer):
     settings = {
-        'environment': 'studio', 'wireframe': True, 'outlines': True,
+        'environment': 'sunset', 'wireframe': True, 'outlines': True,
         'ambientOcclusion': 0.4, 'bloom': True, 'glossy': True,
         'toonShading': True, 'grid': False, 'smoothShading': False,
         'textureMode': 'diffuse', 'keyLightIntensity': 0.75,
         'navigationGizmo': False,
     }
     page = viewer({'fixture-01': model_payload()}, preferences=settings)
-    page.wait_for_function('window.modViewer.getEnvironmentPreset().id === "studio"')
+    page.wait_for_function('window.modViewer.getEnvironmentPreset().id === "sunset"')
+    assert page.locator('#environment-icon [data-environment-icon="sunset"]').is_visible()
+    assert page.locator('#environment-btn').get_attribute('title') == 'Environment: Sunset (click to change)'
     assert bridge_calls(page, 'preferencesSave') == []
     for control in ['wire', 'outline', 'glossy', 'toon']:
         assert page.locator(f'#{control}-btn').get_attribute('aria-pressed') == 'true'
@@ -532,7 +535,7 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     assert page.locator('#bloom-btn').is_disabled()
     assert page.evaluate('window.modViewer.getBloomEnabled()') is True
     page.locator('#environment-btn').click()
-    page.locator('#environment-popover button').nth(1).click()
+    page.locator('#environment-popover button', has_text='Sunset').click()
     assert bridge_calls(page, 'preferencesSave') == []
 
     open_model(page, 'fixture-01')
@@ -566,7 +569,8 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
         slider.dispatchEvent(new Event('change',{bubbles:true}));
       }
     }""")
-    page.wait_for_function('window.__bridge.calls.filter(call => call.name === "preferencesSave").length === 12')
+    page.wait_for_function("""() => Object.keys(Object.assign({}, ...window.__bridge.calls
+      .filter(call => call.name === 'preferencesSave').map(call => call.args[0]))).length === 12""")
     patches = bridge_calls(page, 'preferencesSave')
     saved = {name: value for args in patches for name, value in args[0].items()}
     expected = {

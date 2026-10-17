@@ -5,6 +5,115 @@ import math
 import pytest
 
 
+def test_environment_capture_cache_and_disposal_lifecycle(module_page):
+    module_page.route('**/vendor/three.webgpu.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export * from './three.webgpu.js?environment-contract';
+import * as T from './three.webgpu.js?environment-contract';
+const probe = window.environmentProbe = {captures:[], targets:[], generators:0, disposed:0};
+function target(kind) {
+  const value = new T.RenderTarget(1, 1);
+  const record = {kind, disposed:0}; probe.targets.push(record);
+  value.addEventListener('dispose', () => record.disposed++);
+  return value;
+}
+export class PMREMGenerator {
+  constructor() {probe.generators++;}
+  fromScene(scene, sigma, near, far, {size}) {
+    if(scene.backgroundNode) {
+      probe.captures.push({node:scene.backgroundNode, size});
+      scene.backgroundNode.addEventListener('dispose', () => probe.disposed++);
+    }
+    if(probe.fail && scene.backgroundNode) throw new Error('capture failed');
+    return target('pmrem');
+  }
+  dispose() {probe.disposed++;}
+}
+export const RendererUtils = {
+  saveRendererState: renderer => {
+    if(probe.failState) throw new Error('renderer state failed');
+    return {...renderer.state};
+  },
+  restoreRendererState: (renderer, state) => {renderer.state = state;},
+};
+"""))
+    result = module_page.evaluate("""async () => {
+      const T = await import('three/webgpu');
+      const {createEnvironmentController} = await import('./js/scene/environment.js');
+      const scene = new T.Scene(); scene.background = new T.Color(0x123456);
+      const original = scene.background;
+      const ambientLight = new T.AmbientLight(0xffffff, 0.55);
+      const hemisphereLight = new T.HemisphereLight(0xffffff, 0x30343f, 0.35);
+      const lightTarget = new T.Object3D();
+      const renderer = {getRenderTarget:()=>null, getActiveCubeFace:()=>0,
+        getActiveMipmapLevel:()=>0, getMRT:()=>null, setMRT:value=>{renderer.state.mrt=value;},
+        setRenderTarget:()=>{}, state:{mrt:'original'}};
+      let notifications = 0;
+      const create = () => createEnvironmentController({renderer, scene, ambientLight,
+        hemisphereLight, lightTarget, onVisualChange:()=>notifications++});
+      const controller = create();
+      await controller.prepare();
+      const cold = environmentProbe.generators;
+      controller.setPreset('outdoor'); await controller.prepare();
+      const outdoor = scene.backgroundNode;
+      const sun = controller.getDebugState().atmosphere.sunDirection;
+      const direction = lightTarget.children[0].position.clone().normalize().toArray();
+      const consistent = sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
+        && JSON.stringify(sun) === JSON.stringify(controller.getDominantLightDirection())
+        && environmentProbe.captures[0].node === outdoor;
+      controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
+      const skipped = !controller.getDebugState().resources.indoor.attempted;
+      controller.setPreset('sunset'); await controller.prepare();
+      const sunset = scene.backgroundNode !== outdoor && controller.getDominantLightDirection()[1] < 0.2;
+      for(let i=0;i<5;i++) {controller.setPreset('default'); controller.setPreset('outdoor'); await controller.prepare();}
+      const reused = scene.backgroundNode === outdoor && controller.getDebugState().totalPmremGenerationCount === 3;
+      controller.dispose(); controller.dispose();
+      const restored = scene.background === original && !scene.backgroundNode && scene.environment === null
+        && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
+      const balanced = environmentProbe.targets.every(target => target.disposed === 1);
+      const rejected = !controller.setPreset('outdoor');
+      const pending = create(); pending.setPreset('outdoor');
+      const preparation = pending.prepare(); pending.dispose(); await preparation;
+      environmentProbe.fail = true;
+      const failing = create(); failing.setPreset('outdoor'); await failing.prepare();
+      const failure = failing.getDebugState();
+      const failedCaptures = environmentProbe.captures.length;
+      await failing.prepare();
+      const passive = environmentProbe.captures.length === failedCaptures;
+      environmentProbe.fail = false;
+      failing.setPreset('outdoor'); failing.setPreset('outdoor'); await failing.prepare();
+      const recovered = failing.getDebugState().environmentActive
+        && environmentProbe.captures.length === failedCaptures + 1;
+      failing.setPreset('outdoor'); await failing.prepare();
+      const cachedRecovery = environmentProbe.captures.length === failedCaptures + 1;
+      failing.dispose();
+      const unhandled = [];
+      window.addEventListener('unhandledrejection', event => unhandled.push(String(event.reason)));
+      const unexpected = create(); await unexpected.prepare();
+      environmentProbe.failState = true;
+      unexpected.setPreset('outdoor');
+      while(unexpected.getDebugState().preparationInFlight) await new Promise(r => setTimeout(r,0));
+      await new Promise(r => setTimeout(r,0));
+      const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
+      unexpected.dispose();
+      return {cold, consistent, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
+        balanced, rejected, captures:environmentProbe.captures.length, notifications,
+        failure:!failure.environmentActive && !!failure.resources.outdoor.error,
+        allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
+        generators:environmentProbe.generators, disposed:environmentProbe.disposed,
+        rendererRestored:renderer.state.mrt === 'original', passive, recovered, cachedRecovery,
+        stateFailure, unhandled};
+    }""")
+    assert result == {
+        'cold': 0, 'consistent': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
+        'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
+        'captures': 4, 'notifications': 4, 'failure': True, 'allDisposed': True,
+        'generators': 2, 'disposed': 6, 'rendererRestored': True,
+        'passive': True, 'recovered': True, 'cachedRecovery': True,
+        'stateFailure': True, 'unhandled': [],
+    }
+
+
 def test_semantic_refresh_endpoint_routing_and_completion_order(module_page):
     stubs = {
         'mesh/visibility.js': """
