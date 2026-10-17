@@ -32,6 +32,9 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
         **original, "viewerPreferences": settings,
     }
 
+    assert viewer_preferences.save_preferences({"environment": "nature"}, filename)["environment"] == "nature"
+    assert viewer_preferences.load_preferences(filename)["environment"] == "nature"
+
     defaults = {
         "environment": "default", "wireframe": False, "outlines": False,
         "ambientOcclusion": 0, "bloom": False, "glossy": False,

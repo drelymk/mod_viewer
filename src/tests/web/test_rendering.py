@@ -126,6 +126,124 @@ def test_environment_backgrounds_are_independent_of_model_geometry_and_clipping(
     assert errors == []
 
 
+def test_nature_scenery_follows_model_lifecycle_without_joining_model_tools(viewer):
+    page = viewer({'fixture-01': model_payload(), 'fixture-02': model_payload()},
+                  preferences={'environment': 'nature', 'grid': True})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate("""async () => {
+      window.natureScene = await import('./js/scene/scene.js');
+      window.scenery = natureScene.scene.children.find(o=>o.userData.isViewerScenery);
+    }""")
+    page.wait_for_function('window.modViewer.getEnvironmentPreset().id === "nature"')
+    assert page.evaluate('!scenery.visible && !scenery.children.length')
+    assert page.locator('#grid-btn').get_attribute('aria-pressed') == 'true'
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.wait_for_function('scenery.visible && scenery.children.length > 0 && !natureScene.getEnvironmentDebugState().preparationInFlight')
+    initial = page.evaluate("""async () => {
+      const s=natureScene;
+      const {CHARACTER_AO_LAYER}=await import('./js/scene/viewer-layers.js');
+      window.natureIdentity={node:s.scene.backgroundNode,environment:s.scene.environment,children:[...scenery.children]};
+      const camera={position:s.camera.position.toArray(),target:s.controls.target.toArray(),near:s.camera.near,far:s.camera.far};
+      return {camera,meshCount:window.modViewer.activeMeshes.length,
+        excluded:scenery.children.every(o=>!o.layers.isEnabled(CHARACTER_AO_LAYER)&&!o.castShadow),
+        floor:natureScene.scene.children.find(o=>o.userData.isViewerGround).position.y,
+        ground:scenery.position.y,
+        grid:s.scene.children.find(o=>o.type==='GridHelper').visible};
+    }""")
+    assert initial['excluded'] and not initial['grid']
+    assert initial['ground'] < initial['floor'] < 0
+    assert initial['meshCount'] == page.locator('.draw-item').count() == 1
+    page.evaluate("window.modViewer.setEnvironmentPreset('outdoor')")
+    assert page.evaluate("""() => {
+      const s=natureScene;
+      return !scenery.visible && s.scene.backgroundNode===natureIdentity.node
+        && s.scene.environment===natureIdentity.environment && s.scene.children.find(o=>o.type==='GridHelper').visible;
+    }""")
+    assert page.evaluate("""() => {const s=natureScene;return {position:s.camera.position.toArray(),
+      target:s.controls.target.toArray(),near:s.camera.near,far:s.camera.far};}""") == initial['camera']
+    page.locator('#environment-btn').click()
+    page.locator('#environment-popover button', has_text='Nature').click()
+    assert page.locator('#environment-icon [data-environment-icon="nature"]').is_visible()
+    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+    page.mouse.click(*point)
+    assert page.locator('.draw-item.selected').count() == 1
+    page.keyboard.down('Control')
+    page.mouse.move(340, 130)
+    page.mouse.down()
+    page.mouse.move(900, 740, steps=3)
+    page.mouse.up()
+    page.keyboard.up('Control')
+    assert page.evaluate("""async () => {
+      const {getSelectedMeshes}=await import('./js/scene/selection.js');
+      return getSelectedMeshes().every(m=>window.modViewer.activeMeshes.includes(m));
+    }""")
+    result = page.evaluate("""async () => {
+      const s=natureScene, mesh=window.modViewer.activeMeshes[0];
+      const original=mesh.position.clone(), position=scenery.position.clone();
+      const floor=s.scene.children.find(o=>o.userData.isViewerGround);
+      const floorY=floor.position.y;
+      mesh.position.y+=0.5;
+      s.invalidateCharacterShadowGeometry();s.invalidateViewportModelGeometry();
+      await new Promise(requestAnimationFrame);
+      const stable=scenery.position.equals(position)&&floor.position.y===floorY;
+      mesh.position.copy(original);
+      const {Vector3}=await import('three/webgpu');
+      s.translateModel([mesh],new Vector3(4,2,-3));
+      const translated=Math.abs(scenery.position.y-position.y-2)<1e-8;
+      s.resetView();
+      const reset=scenery.position.distanceTo(position)<1e-8;
+      for(const scale of [0.001,1000,1]) {
+        mesh.scale.setScalar(scale);s.fitTo([mesh]);s.frameView([mesh]);
+      }
+      return {stable,translated,reset,reused:natureIdentity.children.every((o,i)=>scenery.children[i]===o),
+        captures:s.getEnvironmentDebugState().totalPmremGenerationCount};
+    }""")
+    assert result == {'stable': True, 'translated': True, 'reset': True, 'reused': True, 'captures': 1}
+    sample = page.evaluate("""async () => {
+      const {Vector3}=await import('three/webgpu');const s=natureScene;
+      const p=new Vector3(scenery.position.x+scenery.scale.x*.8,scenery.position.y,
+        scenery.position.z+scenery.scale.x*.1).project(s.camera);
+      return [Math.round((p.x+1)*s.renderer.domElement.width/2),Math.round((1-p.y)*s.renderer.domElement.height/2)];
+    }""")
+    colors = []
+    for mode in ['direct','ao','bloom','ao-bloom']:
+        previous = page.evaluate('window.modViewer.getRenderCount()')
+        page.evaluate("""mode => {
+          const s=natureScene;s.setAmbientOcclusionStrength(mode.includes('ao')?0.4:0);
+          s.setBloomAvailable(true);s.setBloomEnabled(mode.includes('bloom'));
+        }""", mode)
+        page.wait_for_function('count=>window.modViewer.getRenderCount()>count', arg=previous)
+        data = page.evaluate('natureScene.renderer.domElement.toDataURL()').split(',', 1)[1]
+        with Image.open(io.BytesIO(base64.b64decode(data))) as image:
+            colors.append(image.convert('RGB').getpixel(tuple(sample)))
+    assert all(max(abs(a-b) for a,b in zip(colors[0], value)) <= 2 for value in colors[1:])
+    assert page.evaluate("""async () => {
+      const {computeModelBounds}=await import('./js/scene/model-bounds.js');
+      const {Vector3}=await import('three/webgpu');
+      const size=computeModelBounds(window.modViewer.activeMeshes).getSize(new Vector3()).length();
+      return Math.abs(natureScene.getViewportRenderPipelineDebugState().modelSize-size)<1e-8;
+    }""")
+    page.evaluate('natureScene.setAmbientOcclusionStrength(0);natureScene.setBloomEnabled(false)')
+    page.locator('#grid-btn').click()
+    page.evaluate("window.modViewer.setEnvironmentPreset('outdoor')")
+    assert page.evaluate("!natureScene.scene.children.find(o=>o.type==='GridHelper').visible")
+    page.evaluate("window.modViewer.setEnvironmentPreset('nature')")
+    open_model(page, 'fixture-02')
+    wait_loaded(page)
+    page.wait_for_timeout(250)
+    before = page.evaluate('window.modViewer.getRenderCount()')
+    page.wait_for_timeout(250)
+    assert page.evaluate('window.modViewer.getRenderCount()') == before
+    assert page.evaluate('scenery.visible && natureScene.getEnvironmentDebugState().totalPmremGenerationCount===1')
+    patches = [args[0] for args in bridge_calls(page, 'preferencesSave')]
+    assert all(patch.keys() <= {'environment', 'grid'} for patch in patches)
+    assert [patch['grid'] for patch in patches if 'grid' in patch] == [False]
+    assert bridge_calls(page, 'export') == bridge_calls(page, 'meshApply') == []
+    assert errors == []
+
+
 def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
     payload = model_payload()
     payload['meshes']['mesh-00'].update(

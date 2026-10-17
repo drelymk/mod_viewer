@@ -435,6 +435,7 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 .environment-icon[data-environment="studio"] [data-environment-icon="studio"],
 .environment-icon[data-environment="indoor"] [data-environment-icon="indoor"],
 .environment-icon[data-environment="outdoor"] [data-environment-icon="outdoor"],
+.environment-icon[data-environment="nature"] [data-environment-icon="nature"],
 .environment-icon[data-environment="sunset"] [data-environment-icon="sunset"] {
   display: block;
 }
@@ -447,6 +448,7 @@ body.asset-preview-mode #toolbar-overflow [data-toolbar-target="export-btn"] {
 .environment-icon [data-environment-icon="indoor"] path:nth-child(2) { fill: #f2c879; }
 .environment-icon [data-environment-icon="outdoor"] { stroke: #79c0ff; }
 .environment-icon [data-environment-icon="outdoor"] circle { fill: #ffd866; stroke: #fff0a8; }
+.environment-icon [data-environment-icon="nature"] { stroke: #9acd7a; }
 .environment-icon [data-environment-icon="sunset"] { stroke: #ffb08b; }
 .environment-icon [data-environment-icon="sunset"] path:first-child { fill: #fca55b; stroke: #ffd48a; }
 body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }

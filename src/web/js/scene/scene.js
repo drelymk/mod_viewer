@@ -5,6 +5,7 @@ import { ArcballControls } from 'three/addons/controls/ArcballControls.js';
 import { createCameraFrame } from './camera-frame.js';
 import { createCharacterShadowController } from './character-shadow-controller.js';
 import { createEnvironmentController } from './environment.js';
+import { createSceneryController } from './scenery.js';
 import { createKeyLightController } from './key-light-controller.js';
 import { resetOutlineProjectionReference, updateOutlineProjectionScale } from './outline-renderer.js';
 import { requestRender, setRenderCallback } from './render-scheduler.js';
@@ -123,6 +124,7 @@ scene.add(keyLight, keyLight.target);
 
 const grid = new THREE.GridHelper(4, 20, 0x21262d, 0x161b22);
 scene.add(grid);
+let gridVisible = true;
 
 export const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.001, 1000);
 camera.position.set(0, 1, 3);
@@ -157,8 +159,12 @@ const environmentController = createEnvironmentController({
   lightTarget: keyLight.target,
   onVisualChange: requestRender,
 });
+const sceneryController = createSceneryController({ scene });
 window.addEventListener('pagehide', (event) => {
-  if (!event.persisted) environmentController.dispose();
+  if (!event.persisted) {
+    sceneryController.dispose();
+    environmentController.dispose();
+  }
 });
 const keyLightController = createKeyLightController({
   scene,
@@ -255,7 +261,12 @@ export const rendererReady = initializeRenderer()
 
 export function setEnvironmentPreset(id) {
   const changed = environmentController.setPreset(id);
-  if (changed) requestRender();
+  if (changed) {
+    sceneryController.setEnabled(id === 'nature');
+    syncSceneryGround();
+    grid.visible = gridVisible && id !== 'nature';
+    requestRender();
+  }
   return changed;
 }
 
@@ -268,11 +279,12 @@ export function getEnvironmentDebugState() {
 }
 
 export function toggleGrid() {
-  grid.visible = !grid.visible;
+  gridVisible = !gridVisible;
+  grid.visible = gridVisible && getEnvironmentPreset().id !== 'nature';
   const button = document.getElementById('grid-btn');
-  button.classList.toggle('off', !grid.visible);
-  button.setAttribute('aria-pressed', String(grid.visible));
-  button.setAttribute('aria-label', `Grid visibility: ${grid.visible ? 'on' : 'off'}`);
+  button.classList.toggle('off', !gridVisible);
+  button.setAttribute('aria-pressed', String(gridVisible));
+  button.setAttribute('aria-label', `Grid visibility: ${gridVisible ? 'on' : 'off'}`);
   requestRender();
 }
 
@@ -353,6 +365,8 @@ function modelTransformPayload(value) {
 
 function notifyModelTransformChanged(meshes, reason, translationDeltaWorld = null, kinematics = null) {
   if (!meshes?.length || typeof window === 'undefined') return;
+  sceneryController.updatePlacement();
+  syncSceneryGround();
   const detail = {
     meshes,
     reason,
@@ -388,6 +402,8 @@ export function adoptModelMeshes(meshes = []) {
   const adopted = cameraFrame.adoptModelMeshes(meshes);
   characterShadowController.adoptMeshes(meshes);
   viewportRenderPipeline.adoptMeshes(meshes);
+  sceneryController.adoptMeshes(meshes);
+  syncSceneryGround();
   requestRender();
   return adopted;
 }
@@ -399,6 +415,8 @@ export function fitTo(meshes, options) {
   }
   characterShadowController.setMeshes(meshes);
   viewportRenderPipeline.setMeshes(meshes);
+  sceneryController.setMeshes(meshes);
+  syncSceneryGround();
   requestRender();
 }
 
@@ -406,6 +424,8 @@ export function forgetModelMeshes(meshes = []) {
   cameraFrame.forgetModelMeshes(meshes);
   characterShadowController.forgetMeshes(meshes);
   viewportRenderPipeline.forgetMeshes(meshes);
+  sceneryController.forgetMeshes(meshes);
+  syncSceneryGround();
   requestRender();
 }
 
@@ -416,6 +436,11 @@ export function resetModelOrientation(options) {
 export function resetCharacterShadows() {
   characterShadowController.reset();
   viewportRenderPipeline.reset();
+  sceneryController.setMeshes([]);
+}
+
+function syncSceneryGround() {
+  characterShadowController.setGroundLevel(sceneryController.getGroundLevel());
 }
 
 export function invalidateCharacterShadowGeometry({ request = true } = {}) {

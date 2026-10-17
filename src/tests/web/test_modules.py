@@ -57,13 +57,16 @@ export const RendererUtils = {
       const controller = create();
       await controller.prepare();
       const cold = environmentProbe.generators;
-      controller.setPreset('outdoor'); await controller.prepare();
+      controller.setPreset('nature');
+      const nature = scene.backgroundNode;
+      const naturePreparation = controller.prepare();
+      controller.setPreset('outdoor'); await naturePreparation;
       const outdoor = scene.backgroundNode;
       const sun = controller.getDebugState().atmosphere.sunDirection;
       const direction = lightTarget.children[0].position.clone().normalize().toArray();
       const consistent = sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
         && JSON.stringify(sun) === JSON.stringify(controller.getDominantLightDirection())
-        && environmentProbe.captures[0].node === outdoor;
+        && environmentProbe.captures[0].node === outdoor && nature === outdoor;
       controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
       const skipped = !controller.getDebugState().resources.indoor.attempted;
       const rooms = {};
@@ -82,12 +85,14 @@ export const RendererUtils = {
       let roomReuse = true;
       for(let i=0;i<5;i++) {
         controller.setPreset('default');
-        for(const id of ['studio','indoor','outdoor']) {
+        for(const id of ['studio','indoor','outdoor','nature']) {
           controller.setPreset(id); await controller.prepare();
           if(rooms[id]) roomReuse &&= scene.backgroundNode === rooms[id].node && scene.environment === rooms[id].texture;
         }
       }
       const reused = scene.backgroundNode === outdoor && controller.getDebugState().totalPmremGenerationCount === 4;
+      const sharedNature = controller.getPreset().id === 'nature'
+        && controller.getDebugState().activeIblPreset === 'outdoor' && controller.getDebugState().skyActive;
       controller.dispose(); controller.dispose();
       const restored = scene.background === original && !scene.backgroundNode && scene.environment === null
         && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
@@ -117,7 +122,7 @@ export const RendererUtils = {
       await new Promise(r => setTimeout(r,0));
       const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
       unexpected.dispose();
-      return {cold, consistent, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
+      return {cold, consistent, sharedNature, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
         roomLighting, roomReuse, roomDisposals,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
@@ -127,7 +132,7 @@ export const RendererUtils = {
         stateFailure, unhandled};
     }""")
     assert result == {
-        'cold': 0, 'consistent': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
+        'cold': 0, 'consistent': True, 'sharedNature': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
         'captures': 4, 'notifications': 5, 'failure': True, 'allDisposed': True,
         'roomLighting': True, 'roomReuse': True, 'roomDisposals': 2,
@@ -135,6 +140,58 @@ export const RendererUtils = {
         'passive': True, 'recovered': True, 'cachedRecovery': True,
         'stateFailure': True, 'unhandled': [],
     }
+
+
+def test_scenery_placement_ownership_and_disposal_lifecycle(module_page):
+    result = module_page.evaluate("""async () => {
+      const T = await import('three/webgpu');
+      const {createSceneryController} = await import('./js/scene/scenery.js');
+      const {CHARACTER_AO_LAYER} = await import('./js/scene/viewer-layers.js');
+      const scene = new T.Scene();
+      const model = new T.Mesh(new T.BoxGeometry(2,4,1)); model.position.set(100,8,-50);
+      scene.add(model);
+      const scenery = createSceneryController({scene});
+      const group = scene.children.find(o=>o.userData.isViewerScenery);
+      scenery.setEnabled(true);
+      const empty = !group.visible && scenery.getGroundLevel() === null && group.children.length === 0;
+      scenery.setMeshes([model]);
+      const placed = group.visible && scenery.getGroundLevel() === 6
+        && group.position.x === 100 && group.position.z === -50 && group.scale.x === 4;
+      const children = [...group.children];
+      const y = group.position.y;
+      model.position.y += 3;
+      scenery.setEnabled(true);
+      scenery.setEnabled(false);scenery.setEnabled(true);
+      const stable = group.position.y === y && scenery.getGroundLevel() === 6;
+      scenery.updatePlacement();
+      const moved = scenery.getGroundLevel() === 9;
+      const picking = new T.Raycaster(new T.Vector3(100,20,-50),new T.Vector3(0,-1,0));
+      group.updateMatrixWorld(true);
+      const isolated = picking.intersectObject(group,true).length === 0
+        && children.every(o=>!o.layers.isEnabled(CHARACTER_AO_LAYER) && !o.castShadow);
+      for(const scale of [0.001,1000,1]) {model.scale.setScalar(scale); scenery.setMeshes([model]);}
+      scenery.setEnabled(false);
+      const disabled = !group.visible && scenery.getGroundLevel() === null;
+      scenery.setEnabled(true);
+      const reused = children.every((o,i)=>group.children[i]===o);
+      const extra = new T.Mesh(model.geometry); extra.position.set(100,0,-50);
+      scenery.adoptMeshes([extra]);
+      const adopted = scenery.getGroundLevel() === -2;
+      scenery.forgetMeshes([extra]);
+      const forgotten = scenery.getGroundLevel() === 9;
+      scenery.setMeshes([]);
+      const cleared = !group.visible;
+      const counts=[];
+      const resources = new Set(children.flatMap(child=>[child.geometry,child.material,
+        ...(child.material.map?[child.material.map]:[]),...(child.isInstancedMesh?[child]:[])]));
+      for(const resource of resources) {
+        const record={count:0};counts.push(record);resource.addEventListener('dispose',()=>record.count++);
+      }
+      scenery.dispose();scenery.dispose();scenery.setEnabled(true);
+      return {empty,placed,stable,moved,isolated,disabled,reused,adopted,forgotten,cleared,
+        disposed:counts.every(c=>c.count===1) && !group.parent && !group.visible && !group.children.length};
+    }""")
+    assert all(result.values()), result
 
 
 def test_semantic_refresh_endpoint_routing_and_completion_order(module_page):
@@ -484,11 +541,15 @@ def test_key_light_projection_and_visible_floor_follow_mesh_changes(module_page)
       mesh.visible = true;
       shadow.invalidateVisibility(); shadow.update();
       clearedFloors.push(grid.position.y);
+      shadow.setGroundLevel(-10); shadow.update();
+      const fixedFloor = grid.position.y === -10;
+      shadow.setGroundLevel(null); shadow.update();
       shadow.reset(); clearedFloors.push(grid.position.y);
-      return {before, after, depths, floors, clearedFloors, parallel: light.shadow.camera.isOrthographicCamera};
+      return {before, after, depths, floors, clearedFloors, fixedFloor, parallel: light.shadow.camera.isOrthographicCamera};
     }""")
     assert result['after'] == result['before']
     assert result['parallel']
+    assert result['fixedFloor']
     assert all(abs(depth) <= 1 for depth in result['depths'])
     for floor, expected in zip(result['floors'], [2, -8, 2]):
         assert floor['grid'] == expected

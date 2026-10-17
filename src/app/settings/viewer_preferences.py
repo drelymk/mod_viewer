@@ -9,7 +9,7 @@ BOOLEAN_KEYS = {
     "smoothShading", "navigationGizmo",
 }
 CHOICES = {
-    "environment": ("default", "studio", "indoor", "outdoor", "sunset"),
+    "environment": ("default", "studio", "indoor", "outdoor", "nature", "sunset"),
     "textureMode": ("all", "diffuse-normal", "diffuse", "none"),
 }
 RANGES = {"ambientOcclusion": (0, 1), "keyLightIntensity": (0, 1.5)}
