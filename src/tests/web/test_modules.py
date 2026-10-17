@@ -5,6 +5,92 @@ import math
 import pytest
 
 
+def test_environment_capture_cache_and_disposal_lifecycle(module_page):
+    module_page.route('**/vendor/three.webgpu.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export * from './three.webgpu.js?environment-contract';
+import * as T from './three.webgpu.js?environment-contract';
+const probe = window.environmentProbe = {captures:[], targets:[], generators:0, disposed:0};
+function target(kind) {
+  const value = new T.RenderTarget(1, 1);
+  const record = {kind, disposed:0}; probe.targets.push(record);
+  value.addEventListener('dispose', () => record.disposed++);
+  return value;
+}
+export class CubeRenderTarget extends T.CubeRenderTarget {
+  constructor(...args) {
+    super(...args);
+    const record = {kind:'sky', disposed:0}; probe.targets.push(record);
+    this.addEventListener('dispose', () => record.disposed++);
+  }
+}
+export class CubeCamera {
+  update(renderer, scene) {
+    const sky = scene.children.find(child => child.isSkyMesh);
+    probe.captures.push({sun:sky.sunPosition.value.toArray(), speed:sky.cloudSpeed.value});
+    for(const resource of [sky.geometry, sky.material]) {
+      resource.addEventListener('dispose', () => probe.disposed++);
+    }
+  }
+}
+export class PMREMGenerator {
+  constructor() {probe.generators++;}
+  fromCubemap() {if(probe.fail) throw new Error('capture failed'); return target('pmrem');}
+  fromScene() {return target('pmrem');}
+  dispose() {probe.disposed++;}
+}
+"""))
+    result = module_page.evaluate("""async () => {
+      const T = await import('three/webgpu');
+      const {createEnvironmentController} = await import('./js/scene/environment.js');
+      const scene = new T.Scene(); scene.background = new T.Color(0x123456);
+      const original = scene.background;
+      const ambientLight = new T.AmbientLight(0xffffff, 0.55);
+      const hemisphereLight = new T.HemisphereLight(0xffffff, 0x30343f, 0.35);
+      const lightTarget = new T.Object3D();
+      const renderer = {getRenderTarget:()=>null, getActiveCubeFace:()=>0,
+        getActiveMipmapLevel:()=>0, getMRT:()=>null, setMRT:()=>{}, setRenderTarget:()=>{}};
+      let notifications = 0;
+      const create = () => createEnvironmentController({renderer, scene, ambientLight,
+        hemisphereLight, lightTarget, onVisualChange:()=>notifications++});
+      const controller = create();
+      await controller.prepare();
+      const cold = environmentProbe.generators;
+      controller.setPreset('outdoor'); await controller.prepare();
+      const outdoor = scene.background;
+      const sun = environmentProbe.captures[0];
+      const direction = lightTarget.children[0].position.clone().normalize().toArray();
+      const consistent = sun.sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
+        && JSON.stringify(sun.sun) === JSON.stringify(controller.getDominantLightDirection());
+      controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
+      const skipped = !controller.getDebugState().resources.indoor.attempted;
+      for(let i=0;i<5;i++) {controller.setPreset('default'); controller.setPreset('outdoor'); await controller.prepare();}
+      const reused = scene.background === outdoor && controller.getDebugState().totalPmremGenerationCount === 2;
+      controller.dispose(); controller.dispose();
+      const restored = scene.background === original && scene.environment === null
+        && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
+      const balanced = environmentProbe.targets.every(target => target.disposed === 1);
+      const rejected = !controller.setPreset('outdoor');
+      const pending = create(); pending.setPreset('outdoor');
+      const preparation = pending.prepare(); pending.dispose(); await preparation;
+      environmentProbe.fail = true;
+      const failing = create(); failing.setPreset('outdoor'); await failing.prepare();
+      const failure = failing.getDebugState();
+      failing.dispose();
+      return {cold, consistent, static:sun.speed === 0, skipped, reused, restored,
+        balanced, rejected, captures:environmentProbe.captures.length, notifications,
+        failure:!failure.environmentActive && !!failure.resources.outdoor.error,
+        allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
+        generators:environmentProbe.generators, disposed:environmentProbe.disposed};
+    }""")
+    assert result == {
+        'cold': 0, 'consistent': True, 'static': True, 'skipped': True,
+        'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
+        'captures': 2, 'notifications': 2, 'failure': True, 'allDisposed': True,
+        'generators': 2, 'disposed': 6,
+    }
+
+
 def test_semantic_refresh_endpoint_routing_and_completion_order(module_page):
     stubs = {
         'mesh/visibility.js': """

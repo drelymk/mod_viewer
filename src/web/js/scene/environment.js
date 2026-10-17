@@ -7,7 +7,22 @@ import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
 const freeze = Object.freeze;
-const OUTDOOR_SKY = freeze({
+function makeAtmosphere(sunElevation, sunAzimuth, sky) {
+  const direction = new THREE.Vector3().setFromSphericalCoords(
+    1,
+    THREE.MathUtils.degToRad(90 - sunElevation),
+    THREE.MathUtils.degToRad(sunAzimuth),
+  );
+  const daylight = THREE.MathUtils.smoothstep(direction.y, 0, 0.7);
+  return freeze({
+    sky: freeze(sky),
+    sunDirection: freeze(direction.toArray()),
+    sunColor: new THREE.Color(0xffa35c).lerp(new THREE.Color(0xfff2df), daylight).getHex(),
+    sunIntensity: THREE.MathUtils.lerp(0.35, 0.7, daylight),
+  });
+}
+
+const OUTDOOR_ATMOSPHERE = makeAtmosphere(50, -45, {
   turbidity: 2.5,
   rayleigh: 0.8,
   mieCoefficient: 0.003,
@@ -136,7 +151,7 @@ const makeAccent = (color, intensity, position) =>
     intensity,
     position: freeze(position),
   });
-const makePreset = (id, label, background, ambient, hemisphere, accent) =>
+const makePreset = (id, label, background, ambient, hemisphere, accent, atmosphere = null) =>
   freeze({
     id,
     label,
@@ -144,6 +159,7 @@ const makePreset = (id, label, background, ambient, hemisphere, accent) =>
     ...(ambient ? { ambient } : {}),
     ...(hemisphere ? { hemisphere } : {}),
     ...(accent ? { accent } : {}),
+    ...(atmosphere ? { atmosphere } : {}),
   });
 
 // Keep the visual vocabulary in one declarative table.
@@ -197,7 +213,8 @@ export const ENVIRONMENT_PRESETS = freeze({
     null,
     makeAmbient(0xdbeaff, 0.26),
     makeHemisphere(0x78b5ed, 0x667068, 0.45),
-    makeAccent(0xffe6bd, 0.7, [-6, 10, 6]),
+    makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
+    OUTDOOR_ATMOSPHERE,
   ),
 });
 
@@ -207,20 +224,20 @@ function directionFromPresetAccent(id) {
 
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
 
-function configureOutdoorSky(sky) {
+function configureAtmosphere(sky, atmosphere) {
   sky.scale.setScalar(10);
   sky.frustumCulled = false;
-  for (const [name, value] of Object.entries(OUTDOOR_SKY)) sky[name].value = value;
+  for (const [name, value] of Object.entries(atmosphere.sky)) sky[name].value = value;
   sky.cloudSpeed.value = 0;
-  sky.sunPosition.value.fromArray(IBL_PROFILES.outdoor.dominantDirection);
+  sky.sunPosition.value.fromArray(atmosphere.sunDirection);
   sky.showSunDisc.value = true;
 }
 
-function createOutdoorCaptureScene() {
+function createAtmosphereCaptureScene(id, atmosphere) {
   const captureScene = new THREE.Scene();
-  captureScene.userData.iblPresetId = 'outdoor';
+  captureScene.userData.iblPresetId = id;
   const sky = new SkyMesh();
-  configureOutdoorSky(sky);
+  configureAtmosphere(sky, atmosphere);
   captureScene.add(sky);
   return captureScene;
 }
@@ -357,11 +374,11 @@ const IBL_PROFILES = freeze({
     lightIntensity: freeze({
       ambient: 0.04,
       hemisphere: 0.08,
-      accent: 0.4,
+      accent: OUTDOOR_ATMOSPHERE.sunIntensity,
     }),
-    dominantDirection: directionFromPresetAccent('outdoor'),
+    dominantDirection: OUTDOOR_ATMOSPHERE.sunDirection,
     pmrem: DEFAULT_PMREM,
-    createCaptureScene: createOutdoorCaptureScene,
+    atmosphere: OUTDOOR_ATMOSPHERE,
   }),
   indoor: freeze({
     environmentIntensity: 0.38,
@@ -488,12 +505,13 @@ export function createEnvironmentController({
 
   let currentPresetId = 'default';
   let disposed = false;
-  let preparationAttempted = false;
-  let preparePromise = null;
+  let preparationEnabled = false;
+  let pmremGenerator = null;
   const iblResources = new Map(
     Object.keys(IBL_PROFILES).map((id) => [
       id,
       {
+        promise: null,
         target: null,
         skyTarget: null,
         texture: null,
@@ -583,10 +601,11 @@ export function createEnvironmentController({
     if (!preset) return false;
     currentPresetId = preset.id;
     applyPreset(id);
+    if (preparationEnabled) void prepareResource(id);
     return true;
   }
 
-  function generateIblResource(id, pmremGenerator) {
+  function generateIblResource(id) {
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
     resource.attempted = true;
@@ -595,9 +614,12 @@ export function createEnvironmentController({
     let generatedTarget = null;
     let skyTarget = null;
     try {
-      captureScene = profile.createCaptureScene();
+      pmremGenerator ||= new THREE.PMREMGenerator(renderer);
+      captureScene = profile.atmosphere
+        ? createAtmosphereCaptureScene(id, profile.atmosphere)
+        : profile.createCaptureScene();
       const { sigma, near, far, size } = profile.pmrem;
-      if (id === 'outdoor') {
+      if (profile.atmosphere) {
         skyTarget = captureSky(renderer, captureScene);
         generatedTarget = pmremGenerator.fromCubemap(skyTarget.texture);
       } else generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
@@ -624,38 +646,33 @@ export function createEnvironmentController({
     }
   }
 
-  async function prepare() {
-    if (disposed) return false;
-    if (preparePromise) return preparePromise;
-    if (preparationAttempted) {
-      return [...iblResources.values()].every((resource) => resource.available);
-    }
-    preparationAttempted = true;
-
-    preparePromise = (async () => {
-      let pmremGenerator = null;
+  function prepareResource(id) {
+    const resource = iblResources.get(id);
+    if (disposed || !resource) return Promise.resolve(false);
+    if (resource.promise) return resource.promise;
+    if (resource.attempted) return Promise.resolve(resource.available);
+    resource.promise = (async () => {
       try {
-        let allAvailable = true;
-        for (const id of Object.keys(IBL_PROFILES)) {
-          // Yield before each GPU-heavy capture so renderer startup and the
-          // intervals between resources remain available to browser work.
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          if (disposed) return false;
-          pmremGenerator ||= new THREE.PMREMGenerator(renderer);
-          const generated = generateIblResource(id, pmremGenerator);
-          allAvailable = generated && allAvailable;
-          if (generated && !disposed && currentPresetId === id) {
-            applyPreset(id);
-            onVisualChange?.();
-          }
+        // Let startup and rapid preset changes settle before expensive GPU work.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (disposed || currentPresetId !== id) return false;
+        const generated = generateIblResource(id);
+        if (generated && !disposed && currentPresetId === id) {
+          applyPreset(id);
+          onVisualChange?.();
         }
-        return allAvailable;
+        return generated;
       } finally {
-        pmremGenerator?.dispose?.();
-        preparePromise = null;
+        resource.promise = null;
       }
     })();
-    return preparePromise;
+    return resource.promise;
+  }
+
+  function prepare() {
+    if (disposed) return Promise.resolve(false);
+    preparationEnabled = true;
+    return prepareResource(currentPresetId);
   }
 
   function getDebugState() {
@@ -679,13 +696,15 @@ export function createEnvironmentController({
       activeIblPreset,
       environmentActive: activeIblPreset !== null,
       environmentIntensity: scene.environmentIntensity,
-      preparationInFlight: preparePromise !== null,
+      preparationInFlight: [...iblResources.values()].some((resource) => resource.promise !== null),
       resources,
       totalPmremGenerationCount: [...iblResources.values()].reduce(
         (total, resource) => total + resource.generationCount,
         0,
       ),
       activeDominantDirection: getDominantLightDirection(),
+      atmosphere: getPreset().atmosphere || null,
+      skyActive: !!iblResources.get(currentPresetId)?.skyTarget,
     };
   }
 
@@ -711,6 +730,8 @@ export function createEnvironmentController({
       resource.texture = null;
       resource.available = false;
     }
+    pmremGenerator?.dispose();
+    pmremGenerator = null;
     background.texture.dispose();
     lightTarget.remove(accentLight);
   }
