@@ -1,21 +1,7 @@
 // Static viewer scenery; model state is supplied only at deliberate placement boundaries.
 
 import * as THREE from 'three/webgpu';
-import {
-  attribute,
-  cameraPosition,
-  color,
-  Fn,
-  mix,
-  modelWorldMatrixInverse,
-  mx_noise_float,
-  output,
-  positionGeometry,
-  positionLocal,
-  smoothstep,
-  vec3,
-  vec4,
-} from 'three/tsl';
+import { color, context, mix, mx_noise_float, output, positionGeometry, smoothstep, vec4 } from 'three/tsl';
 import { computeModelBounds } from './model-bounds.js';
 
 function random(seed) {
@@ -78,52 +64,92 @@ function createGrass() {
   return grass;
 }
 
-function createTrees(sprite, placements, onLoad) {
-  const geometry = new THREE.PlaneGeometry(1, 1);
-  geometry.translate(0, 0.5, 0);
-  const texture = new THREE.TextureLoader().load(new URL(`../../images/${sprite}`, import.meta.url).href, onLoad);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const trees = new THREE.InstancedMesh(
-    geometry,
-    new THREE.MeshBasicNodeMaterial({
-      map: texture,
-      alphaTest: 0.5,
-      alphaToCoverage: true,
-      side: THREE.DoubleSide,
-    }),
-    placements.length,
-  );
-  const offsets = [],
-    sizes = [];
-  const transform = new THREE.Object3D();
-  for (let i = 0; i < trees.count; i++) {
-    const [x, z, height] = placements[i];
-    const width = height * (0.65 + random(i + 1) * 0.35);
-    const y = groundHeight(x, z) - 0.012;
-    offsets.push(x, y, z);
-    sizes.push(width * (i % 2 ? -1 : 1), height);
-    transform.position.set(x, y, z);
-    transform.scale.set(width, height, width);
-    transform.updateMatrix();
-    trees.setMatrixAt(i, transform.matrix);
-    trees.setColorAt(i, new THREE.Color(0xd7d5bf).multiplyScalar(0.8 + random(i + 2) * 0.15));
+function canopyGeometry(shape) {
+  const sphere = new THREE.IcosahedronGeometry(1, 3);
+  const source = sphere.attributes.position;
+  const positions = [],
+    normals = [],
+    colors = [];
+  const lobes = shape
+    ? [
+        [-0.08, 1, 0.04, 0.8, 0.65],
+        [0.08, 1.55, -0.06, 0.64, 0.65],
+        [-0.03, 2.05, 0.02, 0.43, 0.65],
+      ]
+    : [
+        [-0.55, 1.35, 0.04, 0.58, 0.5],
+        [0.48, 1.45, -0.12, 0.62, 0.58],
+        [-0.15, 1.8, -0.35, 0.6, 0.57],
+        [0.06, 1.6, 0.38, 0.57, 0.52],
+        [0.08, 2.03, 0.03, 0.48, 0.48],
+      ];
+  const deep = new THREE.Color(0x34472c),
+    bright = new THREE.Color(0x71834a);
+  for (const [cx, cy, cz, width, height] of lobes) {
+    for (let i = 0; i < source.count; i++) {
+      const x = source.getX(i),
+        y = source.getY(i),
+        z = source.getZ(i);
+      const h = (y + 1) * 0.5;
+      const lump = Math.sin(x * 8.3 + y * 5.7 + cx) * Math.sin(z * 9.9 - y * 4.1 + cz);
+      const radius = (1 - h * (shape ? 0.6 : 0.16)) * (1 + lump * 0.28);
+      const py = cy + y * height;
+      positions.push(cx + x * width * radius, py, cz + z * width * radius);
+      const normal = new THREE.Vector3(x, 0.35 + y * 0.65, z).normalize();
+      normals.push(normal.x, normal.y, normal.z);
+      const tint = deep.clone().lerp(bright, THREE.MathUtils.clamp(py / 2.8 + lump * 0.17, 0, 1));
+      colors.push(tint.r, tint.g, tint.b);
+    }
   }
-  geometry.setAttribute('treeOffset', new THREE.InstancedBufferAttribute(new Float32Array(offsets), 3));
-  geometry.setAttribute('treeSize', new THREE.InstancedBufferAttribute(new Float32Array(sizes), 2));
-  // Face the camera around the trunk without CPU updates or angle-based alpha clipping.
-  trees.material.positionNode = Fn(() => {
-    const anchor = attribute('treeOffset', 'vec3');
-    const size = attribute('treeSize', 'vec2');
-    const view = modelWorldMatrixInverse.mul(vec4(cameraPosition, 1)).xyz.sub(anchor);
-    const right = vec3(view.z, 0, view.x.negate()).normalize();
-    return anchor.add(right.mul(positionGeometry.x.mul(size.x))).add(vec3(0, positionGeometry.y.mul(size.y), 0));
-  })();
-  trees.material.outputNode = vec4(
-    mix(output.rgb, color(0xc0e6ef), smoothstep(6, 25, positionLocal.xz.length()).mul(0.5)),
-    output.a,
+  sphere.dispose();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  return geometry;
+}
+
+function createTrees() {
+  const placements = [];
+  for (let attempt = 0; attempt < 600 && placements.length < 18; attempt++) {
+    const x = (random(attempt * 4 + 1) - 0.5) * 32,
+      z = -8 - random(attempt * 4 + 2) * 14;
+    if (Math.abs(x) < 2.5 + Math.abs(z) * 0.12 || Math.hypot(x, z) > 22.5) continue;
+    const density = Math.max(
+      ...[
+        [-9, -11, 12],
+        [8, -15, 18],
+        [-11, -19, 16],
+      ].map(([cx, cz, spread]) => Math.exp(-((x - cx) ** 2 + (z - cz) ** 2) / spread)),
+    );
+    if (random(attempt * 4 + 3) > density || placements.some((p) => Math.hypot(x - p.x, z - p.z) < 1.25)) continue;
+    placements.push({ x, z, scale: 1 + random(attempt * 4 + 4) * 0.65, yaw: random(attempt + 31) * Math.PI * 2 });
+  }
+  const foliage = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  const bark = new THREE.MeshStandardNodeMaterial({ color: 0x66553b, roughness: 1, metalness: 0 });
+  for (const material of [foliage, bark]) material.contextNode = context({ getAO: (input) => input });
+  const trunk = new THREE.CylinderGeometry(0.045, 0.075, 1, 6);
+  trunk.translate(0, 0.5, 0);
+  const trunks = new THREE.InstancedMesh(trunk, bark, placements.length);
+  const crowns = [0, 1].map(
+    (shape) => new THREE.InstancedMesh(canopyGeometry(shape), foliage, Math.ceil(placements.length / 2)),
   );
-  trees.computeBoundingSphere();
-  return trees;
+  const counts = [0, 0],
+    transform = new THREE.Object3D();
+  for (const [i, p] of placements.entries()) {
+    transform.position.set(p.x, groundHeight(p.x, p.z) - 0.02, p.z);
+    transform.rotation.set((random(i + 51) - 0.5) * 0.06, p.yaw, (random(i + 71) - 0.5) * 0.06);
+    transform.scale.set(p.scale * (0.8 + random(i + 91) * 0.3), p.scale, p.scale * (0.8 + random(i + 101) * 0.3));
+    transform.updateMatrix();
+    trunks.setMatrixAt(i, transform.matrix);
+    const shape = i % 2,
+      index = counts[shape]++;
+    crowns[shape].setMatrixAt(index, transform.matrix);
+    crowns[shape].setColorAt(index, new THREE.Color().setScalar(0.85 + random(i + 111) * 0.25));
+  }
+  for (const [i, crown] of crowns.entries()) crown.count = counts[i];
+  for (const mesh of [trunks, ...crowns]) mesh.computeBoundingSphere();
+  return [trunks, ...crowns];
 }
 
 function createGround() {
@@ -174,7 +200,7 @@ function createGround() {
   return ground;
 }
 
-export function createSceneryController({ scene, onVisualChange = null }) {
+export function createSceneryController({ scene }) {
   const group = new THREE.Group();
   group.name = 'Nature scenery';
   group.userData.isViewerScenery = true;
@@ -196,31 +222,7 @@ export function createSceneryController({ scene, onVisualChange = null }) {
     const span = Math.max(size.x, size.y, size.z);
     if (!(span > 0)) return;
     if (!group.children.length) {
-      const onLoad = () => {
-        if (!disposed) onVisualChange?.();
-      };
-      group.add(
-        createGround(),
-        createGrass(),
-        createTrees(
-          'nature-tree.png',
-          [
-            [-3.8, -4.8, 1.9],
-            [3.8, -14, 2.4],
-            [-8.8, -10, 3.4],
-          ],
-          onLoad,
-        ),
-        createTrees(
-          'nature-tree-slender.png',
-          [
-            [5.6, -6.4, 3.2],
-            [-5.4, -17, 4.2],
-            [11, -15, 4.5],
-          ],
-          onLoad,
-        ),
-      );
+      group.add(createGround(), createGrass(), ...createTrees());
       group.traverse((object) => {
         if (object.isMesh) object.raycast = () => {};
       });

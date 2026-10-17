@@ -140,7 +140,7 @@ def test_nature_scenery_follows_model_lifecycle_without_joining_model_tools(view
     assert page.locator('#grid-btn').get_attribute('aria-pressed') == 'true'
     open_model(page, 'fixture-01')
     wait_loaded(page)
-    page.wait_for_function('scenery.visible && scenery.children.some(o=>o.material?.map?.image) && !natureScene.getEnvironmentDebugState().preparationInFlight')
+    page.wait_for_function('scenery.visible && scenery.children.length > 0 && !natureScene.getEnvironmentDebugState().preparationInFlight')
     initial = page.evaluate("""async () => {
       const s=natureScene;
       const {CHARACTER_AO_LAYER}=await import('./js/scene/viewer-layers.js');
