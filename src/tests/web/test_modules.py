@@ -17,26 +17,14 @@ function target(kind) {
   value.addEventListener('dispose', () => record.disposed++);
   return value;
 }
-export class CubeRenderTarget extends T.CubeRenderTarget {
-  constructor(...args) {
-    super(...args);
-    const record = {kind:'sky', disposed:0}; probe.targets.push(record);
-    this.addEventListener('dispose', () => record.disposed++);
-  }
-}
-export class CubeCamera {
-  update(renderer, scene) {
-    const sky = scene.children.find(child => child.isSkyMesh);
-    probe.captures.push({sun:sky.sunPosition.value.toArray(), speed:sky.cloudSpeed.value});
-    for(const resource of [sky.geometry, sky.material]) {
-      resource.addEventListener('dispose', () => probe.disposed++);
-    }
-  }
-}
 export class PMREMGenerator {
   constructor() {probe.generators++;}
-  fromScene(scene) {
-    if(probe.fail && scene.background?.isCubeTexture) throw new Error('capture failed');
+  fromScene(scene, sigma, near, far, {size}) {
+    if(scene.backgroundNode) {
+      probe.captures.push({node:scene.backgroundNode, size});
+      scene.backgroundNode.addEventListener('dispose', () => probe.disposed++);
+    }
+    if(probe.fail && scene.backgroundNode) throw new Error('capture failed');
     return target('pmrem');
   }
   dispose() {probe.disposed++;}
@@ -67,19 +55,20 @@ export const RendererUtils = {
       await controller.prepare();
       const cold = environmentProbe.generators;
       controller.setPreset('outdoor'); await controller.prepare();
-      const outdoor = scene.background;
-      const sun = environmentProbe.captures[0];
+      const outdoor = scene.backgroundNode;
+      const sun = controller.getDebugState().atmosphere.sunDirection;
       const direction = lightTarget.children[0].position.clone().normalize().toArray();
-      const consistent = sun.sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
-        && JSON.stringify(sun.sun) === JSON.stringify(controller.getDominantLightDirection());
+      const consistent = sun.every((v,i) => Math.abs(v-direction[i])<1e-10)
+        && JSON.stringify(sun) === JSON.stringify(controller.getDominantLightDirection())
+        && environmentProbe.captures[0].node === outdoor;
       controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
       const skipped = !controller.getDebugState().resources.indoor.attempted;
       controller.setPreset('sunset'); await controller.prepare();
-      const sunset = scene.background !== outdoor && controller.getDominantLightDirection()[1] < 0.2;
+      const sunset = scene.backgroundNode !== outdoor && controller.getDominantLightDirection()[1] < 0.2;
       for(let i=0;i<5;i++) {controller.setPreset('default'); controller.setPreset('outdoor'); await controller.prepare();}
-      const reused = scene.background === outdoor && controller.getDebugState().totalPmremGenerationCount === 3;
+      const reused = scene.backgroundNode === outdoor && controller.getDebugState().totalPmremGenerationCount === 3;
       controller.dispose(); controller.dispose();
-      const restored = scene.background === original && scene.environment === null
+      const restored = scene.background === original && !scene.backgroundNode && scene.environment === null
         && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
       const balanced = environmentProbe.targets.every(target => target.disposed === 1);
       const rejected = !controller.setPreset('outdoor');
@@ -107,7 +96,7 @@ export const RendererUtils = {
       await new Promise(r => setTimeout(r,0));
       const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
       unexpected.dispose();
-      return {cold, consistent, static:sun.speed === 0, skipped, sunset, reused, restored,
+      return {cold, consistent, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
         allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
@@ -116,10 +105,10 @@ export const RendererUtils = {
         stateFailure, unhandled};
     }""")
     assert result == {
-        'cold': 0, 'consistent': True, 'static': True, 'skipped': True, 'sunset': True,
+        'cold': 0, 'consistent': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
         'captures': 4, 'notifications': 4, 'failure': True, 'allDisposed': True,
-        'generators': 2, 'disposed': 10, 'rendererRestored': True,
+        'generators': 2, 'disposed': 6, 'rendererRestored': True,
         'passive': True, 'recovered': True, 'cachedRecovery': True,
         'stateFailure': True, 'unhandled': [],
     }

@@ -1,139 +1,137 @@
 # Atmospheric environments
 
 Outdoor and Sunset share the existing Three.js WebGPU renderer and SkyMesh
-scattering model. A frozen atmosphere configuration supplies the sun direction,
+scattering model. A frozen atmosphere configuration supplies sun direction,
 sun color/intensity, scattering, cloud coverage/density and sky exposure.
 Directional sunlight follows that direction independently of the movable
 inspection light. Hemisphere and ambient fill keep inspection materials readable.
 
 Static clouds use MaterialX fractal noise from the vendored TSL library, with
-sunward density sampling for shading, illuminated edges, and filtered silhouettes.
-Clouds fade into atmospheric haze at the horizon. The lower hemisphere blends
-into a preset ground color. Neither preset adds distance fog to model meshes.
-SkyMesh's built-in cloud blend is disabled so there is only one cloud layer.
-The approach was informed by studying
+sunward density sampling for shading and illuminated edges. Clouds fade into
+atmospheric haze at the horizon; the lower hemisphere blends into a preset ground
+color. Neither preset adds distance fog to models. SkyMesh's built-in cloud blend
+is disabled so there is only one cloud layer. The approach was informed by
 [web-ocean's atmosphere and clouds](https://github.com/Noniv/web-ocean/blob/main/js/wgsl/sky.js);
 no source code or renderer was imported from that project.
 
-Each sky is captured once into a 512-pixel half-float cubemap. That same texture
-supplies the viewport background and a 256-pixel PMREM capture. Highlight
-compression happens in linear space during sky capture; model materials retain
-the existing sRGB output, NoToneMapping, AO and emission-only bloom behavior.
-The sky never joins the model scene graph, so model bounds, selection, outlines,
-rigging, AO geometry and camera clipping do not need sky-specific exclusions.
+## Visible sky and reflections
 
-Environment resources are generated on first use, after renderer initialization.
-An unselected queued preset is skipped. Immutable configurations need no frame
-updates or cache invalidation; replacing the controller rebuilds its resources.
-Revisiting a preset reuses its targets. Disposal restores the original background,
-environment and lights and releases all owned targets and generator resources.
-Page teardown releases the controller, while a preserved browser page keeps it.
-After a failed capture, explicitly selecting the preset again permits one new
-attempt. Passive preparation does not retry, and selections during one pending
-capture share that work. Preparation catches errors before its promise escapes.
+The visible sky uses `scene.backgroundNode`, evaluated at the viewport's render
+resolution. It no longer enlarges a cached 512px cubemap. The exact same node is
+captured by `PMREMGenerator.fromScene` at 256px for filtered reflections. No extra
+viewport pass, renderer, atmosphere shader or user setting is needed.
 
-## Capture resolution decision
+The small adapter reuses the pinned Three.js r185 SkyMesh vertex initialization
+and world-position varying on Three.js's background sphere. The background keeps
+its own camera-independent far-plane projection. Vendored assets remain unchanged.
+The cloud shader uses that same view direction. Its `fwidth` filter is evaluated
+at each output's resolution, with a minimum width and the existing smooth density
+transition. The derivative width is bounded below instead of always adding an
+extra blur term; antialiasing remains enabled.
 
-512 pixels preserves the material response while reducing the two cached sky
-textures from 96 MiB to 24 MiB. The two PMREM color textures add 12 MiB at either
-resolution: cached sky plus reflection color storage is therefore 36 MiB instead
-of 108 MiB, excluding depth, temporary resources and driver overhead. Capturing
-six faces shades 1,572,864 pixels instead of 6,291,456.
+Sky highlights are compressed in linear space for both outputs. Models retain
+the existing sRGB, NoToneMapping, AO and emission-only bloom behavior. The sky
+never joins the model scene graph, so bounds, selection, outlines, rigging, AO
+geometry and camera clipping need no sky-specific exclusions.
 
-The following comparison used identical synthetic materials, camera, renderer,
-browser arguments and pixel ratio on the same device. Each case has three fresh
-browser runs and five cached switches per preset per run. Outdoor is activated
-before Sunset, so its time also includes preparation for newly environment-lit
-materials. Values are medians in milliseconds; the
-[recorded samples](benchmarks/environment-capture.json) also
-contain allocation estimates, idle counters and material measurements.
+Environment resources are prepared on first use after renderer initialization.
+Unselected queued work is skipped. Revisiting a preset reuses its node and PMREM;
+camera movement evaluates the visible shader without recapturing reflections.
+Static scenes retain on-demand rendering and submit no idle sky or shadow work.
+Disposal restores the original background, environment and lights and releases
+owned nodes, targets and generator resources. Page teardown releases the
+controller, while a preserved browser page keeps it. Explicit preset reselection
+permits one retry after failed preparation; passive preparation never retries,
+pending selections share work, and errors are caught at the asynchronous boundary.
 
-| Viewport | Capture | First Outdoor | First Sunset | Cached Outdoor | Cached Sunset |
-| --- | --- | ---: | ---: | ---: | ---: |
-| 1280 × 900 | 512 | 805.8 | 420.6 | 77.8 | 74.2 |
-| 1280 × 900 | 1024 | 785.3 | 427.5 | 76.1 | 77.5 |
-| 2560 × 1440 | 512 | 811.2 | 431.3 | 75.9 | 78.0 |
-| 2560 × 1440 | 1024 | 793.7 | 419.3 | 76.6 | 76.9 |
+## Viewport comparison
 
-These measurements do not establish an activation-time improvement. They include
-shader preparation, scheduling and queue completion, and do not isolate GPU
-capture time. The reason for choosing 512 is the lower memory and capture pixel cost.
-At 2560 × 1440, 1024 gives slightly sharper small cloud edges; that background
-difference does not justify four times the sky storage for these static presets.
-All cases retain zero idle viewport/shadow updates and stable cached allocations.
+The comparison uses identical camera, scene, device, browser arguments and pixel
+ratio 1. Each of the three implementations has three fresh-browser runs at
+1920 × 1080 and 2560 × 1440: the reviewed 512px cubemap, a 1024px cubemap, and the
+viewport-resolution node. All retain 256px PMREM. Each run measures 30 camera
+orbit frames after five warmup frames, with no concurrent browser benchmark.
+The [recorded samples](benchmarks/environment-capture.json) include raw timings,
+first activation, cached switching, idle counters and renderer allocation counts.
+Timing includes browser scheduling and GPU queue completion; it is not isolated
+GPU execution time or a portable frame-rate guarantee.
 
-The images below contain native-resolution sky and metal crops from the large
-viewport, with 512 on the left and 1024 on the right.
+Values below are milliseconds. The distributions overlap, so these runs support
+the direct path's practical camera cost without establishing a general speedup.
+First Outdoor activation increases from approximately 0.8 s to 1.1 s in this
+comparison; Sunset remains approximately 0.45 s. That one-time shader preparation
+cost is separate from the steady camera-motion measurements.
 
-![Outdoor capture resolution comparison](images/environment-outdoor-capture-comparison.png)
-![Sunset capture resolution comparison](images/environment-sunset-capture-comparison.png)
+| Viewport | Visible sky | Outdoor median / p95 | Sunset median / p95 |
+| --- | --- | ---: | ---: |
+| 1920 × 1080 | 512px cube | 23.0 / 27.6 | 14.9 / 25.9 |
+| 1920 × 1080 | 1024px cube | 20.1 / 25.2 | 18.9 / 29.1 |
+| 1920 × 1080 | Viewport node | 16.1 / 28.6 | 15.7 / 29.9 |
+| 2560 × 1440 | 512px cube | 17.0 / 28.8 | 13.4 / 25.8 |
+| 2560 × 1440 | 1024px cube | 15.5 / 28.8 | 20.8 / 29.8 |
+| 2560 × 1440 | Viewport node | 15.8 / 26.4 | 15.3 / 26.7 |
 
-## Material comparison
+Native-pixel cloud crops compare 512px, 1024px and viewport rendering from left to
+right. No crop is resized or sharpened. The viewport shader retains small cloud
+structure that cubemap enlargement softens, particularly at 2560 × 1440. Warm
+Sunset illumination and the blue Outdoor atmosphere use the same parameters.
 
-The expanded scene includes separate normal/diffuse, plain diffuse, metal,
-dielectric gloss, transparency/cutout hair, toon, unlit and emissive samples.
-The top row is plain diffuse, toon, unlit and emissive; the bottom row is
-normal/diffuse, metal, gloss and transparency/hair.
+![Outdoor cloud detail at 1920 × 1080](images/environment-outdoor-1920-comparison.png)
+![Outdoor cloud detail at 2560 × 1440](images/environment-outdoor-2560-comparison.png)
+![Sunset cloud detail at 1920 × 1080](images/environment-sunset-1920-comparison.png)
+![Sunset cloud detail at 2560 × 1440](images/environment-sunset-2560-comparison.png)
 
-| Preset | 512 at 2560 × 1440 | 1024 at 2560 × 1440 |
+The direct approach is small enough and its measured camera cost supports using
+it here. A 1024px visible cubemap improves the 512px result but still limits fine
+viewport detail. No additional fallback path is retained. Outdoor and Sunset's
+two cached PMREM color textures total 12 MiB; the visible sky has no cached color
+texture, compared with 24 MiB for two 512px skies or 96 MiB for two 1024px skies.
+These figures exclude depth, temporary resources and driver overhead. Memory
+savings are a consequence of the direct path, not the visual acceptance criterion.
+
+## Model and integration checks
+
+The comparison scene includes normal/diffuse, plain diffuse, metal, dielectric
+gloss, transparency/cutout hair, toon, unlit and emissive surfaces. The top row
+is plain diffuse, toon, unlit and emissive; the bottom row is normal/diffuse,
+metal, gloss and transparency/hair. Full viewport images retain this context:
+
+| Preset | 1920 × 1080 | 2560 × 1440 |
 | --- | --- | --- |
-| Outdoor | [Full frame](images/environment-outdoor-512-large.png) | [Full frame](images/environment-outdoor-1024-large.png) |
-| Sunset | [Full frame](images/environment-sunset-512-large.png) | [Full frame](images/environment-sunset-1024-large.png) |
+| Outdoor | [Full frame](images/environment-outdoor-1920.png) | [Full frame](images/environment-outdoor-2560.png) |
+| Sunset | [Full frame](images/environment-sunset-1920.png) | [Full frame](images/environment-sunset-2560.png) |
 
-Foreground circular regions around each sample differ by less than 0.17 per
-8-bit RGB channel on average between resolutions. Toon and unlit regions match
-exactly. Normal/diffuse and plain diffuse regions have no all-channel white
-clipping under either preset; the small clipped specular regions on metal/gloss
-remain effectively unchanged. Reflections retain the sky's blue upper hemisphere,
-tinted ground and warm Sunset horizon. The independent inspection light accounts
-for the bright white highlight on metal.
+The [combined Sunset frame](images/environment-sunset-2560-ao-bloom.png) retains
+the emission halo around the emissive sample. In the recorded sky strip away
+from that halo, direct, AO, bloom and combined output match exactly at both
+resolutions under both presets.
 
-Transparency and cutout gaps remain readable. The
-[Sunset AO/bloom frame](images/environment-sunset-512-ao-bloom.png) shows emission
-bloom around the emissive sample while diffuse, toon and reflective surfaces
-retain their response. AO leaves the sky unchanged. Emission adds its expected
-local halo; the distant sky region differs by at most one 8-bit channel value.
-Temporarily disabling the emissive sample makes the sky strip match direct
-rendering exactly in all four paths under both presets. These synthetic samples
-establish representative behavior rather than a guarantee for every authored mod.
+The existing focused lifecycle checks cover empty scenes, model replacement,
+all four viewport paths, preset restoration, panning with short clipping planes,
+model scale, resize, the view gizmo and selection. Resource checks cover shared
+sun direction and sky node, skipped work, 256px PMREM reuse, explicit retry,
+caught asynchronous errors and disposal. These checks use generated fixtures.
 
-## Reproducing visual and performance comparisons
+## Reproducing the comparison
 
-Install the repository development dependencies, populate its vendored assets,
-and use a compatible Edge/WebGPU environment. From the repository root:
+Install development dependencies, populate vendored assets, and use a compatible
+Edge/WebGPU environment. From the repository root:
 
 ```sh
-python tools/benchmark_environments.py --sky-size 512 --viewport 1280 900 --output .quality-reports/environments-512
-python tools/benchmark_environments.py --sky-size 1024 --viewport 1280 900 --output .quality-reports/environments-1024
+python tools/benchmark_environments.py --viewport 1920 1080 --output .quality-reports/sky-1920
+python tools/benchmark_environments.py --viewport 2560 1440 --output .quality-reports/sky-2560
 ```
 
-Repeat with `--viewport 2560 1440` for the large comparison. The capture override
-changes only the module served by this tool; it adds no runtime viewer setting.
-Use the same device and settings, and compare multiple runs. Each run starts a
-new browser and captures Outdoor and Sunset in direct, AO, bloom and combined modes.
-The synthetic scene includes diffuse/normal, metal/gloss, transparency/cutout hair,
-toon, unlit and emissive surfaces, with character shadows and AO.
+Use `--source path/to/environment.js` to serve a saved environment module in
+the benchmark only. The cubemap baseline is available from
+`git show 797b5f8:src/web/js/scene/environment.js`; change its
+`SKY_CAPTURE_SIZE` constant from 512 to 1024 for the larger capture comparison.
+Use the same device/settings and compare multiple runs. Each run captures direct,
+AO, bloom and combined output, then measures camera orbit and cached switching.
+Renderer allocation counters are Three.js estimates, not hardware VRAM telemetry.
+First activation includes material shader preparation and should be compared
+separately from camera motion. Check idle counters and before/after allocations
+to verify on-demand rendering and cache reuse.
 
-Reports contain renderer startup, first activation, cached switching, explicit
-sky/PMREM color storage, renderer allocation estimates and idle render/shadow
-counts. Frame latency includes browser scheduling and completion of the GPU queue; it is not
-an isolated GPU execution time. Allocation counters are Three.js estimates, not
-hardware VRAM telemetry. First activation includes shader/capture preparation;
-compare it separately from cached switching. Startup with Default should create
-no environment maps, and idle scenes should submit no viewport or shadow work.
-Compare allocation counts before/after cached switching to check resource reuse.
-
-The original fixed-gradient Outdoor reference remains available in the
-[reviewed revision](https://github.com/drelymk/mod_viewer/blob/383ab21805809849b7b5f9ea28f8499414bcf33e/docs/images/environment-outdoor-before.png).
-
-The focused browser lifecycle test also exercises empty scenes, model replacement,
-all four viewport paths, preset restoration, camera scale/clipping, resize,
-the view gizmo and mesh selection. The module lifecycle test covers shared sun
-direction, skipped work, resource reuse, explicit retry, caught asynchronous
-errors, failure cleanup and disposal. The tool is retained for recurring capture
-cost and material comparisons; it shares frame synchronization and omits the old
-Git-module substitution and camera timing loop.
-
-These browser checks and the comparison tool are explicit local tools. GitHub CI
-continues to run the quality audit and unit/core/app/integration tests without
-enabling browser or GPU tests.
+Browser checks and benchmarks remain explicit local tools. GitHub CI runs the
+quality audit and unit/core/app/integration tests without browser or GPU tests.

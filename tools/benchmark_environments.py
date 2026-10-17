@@ -1,6 +1,6 @@
 """Capture synthetic environment comparisons using the real local WebGPU viewer.
 
-Use --sky-size and --viewport to compare capture cost without changing the
+Use --source and --viewport to compare implementations without changing the
 checkout. Reports stay local unless explicitly selected for publication.
 Timing includes browser scheduling and GPU queue completion; it is not a
 hardware GPU timestamp measurement.
@@ -9,7 +9,6 @@ hardware GPU timestamp measurement.
 import argparse
 import json
 from pathlib import Path
-import re
 import statistics
 import sys
 import time
@@ -78,6 +77,7 @@ def evaluate(page, body, arg=None):
       const frame = async () => {
         requestRender(); await new Promise(requestAnimationFrame);
         await s.renderer.backend.device.queue.onSubmittedWorkDone();
+        if (!s.isRendererAvailable()) throw new Error('WebGPU rendering failed.');
       };
     """
         + body
@@ -129,7 +129,7 @@ def capture(browser, url, output, source, viewport):
               while(s.getEnvironmentDebugState().preparationInFlight) await new Promise(r=>setTimeout(r,0));
               await frame();
               const sky=s.scene.background, env=s.scene.environment;
-              return {activationMs:performance.now()-start, skyTexelBytes:sky.isCubeTexture?6*sky.image[0].width**2*8:0,
+              return {activationMs:performance.now()-start, skyTexelBytes:sky?.isCubeTexture?6*sky.image[0].width**2*8:0,
                 pmremTexelBytes:env?env.image.width*env.image.height*8:0};
             """,
                 preset,
@@ -158,6 +158,23 @@ def capture(browser, url, output, source, viewport):
                 "return [s.getRenderCount(),s.getCharacterShadowDebugState().shadowUpdateCount];",
             )
             data["idleUpdates"] = [a - b for a, b in zip(after, before)]
+            data["cameraMotionMs"] = evaluate(
+                page,
+                """
+              const position=s.camera.position.clone(), target=s.controls.target.clone();
+              const offset=position.clone().sub(target), radius=Math.hypot(offset.x,offset.z);
+              const phase=Math.atan2(offset.x,offset.z), timings=[];
+              for(let i=0;i<35;i++) {
+                const angle=phase+Math.sin(i/34*Math.PI*2)*0.2;
+                s.camera.position.set(target.x+Math.sin(angle)*radius,position.y,target.z+Math.cos(angle)*radius);
+                s.camera.lookAt(target);
+                const start=performance.now(); await frame();
+                if(i>=5) timings.push(performance.now()-start);
+              }
+              s.camera.position.copy(position); s.camera.lookAt(target); await frame();
+              return timings;
+            """,
+            )
             report["presets"][preset] = data
         report["cachedMemoryBefore"] = evaluate(
             page, "return {...s.renderer.info.memory};"
@@ -188,10 +205,7 @@ def main():
     )
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
-        "--sky-size",
-        type=int,
-        choices=[512, 1024],
-        help="Override capture size in the served benchmark module only",
+        "--source", type=Path, help="Serve a saved environment module for comparison"
     )
     parser.add_argument(
         "--viewport",
@@ -203,15 +217,8 @@ def main():
     args = parser.parse_args()
     if args.repeats < 1 or min(args.viewport) < 1:
         parser.error("Repeat count and viewport dimensions must be positive")
-    source = (ROOT / "src/web/js/scene/environment.js").read_text(encoding="utf-8")
-    if args.sky_size:
-        source, count = re.subn(
-            r"const SKY_CAPTURE_SIZE = \d+;",
-            f"const SKY_CAPTURE_SIZE = {args.sky_size};",
-            source,
-        )
-        if count != 1:
-            parser.error("The selected module must have one static sky capture size")
+    source_path = args.source or ROOT / "src/web/js/scene/environment.js"
+    source = source_path.read_text(encoding="utf-8")
     args.output.mkdir(parents=True, exist_ok=True)
     reports = []
     url = server.start()
@@ -238,7 +245,6 @@ def main():
             print(f"Captured run {index + 1}", flush=True)
     summary = {
         "viewport": args.viewport,
-        "skySizeOverride": args.sky_size,
         "runs": reports,
         "medians": {
             preset: {
@@ -250,6 +256,9 @@ def main():
                 ),
                 "skyTexelBytes": reports[0]["presets"][preset]["skyTexelBytes"],
                 "pmremTexelBytes": reports[0]["presets"][preset]["pmremTexelBytes"],
+                "cameraMotionMs": statistics.median(
+                    v for r in reports for v in r["presets"][preset]["cameraMotionMs"]
+                ),
             }
             for preset in ["outdoor", "sunset"]
         },

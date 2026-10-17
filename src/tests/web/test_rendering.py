@@ -65,7 +65,7 @@ def test_atmospheric_background_is_independent_of_model_geometry_and_clipping(vi
             }""", mode)
             page.wait_for_function('count => window.modViewer.getRenderCount() > count', arg=previous)
             with Image.open(io.BytesIO(page.screenshot())) as image:
-                colors.append(image.convert('RGB').getpixel((1050, 250)))
+                colors.append(image.convert('RGB').getpixel((700, 250)))
         assert all(max(abs(a-b) for a, b in zip(colors[0], color)) <= 2 for color in colors[1:])
         backgrounds.append(colors[0])
     assert backgrounds[0] == backgrounds[4] and backgrounds[1] == backgrounds[5]
@@ -74,12 +74,14 @@ def test_atmospheric_background_is_independent_of_model_geometry_and_clipping(vi
       const s = await import('./js/scene/scene.js');
       const {Raycaster, Vector2} = await import('three/webgpu');
       const children = [...s.scene.children];
-      const background = s.scene.background;
+      const background = s.scene.backgroundNode;
       const initial = {near:s.camera.near, far:s.camera.far, position:s.camera.position.clone()};
       s.camera.near = 0.00001; s.camera.far = 0.01; s.camera.updateProjectionMatrix();
       s.camera.position.addScalar(100);
       s.renderer.render(s.scene, s.camera);
       await s.renderer.backend.device.queue.onSubmittedWorkDone();
+      const clippedFrame = s.renderer.domElement.toDataURL();
+      const rect = s.renderer.domElement.getBoundingClientRect();
       const isolated = s.scene.children.length === children.length && children.every(c => s.scene.children.includes(c));
       const raycaster = new Raycaster(); raycaster.setFromCamera(new Vector2(), s.camera);
       const picking = raycaster.intersectObjects(s.scene.children, true).every(hit => !hit.object.isSkyMesh);
@@ -87,11 +89,17 @@ def test_atmospheric_background_is_independent_of_model_geometry_and_clipping(vi
       s.camera.position.copy(initial.position);
       s.setAmbientOcclusionStrength(0); s.setBloomEnabled(false);
       s.setEnvironmentPreset('default');
-      return {cube:background.isCubeTexture, isolated, picking, fog:s.scene.fog,
+      return {procedural:background.isNode, isolated, picking, fog:s.scene.fog,
+        clippedFrame, origin:[rect.left,rect.top],
         generations:s.getEnvironmentDebugState().totalPmremGenerationCount,
-        restored:s.scene.background.isColor, active:s.getEnvironmentDebugState().environmentActive};
+        restored:s.scene.background.isColor && !s.scene.backgroundNode, active:s.getEnvironmentDebugState().environmentActive};
     }""")
-    assert result == {'cube': True, 'isolated': True, 'picking': True, 'fog': None,
+    clipped_frame = result.pop('clippedFrame').split(',', 1)[1]
+    left, top = result.pop('origin')
+    with Image.open(io.BytesIO(base64.b64decode(clipped_frame))) as image:
+        clipped_color = image.convert('RGB').getpixel((int(700-left), int(250-top)))
+    assert max(abs(a-b) for a, b in zip(backgrounds[-1], clipped_color)) <= 2, (backgrounds[-1], clipped_color)
+    assert result == {'procedural': True, 'isolated': True, 'picking': True, 'fog': None,
                       'generations': 4, 'restored': True, 'active': False}
     page.evaluate("window.modViewer.setEnvironmentPreset('sunset')")
     for scale in [0.001, 1000, 1]:

@@ -12,17 +12,17 @@ import {
   mix,
   mx_fractal_noise_float,
   neutralToneMapping,
-  positionWorld,
+  normalWorldGeometry,
   smoothstep,
   vec2,
   vec3,
   vec4,
+  varyingProperty,
 } from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 
 const BACKGROUND_WIDTH = 512;
 const BACKGROUND_HEIGHT = 256;
-const SKY_CAPTURE_SIZE = 512;
 const freeze = Object.freeze;
 function makeAtmosphere(sunElevation, sunAzimuth, sky, exposure, groundColor) {
   const direction = new THREE.Vector3().setFromSphericalCoords(
@@ -276,29 +276,37 @@ function directionFromPresetAccent(id) {
 
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
 
-function configureAtmosphere(sky, atmosphere) {
-  sky.scale.setScalar(10);
-  sky.frustumCulled = false;
+function createAtmosphereNode(atmosphere) {
+  const direction = normalWorldGeometry.normalize();
+  const sky = new SkyMesh();
   for (const [name, value] of Object.entries(atmosphere.sky)) sky[name].value = value;
   sky.cloudSpeed.value = 0;
   sky.cloudCoverage.value = 0;
   sky.sunPosition.value.fromArray(atmosphere.sunDirection);
   sky.showSunDisc.value = true;
-  // Compress sky highlights in linear space before both background and IBL
-  // capture. Models keep the viewport's existing sRGB/NoToneMapping contract.
-  const scattering = sky.material.colorNode;
+  // SkyMesh initializes scattering varyings in its vertex node. Reuse that
+  // initialization and its r185 world-position varying for the background
+  // sphere, while Three.js keeps its own far-plane projection. The zero-valued
+  // dependency includes those vertex assignments without changing sky color.
+  const initializeSky = Fn(() => {
+    const projection = sky.material.vertexNode.toVar();
+    varyingProperty('vec3', 'v_positionWorld').assign(cameraPosition.add(normalWorldGeometry));
+    return projection;
+  })().toVertexStage();
+  const scattering = sky.material.colorNode.add(initializeSky.mul(0));
   const cloudField = Fn(([p]) => mx_fractal_noise_float(vec3(p, 0), 5, 2.1, 0.5).mul(0.5).add(0.5));
-  sky.material.colorNode = Fn(() => {
-    const direction = positionWorld.sub(cameraPosition).normalize();
+  const node = Fn(() => {
+    // Compress sky highlights in linear space for both background and IBL.
+    // Models retain the viewport's existing sRGB/NoToneMapping contract.
     const skyColor = neutralToneMapping(scattering.rgb, atmosphere.exposure);
     const { coverage, density, elevation, scale } = atmosphere.clouds;
     const uv = direction.xz.div(max(direction.y, 0.05)).mul((scale * 1000) / (1 - elevation * 0.9));
     const field = cloudField(uv).toVar();
     const threshold = 1 - coverage;
-    // Filter the silhouette at capture resolution; fade distant clouds into
+    // Filter at the current render resolution; fade distant clouds into
     // the atmospheric horizon instead of adding fog to inspection geometry.
-    const edgeWidth = fwidth(field).mul(1.5).add(0.015);
-    const mask = smoothstep(threshold, edgeWidth.add(threshold + 0.12), field)
+    const edgeWidth = max(fwidth(field).mul(1.5), 0.015);
+    const mask = smoothstep(edgeWidth.negate().add(threshold), edgeWidth.add(threshold + 0.12), field)
       .mul(density)
       .mul(smoothstep(0.02, 0.22, direction.y));
     const sun = sky.sunPosition;
@@ -312,33 +320,11 @@ function configureAtmosphere(sky, atmosphere) {
     const cloudedSky = mix(skyColor, cloudColor, mask);
     return vec4(mix(color(atmosphere.groundColor), cloudedSky, smoothstep(-0.35, 0.02, direction.y)), 1);
   })();
-}
-
-function createAtmosphereCaptureScene(id, atmosphere) {
-  const captureScene = new THREE.Scene();
-  captureScene.userData.iblPresetId = id;
-  const sky = new SkyMesh();
-  configureAtmosphere(sky, atmosphere);
-  captureScene.add(sky);
-  return captureScene;
-}
-
-// Capture the static atmosphere once. A cube background follows camera rotation
-// without joining the model scene or depending on its clipping planes/layers.
-function captureSky(renderer, captureScene) {
-  const target = new THREE.CubeRenderTarget(SKY_CAPTURE_SIZE, {
-    type: THREE.HalfFloatType,
-    generateMipmaps: false,
-    minFilter: THREE.LinearFilter,
-    depthBuffer: false,
-  });
-  try {
-    new THREE.CubeCamera(0.1, 100, target).update(renderer, captureScene);
-    return target;
-  } catch (error) {
-    target.dispose();
-    throw error;
-  }
+  // SkyMesh supplies its existing scattering nodes; its unused mesh resources
+  // never enter the viewer scene. The renderer owns the background geometry.
+  sky.geometry.dispose();
+  sky.material.dispose();
+  return node;
 }
 
 function createLightCard({ color, intensity, position, size, target }) {
@@ -575,6 +561,7 @@ export function createEnvironmentController({
   }
 
   const originalBackground = scene.background;
+  const originalBackgroundNode = scene.backgroundNode;
   const originalEnvironment = scene.environment;
   const originalEnvironmentIntensity = scene.environmentIntensity;
   const originalAmbient = captureLightState(ambientLight);
@@ -597,7 +584,7 @@ export function createEnvironmentController({
       {
         promise: null,
         target: null,
-        skyTarget: null,
+        skyNode: null,
         texture: null,
         attempted: false,
         available: false,
@@ -651,6 +638,7 @@ export function createEnvironmentController({
 
   function applyDefault() {
     scene.background = originalBackground;
+    scene.backgroundNode = originalBackgroundNode;
     restoreEnvironment();
     restoreLightState(ambientLight, originalAmbient);
     restoreLightState(hemisphereLight, originalHemisphere);
@@ -666,8 +654,9 @@ export function createEnvironmentController({
 
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
-    if (resource?.skyTarget) scene.background = resource.skyTarget.texture;
-    else drawBackground(preset);
+    if (preset.atmosphere) resource.skyNode ||= createAtmosphereNode(preset.atmosphere);
+    scene.backgroundNode = resource?.skyNode || null;
+    drawBackground(preset);
     if (profile && resource?.available && resource.texture) {
       applyLights(preset, profile.lightIntensity);
       scene.environment = resource.texture;
@@ -696,38 +685,30 @@ export function createEnvironmentController({
     resource.error = null;
     let captureScene = null;
     let generatedTarget = null;
-    let skyTarget = null;
     let rendererState = null;
     try {
       rendererState = THREE.RendererUtils.saveRendererState(renderer);
       renderer.setMRT(null);
       pmremGenerator ||= new THREE.PMREMGenerator(renderer);
-      captureScene = profile.atmosphere
-        ? createAtmosphereCaptureScene(id, profile.atmosphere)
-        : profile.createCaptureScene();
-      const { sigma, near, far, size } = profile.pmrem;
       if (profile.atmosphere) {
-        skyTarget = captureSky(renderer, captureScene);
-        // Refilter the same visible sky at the smaller reflection resolution.
-        for (const child of captureScene.children) child.visible = false;
-        captureScene.background = skyTarget.texture;
-      }
+        captureScene = new THREE.Scene();
+        captureScene.userData.iblPresetId = id;
+        captureScene.backgroundNode = resource.skyNode;
+      } else captureScene = profile.createCaptureScene();
+      const { sigma, near, far, size } = profile.pmrem;
       generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
       if (!generatedTarget?.texture) {
         throw new Error(`${id} PMREM generation returned no texture.`);
       }
       resource.target = generatedTarget;
-      resource.skyTarget = skyTarget;
       resource.texture = generatedTarget.texture;
       resource.available = true;
       resource.generationCount += 1;
       generatedTarget = null;
-      skyTarget = null;
       return true;
     } finally {
       if (rendererState) THREE.RendererUtils.restoreRendererState(renderer, rendererState);
       generatedTarget?.dispose?.();
-      skyTarget?.dispose();
       disposeCaptureScene(captureScene);
     }
   }
@@ -796,7 +777,7 @@ export function createEnvironmentController({
       ),
       activeDominantDirection: getDominantLightDirection(),
       atmosphere: getPreset().atmosphere || null,
-      skyActive: !!iblResources.get(currentPresetId)?.skyTarget,
+      skyActive: !!iblResources.get(currentPresetId)?.skyNode,
     };
   }
 
@@ -816,9 +797,9 @@ export function createEnvironmentController({
     applyDefault();
     for (const resource of iblResources.values()) {
       resource.target?.dispose?.();
-      resource.skyTarget?.dispose();
+      resource.skyNode?.dispose();
       resource.target = null;
-      resource.skyTarget = null;
+      resource.skyNode = null;
       resource.texture = null;
       resource.available = false;
     }
