@@ -37,6 +37,28 @@ def _activate_rig(page, *, humanoid=False):
     page.wait_for_function('window.__rigApi.getModelRigState().loaded')
 
 
+def test_atmospheric_background_is_independent_of_model_geometry_and_clipping(viewer):
+    page = _open_fixture(viewer, model_payload())
+    result = page.evaluate("""async () => {
+      const s = await import('./js/scene/scene.js');
+      const children = [...s.scene.children];
+      s.setEnvironmentPreset('outdoor');
+      while(s.getEnvironmentDebugState().preparationInFlight) await new Promise(r => setTimeout(r, 10));
+      const background = s.scene.background;
+      const initial = {near:s.camera.near, far:s.camera.far};
+      s.camera.near = 0.00001; s.camera.far = 0.01; s.camera.updateProjectionMatrix();
+      s.camera.position.addScalar(100);
+      s.renderer.render(s.scene, s.camera);
+      await s.renderer.backend.device.queue.onSubmittedWorkDone();
+      const isolated = s.scene.children.length === children.length && children.every(c => s.scene.children.includes(c));
+      s.camera.near = initial.near; s.camera.far = initial.far; s.camera.updateProjectionMatrix();
+      s.setEnvironmentPreset('default');
+      return {cube:background.isCubeTexture, isolated,
+        restored:s.scene.background.isColor, active:s.getEnvironmentDebugState().environmentActive};
+    }""")
+    assert result == {'cube': True, 'isolated': True, 'restored': True, 'active': False}
+
+
 def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
     payload = model_payload()
     payload['meshes']['mesh-00'].update(

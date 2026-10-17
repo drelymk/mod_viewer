@@ -12,9 +12,10 @@ const OUTDOOR_SKY = freeze({
   rayleigh: 0.8,
   mieCoefficient: 0.003,
   mieDirectionalG: 0.75,
-  cloudCoverage: 0,
-  cloudDensity: 0,
+  cloudCoverage: 0.4,
+  cloudDensity: 0.65,
   cloudElevation: 0.5,
+  cloudScale: 0.0004,
 });
 // Bake broad room illumination as well as softbox highlights into PMREM.
 // Dark capture walls leave metals and shadow-facing surfaces almost black,
@@ -122,7 +123,6 @@ const radialBackground = (center, outerRadius, entries, overlay) =>
     ...(overlay ? { overlay: makeGradient('vertical', overlay) } : {}),
   });
 
-const verticalBackground = (entries) => makeGradient('vertical', entries);
 const makeAmbient = (color, intensity) => freeze({ color, intensity });
 const makeHemisphere = (color, groundColor, intensity) =>
   freeze({
@@ -146,8 +146,7 @@ const makePreset = (id, label, background, ambient, hemisphere, accent) =>
     ...(accent ? { accent } : {}),
   });
 
-// Keep the visual vocabulary in one declarative table. These are presentation
-// moods, not attempts to reproduce literal rooms or outdoor photographs.
+// Keep the visual vocabulary in one declarative table.
 export const ENVIRONMENT_PRESETS = freeze({
   default: makePreset('default', 'Default'),
   studio: makePreset(
@@ -195,12 +194,7 @@ export const ENVIRONMENT_PRESETS = freeze({
   outdoor: makePreset(
     'outdoor',
     'Outdoor',
-    verticalBackground([
-      [0, '#285b8a'],
-      [0.42, '#75a8ce'],
-      [0.68, '#879eae'],
-      [1, '#46515a'],
-    ]),
+    null,
     makeAmbient(0xdbeaff, 0.26),
     makeHemisphere(0x78b5ed, 0x667068, 0.45),
     makeAccent(0xffe6bd, 0.7, [-6, 10, 6]),
@@ -214,16 +208,12 @@ function directionFromPresetAccent(id) {
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
 
 function configureOutdoorSky(sky) {
-  sky.scale.setScalar(10000);
-  sky.turbidity.value = OUTDOOR_SKY.turbidity;
-  sky.rayleigh.value = OUTDOOR_SKY.rayleigh;
-  sky.mieCoefficient.value = OUTDOOR_SKY.mieCoefficient;
-  sky.mieDirectionalG.value = OUTDOOR_SKY.mieDirectionalG;
-  sky.cloudCoverage.value = OUTDOOR_SKY.cloudCoverage;
-  sky.cloudDensity.value = OUTDOOR_SKY.cloudDensity;
-  sky.cloudElevation.value = OUTDOOR_SKY.cloudElevation;
+  sky.scale.setScalar(10);
+  sky.frustumCulled = false;
+  for (const [name, value] of Object.entries(OUTDOOR_SKY)) sky[name].value = value;
+  sky.cloudSpeed.value = 0;
   sky.sunPosition.value.fromArray(IBL_PROFILES.outdoor.dominantDirection);
-  sky.showSunDisc.value = false;
+  sky.showSunDisc.value = true;
 }
 
 function createOutdoorCaptureScene() {
@@ -233,6 +223,32 @@ function createOutdoorCaptureScene() {
   configureOutdoorSky(sky);
   captureScene.add(sky);
   return captureScene;
+}
+
+// Capture the static atmosphere once. A cube background follows camera rotation
+// without joining the model scene or depending on its clipping planes/layers.
+function captureSky(renderer, captureScene) {
+  const target = new THREE.CubeRenderTarget(512, {
+    type: THREE.HalfFloatType,
+    generateMipmaps: false,
+    minFilter: THREE.LinearFilter,
+    depthBuffer: false,
+  });
+  const previousTarget = renderer.getRenderTarget();
+  const previousFace = renderer.getActiveCubeFace();
+  const previousMip = renderer.getActiveMipmapLevel();
+  const previousMRT = renderer.getMRT();
+  try {
+    renderer.setMRT(null);
+    new THREE.CubeCamera(0.1, 100, target).update(renderer, captureScene);
+    return target;
+  } catch (error) {
+    target.dispose();
+    throw error;
+  } finally {
+    renderer.setRenderTarget(previousTarget, previousFace, previousMip);
+    renderer.setMRT(previousMRT);
+  }
 }
 
 function createLightCard({ color, intensity, position, size, target }) {
@@ -479,6 +495,7 @@ export function createEnvironmentController({
       id,
       {
         target: null,
+        skyTarget: null,
         texture: null,
         attempted: false,
         available: false,
@@ -545,9 +562,10 @@ export function createEnvironmentController({
       return;
     }
 
-    drawBackground(preset);
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
+    if (resource?.skyTarget) scene.background = resource.skyTarget.texture;
+    else drawBackground(preset);
     if (profile && resource?.available && resource.texture) {
       applyLights(preset, profile.lightIntensity);
       scene.environment = resource.texture;
@@ -575,18 +593,24 @@ export function createEnvironmentController({
     resource.error = null;
     let captureScene = null;
     let generatedTarget = null;
+    let skyTarget = null;
     try {
       captureScene = profile.createCaptureScene();
       const { sigma, near, far, size } = profile.pmrem;
-      generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
+      if (id === 'outdoor') {
+        skyTarget = captureSky(renderer, captureScene);
+        generatedTarget = pmremGenerator.fromCubemap(skyTarget.texture);
+      } else generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
       if (!generatedTarget?.texture) {
         throw new Error(`${id} PMREM generation returned no texture.`);
       }
       resource.target = generatedTarget;
+      resource.skyTarget = skyTarget;
       resource.texture = generatedTarget.texture;
       resource.available = true;
       resource.generationCount += 1;
       generatedTarget = null;
+      skyTarget = null;
       return true;
     } catch (error) {
       resource.available = false;
@@ -595,6 +619,7 @@ export function createEnvironmentController({
       return false;
     } finally {
       generatedTarget?.dispose?.();
+      skyTarget?.dispose();
       disposeCaptureScene(captureScene);
     }
   }
@@ -680,7 +705,9 @@ export function createEnvironmentController({
     applyDefault();
     for (const resource of iblResources.values()) {
       resource.target?.dispose?.();
+      resource.skyTarget?.dispose();
       resource.target = null;
+      resource.skyTarget = null;
       resource.texture = null;
       resource.available = false;
     }
