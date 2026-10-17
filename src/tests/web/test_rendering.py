@@ -38,25 +38,82 @@ def _activate_rig(page, *, humanoid=False):
 
 
 def test_atmospheric_background_is_independent_of_model_geometry_and_clipping(viewer):
-    page = _open_fixture(viewer, model_payload())
+    page = viewer({'fixture-01': model_payload(), 'fixture-02': model_payload()})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.evaluate("""async () => {
+      const s = await import('./js/scene/scene.js'); await s.rendererReady;
+      window.__environmentScene = s;
+      s.setEnvironmentPreset('outdoor');
+    }""")
+    page.wait_for_function('window.__environmentScene.getEnvironmentDebugState().skyActive')
+    assert page.evaluate('window.modViewer.activeMeshes.length') == 0
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    backgrounds = []
+    for preset in ['outdoor', 'sunset', 'studio', 'indoor', 'outdoor', 'sunset']:
+        page.evaluate('id => window.modViewer.setEnvironmentPreset(id)', preset)
+        page.wait_for_function('!window.__environmentScene.getEnvironmentDebugState().preparationInFlight')
+        colors = []
+        for mode in ['direct', 'ao', 'bloom', 'ao-bloom']:
+            previous = page.evaluate('window.modViewer.getRenderCount()')
+            page.evaluate("""async mode => {
+              const s = await import('./js/scene/scene.js');
+              s.setAmbientOcclusionStrength(mode.includes('ao') ? 0.5 : 0);
+              s.setBloomAvailable(true); s.setBloomEnabled(mode.includes('bloom'));
+              const {requestRender} = await import('./js/scene/render-scheduler.js'); requestRender();
+            }""", mode)
+            page.wait_for_function('count => window.modViewer.getRenderCount() > count', arg=previous)
+            with Image.open(io.BytesIO(page.screenshot())) as image:
+                colors.append(image.convert('RGB').getpixel((1050, 250)))
+        assert all(max(abs(a-b) for a, b in zip(colors[0], color)) <= 2 for color in colors[1:])
+        backgrounds.append(colors[0])
+    assert backgrounds[0] == backgrounds[4] and backgrounds[1] == backgrounds[5]
+    assert sum(abs(a-b) for a, b in zip(backgrounds[0], backgrounds[1])) > 40
     result = page.evaluate("""async () => {
       const s = await import('./js/scene/scene.js');
+      const {Raycaster, Vector2} = await import('three/webgpu');
       const children = [...s.scene.children];
-      s.setEnvironmentPreset('outdoor');
-      while(s.getEnvironmentDebugState().preparationInFlight) await new Promise(r => setTimeout(r, 10));
       const background = s.scene.background;
-      const initial = {near:s.camera.near, far:s.camera.far};
+      const initial = {near:s.camera.near, far:s.camera.far, position:s.camera.position.clone()};
       s.camera.near = 0.00001; s.camera.far = 0.01; s.camera.updateProjectionMatrix();
       s.camera.position.addScalar(100);
       s.renderer.render(s.scene, s.camera);
       await s.renderer.backend.device.queue.onSubmittedWorkDone();
       const isolated = s.scene.children.length === children.length && children.every(c => s.scene.children.includes(c));
+      const raycaster = new Raycaster(); raycaster.setFromCamera(new Vector2(), s.camera);
+      const picking = raycaster.intersectObjects(s.scene.children, true).every(hit => !hit.object.isSkyMesh);
       s.camera.near = initial.near; s.camera.far = initial.far; s.camera.updateProjectionMatrix();
+      s.camera.position.copy(initial.position);
+      s.setAmbientOcclusionStrength(0); s.setBloomEnabled(false);
       s.setEnvironmentPreset('default');
-      return {cube:background.isCubeTexture, isolated,
+      return {cube:background.isCubeTexture, isolated, picking, fog:s.scene.fog,
+        generations:s.getEnvironmentDebugState().totalPmremGenerationCount,
         restored:s.scene.background.isColor, active:s.getEnvironmentDebugState().environmentActive};
     }""")
-    assert result == {'cube': True, 'isolated': True, 'restored': True, 'active': False}
+    assert result == {'cube': True, 'isolated': True, 'picking': True, 'fog': None,
+                      'generations': 4, 'restored': True, 'active': False}
+    page.evaluate("window.modViewer.setEnvironmentPreset('sunset')")
+    for scale in [0.001, 1000, 1]:
+        page.evaluate("""async scale => {
+          const s = await import('./js/scene/scene.js');
+          const mesh = window.modViewer.activeMeshes[0]; mesh.scale.setScalar(scale);
+          s.fitTo([mesh]); s.frameView([mesh]);
+        }""", scale)
+    page.locator('#view-gizmo .gizmo-axis[data-axis="z"][data-sign="1"]').press('Enter')
+    page.locator('#camera-reset-view-btn').click()
+    page.set_viewport_size({'width': 1400, 'height': 950})
+    point = project_mesh_points(page, [[0.25, 0.25, 0]])[0]
+    page.mouse.click(*point)
+    assert page.locator('.draw-item.selected').count() == 1
+    open_model(page, 'fixture-02')
+    wait_loaded(page)
+    assert page.evaluate('window.modViewer.getEnvironmentPreset().id') == 'sunset'
+    assert page.evaluate('window.__environmentScene.getEnvironmentDebugState().totalPmremGenerationCount') == 4
+    before = page.evaluate('window.modViewer.getRenderCount()')
+    page.wait_for_timeout(250)
+    assert page.evaluate('window.modViewer.getRenderCount()') == before
+    assert errors == []
 
 
 def test_webgpu_texture_and_visibility_reach_the_frame(viewer):

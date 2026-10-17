@@ -331,20 +331,12 @@ function captureSky(renderer, captureScene) {
     minFilter: THREE.LinearFilter,
     depthBuffer: false,
   });
-  const previousTarget = renderer.getRenderTarget();
-  const previousFace = renderer.getActiveCubeFace();
-  const previousMip = renderer.getActiveMipmapLevel();
-  const previousMRT = renderer.getMRT();
   try {
-    renderer.setMRT(null);
     new THREE.CubeCamera(0.1, 100, target).update(renderer, captureScene);
     return target;
   } catch (error) {
     target.dispose();
     throw error;
-  } finally {
-    renderer.setRenderTarget(previousTarget, previousFace, previousMip);
-    renderer.setMRT(previousMRT);
   }
 }
 
@@ -704,7 +696,9 @@ export function createEnvironmentController({
     let captureScene = null;
     let generatedTarget = null;
     let skyTarget = null;
+    const rendererState = THREE.RendererUtils.saveRendererState(renderer);
     try {
+      renderer.setMRT(null);
       pmremGenerator ||= new THREE.PMREMGenerator(renderer);
       captureScene = profile.atmosphere
         ? createAtmosphereCaptureScene(id, profile.atmosphere)
@@ -734,6 +728,7 @@ export function createEnvironmentController({
       console.debug(`${id} environment preparation failed; using baseline lighting.`, error);
       return false;
     } finally {
+      THREE.RendererUtils.restoreRendererState(renderer, rendererState);
       generatedTarget?.dispose?.();
       skyTarget?.dispose();
       disposeCaptureScene(captureScene);

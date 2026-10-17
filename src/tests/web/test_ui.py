@@ -123,6 +123,7 @@ def test_key_light_drag_restores_controls_after_capture_loss_and_release(viewer)
 def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
     payload = model_payload(3)
     payload['meshes']['mesh-01']['component'] = 'component-00'
+    payload['meshes']['mesh-01']['identity']['component'] = 'component-00'
     for index, mesh in enumerate(payload['meshes'].values()):
         x = index * 2
         mesh['pos'] = append_stream(payload, 'f', [x,0,0, x+1,0,0, x,1,0])

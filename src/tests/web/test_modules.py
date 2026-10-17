@@ -41,6 +41,10 @@ export class PMREMGenerator {
   }
   dispose() {probe.disposed++;}
 }
+export const RendererUtils = {
+  saveRendererState: renderer => ({...renderer.state}),
+  restoreRendererState: (renderer, state) => {renderer.state = state;},
+};
 """))
     result = module_page.evaluate("""async () => {
       const T = await import('three/webgpu');
@@ -51,7 +55,8 @@ export class PMREMGenerator {
       const hemisphereLight = new T.HemisphereLight(0xffffff, 0x30343f, 0.35);
       const lightTarget = new T.Object3D();
       const renderer = {getRenderTarget:()=>null, getActiveCubeFace:()=>0,
-        getActiveMipmapLevel:()=>0, getMRT:()=>null, setMRT:()=>{}, setRenderTarget:()=>{}};
+        getActiveMipmapLevel:()=>0, getMRT:()=>null, setMRT:value=>{renderer.state.mrt=value;},
+        setRenderTarget:()=>{}, state:{mrt:'original'}};
       let notifications = 0;
       const create = () => createEnvironmentController({renderer, scene, ambientLight,
         hemisphereLight, lightTarget, onVisualChange:()=>notifications++});
@@ -85,13 +90,14 @@ export class PMREMGenerator {
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
         allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
-        generators:environmentProbe.generators, disposed:environmentProbe.disposed};
+        generators:environmentProbe.generators, disposed:environmentProbe.disposed,
+        rendererRestored:renderer.state.mrt === 'original'};
     }""")
     assert result == {
         'cold': 0, 'consistent': True, 'static': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
         'captures': 3, 'notifications': 3, 'failure': True, 'allDisposed': True,
-        'generators': 2, 'disposed': 8,
+        'generators': 2, 'disposed': 8, 'rendererRestored': True,
     }
 
 
