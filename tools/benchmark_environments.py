@@ -33,7 +33,7 @@ SETUP = """async () => {
     new T.MeshStandardNodeMaterial({color:0xcdd8df, roughness:0.18, metalness:1}),
     new T.MeshStandardNodeMaterial({color:0x98754a, roughness:0.12}),
     new T.MeshStandardNodeMaterial({color:0x5c6f96, roughness:0.35, transparent:true, opacity:0.55}),
-    new T.MeshStandardNodeMaterial({color:0x9eada2, roughness:0.8}),
+    new T.MeshStandardNodeMaterial({color:0xe5e5e5, roughness:0.8}),
     new T.MeshToonNodeMaterial({color:0xd89061}),
     new T.MeshBasicNodeMaterial({color:0x638dbe}),
     new T.MeshStandardNodeMaterial({color:0x202020, emissive:0xff6633, emissiveIntensity:2}),
@@ -86,7 +86,7 @@ def evaluate(page, body, arg=None):
     )
 
 
-def capture(browser, url, output, source, viewport):
+def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset")):
     with browser.new_context(
         bypass_csp=True, viewport=dict(zip(("width", "height"), viewport))
     ) as context:
@@ -120,7 +120,7 @@ def capture(browser, url, output, source, viewport):
           });
         """,
         )
-        for preset in ["outdoor", "sunset"]:
+        for preset in presets:
             data = evaluate(
                 page,
                 """
@@ -182,13 +182,14 @@ def capture(browser, url, output, source, viewport):
         report["cachedSwitchMs"] = evaluate(
             page,
             """
-          const timings={outdoor:[],sunset:[]};
+          const timings=Object.fromEntries(arg.map(preset => [preset,[]]));
           for(let i=0;i<5;i++) for(const preset of Object.keys(timings)) {
             const start=performance.now(); s.setEnvironmentPreset(preset); await frame();
             timings[preset].push(performance.now()-start);
           }
           return timings;
         """,
+            list(presets),
         )
         report["cachedMemoryAfter"] = evaluate(
             page, "return {...s.renderer.info.memory};"
@@ -204,6 +205,12 @@ def main():
         "--output", type=Path, default=ROOT / ".quality-reports/environments"
     )
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--presets",
+        nargs="+",
+        choices=["studio", "indoor", "outdoor", "sunset"],
+        default=["outdoor", "sunset"],
+    )
     parser.add_argument(
         "--source", type=Path, help="Serve a saved environment module for comparison"
     )
@@ -237,7 +244,9 @@ def main():
                     "--use-webgpu-adapter=d3d11",
                 ],
             ) as browser:
-                report = capture(browser, url, output, source, args.viewport)
+                report = capture(
+                    browser, url, output, source, args.viewport, args.presets
+                )
             (output / "metrics.json").write_text(
                 json.dumps(report, indent=2) + "\n", encoding="utf-8"
             )
@@ -260,7 +269,7 @@ def main():
                     v for r in reports for v in r["presets"][preset]["cameraMotionMs"]
                 ),
             }
-            for preset in ["outdoor", "sunset"]
+            for preset in args.presets
         },
     }
     (args.output / "summary.json").write_text(

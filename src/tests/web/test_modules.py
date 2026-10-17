@@ -10,7 +10,7 @@ def test_environment_capture_cache_and_disposal_lifecycle(module_page):
         content_type='text/javascript', body="""
 export * from './three.webgpu.js?environment-contract';
 import * as T from './three.webgpu.js?environment-contract';
-const probe = window.environmentProbe = {captures:[], targets:[], generators:0, disposed:0};
+const probe = window.environmentProbe = {captures:[], rooms:[], targets:[], generators:0, disposed:0};
 function target(kind) {
   const value = new T.RenderTarget(1, 1);
   const record = {kind, disposed:0}; probe.targets.push(record);
@@ -23,6 +23,9 @@ export class PMREMGenerator {
     if(scene.backgroundNode) {
       probe.captures.push({node:scene.backgroundNode, size});
       scene.backgroundNode.addEventListener('dispose', () => probe.disposed++);
+    } else {
+      const main = scene.children.find(child => child.material?.emissive?.getHex() > 0);
+      probe.rooms.push({id:scene.userData.iblPresetId, direction:main.position.clone().normalize().toArray()});
     }
     if(probe.fail && scene.backgroundNode) throw new Error('capture failed');
     return target('pmrem');
@@ -63,10 +66,28 @@ export const RendererUtils = {
         && environmentProbe.captures[0].node === outdoor;
       controller.setPreset('indoor'); controller.setPreset('studio'); await controller.prepare();
       const skipped = !controller.getDebugState().resources.indoor.attempted;
+      const rooms = {};
+      let roomDisposals = 0;
+      for(const id of ['studio','indoor']) {
+        controller.setPreset(id); await controller.prepare();
+        rooms[id] = {node:scene.backgroundNode, texture:scene.environment};
+        scene.backgroundNode.addEventListener('dispose', () => roomDisposals++);
+      }
+      const roomLighting = environmentProbe.rooms.every(capture => {
+        controller.setPreset(capture.id);
+        return capture.direction.every((v,i) => Math.abs(v-controller.getDominantLightDirection()[i])<1e-10);
+      });
       controller.setPreset('sunset'); await controller.prepare();
       const sunset = scene.backgroundNode !== outdoor && controller.getDominantLightDirection()[1] < 0.2;
-      for(let i=0;i<5;i++) {controller.setPreset('default'); controller.setPreset('outdoor'); await controller.prepare();}
-      const reused = scene.backgroundNode === outdoor && controller.getDebugState().totalPmremGenerationCount === 3;
+      let roomReuse = true;
+      for(let i=0;i<5;i++) {
+        controller.setPreset('default');
+        for(const id of ['studio','indoor','outdoor']) {
+          controller.setPreset(id); await controller.prepare();
+          if(rooms[id]) roomReuse &&= scene.backgroundNode === rooms[id].node && scene.environment === rooms[id].texture;
+        }
+      }
+      const reused = scene.backgroundNode === outdoor && controller.getDebugState().totalPmremGenerationCount === 4;
       controller.dispose(); controller.dispose();
       const restored = scene.background === original && !scene.backgroundNode && scene.environment === null
         && ambientLight.intensity === 0.55 && hemisphereLight.intensity === 0.35 && lightTarget.children.length === 0;
@@ -97,6 +118,7 @@ export const RendererUtils = {
       const stateFailure = unexpected.getDebugState().resources.outdoor.error === 'renderer state failed';
       unexpected.dispose();
       return {cold, consistent, smallReflections:environmentProbe.captures.every(c => c.size === 256), skipped, sunset, reused, restored,
+        roomLighting, roomReuse, roomDisposals,
         balanced, rejected, captures:environmentProbe.captures.length, notifications,
         failure:!failure.environmentActive && !!failure.resources.outdoor.error,
         allDisposed:environmentProbe.targets.every(target => target.disposed === 1),
@@ -107,7 +129,8 @@ export const RendererUtils = {
     assert result == {
         'cold': 0, 'consistent': True, 'smallReflections': True, 'skipped': True, 'sunset': True,
         'reused': True, 'restored': True, 'balanced': True, 'rejected': True,
-        'captures': 4, 'notifications': 4, 'failure': True, 'allDisposed': True,
+        'captures': 4, 'notifications': 5, 'failure': True, 'allDisposed': True,
+        'roomLighting': True, 'roomReuse': True, 'roomDisposals': 2,
         'generators': 2, 'disposed': 6, 'rendererRestored': True,
         'passive': True, 'recovered': True, 'cachedRecovery': True,
         'stateFailure': True, 'unhandled': [],

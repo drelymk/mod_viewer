@@ -21,8 +21,6 @@ import {
 } from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 
-const BACKGROUND_WIDTH = 512;
-const BACKGROUND_HEIGHT = 256;
 const freeze = Object.freeze;
 function makeAtmosphere(sunElevation, sunAzimuth, sky, exposure, groundColor) {
   const direction = new THREE.Vector3().setFromSphericalCoords(
@@ -80,106 +78,89 @@ const SUNSET_ATMOSPHERE = makeAtmosphere(
 // even when the viewer's ambient light makes diffuse surfaces readable.
 const INDOOR_CAPTURE = freeze({
   room: freeze({
-    color: 0x998b7d,
-    size: freeze([18, 12, 18]),
-    position: freeze([0, 1, 0]),
+    color: 0xb99a7b,
+    size: freeze([18, 10, 18]),
+    position: freeze([0, 2, 0]),
   }),
   floor: freeze({
-    color: 0x6d6056,
+    color: 0x866044,
     size: freeze([18, 18]),
-    position: freeze([0, -4.95, 0]),
+    position: freeze([0, -2.95, 0]),
   }),
   mainCard: freeze({
-    color: 0xffd6af,
-    intensity: 2.8,
-    distance: 6,
-    size: freeze([5.5, 4.0]),
+    color: 0xd8eaff,
+    intensity: 3.0,
+    distance: 8,
+    size: freeze([3.8, 3.2]),
   }),
   ceilingCard: freeze({
-    color: 0xfff0de,
-    intensity: 1.4,
-    position: freeze([0, 4.75, 0]),
-    size: freeze([6.0, 5.0]),
+    color: 0xffe2bf,
+    intensity: 0.75,
+    position: freeze([0, 6.5, 0]),
+    size: freeze([7.0, 5.0]),
     target: freeze([0, 0, 0]),
   }),
   fillCard: freeze({
-    color: 0xeaf1f7,
-    intensity: 1.15,
-    position: freeze([-4.5, 1.2, 3.5]),
-    size: freeze([5.5, 4.5]),
+    color: 0xffc58f,
+    intensity: 1.3,
+    position: freeze([5.0, 1.0, 1.5]),
+    size: freeze([6.0, 4.5]),
     target: freeze([0, 0, 0]),
   }),
   roomLight: freeze({
-    color: 0xffdfbf,
-    intensity: 85,
+    color: 0xffd6ab,
+    intensity: 50,
     distance: 0,
     decay: 2,
-    distanceFromOrigin: 2.5,
+    distanceFromOrigin: 1.5,
   }),
 });
 const STUDIO_CAPTURE = freeze({
   room: freeze({
-    color: 0x9b9c9e,
+    color: 0xa6a6a6,
     size: freeze([18, 12, 18]),
     position: freeze([0, 1, 0]),
   }),
   floor: freeze({
-    color: 0x6a7078,
+    color: 0x7e7e7e,
     size: freeze([18, 18]),
     position: freeze([0, -4.95, 0]),
   }),
   mainCard: freeze({
     color: 0xffffff,
-    intensity: 2.6,
+    intensity: 1.7,
     distance: 6,
-    size: freeze([6.0, 4.8]),
+    size: freeze([7.0, 5.5]),
   }),
   fillCard: freeze({
-    color: 0xe8eef5,
-    intensity: 1.1,
-    position: freeze([-4.5, 1.0, 3.5]),
-    size: freeze([5.0, 4.5]),
+    color: 0xf5f7fa,
+    intensity: 0.8,
+    position: freeze([5.0, 2.2, 3.5]),
+    size: freeze([4.5, 5.5]),
     target: freeze([0, 0, 0]),
   }),
   overheadCard: freeze({
     color: 0xffffff,
-    intensity: 1.4,
+    intensity: 0.7,
     position: freeze([0, 4.8, 0]),
     size: freeze([7.0, 4.0]),
     target: freeze([0, 0, 0]),
   }),
   backCard: freeze({
-    color: 0xdde3ea,
-    intensity: 0.8,
-    position: freeze([0, 2.0, -5.5]),
-    size: freeze([4.5, 4.0]),
+    color: 0xf7f7f7,
+    intensity: 1.25,
+    position: freeze([0, 2.5, -5.5]),
+    size: freeze([6.0, 3.0]),
     target: freeze([0, 1, 0]),
   }),
   roomLight: freeze({
     color: 0xffffff,
-    intensity: 80,
+    intensity: 50,
     distance: 0,
     decay: 2,
     distanceFromOrigin: 2.0,
   }),
 });
-
-const makeStops = (entries) => freeze(entries.map(([offset, color]) => freeze({ offset, color })));
-
-const makeGradient = (type, entries, options = {}) =>
-  freeze({
-    type,
-    stops: makeStops(entries),
-    ...options,
-  });
-
-const radialBackground = (center, outerRadius, entries, overlay) =>
-  makeGradient('radial', entries, {
-    center: freeze(center),
-    innerRadius: 0.04,
-    outerRadius,
-    ...(overlay ? { overlay: makeGradient('vertical', overlay) } : {}),
-  });
 
 const makeAmbient = (color, intensity) => freeze({ color, intensity });
 const makeHemisphere = (color, groundColor, intensity) =>
@@ -194,11 +175,11 @@ const makeAccent = (color, intensity, position) =>
     intensity,
     position: freeze(position),
   });
-const makePreset = (id, label, background, ambient, hemisphere, accent, atmosphere = null) =>
+const makePreset = (id, label, createBackgroundNode, ambient, hemisphere, accent, atmosphere = null) =>
   freeze({
     id,
     label,
-    ...(background ? { background } : {}),
+    ...(createBackgroundNode ? { createBackgroundNode } : {}),
     ...(ambient ? { ambient } : {}),
     ...(hemisphere ? { hemisphere } : {}),
     ...(accent ? { accent } : {}),
@@ -211,49 +192,23 @@ export const ENVIRONMENT_PRESETS = freeze({
   studio: makePreset(
     'studio',
     'Studio',
-    radialBackground(
-      [0.5, 0.4],
-      0.82,
-      [
-        [0, '#69717c'],
-        [0.38, '#4e5662'],
-        [1, '#2b313a'],
-      ],
-      [
-        [0, 'rgba(0,0,0,0)'],
-        [0.7, 'rgba(0,0,0,0.02)'],
-        [1, 'rgba(0,0,0,0.12)'],
-      ],
-    ),
-    makeAmbient(0xf5f7fa, 0.38),
-    makeHemisphere(0xe1e9f3, 0x737b85, 0.42),
-    makeAccent(0xffffff, 0.18, [4, 8, 6]),
+    createStudioBackgroundNode,
+    makeAmbient(0xffffff, 0.32),
+    makeHemisphere(0xfafafa, 0x858585, 0.36),
+    makeAccent(0xffffff, 0.16, [-4, 6, 5]),
   ),
   indoor: makePreset(
     'indoor',
     'Indoor',
-    radialBackground(
-      [0.5, 0.43],
-      0.88,
-      [
-        [0, '#807165'],
-        [0.42, '#62564d'],
-        [1, '#36312e'],
-      ],
-      [
-        [0, 'rgba(24,12,8,0.10)'],
-        [0.66, 'rgba(0,0,0,0)'],
-        [1, 'rgba(0,0,0,0.12)'],
-      ],
-    ),
-    makeAmbient(0xfff2e5, 0.32),
-    makeHemisphere(0xfff0dc, 0x686868, 0.38),
-    makeAccent(0xffd2aa, 0.45, [4, 8, 5]),
+    createIndoorBackgroundNode,
+    makeAmbient(0xffd4a6, 0.28),
+    makeHemisphere(0xe6f0ff, 0xb07b4b, 0.36),
+    makeAccent(0xd8eaff, 0.42, [-5, 2.5, -7]),
   ),
   outdoor: makePreset(
     'outdoor',
     'Outdoor',
-    null,
+    () => createAtmosphereNode(OUTDOOR_ATMOSPHERE),
     makeAmbient(0xdbeaff, 0.26),
     makeHemisphere(0x78b5ed, 0x667068, 0.45),
     makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
@@ -262,7 +217,7 @@ export const ENVIRONMENT_PRESETS = freeze({
   sunset: makePreset(
     'sunset',
     'Sunset',
-    null,
+    () => createAtmosphereNode(SUNSET_ATMOSPHERE),
     makeAmbient(0xc8bfdc, 0.22),
     makeHemisphere(0xa9b3dd, 0x625468, 0.4),
     makeAccent(SUNSET_ATMOSPHERE.sunColor, SUNSET_ATMOSPHERE.sunIntensity, SUNSET_ATMOSPHERE.sunDirection),
@@ -275,6 +230,34 @@ function directionFromPresetAccent(id) {
 }
 
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
+
+function createStudioBackgroundNode() {
+  const keyDirection = vec3(...directionFromPresetAccent('studio'));
+  return Fn(() => {
+    const direction = normalWorldGeometry.normalize();
+    // A broad curved sweep suggests a seamless backdrop without placing a
+    // floor or contact shadow under models of arbitrary size and position.
+    const sweep = smoothstep(-0.5, 0.35, direction.y);
+    const backdrop = mix(color(STUDIO_CAPTURE.floor.color).mul(0.32), color(STUDIO_CAPTURE.room.color).mul(0.7), sweep);
+    const keySpill = max(0, direction.dot(keyDirection)).pow(4).mul(0.22).add(0.78);
+    const cove = exp(direction.y.add(0.25).mul(3).pow(2).negate()).mul(0.018);
+    return vec4(backdrop.mul(keySpill).add(cove), 1);
+  })();
+}
+
+function createIndoorBackgroundNode() {
+  const capture = INDOOR_CAPTURE;
+  const daylightDirection = vec3(...directionFromPresetAccent('indoor'));
+  return Fn(() => {
+    const direction = normalWorldGeometry.normalize();
+    // Suggest warm indoor bounce and broad daylight without architectural
+    // edges or a physical floor that would need to track the model.
+    const tone = smoothstep(-0.8, 0.8, direction.y);
+    const warmth = mix(color(capture.floor.color).mul(0.32), color(capture.room.color).mul(0.28), tone);
+    const daylight = smoothstep(-0.4, 1, direction.dot(daylightDirection)).mul(0.04);
+    return vec4(warmth.add(color(capture.mainCard.color).mul(daylight)), 1);
+  })();
+}
 
 function createAtmosphereNode(atmosphere) {
   const direction = normalWorldGeometry.normalize();
@@ -368,71 +351,40 @@ function createCaptureRoom({ room: roomConfig, floor: floorConfig }) {
   return { room, floor };
 }
 
-function createIndoorCaptureScene() {
+function createRoomCaptureScene(id, config) {
   const captureScene = new THREE.Scene();
-  captureScene.userData.iblPresetId = 'indoor';
-  const { room, floor } = createCaptureRoom(INDOOR_CAPTURE);
-
-  const mainPosition = new THREE.Vector3()
-    .fromArray(IBL_PROFILES.indoor.dominantDirection)
-    .multiplyScalar(INDOOR_CAPTURE.mainCard.distance)
-    .toArray();
+  captureScene.userData.iblPresetId = id;
+  const { room, floor } = createCaptureRoom(config);
+  const direction = IBL_PROFILES[id].dominantDirection;
+  const mainPosition = new THREE.Vector3().fromArray(direction).multiplyScalar(config.mainCard.distance).toArray();
   const mainCard = createLightCard({
-    ...INDOOR_CAPTURE.mainCard,
+    ...config.mainCard,
     position: mainPosition,
     target: [0, 0, 0],
   });
-  const ceilingCard = createLightCard(INDOOR_CAPTURE.ceilingCard);
-  const fillCard = createLightCard(INDOOR_CAPTURE.fillCard);
-
+  captureScene.add(room, floor, mainCard);
+  for (const name of ['fillCard', 'ceilingCard', 'overheadCard', 'backCard']) {
+    if (config[name]) captureScene.add(createLightCard(config[name]));
+  }
   const roomLight = new THREE.PointLight(
-    INDOOR_CAPTURE.roomLight.color,
-    INDOOR_CAPTURE.roomLight.intensity,
-    INDOOR_CAPTURE.roomLight.distance,
-    INDOOR_CAPTURE.roomLight.decay,
+    config.roomLight.color,
+    config.roomLight.intensity,
+    config.roomLight.distance,
+    config.roomLight.decay,
   );
-  roomLight.position
-    .fromArray(IBL_PROFILES.indoor.dominantDirection)
-    .multiplyScalar(INDOOR_CAPTURE.roomLight.distanceFromOrigin);
-  captureScene.add(room, floor, mainCard, ceilingCard, fillCard, roomLight);
-  return captureScene;
-}
-
-function createStudioCaptureScene() {
-  const captureScene = new THREE.Scene();
-  captureScene.userData.iblPresetId = 'studio';
-  const { room, floor } = createCaptureRoom(STUDIO_CAPTURE);
-  const mainPosition = new THREE.Vector3()
-    .fromArray(IBL_PROFILES.studio.dominantDirection)
-    .multiplyScalar(STUDIO_CAPTURE.mainCard.distance)
-    .toArray();
-  const mainCard = createLightCard({
-    ...STUDIO_CAPTURE.mainCard,
-    position: mainPosition,
-    target: [0, 0, 0],
-  });
-  const fillCard = createLightCard(STUDIO_CAPTURE.fillCard);
-  const overheadCard = createLightCard(STUDIO_CAPTURE.overheadCard);
-  const backCard = createLightCard(STUDIO_CAPTURE.backCard);
-  const roomLight = new THREE.PointLight(
-    STUDIO_CAPTURE.roomLight.color,
-    STUDIO_CAPTURE.roomLight.intensity,
-    STUDIO_CAPTURE.roomLight.distance,
-    STUDIO_CAPTURE.roomLight.decay,
-  );
-  roomLight.position
-    .fromArray(IBL_PROFILES.studio.dominantDirection)
-    .multiplyScalar(STUDIO_CAPTURE.roomLight.distanceFromOrigin);
-  captureScene.add(room, floor, mainCard, fillCard, overheadCard, backCard, roomLight);
+  roomLight.position.fromArray(direction).multiplyScalar(config.roomLight.distanceFromOrigin);
+  captureScene.add(roomLight);
   return captureScene;
 }
 
 const IBL_PROFILES = freeze({
   outdoor: freeze({
-    environmentIntensity: 0.65,
+    // The display-compressed sky needs a stronger IBL contribution than the
+    // former HDR capture; retain diffuse fill when preparation completes.
+    environmentIntensity: 1.2,
     lightIntensity: freeze({
-      ambient: 0.04,
-      hemisphere: 0.08,
+      ambient: 0.12,
+      hemisphere: 0.24,
       accent: OUTDOOR_ATMOSPHERE.sunIntensity,
     }),
     dominantDirection: OUTDOOR_ATMOSPHERE.sunDirection,
@@ -451,26 +403,26 @@ const IBL_PROFILES = freeze({
     atmosphere: SUNSET_ATMOSPHERE,
   }),
   indoor: freeze({
-    environmentIntensity: 0.38,
+    environmentIntensity: 0.65,
     lightIntensity: freeze({
-      ambient: 0.13,
-      hemisphere: 0.24,
-      accent: 0.3,
+      ambient: 0.2,
+      hemisphere: 0.28,
+      accent: 0.42,
     }),
     dominantDirection: directionFromPresetAccent('indoor'),
     pmrem: DEFAULT_PMREM,
-    createCaptureScene: createIndoorCaptureScene,
+    capture: INDOOR_CAPTURE,
   }),
   studio: freeze({
-    environmentIntensity: 0.4,
+    environmentIntensity: 0.5,
     lightIntensity: freeze({
-      ambient: 0.14,
-      hemisphere: 0.26,
-      accent: 0.24,
+      ambient: 0.1,
+      hemisphere: 0.2,
+      accent: 0.16,
     }),
     dominantDirection: directionFromPresetAccent('studio'),
     pmrem: DEFAULT_PMREM,
-    createCaptureScene: createStudioCaptureScene,
+    capture: STUDIO_CAPTURE,
   }),
 });
 
@@ -484,47 +436,6 @@ function disposeCaptureScene(captureScene) {
   });
   for (const resource of resources) resource.dispose?.();
   captureScene.clear();
-}
-
-function createBackgroundTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = BACKGROUND_WIDTH;
-  canvas.height = BACKGROUND_HEIGHT;
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('Could not create the environment background canvas.');
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.generateMipmaps = false;
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  return { context, texture };
-}
-
-function createGradient(context, spec) {
-  if (spec.type === 'radial') {
-    const [x, y] = spec.center;
-    const radiusScale = Math.max(BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
-    return context.createRadialGradient(
-      x * BACKGROUND_WIDTH,
-      y * BACKGROUND_HEIGHT,
-      spec.innerRadius * radiusScale,
-      x * BACKGROUND_WIDTH,
-      y * BACKGROUND_HEIGHT,
-      spec.outerRadius * radiusScale,
-    );
-  }
-  if (spec.type === 'vertical') {
-    return context.createLinearGradient(0, 0, 0, BACKGROUND_HEIGHT);
-  }
-  throw new Error(`Unknown procedural background type: ${spec.type}`);
-}
-
-function paintGradient(context, spec) {
-  const gradient = createGradient(context, spec);
-  for (const stop of spec.stops) gradient.addColorStop(stop.offset, stop.color);
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
 }
 
 function captureLightState(light, includeGround = false) {
@@ -566,7 +477,6 @@ export function createEnvironmentController({
   const originalEnvironmentIntensity = scene.environmentIntensity;
   const originalAmbient = captureLightState(ambientLight);
   const originalHemisphere = captureLightState(hemisphereLight, true);
-  const background = createBackgroundTexture();
   const accentLight = new THREE.DirectionalLight(0xffffff, 0);
   accentLight.visible = false;
   accentLight.target = lightTarget;
@@ -584,7 +494,7 @@ export function createEnvironmentController({
       {
         promise: null,
         target: null,
-        skyNode: null,
+        backgroundNode: null,
         texture: null,
         attempted: false,
         available: false,
@@ -593,21 +503,6 @@ export function createEnvironmentController({
       },
     ]),
   );
-
-  function drawBackground(preset) {
-    if (!preset.background) {
-      scene.background = originalBackground;
-      return;
-    }
-
-    background.context.clearRect(0, 0, BACKGROUND_WIDTH, BACKGROUND_HEIGHT);
-    paintGradient(background.context, preset.background);
-    if (preset.background.overlay) {
-      paintGradient(background.context, preset.background.overlay);
-    }
-    background.texture.needsUpdate = true;
-    scene.background = background.texture;
-  }
 
   function applyAccent(config, intensity = null) {
     if (!config) {
@@ -654,9 +549,9 @@ export function createEnvironmentController({
 
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
-    if (preset.atmosphere) resource.skyNode ||= createAtmosphereNode(preset.atmosphere);
-    scene.backgroundNode = resource?.skyNode || null;
-    drawBackground(preset);
+    resource.backgroundNode ||= preset.createBackgroundNode();
+    scene.background = originalBackground;
+    scene.backgroundNode = resource.backgroundNode;
     if (profile && resource?.available && resource.texture) {
       applyLights(preset, profile.lightIntensity);
       scene.environment = resource.texture;
@@ -693,8 +588,8 @@ export function createEnvironmentController({
       if (profile.atmosphere) {
         captureScene = new THREE.Scene();
         captureScene.userData.iblPresetId = id;
-        captureScene.backgroundNode = resource.skyNode;
-      } else captureScene = profile.createCaptureScene();
+        captureScene.backgroundNode = resource.backgroundNode;
+      } else captureScene = createRoomCaptureScene(id, profile.capture);
       const { sigma, near, far, size } = profile.pmrem;
       generatedTarget = pmremGenerator.fromScene(captureScene, sigma, near, far, { size });
       if (!generatedTarget?.texture) {
@@ -777,7 +672,7 @@ export function createEnvironmentController({
       ),
       activeDominantDirection: getDominantLightDirection(),
       atmosphere: getPreset().atmosphere || null,
-      skyActive: !!iblResources.get(currentPresetId)?.skyNode,
+      skyActive: !!getPreset().atmosphere && !!iblResources.get(currentPresetId)?.backgroundNode,
     };
   }
 
@@ -797,15 +692,14 @@ export function createEnvironmentController({
     applyDefault();
     for (const resource of iblResources.values()) {
       resource.target?.dispose?.();
-      resource.skyNode?.dispose();
+      resource.backgroundNode?.dispose();
       resource.target = null;
-      resource.skyNode = null;
+      resource.backgroundNode = null;
       resource.texture = null;
       resource.available = false;
     }
     pmremGenerator?.dispose();
     pmremGenerator = null;
-    background.texture.dispose();
     lightTarget.remove(accentLight);
   }
 
