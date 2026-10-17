@@ -1,67 +1,65 @@
 // Static viewer scenery; model state is supplied only at deliberate placement boundaries.
 
 import * as THREE from 'three/webgpu';
-import { color, context, mix, mx_noise_float, output, positionGeometry, smoothstep, vec4 } from 'three/tsl';
+import {
+  cameraPosition,
+  color,
+  context,
+  mix,
+  modelScale,
+  mx_noise_float,
+  normalWorld,
+  output,
+  positionGeometry,
+  positionWorld,
+  smoothstep,
+  vec3,
+  vec4,
+} from 'three/tsl';
 import { computeModelBounds } from './model-bounds.js';
+import { ENVIRONMENT_PRESETS } from './environment.js';
 
 function random(seed) {
   const value = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return value - Math.floor(value);
 }
 
-function groundHeight(x, z) {
-  const edge = THREE.MathUtils.smoothstep(Math.hypot(x, z), 1.8, 6);
-  return edge * (0.22 + Math.sin(x * 0.43 + z * 0.21) * 0.28 + Math.cos(z * 0.36 - x * 0.18) * 0.19);
+function terrainNoise(x, z) {
+  const ix = Math.floor(x),
+    iz = Math.floor(z);
+  const tx = THREE.MathUtils.smoothstep(x - ix, 0, 1),
+    tz = THREE.MathUtils.smoothstep(z - iz, 0, 1);
+  const sample = (a, b) => random(a * 127.1 + b * 311.7) * 2 - 1;
+  return THREE.MathUtils.lerp(
+    THREE.MathUtils.lerp(sample(ix, iz), sample(ix + 1, iz), tx),
+    THREE.MathUtils.lerp(sample(ix, iz + 1), sample(ix + 1, iz + 1), tx),
+    tz,
+  );
 }
 
-function createGrass() {
-  const positions = [],
-    colors = [];
-  const root = new THREE.Color(0x596d3f),
-    tip = new THREE.Color(0x89945e);
-  for (let blade = 0; blade < 192; blade++) {
-    const angle = random(blade * 7 + 1) * Math.PI * 2;
-    const radius = Math.sqrt(random(blade * 7 + 2));
-    const x = Math.cos(angle) * radius,
-      z = Math.sin(angle) * radius;
-    const direction = random(blade * 7 + 3) * Math.PI * 2;
-    const height = 0.025 + random(blade * 7 + 4) * 0.035;
-    const width = 0.004 + random(blade * 7 + 5) * 0.004;
-    const bend = (random(blade * 7 + 6) - 0.5) * 0.04;
-    for (const [px, py] of [
-      [-width, 0],
-      [width, 0],
-      [bend * 0.5 + width * 0.6, height * 0.55],
-      [-width, 0],
-      [bend * 0.5 + width * 0.6, height * 0.55],
-      [bend * 0.5 - width * 0.6, height * 0.55],
-      [bend * 0.5 - width * 0.6, height * 0.55],
-      [bend * 0.5 + width * 0.6, height * 0.55],
-      [bend, height],
-    ]) {
-      positions.push(x + px * Math.cos(direction), py - 0.001, z + px * Math.sin(direction));
-      const tint = root.clone().lerp(tip, py / height);
-      colors.push(tint.r, tint.g, tint.b);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  const material = new THREE.MeshBasicNodeMaterial({ vertexColors: true, side: THREE.DoubleSide });
-  const grass = new THREE.InstancedMesh(geometry, material, 48);
-  const transform = new THREE.Object3D();
-  for (let i = 0; i < grass.count; i++) {
-    const angle = i * 2.399963 + random(i + 1) * 0.25;
-    const radius = 0.72 + Math.sqrt(random(i * 3 + 2)) * 0.72;
-    transform.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
-    transform.rotation.y = random(i * 3 + 3) * Math.PI * 2;
-    const width = 0.24 + random(i * 3 + 4) * 0.08;
-    transform.scale.set(width, 0.35 + random(i * 3 + 5) * 0.2, width);
-    transform.updateMatrix();
-    grass.setMatrixAt(i, transform.matrix);
-  }
-  grass.computeBoundingSphere();
-  return grass;
+function groundHeight(x, z) {
+  return (
+    THREE.MathUtils.smoothstep(Math.hypot(x, z), 2.5, 7) *
+    (terrainNoise(x * 0.065 + 17, z * 0.065 + 31) * 0.6 + terrainNoise(x * 0.17 + 43, z * 0.17 + 11) * 0.14)
+  );
+}
+
+function sceneryMaterial(parameters = {}) {
+  const material = new THREE.MeshStandardNodeMaterial({ roughness: 1, metalness: 0, ...parameters });
+  material.contextNode = context({ getAO: (input) => input });
+  const { ambient, hemisphere, atmosphere } = ENVIRONMENT_PRESETS.outdoor;
+  const ray = positionWorld.sub(cameraPosition);
+  const direction = ray.normalize();
+  const haze = smoothstep(10, 44, ray.length().div(modelScale.x));
+  const upper = mix(color(ambient.color), color(hemisphere.color), smoothstep(0, 0.5, direction.y));
+  const sky = mix(color(atmosphere.groundColor), upper, smoothstep(-0.35, 0.02, direction.y));
+  const sun = direction
+    .dot(vec3(...atmosphere.sunDirection))
+    .max(0)
+    .pow(8)
+    .mul(0.08);
+  material.outputNode = vec4(mix(output.rgb, mix(sky, color(atmosphere.sunColor), sun), haze), output.a);
+  return material;
 }
 
 function canopyGeometry(shape) {
@@ -125,9 +123,8 @@ function createTrees() {
     if (random(attempt * 4 + 3) > density || placements.some((p) => Math.hypot(x - p.x, z - p.z) < 1.25)) continue;
     placements.push({ x, z, scale: 1 + random(attempt * 4 + 4) * 0.65, yaw: random(attempt + 31) * Math.PI * 2 });
   }
-  const foliage = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
-  const bark = new THREE.MeshStandardNodeMaterial({ color: 0x66553b, roughness: 1, metalness: 0 });
-  for (const material of [foliage, bark]) material.contextNode = context({ getAO: (input) => input });
+  const foliage = sceneryMaterial({ vertexColors: true });
+  const bark = sceneryMaterial({ color: 0x66553b });
   const trunk = new THREE.CylinderGeometry(0.045, 0.075, 1, 6);
   trunk.translate(0, 0.5, 0);
   const trunks = new THREE.InstancedMesh(trunk, bark, placements.length);
@@ -153,11 +150,9 @@ function createTrees() {
 }
 
 function createGround() {
-  const variation = mx_noise_float(positionGeometry.xz.mul(0.55)).mul(0.5).add(0.5).toVar();
-  const detail = mx_noise_float(positionGeometry.xz.mul(95)).mul(0.5).add(0.5).toVar();
-  const material = new THREE.MeshStandardNodeMaterial({
-    roughness: 1,
-    metalness: 0,
+  const variation = mx_noise_float(positionGeometry.xz.mul(0.4)).mul(0.5).add(0.5).toVar();
+  const detail = mx_noise_float(positionGeometry.xz.mul(70)).mul(0.5).add(0.5).toVar();
+  const material = sceneryMaterial({
     transparent: true,
     forceSinglePass: true,
     depthWrite: true,
@@ -166,29 +161,29 @@ function createGround() {
     polygonOffsetUnits: 1,
     side: THREE.DoubleSide,
   });
-  const turf = mix(color(0x596d3f), color(0x8c9160), variation);
-  const patches = mix(turf, color(0x88785c), smoothstep(0.56, 0.7, variation).mul(0.6));
-  material.colorNode = mix(patches, color(0x4a5838), detail.mul(0.4));
-  const radius = positionGeometry.xz.length();
-  material.outputNode = vec4(mix(output.rgb, color(0xc0e6ef), smoothstep(3.5, 20, radius).mul(0.95)), output.a);
-  material.opacityNode = smoothstep(12, 24, radius.add(variation.mul(2))).oneMinus();
+  const turf = mix(color(0x606d45), color(0x7c835b), variation);
+  const soil = smoothstep(0.002, 0.03, normalWorld.y.oneMinus())
+    .mul(0.35)
+    .add(smoothstep(0.6, 0.8, variation).mul(0.2));
+  material.colorNode = mix(turf, color(0x786e55), soil).mul(detail.mul(0.12).add(0.9));
+  material.opacityNode = smoothstep(34, 47, positionGeometry.x.abs().max(positionGeometry.z.abs())).oneMinus();
   const geometry = new THREE.BufferGeometry();
-  // Concentric rings give the distant edge gentle relief; the clearing stays exactly flat.
-  const positions = [0, 0, 0],
+  // Concentrate the heightfield's vertices near the flat inspection clearing.
+  const positions = [],
     indices = [];
-  for (let ring = 1; ring <= 24; ring++) {
-    for (let segment = 0; segment < 96; segment++) {
-      const angle = (segment / 96) * Math.PI * 2,
-        x = Math.cos(angle) * ring,
-        z = Math.sin(angle) * ring;
+  const coord = (i) => Math.sign(i / 48 - 1) * Math.abs(i / 48 - 1) ** 1.5 * 48;
+  for (let iz = 0; iz <= 96; iz++) {
+    for (let ix = 0; ix <= 96; ix++) {
+      const x = coord(ix),
+        z = coord(iz);
       positions.push(x, groundHeight(x, z), z);
-      const current = 1 + (ring - 1) * 96 + segment,
-        next = 1 + (ring - 1) * 96 + ((segment + 1) % 96);
-      if (ring === 1) indices.push(0, next, current);
-      else {
-        const previous = current - 96,
-          previousNext = next - 96;
-        indices.push(previous, previousNext, current, previousNext, next, current);
+      if (ix < 96 && iz < 96) {
+        const a = iz * 97 + ix,
+          b = a + 1,
+          c = a + 97,
+          d = c + 1;
+        if ((ix + iz) % 2 === 0) indices.push(a, c, b, b, c, d);
+        else indices.push(a, c, d, a, d, b);
       }
     }
   }
@@ -222,7 +217,7 @@ export function createSceneryController({ scene }) {
     const span = Math.max(size.x, size.y, size.z);
     if (!(span > 0)) return;
     if (!group.children.length) {
-      group.add(createGround(), createGrass(), ...createTrees());
+      group.add(createGround(), ...createTrees());
       group.traverse((object) => {
         if (object.isMesh) object.raycast = () => {};
       });
