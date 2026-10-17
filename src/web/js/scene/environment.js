@@ -119,45 +119,45 @@ const INDOOR_CAPTURE = freeze({
 });
 const STUDIO_CAPTURE = freeze({
   room: freeze({
-    color: 0x9b9c9e,
+    color: 0xa6a6a6,
     size: freeze([18, 12, 18]),
     position: freeze([0, 1, 0]),
   }),
   floor: freeze({
-    color: 0x6a7078,
+    color: 0x7e7e7e,
     size: freeze([18, 18]),
     position: freeze([0, -4.95, 0]),
   }),
   mainCard: freeze({
     color: 0xffffff,
-    intensity: 2.6,
+    intensity: 1.7,
     distance: 6,
-    size: freeze([6.0, 4.8]),
+    size: freeze([7.0, 5.5]),
   }),
   fillCard: freeze({
-    color: 0xe8eef5,
-    intensity: 1.1,
-    position: freeze([-4.5, 1.0, 3.5]),
-    size: freeze([5.0, 4.5]),
+    color: 0xf5f7fa,
+    intensity: 0.8,
+    position: freeze([5.0, 2.2, 3.5]),
+    size: freeze([4.5, 5.5]),
     target: freeze([0, 0, 0]),
   }),
   overheadCard: freeze({
     color: 0xffffff,
-    intensity: 1.4,
+    intensity: 0.7,
     position: freeze([0, 4.8, 0]),
     size: freeze([7.0, 4.0]),
     target: freeze([0, 0, 0]),
   }),
   backCard: freeze({
-    color: 0xdde3ea,
-    intensity: 0.8,
-    position: freeze([0, 2.0, -5.5]),
-    size: freeze([4.5, 4.0]),
+    color: 0xf7f7f7,
+    intensity: 1.25,
+    position: freeze([0, 2.5, -5.5]),
+    size: freeze([6.0, 3.0]),
     target: freeze([0, 1, 0]),
   }),
   roomLight: freeze({
     color: 0xffffff,
-    intensity: 80,
+    intensity: 50,
     distance: 0,
     decay: 2,
     distanceFromOrigin: 2.0,
@@ -211,23 +211,10 @@ export const ENVIRONMENT_PRESETS = freeze({
   studio: makePreset(
     'studio',
     'Studio',
-    radialBackground(
-      [0.5, 0.4],
-      0.82,
-      [
-        [0, '#69717c'],
-        [0.38, '#4e5662'],
-        [1, '#2b313a'],
-      ],
-      [
-        [0, 'rgba(0,0,0,0)'],
-        [0.7, 'rgba(0,0,0,0.02)'],
-        [1, 'rgba(0,0,0,0.12)'],
-      ],
-    ),
-    makeAmbient(0xf5f7fa, 0.38),
-    makeHemisphere(0xe1e9f3, 0x737b85, 0.42),
-    makeAccent(0xffffff, 0.18, [4, 8, 6]),
+    () => createStudioBackgroundNode(),
+    makeAmbient(0xffffff, 0.32),
+    makeHemisphere(0xfafafa, 0x858585, 0.36),
+    makeAccent(0xffffff, 0.16, [-4, 6, 5]),
   ),
   indoor: makePreset(
     'indoor',
@@ -275,6 +262,20 @@ function directionFromPresetAccent(id) {
 }
 
 const DEFAULT_PMREM = freeze({ size: 256, sigma: 0, near: 0.1, far: 100 });
+
+function createStudioBackgroundNode() {
+  const keyDirection = vec3(...directionFromPresetAccent('studio'));
+  return Fn(() => {
+    const direction = normalWorldGeometry.normalize();
+    // A broad curved sweep suggests a seamless backdrop without placing a
+    // floor or contact shadow under models of arbitrary size and position.
+    const sweep = smoothstep(-0.5, 0.35, direction.y);
+    const backdrop = mix(color(STUDIO_CAPTURE.floor.color).mul(0.32), color(STUDIO_CAPTURE.room.color).mul(0.7), sweep);
+    const keySpill = max(0, direction.dot(keyDirection)).pow(4).mul(0.22).add(0.78);
+    const cove = exp(direction.y.add(0.25).mul(3).pow(2).negate()).mul(0.018);
+    return vec4(backdrop.mul(keySpill).add(cove), 1);
+  })();
+}
 
 function createAtmosphereNode(atmosphere) {
   const direction = normalWorldGeometry.normalize();
@@ -462,11 +463,11 @@ const IBL_PROFILES = freeze({
     createCaptureScene: createIndoorCaptureScene,
   }),
   studio: freeze({
-    environmentIntensity: 0.4,
+    environmentIntensity: 0.5,
     lightIntensity: freeze({
-      ambient: 0.14,
-      hemisphere: 0.26,
-      accent: 0.24,
+      ambient: 0.1,
+      hemisphere: 0.2,
+      accent: 0.16,
     }),
     dominantDirection: directionFromPresetAccent('studio'),
     pmrem: DEFAULT_PMREM,
@@ -595,7 +596,7 @@ export function createEnvironmentController({
   );
 
   function drawBackground(preset) {
-    if (!preset.background) {
+    if (!preset.background || typeof preset.background === 'function') {
       scene.background = originalBackground;
       return;
     }
@@ -655,6 +656,7 @@ export function createEnvironmentController({
     const profile = IBL_PROFILES[id];
     const resource = iblResources.get(id);
     if (preset.atmosphere) resource.skyNode ||= createAtmosphereNode(preset.atmosphere);
+    else if (typeof preset.background === 'function') resource.skyNode ||= preset.background();
     scene.backgroundNode = resource?.skyNode || null;
     drawBackground(preset);
     if (profile && resource?.available && resource.texture) {
@@ -777,7 +779,7 @@ export function createEnvironmentController({
       ),
       activeDominantDirection: getDominantLightDirection(),
       atmosphere: getPreset().atmosphere || null,
-      skyActive: !!iblResources.get(currentPresetId)?.skyNode,
+      skyActive: !!getPreset().atmosphere && !!iblResources.get(currentPresetId)?.skyNode,
     };
   }
 
