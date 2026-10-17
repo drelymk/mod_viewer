@@ -55,6 +55,7 @@ export default {
   'environment.preset.studio': 'スタジオ',
   'environment.preset.indoor': '屋内',
   'environment.preset.outdoor': '屋外',
+  'environment.preset.sunset': '夕焼け',
   'renderer.webgpuUnavailable': 'WebGPUを利用できません',
   'renderer.webgpuRequired': 'このバージョンのMod ViewerにはWebGPUが必要です。',
   'renderer.failure':

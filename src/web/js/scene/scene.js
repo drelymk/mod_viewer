@@ -157,6 +157,9 @@ const environmentController = createEnvironmentController({
   lightTarget: keyLight.target,
   onVisualChange: requestRender,
 });
+window.addEventListener('pagehide', (event) => {
+  if (!event.persisted) environmentController.dispose();
+});
 const keyLightController = createKeyLightController({
   scene,
   camera,
