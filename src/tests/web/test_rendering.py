@@ -769,6 +769,28 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
           addTexture('diffuse::texture-03.dds',url);
           setManualTexOverride(window.modViewer.activeMeshes[0],'diffuse::texture-03.dds');
         }''', url)
+        wait_texture(page)
+        dds_requests = []
+        page.on('request', lambda request: dds_requests.append(request.url)
+                if request.url.split('?')[0] == url else None)
+        page.evaluate('''async () => {
+          const {renderer} = await import('./js/scene/scene.js');
+          const {getReadyTextureForPreview} = await import('./js/mesh/mesh-factory.js');
+          const texture = getReadyTextureForPreview('diffuse::texture-03.dds');
+          window.uvBorrowedTexture = texture;
+          window.uvTextureVersion = texture.version;
+          window.uvTextureDisposals = 0;
+          texture.addEventListener('dispose',()=>uvTextureDisposals++);
+          window.uvPreviewTargets = [];
+          const render = renderer.render.bind(renderer);
+          renderer.render = (scene,camera) => {
+            if(scene.children.some(child=>child.material?.map===texture)) {
+              const target = renderer.getRenderTarget();
+              uvPreviewTargets.push([target.width,target.height]);
+            }
+            return render(scene,camera);
+          };
+        }''')
         page.locator('#inspector-tab').click()
         page.locator('.draw-item').click()
         state_before_uv = page.evaluate('previewState()')
@@ -782,12 +804,37 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
         assert all(max(abs(left-right) for left,right in zip(actual,reference)) <= 4
                    for actual,reference in zip(uv['pixels'],expected))
         assert page.evaluate('previewState()') == state_before_uv
+        inline_size = page.evaluate('Math.max(...uvPreviewTargets.at(-1))')
+        assert inline_size <= 512
         reads_before_expansion = page.evaluate('previewReads')
         page.locator('.inspector-uv-expand').click()
+        page.wait_for_function('Math.max(...uvPreviewTargets.at(-1)) > 512')
+        page.wait_for_function("document.querySelector('.uv-viewport-status').hidden")
+        assert page.evaluate('previewReads') == reads_before_expansion + 1
+        assert page.evaluate('''() => {
+          const canvas = document.querySelector('.inspector-uv-texture');
+          return Math.max(...uvPreviewTargets.at(-1)) >= Math.max(canvas.width,canvas.height)-32;
+        }''')
+        expanded_pixels = page.locator('.inspector-uv-texture').evaluate('''canvas =>
+          [0.25,0.75].map(y => [...canvas.getContext('2d')
+            .getImageData(canvas.width/2,canvas.height*y,1,1).data])''')
+        assert expanded_pixels == uv['pixels']
         page.keyboard.press('Escape')
         assert page.locator('.uv-viewport').is_visible()
         page.locator('.uv-viewport-close').click()
-        assert page.evaluate('previewReads') == reads_before_expansion
+        page.locator('.inspector-uv-expand').click()
+        assert page.evaluate('previewReads') == reads_before_expansion + 1
+        size_before_resize = page.evaluate('Math.max(...uvPreviewTargets.at(-1))')
+        page.set_viewport_size({'width': 1440, 'height': 1200})
+        page.wait_for_function('size => Math.max(...uvPreviewTargets.at(-1)) > size', arg=size_before_resize)
+        page.wait_for_function("document.querySelector('.uv-viewport-status').hidden")
+        assert page.evaluate('previewReads') == reads_before_expansion + 2
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.locator('.uv-viewport-close').click()
+        assert page.evaluate('previewReads') == reads_before_expansion + 2
+        assert page.evaluate('uvBorrowedTexture.version === uvTextureVersion && uvTextureDisposals === 0')
+        assert dds_requests == []
+        assert page.evaluate('previewState()') == state_before_uv
         cache = page.evaluate('''async url => {
           const {getDDSPreview,clearDDSPreviews} = await import('./js/textures/dds-preview.js');
           const {getReadyTextureForPreview} = await import('./js/mesh/mesh-factory.js');

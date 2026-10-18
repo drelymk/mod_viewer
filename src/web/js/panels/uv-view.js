@@ -118,6 +118,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   let disposed = false;
   let generation = 0;
   let textureSource;
+  let previewSize = 0;
   let image = null;
   let pendingImage = null;
   let display = null;
@@ -205,7 +206,10 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     const host = overlayBody || inline;
     const availableWidth = host.clientWidth || 280;
     const availableHeight = overlayBody ? host.clientHeight : Infinity;
-    const aspect = image ? (image.naturalWidth || image.width) / (image.naturalHeight || image.height) : 1;
+    const textureImage = image || getReadyTextureForPreview(source.userData.texKey)?.image;
+    const aspect = textureImage
+      ? (textureImage.naturalWidth || textureImage.width) / (textureImage.naturalHeight || textureImage.height)
+      : 1;
     const { minU, minV, maxU, maxV } = display.bounds;
     const spanU = maxU - minU,
       spanV = maxV - minV;
@@ -257,28 +261,31 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
       display = buildDisplay(mesh);
     }
     const url = getTexturePreviewSource(source.userData.texKey);
-    if (textureSource === url) {
-      layout();
+    const changed = textureSource !== url;
+    if (changed) {
+      releaseImage();
+      previewSize = 0;
+    }
+    layout();
+    const dds = isDDSUri(url);
+    // Match the texture's displayed pixels, with bounded sizes and resize buckets.
+    const size = Math.min(overlay ? 2048 : 512, Math.ceil(Math.max(transform.width, transform.height) / 128) * 128);
+    if (!changed && (!dds || previewSize >= size)) {
       syncLabels();
       return;
     }
     const token = ++generation;
     textureSource = url;
-    releaseImage();
-    textureLayer.dataset.previewReady = 'false';
-    statusKey = url ? 'inspector.uvLoading' : 'inspector.uvNoTexture';
+    previewSize = size;
+    textureLayer.dataset.previewReady = String(!!image);
+    statusKey = image ? '' : url ? 'inspector.uvLoading' : 'inspector.uvNoTexture';
     if (!layout()) drawBackground();
     syncLabels();
     if (!url) return;
     const isCurrent = () => !disposed && token === generation && (section.isConnected || overlay?.isConnected);
     try {
       let loaded;
-      if (isDDSUri(url)) {
-        // Expansion scales the shared thumbnail; vector outlines retain display resolution.
-        const size = Math.min(
-          512,
-          Math.ceil(((inline.clientWidth || 280) * Math.min(window.devicePixelRatio || 1, 2)) / 32) * 32,
-        );
+      if (dds) {
         loaded = await getDDSPreview(url, isCurrent, {
           size,
           preserveAspect: true,
@@ -306,7 +313,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
       syncLabels();
     } catch {
       if (!isCurrent()) return;
-      releaseImage();
+      if (!image) releaseImage();
       statusKey = 'inspector.uvPreviewFailed';
       syncLabels();
     }
@@ -320,6 +327,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     overlay.style.left = `${left ? Math.max(0, left.right - viewport.left + 8) : 0}px`;
     overlay.style.right = `${right ? Math.max(0, viewport.right - right.left + 8) : 0}px`;
     layout();
+    void sync();
   }
 
   function closeOverlay() {
@@ -379,7 +387,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   });
   const observer = new ResizeObserver(() => {
     if (overlay) positionOverlay();
-    else layout();
+    else void sync();
   });
   observer.observe(inline);
   for (const dock of document.querySelectorAll('#left-dock, #right-dock')) observer.observe(dock);
@@ -408,6 +416,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
       stage.hidden = expand.disabled;
       display = transform = null;
       textureSource = undefined;
+      previewSize = 0;
       statusKey = '';
       textureLayer.dataset.previewReady = 'false';
       layers.forEach((canvas) => {

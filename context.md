@@ -432,6 +432,10 @@ of documentation, comments and tests; use portable fixtures instead.
   the zoomed view during inspection; Escape and section/header clicks preserve it.
   Model teardown still releases it. Reuse the
   current diffuse publication and DDS preview across panel rebuilds and closing.
+  Size embedded DDS previews for the panel; upgrade only when the displayed
+  texture needs more pixels, up to 2048 on its longest edge in viewport mode.
+  Render upgrades from the ready model texture and retain the larger cached
+  result across closing/reopening; never reload an already ready DDS to expand.
   Face rectangles project each drawn triangle once and select through; do not
   raycast per candidate triangle. Click picking may select the nearest face or
   through all faces, retaining index-buffer ordinals across nonzero draw ranges.
