@@ -428,7 +428,9 @@ of documentation, comments and tests; use portable fixtures instead.
   current mesh's wireframe and resolve highlights directly from selected face
   IDs; texture changes never rebuild that geometry. The section follows Color;
   viewport expansion reparents the same canvases, preserves aspect and side
-  panels, and closes on Escape without cancelling face selection. Reuse the
+  panels, and follows mesh selection without closing. Only its X button closes
+  the zoomed view during inspection; Escape and section/header clicks preserve it.
+  Model teardown still releases it. Reuse the
   current diffuse publication and DDS preview across panel rebuilds and closing.
   Face rectangles project each drawn triangle once and select through; do not
   raycast per candidate triangle. Click picking may select the nearest face or

@@ -46,11 +46,13 @@ export function registerInspectorMesh(mesh, record) {
   if (mesh) meshRecords.set(mesh, record);
 }
 
-function clearContent() {
-  uvView?.dispose();
-  uvView = null;
-  uvMesh = null;
-  uvExpanded = false;
+function clearContent({ teardown = false } = {}) {
+  if (teardown || !uvView?.isZoomed()) {
+    uvView?.dispose();
+    uvView = null;
+    uvMesh = null;
+    uvExpanded = false;
+  }
   const empty = $('inspector-empty');
   const content = $('inspector-content');
   if (empty) empty.hidden = false;
@@ -636,9 +638,11 @@ function updateColorControlState(content, mesh) {
 }
 
 function buildComponent(record) {
-  uvView?.dispose();
-  uvView = null;
-  uvMesh = null;
+  if (!uvView?.isZoomed()) {
+    uvView?.dispose();
+    uvView = null;
+    uvMesh = null;
+  }
   const content = showContent();
   content.replaceChildren();
   buildHeader(content, record.component || t('inspector.component'), componentContext(record), record.source || '');
@@ -646,19 +650,21 @@ function buildComponent(record) {
   buildAssetSection(content, record.assetSummary, true);
   buildMaterialSection(content, record);
   buildComponentTextureSection(content, record);
+  void uvView?.sync();
 }
 
 function buildMesh(mesh, record) {
   if (uvMesh !== mesh) {
-    uvView?.dispose();
     uvMesh = mesh;
-    uvView = createUVView(mesh, {
-      expanded: uvExpanded,
-      onExpanded: (value) => {
-        uvExpanded = value;
-      },
-      getFaceSelection,
-    });
+    if (uvView) uvView.setMesh(mesh);
+    else
+      uvView = createUVView(mesh, {
+        expanded: uvExpanded,
+        onExpanded: (value) => {
+          uvExpanded = value;
+        },
+        getFaceSelection,
+      });
   }
   const content = showContent();
   content.replaceChildren();
@@ -890,7 +896,7 @@ export function clearInspector() {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = null;
   $('selected-mesh-status').textContent = '';
-  clearContent();
+  clearContent({ teardown: true });
 }
 
 export function getInspectorSelection() {

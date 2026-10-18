@@ -63,19 +63,22 @@ export function getDDSPreview(url,isCurrent) {
       window.uvCurrent = create();
       window.uvFace = {source:mesh,triangles:new Set([0])};
       window.uvCurrent.syncSelection(); void window.uvCurrent.sync();
+      const next = new T.Mesh(geometry); next.userData.texKey = 'diffuse::texture-02.dds';
+      addTexture(next.userData.texKey,'/texture-02.dds');
+      window.uvCurrent.setMesh(next); void window.uvCurrent.sync();
       window.hasUVLines = () => {
         const canvas = document.querySelector('.inspector-uv-outlines');
         return canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data.some((v,i)=>i%4===3&&v>0);
       };
     }''')
-    assert module_page.evaluate('uvPending.length') == 2
+    assert module_page.evaluate('uvPending.length') == 3
     assert module_page.evaluate('lazyUV')
-    assert module_page.evaluate('!uvPending[0].isCurrent() && uvPending[1].isCurrent() && oldCanvas.width === 1')
-    module_page.evaluate('uvPending[0].resolve(); uvPending[1].reject(new Error("fixture failure"))')
+    assert module_page.evaluate('!uvPending[0].isCurrent() && !uvPending[1].isCurrent() && uvPending[2].isCurrent() && oldCanvas.width === 1')
+    module_page.evaluate('uvPending[0].resolve(); uvPending[1].resolve(); uvPending[2].reject(new Error("fixture failure"))')
     module_page.wait_for_function('document.querySelector("[role=status]").textContent.includes("unavailable")')
     assert module_page.evaluate('hasUVLines()')
     module_page.evaluate('uvCurrent.dispose()')
-    assert module_page.evaluate('!uvPending[1].isCurrent() && document.querySelector("canvas").width === 1')
+    assert module_page.evaluate('!uvPending[2].isCurrent() && document.querySelector("canvas").width === 1')
 
 
 def test_uv_view_retains_wireframe_and_visits_only_selected_faces(module_page):

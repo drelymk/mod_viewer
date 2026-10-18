@@ -81,7 +81,7 @@ function buildDisplay(mesh) {
 }
 
 export function createUVView(mesh, { expanded = false, onExpanded = () => {}, getFaceSelection }) {
-  const source = getLoosePartSource(mesh) || mesh;
+  let source = getLoosePartSource(mesh) || mesh;
   const section = document.createElement('details');
   section.className = 'inspector-section inspector-uv-section';
   section.open = expanded;
@@ -129,7 +129,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   function syncLabels() {
     label.textContent = t('inspector.uv');
     stage.setAttribute('aria-label', label.textContent);
-    expand.title = t(overlay ? 'inspector.uvClose' : 'inspector.uvExpand');
+    expand.title = t('inspector.uvExpand');
     expand.setAttribute('aria-label', expand.title);
     expand.setAttribute('aria-pressed', String(!!overlay));
     const close = overlay?.querySelector('.uv-viewport-close');
@@ -140,6 +140,11 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     status.textContent = statusKey ? t(statusKey) : '';
     const b = display?.bounds;
     warning.textContent = b && (b.minU < 0 || b.minV < 0 || b.maxU > 1 || b.maxV > 1) ? t('inspector.uvOutside') : '';
+    const zoomStatus = overlay?.querySelector('.uv-viewport-status');
+    if (zoomStatus) {
+      zoomStatus.textContent = [status.textContent, warning.textContent].filter(Boolean).join(' ');
+      zoomStatus.hidden = !zoomStatus.textContent;
+    }
   }
 
   function releaseImage() {
@@ -196,7 +201,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   }
 
   function layout() {
-    if (disposed || !section.open || !display || !section.isConnected) return false;
+    if (disposed || !section.open || !display || (!section.isConnected && !overlay?.isConnected)) return false;
     const host = overlayBody || inline;
     const availableWidth = host.clientWidth || 280;
     const availableHeight = overlayBody ? host.clientHeight : Infinity;
@@ -230,7 +235,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   async function sync() {
     if (disposed) return;
     syncLabels();
-    if (!section.open || !section.isConnected) return;
+    if (!section.open || (!section.isConnected && !overlay?.isConnected)) return;
     const range = triangleRange(mesh);
     stage.hidden = !range.uv;
     expand.disabled = !range.uv;
@@ -265,7 +270,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     if (!layout()) drawBackground();
     syncLabels();
     if (!url) return;
-    const isCurrent = () => !disposed && token === generation && section.isConnected;
+    const isCurrent = () => !disposed && token === generation && (section.isConnected || overlay?.isConnected);
     try {
       let loaded;
       if (isDDSUri(url)) {
@@ -336,14 +341,13 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     if (event.key !== 'Escape') return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    closeOverlay();
   }
 
   expand.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (overlay) {
-      closeOverlay();
+      overlay.querySelector('.uv-viewport-close').focus();
       return;
     }
     section.open = true;
@@ -355,10 +359,13 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     close.className = 'icon-btn uv-viewport-close';
     close.appendChild(createIcon('close'));
     close.addEventListener('click', closeOverlay);
+    const zoomStatus = document.createElement('div');
+    zoomStatus.className = 'inspector-muted uv-viewport-status';
+    zoomStatus.setAttribute('role', 'status');
     overlayBody = document.createElement('div');
     overlayBody.className = 'uv-viewport-body';
     overlayBody.append(stage);
-    overlay.append(close, overlayBody);
+    overlay.append(close, zoomStatus, overlayBody);
     document.getElementById('canvas-container').append(overlay);
     inline.hidden = true;
     observer.observe(overlayBody);
@@ -376,17 +383,37 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   });
   observer.observe(inline);
   for (const dock of document.querySelectorAll('#left-dock, #right-dock')) observer.observe(dock);
+  summary.addEventListener('click', (event) => {
+    if (overlay) event.preventDefault();
+  });
   section.addEventListener('toggle', () => {
     if (disposed) return;
+    if (overlay && !section.open) section.open = true;
     onExpanded(section.open);
     if (section.open) void sync();
-    else closeOverlay();
   });
   syncLabels();
   return {
     section,
     sync,
     syncSelection,
+    isZoomed: () => !!overlay,
+    setMesh(nextMesh) {
+      if (mesh === nextMesh) return;
+      generation += 1;
+      releaseImage();
+      mesh = nextMesh;
+      source = getLoosePartSource(mesh) || mesh;
+      expand.disabled = !mesh.geometry.getAttribute('uv');
+      stage.hidden = expand.disabled;
+      display = transform = null;
+      textureSource = undefined;
+      statusKey = '';
+      textureLayer.dataset.previewReady = 'false';
+      layers.forEach((canvas) => {
+        canvas.width = canvas.height = 1;
+      });
+    },
     dispose() {
       disposed = true;
       generation += 1;

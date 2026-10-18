@@ -1528,6 +1528,7 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
                 idx=append_stream(payload, 'I', [0,1,2,3,4,5]), drawindexed=[6,0,0])
     del payload['meshes']['mesh-01']['uv']
     payload['meshes']['mesh-02']['uv'] = append_stream(payload, 'f', [-1,0,2,0,0,2])
+    payload['meshes']['mesh-02']['tex_key'] = 'diffuse::texture-02.png'
     page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
     wait_loaded(page, 3)
@@ -1589,11 +1590,12 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
     }''')
     assert page.evaluate(highlighted)
     page.keyboard.press('Escape')
-    assert overlay.count() == 0
+    assert overlay.is_visible()
     assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == [1]
-    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
-    assert page.evaluate(pixel)[:3] == [240, 24, 24]
+    uv.locator('summary').click()
     uv.locator('.inspector-uv-expand').click()
+    assert overlay.is_visible()
+    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
     page.locator('.uv-viewport-close').click()
     assert overlay.count() == 0
     page.locator('[data-mesh-edit-action="applySelection"]').click()
@@ -1607,17 +1609,43 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
         && part.geometry.getAttribute('uv') === source.geometry.getAttribute('uv');
     }''')
     assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()') != outlines
+    uv.locator('.inspector-uv-expand').click()
+    page.evaluate("window.uvZoom = document.querySelector('.uv-viewport')")
     rows.nth(2).click()
+    assert page.evaluate("window.uvZoom === document.querySelector('.uv-viewport')")
     assert 'No UV data' in uv.inner_text()
-    assert uv.locator('.inspector-uv-stage').is_hidden()
+    assert 'No UV data' in overlay.inner_text()
+    assert overlay.locator('.inspector-uv-stage').is_hidden()
     rows.nth(3).click()
+    assert page.evaluate("window.uvZoom === document.querySelector('.uv-viewport')")
+    assert page.evaluate("window.uvCanvas === document.querySelector('.uv-viewport .inspector-uv-outlines')")
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    assert page.locator('.inspector-uv-texture').evaluate('''canvas =>
+      [...canvas.getContext('2d').getImageData(canvas.width/2,canvas.height*0.75,1,1).data]
+    ''')[:3] == [24, 24, 240]
     assert 'outside the 0–1' in uv.inner_text()
     assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.width > canvas.height')
+    page.locator('.group-hdr .group-name').last.click()
+    assert overlay.is_visible()
+    rows.nth(3).click()
+    assert overlay.is_visible()
+    page.locator('.uv-viewport-close').click()
+    assert overlay.count() == 0
     old = page.locator('.inspector-uv-outlines').element_handle()
     uv.locator('summary').click()
     retained_width = old.evaluate('canvas => canvas.width')
     uv.locator('summary').click()
     assert old.evaluate('canvas => canvas.width') == retained_width
+    uv.locator('summary').click()
+    rows.nth(2).click()
+    assert uv.locator('.inspector-uv-expand').is_disabled()
+    rows.nth(3).click()
+    assert uv.locator('.inspector-uv-expand').is_enabled()
+    uv.locator('.inspector-uv-expand').click()
+    assert overlay.is_visible()
+    page.evaluate('async () => (await import("./js/panels/inspector-panel.js")).clearInspector()')
+    assert overlay.count() == 0
+    assert old.evaluate('canvas => canvas.width') == 1
     assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 

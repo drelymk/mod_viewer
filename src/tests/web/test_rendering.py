@@ -785,6 +785,8 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
         reads_before_expansion = page.evaluate('previewReads')
         page.locator('.inspector-uv-expand').click()
         page.keyboard.press('Escape')
+        assert page.locator('.uv-viewport').is_visible()
+        page.locator('.uv-viewport-close').click()
         assert page.evaluate('previewReads') == reads_before_expansion
         cache = page.evaluate('''async url => {
           const {getDDSPreview,clearDDSPreviews} = await import('./js/textures/dds-preview.js');
