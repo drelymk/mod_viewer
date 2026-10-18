@@ -7,7 +7,7 @@ import {
   activeMeshes,
   applyMeshVisibility,
   setManualTexOverride,
-  toggleManualMeshVisibility,
+  setManualMeshVisibility,
 } from '../mesh/mesh-state.js';
 import {
   clearTextureRunGroups,
@@ -38,14 +38,16 @@ import {
   isMeshSelected,
   selectMesh,
   selectMeshes,
+  setMeshesVisibility,
   toggleMeshSelection,
+  toggleMeshVisibility,
 } from '../scene/selection.js';
 import { openTextureModal } from '../ui/texture-modal.js';
 import { registerInspectorMesh } from './inspector-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { summarizeAssetBindings } from './asset-diagnostics.js';
-import { isRecording, noteRecordMeshEdit } from '../editing/record-session.js';
+import { isRecording } from '../editing/record-session.js';
 import { openToggleModal } from '../editing/toggle-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { requestRender } from '../scene/render-scheduler.js';
@@ -81,7 +83,6 @@ const meshByRow = new WeakMap();
 const PANEL_SELECTION_THRESHOLD = 5;
 let previewHistory = { source: null, undo: [], redo: [] };
 let restoringPreview = false;
-let isolationSnapshot = null;
 
 function notifyEditToolsChanged() {
   groupsUI.forEach((group) => group.componentDescriptor.syncEditState?.());
@@ -93,10 +94,7 @@ function captureMeshPreview(source) {
   const face = getFaceSelection();
   const indexOf = (mesh) => (mesh === source ? -1 : parts.indexOf(mesh));
   return {
-    parts: snapshotLooseParts(source).map((state, index) => {
-      const saved = isolationSnapshot?.get(parts[index]);
-      return saved ? { ...state, ...saved } : state;
-    }),
+    parts: snapshotLooseParts(source),
     selected: getSelectedMeshes()
       .filter((mesh) => mesh === source || parts.includes(mesh))
       .map(indexOf),
@@ -117,50 +115,24 @@ function rememberMeshPreview(source, snapshot = captureMeshPreview(source)) {
   notifyEditToolsChanged();
 }
 
-function restoreMeshIsolation() {
-  if (!isolationSnapshot) return;
-  const snapshot = isolationSnapshot;
-  isolationSnapshot = null;
-  const live = new Set(activeMeshes.flatMap((source) => [source, ...getLooseParts(source)]));
-  const changed = [];
-  for (const [mesh, state] of snapshot) {
-    if (!live.has(mesh)) continue;
-    mesh.userData.manualVisible = state.visible;
-    applyMeshVisibility(mesh, { notify: false, render: false });
-    mesh.userData.manualVisible = state.manualVisible;
-    mesh.userData.manuallyToggled = state.manuallyToggled;
-    changed.push(mesh);
-  }
-  notifyMeshStateChanged(changed);
-  notifyEditToolsChanged();
-  requestRender();
-}
-
 function canIsolateSelectedMeshes() {
   return (
     !isRecording() &&
     !activeMeshes.some((mesh) => componentForMesh(mesh)?.meshEditApplying) &&
-    (!!isolationSnapshot || getSelectedMeshes().length > 0)
+    getSelectedMeshes().length > 0
   );
 }
 
 function isolateSelectedMeshes() {
-  if (isolationSnapshot) return restoreMeshIsolation();
   const selected = new Set(getSelectedMeshes());
   if (!selected.size) return;
-  isolationSnapshot = new Map();
   const changed = [];
   for (const source of activeMeshes) {
     const parts = getLooseParts(source);
     for (const mesh of [source, ...parts]) {
-      isolationSnapshot.set(mesh, {
-        visible: mesh.visible,
-        manualVisible: mesh.userData.manualVisible,
-        manuallyToggled: mesh.userData.manuallyToggled,
-      });
-      mesh.userData.manualVisible =
+      const visible =
         selected.has(source) || selected.has(mesh) || (mesh === source && parts.some((part) => selected.has(part)));
-      applyMeshVisibility(mesh, { notify: false, render: false });
+      setManualMeshVisibility(mesh, visible, { notify: false, render: false });
       changed.push(mesh);
     }
   }
@@ -192,7 +164,6 @@ function restoreMeshPreview(direction) {
   const stack = previewHistory[direction];
   if (!canRestoreMeshPreview(direction)) return false;
   closeMeshContextMenu();
-  restoreMeshIsolation();
   const snapshot = stack.pop();
   previewHistory[direction === 'undo' ? 'redo' : 'undo'].push(captureMeshPreview(source));
   restoringPreview = true;
@@ -388,6 +359,7 @@ function isPanelSelectionInteractiveTarget(target) {
 
 function onPanelPointerDown(event) {
   if (event.button !== 0 || event.defaultPrevented || isPanelSelectionInteractiveTarget(event.target)) return;
+  event.currentTarget.focus({ preventScroll: true });
   if (event.shiftKey) {
     event.preventDefault();
     return;
@@ -437,6 +409,7 @@ function onPanelClickCapture(event) {
 
 function installPanelSelectionDrag(list) {
   if (panelSelectionListenersInstalled) return;
+  list.tabIndex = 0;
   list.addEventListener('pointerdown', onPanelPointerDown);
   list.addEventListener('click', onPanelClickCapture, true);
   document.addEventListener('pointermove', onPanelPointerMove, true);
@@ -580,8 +553,6 @@ function openMeshContextMenu(event, mesh) {
   actions.createToggle.hidden = !createToggleSelection(mesh);
   actions.isolate.hidden = false;
   actions.isolate.disabled = !canIsolateSelectedMeshes();
-  actions.isolate.dataset.i18n = isolationSnapshot ? 'mesh.restoreVisibility' : 'mesh.isolateSelected';
-  actions.isolate.textContent = t(actions.isolate.dataset.i18n);
   for (const state of meshEditActions(mesh, componentForMesh(getMeshEditSource(mesh)))) {
     if (['apply', 'cancel'].includes(state.id)) continue;
     const action = actions[state.id];
@@ -720,12 +691,7 @@ function buildGroupVisibilityButton(name, getMeshes, className) {
     event.stopPropagation();
     const targets = visibilityTargets(getMeshes());
     const visible = !targets.every((mesh) => mesh.visible);
-    for (const mesh of targets) {
-      if (mesh.visible !== visible) toggleManualMeshVisibility(mesh, { notify: false, render: false });
-      if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
-    }
-    notifyMeshStateChanged(targets);
-    requestRender();
+    setMeshesVisibility(targets, visible);
   });
   button.addEventListener('dblclick', (event) => event.stopPropagation());
   syncGroupVisibilityButton(button, getMeshes());
@@ -956,8 +922,7 @@ function buildDrawRow(
   cb.checked = true;
   cb.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!loosePart) noteRecordMeshEdit(mesh);
-    toggleManualMeshVisibility(mesh);
+    toggleMeshVisibility(mesh);
   });
   cb.addEventListener('dblclick', (event) => event.stopPropagation());
   if (!loosePart && includeInGroup) itemCbs.push(cb);
@@ -1153,7 +1118,6 @@ async function applyComponentMeshChanges(descriptor) {
     },
   };
   descriptor.meshEditApplying = true;
-  restoreMeshIsolation();
   notifyEditToolsChanged();
   try {
     const result = await window.pywebview.api.apply_component_mesh_changes(descriptor.modPath, request);
@@ -1203,7 +1167,6 @@ async function cancelComponentMeshChanges(descriptor) {
     getActiveMeshEditSource() !== activeSource
   )
     return false;
-  restoreMeshIsolation();
   previewHistory = { source: null, undo: [], redo: [] };
   const oldPartWraps = connectedPartWraps(activeSource);
   clearSelection();
@@ -1242,7 +1205,6 @@ async function separateMeshRow(source) {
   });
   if (tolerance === null || isRecording()) return false;
   if (!canEditMesh(source) || descriptor?.meshEditApplying) return false;
-  restoreMeshIsolation();
   const previous = captureMeshPreview(source);
   const parts = separateLooseParts(source, {
     label: meshRowLabel(source, context),
@@ -1264,7 +1226,6 @@ async function separateMeshRow(source) {
 function applyCurrentFaceSelection() {
   const state = getFaceSelection();
   if (!state) return false;
-  restoreMeshIsolation();
   const context = meshPanelContexts.get(state.source);
   if (!context) return false;
   const oldPartWraps = connectedPartWraps(state.source);
@@ -1307,7 +1268,6 @@ function mergeSelectedLooseParts() {
   if (descriptor?.meshEditState === 'applied' || descriptor?.meshEditApplying) {
     return false;
   }
-  restoreMeshIsolation();
   const previous = captureMeshPreview(source);
   const oldPartWraps = getLooseParts(source).map(meshRowWrap).filter(Boolean);
   clearSelection();
@@ -1434,7 +1394,6 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const replace = options.replace !== false;
   closeMeshContextMenu();
   if (replace) {
-    restoreMeshIsolation();
     previewHistory = { source: null, undo: [], redo: [] };
     list.innerHTML = '';
     groupsUI = [];
@@ -1662,7 +1621,6 @@ window.addEventListener(LANGUAGE_CHANGED, () => {
 
 window.addEventListener('mod-viewer-recording-state', (event) => {
   if (event.detail?.recording) {
-    restoreMeshIsolation();
     previewHistory = { source: null, undo: [], redo: [] };
     showRecordingSourceRows();
   } else restoreLoosePartRows();

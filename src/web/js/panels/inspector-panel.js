@@ -1,8 +1,6 @@
 // Selection-aware panel for material, texture, and color editing.
 
-import { clearSelection, getSelectedMeshes } from '../scene/selection.js';
-import { toggleManualMeshVisibility } from '../mesh/mesh-state.js';
-import { noteRecordMeshEdit } from '../editing/record-session.js';
+import { clearSelection, getSelectedMeshes, toggleMeshVisibility } from '../scene/selection.js';
 import { createIcon } from '../ui/ui-icons.js';
 import {
   canEditMeshColor,
@@ -13,7 +11,7 @@ import {
 import { canSaveTexture, getTextureSaveTargets } from '../mesh/texture-save-session.js';
 import { openTextureSaveModal } from '../ui/texture-save-modal.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
-import { getLoosePartSource, isLoosePart } from '../mesh/loose-parts.js';
+import { getLoosePartSource } from '../mesh/loose-parts.js';
 import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
 import { textureDisplayLabel } from '../textures/texture-key.js';
 
@@ -150,8 +148,7 @@ function buildVisibilityButton(mesh) {
   button.className = 'mesh-state-btn inspector-visibility-btn';
   button.appendChild(createIcon('visibility'));
   button.addEventListener('click', () => {
-    if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
-    toggleManualMeshVisibility(mesh);
+    toggleMeshVisibility(mesh);
   });
   updateVisibilityButton(button, mesh);
   return button;

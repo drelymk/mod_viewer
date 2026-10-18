@@ -42,8 +42,8 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
 1. Drag with the left mouse button to orbit, drag with the right mouse button
    to pan, and scroll to zoom. Use `Reset`, `Turn`, or `Tilt` in the viewport
    toolbar to adjust the view, or click a navigation-gizmo axis to snap to it.
-2. Open `Meshes` on the left. Expand components and use their checkboxes or
-   individual mesh visibility buttons to isolate parts. `Reset mesh visibility`
+2. Open `Meshes` on the left. Expand components and use the INI, component, or
+   mesh eye buttons to show or hide their meshes. `Reset mesh visibility`
    restores visibility from the current controls. Right-click a mesh row or the
    mesh in the viewport and choose `Rename` to change its viewer name; press
    Enter to confirm or Escape to cancel.
@@ -51,8 +51,13 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    expanded rows in MESHES; Ctrl+Shift-click adds that range to the selection.
    Ctrl-click toggles meshes in the selection, and Ctrl-drag in the viewport adds
    meshes crossing the selection rectangle. Double-click a mesh row or the model
-   to frame it and open `Inspector`. Press `F` to frame the selection or `H` to
-   toggle its visibility.
+   to frame it and open `Inspector`. Ctrl+A in MESHES selects all mesh rows,
+   including hidden meshes and collapsed groups; in the viewport it selects
+   visible meshes. Press `F` to frame the selection or `H` to hide it. Clicking
+   a selected mesh's eye in MESHES or Inspector shows or hides the entire
+   selection together, using that eye's new state; an unselected mesh's eye
+   affects only that mesh. Control changes update only meshes wired to the
+   changed visibility variables, preserving other manual visibility choices.
 4. Select a component or mesh and open `Inspector` on the right. Choose a
    material kind under `Material`, or leave it on `Auto`. For a selected mesh,
    choose a texture, `Automatic`, or `None` under `Texture`. Use
@@ -180,7 +185,8 @@ Assets cannot be edited this way.
      and click `Separate`. Zero uses exact vertex positions; a small tolerance
      can connect nearby positions into the same part.
    - `Separate by Selection`: click faces to select them, Ctrl-click to add or
-     remove faces, or Ctrl-drag to add faces crossing a rectangle. Leave at
+     remove faces, Ctrl+A to select every face of the mesh or part being edited,
+     or Ctrl-drag to add faces crossing a rectangle. Leave at
      least one face unselected, then choose `Apply Selection`. Inspector also
      provides `Select Connected Faces` and `Invert Selection`. Clicks select the
      nearest visible face; enable `Select through (click)` to include faces
@@ -189,8 +195,9 @@ Assets cannot be edited this way.
      Escape exits without splitting.
 
 2. Right-click a mesh in the viewport or MESHES panel and use `Isolate Selected`
-   to inspect selected meshes or parts, then use `Restore Visibility` in the
-   same menu to return to the previous visibility state. To combine
+   to show selected meshes or parts and hide all others. The action stays
+   available and can be repeated for a different selection; use the eyes or
+   `Reset mesh visibility` to show meshes again. To combine
    parts, Ctrl-click or Shift-click two or more parts from the same original
    mesh and choose `Merge Meshes`. Parts from different sources cannot be merged.
    Undo/Redo icons beside the component's `Edited` badge restore recent preview

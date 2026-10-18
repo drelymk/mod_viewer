@@ -389,6 +389,13 @@ of documentation, comments and tests; use portable fixtures instead.
   crossing the viewport rectangle. Rig picking/dragging owns its gestures and
   must block view selection. Visibility, reset, refresh and texture mutations
   publish shared state notifications so Inspector and rendering stay synchronized.
+  Ctrl+A selects all mesh rows (including hidden/collapsed rows) in MESHES,
+  and only visible mesh/part targets in the viewport; text editing, dialogs and
+  rig gestures keep priority. H hides the selection rather than inverting each
+  mesh. A selected mesh's eye sets the whole selection to that eye's new state;
+  an unselected eye affects only its own mesh. Control refreshes replace manual
+  visibility only for meshes wired to changed visibility variables (including
+  derived-state changes); explicit forced refreshes may rebaseline all meshes.
 - Loose-part separation is transient viewer state. Detect connected triangle
   islands from exact positions or a bounded user tolerance, retain original
   triangle ordinals, share the semantic source's attributes/material/state, and
@@ -398,20 +405,25 @@ of documentation, comments and tests; use portable fixtures instead.
   only explicit Apply enters the staged mesh-edit path.
   Inspector and context menus share edit-action availability. Preview history
   retains bounded triangle partitions and face selections, shares authored
-  vertex buffers, and ends on apply/cancel/reload. Isolation restores prior
-  visibility and manual flags. New edit controls follow the `edit_mesh` UI gate;
-  feature hiding never replaces backend validation or the Export boundary.
+  vertex buffers, and ends on apply/cancel/reload. Isolation shows the selection
+  and hides other meshes without a restore snapshot. New edit controls follow
+  the `edit_mesh` UI gate; feature hiding never replaces backend validation or
+  the Export boundary.
   Component MESHES headers own preview Undo/Redo icons beside Edited; Ctrl+Z/Y
   use the same history and must defer to text editors, dialogs, and rig gestures.
   Apply/Cancel Mesh Changes belong to component inspection and context menus,
   never individual mesh inspection.
   Inspector edit actions are header icons before the mesh visibility eye;
-  Isolate Selected/Restore Visibility belong to the shared viewport/MESHES
-  mesh context menu. Isolation is viewer visibility and is independent of
-  `edit_mesh`; keep the gate on geometry editing and preview history.
+  Isolate Selected remains in the shared viewport/MESHES mesh context menu,
+  including after isolation; changing the selection permits another isolation.
+  Isolation is viewer visibility and is independent of `edit_mesh`; keep the
+  gate on geometry editing and preview history.
   Face rectangles project each drawn triangle once and select through; do not
   raycast per candidate triangle. Click picking may select the nearest face or
   through all faces, retaining index-buffer ordinals across nonzero draw ranges.
+  During Separate by Selection, Ctrl+A selects every face of the active mesh
+  or part through the shared face-selection/history path, keeping mesh-row
+  selection unchanged and deferring to text editing, dialogs and rig gestures.
 - Tabs, panel collapse and library expansion live only in localStorage and
   cannot affect mod state, geometry, materials or Export. Global panel opacity
   and environment/tool preferences belong to app config under the persistence

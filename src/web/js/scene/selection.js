@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu';
 import { camera, controls, frameView, renderer } from './scene.js';
 import { setRightDockTab } from '../panels/right-dock.js';
 import { activeMeshes } from '../mesh/visibility.js';
-import { toggleManualMeshVisibility } from '../mesh/mesh-state.js';
+import { setManualMeshVisibility } from '../mesh/mesh-state.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
@@ -13,6 +13,7 @@ import { setMeshSelectionOutline } from './outline-renderer.js';
 import {
   authoredTriangleOrdinal,
   meshesInClientRect,
+  modelPickTargets,
   raycastModelAtClientPoint,
   raycastModelHitsAtClientPoint,
   trianglesInClientRect,
@@ -147,6 +148,28 @@ export function isMeshSelected(mesh) {
   return selected.has(mesh);
 }
 
+/** Apply one visibility value to a group, preserving mixed-state intent. */
+export function setMeshesVisibility(meshes, visible) {
+  const targets = new Set(meshes);
+  if (visible) {
+    for (const mesh of meshes) {
+      const source = getLoosePartSource(mesh);
+      if (source && !source.visible) targets.add(source);
+    }
+  }
+  for (const mesh of targets) {
+    if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
+    setManualMeshVisibility(mesh, visible, { notify: false, render: false });
+  }
+  notifyMeshStateChanged([...targets]);
+  requestRender();
+}
+
+/** A selected eye applies its new value uniformly to the current selection. */
+export function toggleMeshVisibility(mesh) {
+  setMeshesVisibility(isMeshSelected(mesh) ? getSelectedMeshes() : [mesh], !mesh.visible);
+}
+
 export function getMeshEditSource(mesh) {
   return getLoosePartSource(mesh) || mesh || null;
 }
@@ -241,12 +264,19 @@ function rememberFaceSelection() {
   );
 }
 
+function availableFaceTriangles() {
+  const target = faceSelection.target;
+  return (
+    target.userData.loosePartTriangles ||
+    Array.from({ length: Math.floor(target.geometry.index.count / 3) }, (_, index) => index).filter(
+      (triangle) => authoredTriangleOrdinal(target, triangle) !== null,
+    )
+  );
+}
+
 export function setSelectedFaceTriangles(triangles) {
   if (!faceSelection) return false;
-  const available =
-    faceSelection.target.userData.loosePartTriangles ||
-    Array.from({ length: Math.floor(faceSelection.target.geometry.index.count / 3) }, (_, index) => index);
-  const allowed = new Set(available);
+  const allowed = new Set(availableFaceTriangles());
   const next = new Set(triangles.filter((triangle) => allowed.has(triangle)));
   if (
     next.size === faceSelection.triangles.size &&
@@ -263,10 +293,9 @@ export function setSelectedFaceTriangles(triangles) {
 
 export function invertFaceSelection() {
   if (!faceSelection) return false;
-  const available =
-    faceSelection.target.userData.loosePartTriangles ||
-    Array.from({ length: Math.floor(faceSelection.target.geometry.index.count / 3) }, (_, index) => index);
-  return setSelectedFaceTriangles(available.filter((triangle) => !faceSelection.triangles.has(triangle)));
+  return setSelectedFaceTriangles(
+    availableFaceTriangles().filter((triangle) => !faceSelection.triangles.has(triangle)),
+  );
 }
 
 export function selectConnectedFaces() {
@@ -426,6 +455,7 @@ function restoreBoxGesture(event) {
 }
 
 function onPointerDown(event) {
+  renderer.domElement.focus({ preventScroll: true });
   downX = event.clientX;
   downY = event.clientY;
   if (
@@ -613,20 +643,46 @@ function onKeyDown(event) {
     return;
   }
   const key = event.key.toLowerCase();
+  const selectAll = key === 'a' && event.ctrlKey && !event.shiftKey;
   if (
-    !['h', 'f'].includes(key) ||
+    (!selectAll && !['h', 'f'].includes(key)) ||
     event.defaultPrevented ||
     event.repeat ||
-    event.ctrlKey ||
+    (event.ctrlKey && !selectAll) ||
     event.metaKey ||
     event.altKey ||
-    faceSelection ||
+    event.isComposing ||
+    document.querySelector('.modal-backdrop.show, .dialog-backdrop.show') ||
+    (faceSelection && !selectAll) ||
     isRigTransformInteractionActive() ||
     isRigJointPickingActive()
   )
     return;
   const target = event.target;
-  if (target instanceof Element && (target.closest('input, textarea, select, button') || target.isContentEditable))
+  if (
+    target instanceof Element &&
+    (target.closest('input, textarea, select, .ace_editor, [role="textbox"]') || target.isContentEditable)
+  )
+    return;
+  if (selectAll && faceSelection) {
+    if (document.body.classList.contains('feature-edit-mesh-off')) return;
+    event.preventDefault();
+    setSelectedFaceTriangles(availableFaceTriangles());
+    return;
+  }
+  if (selectAll) {
+    const canvas = renderer.domElement;
+    const inPanel = target?.closest?.('#sidebar') || document.querySelector('#sidebar:hover');
+    const inViewport = target === canvas || canvas.matches(':hover');
+    if (!inPanel && !inViewport) return;
+    const meshes = inPanel
+      ? activeMeshes.flatMap((mesh) => (getMeshView(mesh)?.row?.isConnected ? [mesh] : getLooseParts(mesh)))
+      : modelPickTargets(activeMeshes);
+    event.preventDefault();
+    selectMeshes(meshes, meshes.includes(primary) ? primary : null);
+    return;
+  }
+  if (target instanceof Element && target.closest('button') && !target.closest('#sidebar, .inspector-visibility-btn'))
     return;
   const meshes = getSelectedMeshes();
   if (!meshes.length) return;
@@ -635,18 +691,14 @@ function onKeyDown(event) {
     frameView(meshes);
     return;
   }
-  for (const mesh of meshes) {
-    if (!isLoosePart(mesh)) noteRecordMeshEdit(mesh);
-    toggleManualMeshVisibility(mesh, { notify: false, render: false });
-  }
-  notifyMeshStateChanged(meshes);
-  requestRender();
+  setMeshesVisibility(meshes, false);
 }
 
 export function initSelection() {
   if (selectionInitialized) return;
   selectionInitialized = true;
   const canvas = renderer.domElement;
+  canvas.tabIndex = 0;
   canvas.addEventListener('pointerdown', onPointerDown, { capture: true });
   canvas.addEventListener('pointermove', onPointerMove, { capture: true });
   canvas.addEventListener('pointerup', onPointerUp);

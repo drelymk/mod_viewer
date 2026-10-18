@@ -625,7 +625,6 @@ export default {
   'mesh.showGroup': '显示 {name} 中的所有网格',
   'mesh.editMesh': '编辑网格',
   'mesh.isolateSelected': '仅显示选中项',
-  'mesh.restoreVisibility': '恢复可见性',
   'mesh.undo': '撤销',
   'mesh.redo': '重做',
   'mesh.selectConnected': '选择相连面',

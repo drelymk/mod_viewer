@@ -643,7 +643,6 @@ export default {
   'mesh.showGroup': '{name}のすべてのメッシュを表示',
   'mesh.editMesh': 'メッシュを編集',
   'mesh.isolateSelected': '選択のみ表示',
-  'mesh.restoreVisibility': '表示状態を復元',
   'mesh.undo': '元に戻す',
   'mesh.redo': 'やり直す',
   'mesh.selectConnected': '接続された面を選択',
