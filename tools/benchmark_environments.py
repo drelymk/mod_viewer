@@ -1,4 +1,4 @@
-"""Capture synthetic environment comparisons using the real local WebGPU viewer.
+"""Capture environment comparisons using the real local WebGPU viewer.
 
 Use --source and --viewport to compare implementations without changing the
 checkout. Reports stay local unless explicitly selected for publication.
@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from app.runtime import server  # noqa: E402
+from app.mods.loader import load_mod  # noqa: E402
+from core.mod_discovery import discover_ini_paths  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 
@@ -68,6 +70,16 @@ BRIDGE = """window.pywebview = {api: {
   consume_startup_request: async () => null,
 }};"""
 
+MODEL_SETUP = """async () => {
+  const s = await import('./js/scene/scene.js'); await s.rendererReady;
+  if (!s.isRendererAvailable()) throw new Error('A compatible WebGPU adapter is required.');
+  await window.modViewer.displayMeshPayload(await window.environmentPayload());
+  window.environmentMeshes = window.modViewer.activeMeshes;
+  s.setBloomAvailable(true); s.toggleGrid();
+  document.querySelector('#hint')?.remove();
+  document.querySelector('#empty-actions')?.remove();
+}"""
+
 
 def evaluate(page, body, arg=None):
     return page.evaluate(
@@ -86,11 +98,22 @@ def evaluate(page, body, arg=None):
     )
 
 
-def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset")):
+def capture(
+    browser,
+    url,
+    output,
+    source,
+    viewport,
+    presets=("outdoor", "sunset"),
+    payload=None,
+    capture_only=False,
+):
     with browser.new_context(
         bypass_csp=True, viewport=dict(zip(("width", "height"), viewport))
     ) as context:
         context.add_init_script(BRIDGE)
+        if payload is not None:
+            context.expose_binding("environmentPayload", lambda _source: payload)
         context.route(
             "**/js/scene/environment.js",
             lambda route: route.fulfill(content_type="text/javascript", body=source),
@@ -106,8 +129,17 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
             "await s.rendererReady; while(s.getEnvironmentDebugState().preparationInFlight) await new Promise(r=>setTimeout(r,0)); await frame();",
         )
         report = {"startupMs": (time.perf_counter() - started) * 1000, "presets": {}}
-        page.evaluate(SETUP)
+        page.evaluate(MODEL_SETUP if payload is not None else SETUP)
+        page.wait_for_load_state("networkidle")
         evaluate(page, "await frame();")
+        report["model"] = {
+            "game": (payload or {}).get("metadata", {}).get("game", {}).get("id"),
+            "meshCount": page.evaluate("environmentMeshes.length"),
+        }
+        report["view"] = evaluate(
+            page,
+            "return {camera:s.camera.position.toArray(), target:s.controls.target.toArray(), fov:s.camera.fov};",
+        )
         report["modelSamples"] = evaluate(
             page,
             """
@@ -134,7 +166,13 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
             """,
                 preset,
             )
-            for mode in ["direct", "ao", "bloom", "ao-bloom"]:
+            for intensity in (0, 1):
+                evaluate(page, "s.setKeyLightIntensity(arg); await frame();", intensity)
+                page.screenshot(path=str(output / f"{preset}-key-{intensity}.png"))
+            data["environment"] = evaluate(page, "return s.getEnvironmentDebugState();")
+            for mode in (
+                ["direct"] if capture_only else ["direct", "ao", "bloom", "ao-bloom"]
+            ):
                 evaluate(
                     page,
                     """
@@ -158,6 +196,9 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
                 "return [s.getRenderCount(),s.getCharacterShadowDebugState().shadowUpdateCount];",
             )
             data["idleUpdates"] = [a - b for a, b in zip(after, before)]
+            if capture_only:
+                report["presets"][preset] = data
+                continue
             data["cameraMotionMs"] = evaluate(
                 page,
                 """
@@ -179,9 +220,12 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
         report["cachedMemoryBefore"] = evaluate(
             page, "return {...s.renderer.info.memory};"
         )
-        report["cachedSwitchMs"] = evaluate(
-            page,
-            """
+        report["cachedSwitchMs"] = (
+            {}
+            if capture_only
+            else evaluate(
+                page,
+                """
           const timings=Object.fromEntries(arg.map(preset => [preset,[]]));
           for(let i=0;i<5;i++) for(const preset of Object.keys(timings)) {
             const start=performance.now(); s.setEnvironmentPreset(preset); await frame();
@@ -189,10 +233,14 @@ def capture(browser, url, output, source, viewport, presets=("outdoor", "sunset"
           }
           return timings;
         """,
-            list(presets),
+                list(presets),
+            )
         )
         report["cachedMemoryAfter"] = evaluate(
             page, "return {...s.renderer.info.memory};"
+        )
+        report["cachedEnvironment"] = evaluate(
+            page, "return s.getEnvironmentDebugState();"
         )
         if errors:
             raise RuntimeError("Browser errors: " + "; ".join(errors))
@@ -208,11 +256,24 @@ def main():
     parser.add_argument(
         "--presets",
         nargs="+",
-        choices=["studio", "indoor", "outdoor", "sunset"],
+        choices=["default", "studio", "indoor", "outdoor", "sunset"],
         default=["outdoor", "sunset"],
     )
     parser.add_argument(
         "--source", type=Path, help="Serve a saved environment module for comparison"
+    )
+    parser.add_argument(
+        "--mod",
+        type=Path,
+        help="Load a real mod read-only instead of the synthetic materials",
+    )
+    parser.add_argument(
+        "--disabled-ini", action="store_true", help="Select disabled INIs in --mod"
+    )
+    parser.add_argument(
+        "--capture-only",
+        action="store_true",
+        help="Capture key-light comparisons without effect or timing sweeps",
     )
     parser.add_argument(
         "--viewport",
@@ -222,6 +283,8 @@ def main():
         metavar=("WIDTH", "HEIGHT"),
     )
     args = parser.parse_args()
+    if args.disabled_ini and not args.mod:
+        parser.error("--disabled-ini requires --mod")
     if args.repeats < 1 or min(args.viewport) < 1:
         parser.error("Repeat count and viewport dimensions must be positive")
     source_path = args.source or ROOT / "src/web/js/scene/environment.js"
@@ -229,6 +292,23 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     reports = []
     url = server.start()
+    publication = None
+    payload = None
+    if args.mod:
+        publication = server.begin_texture_publication(str(args.mod))
+        ini_paths = discover_ini_paths(str(args.mod), disabled=args.disabled_ini)
+        payload = load_mod(
+            str(args.mod), ini_paths=ini_paths, texture_source=publication.register
+        )
+        if payload.get("error"):
+            publication.discard()
+            parser.error(payload["error"])
+        # Compare canonical rest geometry, independent of elapsed animation time.
+        payload.pop("animations", None)
+        for mesh in payload["meshes"].values():
+            mesh.pop("animation_geometry", None)
+            mesh.pop("animation_id", None)
+        publication.commit(replace=False)
     with sync_playwright() as runtime:
         for index in range(args.repeats):
             output = args.output / f"run-{index + 1}"
@@ -245,7 +325,14 @@ def main():
                 ],
             ) as browser:
                 report = capture(
-                    browser, url, output, source, args.viewport, args.presets
+                    browser,
+                    url,
+                    output,
+                    source,
+                    args.viewport,
+                    args.presets,
+                    payload,
+                    args.capture_only,
                 )
             (output / "metrics.json").write_text(
                 json.dumps(report, indent=2) + "\n", encoding="utf-8"
@@ -262,12 +349,16 @@ def main():
                 ),
                 "cachedSwitchMs": statistics.median(
                     v for r in reports for v in r["cachedSwitchMs"][preset]
-                ),
+                )
+                if not args.capture_only
+                else None,
                 "skyTexelBytes": reports[0]["presets"][preset]["skyTexelBytes"],
                 "pmremTexelBytes": reports[0]["presets"][preset]["pmremTexelBytes"],
                 "cameraMotionMs": statistics.median(
                     v for r in reports for v in r["presets"][preset]["cameraMotionMs"]
-                ),
+                )
+                if not args.capture_only
+                else None,
             }
             for preset in args.presets
         },
@@ -276,6 +367,8 @@ def main():
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(summary["medians"], indent=2))
+    if publication:
+        publication.release()
 
 
 if __name__ == "__main__":
