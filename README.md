@@ -182,9 +182,11 @@ Assets cannot be edited this way.
    - `Separate by Selection`: click faces to select them, Ctrl-click to add or
      remove faces, or Ctrl-drag to add faces crossing a rectangle. Leave at
      least one face unselected, then choose `Apply Selection`. Inspector also
-     provides `Select Connected Faces` and `Invert Selection`. Selection starts
-     with visible faces only; enable `Select through` to include faces behind
-     other faces. `Cancel Selection` or Escape exits without splitting.
+     provides `Select Connected Faces` and `Invert Selection`. Clicks select the
+     nearest visible face; enable `Select through (click)` to include faces
+     behind other faces. Rectangles always select through in one projection
+     pass; visible-only rectangle selection is deferred. `Cancel Selection` or
+     Escape exits without splitting.
 
 2. Right-click a mesh in the viewport or MESHES panel and use `Isolate Selected`
    to inspect selected meshes or parts, then use `Restore Visibility` in the
@@ -195,6 +197,9 @@ Assets cannot be edited this way.
    layouts and face selections. Ctrl+Z undoes and Ctrl+Y redoes; text inputs keep
    their normal editing shortcuts. History is cleared when changes are applied,
    canceled, or the model is reloaded.
+
+   Isolation is a visibility control and remains available when Edit Mesh is
+   disabled. Geometry editing and preview history still follow `edit_mesh`.
 3. Inspector shows part, mesh-selection and face-selection counts, plus preview
    or staged status. Select the component and choose `Apply Mesh Changes` in
    its Inspector header or context menu to stage the new draw ranges and

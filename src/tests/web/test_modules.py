@@ -1310,7 +1310,7 @@ def test_loose_partition_merge_and_cleanup_preserve_authored_triangle_identity(m
     assert sorted(result['merged']) == [[0, 2], [1]]
 
 
-def test_face_rectangle_visible_only_and_through_respect_occlusion(module_page):
+def test_face_rectangle_and_raycast_preserve_draw_range_identity(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');
       const picking = await import('./js/scene/model-picking.js');
@@ -1318,8 +1318,9 @@ def test_face_rectangle_visible_only_and_through_respect_occlusion(module_page):
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute([
         -0.8,-0.8,0, 0.8,-0.8,0, 0,0.8,0,
-        -0.8,-0.8,-1, 0.8,-0.8,-1, 0,0.8,-1], 3));
-      geometry.setIndex([0,1,2,3,4,5]);
+        -0.8,-0.8,-1, 0.8,-0.8,-1, 0,0.8,-1,
+        -0.8,-0.8,-2, 0.8,-0.8,-2, 0,0.8,-2], 3));
+      geometry.setIndex([0,1,2,3,4,5,6,7,8]);
       const material = new THREE.MeshBasicNodeMaterial({side: THREE.DoubleSide});
       const mesh = new THREE.Mesh(geometry, material);
       const camera = new THREE.OrthographicCamera(-2,2,2,-2,0.1,10);
@@ -1327,21 +1328,48 @@ def test_face_rectangle_visible_only_and_through_respect_occlusion(module_page):
       const canvas = {getBoundingClientRect: () => ({left:0, top:0, width:400, height:400})};
       const options = {mesh, camera, canvas, selectionRect:{left:120, top:120, right:280, bottom:280}};
       const through = picking.trianglesInClientRect(options);
-      const visible = picking.trianglesInClientRect({...options, selectThrough:false});
+      geometry.setDrawRange(3,3);
+      const rangedBox = picking.trianglesInClientRect(options);
       const hits = picking.raycastModelHitsAtClientPoint({clientX:200, clientY:200, camera, canvas, meshes:[mesh]});
       const clickFaces = hits.map(hit => picking.authoredTriangleOrdinal(hit.object, hit.faceIndex));
-      const blocker = new THREE.Mesh(geometry, material);
-      blocker.position.z = 1; blocker.updateMatrixWorld(true);
-      const blocked = picking.trianglesInClientRect({...options, selectThrough:false, occluders:[mesh, blocker]});
-      blocker.visible = false;
-      const hiddenBlocker = picking.trianglesInClientRect({...options, selectThrough:false, occluders:[mesh, blocker]});
-      const split = parts.separateSelectedTriangles(mesh, [1]);
-      const part = picking.trianglesInClientRect({...options, mesh:split.selected, selectThrough:true});
+      const outsideRange = [0,2].map(face => picking.authoredTriangleOrdinal(mesh, face));
+      geometry.setDrawRange(0,Infinity);
+      const split = parts.separateSelectedTriangles(mesh, [0,2]);
+      split.selected.geometry.setDrawRange(3,3);
+      const partBox = picking.trianglesInClientRect({...options, mesh:split.selected});
+      const partHit = picking.raycastModelAtClientPoint({clientX:200, clientY:200, camera, canvas, meshes:[split.selected]});
+      const partFace = picking.authoredTriangleOrdinal(partHit.object, partHit.faceIndex);
       parts.clearLooseParts(mesh);
-      return {through, visible, clickFaces, blocked, hiddenBlocker, part};
+      return {through, rangedBox, clickFaces, outsideRange, partBox, partFace};
     }""")
-    assert result == {'through': [0, 1], 'visible': [0], 'clickFaces': [0, 1],
-                      'blocked': [], 'hiddenBlocker': [0], 'part': [1]}
+    assert result == {'through': [0, 1, 2], 'rangedBox': [1], 'clickFaces': [1],
+                      'outsideRange': [None, None], 'partBox': [2], 'partFace': 2}
+
+
+def test_large_face_rectangle_selects_through_without_raycasting(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const {trianglesInClientRect} = await import('./js/scene/model-picking.js');
+      const count = 12000;
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 9);
+      const indices = new Uint32Array(count * 3);
+      for (let face = 0; face < count; face++) {
+        positions.set([-0.5,-0.5,0, 0.5,-0.5,0, 0,0.5,0], face * 9);
+        indices.set([face * 3, face * 3 + 1, face * 3 + 2], face * 3);
+      }
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+      const mesh = new THREE.Mesh(geometry);
+      mesh.raycast = () => {throw new Error('Rectangle selection must not raycast');};
+      const camera = new THREE.OrthographicCamera(-1,1,1,-1,0.1,10);
+      camera.position.z = 5; camera.lookAt(0,0,0); camera.updateMatrixWorld(true);
+      const selected = trianglesInClientRect({mesh, camera,
+        canvas:{getBoundingClientRect:() => ({left:0, top:0, width:400, height:400})},
+        selectionRect:{left:0, top:0, right:400, bottom:400}});
+      return {count: selected.length, first: selected[0], last: selected.at(-1)};
+    }""")
+    assert result == {'count': 12000, 'first': 0, 'last': 11999}
 
 
 def test_weight_selection_keeps_equal_bone_ids_scoped_to_exact_sources(module_page):

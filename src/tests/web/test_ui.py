@@ -968,7 +968,7 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
     assert bridge_calls(page, 'export') == []
 
 
-def test_inspector_mesh_tools_preview_history_isolation_and_staging(viewer):
+def test_inspector_mesh_tools_preview_history_and_staging(viewer):
     payload = model_payload(3)
     mesh = payload['meshes']['mesh-00']
     mesh.update(pos=append_stream(payload, 'f', [
@@ -985,7 +985,6 @@ def test_inspector_mesh_tools_preview_history_isolation_and_staging(viewer):
     wait_loaded(page, 3)
     page.locator('#inspector-tab').click()
     rows = page.locator('.draw-item')
-    rows.nth(1).locator('.mesh-state-btn').click()
     rows.nth(0).click()
     section = page.locator('.inspector-mesh-edit-section')
     def action(name):
@@ -996,21 +995,10 @@ def test_inspector_mesh_tools_preview_history_isolation_and_staging(viewer):
             return page.locator('.mesh-isolate-action')
         return page.locator('.inspector-heading').locator(f'[data-mesh-edit-action="{name}"]')
     page.evaluate("""() => {
-      window.__meshVisibility = window.modViewer.activeMeshes.map(mesh => ({visible: mesh.visible,
-        manualVisible: mesh.userData.manualVisible, manuallyToggled: mesh.userData.manuallyToggled}));
       window.__sourceGeometry = window.modViewer.activeMeshes[0].geometry;
       window.__sourcePosition = window.__sourceGeometry.attributes.position;
       window.__sourceIndex = window.__sourceGeometry.index;
     }""")
-    action('isolate').click()
-    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [True, False, False]
-    assert action('isolate').inner_text() == 'Restore Visibility'
-    action('isolate').click()
-    assert page.evaluate("""window.modViewer.activeMeshes.every((mesh, index) => {
-      const saved = window.__meshVisibility[index];
-      return mesh.visible === saved.visible && mesh.userData.manualVisible === saved.manualVisible
-        && mesh.userData.manuallyToggled === saved.manuallyToggled;
-    })""")
     assert action('undo').is_disabled()
     action('separate').click()
     page.locator('#dialog-ok').click()
@@ -1089,7 +1077,7 @@ def test_inspector_mesh_tools_preview_history_isolation_and_staging(viewer):
 
 
 def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
-    payload = model_payload(3)
+    payload = model_payload(4)
     label = 'generated mesh label ' * 5
     for index, mesh in enumerate(payload['meshes'].values()):
         x = index * 2
@@ -1097,33 +1085,38 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
     payload['metadata']['mesh_names'][payload['meshes']['mesh-00']['identity']['key']] = label.strip()
     page = viewer({'fixture-01': payload})
     open_model(page, 'fixture-01')
-    wait_loaded(page, 3)
+    wait_loaded(page, 4)
     page.locator('#inspector-tab').click()
     rows = page.locator('.draw-item')
+    rows.nth(3).locator('.mesh-state-btn').click()
     rows.nth(0).click()
     heading = page.locator('.inspector-heading')
     assert heading.locator('h3').get_attribute('title') == label.strip()
     assert heading.locator('[data-mesh-edit-action="isolate"]').count() == 0
     assert page.locator('.inspector-mesh-edit-section button').count() == 0
     rows.nth(1).click(modifiers=['Control'])
-    first, second = project_mesh_points(page, [[0.25,0.25,0], [2.25,0.25,0]])
+    page.evaluate("""() => {
+      window.__meshVisibility = window.modViewer.activeMeshes.map(mesh => ({visible: mesh.visible,
+        manualVisible: mesh.userData.manualVisible, manuallyToggled: mesh.userData.manuallyToggled}));
+      document.body.classList.add('feature-edit-mesh-off');
+    }""")
+    first = project_mesh_points(page, [[0.25,0.25,0]])[0]
     page.mouse.click(*first, button='right')
     isolate = page.locator('.mesh-isolate-action')
     assert isolate.inner_text() == 'Isolate Selected'
     isolate.click()
-    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [True, True, False]
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [True, True, False, False]
     assert page.locator('.draw-item.selected').count() == 2
     rows.nth(1).click(button='right')
     assert isolate.inner_text() == 'Restore Visibility'
     isolate.click()
-    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
-    rows.nth(0).click(button='right')
-    isolate.click()
-    page.mouse.click(*second, button='right')
-    assert isolate.inner_text() == 'Restore Visibility'
-    isolate.click()
-    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    assert page.evaluate("""window.modViewer.activeMeshes.every((mesh, index) => {
+      const saved = window.__meshVisibility[index];
+      return mesh.visible === saved.visible && mesh.userData.manualVisible === saved.manualVisible
+        && mesh.userData.manuallyToggled === saved.manuallyToggled;
+    })""")
     assert page.locator('.draw-item.selected').count() == 2
+    page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
     rows.nth(0).click()
     heading.locator('[data-mesh-edit-action="separateSelection"]').click()
     icons = heading.locator('.inspector-edit-btn')
@@ -1267,7 +1260,7 @@ def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 
 
-def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
+def test_edit_mesh_feature_off_preserves_visibility_actions(viewer):
     payload = model_payload()
     payload['meshes']['mesh-00']['sources'][0]['occurrence'] = {
         'section': 'TextureOverrideFixture', 'ordinal': 0, 'path': []}
@@ -1288,7 +1281,7 @@ def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
     }""")
     assert section.is_hidden()
     assert header_actions.is_hidden()
-    assert menu.locator('.mesh-isolate-action').is_hidden()
+    assert menu.locator('.mesh-isolate-action').is_visible()
     page.evaluate("""() => {
       const mesh = window.modViewer.activeMeshes[0];
       mesh.userData.componentDescriptor.getMeshEditTools(mesh).run('separateSelection');
@@ -1313,7 +1306,7 @@ def test_edit_mesh_feature_off_hides_only_edit_context_actions(viewer):
     page.mouse.click(*point, button='right')
     assert menu.is_visible()
     assert menu.locator('button:visible').evaluate_all(
-        'buttons => buttons.map(button => button.dataset.i18n)') == ['mesh.rename']
+        'buttons => buttons.map(button => button.dataset.i18n)') == ['mesh.rename', 'mesh.isolateSelected']
     assert bridge_calls(page, 'meshApply') == []
 
 

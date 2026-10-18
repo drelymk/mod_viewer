@@ -55,14 +55,15 @@ function geometryRange(mesh) {
 export function authoredTriangleOrdinal(mesh, faceIndex) {
   const face = Number(faceIndex);
   if (!mesh || !Number.isInteger(face) || face < 0) return null;
+  const { drawStart, entryCount } = geometryRange(mesh);
+  // Raycast faceIndex already includes the index-buffer draw-range offset.
+  if (face * 3 < drawStart || face * 3 + 2 >= drawStart + entryCount) return null;
   const partTriangles = mesh.userData?.loosePartTriangles;
   if (Array.isArray(partTriangles)) {
     const triangle = Number(partTriangles[face]);
     return Number.isInteger(triangle) && triangle >= 0 ? triangle : null;
   }
-  const { drawStart, entryCount } = geometryRange(mesh);
-  if (face * 3 + 2 >= entryCount) return null;
-  return Math.floor((drawStart + face * 3) / 3);
+  return face;
 }
 
 function normalizedSelectionRect(selectionRect) {
@@ -194,15 +195,8 @@ function triangleIntersectsRect(triangle, rect) {
   );
 }
 
-/** Return authored triangle ordinals whose projected triangles intersect a rect. */
-export function trianglesInClientRect({
-  mesh,
-  camera,
-  canvas,
-  selectionRect,
-  selectThrough = true,
-  occluders = [mesh],
-} = {}) {
+/** Project each drawn triangle once; rectangle selection always selects through. */
+export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = {}) {
   const targetRect = normalizedSelectionRect(selectionRect);
   const canvasRect = canvas?.getBoundingClientRect?.();
   const width = Number(canvasRect?.width);
@@ -223,45 +217,6 @@ export function trianglesInClientRect({
   mesh.updateWorldMatrix?.(true, false);
   const point = new THREE.Vector3();
   const selected = [];
-  const pickTargets = selectThrough ? [] : modelPickTargets(occluders);
-  const raycaster = new THREE.Raycaster();
-  const pointer = new THREE.Vector2();
-  const visibleInRect = (triangle, face) => {
-    let polygon = triangle;
-    for (const [axis, bound, sign] of [
-      ['x', targetRect.left, 1],
-      ['x', targetRect.right, -1],
-      ['y', targetRect.top, 1],
-      ['y', targetRect.bottom, -1],
-    ]) {
-      const clipped = [];
-      polygon.forEach((end, index) => {
-        const start = polygon[(index + polygon.length - 1) % polygon.length];
-        const insideStart = (start[axis] - bound) * sign >= 0;
-        const insideEnd = (end[axis] - bound) * sign >= 0;
-        if (insideStart !== insideEnd) {
-          const fraction = (bound - start[axis]) / (end[axis] - start[axis]);
-          clipped.push({ x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction });
-        }
-        if (insideEnd) clipped.push(end);
-      });
-      polygon = clipped;
-    }
-    if (!polygon.length) return false;
-    const center = polygon.reduce(
-      (sum, vertex) => ({ x: sum.x + vertex.x / polygon.length, y: sum.y + vertex.y / polygon.length }),
-      { x: 0, y: 0 },
-    );
-    return [center, ...polygon].some((sample) => {
-      const x = sample.x * 0.99 + center.x * 0.01;
-      const y = sample.y * 0.99 + center.y * 0.01;
-      pointer.set(((x - canvasRect.left) / width) * 2 - 1, -((y - canvasRect.top) / height) * 2 + 1);
-      raycaster.setFromCamera(pointer, camera);
-      const hit = raycaster.intersectObjects(pickTargets, false)[0];
-      return hit?.object === mesh && hit.faceIndex === face;
-    });
-  };
-  const partTriangles = mesh.userData?.loosePartTriangles;
   for (let face = 0; face * 3 + 2 < entryCount; face += 1) {
     const entries = [drawStart + face * 3, drawStart + face * 3 + 1, drawStart + face * 3 + 2];
     const vertices = entries.map((entry) => (index ? index.getX(entry) : entry));
@@ -283,11 +238,9 @@ export function trianglesInClientRect({
       triangle.every((vertex) => vertex.z > 1)
     )
       continue;
-    const authored = Array.isArray(partTriangles)
-      ? Number(partTriangles[face])
-      : Math.floor((drawStart + face * 3) / 3);
-    if (Number.isInteger(authored) && authored >= 0 && triangleIntersectsRect(triangle, targetRect)) {
-      if (selectThrough || visibleInRect(triangle, face)) selected.push(authored);
+    const authored = authoredTriangleOrdinal(mesh, Math.floor((drawStart + face * 3) / 3));
+    if (authored !== null && triangleIntersectsRect(triangle, targetRect)) {
+      selected.push(authored);
     }
   }
   return selected;

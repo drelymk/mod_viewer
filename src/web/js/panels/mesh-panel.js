@@ -486,7 +486,7 @@ function ensureMeshContextMenu() {
   };
   addAction('createToggle', 'mesh.createToggle', 'mesh-create-toggle-action');
   addAction('rename', 'mesh.rename', 'mesh-rename-action');
-  addAction('isolate', 'mesh.isolateSelected', 'mesh-edit-context-action mesh-isolate-action');
+  addAction('isolate', 'mesh.isolateSelected', 'mesh-isolate-action');
   addAction('separate', 'mesh.separateLooseParts');
   addAction('separateSelection', 'mesh.separateBySelection');
   addAction('merge', 'mesh.mergeLooseParts');
@@ -502,8 +502,7 @@ function ensureMeshContextMenu() {
   });
   meshContextActions.isolate.addEventListener('click', () => {
     closeMeshContextMenu();
-    if (!document.body.classList.contains('feature-edit-mesh-off') && canIsolateSelectedMeshes())
-      isolateSelectedMeshes();
+    if (canIsolateSelectedMeshes()) isolateSelectedMeshes();
   });
   meshContextActions.createToggle.addEventListener('click', () => {
     const anchor = meshContextTarget;

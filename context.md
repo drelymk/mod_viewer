@@ -407,7 +407,11 @@ of documentation, comments and tests; use portable fixtures instead.
   never individual mesh inspection.
   Inspector edit actions are header icons before the mesh visibility eye;
   Isolate Selected/Restore Visibility belong to the shared viewport/MESHES
-  mesh context menu. Preserve their common availability and `edit_mesh` gate.
+  mesh context menu. Isolation is viewer visibility and is independent of
+  `edit_mesh`; keep the gate on geometry editing and preview history.
+  Face rectangles project each drawn triangle once and select through; do not
+  raycast per candidate triangle. Click picking may select the nearest face or
+  through all faces, retaining index-buffer ordinals across nonzero draw ranges.
 - Tabs, panel collapse and library expansion live only in localStorage and
   cannot affect mod state, geometry, materials or Export. Global panel opacity
   and environment/tool preferences belong to app config under the persistence

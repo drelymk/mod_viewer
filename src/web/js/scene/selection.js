@@ -479,8 +479,6 @@ function onPointerUp(event) {
           camera,
           canvas: renderer.domElement,
           selectionRect: rect,
-          selectThrough: faceSelection.selectThrough,
-          occluders: activeMeshes,
         });
         setSelectedFaceTriangles([...faceSelection.triangles, ...triangles]);
       } else {
