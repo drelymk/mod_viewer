@@ -1095,6 +1095,36 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
     assert bridge_calls(page, 'export') == []
 
 
+def test_face_select_all_respects_nonzero_draw_range(viewer):
+    payload = model_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh.update(pos=append_stream(payload, 'f', [
+        0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0, 4,0,0, 5,0,0, 4,1,0]),
+        idx=append_stream(payload, 'I', [0,1,2,3,4,5,6,7,8]), drawindexed=[9,0,0])
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.evaluate('window.modViewer.activeMeshes[0].geometry.setDrawRange(3, 3)')
+    page.locator('#inspector-tab').click()
+    page.locator('.draw-item').click(button='right')
+    page.locator('[data-i18n="mesh.separateBySelection"]').click()
+    page.keyboard.press('Control+a')
+    selection = """async () => {
+      const {getFaceSelection, getSelectedFaceTriangles} = await import('./js/scene/selection.js');
+      return {triangles: getSelectedFaceTriangles(),
+        overlay: [...getFaceSelection().overlay.geometry.index.array]};
+    }"""
+    assert page.evaluate(selection) == {'triangles': [1], 'overlay': [3, 4, 5]}
+    page.locator('.inspector-heading [data-mesh-edit-action="invert"]').click()
+    assert page.evaluate(selection) == {'triangles': [], 'overlay': []}
+    page.keyboard.press('Control+a')
+    assert page.evaluate(selection) == {'triangles': [1], 'overlay': [3, 4, 5]}
+    assert page.locator('.draw-item.selected').count() == 1
+    page.keyboard.press('Escape')
+    assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+
+
 def test_inspector_mesh_tools_preview_history_and_staging(viewer):
     payload = model_payload(3)
     mesh = payload['meshes']['mesh-00']

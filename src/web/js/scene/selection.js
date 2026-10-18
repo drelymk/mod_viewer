@@ -268,7 +268,9 @@ function availableFaceTriangles() {
   const target = faceSelection.target;
   return (
     target.userData.loosePartTriangles ||
-    Array.from({ length: Math.floor(target.geometry.index.count / 3) }, (_, index) => index)
+    Array.from({ length: Math.floor(target.geometry.index.count / 3) }, (_, index) => index).filter(
+      (triangle) => authoredTriangleOrdinal(target, triangle) !== null,
+    )
   );
 }
 
