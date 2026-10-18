@@ -424,6 +424,10 @@ of documentation, comments and tests; use portable fixtures instead.
   During Separate by Selection, Ctrl+A selects every face of the active mesh
   or part through the shared face-selection/history path, keeping mesh-row
   selection unchanged and deferring to text editing, dialogs and rig gestures.
+  Face-selection modes are icon buttons to the right of the left-panel tabs,
+  visible only during Separate by Selection and defaulting to Set. Set/Extend/Subtract/Difference/Intersect combine click and rectangle
+  hits with the current face selection; Ctrl-click retains its toggle gesture.
+  Preview history preserves the mode alongside face selections.
 - Tabs, panel collapse and library expansion live only in localStorage and
   cannot affect mod state, geometry, materials or Export. Global panel opacity
   and environment/tool preferences belong to app config under the persistence

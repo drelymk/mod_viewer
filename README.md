@@ -188,7 +188,13 @@ Assets cannot be edited this way.
      remove faces, Ctrl+A to select every face of the mesh or part being edited,
      or Ctrl-drag to add faces crossing a rectangle. Leave at
      least one face unselected, then choose `Apply Selection`. Inspector also
-     provides `Select Connected Faces` and `Invert Selection`. Clicks select the
+     provides `Select Connected Faces` and `Invert Selection`. While selecting
+     faces, use the mode icons to the right of the left-panel tabs. These appear
+     only during Separate by Selection and control both clicks and Ctrl-drag
+     rectangles: `Set` replaces
+     the selection, `Extend` adds, `Subtract` removes, `Difference` toggles hit
+     faces, and `Intersect` keeps only previously selected hits. Ctrl-click
+     still toggles faces independently of the chosen mode. Clicks select the
      nearest visible face; enable `Select through (click)` to include faces
      behind other faces. Rectangles always select through in one projection
      pass; visible-only rectangle selection is deferred. `Cancel Selection` or

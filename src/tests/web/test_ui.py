@@ -1095,6 +1095,127 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
     assert bridge_calls(page, 'export') == []
 
 
+def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(viewer):
+    payload = model_payload()
+    mesh = payload['meshes']['mesh-00']
+    mesh.update(pos=append_stream(payload, 'f', [
+        0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0, 4,0,0, 5,0,0, 4,1,0]),
+        idx=append_stream(payload, 'I', [0,1,2,3,4,5,6,7,8]), drawindexed=[9,0,0])
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.locator('#inspector-tab').click()
+    rows = page.locator('.draw-item')
+    rows.first.click()
+    mode = page.locator('#mesh-selection-modes')
+    buttons = mode.locator('[data-face-selection-mode]')
+    def active_mode():
+        return mode.locator('[aria-pressed="true"]').get_attribute('data-face-selection-mode')
+    assert mode.is_hidden()
+    rows.first.click(button='right')
+    page.locator('[data-i18n="mesh.separateBySelection"]').click()
+    assert active_mode() == 'set'
+    assert mode.get_attribute('aria-label') == 'Mode'
+    assert buttons.evaluate_all('buttons => buttons.map(button => button.getAttribute("aria-label"))') == [
+        'Set', 'Extend', 'Subtract', 'Difference', 'Intersect']
+    assert buttons.locator('use').evaluate_all('icons => icons.map(icon => icon.getAttribute("href"))') == [
+        '#icon-selection-set', '#icon-selection-extend', '#icon-selection-subtract',
+        '#icon-selection-difference', '#icon-selection-intersect']
+    assert all(buttons.nth(index).inner_text() == '' for index in range(5))
+    assert buttons.first.get_attribute('title') == 'Mode: Set'
+    assert page.locator('.inspector-selection-mode').count() == 0
+    page.locator('#controls-tab').click()
+    assert page.locator('#inspector-panel').is_hidden()
+    assert mode.is_visible()
+    point = project_mesh_points(page, [[2.25, 0.25, 0]])[0]
+    corners = project_mesh_points(page, [[-0.1,-0.1,0], [3.1,1.1,0]])
+    left, right = sorted(point[0] for point in corners)
+    top, bottom = sorted(point[1] for point in corners)
+    selected = 'async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles().sort()'
+    for value, click_result, box_result in [
+        ('set', [1], [0, 1]),
+        ('extend', [0, 1, 2], [0, 1, 2]),
+        ('subtract', [0, 2], [2]),
+        ('difference', [0, 1, 2], [1, 2]),
+        ('intersect', [], [0]),
+    ]:
+        for gesture, expected in [('click', click_result), ('box', box_result)]:
+            page.evaluate("""async () => {
+              const {setSelectedFaceTriangles} = await import('./js/scene/selection.js');
+              setSelectedFaceTriangles([0, 2]);
+            }""")
+            mode.locator(f'[data-face-selection-mode="{value}"]').click()
+            if gesture == 'click':
+                page.mouse.click(*point)
+            else:
+                page.keyboard.down('Control')
+                page.mouse.move(left, top)
+                page.mouse.down()
+                page.mouse.move(right, bottom, steps=5)
+                page.mouse.up()
+                page.keyboard.up('Control')
+            assert page.evaluate(selected) == expected, (value, gesture)
+            assert page.locator('.draw-item.selected').count() == 1
+    undo = page.locator('.group-hdr [data-mesh-edit-action="undo"]')
+    redo = page.locator('.group-hdr [data-mesh-edit-action="redo"]')
+    undo.click()
+    assert page.evaluate(selected) == [0, 2]
+    assert active_mode() == 'intersect'
+    redo.click()
+    assert page.evaluate(selected) == [0]
+    assert active_mode() == 'intersect'
+    page.evaluate("""() => {
+      const mesh = window.modViewer.activeMeshes[0];
+      mesh.userData.componentDescriptor.meshEditApplying = true;
+    }""")
+    page.evaluate("""() => {
+      const mesh = window.modViewer.activeMeshes[0];
+      mesh.userData.componentDescriptor.getMeshEditTools(mesh).setMode('extend');
+    }""")
+    assert active_mode() == 'intersect'
+    page.evaluate('window.modViewer.activeMeshes[0].userData.componentDescriptor.meshEditApplying = false')
+    page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
+    assert mode.is_hidden()
+    page.evaluate("""() => {
+      const mesh = window.modViewer.activeMeshes[0];
+      mesh.userData.componentDescriptor.getMeshEditTools(mesh).setMode('extend');
+    }""")
+    assert active_mode() == 'intersect'
+    page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
+    for locale in ('ja', 'zh-CN', 'ko', 'es', 'ru', 'en'):
+        page.evaluate("""async locale => {
+          const {setLocale} = await import('./js/i18n/index.js');
+          setLocale(locale);
+        }""", locale)
+        expected = page.evaluate("""async () => {
+          const {t} = await import('./js/i18n/index.js');
+          return ['set','extend','subtract','difference','intersect'].map(value => t(`mesh.selectionMode.${value}`));
+        }""")
+        assert buttons.evaluate_all('buttons => buttons.map(button => button.getAttribute("aria-label"))') == expected
+        assert active_mode() == 'intersect'
+    for width in (1280, 960, 800):
+        page.set_viewport_size({'width': width, 'height': 900})
+        assert mode.evaluate("""toolbar => {
+          const bounds = toolbar.getBoundingClientRect();
+          const tabs = document.getElementById('left-dock-tabs').getBoundingClientRect();
+          return bounds.left > tabs.right && bounds.right <= innerWidth
+            && Math.abs(bounds.top + bounds.height / 2 - tabs.top - tabs.height / 2) < 1;
+        }""")
+    assert page.locator('#meshes-tab').get_attribute('aria-selected') == 'true'
+    page.locator('#inspector-tab').click()
+    page.locator('.inspector-heading [data-mesh-edit-action="applySelection"]').click()
+    assert mode.is_hidden()
+    assert rows.count() == 2
+    rows.first.click(button='right')
+    page.locator('[data-i18n="mesh.separateBySelection"]').click()
+    assert active_mode() == 'set'
+    mode.locator('[data-face-selection-mode="extend"]').click()
+    page.locator('.inspector-heading [data-mesh-edit-action="cancelSelection"]').click()
+    assert mode.is_hidden()
+    assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+
+
 def test_face_select_all_respects_nonzero_draw_range(viewer):
     payload = model_payload()
     mesh = payload['meshes']['mesh-00']

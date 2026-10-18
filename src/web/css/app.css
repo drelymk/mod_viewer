@@ -957,6 +957,7 @@ body.feature-edit-mesh-off .mesh-edit-context-action { display: none; }
 body.feature-edit-mesh-off .inspector-mesh-edit-section { display: none; }
 body.feature-edit-mesh-off .inspector-mesh-edit-actions { display: none; }
 body.feature-edit-mesh-off .mesh-history-actions { display: none; }
+body.feature-edit-mesh-off .mesh-selection-modes { display: none; }
 .inspector-mesh-edit-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; }
 .icon-btn.inspector-edit-btn { width: 22px; height: 22px; min-height: 22px; }
 .inspector-edit-through { display: flex; align-items: center; gap: 6px; }
@@ -1449,6 +1450,7 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   width: 288px; max-width: min(288px, calc(50vw - 36px));
 }
 #left-dock-tabs { width: 100%; }
+#left-dock-header { position: relative; width: 100%; }
 .dock-tabs {
   display: grid; gap: 3px; padding: 3px;
   background: rgba(13,17,23,var(--panel-opacity));
@@ -1457,6 +1459,13 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   box-shadow: 0 6px 20px rgba(0,0,0,var(--panel-shadow-opacity));
 }
 .left-dock-tabs { grid-template-columns: .9fr 1.2fr .9fr; }
+.mesh-selection-modes {
+  position: absolute; left: calc(100% + 8px); top: 0;
+  display: flex; align-items: center; gap: 2px; width: max-content;
+}
+.mesh-selection-modes[hidden] { display: none; }
+.mesh-selection-modes .icon-btn { width: 30px; height: 32px; min-height: 32px; padding: 0; }
+.mesh-selection-modes .icon-btn[aria-pressed="true"] { color: var(--text); background: var(--accent); }
 .dock-tab, .right-dock-tab {
   min-height: 32px; border: 0; border-radius: var(--radius-sm);
   color: var(--text-muted); background: transparent; cursor: pointer;
