@@ -1,6 +1,7 @@
 """Assembly of resolved ``DrawCall`` records into component draw groups."""
 
 import re
+from functools import partial
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
@@ -174,8 +175,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 resources, resource_name).get("filename")
         return texture_file_cache[resource_name]
 
-    def resolve_vertex_resource(resource_name):
-        resource_info = resolve_vertex_info(resource_name)
+    def resolve_vertex_resource(resource_name, resolve_info=resolve_vertex_info):
+        resource_info = resolve_info(resource_name)
         return resource_info.get("filename"), resource_info.get("stride")
 
     def lookup_component_buffers(component):
@@ -265,10 +266,13 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             geometry_match=info.get("geometry_match_at_end"),
             vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
+            resource_copies=info.get("resource_copies_at_end") or {},
         )]
         draws = []
         animation_bindings = []
         for number, authored in enumerate(authored_draws, 1):
+            resolve_draw_vertex_info = partial(
+                resolve_vertex_info, copy_sources=authored.resource_copies)
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,
@@ -301,9 +305,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             effective_position_resource = buffers["position"]
             if draw_buffers and draw_buffers != buffers:
                 position, stride = resolve_vertex_resource(
-                    draw_buffers["position"])
+                    draw_buffers["position"], resolve_draw_vertex_info)
                 texcoord, texcoord_stride_for_draw = resolve_vertex_resource(
-                    draw_buffers["texcoord"])
+                    draw_buffers["texcoord"], resolve_draw_vertex_info)
                 if position:
                     draw.position_file = position
                     draw.position_stride = stride or POSITION_STRIDE
@@ -320,7 +324,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     draw.position_stride = None
                     effective_position_resource = None
                 else:
-                    position, stride = resolve_vertex_resource(position_resource)
+                    position, stride = resolve_vertex_resource(
+                        position_resource, resolve_draw_vertex_info)
                     if position:
                         draw.position_file = position
                         draw.position_stride = stride or POSITION_STRIDE
@@ -335,7 +340,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 resource_name = authored_texcoords.get(slot)
                 if not resource_name:
                     continue
-                texcoord, stride = resolve_vertex_resource(resource_name)
+                texcoord, stride = resolve_vertex_resource(
+                    resource_name, resolve_draw_vertex_info)
                 if texcoord and (stride or 0) != 32:
                     resolved_texcoord = (texcoord, stride or 20)
                     break
@@ -353,7 +359,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             effective_vertex_resources.update(vertex_resources)
             draw.normal_source = _resolve_normal_source(
                 effective_vertex_resources, resources, draw.position_file,
-                draw.position_stride, resolve_vertex_info)
+                draw.position_stride, resolve_draw_vertex_info)
             # AuthoredDrawCall.vertex_resources is the complete effective
             # state captured at this draw, including CommandList bindings and
             # explicit nulls.  Do not merge a section-end snapshot here: a
@@ -374,7 +380,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 "resolution_source": None,
             }
             skinning_source, skinning_error = resolve_skinning_source(
-                direct_skinning_resources, resolve_vertex_info,
+                direct_skinning_resources, resolve_draw_vertex_info,
                 bone_id_offset=authored.skinning_bone_offset,
                 remap_resources=remap_resources)
             if skinning_source is not None:
@@ -390,7 +396,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 skinning_resolution[
                     "legacy_component_candidate_count"] = len(blend_fallback)
                 skinning_source, skinning_error = resolve_skinning_source(
-                    blend_fallback, resolve_vertex_info,
+                    blend_fallback, resolve_draw_vertex_info,
                     bone_id_offset=authored.skinning_bone_offset,
                     remap_resources=remap_resources)
                 if skinning_source is not None:

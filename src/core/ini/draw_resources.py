@@ -5,7 +5,8 @@ import re
 
 from ..geometry.buffers import POSITION_STRIDE, _res_get
 from ..geometry.vertex_attributes import VertexAttributeSource
-from .draw_scan import (_reachable_execution_sections, _run_target_name)
+from .draw_scan import (_reachable_execution_sections, _run_target_name,
+                        _RESOURCE_COPY_RE)
 from .sections import ResourceTable
 from .command_phases import parse_command_line, phase_commands
 
@@ -161,14 +162,12 @@ def _collect_resource_copy_sources(sections, resources):
     """Resolve explicit resource copy and reference edges."""
     resources = ResourceTable.normalize(resources)
     resource_copy_sources = {}
-    resource_assignment_re = re.compile(
-        r"^\s*(Resource\S+)\s*=\s*(?:copy(?:\s+(?:ref|reference))?|"
-        r"ref(?:erence)?)\s+"
-        r"(Resource\S+)\s*$", re.I)
     for lines in sections.values():
-        for raw in lines:
-            line = parse_command_line(raw).text
-            match = resource_assignment_re.match(line)
+        commands = tuple(parse_command_line(raw) for raw in lines)
+        ordered = (command for phase in ("pre", "post")
+                   for command in phase_commands(commands, phase))
+        for command in ordered:
+            match = _RESOURCE_COPY_RE.match(command.text)
             if not match:
                 continue
             destination, source_resource = match.groups()
@@ -456,10 +455,11 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         descriptor_cache[cache_key] = descriptor
         return descriptor
 
-    def resolve_vertex_info(resource_name, visiting=None):
+    def resolve_vertex_info(resource_name, visiting=None, *, copy_sources=None):
         if not resource_name:
             return {}
-        cache_key = resource_name
+        cache_key = ((resource_name, tuple(sorted(copy_sources.items())))
+                     if copy_sources else resource_name)
         if cache_key in vertex_info_cache:
             return vertex_info_cache[cache_key]
 
@@ -469,15 +469,19 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         visiting.add(cache_key)
         resource_info = _res_get(resources, resource_name)
         resolved = dict(resource_info)
-        if not resource_info.get("filename"):
+        snapshot_source = (copy_sources or {}).get(resource_name.casefold())
+        if snapshot_source or not resource_info.get("filename"):
             resolved = {}
-            for candidate in resource_copy_sources.get(cache_key.lower(), ()):
-                resolved = resolve_vertex_info(candidate, visiting)
+            candidates = ((snapshot_source,) if snapshot_source else
+                          resource_copy_sources.get(resource_name.lower(), ()))
+            for candidate in candidates:
+                resolved = resolve_vertex_info(
+                    candidate, visiting, copy_sources=copy_sources)
                 if resolved.get("filename"):
                     resolved = dict(resolved)
                     break
         if resolved.get("filename"):
-            for descriptor_source in descriptor_sources.get(cache_key.lower(), ()):
+            for descriptor_source in descriptor_sources.get(resource_name.lower(), ()):
                 resolved.update(resolve_descriptor_info(descriptor_source))
         vertex_info_cache[cache_key] = resolved
         return resolved

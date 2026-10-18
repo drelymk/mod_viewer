@@ -148,8 +148,9 @@ this = ResourceMystery
     assert "texture_hashes" not in draw.auxiliary_maps["light_map"]["variants"][0]
 
 
-def test_texture_override_index_preserves_conditions_and_resolves_files():
-    sections = parse_sections("source-01.ini", text="""[KeyStyle]
+@pytest.mark.parametrize("phase", ["", "pre ", "PoSt\t"])
+def test_texture_override_index_preserves_conditions_and_resolves_files(phase):
+    sections = parse_sections("source-01.ini", text=f"""[KeyStyle]
 type = cycle
 $Style = 0,1
 
@@ -162,9 +163,9 @@ drawindexed = 3, 0, 0
 [TextureOverrideOriginal]
 hash = 11111111
 if $Style == 0
-this = ResourceA
+{phase}this = ResourceA ; replacement
 else
-this = ResourceB
+{phase}this = ResourceB
 endif
 
 [ResourcePosition]
@@ -194,6 +195,8 @@ filename = textures/b.dds
             "var": "Style", "value": "0", "negate": False}]]),
         ("ResourceB", [[{
             "var": "Style", "value": "0", "negate": True}]])]
+    assert scanned.texture_override_index.hashes_by_resource == {
+        "resourcea": ("11111111",), "resourceb": ("11111111",)}
 
     group = build_draw_groups(sections, extract_resources(sections))[0]
     resolved = group["_texture_override_index"].replacements_by_hash[

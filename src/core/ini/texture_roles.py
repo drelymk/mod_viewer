@@ -91,7 +91,7 @@ def _collect_texture_override_index(sections, toggle_vars, alias_map,
         hashes = set()
         cond_stack = []
         for raw in lines:
-            line = raw.split(";", 1)[0].strip()
+            line = parse_command_line(raw).text
             if not line:
                 continue
             match = re.match(r"(?:else\s+if|elif)\s+(.*)$", line, re.I)

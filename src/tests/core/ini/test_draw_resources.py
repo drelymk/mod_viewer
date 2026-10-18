@@ -192,6 +192,52 @@ stride = 40
         "filename": "position.buf", "stride": 40}
 
 
+@pytest.mark.parametrize("deferred", [
+    "post ResourceGeometry = copy ResourcePost",
+    "post run = CommandListCopy",
+])
+def test_shared_copy_alias_resolves_at_each_draw_phase(deferred):
+    text = f"""[TextureOverrideComponent01]
+{deferred}
+ResourceGeometry = copy ResourcePre
+vb0 = ResourceGeometry
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+drawindexed = 3, 0, 0
+post drawindexed = 3, 0, 0
+[ResourcePre]
+filename = pre.buf
+stride = 12
+[ResourcePost]
+filename = post.buf
+stride = 40
+[ResourceTexcoord]
+filename = uv.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+[CommandListCopy]
+ResourceGeometry = copy ResourcePost
+"""
+    sections = parse_sections("source-01.ini", text=text)
+    resources = extract_resources(sections)
+    copies = _collect_resource_copy_sources(sections, resources)
+    assert copies["resourcegeometry"] == ["ResourcePre", "ResourcePost"]
+    draws = build_draw_groups(sections, resources)[0]["draws"]
+    assert [(draw.position_file, draw.position_stride) for draw in draws] == [
+        ("pre.buf", 12), ("post.buf", 40)]
+    assert [draw.occurrence.ordinal for draw in draws] == [0, 1]
+    assert draws[0].render_identity() != draws[1].render_identity()
+
+    pre_only = parse_sections("source-01.ini", text="\n".join(
+        line for line in text.splitlines() if not line.startswith("post ")))
+    ordinary = build_draw_groups(pre_only, extract_resources(pre_only))[0]["draws"]
+    assert len(ordinary) == 1
+    assert ordinary[0].render_identity() == draws[0].render_identity()
+    assert ordinary[0].occurrence == draws[0].occurrence
+
+
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
     sections = parse_sections("source-01.ini", text="""
 [TextureOverrideComponent01]
