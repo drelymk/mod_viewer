@@ -267,12 +267,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
             resource_copies=info.get("resource_copies_at_end") or {},
+            resource_descriptors=info.get("resource_descriptors_at_end") or {},
         )]
         draws = []
         animation_bindings = []
         for number, authored in enumerate(authored_draws, 1):
             resolve_draw_vertex_info = partial(
-                resolve_vertex_info, copy_sources=authored.resource_copies)
+                resolve_vertex_info, copy_sources=authored.resource_copies,
+                descriptor_copies=authored.resource_descriptors)
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,

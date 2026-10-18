@@ -238,6 +238,104 @@ ResourceGeometry = copy ResourcePost
     assert ordinary[0].occurrence == draws[0].occurrence
 
 
+def test_conditional_copy_snapshot_retains_conservative_source_until_reset():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+vb0 = ResourceGeometry
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+if $mode == 0
+ResourceGeometry = copy ResourceA
+else
+ResourceGeometry = copy ResourceB
+endif
+drawindexed = 3, 0, 0
+ResourceGeometry = copy ResourceC
+drawindexed = 3, 3, 0
+[ResourceA]
+filename = a.buf
+stride = 12
+[ResourceB]
+filename = b.buf
+stride = 40
+[ResourceC]
+filename = c.buf
+stride = 12
+[ResourceTexcoord]
+filename = uv.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+""")
+    resources = extract_resources(sections)
+    copies = _collect_resource_copy_sources(sections, resources)
+    assert copies["resourcegeometry"] == ["ResourceA", "ResourceB", "ResourceC"]
+    legacy = _resolve_component_buffers({}, resources, copies)["resolve_vertex_info"]
+    scanned = _scan_sections_for_draws(sections, gating_vars={"mode"})
+    assert "resourcegeometry" not in scanned["TextureOverrideComponent01"][
+        "draws"][0].resource_copies
+    draws = build_draw_groups(sections, resources, section_info=scanned)[0]["draws"]
+    assert [(draw.position_file, draw.position_stride) for draw in draws] == [
+        (legacy("ResourceGeometry")["filename"], 12), ("c.buf", 12)]
+    assert [draw.occurrence.ordinal for draw in draws] == [0, 1]
+
+
+@pytest.mark.parametrize("pre_layout,deferred", [
+    ("pre", "post ResourceGeometry = copy_desc ResourceLayoutPost"),
+    ("pre", "post run = CommandListLayout"),
+    ("conditional", "post run = CommandListLayout"),
+    ("none", "PoSt ResourceGeometry = copy_description ResourceLayoutPost"),
+])
+def test_copy_descriptors_resolve_at_each_draw_phase(pre_layout, deferred):
+    assignment = ("ResourceGeometry = copy_desc ResourceLayoutPre"
+                  if pre_layout != "none" else "")
+    if pre_layout == "conditional":
+        assignment = f"if $mode == 0\n{assignment}\nendif"
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01]
+{deferred}
+ResourceGeometry = copy ResourcePosition
+{assignment}
+vb0 = ResourceGeometry
+vb1 = ResourceTexcoord
+ib = ResourceIndex
+drawindexed = 3, 0, 0
+post drawindexed = 3, 0, 0
+[ResourcePosition]
+filename = position.buf
+stride = 12
+format = R32G32B32_FLOAT
+[ResourceLayoutPre]
+filename = layout-pre.buf
+stride = 12
+format = R32G32B32_FLOAT
+[ResourceLayoutPost]
+filename = layout-post.buf
+stride = 40
+format = R16G16B16A16_FLOAT
+[ResourceTexcoord]
+filename = uv.buf
+stride = 8
+[ResourceIndex]
+filename = index.buf
+format = R32_UINT
+[CommandListLayout]
+ResourceGeometry = copy_desc ResourceLayoutPost
+""")
+    resources = extract_resources(sections)
+    scanned = _scan_sections_for_draws(sections)
+    draws = build_draw_groups(sections, resources, section_info=scanned)[0]["draws"]
+    assert [(draw.position_file, draw.position_stride) for draw in draws] == [
+        ("position.buf", 12), ("position.buf", 40)]
+    resolve = _resolve_component_buffers(
+        scanned, resources, _collect_resource_copy_sources(sections, resources),
+        sections=sections)["resolve_vertex_info"]
+    assert [resolve("ResourceGeometry", copy_sources=authored.resource_copies,
+                    descriptor_copies=authored.resource_descriptors)["format"]
+            for authored in scanned["TextureOverrideComponent01"]["draws"]] == [
+                "R32G32B32_FLOAT", "R16G16B16A16_FLOAT"]
+    assert [draw.occurrence.ordinal for draw in draws] == [0, 1]
+
+
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
     sections = parse_sections("source-01.ini", text="""
 [TextureOverrideComponent01]

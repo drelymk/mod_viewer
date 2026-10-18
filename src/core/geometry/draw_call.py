@@ -54,6 +54,8 @@ class AuthoredDrawCall:
     slot_textures: list = field(default_factory=list)
     # Explicit copy/ref aliases at this draw, before later phase assignments.
     resource_copies: dict[str, str] = field(default_factory=dict)
+    # Empty tuples fence off local descriptor copies that have not executed yet.
+    resource_descriptors: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
