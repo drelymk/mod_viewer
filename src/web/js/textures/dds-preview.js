@@ -5,6 +5,7 @@ import { loadDDSTexture } from './dds-loader.js';
 
 const PREVIEW_SIZE = 256;
 const MAX_PREVIEWS = 8;
+const MAX_PREVIEW_BYTES = 16 * 1024 * 1024;
 const previews = new Map();
 let previewQueue = Promise.resolve();
 
@@ -134,10 +135,15 @@ export async function getDDSPreview(url, isCurrent, options = {}) {
     entry.pending.then(
       (result) => {
         entry.complete = true;
+        entry.bytes = result ? result.width * result.height * 4 : 0;
         if (!result && previews.get(key) === entry) previews.delete(key);
+        let bytes = [...previews.values()].reduce((sum, cached) => sum + (cached.bytes || 0), 0);
         for (const [oldKey, old] of previews) {
-          if (previews.size <= MAX_PREVIEWS) break;
-          if (old.complete) previews.delete(oldKey);
+          if (previews.size <= MAX_PREVIEWS && bytes <= MAX_PREVIEW_BYTES) break;
+          if (old.complete) {
+            previews.delete(oldKey);
+            bytes -= old.bytes || 0;
+          }
         }
       },
       () => {

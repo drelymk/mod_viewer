@@ -24,6 +24,7 @@ const readyTextures = new Set();
 const failedTextures = new Set();
 const textureUsers = new Map();
 const reloadTokens = new Map();
+const previewIdentities = new Map();
 // all: every authored map; diffuse-normal: color + the material's actual
 // normal source; diffuse: color only; none: flat colour.
 let textureMode = 'all';
@@ -45,6 +46,7 @@ export function setTextures(textures) {
   failedTextures.clear();
   readyTextures.clear();
   reloadTokens.clear();
+  previewIdentities.clear();
   textureUsers.clear();
 }
 
@@ -55,6 +57,7 @@ export function addTexture(key, uri) {
   if (!splitTextureKey(key)) return false;
   const previousSource = getTexturePreviewSource(key);
   if (previousSource) clearDDSPreviews(previousSource);
+  previewIdentities.set(key, {});
   registry[key] = uri;
   disposeTexture(loaders[key]);
   delete loaders[key];
@@ -76,6 +79,7 @@ export function removeTextures(keys) {
     readyTextures.delete(key);
     failedTextures.delete(key);
     reloadTokens.delete(key);
+    previewIdentities.delete(key);
     textureUsers.delete(key);
     removed += 1;
   }
@@ -226,6 +230,7 @@ export function reloadTextures(keys, { force = false } = {}) {
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
     clearDDSPreviews(getTexturePreviewSource(key));
+    previewIdentities.set(key, {});
     for (const mesh of textureUsers.get(key) || []) users.add(mesh);
     const uri = registry[key];
     const token = (reloadTokens.get(key) || 0) + 1;
@@ -264,6 +269,11 @@ export function hasTexture(key) {
 export function getTexturePreviewSource(key) {
   const uri = registry[key];
   return uri ? (reloadTokens.has(key) ? reloadUri(uri, reloadTokens.get(key)) : uri) : null;
+}
+
+/** Replacement identity also changes when a publication reuses its URL. */
+export function getTexturePreviewIdentity(key) {
+  return previewIdentities.get(key);
 }
 
 /** Inspection can borrow an already uploaded texture without owning its lifetime. */

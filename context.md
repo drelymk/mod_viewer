@@ -174,8 +174,10 @@ of documentation, comments and tests; use portable fixtures instead.
   file-byte cap. Menu DDS previews load only when visible
   and render through the shared WebGPU renderer into HTML canvases; dispose
   temporary GPU resources and ignore stale work when the panel is rebuilt.
-  Share at most eight completed DDS canvas previews by published URL, resolution
-  and aspect policy; invalidate changed sources and clear on model replacement.
+  Share at most eight completed DDS canvas previews and 16 MiB of RGBA pixels
+  by published URL, resolution and aspect policy; invalidate changed sources
+  and clear on model replacement. Open UV views also compare replacement
+  identity so same-URL republications cannot retain stale images.
   Borrow ready model textures without disposing them. Preserve WebGPU readback
   row alignment when packing display-sized previews.
 
@@ -429,7 +431,8 @@ of documentation, comments and tests; use portable fixtures instead.
   IDs; texture changes never rebuild that geometry. The section follows Color;
   viewport expansion reparents the same canvases, preserves aspect and side
   panels, and follows mesh selection without closing. Only its X button closes
-  the zoomed view during inspection; Escape and section/header clicks preserve it.
+  the zoomed view during inspection; section/header clicks preserve it. UV does
+  not intercept Escape; dialogs and mesh-edit cancellation keep their handlers.
   Model teardown still releases it. Reuse the
   current diffuse publication and DDS preview across panel rebuilds and closing.
   Size embedded DDS previews for the panel; upgrade only when the displayed

@@ -1591,13 +1591,34 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
     assert page.evaluate(highlighted)
     page.keyboard.press('Escape')
     assert overlay.is_visible()
-    assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == [1]
+    assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == []
+    assert not page.evaluate(highlighted)
+    page.evaluate('''async () => {
+      const {confirmDialog} = await import('./js/ui/dialogs.js');
+      window.uvDialogResult = null;
+      void confirmDialog('Confirm fixture action').then(result=>window.uvDialogResult=result);
+    }''')
+    page.locator('#dialog-backdrop.show').wait_for()
+    page.keyboard.press('Escape')
+    assert page.locator('#dialog-backdrop').is_hidden()
+    assert page.evaluate('uvDialogResult === false')
+    assert overlay.is_visible()
+    page.evaluate('''async () => {
+      const {openTextureModal} = await import('./js/ui/texture-modal.js');
+      openTextureModal('Component fixture', [], 'fixture-01', ()=>{});
+    }''')
+    page.locator('#texture-modal-backdrop.show').wait_for()
+    page.keyboard.press('Escape')
+    assert page.locator('#texture-modal-backdrop').is_hidden()
+    assert overlay.is_visible()
     uv.locator('summary').click()
     uv.locator('.inspector-uv-expand').click()
     assert overlay.is_visible()
     assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
     page.locator('.uv-viewport-close').click()
     assert overlay.count() == 0
+    page.locator('[data-mesh-edit-action="separateSelection"]').click()
+    page.mouse.click(*point)
     page.locator('[data-mesh-edit-action="applySelection"]').click()
     assert rows.count() == 4
     assert not page.evaluate(highlighted)

@@ -1,6 +1,11 @@
 // Read-only Canvas inspection of the existing geometry and published diffuse.
 
-import { getTexturePreviewSource, getReadyTextureForPreview, isDDSUri } from '../mesh/mesh-factory.js';
+import {
+  getTexturePreviewSource,
+  getTexturePreviewIdentity,
+  getReadyTextureForPreview,
+  isDDSUri,
+} from '../mesh/mesh-factory.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
 import { getDDSPreview } from '../textures/dds-preview.js';
 import { createIcon } from '../ui/ui-icons.js';
@@ -118,6 +123,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   let disposed = false;
   let generation = 0;
   let textureSource;
+  let textureIdentity;
   let previewSize = 0;
   let image = null;
   let pendingImage = null;
@@ -261,7 +267,8 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
       display = buildDisplay(mesh);
     }
     const url = getTexturePreviewSource(source.userData.texKey);
-    const changed = textureSource !== url;
+    const identity = getTexturePreviewIdentity(source.userData.texKey);
+    const changed = textureSource !== url || textureIdentity !== identity;
     if (changed) {
       releaseImage();
       previewSize = 0;
@@ -276,13 +283,18 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     }
     const token = ++generation;
     textureSource = url;
+    textureIdentity = identity;
     previewSize = size;
     textureLayer.dataset.previewReady = String(!!image);
     statusKey = image ? '' : url ? 'inspector.uvLoading' : 'inspector.uvNoTexture';
     if (!layout()) drawBackground();
     syncLabels();
     if (!url) return;
-    const isCurrent = () => !disposed && token === generation && (section.isConnected || overlay?.isConnected);
+    const isCurrent = () =>
+      !disposed &&
+      token === generation &&
+      identity === getTexturePreviewIdentity(source.userData.texKey) &&
+      (section.isConnected || overlay?.isConnected);
     try {
       let loaded;
       if (dds) {
@@ -337,18 +349,11 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     inline.hidden = false;
     overlay.remove();
     overlay = overlayBody = null;
-    window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('resize', positionOverlay);
     window.removeEventListener('mod-viewer-right-dock-tab-changed', positionOverlay);
     layout();
     syncLabels();
     if (!disposed) expand.focus({ preventScroll: true });
-  }
-
-  function onKeyDown(event) {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
   }
 
   expand.addEventListener('click', (event) => {
@@ -377,7 +382,6 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     document.getElementById('canvas-container').append(overlay);
     inline.hidden = true;
     observer.observe(overlayBody);
-    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('resize', positionOverlay);
     window.addEventListener('mod-viewer-right-dock-tab-changed', positionOverlay);
     positionOverlay();
