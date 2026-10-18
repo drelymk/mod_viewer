@@ -31,6 +31,53 @@ from tests.support_snapshot import snapshot_context
 from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
+def test_deferred_component_loads_geometry_and_staged_reload_preserves_disk(tmp_path):
+    text = basic_model_ini().replace("drawindexed = 3, 0, 0", """if $mode == 1
+post run = CommandListReplacement
+endif
+drawindexed = 3, 0, 0
+""") + """[Constants]
+global persist $mode = 1
+[KeyMode]
+type = cycle
+$mode = 0,1
+[CommandListReplacement]
+vb0 = ResourceReplacementPosition
+run = CustomShaderReplacement
+[CustomShaderReplacement]
+drawindexed = 3, 0, 0
+[ResourceReplacementPosition]
+filename = replacement.buf
+stride = 12
+"""
+    ini = tmp_path / "mod.ini"
+    ini.write_text(text, encoding="utf-8")
+    for name, data in triangle_geometry().items():
+        (tmp_path / name).write_bytes(data)
+    (tmp_path / "replacement.buf").write_bytes(struct.pack(
+        "<9f", 10, 0, 0, 11, 0, 0, 10, 1, 0))
+
+    payload = mod_loader.load_mod(str(tmp_path), geometry=GeometryBlob())
+    assert not payload.get("error")
+    meshes = list(payload["meshes"].values())
+    assert len(meshes) == 2
+    assert meshes[0]["identity"] != meshes[1]["identity"]
+    assert meshes[0]["sources"][0]["section"] == "TextureOverrideComponent01"
+    assert meshes[1]["sources"][0]["section"] == "CustomShaderReplacement"
+    assert meshes[1]["conditions"] == [
+        [{"var": "mode", "value": "1", "negate": False}]]
+    assert all(mesh["pos"]["length"] > 0 for mesh in meshes)
+    assert not edit_session.has_pending(str(tmp_path))
+
+    staged = text.replace("post run = CommandListReplacement", "; deferred call removed")
+    payload = mod_loader.load_mod(
+        str(tmp_path), overrides={str(ini): staged}, geometry=GeometryBlob())
+    assert not payload.get("error")
+    assert len(payload["meshes"]) == 1
+    assert next(iter(payload["meshes"].values()))["identity"] == meshes[0]["identity"]
+    assert ini.read_text(encoding="utf-8") == text
+
+
 def test_nested_ini_resources_are_relative_to_their_ini():
     ini = """[TextureOverride{0}Position]
 vb0 = Resource{0}Position

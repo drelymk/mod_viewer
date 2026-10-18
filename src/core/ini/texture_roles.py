@@ -6,6 +6,7 @@ import re
 from ..geometry.identity import normalize_geometry_hash
 from .dnf import DNF_TRUE, dnf_and, dnf_not, dnf_or, normalize_dnf, parse_condition_dnf
 from .sections import ResourceTable
+from .command_phases import parse_command_line
 
 
 def _freeze_dnf(dnf):
@@ -90,7 +91,7 @@ def _collect_texture_override_index(sections, toggle_vars, alias_map,
         hashes = set()
         cond_stack = []
         for raw in lines:
-            line = raw.split(";", 1)[0].strip()
+            line = parse_command_line(raw).text
             if not line:
                 continue
             match = re.match(r"(?:else\s+if|elif)\s+(.*)$", line, re.I)
@@ -187,7 +188,7 @@ def _collect_structural_slot_role_hints(sections):
     observations = {}
     for lines in sections.values():
         for raw in lines:
-            line = raw.split(";", 1)[0].strip()
+            line = parse_command_line(raw).text
             if not line:
                 continue
             slot = re.match(

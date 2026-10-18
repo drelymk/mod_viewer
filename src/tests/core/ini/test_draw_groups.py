@@ -10,6 +10,7 @@ from tests.support.model_data import standard_component_resources
 
 @pytest.mark.parametrize("command", [
     "drawindexed = auto", "run = CommandListComponent01IB",
+    "post drawindexed = auto", "post run = CommandListComponent01IB",
 ])
 def test_hash_family_auto_keeps_parts_and_replacement_bindings_separate(command):
     sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01IB]
@@ -147,8 +148,9 @@ this = ResourceMystery
     assert "texture_hashes" not in draw.auxiliary_maps["light_map"]["variants"][0]
 
 
-def test_texture_override_index_preserves_conditions_and_resolves_files():
-    sections = parse_sections("source-01.ini", text="""[KeyStyle]
+@pytest.mark.parametrize("phase", ["", "pre ", "PoSt\t"])
+def test_texture_override_index_preserves_conditions_and_resolves_files(phase):
+    sections = parse_sections("source-01.ini", text=f"""[KeyStyle]
 type = cycle
 $Style = 0,1
 
@@ -161,9 +163,9 @@ drawindexed = 3, 0, 0
 [TextureOverrideOriginal]
 hash = 11111111
 if $Style == 0
-this = ResourceA
+{phase}this = ResourceA ; replacement
 else
-this = ResourceB
+{phase}this = ResourceB
 endif
 
 [ResourcePosition]
@@ -193,6 +195,8 @@ filename = textures/b.dds
             "var": "Style", "value": "0", "negate": False}]]),
         ("ResourceB", [[{
             "var": "Style", "value": "0", "negate": True}]])]
+    assert scanned.texture_override_index.hashes_by_resource == {
+        "resourcea": ("11111111",), "resourceb": ("11111111",)}
 
     group = build_draw_groups(sections, extract_resources(sections))[0]
     resolved = group["_texture_override_index"].replacements_by_hash[
@@ -539,3 +543,56 @@ stride = 32
     assert draws[0].skinning_source is None
     assert draws[1].skinning_source.file == "direct.bin"
     assert draws[1].skinning_resolution["resolution_source"] == "direct"
+
+
+@pytest.mark.parametrize("prefix,target,starts", [
+    ("", "CommandListPart", [0, 3, 6, 9]),
+    ("pre ", "CommandListPart", [0, 6, 3, 9]),
+    ("post ", "CommandListPart", [3, 0, 6, 9]),
+    ("", "CustomShaderPart", [0, 6, 3, 9]),
+    ("pre ", "CustomShaderPart", [0, 6, 3, 9]),
+    ("PoSt\t", "CustomShaderPart", [3, 0, 6, 9]),
+])
+def test_nested_run_phases_preserve_order_guards_and_authored_sources(
+        prefix, target, starts):
+    text = f"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+post run = CommandListEmpty
+if $mode == 1
+{prefix}run = {target} ; retain the call's authored ordinal
+endif
+drawindexed = 3, 3, 0
+post drawindexed = 3, 9, 0
+[{target}]
+run = CommandListNested
+[CommandListNested]
+drawindexed = 3, 0, 0
+post drawindexed = 3, 6, 0
+post run = {target}
+run = ResourceIgnored
+[ResourceIgnored]
+drawindexed = 3, 12, 0
+[CommandListEmpty]
+""" + standard_component_resources()
+    sections = parse_sections("source-01.ini", text=text)
+    draws = build_draw_groups(
+        sections, extract_resources(sections), gating_vars={"mode"})[0]["draws"]
+
+    assert [draw.start for draw in draws] == starts
+    by_start = {draw.start: draw for draw in draws}
+    for start, ordinal in [(0, 0), (6, 1)]:
+        draw = by_start[start]
+        assert draw.conditions == [[{"var": "mode", "value": "1", "negate": False}]]
+        assert draw.occurrence.section == "CommandListNested"
+        assert draw.occurrence.ordinal == ordinal
+        assert draw.occurrence.path == (
+            ("TextureOverrideComponent01", 1), (target, 0))
+        source = draw.sources[0]
+        assert source["ini_path"] == "source-01.ini"
+        assert text.splitlines()[source["line_no"] - 1].endswith(
+            f"drawindexed = 3, {start}, 0")
+    assert not by_start[3].conditions
+    assert not by_start[9].conditions
+    assert [by_start[start].occurrence.ordinal for start in (3, 9)] == [0, 1]

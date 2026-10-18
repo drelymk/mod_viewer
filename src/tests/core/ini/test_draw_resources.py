@@ -65,10 +65,11 @@ stride = 12
 
 
 @pytest.mark.parametrize("reference", ("reference", "copy reference"))
-def test_resource_reference_alias_resolves_file_backed_source(reference):
+@pytest.mark.parametrize("phase", ("", "post "))
+def test_resource_reference_alias_resolves_file_backed_source(reference, phase):
     sections = parse_sections("source-01.ini", text=f"""
 [Present]
-ResourcePosition = {reference} ResourcePosition.B
+{phase}ResourcePosition = {reference} ResourcePosition.B
 
 [ResourcePosition]
 [ResourcePosition.B]
@@ -85,10 +86,11 @@ stride = 12
     }
 
 
-def test_copy_description_alias_is_collected_as_descriptor_only():
-    sections = parse_sections("source-01.ini", text="""
+@pytest.mark.parametrize("phase", ("", "post "))
+def test_copy_description_alias_is_collected_as_descriptor_only(phase):
+    sections = parse_sections("source-01.ini", text=f"""
 [CommandListRemap]
-ResourceBlendOverride = copy_description ResourceBlendSource
+{phase}ResourceBlendOverride = copy_description ResourceBlendSource
 
 [ResourceBlendSource]
 format = DXGI_FORMAT_R8_UINT

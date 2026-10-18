@@ -7,6 +7,7 @@ from ..geometry.buffers import POSITION_STRIDE, _res_get
 from ..geometry.vertex_attributes import VertexAttributeSource
 from .draw_scan import (_reachable_execution_sections, _run_target_name)
 from .sections import ResourceTable
+from .command_phases import parse_command_line, phase_commands
 
 
 @dataclass
@@ -165,9 +166,11 @@ def _collect_resource_copy_sources(sections, resources):
         r"ref(?:erence)?)\s+"
         r"(Resource\S+)\s*$", re.I)
     for lines in sections.values():
-        for raw in lines:
-            line = raw.split(";", 1)[0].strip()
-            match = resource_assignment_re.match(line)
+        commands = tuple(parse_command_line(raw) for raw in lines)
+        ordered = (command for phase in ("pre", "post")
+                   for command in phase_commands(commands, phase))
+        for command in ordered:
+            match = resource_assignment_re.match(command.text)
             if not match:
                 continue
             destination, source_resource = match.groups()
@@ -190,8 +193,11 @@ def _collect_resource_copy_sources(sections, resources):
     for lines in sections.values():
         cs_inputs = {}
         cs_u_sources = {}
-        for raw in lines:
-            line = raw.split(";", 1)[0].strip()
+        commands = tuple(parse_command_line(raw) for raw in lines)
+        ordered = (command for phase in ("pre", "post")
+                   for command in phase_commands(commands, phase))
+        for command in ordered:
+            line = command.text
             match = cs_read_re.match(line)
             if match:
                 slot, resource_name = match.groups()
@@ -245,7 +251,7 @@ def _collect_resource_descriptor_sources(sections):
         re.I)
     for lines in sections.values():
         for raw in lines:
-            match = assignment_re.match(raw.split(";", 1)[0].strip())
+            match = assignment_re.match(parse_command_line(raw).text)
             if not match:
                 continue
             destination, source = match.groups()

@@ -3,6 +3,7 @@
 import re
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
+from .command_phases import parse_command_line, run_target_phases
 
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
@@ -38,7 +39,7 @@ class _ScannedSections(dict):
 
 def _run_target_name(line, section_lookup):
     """Return a traversable ``run =`` target using scanner rules."""
-    match = re.match(r"run\s*=\s*(\S+)", line, re.I)
+    match = re.match(r"run\s*=\s*(\S+)", parse_command_line(line).text, re.I)
     if not match:
         return None
     target_name = section_lookup.get(match.group(1).lower())
@@ -59,7 +60,7 @@ def _reachable_execution_sections(sections, root, section_lookup):
         current = pending.pop()
         reachable.append(current)
         for raw in sections[current]:
-            line = raw.split(";", 1)[0].strip()
+            line = parse_command_line(raw).text
             target_name = _run_target_name(line, section_lookup)
             if target_name and target_name not in visiting:
                 visiting.add(target_name)
@@ -77,7 +78,7 @@ def _collect_legacy_scope_roles(sections, root, section_lookup):
     for section_name in _reachable_execution_sections(
             sections, root, section_lookup):
         for raw in sections[section_name]:
-            line = raw.split(";", 1)[0].strip()
+            line = parse_command_line(raw).text
             if not line:
                 continue
             slot = re.match(
@@ -177,6 +178,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     animation_vars = set(animation_vars or ())
     tracked_vars = set(toggle_vars) | animation_vars
     section_lookup = {str(name).lower(): name for name in sections}
+    commands = {name: tuple(parse_command_line(raw) for raw in lines)
+                for name, lines in sections.items()}
     alias_map = (condition_aliases if condition_aliases is not None
                  else build_bool_alias_map(sections))
     draw_constants = immutable_draw_constants(sections)
@@ -300,13 +303,23 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 result.pop(role, None)
         return result
 
-    def scan(lines, info, cond_stack, visiting, section_name,
+    def scan(info, cond_stack, visiting, section_name, phase,
              execution_path=()):
         draw_ordinal = 0
         run_ordinal = 0
-        for raw in lines:
-            line = raw.split(";")[0].strip()
+        for command in commands[section_name]:
+            raw, line = command.raw, command.text
             if not line:
+                continue
+            # Ordinals describe authored commands, independent of execution
+            # phase. Filtering first would give pre/post draws the same ID.
+            current_draw = draw_ordinal
+            if re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I):
+                draw_ordinal += 1
+            current_run = run_ordinal
+            if re.match(r"run\s*=\s*(\S+)", line, re.I):
+                run_ordinal += 1
+            if not command.runs_in(phase):
                 continue
             if info["src"] is None:
                 info["src"] = line_source(raw)
@@ -429,8 +442,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
             if match:
                 occurrence = DrawOccurrence(
-                    section_name, draw_ordinal, execution_path)
-                draw_ordinal += 1
+                    section_name, current_draw, execution_path)
                 if match[1].strip().casefold() == "auto":
                     info["drawindexed_auto"] = True
                     continue
@@ -487,14 +499,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         source="semantic")
             run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if run_match:
-                current_run = run_ordinal
-                run_ordinal += 1
                 target_name = _run_target_name(line, section_lookup)
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
-                    scan(sections[target_name], info, cond_stack, visiting,
-                         target_name,
-                         execution_path + ((section_name, current_run),))
+                    for target_phase in run_target_phases(
+                            command, target_name, phase):
+                        scan(info, list(cond_stack), visiting,
+                             target_name, target_phase,
+                             execution_path + ((section_name, current_run),))
                     visiting.discard(target_name)
 
     scanned = _ScannedSections(texture_override_index=texture_override_index)
@@ -520,7 +532,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "_match_index_count": None,
             "_cur_skinning_bone_offset": 0,
         }
-        scan(lines, info, [], {name}, name)
+        for phase in ("pre", "post"):
+            scan(info, [], {name}, name, phase)
         info.pop("_cur_ib", None)
         info["diffuse_variants_at_end"] = _effective_role_assignments(
             info.get("_cur_diffuse_variants") or [])

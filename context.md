@@ -102,6 +102,10 @@ of documentation, comments and tests; use portable fixtures instead.
 - Texture bindings are per-draw execution-order state: retain the latest
   applicable assignment, conditional alternatives and no-map fallbacks for
   every role. Never collapse bindings to a component-level texture.
+- Draw discovery selects generic `pre`/`post` command phases before handling
+  bindings or draws. Plain CommandList calls follow the caller's phase;
+  explicit phase calls and CustomShader calls execute both target phases
+  together. Preserve authored draw/call ordinals across phase selection.
 - Follow explicit `Resource = copy ...` and compute UAV copy/ref chains when
   resolving authored geometry and animation sources. Preserve ordered alternatives,
   stop cycles, and never infer a source through an unsupported shader operation.
