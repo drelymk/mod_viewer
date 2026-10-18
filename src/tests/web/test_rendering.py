@@ -697,6 +697,17 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
     }""")
     points = [[0.5, 0.2, 0], [0.5, 0.8, 0]]
     compressed = mesh_pixels(page, points)
+    page.locator('#inspector-tab').click()
+    page.locator('.draw-item').click()
+    page.locator('.inspector-uv-section summary').click()
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    uv_pixels = '''() => {
+      const canvas = document.querySelector('.inspector-uv-texture');
+      return [0.75,0.25].map(v => [...canvas.getContext('2d')
+        .getImageData(canvas.width/2,canvas.height*v,1,1).data]);
+    }'''
+    compressed_uv = page.evaluate(uv_pixels)
+    assert compressed_uv[0][2] > 240 and compressed_uv[1][0] > 240
     page.evaluate("""async () => {
       const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
       setManualTexOverride(window.modViewer.activeMeshes[0], 'diffuse::texture-02.png');
@@ -706,10 +717,56 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
       return texture?.image && !texture.isCompressedTexture;
     }""")
     reference_pixels = mesh_pixels(page, points)
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    assert page.evaluate(uv_pixels) == compressed_uv
     assert compressed[0][2] > compressed[0][0] + 60
     assert compressed[1][0] > compressed[1][2] + 60
     assert all(max(abs(a-b) for a,b in zip(left, right)) < 40
                for left, right in zip(compressed, reference_pixels))
+
+
+def test_active_uv_refreshes_when_dds_is_replaced_at_the_same_url(viewer, tmp_path):
+    path = tmp_path / 'texture-01.dds'
+    original = split_color_dds()
+    path.write_bytes(original)
+    publication = server.begin_texture_publication(str(tmp_path))
+    url = publication.register(str(path))
+    publication.commit()
+    try:
+        payload = textured_payload()
+        payload['textures']['diffuse::texture-01.dds'] = url
+        payload['meshes']['mesh-00']['tex_key'] = 'diffuse::texture-01.dds'
+        page = _open_fixture(viewer, payload)
+        wait_texture(page)
+        page.locator('#inspector-tab').click()
+        page.locator('.draw-item').click()
+        page.locator('.inspector-uv-section summary').click()
+        page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+        page.locator('.inspector-uv-expand').click()
+        page.evaluate('''() => {
+          window.uvCanvas = document.querySelector('.inspector-uv-outlines');
+          window.uvWireframe = uvCanvas.toDataURL();
+          window.uvPixels = () => {
+            const canvas = document.querySelector('.inspector-uv-texture');
+            return [0.25,0.75].map(y=>[...canvas.getContext('2d')
+              .getImageData(canvas.width/2,canvas.height*y,1,1).data]);
+          };
+        }''')
+        page.wait_for_function('uvPixels()[0][0] > 240 && uvPixels()[1][2] > 240')
+        path.write_bytes(original[:-4] + struct.pack('<I', 0x00005555))
+        assert page.evaluate('''async url => {
+          const {addTexture,getTexturePreviewSource} = await import('./js/mesh/mesh-factory.js');
+          const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
+          const mesh = window.modViewer.activeMeshes[0];
+          addTexture(mesh.userData.texKey,url);
+          setManualTexOverride(mesh,mesh.userData.texKey);
+          return getTexturePreviewSource(mesh.userData.texKey) === url;
+        }''', url)
+        page.wait_for_function('uvPixels()[0][2] > 240 && uvPixels()[1][0] > 240')
+        assert page.evaluate("uvCanvas === document.querySelector('.inspector-uv-outlines') && uvCanvas.toDataURL() === uvWireframe")
+        assert page.locator('.uv-viewport').is_visible()
+    finally:
+        publication.release()
 
 
 def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
@@ -734,6 +791,9 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
           window.previewState = () => [renderer.getRenderTarget()?.uuid || null,
             renderer.getClearAlpha(), renderer.getScissorTest(), renderer.outputColorSpace,
             renderer.toneMapping, renderer.getPixelRatio(), renderer.autoClear];
+          window.previewReads = 0;
+          const read = renderer.readRenderTargetPixelsAsync.bind(renderer);
+          renderer.readRenderTargetPixelsAsync = (...args) => {window.previewReads++;return read(...args);};
           const before = previewState();
           const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
           buildMenuPanel({option01: {name: 'Option01', var: 'option01', values: ['0', '1'],
@@ -747,6 +807,111 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
         assert all(max(abs(left - right) for left, right in zip(actual, reference)) <= 4
                    for actual, reference in zip(result['pixels'], expected))
         assert max(abs(left - right) for left, right in zip(before_pixels, mesh_pixel(page))) < 5
+        page.evaluate('''async url => {
+          const {addTexture} = await import('./js/mesh/mesh-factory.js');
+          const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
+          addTexture('diffuse::texture-03.dds',url);
+          setManualTexOverride(window.modViewer.activeMeshes[0],'diffuse::texture-03.dds');
+        }''', url)
+        wait_texture(page)
+        dds_requests = []
+        page.on('request', lambda request: dds_requests.append(request.url)
+                if request.url.split('?')[0] == url else None)
+        page.evaluate('''async () => {
+          const {renderer} = await import('./js/scene/scene.js');
+          const {getReadyTextureForPreview} = await import('./js/mesh/mesh-factory.js');
+          const texture = getReadyTextureForPreview('diffuse::texture-03.dds');
+          window.uvBorrowedTexture = texture;
+          window.uvTextureVersion = texture.version;
+          window.uvTextureDisposals = 0;
+          texture.addEventListener('dispose',()=>uvTextureDisposals++);
+          window.uvPreviewTargets = [];
+          const render = renderer.render.bind(renderer);
+          renderer.render = (scene,camera) => {
+            if(scene.children.some(child=>child.material?.map===texture)) {
+              const target = renderer.getRenderTarget();
+              uvPreviewTargets.push([target.width,target.height]);
+            }
+            return render(scene,camera);
+          };
+        }''')
+        page.locator('#inspector-tab').click()
+        page.locator('.draw-item').click()
+        state_before_uv = page.evaluate('previewState()')
+        page.locator('.inspector-uv-section summary').click()
+        page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+        uv = page.locator('.inspector-uv-texture').evaluate('''canvas => ({
+          aspect:canvas.width/canvas.height,
+          pixels:[0.25,0.75].map(y => [...canvas.getContext('2d')
+            .getImageData(canvas.width/2,canvas.height*y,1,1).data])})''')
+        assert 0.45 < uv['aspect'] < 0.6
+        assert all(max(abs(left-right) for left,right in zip(actual,reference)) <= 4
+                   for actual,reference in zip(uv['pixels'],expected))
+        assert page.evaluate('previewState()') == state_before_uv
+        inline_size = page.evaluate('Math.max(...uvPreviewTargets.at(-1))')
+        assert inline_size <= 512
+        reads_before_expansion = page.evaluate('previewReads')
+        page.locator('.inspector-uv-expand').click()
+        page.wait_for_function('Math.max(...uvPreviewTargets.at(-1)) > 512')
+        page.wait_for_function("document.querySelector('.uv-viewport-status').hidden")
+        assert page.evaluate('previewReads') == reads_before_expansion + 1
+        assert page.evaluate('''() => {
+          const canvas = document.querySelector('.inspector-uv-texture');
+          return Math.max(...uvPreviewTargets.at(-1)) >= Math.max(canvas.width,canvas.height)-32;
+        }''')
+        expanded_pixels = page.locator('.inspector-uv-texture').evaluate('''canvas =>
+          [0.25,0.75].map(y => [...canvas.getContext('2d')
+            .getImageData(canvas.width/2,canvas.height*y,1,1).data])''')
+        assert expanded_pixels == uv['pixels']
+        page.keyboard.press('Escape')
+        assert page.locator('.uv-viewport').is_visible()
+        page.locator('.uv-viewport-close').click()
+        page.locator('.inspector-uv-expand').click()
+        assert page.evaluate('previewReads') == reads_before_expansion + 1
+        size_before_resize = page.evaluate('Math.max(...uvPreviewTargets.at(-1))')
+        page.set_viewport_size({'width': 1440, 'height': 1200})
+        page.wait_for_function('size => Math.max(...uvPreviewTargets.at(-1)) > size', arg=size_before_resize)
+        page.wait_for_function("document.querySelector('.uv-viewport-status').hidden")
+        assert page.evaluate('previewReads') == reads_before_expansion + 2
+        page.set_viewport_size({'width': 1280, 'height': 900})
+        page.locator('.uv-viewport-close').click()
+        assert page.evaluate('previewReads') == reads_before_expansion + 2
+        assert page.evaluate('uvBorrowedTexture.version === uvTextureVersion && uvTextureDisposals === 0')
+        assert dds_requests == []
+        assert page.evaluate('previewState()') == state_before_uv
+        cache = page.evaluate('''async url => {
+          const {getDDSPreview,clearDDSPreviews} = await import('./js/textures/dds-preview.js');
+          const {getReadyTextureForPreview} = await import('./js/mesh/mesh-factory.js');
+          const texture = getReadyTextureForPreview('diffuse::texture-03.dds');
+          let disposals = 0; texture.addEventListener('dispose',()=>disposals++);
+          const options = {size:32,preserveAspect:true,texture};
+          const before = previewReads;
+          const a = await getDDSPreview(url,()=>true,options);
+          const b = await getDDSPreview(url,()=>true,options);
+          const reused = a === b && previewReads === before;
+          clearDDSPreviews();
+          const [c,d] = await Promise.all([getDDSPreview(url,()=>true,options),getDDSPreview(url,()=>true,options)]);
+          const shared = c === d && previewReads === before+1;
+          for(let i=0;i<9;i++) await getDDSPreview(`${url}?fixture=${i}`,()=>true,options);
+          const evictedBefore = previewReads;
+          await getDDSPreview(url,()=>true,options);
+          const bounded = previewReads === evictedBefore+1;
+          clearDDSPreviews(url);
+          await getDDSPreview(url,()=>true,options);
+          const invalidated = previewReads===evictedBefore+2;
+          clearDDSPreviews();
+          const large = {size:2048,texture};
+          const largeBefore = previewReads;
+          await getDDSPreview(url,()=>true,large);
+          await getDDSPreview(`${url}?fixture=large`,()=>true,large);
+          await getDDSPreview(`${url}?fixture=large`,()=>true,large);
+          const largeReused = previewReads===largeBefore+2;
+          await getDDSPreview(url,()=>true,large);
+          return {reused,shared,bounded,invalidated,disposals,
+            byteBounded:largeReused && previewReads===largeBefore+3};
+        }''', url)
+        assert cache == {'reused': True, 'shared': True, 'bounded': True, 'invalidated': True,
+                         'disposals': 0, 'byteBounded': True}
     finally:
         publication.release()
 

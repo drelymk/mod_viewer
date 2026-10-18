@@ -11,6 +11,7 @@ import {
 import { syncMeshColorAdjustment } from './mesh-color-session.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture, reloadDDSTexture } from '../textures/dds-loader.js';
+import { clearDDSPreviews } from '../textures/dds-preview.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { splitTextureKey } from '../textures/texture-key.js';
 import { CHARACTER_AO_LAYER } from '../scene/viewer-layers.js';
@@ -23,6 +24,7 @@ const readyTextures = new Set();
 const failedTextures = new Set();
 const textureUsers = new Map();
 const reloadTokens = new Map();
+const previewIdentities = new Map();
 // all: every authored map; diffuse-normal: color + the material's actual
 // normal source; diffuse: color only; none: flat colour.
 let textureMode = 'all';
@@ -32,6 +34,7 @@ function disposeTexture(texture) {
 }
 
 export function setTextures(textures) {
+  clearDDSPreviews();
   registry = {};
   for (const [key, uri] of Object.entries(textures || {})) {
     if (splitTextureKey(key)) registry[key] = uri;
@@ -43,6 +46,7 @@ export function setTextures(textures) {
   failedTextures.clear();
   readyTextures.clear();
   reloadTokens.clear();
+  previewIdentities.clear();
   textureUsers.clear();
 }
 
@@ -51,6 +55,9 @@ export function setTextures(textures) {
  * web/js/panels/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
 export function addTexture(key, uri) {
   if (!splitTextureKey(key)) return false;
+  const previousSource = getTexturePreviewSource(key);
+  if (previousSource) clearDDSPreviews(previousSource);
+  previewIdentities.set(key, {});
   registry[key] = uri;
   disposeTexture(loaders[key]);
   delete loaders[key];
@@ -65,12 +72,14 @@ export function removeTextures(keys) {
   let removed = 0;
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
+    clearDDSPreviews(getTexturePreviewSource(key));
     delete registry[key];
     disposeTexture(loaders[key]);
     delete loaders[key];
     readyTextures.delete(key);
     failedTextures.delete(key);
     reloadTokens.delete(key);
+    previewIdentities.delete(key);
     textureUsers.delete(key);
     removed += 1;
   }
@@ -220,6 +229,8 @@ export function reloadTextures(keys, { force = false } = {}) {
   const reloads = [];
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
+    clearDDSPreviews(getTexturePreviewSource(key));
+    previewIdentities.set(key, {});
     for (const mesh of textureUsers.get(key) || []) users.add(mesh);
     const uri = registry[key];
     const token = (reloadTokens.get(key) || 0) + 1;
@@ -252,6 +263,22 @@ export function reloadTextures(keys, { force = false } = {}) {
 
 export function hasTexture(key) {
   return !!(splitTextureKey(key) && registry[key] && !failedTextures.has(key));
+}
+
+/** Published source for on-demand inspection, including in-place texture reloads. */
+export function getTexturePreviewSource(key) {
+  const uri = registry[key];
+  return uri ? (reloadTokens.has(key) ? reloadUri(uri, reloadTokens.get(key)) : uri) : null;
+}
+
+/** Replacement identity also changes when a publication reuses its URL. */
+export function getTexturePreviewIdentity(key) {
+  return previewIdentities.get(key);
+}
+
+/** Inspection can borrow an already uploaded texture without owning its lifetime. */
+export function getReadyTextureForPreview(key) {
+  return readyTextures.has(key) ? loaders[key] : null;
 }
 
 function trackTextureUser(mesh, key) {
@@ -303,7 +330,7 @@ function handleTextureError(key, texture, uri) {
   window.dispatchEvent(new CustomEvent('mod-viewer-texture-load-error', { detail: { key } }));
 }
 
-function isDDSUri(uri) {
+export function isDDSUri(uri) {
   return typeof uri === 'string' && /\.dds(?:[?#]|$)/i.test(uri);
 }
 

@@ -1,6 +1,6 @@
 // Selection-aware panel for material, texture, and color editing.
 
-import { clearSelection, getSelectedMeshes, toggleMeshVisibility } from '../scene/selection.js';
+import { clearSelection, getFaceSelection, getSelectedMeshes, toggleMeshVisibility } from '../scene/selection.js';
 import { createIcon } from '../ui/ui-icons.js';
 import {
   canEditMeshColor,
@@ -14,9 +14,14 @@ import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
 import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
 import { textureDisplayLabel } from '../textures/texture-key.js';
+import { meshUnderlyingVisible } from '../mesh/mesh-state.js';
+import { createUVView } from './uv-view.js';
 
 const meshRecords = new WeakMap();
 let current = null;
+let uvView = null;
+let uvMesh = null;
+let uvExpanded = false;
 const $ = (id) => document.getElementById(id);
 
 function semanticMesh(mesh) {
@@ -41,7 +46,13 @@ export function registerInspectorMesh(mesh, record) {
   if (mesh) meshRecords.set(mesh, record);
 }
 
-function clearContent() {
+function clearContent({ teardown = false } = {}) {
+  if (teardown || !uvView?.isZoomed()) {
+    uvView?.dispose();
+    uvView = null;
+    uvMesh = null;
+    uvExpanded = false;
+  }
   const empty = $('inspector-empty');
   const content = $('inspector-content');
   if (empty) empty.hidden = false;
@@ -127,15 +138,16 @@ function buildHeader(content, title, context, titleHint = '') {
 }
 
 function updateVisibilityButton(button, mesh) {
-  button.classList.toggle('state-hidden', !mesh.visible);
+  const visible = meshUnderlyingVisible(mesh);
+  button.classList.toggle('state-hidden', !visible);
   button.classList.toggle('state-manual', !!mesh.userData.manuallyToggled);
-  button.setAttribute('aria-pressed', String(mesh.visible));
+  button.setAttribute('aria-pressed', String(visible));
   button.title = t(
     mesh.userData.manuallyToggled
-      ? mesh.visible
+      ? visible
         ? 'mesh.visibleManual'
         : 'mesh.hiddenManual'
-      : mesh.visible
+      : visible
         ? 'mesh.visibleAutomatic'
         : 'mesh.hiddenAutomatic',
   );
@@ -626,6 +638,11 @@ function updateColorControlState(content, mesh) {
 }
 
 function buildComponent(record) {
+  if (!uvView?.isZoomed()) {
+    uvView?.dispose();
+    uvView = null;
+    uvMesh = null;
+  }
   const content = showContent();
   content.replaceChildren();
   buildHeader(content, record.component || t('inspector.component'), componentContext(record), record.source || '');
@@ -633,9 +650,22 @@ function buildComponent(record) {
   buildAssetSection(content, record.assetSummary, true);
   buildMaterialSection(content, record);
   buildComponentTextureSection(content, record);
+  void uvView?.sync();
 }
 
 function buildMesh(mesh, record) {
+  if (uvMesh !== mesh) {
+    uvMesh = mesh;
+    if (uvView) uvView.setMesh(mesh);
+    else
+      uvView = createUVView(mesh, {
+        expanded: uvExpanded,
+        onExpanded: (value) => {
+          uvExpanded = value;
+        },
+        getFaceSelection,
+      });
+  }
   const content = showContent();
   content.replaceChildren();
   const source = semanticMesh(mesh);
@@ -649,6 +679,8 @@ function buildMesh(mesh, record) {
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
   buildColorSection(content, source);
+  content.appendChild(uvView.section);
+  void uvView.sync();
 }
 
 function updateInspectorState() {
@@ -662,6 +694,7 @@ function updateInspectorState() {
     material.value = owner?.getMaterialKind?.() || 'auto';
   }
   if (current.type === 'mesh') {
+    void uvView?.sync();
     const visibility = content.querySelector('.inspector-visibility-btn');
     if (visibility) updateVisibilityButton(visibility, current.mesh);
     const source = semanticMesh(current.mesh);
@@ -715,6 +748,7 @@ function selectMesh(mesh, meshes) {
 }
 
 export function initInspectorPanel() {
+  window.addEventListener('mod-viewer-face-selection-changed', () => uvView?.syncSelection());
   for (const event of [
     'mod-viewer-mesh-edit-tools-changed',
     'mod-viewer-mesh-edit-state',
@@ -862,7 +896,7 @@ export function clearInspector() {
   if (current?.type === 'component') current.record.header?.classList.remove('selected');
   current = null;
   $('selected-mesh-status').textContent = '';
-  clearContent();
+  clearContent({ teardown: true });
 }
 
 export function getInspectorSelection() {

@@ -1290,6 +1290,17 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
     action('isolate').click()
     assert page.evaluate('window.modViewer.activeMeshes[0].visible')
     assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.map(part => part.visible)') == [True, False, False]
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => part.userData.manualVisible)')
+    assert page.evaluate('''async () => {
+      const {modelPickTargets} = await import('./js/scene/model-picking.js');
+      const source = window.modViewer.activeMeshes[0];
+      const targets = modelPickTargets(window.modViewer.activeMeshes);
+      return targets.length === 1 && targets[0] === source.userData.looseParts[0];
+    }''')
+    page.locator('#exit-isolation-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => part.visible)')
+    action('isolate').click()
     action('isolate').click()
     assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.map(part => part.visible)') == [True, False, False]
     page.locator('#mesh-list').focus()
@@ -1314,7 +1325,9 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
     assert rows.count() == 5
     rows.nth(0).click()
     rows.nth(1).click(modifiers=['Shift'])
+    action('isolate').click()
     action('merge').click()
+    assert page.locator('#exit-isolation-btn').is_hidden()
     assert rows.count() == 4
     action('undo').click()
     assert rows.count() == 5
@@ -1403,7 +1416,9 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
 
 
 def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
-    payload = model_payload(4)
+    payload = controlled_payload(4)
+    for name in ('mesh-01', 'mesh-02', 'mesh-03'):
+        payload['meshes'][name]['conditions'] = []
     label = 'generated mesh label ' * 5
     for index, mesh in enumerate(payload['meshes'].values()):
         x = index * 2
@@ -1440,8 +1455,34 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
     assert isolate.inner_text() == 'Isolate Selected'
     isolate.click()
     assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, False, True, False]
+    page.wait_for_function('''async () => {
+      const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+      const {computeModelBounds} = await import('./js/scene/model-bounds.js');
+      const expected = computeModelBounds([window.modViewer.activeMeshes[2]]);
+      const actual = getCharacterShadowDebugState().casterBounds;
+      return actual && ['min','max'].every(key => expected[key].toArray()
+        .every((value,index) => Math.abs(value-actual[key][index]) < 1e-6));
+    }''')
+    assert [rows.nth(index).locator('.mesh-state-btn').get_attribute('aria-pressed')
+            for index in range(4)] == ['true', 'true', 'true', 'false']
+    assert page.locator('.group-hdr .mesh-state-btn').evaluate_all(
+        "buttons => buttons.map(button => button.getAttribute('aria-pressed'))") == ['true', 'true', 'true', 'false']
+    assert page.locator('.inspector-visibility-btn').get_attribute('aria-pressed') == 'true'
+    page.locator('#controls-tab').click()
+    page.locator('.toggle-cycle-btn').click()
+    page.locator('#exit-isolation-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, True, True, False]
+    assert page.locator('#exit-isolation-btn').is_hidden()
+    rows.nth(2).click(button='right')
+    isolate.click()
+    page.locator('.group-hdr .mesh-state-btn').nth(1).click()
+    page.locator('#exit-isolation-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, False, True, False]
+    rows.nth(2).click(button='right')
+    isolate.click()
     page.locator('#reset-state-btn').click()
     assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    page.locator('#inspector-tab').click()
     page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
     rows.nth(0).click()
     heading.locator('[data-mesh-edit-action="separateSelection"]').click()
@@ -1470,6 +1511,162 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
         assert eye['right'] <= outer['x'] + outer['width'] + 0.5
     heading.locator('[data-mesh-edit-action="cancelSelection"]').click()
     assert heading.locator('.inspector-edit-btn').count() == 2
+    assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+    rows.nth(2).click(button='right')
+    isolate.click()
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 4)
+    assert page.locator('#exit-isolation-btn').is_hidden()
+
+
+def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
+    payload = textured_payload(3)
+    mesh = payload['meshes']['mesh-00']
+    mesh.update(pos=append_stream(payload, 'f', [0,0,0,1,0,0,0,1,0,2,0,0,3,0,0,2,1,0]),
+                uv=append_stream(payload, 'f', [0,0,0.4,0,0,0.4,0.6,0.6,1,0.6,1,1]),
+                idx=append_stream(payload, 'I', [0,1,2,3,4,5]), drawindexed=[6,0,0])
+    del payload['meshes']['mesh-01']['uv']
+    payload['meshes']['mesh-02']['uv'] = append_stream(payload, 'f', [-1,0,2,0,0,2])
+    payload['meshes']['mesh-02']['tex_key'] = 'diffuse::texture-02.png'
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 3)
+    page.locator('#inspector-tab').click()
+    rows = page.locator('.draw-item')
+    rows.first.click()
+    uv = page.locator('.inspector-uv-section')
+    assert uv.get_attribute('open') is None
+    assert uv.evaluate('section => section.parentElement.lastElementChild === section')
+    assert uv.locator('canvas').first.evaluate('canvas => canvas.width') == 300
+    page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
+    uv.locator('summary').click()
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    pixel = """() => {
+      const canvas = document.querySelector('.inspector-uv-texture');
+      return [...canvas.getContext('2d').getImageData(canvas.width/2,canvas.height/2,1,1).data];
+    }"""
+    assert page.evaluate(pixel)[:3] == [240, 24, 24]
+    page.locator('[data-texture-value="diffuse::texture-02.png"]').click()
+    page.wait_for_function(f"({pixel})()[2] === 240")
+    assert page.evaluate(pixel)[:3] == [24, 24, 240]
+    page.locator('[data-texture-choice="none"]').click()
+    assert 'No diffuse texture' in uv.inner_text()
+    page.locator('[data-texture-choice="automatic"]').click()
+    page.wait_for_function(f"({pixel})()[0] === 240")
+    page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
+    page.locator('[data-mesh-edit-action="separateSelection"]').click()
+    highlighted = """() => {
+      const canvas = document.querySelector('.inspector-uv-highlight');
+      return canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data.some((v,i) => i%4===3 && v>0);
+    }"""
+    assert not page.evaluate(highlighted)
+    unchanged = page.locator('.inspector-uv-texture').evaluate('canvas => canvas.toDataURL()')
+    outlines = page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()')
+    point = project_mesh_points(page, [[2.2,0.2,0]])[0]
+    page.mouse.click(*point)
+    assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == [1]
+    assert page.evaluate(highlighted)
+    assert page.locator('.inspector-uv-texture').evaluate('canvas => canvas.toDataURL()') == unchanged
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()') == outlines
+    page.evaluate('''() => {
+      window.uvCanvas = document.querySelector('.inspector-uv-outlines');
+      const component = window.modViewer.activeMeshes[0].userData.componentDescriptor;
+      window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {detail:{component,reason:'pool'}}));
+    }''')
+    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
+    uv.locator('.inspector-uv-expand').click()
+    overlay = page.locator('#canvas-container > .uv-viewport')
+    assert overlay.is_visible()
+    assert uv.is_visible()
+    assert page.evaluate("window.uvCanvas === document.querySelector('.uv-viewport .inspector-uv-outlines')")
+    assert page.evaluate('''() => {
+      const bounds = document.querySelector('.uv-viewport').getBoundingClientRect();
+      const left = document.getElementById('left-dock').getBoundingClientRect();
+      const right = document.getElementById('right-dock').getBoundingClientRect();
+      const viewport = document.getElementById('canvas-container').getBoundingClientRect();
+      return bounds.left >= left.right && bounds.right <= right.left
+        && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+    }''')
+    assert page.evaluate(highlighted)
+    page.keyboard.press('Escape')
+    assert overlay.is_visible()
+    assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == []
+    assert not page.evaluate(highlighted)
+    page.evaluate('''async () => {
+      const {confirmDialog} = await import('./js/ui/dialogs.js');
+      window.uvDialogResult = null;
+      void confirmDialog('Confirm fixture action').then(result=>window.uvDialogResult=result);
+    }''')
+    page.locator('#dialog-backdrop.show').wait_for()
+    page.keyboard.press('Escape')
+    assert page.locator('#dialog-backdrop').is_hidden()
+    assert page.evaluate('uvDialogResult === false')
+    assert overlay.is_visible()
+    page.evaluate('''async () => {
+      const {openTextureModal} = await import('./js/ui/texture-modal.js');
+      openTextureModal('Component fixture', [], 'fixture-01', ()=>{});
+    }''')
+    page.locator('#texture-modal-backdrop.show').wait_for()
+    page.keyboard.press('Escape')
+    assert page.locator('#texture-modal-backdrop').is_hidden()
+    assert overlay.is_visible()
+    uv.locator('summary').click()
+    uv.locator('.inspector-uv-expand').click()
+    assert overlay.is_visible()
+    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
+    page.locator('.uv-viewport-close').click()
+    assert overlay.count() == 0
+    page.locator('[data-mesh-edit-action="separateSelection"]').click()
+    page.mouse.click(*point)
+    page.locator('[data-mesh-edit-action="applySelection"]').click()
+    assert rows.count() == 4
+    assert not page.evaluate(highlighted)
+    assert page.evaluate('''async () => {
+      const {forEachUVTriangle} = await import('./js/panels/uv-view.js');
+      const source = window.modViewer.activeMeshes[0], part = source.userData.looseParts[1];
+      const triangles = []; forEachUVTriangle(part, (uv,a,b,c,id) => triangles.push(id));
+      return triangles.length === 1 && triangles[0] === 1
+        && part.geometry.getAttribute('uv') === source.geometry.getAttribute('uv');
+    }''')
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()') != outlines
+    uv.locator('.inspector-uv-expand').click()
+    page.evaluate("window.uvZoom = document.querySelector('.uv-viewport')")
+    rows.nth(2).click()
+    assert page.evaluate("window.uvZoom === document.querySelector('.uv-viewport')")
+    assert 'No UV data' in uv.inner_text()
+    assert 'No UV data' in overlay.inner_text()
+    assert overlay.locator('.inspector-uv-stage').is_hidden()
+    rows.nth(3).click()
+    assert page.evaluate("window.uvZoom === document.querySelector('.uv-viewport')")
+    assert page.evaluate("window.uvCanvas === document.querySelector('.uv-viewport .inspector-uv-outlines')")
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    assert page.locator('.inspector-uv-texture').evaluate('''canvas =>
+      [...canvas.getContext('2d').getImageData(canvas.width/2,canvas.height*0.75,1,1).data]
+    ''')[:3] == [24, 24, 240]
+    assert 'outside the 0–1' in uv.inner_text()
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.width > canvas.height')
+    page.locator('.group-hdr .group-name').last.click()
+    assert overlay.is_visible()
+    rows.nth(3).click()
+    assert overlay.is_visible()
+    page.locator('.uv-viewport-close').click()
+    assert overlay.count() == 0
+    old = page.locator('.inspector-uv-outlines').element_handle()
+    uv.locator('summary').click()
+    retained_width = old.evaluate('canvas => canvas.width')
+    uv.locator('summary').click()
+    assert old.evaluate('canvas => canvas.width') == retained_width
+    uv.locator('summary').click()
+    rows.nth(2).click()
+    assert uv.locator('.inspector-uv-expand').is_disabled()
+    rows.nth(3).click()
+    assert uv.locator('.inspector-uv-expand').is_enabled()
+    uv.locator('.inspector-uv-expand').click()
+    assert overlay.is_visible()
+    page.evaluate('async () => (await import("./js/panels/inspector-panel.js")).clearInspector()')
+    assert overlay.count() == 0
+    assert old.evaluate('canvas => canvas.width') == 1
     assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 

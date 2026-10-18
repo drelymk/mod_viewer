@@ -5,6 +5,118 @@ import math
 import pytest
 
 
+@pytest.mark.parametrize('indexed,start,count,membership,expected', [
+    (True, 3, 3, None, [1]),
+    (False, 0, 3, None, [0]),
+    (True, 3, 3, [2, 0], [0]),
+    (True, 0, 0, None, []),
+])
+def test_uv_triangles_use_draw_range_and_authored_part_identity(
+        module_page, indexed, start, count, membership, expected):
+    result = module_page.evaluate('''async ({indexed,start,count,membership}) => {
+      const T = await import('three/webgpu');
+      const {forEachUVTriangle} = await import('./js/panels/uv-view.js');
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.Float32BufferAttribute(new Float32Array(18),3));
+      geometry.setAttribute('uv', new T.Float32BufferAttribute([0,0,1,0,0,1,0,0,1,0,0,1],2));
+      if(indexed) geometry.setIndex([0,1,2,3,4,5]);
+      geometry.setDrawRange(start,count);
+      const mesh = new T.Mesh(geometry);
+      if(membership) mesh.userData.loosePartTriangles = membership;
+      const triangles = [];
+      forEachUVTriangle(mesh, (uv,a,b,c,id) => triangles.push(id));
+      return triangles;
+    }''', dict(indexed=indexed, start=start, count=count, membership=membership))
+    assert result == expected
+
+
+def test_uv_stale_dds_preview_and_failed_preview_keep_outlines(module_page):
+    module_page.route('**/js/textures/dds-preview.js', lambda route: route.fulfill(
+        content_type='text/javascript', body='''
+window.uvPending = [];
+export function clearDDSPreviews() {}
+export function getDDSPreview(url,isCurrent) {
+  const canvas = document.createElement('canvas');
+  return new Promise((resolve,reject) => window.uvPending.push({canvas,url,isCurrent,resolve,reject}));
+}
+'''))
+    module_page.evaluate('''async () => {
+      const T = await import('three/webgpu');
+      const {addTexture} = await import('./js/mesh/mesh-factory.js');
+      const {createUVView} = await import('./js/panels/uv-view.js');
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute([0,0,0,1,0,0,0,1,0],3));
+      geometry.setAttribute('uv',new T.Float32BufferAttribute([0,0,1,0,0,1],2));
+      geometry.setIndex([0,1,2]);
+      const mesh = new T.Mesh(geometry); mesh.userData.texKey = 'diffuse::texture-01.dds';
+      addTexture(mesh.userData.texKey,'/texture-01.dds');
+      const create = (expanded=true) => {
+        const view = createUVView(mesh,{expanded,onExpanded:()=>{},getFaceSelection:()=>window.uvFace});
+        document.body.append(view.section); void view.sync(); return view;
+      };
+      const collapsed = create(false);
+      window.lazyUV = window.uvPending.length === 0;
+      collapsed.dispose(); collapsed.section.remove();
+      const old = create();
+      window.oldCanvas = old.section.querySelector('.inspector-uv-outlines');
+      old.dispose(); old.section.remove();
+      window.uvCurrent = create();
+      window.uvFace = {source:mesh,triangles:new Set([0])};
+      window.uvCurrent.syncSelection(); void window.uvCurrent.sync();
+      const next = new T.Mesh(geometry); next.userData.texKey = 'diffuse::texture-02.dds';
+      addTexture(next.userData.texKey,'/texture-02.dds');
+      window.uvCurrent.setMesh(next); void window.uvCurrent.sync();
+      window.hasUVLines = () => {
+        const canvas = document.querySelector('.inspector-uv-outlines');
+        return canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data.some((v,i)=>i%4===3&&v>0);
+      };
+    }''')
+    assert module_page.evaluate('uvPending.length') == 3
+    assert module_page.evaluate('lazyUV')
+    assert module_page.evaluate('!uvPending[0].isCurrent() && !uvPending[1].isCurrent() && uvPending[2].isCurrent() && oldCanvas.width === 1')
+    module_page.evaluate('uvPending[0].resolve(); uvPending[1].resolve(); uvPending[2].reject(new Error("fixture failure"))')
+    module_page.wait_for_function('document.querySelector("[role=status]").textContent.includes("unavailable")')
+    assert module_page.evaluate('hasUVLines()')
+    module_page.evaluate('uvCurrent.dispose()')
+    assert module_page.evaluate('!uvPending[2].isCurrent() && document.querySelector("canvas").width === 1')
+
+
+def test_uv_view_retains_wireframe_and_visits_only_selected_faces(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three/webgpu');
+      const {createUVView} = await import('./js/panels/uv-view.js');
+      const geometry = new T.BufferGeometry();
+      const count = 2000;
+      geometry.setAttribute('position',new T.Float32BufferAttribute(new Float32Array(count*9),3));
+      const values = new Float32Array(count*6);
+      for(let i=0;i<values.length;i+=6) values.set([0,0,1,0,0,1],i);
+      const uv = new T.Float32BufferAttribute(values,2);
+      geometry.setAttribute('uv',uv);
+      const original = uv.getX.bind(uv); let reads=0;
+      uv.getX = vertex => {reads++;return original(vertex);};
+      const mesh = new T.Mesh(geometry);
+      let face = null;
+      const view = createUVView(mesh,{expanded:true,getFaceSelection:()=>face});
+      document.body.append(view.section); await view.sync();
+      const built = reads > count;
+      reads = 0; await view.sync();
+      const stable = reads === 0;
+      for(let i=0;i<50;i++) {
+        face = {source:mesh,triangles:new Set([i])}; view.syncSelection();
+      }
+      const selectionReads = reads;
+      view.section.open = false; await new Promise(r=>requestAnimationFrame(r));
+      view.section.open = true; await view.sync();
+      const retained = reads === selectionReads;
+      geometry.setDrawRange(3,3); await view.sync();
+      const invalidated = reads > selectionReads;
+      view.dispose();
+      return {built,stable,selectionReads,retained,invalidated};
+    }''')
+    assert result == {'built': True, 'stable': True, 'selectionReads': 300,
+                      'retained': True, 'invalidated': True}
+
+
 def test_environment_capture_cache_and_disposal_lifecycle(module_page):
     module_page.route('**/vendor/three.webgpu.js', lambda route: route.fulfill(
         content_type='text/javascript', body="""
@@ -268,6 +380,7 @@ export const renderDDSPreview = async (canvas, url, current) => {
   window.previewCurrent = current;
   await new Promise(resolve => {window.finishPreview = resolve;});
 };
+export function clearDDSPreviews() {}
 """))
     module_page.evaluate("""async () => {
       const style = document.createElement('link');

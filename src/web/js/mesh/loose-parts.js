@@ -4,6 +4,12 @@ import * as THREE from 'three/webgpu';
 import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 
 let selectionCleanup = null;
+let topologyCleanup = null;
+
+/** Visibility filters must release references before replacing part topology. */
+export function setLoosePartTopologyCleanup(callback) {
+  topologyCleanup = callback;
+}
 
 export const MAX_LOOSE_PART_TOLERANCE = 0.01;
 
@@ -213,6 +219,7 @@ export function separateLooseParts(source, { label = null, tolerance = 0 } = {})
   }
   const groups = findLoosePartGroups(source, { tolerance });
   if (groups.length <= 1) return [];
+  topologyCleanup?.();
 
   const sourceGeometry = source.geometry;
   if (!sourceGeometry.boundingBox) sourceGeometry.computeBoundingBox();
@@ -247,7 +254,7 @@ export function snapshotLooseParts(source) {
   return getLooseParts(source).map((part) => ({
     triangles: [...part.userData.loosePartTriangles],
     label: part.userData.loosePartLabel,
-    visible: part.visible,
+    visible: part.userData.manualVisible !== false,
     manualVisible: part.userData.manualVisible,
     manuallyToggled: part.userData.manuallyToggled,
     position: part.position.toArray(),
@@ -257,6 +264,7 @@ export function snapshotLooseParts(source) {
 }
 
 export function restoreLooseParts(source, snapshot) {
+  topologyCleanup?.();
   clearLooseParts(source);
   if (!snapshot.length) return;
   source.userData.loosePartDrawRange = { ...source.geometry.drawRange };
@@ -318,6 +326,7 @@ export function separateSelectedTriangles(target, selectedTriangles, { label = n
     remainderTriangles = targetTriangles.filter((triangle) => !selectedSet.has(triangle));
   }
   if (!selected.length || !remainderTriangles.length) return null;
+  topologyCleanup?.();
 
   if (sourceWasClean) {
     const sourceGeometry = source.geometry;
@@ -407,6 +416,7 @@ function disposeLoosePart(source, part) {
 export function mergeLooseParts(meshes) {
   const requested = [...new Set(meshes || [])];
   if (!canMergeLooseParts(requested)) return null;
+  topologyCleanup?.();
   const selected = new Set(requested);
   const source = getLoosePartSource(requested[0]);
   const sourceParts = getLooseParts(source);
@@ -446,6 +456,7 @@ export function mergeLooseParts(meshes) {
 export function clearLooseParts(source) {
   const parts = getLooseParts(source);
   if (!parts.length) return false;
+  topologyCleanup?.();
   for (const part of parts) {
     disposeLoosePart(source, part);
   }

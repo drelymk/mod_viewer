@@ -1590,3 +1590,52 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   background: #321b1b;
   color: #f0f6fc;
 }
+.inspector-uv-section > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+}
+#exit-isolation-btn[hidden] { display: none; }
+.inspector-uv-section > summary > span { flex: 1; }
+.inspector-uv-section > summary::-webkit-details-marker { display: none; }
+.inspector-uv-section:not([open]) .inspector-uv-chevron { transform: rotate(-90deg); }
+.inspector-uv-inline { width: 100%; overflow: hidden; margin-top: 8px; }
+.inspector-uv-stage {
+  position: relative;
+  margin: auto;
+  flex-shrink: 0;
+  background: #252a32;
+  pointer-events: none;
+}
+.inspector-uv-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.inspector-uv-warning {
+  margin-top: 6px;
+}
+.uv-viewport {
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+.uv-viewport-close { align-self: flex-end; }
+.uv-viewport-body {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}

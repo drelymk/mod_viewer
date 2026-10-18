@@ -17,7 +17,14 @@ import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
-import { clearLooseParts, getLooseParts, isLoosePart, syncLoosePartMaterial } from './loose-parts.js';
+import {
+  clearLooseParts,
+  getLooseParts,
+  getLoosePartSource,
+  isLoosePart,
+  setLoosePartTopologyCleanup,
+  syncLoosePartMaterial,
+} from './loose-parts.js';
 import {
   disposeSkinningExperiment,
   getSkinningBaseMaterial,
@@ -29,6 +36,38 @@ import {
 
 export const activeMeshes = [];
 const controlDependencies = new WeakMap();
+let isolation = null;
+
+export function isMeshIsolationActive() {
+  return isolation !== null;
+}
+
+/** One temporary filter; manual visibility and control state remain authoritative. */
+export function setMeshIsolation(meshes) {
+  isolation = meshes?.length ? new Set(meshes) : null;
+  const changed = activeMeshes.flatMap((mesh) => [mesh, ...getLooseParts(mesh)]);
+  for (const mesh of changed) applyMeshVisibility(mesh, { notify: false, render: false });
+  notifyMeshStateChanged(changed);
+  window.dispatchEvent(new CustomEvent('mod-viewer-isolation-changed'));
+  requestRender();
+}
+
+export function clearMeshIsolation() {
+  if (isolation) setMeshIsolation(null);
+}
+
+setLoosePartTopologyCleanup(clearMeshIsolation);
+
+/** Eye controls describe the underlying choice, including while filtered out. */
+export function meshUnderlyingVisible(mesh) {
+  return mesh.userData.manualVisible !== false;
+}
+
+function isolationIncludes(mesh) {
+  if (!isolation || isolation.has(mesh)) return true;
+  const source = getLoosePartSource(mesh);
+  return source ? isolation.has(source) : getLooseParts(mesh).some((part) => isolation.has(part));
+}
 
 // These fields all follow the same variants -> default -> resolved -> current
 // lifecycle. Keep role-specific rendering policy below this mechanical table.
@@ -126,6 +165,8 @@ export function invalidateControlDependencies(mesh) {
 }
 
 export function resetMeshes({ preserveModelOrientation = false } = {}) {
+  isolation = null;
+  window.dispatchEvent(new CustomEvent('mod-viewer-isolation-changed'));
   // Release source-level physics participants before their member geometry is
   // disposed. This keeps teardown callbacks on live meshes.
   destroyModelPhysicsSession();
@@ -177,6 +218,7 @@ export function removeMesh(mesh) {
   if (!mesh) return false;
   const index = activeMeshes.indexOf(mesh);
   if (index < 0) return false;
+  clearMeshIsolation();
   clearLooseParts(mesh);
   disposeSkinningExperiment(mesh);
   detachOutline(mesh);
@@ -200,6 +242,7 @@ export function removeAssetFillMeshes() {
 }
 
 export function resetMeshVisibility() {
+  clearMeshIsolation();
   const changed = [];
   activeMeshes.forEach((mesh) => {
     mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;
@@ -403,10 +446,11 @@ export function applyTextureVariant(mesh, { render = true } = {}) {
 // or an explicit reset/reload replaces it.
 export function applyMeshVisibility(mesh, { notify = true, render = true } = {}) {
   const previous = mesh.visible;
-  mesh.visible = mesh.userData.manualVisible !== false;
+  mesh.visible = meshUnderlyingVisible(mesh) && isolationIncludes(mesh);
   const changed = previous !== mesh.visible;
-  if (changed && mesh.visible && mesh.userData.textureRequestsDeferred !== true) {
-    refreshMeshTexture(mesh, { render: false });
+  const owner = getLoosePartSource(mesh) || mesh;
+  if (changed && mesh.visible && owner.visible && owner.userData.textureRequestsDeferred !== true) {
+    refreshMeshTexture(owner, { render: false });
   }
   if (changed) invalidateCharacterShadowVisibility({ request: render });
   if (notify) notifyMeshStateChanged([mesh]);
@@ -517,7 +561,7 @@ export function refreshMeshes(options) {
           }) || visibilityChanged;
         changedMeshes.add(mesh);
         if (!mesh.userData.defaultCaptured) {
-          mesh.userData.loadedVisible = mesh.visible;
+          mesh.userData.loadedVisible = meshUnderlyingVisible(mesh);
           mesh.userData.defaultCaptured = true;
         }
       }

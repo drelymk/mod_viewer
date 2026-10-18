@@ -41,6 +41,11 @@ def test_archive_preview_stages_toggle_but_cannot_export_or_persist_metadata(vie
     assert page.locator('#export-btn').is_disabled()
     page.locator('#inspector-tab').click()
     page.locator('.draw-item').click()
+    page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
+    page.locator('.inspector-uv-section summary').click()
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.width > 1')
+    page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
     result = page.evaluate("""async () => {
       const {setMeshColorAdjustment} = await import('./js/mesh/mesh-color-session.js');
       const {saveTextureState} = await import('./js/mesh/mesh-texture-state.js');

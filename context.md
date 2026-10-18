@@ -173,7 +173,13 @@ of documentation, comments and tests; use portable fixtures instead.
   and structurally valid; otherwise publication rejects them. There is no DDS
   file-byte cap. Menu DDS previews load only when visible
   and render through the shared WebGPU renderer into HTML canvases; dispose
-  preview resources and ignore stale work when the panel is rebuilt.
+  temporary GPU resources and ignore stale work when the panel is rebuilt.
+  Share at most eight completed DDS canvas previews and 16 MiB of RGBA pixels
+  by published URL, resolution and aspect policy; invalidate changed sources
+  and clear on model replacement. Open UV views also compare replacement
+  identity so same-URL republications cannot retain stale images.
+  Borrow ready model textures without disposing them. Preserve WebGPU readback
+  row alignment when packing display-sized previews.
 
 ## Animation reconstruction
 
@@ -405,9 +411,10 @@ of documentation, comments and tests; use portable fixtures instead.
   only explicit Apply enters the staged mesh-edit path.
   Inspector and context menus share edit-action availability. Preview history
   retains bounded triangle partitions and face selections, shares authored
-  vertex buffers, and ends on apply/cancel/reload. Isolation shows the selection
-  and hides other meshes without a restore snapshot. New edit controls follow
-  the `edit_mesh` UI gate; feature hiding never replaces backend validation or
+  vertex buffers, and ends on apply/cancel/reload. Isolation filters effective
+  visibility through the selection while preserving current manual/control
+  choices; exit/reset/topology replacement clears the filter. New edit controls
+  follow the `edit_mesh` UI gate; feature hiding never replaces backend validation or
   the Export boundary.
   Component MESHES headers own preview Undo/Redo icons beside Edited; Ctrl+Z/Y
   use the same history and must defer to text editors, dialogs, and rig gestures.
@@ -418,6 +425,20 @@ of documentation, comments and tests; use portable fixtures instead.
   including after isolation; changing the selection permits another isolation.
   Isolation is viewer visibility and is independent of `edit_mesh`; keep the
   gate on geometry editing and preview history.
+  UV inspection is read-only and independent of `edit_mesh`: read the live
+  geometry/draw range and authored part ordinals only when expanded. Retain one
+  current mesh's wireframe and resolve highlights directly from selected face
+  IDs; texture changes never rebuild that geometry. The section follows Color;
+  viewport expansion reparents the same canvases, preserves aspect and side
+  panels, and follows mesh selection without closing. Only its X button closes
+  the zoomed view during inspection; section/header clicks preserve it. UV does
+  not intercept Escape; dialogs and mesh-edit cancellation keep their handlers.
+  Model teardown still releases it. Reuse the
+  current diffuse publication and DDS preview across panel rebuilds and closing.
+  Size embedded DDS previews for the panel; upgrade only when the displayed
+  texture needs more pixels, up to 2048 on its longest edge in viewport mode.
+  Render upgrades from the ready model texture and retain the larger cached
+  result across closing/reopening; never reload an already ready DDS to expand.
   Face rectangles project each drawn triangle once and select through; do not
   raycast per candidate triangle. Click picking may select the nearest face or
   through all faces, retaining index-buffer ordinals across nonzero draw ranges.
