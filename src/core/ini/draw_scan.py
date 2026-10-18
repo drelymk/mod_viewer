@@ -26,12 +26,6 @@ _RUN_SKIP_PREFIXES = (
     "Constants")
 _WWMI_BONE_OFFSET_RE = re.compile(
     r"^\$\\WWMIv1\\vg_offset\s*=\s*(\d+)\s*$", re.I)
-_RESOURCE_COPY_RE = re.compile(
-    r"^\s*(Resource\S+)\s*=\s*(?:copy(?:\s+(?:ref|reference))?|"
-    r"ref(?:erence)?)\s+(Resource\S+)\s*$", re.I)
-_RESOURCE_DESCRIPTOR_RE = re.compile(
-    r"^\s*(Resource\S+)\s*=\s*copy_desc(?:ription)?\s+"
-    r"(Resource\S+)\s*$", re.I)
 
 
 class _ScannedSections(dict):
@@ -358,25 +352,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if cond_stack:
                     cond_stack.pop()
                 continue
-            copy = _RESOURCE_COPY_RE.match(line)
-            if copy and copy[1].casefold() != copy[2].casefold():
-                if cond_stack:
-                    # Branch traversal cannot establish one active source.
-                    # Leave its ordered alternatives to the legacy resolver.
-                    info["_cur_resource_copies"].pop(copy[1].casefold(), None)
-                else:
-                    info["_cur_resource_copies"][copy[1].casefold()] = copy[2]
-            descriptor = _RESOURCE_DESCRIPTOR_RE.match(line)
-            if descriptor and descriptor[1].casefold() != descriptor[2].casefold():
-                key = descriptor[1].casefold()
-                sources = info["_cur_resource_descriptors"].get(key, ())
-                if cond_stack:
-                    # Retain conservative descriptor alternatives, but only
-                    # from commands already visited in this execution path.
-                    info["_cur_resource_descriptors"][key] = (
-                        *sources, descriptor[2])
-                else:
-                    info["_cur_resource_descriptors"][key] = (descriptor[2],)
             match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
             if match:
                 info["_geometry_hash"] = normalize_geometry_hash(
@@ -510,8 +485,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     skinning_remap_resources=dict(
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
-                    resource_copies=dict(info["_cur_resource_copies"]),
-                    resource_descriptors=dict(info["_cur_resource_descriptors"]),
                 ))
             semantic = re.match(
                 r"^(Resource[\\/]"
@@ -544,16 +517,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             continue
         scope_legacy_resource_roles = _collect_legacy_scope_roles(
             sections, name, section_lookup)
-        # A local post copy must not supply a descriptor to an earlier draw.
-        # Keep global fallback for declarations outside this execution scope.
-        local_descriptors = {
-            match[1].casefold(): ()
-            for reachable in _reachable_execution_sections(
-                sections, name, section_lookup)
-            for command in commands[reachable]
-            if (match := _RESOURCE_DESCRIPTOR_RE.match(command.text))
-            and match[1].casefold() != match[2].casefold()
-        }
         info = {
             "vb0": None, "vb1": None, "vb2": None, "ib": None,
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
@@ -565,8 +528,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
             "_cur_compute_resources": {},
-            "_cur_resource_copies": {},
-            "_cur_resource_descriptors": local_descriptors,
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
             "_cur_skinning_bone_offset": 0,
@@ -584,8 +545,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
         info["vertex_resources_at_end"] = dict(
             info.get("_cur_vertex_resources") or {})
         info.pop("_cur_vertex_resources", None)
-        info["resource_copies_at_end"] = info.pop("_cur_resource_copies")
-        info["resource_descriptors_at_end"] = info.pop("_cur_resource_descriptors")
         info["slot_textures_at_end"] = slot_snapshot(info)
         for key in (
                 "_cur_slot_textures", "_cur_diffuse_variants",

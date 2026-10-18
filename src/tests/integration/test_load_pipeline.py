@@ -32,37 +32,23 @@ from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
 def test_deferred_component_loads_geometry_and_staged_reload_preserves_disk(tmp_path):
-    text = """[Constants]
+    text = basic_model_ini().replace("drawindexed = 3, 0, 0", """if $mode == 1
+post run = CommandListReplacement
+endif
+drawindexed = 3, 0, 0
+""") + """[Constants]
 global persist $mode = 1
 [KeyMode]
 type = cycle
 $mode = 0,1
-[TextureOverrideComponent01]
-hash = 10101010
-ib = ResourceIndex
-vb0 = ResourcePosition
-vb1 = ResourceTexcoord
-if $mode == 1
-post run = CommandListReplacement
-endif
-drawindexed = 3, 0, 0
 [CommandListReplacement]
 vb0 = ResourceReplacementPosition
 run = CustomShaderReplacement
 [CustomShaderReplacement]
 drawindexed = 3, 0, 0
-[ResourceIndex]
-filename = i.buf
-format = R32_UINT
-[ResourcePosition]
-filename = p.buf
-stride = 12
 [ResourceReplacementPosition]
 filename = replacement.buf
 stride = 12
-[ResourceTexcoord]
-filename = t.buf
-stride = 8
 """
     ini = tmp_path / "mod.ini"
     ini.write_text(text, encoding="utf-8")
@@ -88,6 +74,7 @@ stride = 8
         str(tmp_path), overrides={str(ini): staged}, geometry=GeometryBlob())
     assert not payload.get("error")
     assert len(payload["meshes"]) == 1
+    assert next(iter(payload["meshes"].values()))["identity"] == meshes[0]["identity"]
     assert ini.read_text(encoding="utf-8") == text
 
 

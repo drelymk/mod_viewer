@@ -5,8 +5,7 @@ import re
 
 from ..geometry.buffers import POSITION_STRIDE, _res_get
 from ..geometry.vertex_attributes import VertexAttributeSource
-from .draw_scan import (_reachable_execution_sections, _run_target_name,
-                        _RESOURCE_COPY_RE, _RESOURCE_DESCRIPTOR_RE)
+from .draw_scan import (_reachable_execution_sections, _run_target_name)
 from .sections import ResourceTable
 from .command_phases import parse_command_line, phase_commands
 
@@ -162,12 +161,16 @@ def _collect_resource_copy_sources(sections, resources):
     """Resolve explicit resource copy and reference edges."""
     resources = ResourceTable.normalize(resources)
     resource_copy_sources = {}
+    resource_assignment_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*(?:copy(?:\s+(?:ref|reference))?|"
+        r"ref(?:erence)?)\s+"
+        r"(Resource\S+)\s*$", re.I)
     for lines in sections.values():
         commands = tuple(parse_command_line(raw) for raw in lines)
         ordered = (command for phase in ("pre", "post")
                    for command in phase_commands(commands, phase))
         for command in ordered:
-            match = _RESOURCE_COPY_RE.match(command.text)
+            match = resource_assignment_re.match(command.text)
             if not match:
                 continue
             destination, source_resource = match.groups()
@@ -242,9 +245,13 @@ def _collect_resource_copy_sources(sections, resources):
 def _collect_resource_descriptor_sources(sections):
     """Collect descriptor-only copies without making them data edges."""
     descriptor_sources = {}
+    assignment_re = re.compile(
+        r"^\s*(Resource\S+)\s*=\s*copy_desc(?:ription)?\s+"
+        r"(Resource\S+)\s*$",
+        re.I)
     for lines in sections.values():
         for raw in lines:
-            match = _RESOURCE_DESCRIPTOR_RE.match(parse_command_line(raw).text)
+            match = assignment_re.match(parse_command_line(raw).text)
             if not match:
                 continue
             destination, source = match.groups()
@@ -428,11 +435,10 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
     descriptor_sources = _collect_resource_descriptor_sources(sections or {})
     descriptor_cache = {}
 
-    def resolve_descriptor_info(resource_name, visiting=None, *, descriptor_copies=None):
+    def resolve_descriptor_info(resource_name, visiting=None):
         if not resource_name:
             return {}
-        cache_key = ((resource_name, tuple(sorted(descriptor_copies.items())))
-                     if descriptor_copies else resource_name)
+        cache_key = resource_name
         if cache_key in descriptor_cache:
             return descriptor_cache[cache_key]
 
@@ -441,31 +447,21 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
             return {}
         visiting.add(cache_key)
 
+        descriptor = {}
+        for candidate in descriptor_sources.get(cache_key.lower(), ()):
+            descriptor.update(resolve_descriptor_info(candidate, visiting))
         resource_info = _res_get(resources, resource_name)
-        own_descriptor = {
+        descriptor.update({
             key: resource_info[key]
             for key in ("format", "stride") if resource_info.get(key) is not None
-        }
-        key = resource_name.casefold()
-        local = key in (descriptor_copies or {})
-        candidates = (descriptor_copies[key] if local
-                      else descriptor_sources.get(key, ()))
-        descriptor = dict(own_descriptor) if local else {}
-        for candidate in candidates:
-            descriptor.update(resolve_descriptor_info(
-                candidate, visiting, descriptor_copies=descriptor_copies))
-        if not local:
-            descriptor.update(own_descriptor)
+        })
         descriptor_cache[cache_key] = descriptor
         return descriptor
 
-    def resolve_vertex_info(resource_name, visiting=None, *, copy_sources=None,
-                            descriptor_copies=None):
+    def resolve_vertex_info(resource_name, visiting=None):
         if not resource_name:
             return {}
-        cache_key = ((resource_name, tuple(sorted((copy_sources or {}).items())),
-                      tuple(sorted((descriptor_copies or {}).items())))
-                     if copy_sources or descriptor_copies else resource_name)
+        cache_key = resource_name
         if cache_key in vertex_info_cache:
             return vertex_info_cache[cache_key]
 
@@ -475,27 +471,16 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         visiting.add(cache_key)
         resource_info = _res_get(resources, resource_name)
         resolved = dict(resource_info)
-        snapshot_source = (copy_sources or {}).get(resource_name.casefold())
-        if snapshot_source or not resource_info.get("filename"):
+        if not resource_info.get("filename"):
             resolved = {}
-            candidates = ((snapshot_source,) if snapshot_source else
-                          resource_copy_sources.get(resource_name.lower(), ()))
-            for candidate in candidates:
-                resolved = resolve_vertex_info(
-                    candidate, visiting, copy_sources=copy_sources,
-                    descriptor_copies=descriptor_copies)
+            for candidate in resource_copy_sources.get(cache_key.lower(), ()):
+                resolved = resolve_vertex_info(candidate, visiting)
                 if resolved.get("filename"):
                     resolved = dict(resolved)
                     break
         if resolved.get("filename"):
-            key = resource_name.casefold()
-            if key in (descriptor_copies or {}):
-                sources = descriptor_copies[key]
-            else:
-                sources = descriptor_sources.get(key, ())
-            for descriptor_source in sources:
-                resolved.update(resolve_descriptor_info(
-                    descriptor_source, descriptor_copies=descriptor_copies))
+            for descriptor_source in descriptor_sources.get(cache_key.lower(), ()):
+                resolved.update(resolve_descriptor_info(descriptor_source))
         vertex_info_cache[cache_key] = resolved
         return resolved
 

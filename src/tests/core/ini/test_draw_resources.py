@@ -65,10 +65,11 @@ stride = 12
 
 
 @pytest.mark.parametrize("reference", ("reference", "copy reference"))
-def test_resource_reference_alias_resolves_file_backed_source(reference):
+@pytest.mark.parametrize("phase", ("", "post "))
+def test_resource_reference_alias_resolves_file_backed_source(reference, phase):
     sections = parse_sections("source-01.ini", text=f"""
 [Present]
-ResourcePosition = {reference} ResourcePosition.B
+{phase}ResourcePosition = {reference} ResourcePosition.B
 
 [ResourcePosition]
 [ResourcePosition.B]
@@ -85,10 +86,11 @@ stride = 12
     }
 
 
-def test_copy_description_alias_is_collected_as_descriptor_only():
-    sections = parse_sections("source-01.ini", text="""
+@pytest.mark.parametrize("phase", ("", "post "))
+def test_copy_description_alias_is_collected_as_descriptor_only(phase):
+    sections = parse_sections("source-01.ini", text=f"""
 [CommandListRemap]
-ResourceBlendOverride = copy_description ResourceBlendSource
+{phase}ResourceBlendOverride = copy_description ResourceBlendSource
 
 [ResourceBlendSource]
 format = DXGI_FORMAT_R8_UINT
@@ -159,181 +161,6 @@ filename = a.buf
         sections, extract_resources(sections))
 
     assert "resourceb" not in copy_sources
-
-
-@pytest.mark.parametrize("prefix", ["pre ", "post "])
-def test_phased_resource_copies_preserve_data_descriptor_and_uav_order(prefix):
-    sections = parse_sections("source-01.ini", text=f"""
-[CommandListCopy]
-post cs-u5 = null
-cs-u5 = copy ResourceSource
-ResourceEarly = ref cs-u5
-{prefix} ResourceAlias = copy ResourceSource
-{prefix} ResourceAlias = copy_desc ResourceLayout
-{prefix} cs-u5 = copy ResourceAlias
-{prefix} ResourceOutput = ref cs-u5
-
-[ResourceSource]
-filename = position.buf
-stride = 12
-[ResourceLayout]
-filename = descriptor.buf
-stride = 40
-""")
-    resources = extract_resources(sections)
-    copies = _collect_resource_copy_sources(sections, resources)
-    assert copies == {
-        "resourceearly": ["ResourceSource"],
-        "resourcealias": ["ResourceSource"],
-        "resourceoutput": ["ResourceAlias"],
-    }
-    resolved = _resolve_component_buffers({}, resources, copies, sections=sections)
-    assert resolved["resolve_vertex_info"]("ResourceOutput") == {
-        "filename": "position.buf", "stride": 40}
-
-
-@pytest.mark.parametrize("deferred", [
-    "post ResourceGeometry = copy ResourcePost",
-    "post run = CommandListCopy",
-])
-def test_shared_copy_alias_resolves_at_each_draw_phase(deferred):
-    text = f"""[TextureOverrideComponent01]
-{deferred}
-ResourceGeometry = copy ResourcePre
-vb0 = ResourceGeometry
-vb1 = ResourceTexcoord
-ib = ResourceIndex
-drawindexed = 3, 0, 0
-post drawindexed = 3, 0, 0
-[ResourcePre]
-filename = pre.buf
-stride = 12
-[ResourcePost]
-filename = post.buf
-stride = 40
-[ResourceTexcoord]
-filename = uv.buf
-stride = 8
-[ResourceIndex]
-filename = index.buf
-format = R32_UINT
-[CommandListCopy]
-ResourceGeometry = copy ResourcePost
-"""
-    sections = parse_sections("source-01.ini", text=text)
-    resources = extract_resources(sections)
-    copies = _collect_resource_copy_sources(sections, resources)
-    assert copies["resourcegeometry"] == ["ResourcePre", "ResourcePost"]
-    draws = build_draw_groups(sections, resources)[0]["draws"]
-    assert [(draw.position_file, draw.position_stride) for draw in draws] == [
-        ("pre.buf", 12), ("post.buf", 40)]
-    assert [draw.occurrence.ordinal for draw in draws] == [0, 1]
-    assert draws[0].render_identity() != draws[1].render_identity()
-
-    pre_only = parse_sections("source-01.ini", text="\n".join(
-        line for line in text.splitlines() if not line.startswith("post ")))
-    ordinary = build_draw_groups(pre_only, extract_resources(pre_only))[0]["draws"]
-    assert len(ordinary) == 1
-    assert ordinary[0].render_identity() == draws[0].render_identity()
-    assert ordinary[0].occurrence == draws[0].occurrence
-
-
-def test_conditional_copy_snapshot_retains_conservative_source_until_reset():
-    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
-vb0 = ResourceGeometry
-vb1 = ResourceTexcoord
-ib = ResourceIndex
-if $mode == 0
-ResourceGeometry = copy ResourceA
-else
-ResourceGeometry = copy ResourceB
-endif
-drawindexed = 3, 0, 0
-ResourceGeometry = copy ResourceC
-drawindexed = 3, 3, 0
-[ResourceA]
-filename = a.buf
-stride = 12
-[ResourceB]
-filename = b.buf
-stride = 40
-[ResourceC]
-filename = c.buf
-stride = 12
-[ResourceTexcoord]
-filename = uv.buf
-stride = 8
-[ResourceIndex]
-filename = index.buf
-format = R32_UINT
-""")
-    resources = extract_resources(sections)
-    copies = _collect_resource_copy_sources(sections, resources)
-    assert copies["resourcegeometry"] == ["ResourceA", "ResourceB", "ResourceC"]
-    legacy = _resolve_component_buffers({}, resources, copies)["resolve_vertex_info"]
-    scanned = _scan_sections_for_draws(sections, gating_vars={"mode"})
-    assert "resourcegeometry" not in scanned["TextureOverrideComponent01"][
-        "draws"][0].resource_copies
-    draws = build_draw_groups(sections, resources, section_info=scanned)[0]["draws"]
-    assert [(draw.position_file, draw.position_stride) for draw in draws] == [
-        (legacy("ResourceGeometry")["filename"], 12), ("c.buf", 12)]
-    assert [draw.occurrence.ordinal for draw in draws] == [0, 1]
-
-
-@pytest.mark.parametrize("pre_layout,deferred", [
-    ("pre", "post ResourceGeometry = copy_desc ResourceLayoutPost"),
-    ("pre", "post run = CommandListLayout"),
-    ("conditional", "post run = CommandListLayout"),
-    ("none", "PoSt ResourceGeometry = copy_description ResourceLayoutPost"),
-])
-def test_copy_descriptors_resolve_at_each_draw_phase(pre_layout, deferred):
-    assignment = ("ResourceGeometry = copy_desc ResourceLayoutPre"
-                  if pre_layout != "none" else "")
-    if pre_layout == "conditional":
-        assignment = f"if $mode == 0\n{assignment}\nendif"
-    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01]
-{deferred}
-ResourceGeometry = copy ResourcePosition
-{assignment}
-vb0 = ResourceGeometry
-vb1 = ResourceTexcoord
-ib = ResourceIndex
-drawindexed = 3, 0, 0
-post drawindexed = 3, 0, 0
-[ResourcePosition]
-filename = position.buf
-stride = 12
-format = R32G32B32_FLOAT
-[ResourceLayoutPre]
-filename = layout-pre.buf
-stride = 12
-format = R32G32B32_FLOAT
-[ResourceLayoutPost]
-filename = layout-post.buf
-stride = 40
-format = R16G16B16A16_FLOAT
-[ResourceTexcoord]
-filename = uv.buf
-stride = 8
-[ResourceIndex]
-filename = index.buf
-format = R32_UINT
-[CommandListLayout]
-ResourceGeometry = copy_desc ResourceLayoutPost
-""")
-    resources = extract_resources(sections)
-    scanned = _scan_sections_for_draws(sections)
-    draws = build_draw_groups(sections, resources, section_info=scanned)[0]["draws"]
-    assert [(draw.position_file, draw.position_stride) for draw in draws] == [
-        ("position.buf", 12), ("position.buf", 40)]
-    resolve = _resolve_component_buffers(
-        scanned, resources, _collect_resource_copy_sources(sections, resources),
-        sections=sections)["resolve_vertex_info"]
-    assert [resolve("ResourceGeometry", copy_sources=authored.resource_copies,
-                    descriptor_copies=authored.resource_descriptors)["format"]
-            for authored in scanned["TextureOverrideComponent01"]["draws"]] == [
-                "R32G32B32_FLOAT", "R16G16B16A16_FLOAT"]
-    assert [draw.occurrence.ordinal for draw in draws] == [0, 1]
 
 
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
