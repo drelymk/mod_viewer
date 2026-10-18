@@ -1,6 +1,6 @@
 // Selection-aware panel for material, texture, and color editing.
 
-import { clearSelection, getSelectedMeshes, toggleMeshVisibility } from '../scene/selection.js';
+import { clearSelection, getFaceSelection, getSelectedMeshes, toggleMeshVisibility } from '../scene/selection.js';
 import { createIcon } from '../ui/ui-icons.js';
 import {
   canEditMeshColor,
@@ -15,9 +15,12 @@ import { getLoosePartSource } from '../mesh/loose-parts.js';
 import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
 import { textureDisplayLabel } from '../textures/texture-key.js';
 import { meshUnderlyingVisible } from '../mesh/mesh-state.js';
+import { createUVView } from './uv-view.js';
 
 const meshRecords = new WeakMap();
 let current = null;
+let uvView = null;
+let uvExpanded = false;
 const $ = (id) => document.getElementById(id);
 
 function semanticMesh(mesh) {
@@ -43,6 +46,9 @@ export function registerInspectorMesh(mesh, record) {
 }
 
 function clearContent() {
+  uvView?.dispose();
+  uvView = null;
+  uvExpanded = false;
   const empty = $('inspector-empty');
   const content = $('inspector-content');
   if (empty) empty.hidden = false;
@@ -135,10 +141,10 @@ function updateVisibilityButton(button, mesh) {
   button.title = t(
     mesh.userData.manuallyToggled
       ? visible
-        ? 'visibleManual'
+        ? 'mesh.visibleManual'
         : 'mesh.hiddenManual'
       : visible
-        ? 'visibleAutomatic'
+        ? 'mesh.visibleAutomatic'
         : 'mesh.hiddenAutomatic',
   );
   button.setAttribute('aria-label', button.title);
@@ -628,6 +634,8 @@ function updateColorControlState(content, mesh) {
 }
 
 function buildComponent(record) {
+  uvView?.dispose();
+  uvView = null;
   const content = showContent();
   content.replaceChildren();
   buildHeader(content, record.component || t('inspector.component'), componentContext(record), record.source || '');
@@ -638,6 +646,7 @@ function buildComponent(record) {
 }
 
 function buildMesh(mesh, record) {
+  uvView?.dispose();
   const content = showContent();
   content.replaceChildren();
   const source = semanticMesh(mesh);
@@ -650,6 +659,15 @@ function buildMesh(mesh, record) {
   buildAssetSection(content, source.userData.assetEntry?.asset_binding);
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
+  uvView = createUVView(mesh, {
+    expanded: uvExpanded,
+    onExpanded: (value) => {
+      uvExpanded = value;
+    },
+    getFaceSelection,
+  });
+  content.appendChild(uvView.section);
+  void uvView.sync();
   buildColorSection(content, source);
 }
 
@@ -664,6 +682,7 @@ function updateInspectorState() {
     material.value = owner?.getMaterialKind?.() || 'auto';
   }
   if (current.type === 'mesh') {
+    void uvView?.sync();
     const visibility = content.querySelector('.inspector-visibility-btn');
     if (visibility) updateVisibilityButton(visibility, current.mesh);
     const source = semanticMesh(current.mesh);
@@ -717,6 +736,7 @@ function selectMesh(mesh, meshes) {
 }
 
 export function initInspectorPanel() {
+  window.addEventListener('mod-viewer-face-selection-changed', () => uvView?.syncSelection());
   for (const event of [
     'mod-viewer-mesh-edit-tools-changed',
     'mod-viewer-mesh-edit-state',

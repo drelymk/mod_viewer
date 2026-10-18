@@ -697,6 +697,17 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
     }""")
     points = [[0.5, 0.2, 0], [0.5, 0.8, 0]]
     compressed = mesh_pixels(page, points)
+    page.locator('#inspector-tab').click()
+    page.locator('.draw-item').click()
+    page.locator('.inspector-uv-section summary').click()
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    uv_pixels = '''() => {
+      const canvas = document.querySelector('.inspector-uv-texture');
+      return [0.75,0.25].map(v => [...canvas.getContext('2d')
+        .getImageData(canvas.width/2,canvas.height*v,1,1).data]);
+    }'''
+    compressed_uv = page.evaluate(uv_pixels)
+    assert compressed_uv[0][2] > 240 and compressed_uv[1][0] > 240
     page.evaluate("""async () => {
       const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
       setManualTexOverride(window.modViewer.activeMeshes[0], 'diffuse::texture-02.png');
@@ -706,6 +717,8 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
       return texture?.image && !texture.isCompressedTexture;
     }""")
     reference_pixels = mesh_pixels(page, points)
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    assert page.evaluate(uv_pixels) == compressed_uv
     assert compressed[0][2] > compressed[0][0] + 60
     assert compressed[1][0] > compressed[1][2] + 60
     assert all(max(abs(a-b) for a,b in zip(left, right)) < 40
@@ -747,6 +760,25 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
         assert all(max(abs(left - right) for left, right in zip(actual, reference)) <= 4
                    for actual, reference in zip(result['pixels'], expected))
         assert max(abs(left - right) for left, right in zip(before_pixels, mesh_pixel(page))) < 5
+        page.evaluate('''async url => {
+          const {addTexture} = await import('./js/mesh/mesh-factory.js');
+          const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
+          addTexture('diffuse::texture-03.dds',url);
+          setManualTexOverride(window.modViewer.activeMeshes[0],'diffuse::texture-03.dds');
+        }''', url)
+        page.locator('#inspector-tab').click()
+        page.locator('.draw-item').click()
+        state_before_uv = page.evaluate('previewState()')
+        page.locator('.inspector-uv-section summary').click()
+        page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+        uv = page.locator('.inspector-uv-texture').evaluate('''canvas => ({
+          aspect:canvas.width/canvas.height,
+          pixels:[0.25,0.75].map(y => [...canvas.getContext('2d')
+            .getImageData(canvas.width/2,canvas.height*y,1,1).data])})''')
+        assert 0.45 < uv['aspect'] < 0.6
+        assert all(max(abs(left-right) for left,right in zip(actual,reference)) <= 4
+                   for actual,reference in zip(uv['pixels'],expected))
+        assert page.evaluate('previewState()') == state_before_uv
     finally:
         publication.release()
 

@@ -1520,6 +1520,77 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
     assert page.locator('#exit-isolation-btn').is_hidden()
 
 
+def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
+    payload = textured_payload(3)
+    mesh = payload['meshes']['mesh-00']
+    mesh.update(pos=append_stream(payload, 'f', [0,0,0,1,0,0,0,1,0,2,0,0,3,0,0,2,1,0]),
+                uv=append_stream(payload, 'f', [0,0,0.4,0,0,0.4,0.6,0.6,1,0.6,1,1]),
+                idx=append_stream(payload, 'I', [0,1,2,3,4,5]), drawindexed=[6,0,0])
+    del payload['meshes']['mesh-01']['uv']
+    payload['meshes']['mesh-02']['uv'] = append_stream(payload, 'f', [-1,0,2,0,0,2])
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 3)
+    page.locator('#inspector-tab').click()
+    rows = page.locator('.draw-item')
+    rows.first.click()
+    uv = page.locator('.inspector-uv-section')
+    assert uv.get_attribute('open') is None
+    assert uv.locator('canvas').first.evaluate('canvas => canvas.width') == 300
+    page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
+    uv.locator('summary').click()
+    page.wait_for_function("document.querySelector('.inspector-uv-texture').dataset.previewReady === 'true'")
+    pixel = """() => {
+      const canvas = document.querySelector('.inspector-uv-texture');
+      return [...canvas.getContext('2d').getImageData(canvas.width/2,canvas.height/2,1,1).data];
+    }"""
+    assert page.evaluate(pixel)[:3] == [240, 24, 24]
+    page.locator('[data-texture-value="diffuse::texture-02.png"]').click()
+    page.wait_for_function(f"({pixel})()[2] === 240")
+    assert page.evaluate(pixel)[:3] == [24, 24, 240]
+    page.locator('[data-texture-choice="none"]').click()
+    assert 'No diffuse texture' in uv.inner_text()
+    page.locator('[data-texture-choice="automatic"]').click()
+    page.wait_for_function(f"({pixel})()[0] === 240")
+    page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
+    page.locator('[data-mesh-edit-action="separateSelection"]').click()
+    highlighted = """() => {
+      const canvas = document.querySelector('.inspector-uv-highlight');
+      return canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data.some((v,i) => i%4===3 && v>0);
+    }"""
+    assert not page.evaluate(highlighted)
+    unchanged = page.locator('.inspector-uv-texture').evaluate('canvas => canvas.toDataURL()')
+    outlines = page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()')
+    point = project_mesh_points(page, [[2.2,0.2,0]])[0]
+    page.mouse.click(*point)
+    assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == [1]
+    assert page.evaluate(highlighted)
+    assert page.locator('.inspector-uv-texture').evaluate('canvas => canvas.toDataURL()') == unchanged
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()') == outlines
+    page.locator('[data-mesh-edit-action="applySelection"]').click()
+    assert rows.count() == 4
+    assert not page.evaluate(highlighted)
+    assert page.evaluate('''async () => {
+      const {forEachUVTriangle} = await import('./js/panels/uv-view.js');
+      const source = window.modViewer.activeMeshes[0], part = source.userData.looseParts[1];
+      const triangles = []; forEachUVTriangle(part, (uv,a,b,c,id) => triangles.push(id));
+      return triangles.length === 1 && triangles[0] === 1
+        && part.geometry.getAttribute('uv') === source.geometry.getAttribute('uv');
+    }''')
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()') != outlines
+    rows.nth(2).click()
+    assert 'No UV data' in uv.inner_text()
+    assert uv.locator('.inspector-uv-stage').is_hidden()
+    rows.nth(3).click()
+    assert 'outside the 0–1' in uv.inner_text()
+    assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.width > canvas.height')
+    old = page.locator('.inspector-uv-outlines').element_handle()
+    uv.locator('summary').click()
+    page.wait_for_function('canvas => canvas.width === 1', arg=old)
+    assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
+    assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+
+
 def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):
     payload = model_payload(2)
     mesh = payload['meshes']['mesh-00']

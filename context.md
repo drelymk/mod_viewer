@@ -419,6 +419,9 @@ of documentation, comments and tests; use portable fixtures instead.
   including after isolation; changing the selection permits another isolation.
   Isolation is viewer visibility and is independent of `edit_mesh`; keep the
   gate on geometry editing and preview history.
+  UV inspection is read-only and independent of `edit_mesh`: read the live
+  geometry/draw range and authored part ordinals only when expanded, reuse the
+  current diffuse publication and DDS preview, and update face highlights alone.
   Face rectangles project each drawn triangle once and select through; do not
   raycast per candidate triangle. Click picking may select the nearest face or
   through all faces, retaining index-buffer ordinals across nonzero draw ranges.

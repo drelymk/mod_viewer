@@ -6,7 +6,7 @@ import { loadDDSTexture } from './dds-loader.js';
 const PREVIEW_SIZE = 256;
 let previewQueue = Promise.resolve();
 
-async function renderPreview(canvas, url, isCurrent) {
+async function renderPreview(canvas, url, isCurrent, { size = PREVIEW_SIZE, preserveAspect = false }) {
   if (!isCurrent()) return;
   const { renderer, rendererReady } = await import('../scene/scene.js');
   if (!(await rendererReady)) throw new Error('DDS preview renderer unavailable');
@@ -29,7 +29,12 @@ async function renderPreview(canvas, url, isCurrent) {
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
     camera.position.z = 1;
     const largest = Math.max(width, height);
-    geometry = new THREE.PlaneGeometry((2 * width) / largest, (2 * height) / largest);
+    const outputWidth = preserveAspect ? Math.max(1, Math.round((size * width) / largest)) : size;
+    const outputHeight = preserveAspect ? Math.max(1, Math.round((size * height) / largest)) : size;
+    geometry = new THREE.PlaneGeometry(
+      preserveAspect ? 2 : (2 * width) / largest,
+      preserveAspect ? 2 : (2 * height) / largest,
+    );
     material = new THREE.MeshBasicMaterial({
       map: texture,
       transparent: true,
@@ -39,7 +44,7 @@ async function renderPreview(canvas, url, isCurrent) {
       toneMapped: false,
     });
     scene.add(new THREE.Mesh(geometry, material));
-    target = new THREE.RenderTarget(PREVIEW_SIZE, PREVIEW_SIZE, {
+    target = new THREE.RenderTarget(outputWidth, outputHeight, {
       depthBuffer: false,
       stencilBuffer: false,
       colorSpace: THREE.SRGBColorSpace,
@@ -55,13 +60,13 @@ async function renderPreview(canvas, url, isCurrent) {
     } finally {
       THREE.RendererUtils.restoreRendererState(renderer, state);
     }
-    const pixels = await renderer.readRenderTargetPixelsAsync(target, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
+    const pixels = await renderer.readRenderTargetPixelsAsync(target, 0, 0, outputWidth, outputHeight);
     if (!isCurrent()) return;
-    canvas.width = PREVIEW_SIZE;
-    canvas.height = PREVIEW_SIZE;
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('DDS preview canvas unavailable');
-    context.putImageData(new ImageData(new Uint8ClampedArray(pixels), PREVIEW_SIZE, PREVIEW_SIZE), 0, 0);
+    context.putImageData(new ImageData(new Uint8ClampedArray(pixels), outputWidth, outputHeight), 0, 0);
     canvas.dataset.previewReady = 'true';
   } finally {
     target?.dispose();
@@ -71,10 +76,10 @@ async function renderPreview(canvas, url, isCurrent) {
   }
 }
 
-export function renderDDSPreview(canvas, url, isCurrent = () => canvas.isConnected) {
+export function renderDDSPreview(canvas, url, isCurrent = () => canvas.isConnected, options = {}) {
   // One preview at a time bounds uploads and gives panel rebuilds a chance to
   // cancel queued work before any source bytes are fetched.
-  const pending = previewQueue.then(() => renderPreview(canvas, url, isCurrent));
+  const pending = previewQueue.then(() => renderPreview(canvas, url, isCurrent, options));
   previewQueue = pending.catch(() => {});
   return pending;
 }

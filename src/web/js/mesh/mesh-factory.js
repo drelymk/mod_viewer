@@ -254,6 +254,12 @@ export function hasTexture(key) {
   return !!(splitTextureKey(key) && registry[key] && !failedTextures.has(key));
 }
 
+/** Published source for on-demand inspection, including in-place texture reloads. */
+export function getTexturePreviewSource(key) {
+  const uri = registry[key];
+  return uri ? (reloadTokens.has(key) ? reloadUri(uri, reloadTokens.get(key)) : uri) : null;
+}
+
 function trackTextureUser(mesh, key) {
   let users = textureUsers.get(key);
   if (!users) {
@@ -303,7 +309,7 @@ function handleTextureError(key, texture, uri) {
   window.dispatchEvent(new CustomEvent('mod-viewer-texture-load-error', { detail: { key } }));
 }
 
-function isDDSUri(uri) {
+export function isDDSUri(uri) {
   return typeof uri === 'string' && /\.dds(?:[?#]|$)/i.test(uri);
 }
 
