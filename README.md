@@ -47,10 +47,12 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    restores visibility from the current controls. Right-click a mesh row or the
    mesh in the viewport and choose `Rename` to change its viewer name; press
    Enter to confirm or Escape to cancel.
-3. Click a mesh row or the model to select a mesh. Ctrl-click toggles meshes in
-   the selection, and Ctrl-drag in the viewport adds meshes crossing the selection
-   rectangle. Double-click a mesh row or the model to frame it and open
-   `Inspector`. Press `F` to frame the selection or `H` to toggle its visibility.
+3. Click a mesh row or the model to select a mesh. Shift-click selects a range of
+   expanded rows in MESHES; Ctrl+Shift-click adds that range to the selection.
+   Ctrl-click toggles meshes in the selection, and Ctrl-drag in the viewport adds
+   meshes crossing the selection rectangle. Double-click a mesh row or the model
+   to frame it and open `Inspector`. Press `F` to frame the selection or `H` to
+   toggle its visibility.
 4. Select a component or mesh and open `Inspector` on the right. Choose a
    material kind under `Material`, or leave it on `Auto`. For a selected mesh,
    choose a texture, `Automatic`, or `None` under `Texture`. Use
@@ -170,25 +172,34 @@ Mesh editing is optional and may be hidden in portable builds. It requires a
 writable mod folder and supported authored draws; archive previews and original
 Assets cannot be edited this way.
 
-1. Right-click a mesh row or the mesh in the viewport and choose a separation
-   method:
+1. Select a mesh and use the edit icons to the left of the eye in the Inspector
+   header, or right-click a mesh row or the mesh in the viewport, and choose a
+   separation method. Hover an icon for its action name or disabled reason:
 
    - `Separate by Loose Parts`: adjust `Connection tolerance` from 0 to 0.01
      and click `Separate`. Zero uses exact vertex positions; a small tolerance
      can connect nearby positions into the same part.
    - `Separate by Selection`: click faces to select them, Ctrl-click to add or
      remove faces, or Ctrl-drag to add faces crossing a rectangle. Leave at
-     least one face unselected, then right-click and choose `Apply Selection`.
-     `Cancel Selection` or Escape exits face selection without splitting.
+     least one face unselected, then choose `Apply Selection`. Inspector also
+     provides `Select Connected Faces` and `Invert Selection`. Selection starts
+     with visible faces only; enable `Select through` to include faces behind
+     other faces. `Cancel Selection` or Escape exits without splitting.
 
-2. Inspect the resulting part rows and use their visibility buttons to isolate
-   them. To combine parts, Ctrl-select two or more parts from the same original
-   mesh, right-click one, and choose `Merge Meshes`. Parts from different source
-   meshes cannot be merged.
-3. When the layout is ready, right-click its component header in `Meshes` and
-   choose `Apply Mesh Changes`. This stages the new draw ranges and index-buffer
-   layout in memory, then reloads the preview. To abandon an unapplied layout,
-   use `Cancel Mesh Changes` from that component menu.
+2. Right-click a mesh in the viewport or MESHES panel and use `Isolate Selected`
+   to inspect selected meshes or parts, then use `Restore Visibility` in the
+   same menu to return to the previous visibility state. To combine
+   parts, Ctrl-click or Shift-click two or more parts from the same original
+   mesh and choose `Merge Meshes`. Parts from different sources cannot be merged.
+   Undo/Redo icons beside the component's `Edited` badge restore recent preview
+   layouts and face selections. Ctrl+Z undoes and Ctrl+Y redoes; text inputs keep
+   their normal editing shortcuts. History is cleared when changes are applied,
+   canceled, or the model is reloaded.
+3. Inspector shows part, mesh-selection and face-selection counts, plus preview
+   or staged status. Select the component and choose `Apply Mesh Changes` in
+   its Inspector header or context menu to stage the new draw ranges and
+   index-buffer layout in memory and reload the preview. `Cancel Mesh Changes` abandons the
+   unapplied layout.
 4. Check the reloaded parts, then click `Export` to write the staged buffer and
    INI changes with backups. Apply or cancel the current layout before starting
    another mesh edit; unapplied layouts block Export.

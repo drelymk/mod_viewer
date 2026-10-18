@@ -48,7 +48,7 @@ export function normalizeLoosePartTolerance(value) {
 }
 
 /** Find triangle ordinals for each connected island. */
-function findLoosePartGroups(mesh, { tolerance = 0 } = {}) {
+export function findLoosePartGroups(mesh, { tolerance = 0 } = {}) {
   const geometry = mesh?.geometry;
   const index = geometry?.index;
   const position = geometry?.getAttribute?.('position') || geometry?.attributes?.position;
@@ -120,8 +120,6 @@ function findLoosePartGroups(mesh, { tolerance = 0 } = {}) {
     }
     group.triangles.push(triangle);
   }
-  if (groups.size <= 1) return [];
-
   return [...groups.values()];
 }
 
@@ -242,6 +240,40 @@ export function separateLooseParts(source, { label = null, tolerance = 0 } = {})
 
 export function getLooseParts(mesh) {
   return mesh?.userData?.looseParts || [];
+}
+
+/** History retains triangle membership and viewer state, never copied vertex buffers. */
+export function snapshotLooseParts(source) {
+  return getLooseParts(source).map((part) => ({
+    triangles: [...part.userData.loosePartTriangles],
+    label: part.userData.loosePartLabel,
+    visible: part.visible,
+    manualVisible: part.userData.manualVisible,
+    manuallyToggled: part.userData.manuallyToggled,
+    position: part.position.toArray(),
+    quaternion: part.quaternion.toArray(),
+    scale: part.scale.toArray(),
+  }));
+}
+
+export function restoreLooseParts(source, snapshot) {
+  clearLooseParts(source);
+  if (!snapshot.length) return;
+  source.userData.loosePartDrawRange = { ...source.geometry.drawRange };
+  source.geometry.setDrawRange(0, 0);
+  source.userData.looseParts = snapshot.map((state, index) => {
+    const part = createLoosePart(source, state.triangles, { index });
+    part.position.fromArray(state.position);
+    part.quaternion.fromArray(state.quaternion);
+    part.scale.fromArray(state.scale);
+    part.visible = state.visible;
+    Object.assign(part.userData, {
+      loosePartLabel: state.label,
+      manualVisible: state.manualVisible,
+      manuallyToggled: state.manuallyToggled,
+    });
+    return part;
+  });
 }
 
 export function isLoosePart(mesh) {

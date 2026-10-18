@@ -89,6 +89,7 @@ export async function refreshPendingState(path = viewerState.currentModPath, gua
       : blocked
         ? t('errors.exportBlocked', { detail: t('model.unwiredToggleDetail') })
         : '';
+  window.dispatchEvent(new CustomEvent('mod-viewer-pending-state-changed'));
 }
 
 window.addEventListener('mod-viewer-mesh-edit-state', () => {

@@ -1284,20 +1284,64 @@ def test_loose_partition_merge_and_cleanup_preserve_authored_triangle_identity(m
       const originalRange = {...source.geometry.drawRange};
       const partition = parts.separateLooseParts(source);
       const other = parts.separateLooseParts(sibling);
+      partition[0].userData.loosePartLabel = 'part-01';
+      partition[0].visible = false;
+      partition[0].userData.manualVisible = false;
+      partition[0].position.set(1, 2, 3);
+      const snapshot = parts.snapshotLooseParts(source);
       const initial = partition.map(part => part.userData.loosePartTriangles);
       const shared = partition.every(part => part.geometry.attributes.position === position && part.material === source.material);
       const crossSource = parts.canMergeLooseParts([partition[0], other[0]]);
       parts.mergeLooseParts([partition[2], partition[0]]);
       const merged = parts.getLooseParts(source).map(part => part.userData.loosePartTriangles);
+      parts.restoreLooseParts(source, snapshot);
+      const restoredParts = parts.getLooseParts(source);
+      const restoredSnapshot = JSON.stringify(parts.snapshotLooseParts(source)) === JSON.stringify(snapshot);
+      const restoredShared = restoredParts.every(part => part.geometry.attributes.position === position && part.material === source.material);
       parts.clearLooseParts(source);
       parts.clearLooseParts(sibling);
-      return {initial, shared, crossSource, merged, clean: parts.getLooseParts(source).length === 0,
+      return {initial, shared, crossSource, merged, restoredSnapshot, restoredShared, clean: parts.getLooseParts(source).length === 0,
         restored: source.geometry.index === index && source.geometry.drawRange.count === originalRange.count};
     }""")
     assert result['initial'] == [[0], [1], [2]]
     assert result['shared'] and result['restored'] and result['clean']
+    assert result['restoredSnapshot'] and result['restoredShared']
     assert result['crossSource'] is False
     assert sorted(result['merged']) == [[0, 2], [1]]
+
+
+def test_face_rectangle_visible_only_and_through_respect_occlusion(module_page):
+    result = module_page.evaluate("""async () => {
+      const THREE = await import('three/webgpu');
+      const picking = await import('./js/scene/model-picking.js');
+      const parts = await import('./js/mesh/loose-parts.js');
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+        -0.8,-0.8,0, 0.8,-0.8,0, 0,0.8,0,
+        -0.8,-0.8,-1, 0.8,-0.8,-1, 0,0.8,-1], 3));
+      geometry.setIndex([0,1,2,3,4,5]);
+      const material = new THREE.MeshBasicNodeMaterial({side: THREE.DoubleSide});
+      const mesh = new THREE.Mesh(geometry, material);
+      const camera = new THREE.OrthographicCamera(-2,2,2,-2,0.1,10);
+      camera.position.z = 5; camera.lookAt(0,0,0); camera.updateMatrixWorld(true);
+      const canvas = {getBoundingClientRect: () => ({left:0, top:0, width:400, height:400})};
+      const options = {mesh, camera, canvas, selectionRect:{left:120, top:120, right:280, bottom:280}};
+      const through = picking.trianglesInClientRect(options);
+      const visible = picking.trianglesInClientRect({...options, selectThrough:false});
+      const hits = picking.raycastModelHitsAtClientPoint({clientX:200, clientY:200, camera, canvas, meshes:[mesh]});
+      const clickFaces = hits.map(hit => picking.authoredTriangleOrdinal(hit.object, hit.faceIndex));
+      const blocker = new THREE.Mesh(geometry, material);
+      blocker.position.z = 1; blocker.updateMatrixWorld(true);
+      const blocked = picking.trianglesInClientRect({...options, selectThrough:false, occluders:[mesh, blocker]});
+      blocker.visible = false;
+      const hiddenBlocker = picking.trianglesInClientRect({...options, selectThrough:false, occluders:[mesh, blocker]});
+      const split = parts.separateSelectedTriangles(mesh, [1]);
+      const part = picking.trianglesInClientRect({...options, mesh:split.selected, selectThrough:true});
+      parts.clearLooseParts(mesh);
+      return {through, visible, clickFaces, blocked, hiddenBlocker, part};
+    }""")
+    assert result == {'through': [0, 1], 'visible': [0], 'clickFaces': [0, 1],
+                      'blocked': [], 'hiddenBlocker': [0], 'part': [1]}
 
 
 def test_weight_selection_keeps_equal_bone_ids_scoped_to_exact_sources(module_page):

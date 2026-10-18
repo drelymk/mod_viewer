@@ -384,10 +384,11 @@ of documentation, comments and tests; use portable fixtures instead.
   and Controls owns Present/Toggle/Menu. Group Meshes/Toggles by subfolder, root
   INI stem or None for a single INI; retain source INI rows. Selection is an
   event-driven set with one primary Inspector target: plain click replaces,
-  Ctrl-click toggles and Ctrl-drag additively selects visible geometry crossing
-  the viewport rectangle. Rig picking/dragging owns its gestures and must block
-  view selection. Visibility, reset, refresh and texture mutations publish shared
-  state notifications so Inspector and rendering stay synchronized.
+  Shift-click selects a range of expanded MESHES rows; Ctrl+Shift-click adds the
+  range. Ctrl-click toggles and Ctrl-drag additively selects visible geometry
+  crossing the viewport rectangle. Rig picking/dragging owns its gestures and
+  must block view selection. Visibility, reset, refresh and texture mutations
+  publish shared state notifications so Inspector and rendering stay synchronized.
 - Loose-part separation is transient viewer state. Detect connected triangle
   islands from exact positions or a bounded user tolerance, retain original
   triangle ordinals, share the semantic source's attributes/material/state, and
@@ -395,6 +396,18 @@ of documentation, comments and tests; use portable fixtures instead.
   only for selected siblings from one source and preserves their stable source
   order. Clearing/disposal restores the source draw range and selection safely;
   only explicit Apply enters the staged mesh-edit path.
+  Inspector and context menus share edit-action availability. Preview history
+  retains bounded triangle partitions and face selections, shares authored
+  vertex buffers, and ends on apply/cancel/reload. Isolation restores prior
+  visibility and manual flags. New edit controls follow the `edit_mesh` UI gate;
+  feature hiding never replaces backend validation or the Export boundary.
+  Component MESHES headers own preview Undo/Redo icons beside Edited; Ctrl+Z/Y
+  use the same history and must defer to text editors, dialogs, and rig gestures.
+  Apply/Cancel Mesh Changes belong to component inspection and context menus,
+  never individual mesh inspection.
+  Inspector edit actions are header icons before the mesh visibility eye;
+  Isolate Selected/Restore Visibility belong to the shared viewport/MESHES
+  mesh context menu. Preserve their common availability and `edit_mesh` gate.
 - Tabs, panel collapse and library expansion live only in localStorage and
   cannot affect mod state, geometry, materials or Export. Global panel opacity
   and environment/tool preferences belong to app config under the persistence
