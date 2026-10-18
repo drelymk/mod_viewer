@@ -11,6 +11,7 @@ import {
 import { syncMeshColorAdjustment } from './mesh-color-session.js';
 import { getMeshView } from './mesh-view-bindings.js';
 import { loadDDSTexture, reloadDDSTexture } from '../textures/dds-loader.js';
+import { clearDDSPreviews } from '../textures/dds-preview.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { splitTextureKey } from '../textures/texture-key.js';
 import { CHARACTER_AO_LAYER } from '../scene/viewer-layers.js';
@@ -32,6 +33,7 @@ function disposeTexture(texture) {
 }
 
 export function setTextures(textures) {
+  clearDDSPreviews();
   registry = {};
   for (const [key, uri] of Object.entries(textures || {})) {
     if (splitTextureKey(key)) registry[key] = uri;
@@ -51,6 +53,8 @@ export function setTextures(textures) {
  * web/js/panels/mesh-panel.js). View-only/session-scoped: never reaches the ini. */
 export function addTexture(key, uri) {
   if (!splitTextureKey(key)) return false;
+  const previousSource = getTexturePreviewSource(key);
+  if (previousSource) clearDDSPreviews(previousSource);
   registry[key] = uri;
   disposeTexture(loaders[key]);
   delete loaders[key];
@@ -65,6 +69,7 @@ export function removeTextures(keys) {
   let removed = 0;
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
+    clearDDSPreviews(getTexturePreviewSource(key));
     delete registry[key];
     disposeTexture(loaders[key]);
     delete loaders[key];
@@ -220,6 +225,7 @@ export function reloadTextures(keys, { force = false } = {}) {
   const reloads = [];
   for (const key of keys || []) {
     if (!Object.hasOwn(registry, key)) continue;
+    clearDDSPreviews(getTexturePreviewSource(key));
     for (const mesh of textureUsers.get(key) || []) users.add(mesh);
     const uri = registry[key];
     const token = (reloadTokens.get(key) || 0) + 1;
@@ -258,6 +264,11 @@ export function hasTexture(key) {
 export function getTexturePreviewSource(key) {
   const uri = registry[key];
   return uri ? (reloadTokens.has(key) ? reloadUri(uri, reloadTokens.get(key)) : uri) : null;
+}
+
+/** Inspection can borrow an already uploaded texture without owning its lifetime. */
+export function getReadyTextureForPreview(key) {
+  return readyTextures.has(key) ? loaders[key] : null;
 }
 
 function trackTextureUser(mesh, key) {

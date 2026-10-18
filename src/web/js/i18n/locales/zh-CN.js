@@ -549,6 +549,8 @@ export default {
   'inspector.tintColor': '叠加色',
   'inspector.clearTint': '清除叠加色',
   'inspector.component': '组件',
+  'inspector.uvExpand': '展开 UV 视图',
+  'inspector.uvClose': '关闭展开的 UV 视图',
   'inspector.uv': 'UV',
   'inspector.noUV': '无 UV 数据',
   'inspector.uvOutside': 'UV 超出 0–1 纹理区域。',

@@ -565,6 +565,8 @@ export default {
   'inspector.tintColor': '色合い',
   'inspector.clearTint': '色合いをクリア',
   'inspector.component': 'コンポーネント',
+  'inspector.uvExpand': 'UV 表示を拡大',
+  'inspector.uvClose': '拡大 UV 表示を閉じる',
   'inspector.uv': 'UV',
   'inspector.noUV': 'UV データなし',
   'inspector.uvOutside': 'UV が 0–1 のテクスチャ領域の外に広がっています。',

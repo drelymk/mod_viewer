@@ -564,6 +564,8 @@ export default {
   'inspector.tintColor': '틴트 색상',
   'inspector.clearTint': '틴트 지우기',
   'inspector.component': '컴포넌트',
+  'inspector.uvExpand': 'UV 보기 확대',
+  'inspector.uvClose': '확대된 UV 보기 닫기',
   'inspector.uv': 'UV',
   'inspector.noUV': 'UV 데이터 없음',
   'inspector.uvOutside': 'UV가 0–1 텍스처 영역을 벗어납니다.',

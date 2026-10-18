@@ -20,6 +20,7 @@ import { createUVView } from './uv-view.js';
 const meshRecords = new WeakMap();
 let current = null;
 let uvView = null;
+let uvMesh = null;
 let uvExpanded = false;
 const $ = (id) => document.getElementById(id);
 
@@ -48,6 +49,7 @@ export function registerInspectorMesh(mesh, record) {
 function clearContent() {
   uvView?.dispose();
   uvView = null;
+  uvMesh = null;
   uvExpanded = false;
   const empty = $('inspector-empty');
   const content = $('inspector-content');
@@ -636,6 +638,7 @@ function updateColorControlState(content, mesh) {
 function buildComponent(record) {
   uvView?.dispose();
   uvView = null;
+  uvMesh = null;
   const content = showContent();
   content.replaceChildren();
   buildHeader(content, record.component || t('inspector.component'), componentContext(record), record.source || '');
@@ -646,7 +649,17 @@ function buildComponent(record) {
 }
 
 function buildMesh(mesh, record) {
-  uvView?.dispose();
+  if (uvMesh !== mesh) {
+    uvView?.dispose();
+    uvMesh = mesh;
+    uvView = createUVView(mesh, {
+      expanded: uvExpanded,
+      onExpanded: (value) => {
+        uvExpanded = value;
+      },
+      getFaceSelection,
+    });
+  }
   const content = showContent();
   content.replaceChildren();
   const source = semanticMesh(mesh);
@@ -659,16 +672,9 @@ function buildMesh(mesh, record) {
   buildAssetSection(content, source.userData.assetEntry?.asset_binding);
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
-  uvView = createUVView(mesh, {
-    expanded: uvExpanded,
-    onExpanded: (value) => {
-      uvExpanded = value;
-    },
-    getFaceSelection,
-  });
+  buildColorSection(content, source);
   content.appendChild(uvView.section);
   void uvView.sync();
-  buildColorSection(content, source);
 }
 
 function updateInspectorState() {

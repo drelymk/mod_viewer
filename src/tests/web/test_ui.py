@@ -1536,6 +1536,7 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
     rows.first.click()
     uv = page.locator('.inspector-uv-section')
     assert uv.get_attribute('open') is None
+    assert uv.evaluate('section => section.parentElement.lastElementChild === section')
     assert uv.locator('canvas').first.evaluate('canvas => canvas.width') == 300
     page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
     uv.locator('summary').click()
@@ -1567,6 +1568,34 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
     assert page.evaluate(highlighted)
     assert page.locator('.inspector-uv-texture').evaluate('canvas => canvas.toDataURL()') == unchanged
     assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.toDataURL()') == outlines
+    page.evaluate('''() => {
+      window.uvCanvas = document.querySelector('.inspector-uv-outlines');
+      const component = window.modViewer.activeMeshes[0].userData.componentDescriptor;
+      window.dispatchEvent(new CustomEvent('mod-viewer-inspector-refresh', {detail:{component,reason:'pool'}}));
+    }''')
+    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
+    uv.locator('.inspector-uv-expand').click()
+    overlay = page.locator('#canvas-container > .uv-viewport')
+    assert overlay.is_visible()
+    assert uv.is_visible()
+    assert page.evaluate("window.uvCanvas === document.querySelector('.uv-viewport .inspector-uv-outlines')")
+    assert page.evaluate('''() => {
+      const bounds = document.querySelector('.uv-viewport').getBoundingClientRect();
+      const left = document.getElementById('left-dock').getBoundingClientRect();
+      const right = document.getElementById('right-dock').getBoundingClientRect();
+      const viewport = document.getElementById('canvas-container').getBoundingClientRect();
+      return bounds.left >= left.right && bounds.right <= right.left
+        && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+    }''')
+    assert page.evaluate(highlighted)
+    page.keyboard.press('Escape')
+    assert overlay.count() == 0
+    assert page.evaluate('async () => (await import("./js/scene/selection.js")).getSelectedFaceTriangles()') == [1]
+    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
+    assert page.evaluate(pixel)[:3] == [240, 24, 24]
+    uv.locator('.inspector-uv-expand').click()
+    page.locator('.uv-viewport-close').click()
+    assert overlay.count() == 0
     page.locator('[data-mesh-edit-action="applySelection"]').click()
     assert rows.count() == 4
     assert not page.evaluate(highlighted)
@@ -1586,7 +1615,9 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
     assert page.locator('.inspector-uv-outlines').evaluate('canvas => canvas.width > canvas.height')
     old = page.locator('.inspector-uv-outlines').element_handle()
     uv.locator('summary').click()
-    page.wait_for_function('canvas => canvas.width === 1', arg=old)
+    retained_width = old.evaluate('canvas => canvas.width')
+    uv.locator('summary').click()
+    assert old.evaluate('canvas => canvas.width') == retained_width
     assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 

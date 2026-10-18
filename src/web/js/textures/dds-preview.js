@@ -4,22 +4,31 @@ import * as THREE from 'three/webgpu';
 import { loadDDSTexture } from './dds-loader.js';
 
 const PREVIEW_SIZE = 256;
+const MAX_PREVIEWS = 8;
+const previews = new Map();
 let previewQueue = Promise.resolve();
 
-async function renderPreview(canvas, url, isCurrent, { size = PREVIEW_SIZE, preserveAspect = false }) {
+async function renderPreview(
+  canvas,
+  url,
+  isCurrent,
+  { size = PREVIEW_SIZE, preserveAspect = false, texture: sharedTexture },
+) {
   if (!isCurrent()) return;
   const { renderer, rendererReady } = await import('../scene/scene.js');
   if (!(await rendererReady)) throw new Error('DDS preview renderer unavailable');
   if (!isCurrent()) return;
 
-  let texture;
+  let texture = sharedTexture;
   let geometry;
   let material;
   let target;
   try {
-    await new Promise((resolve, reject) => {
-      texture = loadDDSTexture(url, resolve, reject);
-    });
+    if (!texture) {
+      await new Promise((resolve, reject) => {
+        texture = loadDDSTexture(url, resolve, reject);
+      });
+    }
     if (!isCurrent()) return;
     texture.colorSpace = THREE.SRGBColorSpace;
     const { width, height } = texture.image;
@@ -66,20 +75,94 @@ async function renderPreview(canvas, url, isCurrent, { size = PREVIEW_SIZE, pres
     canvas.height = outputHeight;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('DDS preview canvas unavailable');
-    context.putImageData(new ImageData(new Uint8ClampedArray(pixels), outputWidth, outputHeight), 0, 0);
+    // The pinned WebGPU readback retains 256-byte row alignment (except the last row).
+    const rowBytes = outputWidth * 4;
+    const stride = Math.ceil(rowBytes / 256) * 256;
+    const image = new ImageData(outputWidth, outputHeight);
+    for (let y = 0; y < outputHeight; y += 1) {
+      image.data.set(pixels.subarray(y * stride, y * stride + rowBytes), y * rowBytes);
+    }
+    context.putImageData(image, 0, 0);
     canvas.dataset.previewReady = 'true';
   } finally {
     target?.dispose();
     material?.dispose();
     geometry?.dispose();
-    texture?.dispose();
+    if (!sharedTexture) texture?.dispose();
+  }
+}
+
+/** Clear only previews whose published source has changed, or the entire model lifetime. */
+export function clearDDSPreviews(url = null) {
+  for (const [key, entry] of previews) {
+    if (url !== null && entry.url !== url) continue;
+    entry.invalid = true;
+    previews.delete(key);
+  }
+}
+
+/** Bounded, shared Canvas results. Pending consumers share one upload/readback. */
+export async function getDDSPreview(url, isCurrent, options = {}) {
+  if (!isCurrent()) return null;
+  const size = Math.max(1, Math.min(2048, Math.round(options.size || PREVIEW_SIZE)));
+  const preserveAspect = options.preserveAspect === true;
+  let key = JSON.stringify([url, size, preserveAspect]);
+  let entry = previews.get(key);
+  if (!entry) {
+    for (const [candidateKey, candidate] of previews) {
+      if (
+        candidate.url === url &&
+        candidate.preserveAspect === preserveAspect &&
+        candidate.size >= size &&
+        (!entry || candidate.size < entry.size)
+      ) {
+        key = candidateKey;
+        entry = candidate;
+      }
+    }
+  }
+  if (!entry) {
+    entry = { url, size, preserveAspect, consumers: new Set(), invalid: false, complete: false };
+    const current = () => !entry.invalid && [...entry.consumers].some((consumer) => consumer());
+    const canvas = document.createElement('canvas');
+    entry.pending = previewQueue.then(async () => {
+      await renderPreview(canvas, url, current, { ...options, size, preserveAspect });
+      return canvas.dataset.previewReady === 'true' && !entry.invalid ? canvas : null;
+    });
+    previewQueue = entry.pending.catch(() => {});
+    previews.set(key, entry);
+    entry.pending.then(
+      (result) => {
+        entry.complete = true;
+        if (!result && previews.get(key) === entry) previews.delete(key);
+        for (const [oldKey, old] of previews) {
+          if (previews.size <= MAX_PREVIEWS) break;
+          if (old.complete) previews.delete(oldKey);
+        }
+      },
+      () => {
+        if (previews.get(key) === entry) previews.delete(key);
+      },
+    );
+  } else {
+    previews.delete(key);
+    previews.set(key, entry);
+  }
+  entry.consumers.add(isCurrent);
+  try {
+    const result = await entry.pending;
+    return isCurrent() && !entry.invalid ? result : null;
+  } finally {
+    entry.consumers.delete(isCurrent);
   }
 }
 
 export function renderDDSPreview(canvas, url, isCurrent = () => canvas.isConnected, options = {}) {
-  // One preview at a time bounds uploads and gives panel rebuilds a chance to
-  // cancel queued work before any source bytes are fetched.
-  const pending = previewQueue.then(() => renderPreview(canvas, url, isCurrent, options));
-  previewQueue = pending.catch(() => {});
-  return pending;
+  return getDDSPreview(url, isCurrent, options).then((preview) => {
+    if (!preview || !isCurrent()) return;
+    canvas.width = preview.width;
+    canvas.height = preview.height;
+    canvas.getContext('2d').drawImage(preview, 0, 0);
+    canvas.dataset.previewReady = 'true';
+  });
 }

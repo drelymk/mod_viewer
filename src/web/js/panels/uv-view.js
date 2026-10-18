@@ -1,54 +1,106 @@
 // Read-only Canvas inspection of the existing geometry and published diffuse.
 
-import { getTexturePreviewSource, isDDSUri } from '../mesh/mesh-factory.js';
+import { getTexturePreviewSource, getReadyTextureForPreview, isDDSUri } from '../mesh/mesh-factory.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
-import { authoredTriangleOrdinal } from '../scene/model-picking.js';
-import { renderDDSPreview } from '../textures/dds-preview.js';
+import { getDDSPreview } from '../textures/dds-preview.js';
+import { createIcon } from '../ui/ui-icons.js';
 import { t } from '../i18n/index.js';
 
-const SIZE = 768;
-
-/** Visit drawn triangles without retaining a second copy of the UV/index buffers. */
-export function forEachUVTriangle(mesh, visit) {
+function triangleRange(mesh) {
   const geometry = mesh.geometry;
   const uv = geometry.getAttribute('uv');
-  if (!uv) return;
   const index = geometry.index;
-  const count = index ? index.count : uv.count;
   const start = Math.max(0, geometry.drawRange.start);
-  const end = Math.min(count, start + geometry.drawRange.count);
-  for (let offset = Math.ceil(start / 3) * 3; offset + 2 < end; offset += 3) {
-    const triangle = authoredTriangleOrdinal(mesh, offset / 3);
-    if (triangle === null) continue;
-    const a = index ? index.getX(offset) : offset;
-    const b = index ? index.getX(offset + 1) : offset + 1;
-    const c = index ? index.getX(offset + 2) : offset + 2;
-    if (a < 0 || b < 0 || c < 0 || a >= uv.count || b >= uv.count || c >= uv.count) continue;
-    if (
-      !Number.isFinite(uv.getX(a)) ||
-      !Number.isFinite(uv.getY(a)) ||
-      !Number.isFinite(uv.getX(b)) ||
-      !Number.isFinite(uv.getY(b)) ||
-      !Number.isFinite(uv.getX(c)) ||
-      !Number.isFinite(uv.getY(c))
-    )
-      continue;
-    visit(uv, a, b, c, triangle);
+  const end = Math.min(index ? index.count : uv?.count || 0, start + geometry.drawRange.count);
+  return { uv, index, start, end, membership: mesh.userData.loosePartTriangles };
+}
+
+function visitTriangle(range, offset, visit) {
+  const { uv, index, membership } = range;
+  const id = membership ? membership[offset / 3] : offset / 3;
+  if (!Number.isInteger(id) || id < 0) return;
+  const a = index ? index.getX(offset) : offset;
+  const b = index ? index.getX(offset + 1) : offset + 1;
+  const c = index ? index.getX(offset + 2) : offset + 2;
+  if (a < 0 || b < 0 || c < 0 || a >= uv.count || b >= uv.count || c >= uv.count) return;
+  if (
+    !Number.isFinite(uv.getX(a)) ||
+    !Number.isFinite(uv.getY(a)) ||
+    !Number.isFinite(uv.getX(b)) ||
+    !Number.isFinite(uv.getY(b)) ||
+    !Number.isFinite(uv.getX(c)) ||
+    !Number.isFinite(uv.getY(c))
+  )
+    return;
+  visit(uv, a, b, c, id, offset);
+}
+
+/** Visit drawn triangles without recalculating their draw range per triangle. */
+export function forEachUVTriangle(mesh, visit) {
+  const range = triangleRange(mesh);
+  if (!range.uv) return;
+  for (let offset = Math.ceil(range.start / 3) * 3; offset + 2 < range.end; offset += 3) {
+    visitTriangle(range, offset, visit);
   }
 }
 
-export function createUVView(mesh, { expanded = false, onExpanded, getFaceSelection }) {
+function addTriangle(path, uv, a, b, c) {
+  path.moveTo(uv.getX(a), 1 - uv.getY(a));
+  path.lineTo(uv.getX(b), 1 - uv.getY(b));
+  path.lineTo(uv.getX(c), 1 - uv.getY(c));
+  path.closePath();
+}
+
+function buildDisplay(mesh) {
+  const range = triangleRange(mesh);
+  const path = new Path2D();
+  const offsets = range.membership ? new Map() : null;
+  const bounds = { minU: 0, minV: 0, maxU: 1, maxV: 1 };
+  let commands = '';
+  forEachUVTriangle(mesh, (uv, a, b, c, id, offset) => {
+    const uA = uv.getX(a),
+      vA = uv.getY(a);
+    const uB = uv.getX(b),
+      vB = uv.getY(b);
+    const uC = uv.getX(c),
+      vC = uv.getY(c);
+    // Batch native path construction; keep only a bounded temporary command string.
+    commands += `M${uA} ${1 - vA}L${uB} ${1 - vB}L${uC} ${1 - vC}Z`;
+    if (commands.length >= 65536) {
+      path.addPath(new Path2D(commands));
+      commands = '';
+    }
+    offsets?.set(id, offset);
+    bounds.minU = Math.min(bounds.minU, uA, uB, uC);
+    bounds.maxU = Math.max(bounds.maxU, uA, uB, uC);
+    bounds.minV = Math.min(bounds.minV, vA, vB, vC);
+    bounds.maxV = Math.max(bounds.maxV, vA, vB, vC);
+  });
+  if (commands) path.addPath(new Path2D(commands));
+  return { ...range, path, offsets, bounds, uvVersion: range.uv.version, indexVersion: range.index?.version };
+}
+
+export function createUVView(mesh, { expanded = false, onExpanded = () => {}, getFaceSelection }) {
   const source = getLoosePartSource(mesh) || mesh;
   const section = document.createElement('details');
   section.className = 'inspector-section inspector-uv-section';
   section.open = expanded;
   const summary = document.createElement('summary');
   summary.className = 'inspector-section-title';
-  summary.textContent = t('inspector.uv');
+  const label = document.createElement('span');
+  const expand = document.createElement('button');
+  expand.type = 'button';
+  expand.className = 'icon-btn inspector-uv-expand';
+  expand.disabled = !mesh.geometry.getAttribute('uv');
+  expand.appendChild(createIcon('expand'));
+  const chevron = createIcon('chevron-down');
+  chevron.classList.add('inspector-uv-chevron');
+  summary.append(chevron, label, expand);
+  const inline = document.createElement('div');
+  inline.className = 'inspector-uv-inline';
   const stage = document.createElement('div');
   stage.className = 'inspector-uv-stage';
   stage.setAttribute('role', 'img');
-  stage.setAttribute('aria-label', t('inspector.uv'));
   const layers = ['texture', 'outlines', 'highlight'].map((name) => {
     const canvas = document.createElement('canvas');
     canvas.className = `inspector-uv-${name}`;
@@ -61,77 +113,79 @@ export function createUVView(mesh, { expanded = false, onExpanded, getFaceSelect
   status.setAttribute('role', 'status');
   const warning = document.createElement('div');
   warning.className = 'inspector-muted inspector-uv-warning';
-  section.append(summary, stage, status, warning);
+  inline.append(stage);
+  section.append(summary, inline, status, warning);
   let disposed = false;
   let generation = 0;
   let textureSource;
   let image = null;
-  let bounds = null;
+  let pendingImage = null;
+  let display = null;
   let transform = null;
+  let overlay = null;
+  let overlayBody = null;
+  let statusKey = '';
+
+  function syncLabels() {
+    label.textContent = t('inspector.uv');
+    stage.setAttribute('aria-label', label.textContent);
+    expand.title = t(overlay ? 'inspector.uvClose' : 'inspector.uvExpand');
+    expand.setAttribute('aria-label', expand.title);
+    expand.setAttribute('aria-pressed', String(!!overlay));
+    const close = overlay?.querySelector('.uv-viewport-close');
+    if (close) {
+      close.title = t('inspector.uvClose');
+      close.setAttribute('aria-label', close.title);
+    }
+    status.textContent = statusKey ? t(statusKey) : '';
+    const b = display?.bounds;
+    warning.textContent = b && (b.minU < 0 || b.minV < 0 || b.maxU > 1 || b.maxV > 1) ? t('inspector.uvOutside') : '';
+  }
 
   function releaseImage() {
-    if (!image) return;
+    if (pendingImage) {
+      pendingImage.onload = pendingImage.onerror = null;
+      pendingImage.src = '';
+      pendingImage = null;
+    }
     if (image instanceof HTMLImageElement) {
       image.onload = image.onerror = null;
       image.src = '';
-    } else {
-      image.width = image.height = 1;
     }
+    // DDS canvases belong to the bounded shared preview cache.
     image = null;
   }
 
-  function release() {
-    generation += 1;
-    textureLayer.dataset.previewReady = 'false';
-    textureSource = undefined;
-    bounds = transform = null;
-    releaseImage();
-    layers.forEach((canvas) => {
-      canvas.width = canvas.height = 1;
-    });
-  }
-
-  function drawTriangles(canvas, selected = null) {
+  function stroke(canvas, path, color, lineWidth) {
     const context = canvas.getContext('2d');
     context.clearRect(0, 0, canvas.width, canvas.height);
-    if (!transform || (selected && !selected.size)) return;
+    const scaled = new Path2D();
     const { x, y, width, height } = transform;
-    context.beginPath();
-    forEachUVTriangle(mesh, (uv, a, b, c, triangle) => {
-      if (selected && !selected.has(triangle)) return;
-      context.moveTo(x + uv.getX(a) * width, y + (1 - uv.getY(a)) * height);
-      context.lineTo(x + uv.getX(b) * width, y + (1 - uv.getY(b)) * height);
-      context.lineTo(x + uv.getX(c) * width, y + (1 - uv.getY(c)) * height);
-      context.closePath();
-    });
-    context.strokeStyle = selected ? '#ffdf5d' : '#72d8ff';
-    context.lineWidth = selected ? 2.5 : 1;
-    context.stroke();
+    scaled.addPath(path, new DOMMatrix([width, 0, 0, height, x, y]));
+    context.strokeStyle = color;
+    context.lineWidth = lineWidth;
+    context.stroke(scaled);
   }
 
   function syncSelection() {
-    if (disposed || !section.open || !transform) return;
+    if (disposed || !section.open || !transform || !display) return;
+    const path = new Path2D();
     const face = getFaceSelection();
-    drawTriangles(highlight, face?.source === source ? face.triangles : new Set());
+    if (face?.source === source) {
+      for (const id of face.triangles) {
+        const offset = display.offsets ? display.offsets.get(id) : id * 3;
+        if (!Number.isInteger(offset) || offset < display.start || offset + 2 >= display.end) continue;
+        visitTriangle(display, offset, (uv, a, b, c) => addTriangle(path, uv, a, b, c));
+      }
+    }
+    stroke(highlight, path, '#ffdf5d', 2.5);
   }
 
-  function draw() {
-    const aspect = image ? (image.naturalWidth || image.width) / (image.naturalHeight || image.height) : 1;
-    const spanU = bounds.maxU - bounds.minU;
-    const spanV = bounds.maxV - bounds.minV;
-    const scale = (SIZE - 24) / Math.max(spanU * aspect, spanV);
-    const width = scale * aspect;
-    const height = scale;
-    const outputWidth = Math.max(1, Math.ceil(spanU * width + 24));
-    const outputHeight = Math.max(1, Math.ceil(spanV * height + 24));
-    transform = { x: 12 - bounds.minU * width, y: 12 + (bounds.maxV - 1) * height, width, height };
-    layers.forEach((canvas) => {
-      canvas.width = outputWidth;
-      canvas.height = outputHeight;
-    });
-    stage.style.aspectRatio = `${outputWidth} / ${outputHeight}`;
-    const { x, y } = transform;
+  function drawBackground() {
+    if (!transform || !section.open) return;
+    const { x, y, width, height } = transform;
     const context = textureLayer.getContext('2d');
+    context.clearRect(0, 0, textureLayer.width, textureLayer.height);
     if (image) context.drawImage(image, x, y, width, height);
     else {
       context.fillStyle = '#353b45';
@@ -139,77 +193,210 @@ export function createUVView(mesh, { expanded = false, onExpanded, getFaceSelect
     }
     context.strokeStyle = '#939ba7';
     context.strokeRect(x, y, width, height);
-    drawTriangles(outlines);
+  }
+
+  function layout() {
+    if (disposed || !section.open || !display || !section.isConnected) return false;
+    const host = overlayBody || inline;
+    const availableWidth = host.clientWidth || 280;
+    const availableHeight = overlayBody ? host.clientHeight : Infinity;
+    const aspect = image ? (image.naturalWidth || image.width) / (image.naturalHeight || image.height) : 1;
+    const { minU, minV, maxU, maxV } = display.bounds;
+    const spanU = maxU - minU,
+      spanV = maxV - minV;
+    const scale = Math.max(
+      Number.MIN_VALUE,
+      Math.min((availableWidth - 16) / (spanU * aspect), (availableHeight - 16) / spanV),
+    );
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = scale * aspect * dpr,
+      height = scale * dpr;
+    const outputWidth = Math.ceil(spanU * width + 16 * dpr);
+    const outputHeight = Math.ceil(spanV * height + 16 * dpr);
+    stage.style.width = `${outputWidth / dpr}px`;
+    stage.style.height = `${outputHeight / dpr}px`;
+    if (transform?.display === display && transform.width === width && transform.height === height) return false;
+    transform = { display, x: 8 * dpr - minU * width, y: 8 * dpr + (maxV - 1) * height, width, height };
+    layers.forEach((canvas) => {
+      canvas.width = outputWidth;
+      canvas.height = outputHeight;
+    });
+    stroke(outlines, display.path, '#72d8ff', 1);
+    drawBackground();
     syncSelection();
+    return true;
   }
 
   async function sync() {
-    if (disposed || !section.open || !section.isConnected) return;
-    const url = getTexturePreviewSource(source.userData.texKey);
-    if (textureSource === url && bounds) return;
-    release();
-    textureSource = url;
-    stage.hidden = !mesh.geometry.getAttribute('uv');
-    warning.textContent = '';
-    if (stage.hidden) {
-      status.textContent = t('inspector.noUV');
+    if (disposed) return;
+    syncLabels();
+    if (!section.open || !section.isConnected) return;
+    const range = triangleRange(mesh);
+    stage.hidden = !range.uv;
+    expand.disabled = !range.uv;
+    if (!range.uv) {
+      statusKey = 'inspector.noUV';
+      syncLabels();
       return;
     }
-    bounds = { minU: 0, minV: 0, maxU: 1, maxV: 1 };
-    forEachUVTriangle(mesh, (uv, a, b, c) => {
-      for (const vertex of [a, b, c]) {
-        bounds.minU = Math.min(bounds.minU, uv.getX(vertex));
-        bounds.maxU = Math.max(bounds.maxU, uv.getX(vertex));
-        bounds.minV = Math.min(bounds.minV, uv.getY(vertex));
-        bounds.maxV = Math.max(bounds.maxV, uv.getY(vertex));
-      }
-    });
-    if (bounds.minU < 0 || bounds.minV < 0 || bounds.maxU > 1 || bounds.maxV > 1) {
-      warning.textContent = t('inspector.uvOutside');
+    if (
+      !display ||
+      display.uv !== range.uv ||
+      display.index !== range.index ||
+      display.uvVersion !== range.uv.version ||
+      display.indexVersion !== range.index?.version ||
+      display.start !== range.start ||
+      display.end !== range.end ||
+      display.membership !== range.membership
+    ) {
+      display = buildDisplay(mesh);
     }
-    status.textContent = url ? t('inspector.uvLoading') : t('inspector.uvNoTexture');
-    draw();
+    const url = getTexturePreviewSource(source.userData.texKey);
+    if (textureSource === url) {
+      layout();
+      syncLabels();
+      return;
+    }
+    const token = ++generation;
+    textureSource = url;
+    releaseImage();
+    textureLayer.dataset.previewReady = 'false';
+    statusKey = url ? 'inspector.uvLoading' : 'inspector.uvNoTexture';
+    if (!layout()) drawBackground();
+    syncLabels();
     if (!url) return;
-    const token = generation;
-    const isCurrent = () => !disposed && section.open && section.isConnected && token === generation;
+    const isCurrent = () => !disposed && token === generation && section.isConnected;
     try {
+      let loaded;
       if (isDDSUri(url)) {
-        const canvas = document.createElement('canvas');
-        image = canvas;
-        await renderDDSPreview(canvas, url, isCurrent, { size: SIZE, preserveAspect: true });
+        // Expansion scales the shared thumbnail; vector outlines retain display resolution.
+        const size = Math.min(
+          512,
+          Math.ceil(((inline.clientWidth || 280) * Math.min(window.devicePixelRatio || 1, 2)) / 32) * 32,
+        );
+        loaded = await getDDSPreview(url, isCurrent, {
+          size,
+          preserveAspect: true,
+          texture: getReadyTextureForPreview(source.userData.texKey),
+        });
       } else {
         const nativeImage = new Image();
-        image = nativeImage;
-        await new Promise((resolve, reject) => {
-          nativeImage.onload = resolve;
+        pendingImage = nativeImage;
+        loaded = await new Promise((resolve, reject) => {
+          nativeImage.onload = () => resolve(nativeImage);
           nativeImage.onerror = reject;
           nativeImage.src = url;
         });
       }
       if (!isCurrent()) return;
-      status.textContent = '';
-      draw();
+      if (!loaded) {
+        textureSource = undefined;
+        return;
+      }
+      image = loaded;
+      pendingImage = null;
+      statusKey = '';
+      if (!layout()) drawBackground();
       textureLayer.dataset.previewReady = 'true';
+      syncLabels();
     } catch {
       if (!isCurrent()) return;
       releaseImage();
-      status.textContent = t('inspector.uvPreviewFailed');
+      statusKey = 'inspector.uvPreviewFailed';
+      syncLabels();
     }
   }
 
+  function positionOverlay() {
+    if (!overlay) return;
+    const viewport = overlay.parentElement.getBoundingClientRect();
+    const left = document.querySelector('#left-dock.ui-visible')?.getBoundingClientRect();
+    const right = document.querySelector('#right-dock.ui-visible')?.getBoundingClientRect();
+    overlay.style.left = `${left ? Math.max(0, left.right - viewport.left + 8) : 0}px`;
+    overlay.style.right = `${right ? Math.max(0, viewport.right - right.left + 8) : 0}px`;
+    layout();
+  }
+
+  function closeOverlay() {
+    if (!overlay) return;
+    observer.unobserve(overlayBody);
+    inline.append(stage);
+    inline.hidden = false;
+    overlay.remove();
+    overlay = overlayBody = null;
+    window.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('resize', positionOverlay);
+    window.removeEventListener('mod-viewer-right-dock-tab-changed', positionOverlay);
+    layout();
+    syncLabels();
+    if (!disposed) expand.focus({ preventScroll: true });
+  }
+
+  function onKeyDown(event) {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeOverlay();
+  }
+
+  expand.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (overlay) {
+      closeOverlay();
+      return;
+    }
+    section.open = true;
+    overlay = document.createElement('section');
+    overlay.className = 'uv-viewport';
+    overlay.setAttribute('aria-label', t('inspector.uv'));
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'icon-btn uv-viewport-close';
+    close.appendChild(createIcon('close'));
+    close.addEventListener('click', closeOverlay);
+    overlayBody = document.createElement('div');
+    overlayBody.className = 'uv-viewport-body';
+    overlayBody.append(stage);
+    overlay.append(close, overlayBody);
+    document.getElementById('canvas-container').append(overlay);
+    inline.hidden = true;
+    observer.observe(overlayBody);
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('resize', positionOverlay);
+    window.addEventListener('mod-viewer-right-dock-tab-changed', positionOverlay);
+    positionOverlay();
+    syncLabels();
+    void sync();
+    close.focus();
+  });
+  const observer = new ResizeObserver(() => {
+    if (overlay) positionOverlay();
+    else layout();
+  });
+  observer.observe(inline);
+  for (const dock of document.querySelectorAll('#left-dock, #right-dock')) observer.observe(dock);
   section.addEventListener('toggle', () => {
     if (disposed) return;
     onExpanded(section.open);
     if (section.open) void sync();
-    else release();
+    else closeOverlay();
   });
+  syncLabels();
   return {
     section,
     sync,
     syncSelection,
     dispose() {
       disposed = true;
-      release();
+      generation += 1;
+      closeOverlay();
+      observer.disconnect();
+      releaseImage();
+      display = transform = null;
+      layers.forEach((canvas) => {
+        canvas.width = canvas.height = 1;
+      });
     },
   };
 }

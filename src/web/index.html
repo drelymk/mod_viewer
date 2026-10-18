@@ -54,6 +54,8 @@
   <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7"/></symbol>
   <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
   <symbol id="icon-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+  <symbol id="icon-expand" viewBox="0 0 24 24"><path d="M9 3H3v6M15 3h6v6M21 15v6h-6M9 21H3v-6M3 3l6 6M21 3l-6 6M21 21l-6-6M3 21l6-6"/></symbol>
+  <symbol id="icon-exit-isolation" viewBox="0 0 24 24"><path d="M9 4H4v16h5M12 12h9m-4-4 4 4-4 4"/></symbol>
 </svg>
 
 <div id="toolbar">
@@ -245,7 +247,7 @@
         <button type="button" class="group-toggle" aria-expanded="true" aria-controls="mesh-list"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg></button>
         <h3 data-i18n="panels.meshes">Meshes</h3>
         <div class="panel-hdr-actions">
-          <button id="exit-isolation-btn" class="ui-button" type="button" hidden data-i18n="mesh.exitIsolation">Exit Isolation</button>
+          <button id="exit-isolation-btn" class="icon-btn" type="button" hidden title="Exit Isolation" aria-label="Exit Isolation" data-i18n-title="mesh.exitIsolation" data-i18n-aria-label="mesh.exitIsolation"><svg class="ui-icon" aria-hidden="true"><use href="#icon-exit-isolation"></use></svg></button>
           <button id="asset-fill-btn" class="icon-btn asset-fill-btn" type="button" disabled
                   title="Add original Asset components not handled by this mod."
                   data-i18n-title="mesh.addOriginalParts" aria-label="Load missing parts" data-i18n-aria-label="mesh.loadMissingParts" aria-pressed="false" data-state="load"><svg class="ui-icon" aria-hidden="true"><use href="#icon-mesh-add"></use></svg></button>

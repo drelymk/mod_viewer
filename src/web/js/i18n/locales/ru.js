@@ -566,6 +566,8 @@ export default {
   'inspector.tintColor': 'Цвет тонировки',
   'inspector.clearTint': 'Очистить оттенок',
   'inspector.component': 'Компонент',
+  'inspector.uvExpand': 'Развернуть вид UV',
+  'inspector.uvClose': 'Закрыть развёрнутый вид UV',
   'inspector.uv': 'UV',
   'inspector.noUV': 'Нет данных UV',
   'inspector.uvOutside': 'UV выходят за пределы области текстуры 0–1.',

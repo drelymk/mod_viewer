@@ -173,7 +173,11 @@ of documentation, comments and tests; use portable fixtures instead.
   and structurally valid; otherwise publication rejects them. There is no DDS
   file-byte cap. Menu DDS previews load only when visible
   and render through the shared WebGPU renderer into HTML canvases; dispose
-  preview resources and ignore stale work when the panel is rebuilt.
+  temporary GPU resources and ignore stale work when the panel is rebuilt.
+  Share at most eight completed DDS canvas previews by published URL, resolution
+  and aspect policy; invalidate changed sources and clear on model replacement.
+  Borrow ready model textures without disposing them. Preserve WebGPU readback
+  row alignment when packing display-sized previews.
 
 ## Animation reconstruction
 
@@ -420,8 +424,12 @@ of documentation, comments and tests; use portable fixtures instead.
   Isolation is viewer visibility and is independent of `edit_mesh`; keep the
   gate on geometry editing and preview history.
   UV inspection is read-only and independent of `edit_mesh`: read the live
-  geometry/draw range and authored part ordinals only when expanded, reuse the
-  current diffuse publication and DDS preview, and update face highlights alone.
+  geometry/draw range and authored part ordinals only when expanded. Retain one
+  current mesh's wireframe and resolve highlights directly from selected face
+  IDs; texture changes never rebuild that geometry. The section follows Color;
+  viewport expansion reparents the same canvases, preserves aspect and side
+  panels, and closes on Escape without cancelling face selection. Reuse the
+  current diffuse publication and DDS preview across panel rebuilds and closing.
   Face rectangles project each drawn triangle once and select through; do not
   raycast per candidate triangle. Click picking may select the nearest face or
   through all faces, retaining index-buffer ordinals across nonzero draw ranges.

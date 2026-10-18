@@ -560,6 +560,8 @@ export default {
   'inspector.tintColor': 'Tint color',
   'inspector.clearTint': 'Clear tint',
   'inspector.component': 'Component',
+  'inspector.uvExpand': 'Expand UV view',
+  'inspector.uvClose': 'Close expanded UV view',
   'inspector.uv': 'UV',
   'inspector.noUV': 'No UV data',
   'inspector.uvOutside': 'UVs extend outside the 0–1 texture region.',

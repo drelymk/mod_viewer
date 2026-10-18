@@ -34,7 +34,9 @@ def test_uv_stale_dds_preview_and_failed_preview_keep_outlines(module_page):
     module_page.route('**/js/textures/dds-preview.js', lambda route: route.fulfill(
         content_type='text/javascript', body='''
 window.uvPending = [];
-export function renderDDSPreview(canvas,url,isCurrent) {
+export function clearDDSPreviews() {}
+export function getDDSPreview(url,isCurrent) {
+  const canvas = document.createElement('canvas');
   return new Promise((resolve,reject) => window.uvPending.push({canvas,url,isCurrent,resolve,reject}));
 }
 '''))
@@ -74,6 +76,42 @@ export function renderDDSPreview(canvas,url,isCurrent) {
     assert module_page.evaluate('hasUVLines()')
     module_page.evaluate('uvCurrent.dispose()')
     assert module_page.evaluate('!uvPending[1].isCurrent() && document.querySelector("canvas").width === 1')
+
+
+def test_uv_view_retains_wireframe_and_visits_only_selected_faces(module_page):
+    result = module_page.evaluate('''async () => {
+      const T = await import('three/webgpu');
+      const {createUVView} = await import('./js/panels/uv-view.js');
+      const geometry = new T.BufferGeometry();
+      const count = 2000;
+      geometry.setAttribute('position',new T.Float32BufferAttribute(new Float32Array(count*9),3));
+      const values = new Float32Array(count*6);
+      for(let i=0;i<values.length;i+=6) values.set([0,0,1,0,0,1],i);
+      const uv = new T.Float32BufferAttribute(values,2);
+      geometry.setAttribute('uv',uv);
+      const original = uv.getX.bind(uv); let reads=0;
+      uv.getX = vertex => {reads++;return original(vertex);};
+      const mesh = new T.Mesh(geometry);
+      let face = null;
+      const view = createUVView(mesh,{expanded:true,getFaceSelection:()=>face});
+      document.body.append(view.section); await view.sync();
+      const built = reads > count;
+      reads = 0; await view.sync();
+      const stable = reads === 0;
+      for(let i=0;i<50;i++) {
+        face = {source:mesh,triangles:new Set([i])}; view.syncSelection();
+      }
+      const selectionReads = reads;
+      view.section.open = false; await new Promise(r=>requestAnimationFrame(r));
+      view.section.open = true; await view.sync();
+      const retained = reads === selectionReads;
+      geometry.setDrawRange(3,3); await view.sync();
+      const invalidated = reads > selectionReads;
+      view.dispose();
+      return {built,stable,selectionReads,retained,invalidated};
+    }''')
+    assert result == {'built': True, 'stable': True, 'selectionReads': 300,
+                      'retained': True, 'invalidated': True}
 
 
 def test_environment_capture_cache_and_disposal_lifecycle(module_page):
@@ -339,6 +377,7 @@ export const renderDDSPreview = async (canvas, url, current) => {
   window.previewCurrent = current;
   await new Promise(resolve => {window.finishPreview = resolve;});
 };
+export function clearDDSPreviews() {}
 """))
     module_page.evaluate("""async () => {
       const style = document.createElement('link');

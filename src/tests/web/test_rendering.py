@@ -747,6 +747,9 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
           window.previewState = () => [renderer.getRenderTarget()?.uuid || null,
             renderer.getClearAlpha(), renderer.getScissorTest(), renderer.outputColorSpace,
             renderer.toneMapping, renderer.getPixelRatio(), renderer.autoClear];
+          window.previewReads = 0;
+          const read = renderer.readRenderTargetPixelsAsync.bind(renderer);
+          renderer.readRenderTargetPixelsAsync = (...args) => {window.previewReads++;return read(...args);};
           const before = previewState();
           const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
           buildMenuPanel({option01: {name: 'Option01', var: 'option01', values: ['0', '1'],
@@ -779,6 +782,32 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
         assert all(max(abs(left-right) for left,right in zip(actual,reference)) <= 4
                    for actual,reference in zip(uv['pixels'],expected))
         assert page.evaluate('previewState()') == state_before_uv
+        reads_before_expansion = page.evaluate('previewReads')
+        page.locator('.inspector-uv-expand').click()
+        page.keyboard.press('Escape')
+        assert page.evaluate('previewReads') == reads_before_expansion
+        cache = page.evaluate('''async url => {
+          const {getDDSPreview,clearDDSPreviews} = await import('./js/textures/dds-preview.js');
+          const {getReadyTextureForPreview} = await import('./js/mesh/mesh-factory.js');
+          const texture = getReadyTextureForPreview('diffuse::texture-03.dds');
+          let disposals = 0; texture.addEventListener('dispose',()=>disposals++);
+          const options = {size:32,preserveAspect:true,texture};
+          const before = previewReads;
+          const a = await getDDSPreview(url,()=>true,options);
+          const b = await getDDSPreview(url,()=>true,options);
+          const reused = a === b && previewReads === before;
+          clearDDSPreviews();
+          const [c,d] = await Promise.all([getDDSPreview(url,()=>true,options),getDDSPreview(url,()=>true,options)]);
+          const shared = c === d && previewReads === before+1;
+          for(let i=0;i<9;i++) await getDDSPreview(`${url}?fixture=${i}`,()=>true,options);
+          const evictedBefore = previewReads;
+          await getDDSPreview(url,()=>true,options);
+          const bounded = previewReads === evictedBefore+1;
+          clearDDSPreviews(url);
+          await getDDSPreview(url,()=>true,options);
+          return {reused,shared,bounded,invalidated:previewReads===evictedBefore+2,disposals};
+        }''', url)
+        assert cache == {'reused': True, 'shared': True, 'bounded': True, 'invalidated': True, 'disposals': 0}
     finally:
         publication.release()
 
