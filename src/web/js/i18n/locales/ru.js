@@ -643,7 +643,6 @@ export default {
   'mesh.showGroup': 'Показать все меши в {name}',
   'mesh.editMesh': 'Редактировать меш',
   'mesh.isolateSelected': 'Изолировать выбранное',
-  'mesh.restoreVisibility': 'Восстановить видимость',
   'mesh.undo': 'Отменить',
   'mesh.redo': 'Повторить',
   'mesh.selectConnected': 'Выбрать связанные грани',

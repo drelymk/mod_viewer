@@ -997,6 +997,7 @@ button, input, select { font: inherit; }
 button { min-height: 30px; }
 button:focus-visible, input:focus-visible, select:focus-visible,
 [tabindex]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+#mesh-list:focus { outline: none; box-shadow: none; }
 
 #toolbar {
   height: var(--toolbar-height); padding: 0 16px; gap: 14px;

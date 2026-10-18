@@ -649,7 +649,6 @@ export default {
   'mesh.showGroup': 'Mostrar todas las mallas de {name}',
   'mesh.editMesh': 'Editar malla',
   'mesh.isolateSelected': 'Aislar selección',
-  'mesh.restoreVisibility': 'Restaurar visibilidad',
   'mesh.undo': 'Deshacer',
   'mesh.redo': 'Rehacer',
   'mesh.selectConnected': 'Seleccionar caras conectadas',

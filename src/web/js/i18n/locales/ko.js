@@ -641,7 +641,6 @@ export default {
   'mesh.showGroup': '{name}의 모든 메시 표시',
   'mesh.editMesh': '메시 편집',
   'mesh.isolateSelected': '선택 항목만 표시',
-  'mesh.restoreVisibility': '표시 상태 복원',
   'mesh.undo': '실행 취소',
   'mesh.redo': '다시 실행',
   'mesh.selectConnected': '연결된 면 선택',

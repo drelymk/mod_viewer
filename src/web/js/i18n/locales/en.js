@@ -637,7 +637,6 @@ export default {
   'mesh.showGroup': 'Show all meshes in {name}',
   'mesh.editMesh': 'Edit Mesh',
   'mesh.isolateSelected': 'Isolate Selected',
-  'mesh.restoreVisibility': 'Restore Visibility',
   'mesh.undo': 'Undo',
   'mesh.redo': 'Redo',
   'mesh.selectConnected': 'Select Connected Faces',

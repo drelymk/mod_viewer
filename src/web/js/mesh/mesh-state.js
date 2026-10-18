@@ -17,7 +17,7 @@ import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
-import { clearLooseParts, isLoosePart, syncLoosePartMaterial } from './loose-parts.js';
+import { clearLooseParts, getLooseParts, isLoosePart, syncLoosePartMaterial } from './loose-parts.js';
 import {
   disposeSkinningExperiment,
   getSkinningBaseMaterial,
@@ -200,12 +200,21 @@ export function removeAssetFillMeshes() {
 }
 
 export function resetMeshVisibility() {
+  const changed = [];
   activeMeshes.forEach((mesh) => {
     mesh.userData.manualVisible = mesh.userData.loadedVisible !== false;
     mesh.userData.manuallyToggled = false;
-    applyMeshVisibility(mesh, { notify: false });
+    const parts = getLooseParts(mesh);
+    for (const part of parts) {
+      part.userData.manualVisible = true;
+      part.userData.manuallyToggled = false;
+    }
+    for (const target of [mesh, ...parts]) {
+      applyMeshVisibility(target, { notify: false, render: false });
+      changed.push(target);
+    }
   });
-  notifyMeshStateChanged(activeMeshes);
+  notifyMeshStateChanged(changed);
   requestRender();
 }
 
@@ -390,8 +399,8 @@ export function applyTextureVariant(mesh, { render = true } = {}) {
   return materialChanged || next.some((value, index) => !Object.is(value, previous[index]));
 }
 
-// The MESHES control is the direct visibility source. Automatic refreshes
-// re-baseline visibility and clear any transient manual eye-click marker.
+// Manual visibility stays authoritative until a wired visibility control changes
+// or an explicit reset/reload replaces it.
 export function applyMeshVisibility(mesh, { notify = true, render = true } = {}) {
   const previous = mesh.visible;
   mesh.visible = mesh.userData.manualVisible !== false;
@@ -405,9 +414,8 @@ export function applyMeshVisibility(mesh, { notify = true, render = true } = {})
   return changed;
 }
 
-/** Toggle viewer visibility without changing the authored control state. */
-export function toggleManualMeshVisibility(mesh, options) {
-  const visible = !mesh.visible;
+/** Set viewer visibility without changing the authored control state. */
+export function setManualMeshVisibility(mesh, visible, options) {
   mesh.userData.manualVisible = visible;
   mesh.userData.manuallyToggled = isLoosePart(mesh) || visible !== conditionsSatisfied(mesh);
   return applyMeshVisibility(mesh, options);
@@ -498,8 +506,7 @@ export function refreshMeshes(options) {
   try {
     for (const mesh of activeMeshes) {
       const dependencies = dependenciesFor(mesh);
-      const needsVisibility =
-        visibilityForced || mesh.userData.manuallyToggled === true || intersects(dependencies.visibility, changed);
+      const needsVisibility = visibilityForced || intersects(dependencies.visibility, changed);
       if (needsVisibility) {
         mesh.userData.manualVisible = conditionsSatisfied(mesh);
         mesh.userData.manuallyToggled = false;
