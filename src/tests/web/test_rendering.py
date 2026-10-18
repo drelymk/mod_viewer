@@ -55,6 +55,25 @@ def test_environment_backgrounds_are_independent_of_model_geometry_and_clipping(
     for preset in presets:
         page.evaluate('id => window.modViewer.setEnvironmentPreset(id)', preset)
         page.wait_for_function('!window.__environmentScene.getEnvironmentDebugState().preparationInFlight')
+        independent = page.evaluate("""async () => {
+          const s = window.__environmentScene;
+          const key = s.scene.children.find(light => light.isDirectionalLight && light.castShadow);
+          const presetLights = [];
+          s.scene.traverse(light => {
+            if(light.isLight && light !== key) presetLights.push(light);
+          });
+          const snapshot = () => JSON.stringify({
+            lights:presetLights.map(light => [light.uuid,light.visible,light.intensity,light.color.getHex()]),
+            environment:s.scene.environment.uuid, intensity:s.scene.environmentIntensity,
+            generations:s.getEnvironmentDebugState().totalPmremGenerationCount,
+          });
+          const original = snapshot(), position = key.position.clone();
+          s.setKeyLightIntensity(0);
+          const disabled = key.intensity === 0 && snapshot() === original;
+          s.setKeyLightIntensity(1);
+          return disabled && key.intensity === 1 && key.position.equals(position) && snapshot() === original;
+        }""")
+        assert independent
         colors = []
         for mode in ['direct', 'ao', 'bloom', 'ao-bloom']:
             previous = page.evaluate('window.modViewer.getRenderCount()')
