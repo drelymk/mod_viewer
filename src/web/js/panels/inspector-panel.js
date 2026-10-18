@@ -119,6 +119,7 @@ function buildHeader(content, title, context, titleHint = '') {
   headingRow.className = 'inspector-heading';
   const heading = document.createElement('h3');
   heading.textContent = title;
+  heading.title = title;
   headingRow.appendChild(heading);
   header.appendChild(headingRow);
   const subtitle = addText(header, 'inspector-context', context || '');
@@ -631,6 +632,7 @@ function buildComponent(record) {
   const content = showContent();
   content.replaceChildren();
   buildHeader(content, record.component || t('inspector.component'), componentContext(record), record.source || '');
+  buildMeshEditSection(content, record);
   buildAssetSection(content, record.assetSummary, true);
   buildMaterialSection(content, record);
   buildComponentTextureSection(content, record);
@@ -645,6 +647,7 @@ function buildMesh(mesh, record) {
   const componentName = component?.component || component || t('inspector.component');
   const heading = buildHeader(content, name, componentName, record.entry?.source?.[0]?.ini || '');
   heading.appendChild(buildVisibilityButton(mesh));
+  buildMeshEditSection(content, component, mesh);
   buildAssetSection(content, source.userData.assetEntry?.asset_binding);
   buildMaterialSection(content, component || {});
   buildTextureControls(content, record, source);
@@ -655,6 +658,7 @@ function updateInspectorState() {
   if (!current) return;
   const content = $('inspector-content');
   if (!content) return;
+  refreshMeshEditSection();
   const material = content.querySelector('.inspector-material-kind-control');
   if (material) {
     const owner = current.type === 'mesh' ? current.record.component : current.record;
@@ -714,6 +718,14 @@ function selectMesh(mesh, meshes) {
 }
 
 export function initInspectorPanel() {
+  for (const event of [
+    'mod-viewer-mesh-edit-tools-changed',
+    'mod-viewer-mesh-edit-state',
+    'mod-viewer-recording-state',
+    'mod-viewer-pending-state-changed',
+  ]) {
+    window.addEventListener(event, refreshMeshEditSection);
+  }
   window.addEventListener(LANGUAGE_CHANGED, () => {
     if (current?.type === 'component') {
       buildComponent(current.record);
@@ -765,6 +777,88 @@ export function initInspectorPanel() {
     if (affected) updateInspectorState();
   });
   clearContent();
+}
+
+const MESH_EDIT_ICONS = {
+  separate: 'mesh-separate',
+  separateSelection: 'face-select',
+  merge: 'mesh-merge',
+  applySelection: 'check',
+  cancelSelection: 'close',
+  connected: 'faces-connected',
+  invert: 'selection-invert',
+  apply: 'check',
+  cancel: 'close',
+};
+
+function buildMeshEditSection(content, component, mesh = null, heading = content.querySelector('.inspector-heading')) {
+  if (!component?.getMeshEditTools) return;
+  const tools = component.getMeshEditTools(mesh);
+  const section = document.createElement('section');
+  section.className = 'inspector-section inspector-mesh-edit-section';
+  addText(section, 'inspector-section-title', t('mesh.editMesh'));
+  addText(section, 'inspector-edit-summary', t('mesh.editSummary', tools));
+  addText(
+    section,
+    'inspector-muted',
+    t(
+      tools.stage === 'edited'
+        ? 'mesh.previewStage'
+        : tools.stage === 'applied'
+          ? 'mesh.stagedStage'
+          : 'mesh.readyStage',
+    ),
+  );
+  const actions = document.createElement('div');
+  actions.className = 'inspector-mesh-edit-actions';
+  actions.setAttribute('role', 'toolbar');
+  actions.setAttribute('aria-label', t('mesh.editMesh'));
+  for (const action of tools.actions) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'icon-btn inspector-edit-btn';
+    button.dataset.meshEditAction = action.id;
+    const label = t(action.key);
+    button.appendChild(createIcon(MESH_EDIT_ICONS[action.id]));
+    button.setAttribute('aria-label', label);
+    button.disabled = action.disabled;
+    button.title = action.reason ? `${label}: ${t(action.reason)}` : label;
+    if (action.reason) button.setAttribute('aria-description', t(action.reason));
+    button.addEventListener('click', () => {
+      void tools.run(action.id);
+    });
+    actions.appendChild(button);
+  }
+  heading?.querySelector('.inspector-mesh-edit-actions')?.remove();
+  if (tools.actions.length) heading?.insertBefore(actions, heading.querySelector('.inspector-visibility-btn'));
+  if (tools.face) {
+    const label = document.createElement('label');
+    label.className = 'inspector-edit-through';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = tools.face.through;
+    input.disabled = tools.face.disabled;
+    input.addEventListener('change', () => tools.setThrough(input.checked));
+    label.append(input, t('mesh.selectThrough'));
+    section.appendChild(label);
+    addText(section, 'inspector-muted', t(tools.face.through ? 'mesh.selectThroughHint' : 'mesh.visibleFacesOnly'));
+  }
+  content.appendChild(section);
+}
+
+function refreshMeshEditSection() {
+  if (!current) return;
+  const content = $('inspector-content');
+  const previous = content?.querySelector('.inspector-mesh-edit-section');
+  if (!previous) return;
+  const temporary = document.createElement('div');
+  buildMeshEditSection(
+    temporary,
+    current.type === 'mesh' ? current.record.component : current.record,
+    current.type === 'mesh' ? current.mesh : null,
+    content.querySelector('.inspector-heading'),
+  );
+  previous.replaceWith(...temporary.childNodes);
 }
 
 export function clearInspector() {

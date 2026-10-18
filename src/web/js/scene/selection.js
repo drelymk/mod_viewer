@@ -14,12 +14,14 @@ import {
   authoredTriangleOrdinal,
   meshesInClientRect,
   raycastModelAtClientPoint,
+  raycastModelHitsAtClientPoint,
   trianglesInClientRect,
 } from './model-picking.js';
 import { requestRender } from './render-scheduler.js';
 import {
   getLoosePartSource,
   getLooseParts,
+  findLoosePartGroups,
   isLoosePart,
   indicesForTriangles,
   setLoosePartSelectionCleanup,
@@ -104,6 +106,10 @@ export function selectMesh(mesh) {
   replaceSelection(next, mesh);
 }
 
+export function selectMeshes(meshes, nextPrimary = null) {
+  replaceSelection(meshes, nextPrimary);
+}
+
 export function toggleMeshSelection(mesh) {
   if (!mesh) return false;
   const next = new Set(selected);
@@ -131,6 +137,10 @@ export function clearSelection() {
 
 export function getSelectedMeshes() {
   return [...selected];
+}
+
+export function getPrimarySelectedMesh() {
+  return primary;
 }
 
 export function isMeshSelected(mesh) {
@@ -221,6 +231,60 @@ function updateFaceOverlay() {
   faceSelection.overlay.visible = faceSelection.target.visible;
 }
 
+function notifyFaceSelectionChanged() {
+  window.dispatchEvent(new CustomEvent('mod-viewer-face-selection-changed'));
+}
+
+function rememberFaceSelection() {
+  window.dispatchEvent(
+    new CustomEvent('mod-viewer-mesh-edit-before-change', { detail: { source: faceSelection.source } }),
+  );
+}
+
+export function setSelectedFaceTriangles(triangles) {
+  if (!faceSelection) return false;
+  const available =
+    faceSelection.target.userData.loosePartTriangles ||
+    Array.from({ length: Math.floor(faceSelection.target.geometry.index.count / 3) }, (_, index) => index);
+  const allowed = new Set(available);
+  const next = new Set(triangles.filter((triangle) => allowed.has(triangle)));
+  if (
+    next.size === faceSelection.triangles.size &&
+    [...next].every((triangle) => faceSelection.triangles.has(triangle))
+  )
+    return false;
+  rememberFaceSelection();
+  faceSelection.triangles = next;
+  updateFaceOverlay();
+  notifyFaceSelectionChanged();
+  requestRender();
+  return true;
+}
+
+export function invertFaceSelection() {
+  if (!faceSelection) return false;
+  const available =
+    faceSelection.target.userData.loosePartTriangles ||
+    Array.from({ length: Math.floor(faceSelection.target.geometry.index.count / 3) }, (_, index) => index);
+  return setSelectedFaceTriangles(available.filter((triangle) => !faceSelection.triangles.has(triangle)));
+}
+
+export function selectConnectedFaces() {
+  if (!faceSelection?.triangles.size) return false;
+  const groups = findLoosePartGroups(faceSelection.target);
+  const triangles = groups.flatMap((group) => {
+    const authored = group.triangles.map((triangle) => authoredTriangleOrdinal(faceSelection.target, triangle));
+    return authored.some((triangle) => faceSelection.triangles.has(triangle)) ? authored : [];
+  });
+  return setSelectedFaceTriangles([...faceSelection.triangles, ...triangles]);
+}
+
+export function setFaceSelectionThrough(value) {
+  if (!faceSelection) return;
+  faceSelection.selectThrough = !!value;
+  notifyFaceSelectionChanged();
+}
+
 function disposeFaceOverlay(state) {
   const topologyOverlay = state?.topologyOverlay;
   if (topologyOverlay) {
@@ -255,9 +319,11 @@ export function beginFaceSelection(target) {
     triangles: new Set(),
     topologyOverlay: null,
     overlay: null,
+    selectThrough: false,
   };
   createFaceOverlay(faceSelection);
   selectMesh(target);
+  notifyFaceSelectionChanged();
   requestRender();
   return true;
 }
@@ -267,11 +333,13 @@ function clearFaceSelectionState() {
   if (!state) return null;
   disposeFaceOverlay(state);
   faceSelection = null;
+  notifyFaceSelectionChanged();
   requestRender();
   return state;
 }
 
 export function cancelFaceSelection() {
+  if (faceSelection) rememberFaceSelection();
   return !!clearFaceSelectionState();
 }
 
@@ -285,6 +353,7 @@ export function applyFaceSelection({ label = null } = {}) {
   if (!selectedTriangles.length || selectedTriangles.length >= targetCount) {
     return null;
   }
+  rememberFaceSelection();
   clearFaceSelectionState();
   const result = separateSelectedTriangles(state.target, selectedTriangles, { label });
   if (!result) return null;
@@ -411,9 +480,7 @@ function onPointerUp(event) {
           canvas: renderer.domElement,
           selectionRect: rect,
         });
-        triangles.forEach((triangle) => faceSelection.triangles.add(triangle));
-        updateFaceOverlay();
-        requestRender();
+        setSelectedFaceTriangles([...faceSelection.triangles, ...triangles]);
       } else {
         addMeshesToSelection(
           meshesInClientRect({
@@ -431,7 +498,7 @@ function onPointerUp(event) {
       clientY: event.clientY,
       canvas: renderer.domElement,
       camera,
-      meshes: faceSelection ? [faceSelection.target] : activeMeshes,
+      meshes: faceSelection?.selectThrough ? [faceSelection.target] : activeMeshes,
     });
     if (faceSelection) {
       updateFaceSelectionFromClick(event, hit);
@@ -447,7 +514,7 @@ function onPointerUp(event) {
       clientY: event.clientY,
       canvas: renderer.domElement,
       camera,
-      meshes: [faceSelection.target],
+      meshes: faceSelection.selectThrough ? [faceSelection.target] : activeMeshes,
     });
     updateFaceSelectionFromClick(event, hit);
     return;
@@ -467,18 +534,26 @@ function updateFaceSelectionFromClick(event, hit) {
   if (!faceSelection || hit?.object !== faceSelection.target) return;
   const triangle = authoredTriangleOrdinal(hit.object, hit.faceIndex);
   if (triangle === null) return;
+  const triangles = faceSelection.selectThrough
+    ? raycastModelHitsAtClientPoint({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        canvas: renderer.domElement,
+        camera,
+        meshes: [faceSelection.target],
+      })
+        .map((item) => authoredTriangleOrdinal(item.object, item.faceIndex))
+        .filter((item) => item !== null)
+    : [triangle];
+  const next = new Set(faceSelection.triangles);
   if (event.ctrlKey) {
-    if (faceSelection.triangles.has(triangle)) {
-      faceSelection.triangles.delete(triangle);
-    } else {
-      faceSelection.triangles.add(triangle);
-    }
+    const remove = triangles.every((item) => next.has(item));
+    triangles.forEach((item) => (remove ? next.delete(item) : next.add(item)));
   } else {
-    faceSelection.triangles.clear();
-    faceSelection.triangles.add(triangle);
+    next.clear();
+    triangles.forEach((item) => next.add(item));
   }
-  updateFaceOverlay();
-  requestRender();
+  setSelectedFaceTriangles([...next]);
 }
 
 function onPointerCancel(event) {

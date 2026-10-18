@@ -18,10 +18,14 @@ export function modelPickTargets(meshes = []) {
 
 /** Return the first visible model intersection at a client-space point. */
 export function raycastModelAtClientPoint({ clientX, clientY, canvas, camera, meshes } = {}) {
+  return raycastModelHitsAtClientPoint({ clientX, clientY, canvas, camera, meshes })[0] || null;
+}
+
+export function raycastModelHitsAtClientPoint({ clientX, clientY, canvas, camera, meshes } = {}) {
   const rect = canvas?.getBoundingClientRect?.();
   const width = Number(rect?.width);
   const height = Number(rect?.height);
-  if (!rect || !camera || width <= 0 || height <= 0) return null;
+  if (!rect || !camera || width <= 0 || height <= 0) return [];
 
   const pointer = new THREE.Vector2(
     ((Number(clientX) - rect.left) / width) * 2 - 1,
@@ -30,7 +34,7 @@ export function raycastModelAtClientPoint({ clientX, clientY, canvas, camera, me
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(pointer, camera);
   const visibleMeshes = modelPickTargets(meshes);
-  return raycaster.intersectObjects(visibleMeshes, false)[0] || null;
+  return raycaster.intersectObjects(visibleMeshes, false);
 }
 
 function geometryRange(mesh) {
@@ -51,14 +55,15 @@ function geometryRange(mesh) {
 export function authoredTriangleOrdinal(mesh, faceIndex) {
   const face = Number(faceIndex);
   if (!mesh || !Number.isInteger(face) || face < 0) return null;
+  const { drawStart, entryCount } = geometryRange(mesh);
+  // Raycast faceIndex already includes the index-buffer draw-range offset.
+  if (face * 3 < drawStart || face * 3 + 2 >= drawStart + entryCount) return null;
   const partTriangles = mesh.userData?.loosePartTriangles;
   if (Array.isArray(partTriangles)) {
     const triangle = Number(partTriangles[face]);
     return Number.isInteger(triangle) && triangle >= 0 ? triangle : null;
   }
-  const { drawStart, entryCount } = geometryRange(mesh);
-  if (face * 3 + 2 >= entryCount) return null;
-  return Math.floor((drawStart + face * 3) / 3);
+  return face;
 }
 
 function normalizedSelectionRect(selectionRect) {
@@ -190,7 +195,7 @@ function triangleIntersectsRect(triangle, rect) {
   );
 }
 
-/** Return authored triangle ordinals whose projected triangles intersect a rect. */
+/** Project each drawn triangle once; rectangle selection always selects through. */
 export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = {}) {
   const targetRect = normalizedSelectionRect(selectionRect);
   const canvasRect = canvas?.getBoundingClientRect?.();
@@ -212,7 +217,6 @@ export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = 
   mesh.updateWorldMatrix?.(true, false);
   const point = new THREE.Vector3();
   const selected = [];
-  const partTriangles = mesh.userData?.loosePartTriangles;
   for (let face = 0; face * 3 + 2 < entryCount; face += 1) {
     const entries = [drawStart + face * 3, drawStart + face * 3 + 1, drawStart + face * 3 + 2];
     const vertices = entries.map((entry) => (index ? index.getX(entry) : entry));
@@ -234,10 +238,8 @@ export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = 
       triangle.every((vertex) => vertex.z > 1)
     )
       continue;
-    const authored = Array.isArray(partTriangles)
-      ? Number(partTriangles[face])
-      : Math.floor((drawStart + face * 3) / 3);
-    if (Number.isInteger(authored) && authored >= 0 && triangleIntersectsRect(triangle, targetRect)) {
+    const authored = authoredTriangleOrdinal(mesh, Math.floor((drawStart + face * 3) / 3));
+    if (authored !== null && triangleIntersectsRect(triangle, targetRect)) {
       selected.push(authored);
     }
   }
