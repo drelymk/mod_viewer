@@ -405,9 +405,10 @@ of documentation, comments and tests; use portable fixtures instead.
   only explicit Apply enters the staged mesh-edit path.
   Inspector and context menus share edit-action availability. Preview history
   retains bounded triangle partitions and face selections, shares authored
-  vertex buffers, and ends on apply/cancel/reload. Isolation shows the selection
-  and hides other meshes without a restore snapshot. New edit controls follow
-  the `edit_mesh` UI gate; feature hiding never replaces backend validation or
+  vertex buffers, and ends on apply/cancel/reload. Isolation filters effective
+  visibility through the selection while preserving current manual/control
+  choices; exit/reset/topology replacement clears the filter. New edit controls
+  follow the `edit_mesh` UI gate; feature hiding never replaces backend validation or
   the Export boundary.
   Component MESHES headers own preview Undo/Redo icons beside Edited; Ctrl+Z/Y
   use the same history and must defer to text editors, dialogs, and rig gestures.

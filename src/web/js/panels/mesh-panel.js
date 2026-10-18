@@ -6,8 +6,11 @@ import { textureFile } from '../textures/texture-key.js';
 import {
   activeMeshes,
   applyMeshVisibility,
+  clearMeshIsolation,
+  isMeshIsolationActive,
+  meshUnderlyingVisible,
+  setMeshIsolation,
   setManualTexOverride,
-  setManualMeshVisibility,
 } from '../mesh/mesh-state.js';
 import {
   clearTextureRunGroups,
@@ -161,22 +164,13 @@ function canIsolateSelectedMeshes() {
 }
 
 function isolateSelectedMeshes() {
-  const selected = new Set(getSelectedMeshes());
-  if (!selected.size) return;
-  const changed = [];
-  for (const source of activeMeshes) {
-    const parts = getLooseParts(source);
-    for (const mesh of [source, ...parts]) {
-      const visible =
-        selected.has(source) || selected.has(mesh) || (mesh === source && parts.some((part) => selected.has(part)));
-      setManualMeshVisibility(mesh, visible, { notify: false, render: false });
-      changed.push(mesh);
-    }
-  }
-  notifyMeshStateChanged(changed);
-  notifyEditToolsChanged();
-  requestRender();
+  setMeshIsolation(getSelectedMeshes());
 }
+
+window.addEventListener('mod-viewer-isolation-changed', () => {
+  const button = document.getElementById('exit-isolation-btn');
+  if (button) button.hidden = !isMeshIsolationActive();
+});
 
 function canRestoreMeshPreview(direction, descriptor = componentForMesh(previewHistory.source)) {
   return (
@@ -680,7 +674,7 @@ function syncMeshPanel(changedMeshes = null) {
     )
       continue;
     group.itemObjs.forEach((mesh, index) => {
-      group.itemCbs[index].checked = mesh.visible;
+      group.itemCbs[index].checked = meshUnderlyingVisible(mesh);
       const binding = getMeshView(mesh);
       binding?.syncStateIndicator?.();
       binding?.syncTextureSelection?.();
@@ -707,8 +701,8 @@ function visibilityTargets(meshes) {
 
 function syncGroupVisibilityButton(button, meshes) {
   const targets = visibilityTargets(meshes);
-  const any = targets.some((mesh) => mesh.visible);
-  const all = targets.length > 0 && targets.every((mesh) => mesh.visible);
+  const any = targets.some(meshUnderlyingVisible);
+  const all = targets.length > 0 && targets.every(meshUnderlyingVisible);
   button.classList.toggle('state-hidden', !any);
   button.classList.toggle(
     'state-manual',
@@ -728,7 +722,7 @@ function buildGroupVisibilityButton(name, getMeshes, className) {
   button.addEventListener('click', (event) => {
     event.stopPropagation();
     const targets = visibilityTargets(getMeshes());
-    const visible = !targets.every((mesh) => mesh.visible);
+    const visible = !targets.every(meshUnderlyingVisible);
     setMeshesVisibility(targets, visible);
   });
   button.addEventListener('dblclick', (event) => event.stopPropagation());
@@ -972,14 +966,15 @@ function buildDrawRow(
   labelSpan.textContent = displayLabel;
   row.append(cb, labelSpan);
   const updateStateIndicator = (m) => {
-    cb.checked = m.visible;
-    cb.classList.toggle('state-hidden', !m.visible);
+    const visible = meshUnderlyingVisible(m);
+    cb.checked = visible;
+    cb.classList.toggle('state-hidden', !visible);
     cb.classList.toggle('state-manual', !!m.userData.manuallyToggled);
-    cb.setAttribute('aria-pressed', String(m.visible));
+    cb.setAttribute('aria-pressed', String(visible));
     if (m.userData.manuallyToggled) {
-      cb.title = t(m.visible ? 'mesh.visibleManual' : 'mesh.hiddenManual');
+      cb.title = t(visible ? 'mesh.visibleManual' : 'mesh.hiddenManual');
     } else {
-      cb.title = t(m.visible ? 'mesh.visibleAutomatic' : 'mesh.hiddenAutomatic');
+      cb.title = t(visible ? 'mesh.visibleAutomatic' : 'mesh.hiddenAutomatic');
     }
   };
   updateStateIndicator(mesh);
@@ -1431,6 +1426,9 @@ export function buildMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 }
 
 export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
+  const exitIsolation = document.getElementById('exit-isolation-btn');
+  exitIsolation.hidden = !isMeshIsolationActive();
+  exitIsolation.onclick = clearMeshIsolation;
   const list = document.getElementById('mesh-list');
   installPanelSelectionDrag(list);
   const replace = options.replace !== false;
@@ -1664,6 +1662,7 @@ window.addEventListener(LANGUAGE_CHANGED, () => {
 
 window.addEventListener('mod-viewer-recording-state', (event) => {
   if (event.detail?.recording) {
+    clearMeshIsolation();
     previewHistory = { source: null, undo: [], redo: [] };
     showRecordingSourceRows();
   } else restoreLoosePartRows();

@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu';
 import { camera, controls, frameView, renderer } from './scene.js';
 import { setRightDockTab } from '../panels/right-dock.js';
 import { activeMeshes } from '../mesh/visibility.js';
-import { setManualMeshVisibility } from '../mesh/mesh-state.js';
+import { meshUnderlyingVisible, setManualMeshVisibility } from '../mesh/mesh-state.js';
 import { notifyMeshStateChanged } from '../mesh/mesh-state-events.js';
 import { noteRecordMeshEdit } from '../editing/record-session.js';
 import { getMeshView } from '../mesh/mesh-view-bindings.js';
@@ -155,7 +155,7 @@ export function setMeshesVisibility(meshes, visible) {
   if (visible) {
     for (const mesh of meshes) {
       const source = getLoosePartSource(mesh);
-      if (source && !source.visible) targets.add(source);
+      if (source && !meshUnderlyingVisible(source)) targets.add(source);
     }
   }
   for (const mesh of targets) {
@@ -168,7 +168,7 @@ export function setMeshesVisibility(meshes, visible) {
 
 /** A selected eye applies its new value uniformly to the current selection. */
 export function toggleMeshVisibility(mesh) {
-  setMeshesVisibility(isMeshSelected(mesh) ? getSelectedMeshes() : [mesh], !mesh.visible);
+  setMeshesVisibility(isMeshSelected(mesh) ? getSelectedMeshes() : [mesh], !meshUnderlyingVisible(mesh));
 }
 
 export function getMeshEditSource(mesh) {

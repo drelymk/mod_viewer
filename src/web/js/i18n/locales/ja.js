@@ -642,6 +642,7 @@ export default {
   'mesh.hideGroup': '{name}のすべてのメッシュを非表示',
   'mesh.showGroup': '{name}のすべてのメッシュを表示',
   'mesh.editMesh': 'メッシュを編集',
+  'mesh.exitIsolation': '隔離を終了',
   'mesh.isolateSelected': '選択のみ表示',
   'mesh.undo': '元に戻す',
   'mesh.redo': 'やり直す',

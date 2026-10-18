@@ -1290,6 +1290,17 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
     action('isolate').click()
     assert page.evaluate('window.modViewer.activeMeshes[0].visible')
     assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.map(part => part.visible)') == [True, False, False]
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => part.userData.manualVisible)')
+    assert page.evaluate('''async () => {
+      const {modelPickTargets} = await import('./js/scene/model-picking.js');
+      const source = window.modViewer.activeMeshes[0];
+      const targets = modelPickTargets(window.modViewer.activeMeshes);
+      return targets.length === 1 && targets[0] === source.userData.looseParts[0];
+    }''')
+    page.locator('#exit-isolation-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.every(part => part.visible)')
+    action('isolate').click()
     action('isolate').click()
     assert page.evaluate('window.modViewer.activeMeshes[0].userData.looseParts.map(part => part.visible)') == [True, False, False]
     page.locator('#mesh-list').focus()
@@ -1314,7 +1325,9 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
     assert rows.count() == 5
     rows.nth(0).click()
     rows.nth(1).click(modifiers=['Shift'])
+    action('isolate').click()
     action('merge').click()
+    assert page.locator('#exit-isolation-btn').is_hidden()
     assert rows.count() == 4
     action('undo').click()
     assert rows.count() == 5
@@ -1403,7 +1416,9 @@ def test_inspector_mesh_tools_preview_history_and_staging(viewer):
 
 
 def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
-    payload = model_payload(4)
+    payload = controlled_payload(4)
+    for name in ('mesh-01', 'mesh-02', 'mesh-03'):
+        payload['meshes'][name]['conditions'] = []
     label = 'generated mesh label ' * 5
     for index, mesh in enumerate(payload['meshes'].values()):
         x = index * 2
@@ -1440,8 +1455,34 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
     assert isolate.inner_text() == 'Isolate Selected'
     isolate.click()
     assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, False, True, False]
+    page.wait_for_function('''async () => {
+      const {getCharacterShadowDebugState} = await import('./js/scene/scene.js');
+      const {computeModelBounds} = await import('./js/scene/model-bounds.js');
+      const expected = computeModelBounds([window.modViewer.activeMeshes[2]]);
+      const actual = getCharacterShadowDebugState().casterBounds;
+      return actual && ['min','max'].every(key => expected[key].toArray()
+        .every((value,index) => Math.abs(value-actual[key][index]) < 1e-6));
+    }''')
+    assert [rows.nth(index).locator('.mesh-state-btn').get_attribute('aria-pressed')
+            for index in range(4)] == ['true', 'true', 'true', 'false']
+    assert page.locator('.group-hdr .mesh-state-btn').evaluate_all(
+        "buttons => buttons.map(button => button.getAttribute('aria-pressed'))") == ['true', 'true', 'true', 'false']
+    assert page.locator('.inspector-visibility-btn').get_attribute('aria-pressed') == 'true'
+    page.locator('#controls-tab').click()
+    page.locator('.toggle-cycle-btn').click()
+    page.locator('#exit-isolation-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, True, True, False]
+    assert page.locator('#exit-isolation-btn').is_hidden()
+    rows.nth(2).click(button='right')
+    isolate.click()
+    page.locator('.group-hdr .mesh-state-btn').nth(1).click()
+    page.locator('#exit-isolation-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes.map(mesh => mesh.visible)') == [False, False, True, False]
+    rows.nth(2).click(button='right')
+    isolate.click()
     page.locator('#reset-state-btn').click()
     assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.visible)')
+    page.locator('#inspector-tab').click()
     page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
     rows.nth(0).click()
     heading.locator('[data-mesh-edit-action="separateSelection"]').click()
@@ -1472,6 +1513,11 @@ def test_inspector_header_icons_and_isolation_menus_share_selection(viewer):
     assert heading.locator('.inspector-edit-btn').count() == 2
     assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
+    rows.nth(2).click(button='right')
+    isolate.click()
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 4)
+    assert page.locator('#exit-isolation-btn').is_hidden()
 
 
 def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):

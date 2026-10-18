@@ -648,6 +648,7 @@ export default {
   'mesh.hideGroup': 'Ocultar todas las mallas de {name}',
   'mesh.showGroup': 'Mostrar todas las mallas de {name}',
   'mesh.editMesh': 'Editar malla',
+  'mesh.exitIsolation': 'Salir del aislamiento',
   'mesh.isolateSelected': 'Aislar selección',
   'mesh.undo': 'Deshacer',
   'mesh.redo': 'Rehacer',

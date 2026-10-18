@@ -636,6 +636,7 @@ export default {
   'mesh.hideGroup': 'Hide all meshes in {name}',
   'mesh.showGroup': 'Show all meshes in {name}',
   'mesh.editMesh': 'Edit Mesh',
+  'mesh.exitIsolation': 'Exit Isolation',
   'mesh.isolateSelected': 'Isolate Selected',
   'mesh.undo': 'Undo',
   'mesh.redo': 'Redo',

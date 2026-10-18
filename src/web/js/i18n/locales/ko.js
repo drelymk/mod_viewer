@@ -640,6 +640,7 @@ export default {
   'mesh.hideGroup': '{name}의 모든 메시 숨기기',
   'mesh.showGroup': '{name}의 모든 메시 표시',
   'mesh.editMesh': '메시 편집',
+  'mesh.exitIsolation': '격리 종료',
   'mesh.isolateSelected': '선택 항목만 표시',
   'mesh.undo': '실행 취소',
   'mesh.redo': '다시 실행',

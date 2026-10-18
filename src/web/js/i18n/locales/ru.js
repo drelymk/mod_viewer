@@ -642,6 +642,7 @@ export default {
   'mesh.hideGroup': 'Скрыть все меши в {name}',
   'mesh.showGroup': 'Показать все меши в {name}',
   'mesh.editMesh': 'Редактировать меш',
+  'mesh.exitIsolation': 'Выйти из изоляции',
   'mesh.isolateSelected': 'Изолировать выбранное',
   'mesh.undo': 'Отменить',
   'mesh.redo': 'Повторить',

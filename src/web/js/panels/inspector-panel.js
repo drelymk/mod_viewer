@@ -14,6 +14,7 @@ import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { getLoosePartSource } from '../mesh/loose-parts.js';
 import { assetDetailLabel, assetMatchLabel, assetSummaryLabel } from './asset-diagnostics.js';
 import { textureDisplayLabel } from '../textures/texture-key.js';
+import { meshUnderlyingVisible } from '../mesh/mesh-state.js';
 
 const meshRecords = new WeakMap();
 let current = null;
@@ -127,16 +128,17 @@ function buildHeader(content, title, context, titleHint = '') {
 }
 
 function updateVisibilityButton(button, mesh) {
-  button.classList.toggle('state-hidden', !mesh.visible);
+  const visible = meshUnderlyingVisible(mesh);
+  button.classList.toggle('state-hidden', !visible);
   button.classList.toggle('state-manual', !!mesh.userData.manuallyToggled);
-  button.setAttribute('aria-pressed', String(mesh.visible));
+  button.setAttribute('aria-pressed', String(visible));
   button.title = t(
     mesh.userData.manuallyToggled
-      ? mesh.visible
-        ? 'mesh.visibleManual'
+      ? visible
+        ? 'visibleManual'
         : 'mesh.hiddenManual'
-      : mesh.visible
-        ? 'mesh.visibleAutomatic'
+      : visible
+        ? 'visibleAutomatic'
         : 'mesh.hiddenAutomatic',
   );
   button.setAttribute('aria-label', button.title);

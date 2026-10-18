@@ -624,6 +624,7 @@ export default {
   'mesh.hideGroup': '隐藏 {name} 中的所有网格',
   'mesh.showGroup': '显示 {name} 中的所有网格',
   'mesh.editMesh': '编辑网格',
+  'mesh.exitIsolation': '退出隔离',
   'mesh.isolateSelected': '仅显示选中项',
   'mesh.undo': '撤销',
   'mesh.redo': '重做',
