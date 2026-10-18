@@ -195,22 +195,22 @@ export const ENVIRONMENT_PRESETS = freeze({
     createStudioBackgroundNode,
     makeAmbient(0xffffff, 0.32),
     makeHemisphere(0xfafafa, 0x858585, 0.36),
-    makeAccent(0xffffff, 0.16, [-4, 6, 5]),
+    makeAccent(0xffffff, 0.08, [-4, 6, 5]),
   ),
   indoor: makePreset(
     'indoor',
     'Indoor',
     createIndoorBackgroundNode,
-    makeAmbient(0xffd4a6, 0.28),
-    makeHemisphere(0xe6f0ff, 0xb07b4b, 0.36),
-    makeAccent(0xd8eaff, 0.42, [-5, 2.5, -7]),
+    makeAmbient(0xffdec2, 0.24),
+    makeHemisphere(0xdceaff, 0xb99a7b, 0.32),
+    makeAccent(0xd8eaff, 0.5, [-5, 2.5, -7]),
   ),
   outdoor: makePreset(
     'outdoor',
     'Outdoor',
     () => createAtmosphereNode(OUTDOOR_ATMOSPHERE),
-    makeAmbient(0xdbeaff, 0.26),
-    makeHemisphere(0x78b5ed, 0x667068, 0.45),
+    makeAmbient(0xf1f4f5, 0.36),
+    makeHemisphere(0xd9e7ef, 0x8e9382, 0.55),
     makeAccent(OUTDOOR_ATMOSPHERE.sunColor, OUTDOOR_ATMOSPHERE.sunIntensity, OUTDOOR_ATMOSPHERE.sunDirection),
     OUTDOOR_ATMOSPHERE,
   ),
@@ -218,8 +218,8 @@ export const ENVIRONMENT_PRESETS = freeze({
     'sunset',
     'Sunset',
     () => createAtmosphereNode(SUNSET_ATMOSPHERE),
-    makeAmbient(0xc8bfdc, 0.22),
-    makeHemisphere(0xa9b3dd, 0x625468, 0.4),
+    makeAmbient(0xe6d7d1, 0.24),
+    makeHemisphere(0xc7c9d9, 0x8c7370, 0.44),
     makeAccent(SUNSET_ATMOSPHERE.sunColor, SUNSET_ATMOSPHERE.sunIntensity, SUNSET_ATMOSPHERE.sunDirection),
     SUNSET_ATMOSPHERE,
   ),
@@ -379,12 +379,12 @@ function createRoomCaptureScene(id, config) {
 
 const IBL_PROFILES = freeze({
   outdoor: freeze({
-    // The display-compressed sky needs a stronger IBL contribution than the
-    // former HDR capture; retain diffuse fill when preparation completes.
-    environmentIntensity: 1.2,
+    // Keep the blue sky in reflections, with less saturated indirect fill
+    // carrying shadow-facing skin and white fabric instead of extra sunlight.
+    environmentIntensity: 1.0,
     lightIntensity: freeze({
-      ambient: 0.12,
-      hemisphere: 0.24,
+      ambient: 0.22,
+      hemisphere: 0.38,
       accent: OUTDOOR_ATMOSPHERE.sunIntensity,
     }),
     dominantDirection: OUTDOOR_ATMOSPHERE.sunDirection,
@@ -392,10 +392,10 @@ const IBL_PROFILES = freeze({
     atmosphere: OUTDOOR_ATMOSPHERE,
   }),
   sunset: freeze({
-    environmentIntensity: 0.65,
+    environmentIntensity: 0.8,
     lightIntensity: freeze({
-      ambient: 0.12,
-      hemisphere: 0.22,
+      ambient: 0.14,
+      hemisphere: 0.26,
       accent: SUNSET_ATMOSPHERE.sunIntensity,
     }),
     dominantDirection: SUNSET_ATMOSPHERE.sunDirection,
@@ -405,20 +405,22 @@ const IBL_PROFILES = freeze({
   indoor: freeze({
     environmentIntensity: 0.65,
     lightIntensity: freeze({
-      ambient: 0.2,
-      hemisphere: 0.28,
-      accent: 0.42,
+      ambient: 0.18,
+      hemisphere: 0.26,
+      accent: 0.5,
     }),
     dominantDirection: directionFromPresetAccent('indoor'),
     pmrem: DEFAULT_PMREM,
     capture: INDOOR_CAPTURE,
   }),
   studio: freeze({
-    environmentIntensity: 0.5,
+    // Broad neutral IBL lifts faces and fabric without adding a competing
+    // toon boundary beside the movable inspection key.
+    environmentIntensity: 0.85,
     lightIntensity: freeze({
       ambient: 0.1,
-      hemisphere: 0.2,
-      accent: 0.16,
+      hemisphere: 0.23,
+      accent: 0.08,
     }),
     dominantDirection: directionFromPresetAccent('studio'),
     pmrem: DEFAULT_PMREM,
