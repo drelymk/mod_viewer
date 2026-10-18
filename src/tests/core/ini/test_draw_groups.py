@@ -10,6 +10,7 @@ from tests.support.model_data import standard_component_resources
 
 @pytest.mark.parametrize("command", [
     "drawindexed = auto", "run = CommandListComponent01IB",
+    "post drawindexed = auto", "post run = CommandListComponent01IB",
 ])
 def test_hash_family_auto_keeps_parts_and_replacement_bindings_separate(command):
     sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01IB]
@@ -539,3 +540,126 @@ stride = 32
     assert draws[0].skinning_source is None
     assert draws[1].skinning_source.file == "direct.bin"
     assert draws[1].skinning_resolution["resolution_source"] == "direct"
+
+
+@pytest.mark.parametrize("prefix,target,starts", [
+    ("", "CommandListPart", [0, 3, 6, 9]),
+    ("pre ", "CommandListPart", [0, 6, 3, 9]),
+    ("post ", "CommandListPart", [3, 0, 6, 9]),
+    ("", "CustomShaderPart", [0, 6, 3, 9]),
+    ("pre ", "CustomShaderPart", [0, 6, 3, 9]),
+    ("PoSt\t", "CustomShaderPart", [3, 0, 6, 9]),
+])
+def test_nested_run_phases_preserve_order_guards_and_authored_sources(
+        prefix, target, starts):
+    text = f"""[TextureOverrideComponent01]
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+post run = CommandListEmpty
+if $mode == 1
+{prefix}run = {target} ; retain the call's authored ordinal
+endif
+drawindexed = 3, 3, 0
+post drawindexed = 3, 9, 0
+[{target}]
+run = CommandListNested
+[CommandListNested]
+drawindexed = 3, 0, 0
+post drawindexed = 3, 6, 0
+post run = {target}
+run = ResourceIgnored
+[ResourceIgnored]
+drawindexed = 3, 12, 0
+[CommandListEmpty]
+""" + standard_component_resources()
+    sections = parse_sections("source-01.ini", text=text)
+    draws = build_draw_groups(
+        sections, extract_resources(sections), gating_vars={"mode"})[0]["draws"]
+
+    assert [draw.start for draw in draws] == starts
+    by_start = {draw.start: draw for draw in draws}
+    for start, ordinal in [(0, 0), (6, 1)]:
+        draw = by_start[start]
+        assert draw.conditions == [[{"var": "mode", "value": "1", "negate": False}]]
+        assert draw.occurrence.section == "CommandListNested"
+        assert draw.occurrence.ordinal == ordinal
+        assert draw.occurrence.path == (
+            ("TextureOverrideComponent01", 1), (target, 0))
+        source = draw.sources[0]
+        assert source["ini_path"] == "source-01.ini"
+        assert text.splitlines()[source["line_no"] - 1].endswith(
+            f"drawindexed = 3, {start}, 0")
+    assert not by_start[3].conditions
+    assert not by_start[9].conditions
+    assert [by_start[start].occurrence.ordinal for start in (3, 9)] == [0, 1]
+
+
+def test_phase_selection_applies_to_bindings_draws_and_texture_roles():
+    sections = parse_sections("source-01.ini", text=r"""[TextureOverrideComponent01]
+hash = 10101010
+match_first_index = 12
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+Resource\RabbitFX\Diffuse = ResourceBase
+post vb0 = ResourceDeferredPosition
+post vb1 = null
+post ib = ResourceDeferredIndex
+post cs-t35 = ResourceDeferredRemap
+post $\WWMIv1\vg_offset = 20
+post Resource\RabbitFX\Diffuse = ResourceDeferred
+post Resource\RabbitFX\LightMap = ResourceDeferredLight
+post ps-t5 = Resource\RabbitFX\NormalMap
+drawindexed = 3, 0, 0
+pre drawindexed = 3, 3, 0
+if $mode == 1
+post drawindexed = 3, 6, 0
+else if $mode == 2
+post drawindexed = 3, 9, 0
+else
+post drawindexed = 3, 12, 0
+endif
+post ps-t5 = null
+post drawindexed = 3, 15, 0
+[ResourceBase]
+filename = base.dds
+[ResourceDeferred]
+filename = deferred.dds
+[ResourceDeferredLight]
+filename = light.dds
+[Resource\RabbitFX\NormalMap]
+filename = normal.dds
+""" + standard_component_resources())
+    info = _scan_sections_for_draws(
+        sections, gating_vars={"mode"})["TextureOverrideComponent01"]
+    draws = info["draws"]
+    assert [draw.start for draw in draws] == [0, 3, 6, 9, 12, 15]
+    assert [draw.occurrence.ordinal for draw in draws] == list(range(6))
+    for draw in draws[:2]:
+        assert draw.vertex_resources == {
+            0: "ResourceComponent01Position", 1: "ResourceComponent01Texcoord"}
+        assert draw.index_resource == "ResourceComponent01IB"
+        assert draw.diffuse_variants[-1]["res"] == "ResourceBase"
+        assert not draw.skinning_remap_resources
+        assert draw.skinning_bone_offset == 0
+        assert not draw.slot_textures
+    for draw in draws[2:]:
+        assert draw.vertex_resources == {0: "ResourceDeferredPosition", 1: None}
+        assert draw.index_resource == "ResourceDeferredIndex"
+        assert draw.diffuse_variants[-1]["res"] == "ResourceDeferred"
+        assert draw.auxiliary_maps["light_map"]["variants"][-1]["res"] == (
+            "ResourceDeferredLight")
+        assert draw.skinning_remap_resources == {35: "ResourceDeferredRemap"}
+        assert draw.skinning_bone_offset == 20
+        assert draw.geometry_match.hash == "10101010"
+        assert draw.geometry_match.first_index == 12
+    assert [draw.conditions for draw in draws[2:5]] == [
+        [[{"var": "mode", "value": "1", "negate": False}]],
+        [[{"var": "mode", "value": "2", "negate": False}]],
+        [[{"var": "mode", "value": "1", "negate": True},
+          {"var": "mode", "value": "2", "negate": True}]],
+    ]
+    assert not draws[-1].conditions
+    assert draws[2].slot_textures[0].role_hint == "normal_map"
+    assert not draws[-1].slot_textures

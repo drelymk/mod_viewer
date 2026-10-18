@@ -161,6 +161,37 @@ filename = a.buf
     assert "resourceb" not in copy_sources
 
 
+@pytest.mark.parametrize("prefix", ["pre ", "post "])
+def test_phased_resource_copies_preserve_data_descriptor_and_uav_order(prefix):
+    sections = parse_sections("source-01.ini", text=f"""
+[CommandListCopy]
+post cs-u5 = null
+cs-u5 = copy ResourceSource
+ResourceEarly = ref cs-u5
+{prefix} ResourceAlias = copy ResourceSource
+{prefix} ResourceAlias = copy_desc ResourceLayout
+{prefix} cs-u5 = copy ResourceAlias
+{prefix} ResourceOutput = ref cs-u5
+
+[ResourceSource]
+filename = position.buf
+stride = 12
+[ResourceLayout]
+filename = descriptor.buf
+stride = 40
+""")
+    resources = extract_resources(sections)
+    copies = _collect_resource_copy_sources(sections, resources)
+    assert copies == {
+        "resourceearly": ["ResourceSource"],
+        "resourcealias": ["ResourceSource"],
+        "resourceoutput": ["ResourceAlias"],
+    }
+    resolved = _resolve_component_buffers({}, resources, copies, sections=sections)
+    assert resolved["resolve_vertex_info"]("ResourceOutput") == {
+        "filename": "position.buf", "stride": 40}
+
+
 def test_runtime_wwmi_blend_override_uses_authored_descriptor():
     sections = parse_sections("source-01.ini", text="""
 [TextureOverrideComponent01]
