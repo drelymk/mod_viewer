@@ -31,6 +31,7 @@ import {
 import { isRigTransformInteractionActive, isRigJointPickingActive } from './rig-overlay-state.js';
 
 const DRAG_THRESHOLD_PIXELS = 5;
+export const FACE_SELECTION_MODES = Object.freeze(['set', 'extend', 'subtract', 'difference', 'intersect']);
 
 const selected = new Set();
 let primary = null;
@@ -314,6 +315,34 @@ export function setFaceSelectionThrough(value) {
   notifyFaceSelectionChanged();
 }
 
+export function setFaceSelectionMode(mode) {
+  if (!faceSelection || !FACE_SELECTION_MODES.includes(mode)) return false;
+  faceSelection.mode = mode;
+  notifyFaceSelectionChanged();
+  return true;
+}
+
+function combineFaceSelection(triangles) {
+  if (!faceSelection) return;
+  const previous = faceSelection.triangles;
+  const hits = new Set(triangles);
+  switch (faceSelection.mode) {
+    case 'extend':
+      return setSelectedFaceTriangles([...previous, ...hits]);
+    case 'subtract':
+      return setSelectedFaceTriangles([...previous].filter((triangle) => !hits.has(triangle)));
+    case 'difference':
+      return setSelectedFaceTriangles([
+        ...[...previous].filter((triangle) => !hits.has(triangle)),
+        ...[...hits].filter((triangle) => !previous.has(triangle)),
+      ]);
+    case 'intersect':
+      return setSelectedFaceTriangles([...previous].filter((triangle) => hits.has(triangle)));
+    default:
+      return setSelectedFaceTriangles([...hits]);
+  }
+}
+
 function disposeFaceOverlay(state) {
   const topologyOverlay = state?.topologyOverlay;
   if (topologyOverlay) {
@@ -349,6 +378,7 @@ export function beginFaceSelection(target) {
     topologyOverlay: null,
     overlay: null,
     selectThrough: false,
+    mode: 'set',
   };
   createFaceOverlay(faceSelection);
   selectMesh(target);
@@ -510,7 +540,7 @@ function onPointerUp(event) {
           canvas: renderer.domElement,
           selectionRect: rect,
         });
-        setSelectedFaceTriangles([...faceSelection.triangles, ...triangles]);
+        combineFaceSelection(triangles);
       } else {
         addMeshesToSelection(
           meshesInClientRect({
@@ -561,7 +591,11 @@ function onPointerUp(event) {
 }
 
 function updateFaceSelectionFromClick(event, hit) {
-  if (!faceSelection || hit?.object !== faceSelection.target) return;
+  if (!faceSelection || (hit && hit.object !== faceSelection.target)) return;
+  if (!hit) {
+    if (!event.ctrlKey) combineFaceSelection([]);
+    return;
+  }
   const triangle = authoredTriangleOrdinal(hit.object, hit.faceIndex);
   if (triangle === null) return;
   const triangles = faceSelection.selectThrough
@@ -575,15 +609,14 @@ function updateFaceSelectionFromClick(event, hit) {
         .map((item) => authoredTriangleOrdinal(item.object, item.faceIndex))
         .filter((item) => item !== null)
     : [triangle];
-  const next = new Set(faceSelection.triangles);
   if (event.ctrlKey) {
+    const next = new Set(faceSelection.triangles);
     const remove = triangles.every((item) => next.has(item));
     triangles.forEach((item) => (remove ? next.delete(item) : next.add(item)));
+    setSelectedFaceTriangles([...next]);
   } else {
-    next.clear();
-    triangles.forEach((item) => next.add(item));
+    combineFaceSelection(triangles);
   }
-  setSelectedFaceTriangles([...next]);
 }
 
 function onPointerCancel(event) {

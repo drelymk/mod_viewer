@@ -20,6 +20,7 @@ import { bindMeshView, getMeshView } from '../mesh/mesh-view-bindings.js';
 import { registerViewSync } from '../scene/view-sync.js';
 import { buildSourceSection, groupKeysBySource, usesSourceSections } from '../ui/panel-utils.js';
 import {
+  FACE_SELECTION_MODES,
   addMeshesToSelection,
   applyFaceSelection,
   beginFaceSelection,
@@ -35,6 +36,7 @@ import {
   selectConnectedFaces,
   setSelectedFaceTriangles,
   setFaceSelectionThrough,
+  setFaceSelectionMode,
   isMeshSelected,
   selectMesh,
   selectMeshes,
@@ -86,7 +88,42 @@ let restoringPreview = false;
 
 function notifyEditToolsChanged() {
   groupsUI.forEach((group) => group.componentDescriptor.syncEditState?.());
+  syncFaceSelectionModes();
   window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-tools-changed'));
+}
+
+function syncFaceSelectionModes() {
+  const toolbar = document.getElementById('mesh-selection-modes');
+  if (!toolbar) return;
+  const face = getFaceSelection();
+  const descriptor = componentForMesh(face?.source);
+  toolbar.hidden = !face || !descriptor;
+  if (toolbar.hidden) return;
+  if (!toolbar.childElementCount) {
+    for (const mode of FACE_SELECTION_MODES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'icon-btn';
+      button.dataset.faceSelectionMode = mode;
+      button.appendChild(createIcon(`selection-${mode}`));
+      button.addEventListener('click', () => {
+        const current = getFaceSelection();
+        const component = componentForMesh(current?.source);
+        if (current && component) inspectorEditTools(current.target, component).setMode(mode);
+      });
+      toolbar.appendChild(button);
+    }
+  }
+  const tools = inspectorEditTools(face.target, descriptor);
+  toolbar.setAttribute('aria-label', t('mesh.selectionMode'));
+  for (const button of toolbar.children) {
+    const mode = button.dataset.faceSelectionMode;
+    const label = t(`mesh.selectionMode.${mode}`);
+    button.setAttribute('aria-label', label);
+    button.title = `${t('mesh.selectionMode')}: ${label}`;
+    button.setAttribute('aria-pressed', String(face.mode === mode));
+    button.disabled = tools.face.disabled;
+  }
 }
 
 function captureMeshPreview(source) {
@@ -101,7 +138,7 @@ function captureMeshPreview(source) {
     primary: indexOf(getPrimarySelectedMesh()),
     face:
       face?.source === source
-        ? { target: indexOf(face.target), triangles: [...face.triangles], through: face.selectThrough }
+        ? { target: indexOf(face.target), triangles: [...face.triangles], through: face.selectThrough, mode: face.mode }
         : null,
   };
 }
@@ -185,6 +222,7 @@ function restoreMeshPreview(direction) {
       beginFaceSelection(meshAt(snapshot.face.target));
       setSelectedFaceTriangles(snapshot.face.triangles);
       setFaceSelectionThrough(snapshot.face.through);
+      setFaceSelectionMode(snapshot.face.mode);
     }
     selectMeshes(snapshot.selected.map(meshAt), meshAt(snapshot.primary));
     invalidateCharacterShadowVisibility({ request: false });
@@ -1371,7 +1409,7 @@ function inspectorEditTools(mesh, descriptor) {
       !hasUnappliedMeshChanges()
         ? 'applied'
         : descriptor.meshEditState,
-    face: face?.source === source ? { through: face.selectThrough, disabled: !available } : null,
+    face: face?.source === source ? { through: face.selectThrough, mode: face.mode, disabled: !available } : null,
     run(id) {
       if (document.body.classList.contains('feature-edit-mesh-off')) return;
       const action = inspectorEditTools(mesh, descriptor).actions.find((item) => item.id === id);
@@ -1379,6 +1417,10 @@ function inspectorEditTools(mesh, descriptor) {
     },
     setThrough(value) {
       if (!document.body.classList.contains('feature-edit-mesh-off') && !isRecording()) setFaceSelectionThrough(value);
+    },
+    setMode(mode) {
+      if (document.body.classList.contains('feature-edit-mesh-off')) return;
+      if (inspectorEditTools(mesh, descriptor).face?.disabled === false) setFaceSelectionMode(mode);
     },
   };
 }
@@ -1606,6 +1648,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
 }
 
 window.addEventListener(LANGUAGE_CHANGED, () => {
+  syncFaceSelectionModes();
   if (meshContextActions) {
     Object.entries(meshContextActions).forEach(([, action]) => {
       action.textContent = t(action.dataset.i18n);
