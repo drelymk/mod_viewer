@@ -11,7 +11,7 @@ from .draw_resources import (
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
     _hash_wide_overrides, _select_draw_sections,
 )
-from .draw_scan import _scan_sections_for_draws
+from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable
 from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
 
@@ -139,6 +139,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         "component_blend_vertex_resources"]
     component_animation_vertex_bindings = resolved_buffers[
         "component_animation_vertex_bindings"]
+    component_vertex_binding_history = resolved_buffers["component_vertex_binding_history"]
     hash_buffers = resolved_buffers["hash_buffers"]
     global_ib = resolved_buffers["global_ib"]
     global_position = resolved_buffers["global_position"]
@@ -269,6 +270,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         draws = []
         animation_bindings = []
         for number, authored in enumerate(authored_draws, 1):
+            # None with authored IB assignments is unresolved, not the group's
+            # first replacement. Keep it in the scan without inventing geometry.
+            if (info.get("index_binding_history") and authored.index_resource is None
+                    and authored.count is not None):
+                continue
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,
@@ -311,6 +317,31 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if texcoord:
                     draw.texcoord_file = texcoord
                     draw.texcoord_stride = texcoord_stride_for_draw or 20
+
+            histories = _lookup_component_value(
+                component_vertex_binding_history, _ib_res_to_component(effective_ib)
+            ) or _lookup_component_value(component_vertex_binding_history, component) or {}
+            # Select resources only when the authored guard proves one binding.
+            # Layout interpretation and direct/null overrides stay below.
+            for role, fallback in (("position", effective_position_resource),
+                                   ("texcoord", (draw_buffers or buffers)["texcoord"])):
+                history = histories.get(role, [])
+                slots = {item["slot"] for item in history
+                         if str(item["resource"]).casefold() == str(fallback).casefold()}
+                if len(slots) != 1:
+                    continue
+                slot = next(iter(slots))
+                resource = _buffer_resource_at_draw(
+                    [item for item in history if item["slot"] == slot],
+                    authored.binding_conditions, fallback)
+                if resource != fallback:
+                    file, stride = resolve_vertex_resource(resource)
+                    if file or resource is None:
+                        setattr(draw, f"{role}_file", file)
+                        default_stride = POSITION_STRIDE if role == "position" else 20
+                        setattr(draw, f"{role}_stride", (stride or default_stride) if file else None)
+                        if role == "position":
+                            effective_position_resource = resource
 
             vertex_resources = authored.vertex_resources
             if 0 in vertex_resources:
@@ -382,7 +413,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if skinning_source is None and skinning_error is None:
                 occupied_slots = set(vertex_resources)
                 blend_fallback = {
-                    slot: resource
+                    slot: _buffer_resource_at_draw(
+                        [item for item in histories.get("blend", []) if item["slot"] == slot],
+                        authored.binding_conditions, resource)
                     for slot, resource in lookup_component_blend_vertex_resources(
                         _ib_res_to_component(effective_ib)).items()
                     if slot not in occupied_slots

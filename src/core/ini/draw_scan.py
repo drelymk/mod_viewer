@@ -1,6 +1,7 @@
 """Execution-order scanning of authored draw state."""
 
 import re
+from dataclasses import replace
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 from .command_phases import parse_command_line, run_target_phases
@@ -17,8 +18,9 @@ from .texture_roles import (
     _collect_structural_slot_role_hints, _collect_texture_override_index,
     _effective_role_assignments, _legacy_texture_evidence,
     _semantic_texture_role,
+    _condition_difference, _condition_group_is_consistent,
 )
-from .sections import line_source
+from .sections import canonical_var_names, line_source
 
 
 _RUN_SKIP_PREFIXES = (
@@ -169,14 +171,79 @@ def _split_animation_conditions(conditions, animation_vars):
     return ordinary, animated
 
 
+def _buffer_resource_at_draw(history, conditions, fallback):
+    """Use the latest assignment implied by the draw, not an unknown write."""
+    return next((item["resource"] for item in reversed(history)
+                 if _condition_difference(conditions, item["conditions"]) is None), fallback)
+
+
+def _index_draws_at_join(authored, history, visibility_vars, vertex_history):
+    """Resolve conditional IB and direct VB snapshots at the authored draw."""
+    if any(authored.animation_conditions):
+        return [authored]
+    vertex_histories = {
+        slot: [item for item in vertex_history if item["slot"] == slot]
+        for slot in authored.vertex_resources}
+    draws = [authored]
+    for assignments in [history, *vertex_histories.values()]:
+        resolved = []
+        for draw in draws:
+            remaining = draw.binding_conditions
+            branches = []
+            for item in reversed(assignments):
+                applicable = [group for group in dnf_and(
+                    remaining or DNF_TRUE, item["conditions"] or DNF_TRUE)
+                    if _condition_group_is_consistent(group)]
+                if not applicable:
+                    continue
+                unknown = normalize_dnf(item["conditions"], {
+                    clause["var"] for group in item["conditions"] for clause in group
+                    if clause["var"] not in visibility_vars})
+                if unknown and _condition_difference(draw.binding_conditions, unknown) is not None:
+                    # An unknown write cannot prove a replacement; retain earlier
+                    # supported alternatives instead of the last scanned resource.
+                    continue
+                branches.append(replace(
+                    draw, binding_conditions=applicable,
+                    conditions=normalize_dnf(applicable, visibility_vars)))
+                remaining = _condition_difference(remaining, item["conditions"])
+                if remaining is None:
+                    break
+            else:
+                if remaining is not None:
+                    branches.append(replace(
+                        draw, binding_conditions=remaining,
+                        conditions=normalize_dnf(remaining, visibility_vars)))
+            resolved.extend(reversed(branches))
+        draws = resolved
+    # Select every binding from the same guard. An absent slot stays untouched;
+    # an explicit null remains an occupied slot.
+    missing = object()
+    for draw in draws:
+        draw.index_resource = _buffer_resource_at_draw(
+            history, draw.binding_conditions, None) if history else authored.index_resource
+        draw.vertex_resources = {}
+        for slot, assignments in vertex_histories.items():
+            value = _buffer_resource_at_draw(assignments, draw.binding_conditions, missing)
+            if value is not missing:
+                draw.vertex_resources[slot] = value
+    return draws
+
+
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                              animation_vars=None, qualified_vars=None, *,
-                             resources=None, condition_aliases=None):
+                             resources=None, condition_aliases=None,
+                             canonical_vars=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
     animation_vars = set(animation_vars or ())
     tracked_vars = set(toggle_vars) | animation_vars
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
+    vertex_vars = tracked_vars | set(canon.values())
+    visibility_vars = {f"{var_prefix or ''}{name}" for name in tracked_vars}
+    visibility_vars.update((qualified_vars or {}).values())
     section_lookup = {str(name).lower(): name for name in sections}
     commands = {name: tuple(parse_command_line(raw) for raw in lines)
                 for name, lines in sections.items()}
@@ -399,6 +466,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 value = None if resource.lower() == "null" else resource
                 if cond_stack:
                     info["vertex_bindings_conditional"] = True
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                info["vertex_binding_history"].append({
+                    "slot": slot, "resource": value,
+                    "conditions": normalize_dnf(
+                        combined, vertex_vars, var_prefix, qualified_vars),
+                })
                 if slot == 0 and value and animation_vars:
                     # Command lists often put the animated vb0 assignment in
                     # an ``elif DRAW_TYPE`` branch.  Unknown runtime branch
@@ -439,6 +514,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if not info["ib"]:
                     info["ib"] = match.group(1)
                 info["_cur_ib"] = match.group(1)
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                info["index_binding_history"].append({
+                    "resource": match.group(1),
+                    "conditions": normalize_dnf(
+                        combined, vertex_vars, var_prefix, qualified_vars),
+                })
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
             if match:
                 occurrence = DrawOccurrence(
@@ -465,9 +548,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         **source,
                         "occurrence": occurrence.to_dict(),
                     }
-                info["draws"].append(AuthoredDrawCall(
+                authored = AuthoredDrawCall(
                     count=arguments[0], start=arguments[1],
                     base=arguments[2], conditions=conditions,
+                    binding_conditions=normalize_dnf(
+                        combined, vertex_vars, var_prefix, qualified_vars),
                     animation_conditions=animation_conditions,
                     source=source,
                     occurrence=occurrence,
@@ -485,7 +570,10 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     skinning_remap_resources=dict(
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
-                ))
+                )
+                info["draws"].extend(_index_draws_at_join(
+                    authored, info["index_binding_history"], visibility_vars,
+                    info["vertex_binding_history"]))
             semantic = re.match(
                 r"^(Resource[\\/]"
                 r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
@@ -527,6 +615,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "referenced_textures": {},
             "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
+            "vertex_binding_history": [],
+            "index_binding_history": [],
             "_cur_compute_resources": {},
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,

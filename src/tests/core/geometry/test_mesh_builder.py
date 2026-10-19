@@ -4,11 +4,104 @@ import os
 import struct
 import tempfile
 
+from core.ini.analysis import analyze_ini
+from core.ini.sections import parse_sections
+from tests.support.model_data import standard_component_resources, triangle_geometry
+from tests.support.provenance import visible
+
 from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
 from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
+
+def test_conditional_component_streams_and_direct_overrides(tmp_path):
+    text = """[Constants]
+global $Ready = 0
+global $Mode = 0
+[KeyMode]
+type = cycle
+$Mode = 0,1
+[TextureOverrideComponent01Position]
+if $Ready == 1
+if $mode == 0
+vb0 = ResourceComponent01Position
+else
+vb0 = ResourceAlternatePosition
+endif
+endif
+[TextureOverrideComponent01Texcoord]
+if $Mode == 0
+vb1 = ResourceComponent01Texcoord
+else
+vb1 = ResourceAlternateTexcoord
+endif
+vb2 = ResourceNormal
+[TextureOverrideComponent01Blend]
+if $Mode == 0
+vb1 = ResourceBaseBlend
+else
+vb1 = ResourceAlternateBlend
+endif
+[TextureOverrideComponent01A]
+ib = ResourceComponent01IB
+if $Ready == 1
+if $Mode == 0
+drawindexed = 3, 0, 0
+else
+drawindexed = 3, 3, 0
+endif
+endif
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+vb4 = ResourceBaseBlend
+drawindexed = 3, 6, 0
+vb0 = null
+drawindexed = 3, 6, 0
+""" + standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    files = triangle_geometry()
+    files["i.buf"] = struct.pack("<9I", 0, 1, 2, 3, 4, 5, 0, 1, 2)
+    files["alternate-position.buf"] = b"".join(
+        struct.pack("<3f", *position) + b"\0" * 28 for position in (
+            (0, 0, 0), (1, 0, 0), (0, 1, 0), (10, 0, 0), (11, 0, 0), (10, 1, 0)))
+    files["alternate-texcoord.buf"] = b"\0" * 20 * 6
+    files["base-blend.buf"] = struct.pack("<4f4I", 1, 0, 0, 0, 1, 0, 0, 0) * 3
+    files["alternate-blend.buf"] = files["base-blend.buf"] * 2
+    files["normal.buf"] = b"\0" * 12
+    for resource, filename, stride in [
+        ("AlternatePosition", "alternate-position.buf", None),
+        ("AlternateTexcoord", "alternate-texcoord.buf", None),
+        ("BaseBlend", "base-blend.buf", 32),
+        ("AlternateBlend", "alternate-blend.buf", 32),
+        ("Normal", "normal.buf", 4),
+    ]:
+        text += f"[Resource{resource}]\nfilename = {filename}\n"
+        if stride is not None:
+            text += f"stride = {stride}\n"
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+    analysis = analyze_ini(parse_sections(str(tmp_path / "source.ini"), text=text),
+                           var_prefix="source::")
+    draws = analysis.draw_groups[0]["draws"]
+    result = build_mesh_result(analysis.draw_groups, str(tmp_path))
+    assert len(result.meshes) == 3
+    for mode in (0, 1):
+        state = {**analysis.defaults, "source::Mode": str(mode)}
+        active = [draw for draw in draws if draw.start < 6 and visible(draw.conditions, state)]
+        assert len(active) == 1
+        draw = active[0]
+        entry = result.meshes[draw.label]
+        assert sorted(geometry_values(result.geometry, entry["pos"])[0::3]) == (
+            [10, 10, 11] if mode else [0, 0, 1])
+        assert draw.texcoord_file == ("alternate-texcoord.buf" if mode else "t.buf")
+        assert (draw.position_stride, draw.texcoord_stride) == ((40, 20) if mode else (12, 8))
+        assert draw.skinning_source.file == ("alternate-blend.buf" if mode else "base-blend.buf")
+        assert text.splitlines()[draw.sources[0]["line_no"] - 1].startswith("drawindexed")
+    assert draws[2].position_file == "p.buf"
+    assert draws[2].skinning_source.file == "base-blend.buf"
+    assert draws[3].position_file is None
+    assert draws[3].label not in result.meshes
+
 
 IB_REASSIGN_INI = """[TextureOverrideComponent01Blend]
 ib = ResourceComponent01HeadIB

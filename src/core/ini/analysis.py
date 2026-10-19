@@ -98,7 +98,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
     }
     section_info = _scan_sections_for_draws(
         sections, var_prefix, scan_gating_vars, animation_analysis.frame_vars,
-        qualified_vars, resources=resources, condition_aliases=condition_aliases)
+        qualified_vars, resources=resources, condition_aliases=condition_aliases,
+        canonical_vars=canonical_vars)
     draw_groups = build_draw_groups(
         sections, resources, var_prefix=var_prefix, source=source,
         seen=seen, gating_vars=scan_gating_vars,

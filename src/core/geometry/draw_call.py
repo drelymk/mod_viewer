@@ -35,6 +35,8 @@ class AuthoredDrawCall:
     start: int
     base: int
     conditions: list = field(default_factory=list)
+    # Binding guards distinguish streams without becoming visibility controls.
+    binding_conditions: list = field(default_factory=list)
     animation_conditions: list = field(default_factory=list)
     source: dict | None = None
     occurrence: DrawOccurrence | tuple | None = None
