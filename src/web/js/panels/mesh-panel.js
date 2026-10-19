@@ -816,22 +816,6 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
   editBadge.textContent = t('toolbar.edited');
   const historyControls = document.createElement('span');
   historyControls.className = 'mesh-history-actions';
-  const commitButtons = ['apply', 'cancel'].map((id) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'icon-btn mesh-history-btn';
-    button.dataset.meshEditAction = id;
-    button.appendChild(createIcon(id === 'apply' ? 'check' : 'close'));
-    button.addEventListener('click', (event) => {
-      event.stopPropagation();
-      if (document.body.classList.contains('feature-edit-mesh-off')) return;
-      const action = meshEditActions(null, componentDescriptor).find((item) => item.id === id);
-      if (action && !action.disabled) void action.run();
-    });
-    button.addEventListener('dblclick', (event) => event.stopPropagation());
-    historyControls.appendChild(button);
-    return button;
-  });
   const historyButtons = ['undo', 'redo'].map((direction) => {
     const button = document.createElement('button');
     button.type = 'button';
@@ -856,17 +840,6 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
     const ownsHistory = componentForMesh(previewHistory.source) === componentDescriptor;
     historyControls.hidden =
       state !== 'edited' && !(ownsHistory && (previewHistory.undo.length || previewHistory.redo.length));
-    const actions = meshEditActions(null, componentDescriptor);
-    commitButtons.forEach((button) => {
-      const action = actions.find((item) => item.id === button.dataset.meshEditAction);
-      button.hidden = !action;
-      button.disabled = !action || action.disabled;
-      const label = t(
-        action?.key || (button.dataset.meshEditAction === 'apply' ? 'mesh.applyMeshChanges' : 'mesh.cancelMeshChanges'),
-      );
-      button.setAttribute('aria-label', label);
-      button.title = action?.reason ? `${label}: ${t(action.reason)}` : label;
-    });
     historyButtons.forEach((button) => {
       const direction = button.dataset.meshEditAction;
       button.disabled = !canRestoreMeshPreview(direction, componentDescriptor);

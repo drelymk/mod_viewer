@@ -224,12 +224,18 @@ def extract_resources(sections):
         if name.lower().startswith(skip):
             continue
         res = {}
+        index_editable, keys, resource_type = True, set(), "buffer"
         for line in lines:
             if "=" not in line:
+                index_editable = False
                 continue
             k, _, v = line.partition("=")
             k = k.strip().lower()
             v = v.strip()
+            index_editable &= k in {"filename", "format", "type"} and k not in keys
+            keys.add(k)
+            if k == "type":
+                resource_type = v.casefold()
             if k == "filename":
                 res["filename"] = v
             elif k == "stride":
@@ -240,6 +246,8 @@ def extract_resources(sections):
             elif k == "format":
                 res["format"] = v
         if "filename" in res:
+            if "format" in res:
+                res["index_editable"] = index_editable and resource_type == "buffer"
             resources[name] = res
     return ResourceTable(resources)
 

@@ -35,7 +35,7 @@ def target_refs(d, *line_numbers):
             "ini": "mod.ini",
             "line": line_number,
             "section": key[0],
-            "drawindexed": list(key[1:]),
+            "drawindexed": "auto" if key[1] is None else list(key[1:]),
             "occurrence": occurrence,
         })
     return refs
@@ -47,6 +47,25 @@ def fails(fn, msg):
         assert (False), (msg + " (no error raised)")
     except te.ToggleEditError:
         assert (True), (msg)
+
+
+def test_draw_resolver_shares_auto_numeric_and_phased_occurrence_identity():
+    document = doc("[CommandListDraw]\ndrawindexed = $runtime, 0, 0\n"
+                   "drawindexed = auto ; keep\ndrawindexed = 6, 0, 0\n"
+                   "post drawindexed = auto\n")
+    refs = target_refs(document, 3, 4, 5)
+    assert [ref["occurrence"]["ordinal"] for ref in refs] == [1, 2, 3]
+    document.replace_lines(1, 1, ["; shifted"])
+    assert re_.resolve_draw_references(document, refs, "mod.ini") == {3: 3, 4: 4, 5: 5}
+    document.replace_lines(3, 4, ["drawindexed = 3, 0, 0"])
+    original = document.to_string()
+    with pytest.raises(te.ToggleEditError, match="stale"):
+        re_.resolve_draw_references(document, [refs[0]], "mod.ini")
+    assert document.to_string() == original
+    duplicate = doc("[CommandListDraw]\ndrawindexed = auto\n"
+                    "[commandlistdraw]\ndrawindexed = auto\n")
+    with pytest.raises(te.ToggleEditError, match="ambiguous"):
+        re_.resolve_draw_references(duplicate, target_refs(duplicate, 2), "mod.ini")
 
 
 # â”€â”€ fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

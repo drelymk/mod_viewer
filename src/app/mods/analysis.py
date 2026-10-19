@@ -327,6 +327,7 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
     animation_control_vars = set()
     resource_files = []
     texture_override_indexes = []
+    geometry_owners = {}
     ini_records = [{
         "ini_path": record.path, "sections": record.sections,
         "var_prefix": record.var_prefix, "source": record.source_name,
@@ -418,6 +419,8 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
             compute_animation_control_vars(
                 sparse_compute, analysis.state_rules))
         record["analysis"] = analysis
+        for geometry_hash in analysis.geometry_hashes:
+            geometry_owners.setdefault(geometry_hash, set()).add(ini_path)
         resource_files.extend(
             info["filename"] for info in analysis.resources.values()
             if info.get("filename"))
@@ -597,6 +600,11 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
             "sync_error": sync_error,
         }
     present = {"target_inis": present_sources, "item": present_item}
+    for group in groups:
+        for draw in group["draws"]:
+            if (draw.auto_draw and draw.auto_draw["family"] and
+                    len(geometry_owners[draw.geometry_match.hash]) > 1):
+                draw.auto_draw = None
     return ParsedModAnalysis(
         groups=groups,
         toggles=toggle_keys,

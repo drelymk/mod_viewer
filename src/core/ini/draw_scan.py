@@ -5,6 +5,7 @@ from dataclasses import replace
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 from .command_phases import parse_command_line, run_target_phases
+from .migoto_semantics import classify_run_target, unique_command_metadata
 
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
@@ -391,6 +392,27 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             if info["src"] is None:
                 info["src"] = line_source(raw)
             low = line.lower()
+            key, _, value = low.partition("=")
+            key, value = key.strip(), value.strip()
+            info["auto_owner_safe"] &= (
+                not execution_path and not cond_stack and phase == "pre"
+                and key in {"hash", "match_priority", "handling", "drawindexed"}
+                and (key != "handling" or value == "skip")
+                and (key != "drawindexed" or value == "auto"))
+            if not execution_path and (unique_command_metadata(section_name, key)
+                                       or key.startswith("match_")):
+                info["matching_safe"] &= (
+                    key not in info["_match_keys"] and not cond_stack and phase == "pre"
+                    and key in {"hash", "match_first_index", "match_priority"})
+                info["_match_keys"].add(key)
+            if key == "match_priority" and not execution_path:
+                try:
+                    info["match_priority"] = int(value)
+                except ValueError:
+                    info["matching_safe"] = False
+            if key == "handling":
+                info["auto_owner_safe"] &= not info["handling_skip"]
+                info["handling_skip"] = value == "skip"
             bone_offset = _WWMI_BONE_OFFSET_RE.match(line)
             if bone_offset:
                 info["_cur_skinning_bone_offset"] = int(
@@ -519,6 +541,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     combined = dnf_and(combined, frame["cur"])
                 info["index_binding_history"].append({
                     "resource": match.group(1),
+                    "phase": phase, "conditional": bool(cond_stack),
                     "conditions": normalize_dnf(
                         combined, vertex_vars, var_prefix, qualified_vars),
                 })
@@ -526,16 +549,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             if match:
                 occurrence = DrawOccurrence(
                     section_name, current_draw, execution_path)
-                if match[1].strip().casefold() == "auto":
+                automatic = match[1].strip().casefold() == "auto"
+                if automatic:
                     info["drawindexed_auto"] = True
-                    source = line_source(raw)
-                    if source:
-                        info["auto_sources"].append({
-                            **source, "occurrence": occurrence.to_dict(),
-                            "phase": phase, "conditional": bool(cond_stack),
-                        })
-                    continue
-                arguments = resolve_drawindexed(match[1], draw_constants)
+                arguments = ((None, 0, 0) if automatic else
+                             resolve_drawindexed(match[1], draw_constants))
                 if arguments is None:
                     info["unresolved_draws"] = True
                     continue
@@ -554,6 +572,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         **source,
                         "occurrence": occurrence.to_dict(),
                     }
+                    if automatic:
+                        source.update(phase=phase, conditional=bool(cond_stack))
+                        info["auto_sources"].append(source)
                 authored = AuthoredDrawCall(
                     count=arguments[0], start=arguments[1],
                     base=arguments[2], conditions=conditions,
@@ -577,7 +598,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
                 )
-                info["draws"].extend(_index_draws_at_join(
+                info["auto_draws" if automatic else "draws"].extend(_index_draws_at_join(
                     authored, info["index_binding_history"], visibility_vars,
                     info["vertex_binding_history"]))
             semantic = re.match(
@@ -594,6 +615,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if run_match:
                 target_name = _run_target_name(line, section_lookup)
+                if (target_name in visiting or
+                        (not target_name and classify_run_target(run_match[1]) != "namespaced")):
+                    info["execution_resolved"] = False
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     for target_phase in run_target_phases(
@@ -616,6 +640,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
             "drawindexed_auto": False, "_cur_diffuse_variants": [],
             "auto_sources": [],
+            "auto_draws": [], "auto_owner_safe": True, "handling_skip": False,
+            "matching_safe": True, "_match_keys": set(), "match_priority": 0,
+            "execution_resolved": True,
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
@@ -631,6 +658,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
         }
         for phase in ("pre", "post"):
             scan(info, [], {name}, name, phase)
+        info.pop("_match_keys")
         info.pop("_cur_ib", None)
         info["diffuse_variants_at_end"] = _effective_role_assignments(
             info.get("_cur_diffuse_variants") or [])

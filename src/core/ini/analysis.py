@@ -36,6 +36,7 @@ class IniAnalysis:
     texture_override_index: TextureOverrideIndex = field(
         default_factory=TextureOverrideIndex)
     condition_aliases: dict = field(default_factory=dict)
+    geometry_hashes: set = field(default_factory=set)
 
 
 def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
@@ -122,4 +123,7 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         texture_api_evidence=texture_api_evidence,
         texture_override_index=section_info.texture_override_index,
         condition_aliases=condition_aliases,
+        geometry_hashes={match.hash for name, info in section_info.items()
+                         if name.lower().startswith("textureoverride")
+                         and (match := info.get("geometry_match_at_end"))},
     )

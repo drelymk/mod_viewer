@@ -116,6 +116,42 @@ def _resolve_slot_texture_files(authored, resolve_file):
     ]
 
 
+def _auto_families(section_info):
+    """Prove shared draw ownership from the existing execution scan."""
+    families = {}
+    for name, info in section_info.items():
+        match = info.get("geometry_match_at_end")
+        if name.lower().startswith("textureoverride") and match:
+            key = ((info.get("src") or {}).get("ini_path"), match.hash)
+            families.setdefault(key, []).append((name, info))
+    result = {}
+    for key, family in families.items():
+        owners = [(name, info) for name, info in family
+                  if info["geometry_match_at_end"].first_index is None
+                  and info["drawindexed_auto"]]
+        if len(owners) != 1:
+            continue
+        name, owner = owners[0]
+        members = [(label, info) for label, info in family if info is not owner]
+        indices = [info["geometry_match_at_end"].first_index for _, info in members]
+        if (not owner["auto_owner_safe"] or not owner["matching_safe"]
+                or not owner["handling_skip"] or owner["ib"]
+                or len(owner["auto_sources"]) != 1 or not members
+                or None in indices or len(set(indices)) != len(indices)):
+            continue
+        if all(info["matching_safe"] and info["execution_resolved"]
+               and not info["draws"] and not info["auto_draws"]
+               and not info.get("unresolved_draws")
+               and len(info["index_binding_history"]) == 1
+               and not info["index_binding_history"][0]["conditional"]
+               and info["index_binding_history"][0]["phase"] == "pre"
+               and (info["match_priority"], label.casefold()) <
+                   (owner["match_priority"], name.casefold())
+               for label, info in members):
+            result[key] = tuple(label for label, _ in members)
+    return result
+
+
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None, animation_vars=None,
                       qualified_vars=None, *, section_info=None):
@@ -155,6 +191,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     # Hash-wide references are manual choices for each same-INI/hash part.
     family_references = {}
     family_auto_sources = {}
+    auto_families = _auto_families(section_info)
     for provider in _hash_wide_overrides(section_info):
         match = provider["geometry_match_at_end"]
         family = ((provider.get("src") or {}).get("ini_path"), match.hash)
@@ -300,12 +337,18 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
             )
-            if authored.count is None and auto_sources:
+            if authored.count is None:
                 draw.sources = list(auto_sources)
-                draw.auto_draw = {
-                    "component": section_name, "resource": ib_resource,
-                    "format": ib_info.get("format"),
-                }
+                local = info["auto_draws"]
+                local_binding = (len(local) == 1 and local[0].index_resource
+                                 and local[0].index_resource.casefold() == ib_resource.casefold())
+                if (ib_info.get("index_editable") and
+                        (local_binding or (not local and family in auto_families))):
+                    draw.auto_draw = {
+                        "component": section_name, "resource": ib_resource,
+                        "format": ib_info.get("format"),
+                        "family": () if local else auto_families[family],
+                    }
             effective_ib = authored.index_resource or ib_resource
             if effective_ib != ib_resource:
                 resolved_ib = resolve_ib_file(effective_ib)

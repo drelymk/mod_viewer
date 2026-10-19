@@ -159,7 +159,8 @@ filename = component02-diffuse.dds
         assert source["occurrence"]["ordinal"] == 0
         assert source["phase"] == ("post" if command.startswith("post draw") else "pre")
         assert bool(source["occurrence"]["path"]) == ("run" in command)
-        assert draw.auto_draw["resource"] in {"ResourceComponent01IB", "ResourceComponent02IB"}
+        # The unresolved same-hash sibling prevents editing, not rendering.
+        assert draw.auto_draw is None
 
 
 def test_part_specific_auto_does_not_draw_same_hash_sibling():
@@ -181,6 +182,7 @@ vb1 = ResourceComponent01Texcoord
     assert [group["name"] for group in groups] == ["Component01A"]
     assert groups[0]["draws"][0].count is None
     assert groups[0]["draws"][0].sources[0]["line_no"] == 7
+    assert groups[0]["draws"][0].occurrence.ordinal is None
 
 
 def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
