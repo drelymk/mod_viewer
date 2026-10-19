@@ -153,6 +153,13 @@ filename = component02-diffuse.dds
     assert [draw.ib_file for draw in draws] == ["component01.ib", "component02.ib"]
     assert [draw.texture_default_file for draw in draws] == [
         "component01-diffuse.dds", "component02-diffuse.dds"]
+    for draw in draws:
+        source = draw.sources[0]
+        assert sections[source["section"]][0 if "run" in command else 1].strip().endswith("auto")
+        assert source["occurrence"]["ordinal"] == 0
+        assert source["phase"] == ("post" if command.startswith("post draw") else "pre")
+        assert bool(source["occurrence"]["path"]) == ("run" in command)
+        assert draw.auto_draw["resource"] in {"ResourceComponent01IB", "ResourceComponent02IB"}
 
 
 def test_part_specific_auto_does_not_draw_same_hash_sibling():
@@ -173,6 +180,7 @@ vb1 = ResourceComponent01Texcoord
     groups = build_draw_groups(sections, extract_resources(sections))
     assert [group["name"] for group in groups] == ["Component01A"]
     assert groups[0]["draws"][0].count is None
+    assert groups[0]["draws"][0].sources[0]["line_no"] == 7
 
 
 def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
