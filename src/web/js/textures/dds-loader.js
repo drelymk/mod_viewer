@@ -16,6 +16,8 @@ const RESOURCE_MISC_TEXTURECUBE = 0x4;
 const MAX_DIMENSION = 65536;
 
 const DXGI_FORMATS = new Map([
+  [28, 'rgba8_unorm'],
+  [29, 'rgba8_srgb'],
   [71, 'bc1_unorm'],
   [72, 'bc1_srgb'],
   [74, 'bc2_unorm'],
@@ -26,6 +28,10 @@ const DXGI_FORMATS = new Map([
   [81, 'bc4_snorm'],
   [83, 'bc5_unorm'],
   [84, 'bc5_snorm'],
+  [87, 'bgra8_unorm'],
+  [88, 'bgrx8_unorm'],
+  [91, 'bgra8_srgb'],
+  [93, 'bgrx8_srgb'],
   [95, 'bc6h_ufloat'],
   [96, 'bc6h_float'],
   [98, 'bc7_unorm'],
@@ -44,7 +50,7 @@ const LEGACY_FORMATS = new Map([
   ['BC5S', 'bc5_snorm'],
 ]);
 
-const COMPRESSED_FORMATS = new Set(DXGI_FORMATS.values());
+const COMPRESSED_FORMATS = new Set([...DXGI_FORMATS.values()].filter((format) => format.startsWith('bc')));
 
 const THREE_FORMATS = {
   bc1_unorm: THREE.RGBA_S3TC_DXT1_Format,
@@ -127,13 +133,13 @@ function readFormat(view) {
     fail('unsupported pixel format');
   }
   const masks = [92, 96, 100, 104].map((offset) => view.getUint32(offset, true));
-  const rgba = [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000];
-  const bgra = [0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000];
-  const format = masks.every((value, index) => value === rgba[index])
-    ? 'rgba8'
-    : masks.every((value, index) => value === bgra[index])
-      ? 'bgra8'
-      : null;
+  const layouts = [
+    ['rgba8', [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000]],
+    ['bgra8', [0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000]],
+    ['rgbx8', [0x000000ff, 0x0000ff00, 0x00ff0000, 0]],
+    ['bgrx8', [0x00ff0000, 0x0000ff00, 0x000000ff, 0]],
+  ];
+  const format = layouts.find(([, layout]) => masks.every((value, index) => value === layout[index]))?.[0];
   if (!format) fail('unsupported 32-bit channel layout');
   return { width, height, mipCount: mipCountValue, format, dataOffset: 128 };
 }
@@ -146,11 +152,16 @@ function levelByteLength(format, width, height) {
 
 function decodeUncompressed(bytes, offset, length, width, height, format) {
   const output = bytes.slice(offset, offset + length);
-  if (format === 'bgra8') {
+  const swapRedBlue = format.startsWith('bg');
+  const opaque = format.startsWith('rgbx8') || format.startsWith('bgrx8');
+  if (swapRedBlue || opaque) {
     for (let index = 0; index < output.length; index += 4) {
-      const blue = output[index];
-      output[index] = output[index + 2];
-      output[index + 2] = blue;
+      if (swapRedBlue) {
+        const blue = output[index];
+        output[index] = output[index + 2];
+        output[index + 2] = blue;
+      }
+      if (opaque) output[index + 3] = 255;
     }
   }
   return { data: output, width, height };

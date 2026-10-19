@@ -4,6 +4,78 @@ import math
 
 import pytest
 
+from tests.support.dds_data import uncompressed_dds
+
+
+@pytest.mark.parametrize('dxgi_format,bgra,alpha,format_id', [
+    (28, False, True, 'rgba8_unorm'), (29, False, True, 'rgba8_srgb'),
+    (87, True, True, 'bgra8_unorm'), (91, True, True, 'bgra8_srgb'),
+    (88, True, False, 'bgrx8_unorm'), (93, True, False, 'bgrx8_srgb'),
+    (None, False, True, 'rgba8'), (None, True, True, 'bgra8'),
+    (None, False, False, 'rgbx8'), (None, True, False, 'bgrx8'),
+])
+def test_uncompressed_dds_pixels_mips_and_texture_lifecycle(
+        module_page, dxgi_format, bgra, alpha, format_id):
+    pixels = bytes([11, 47, 193, 7]) * 15 + bytes([31, 61, 101, 127]) * 2 + bytes([5, 9, 13, 23])
+    data = uncompressed_dds(pixels, width=3, height=5, mip_count=3,
+                            dxgi_format=dxgi_format, bgra=bgra, alpha=alpha)
+    module_page.route('**/fixture.dds', lambda route: route.fulfill(
+        content_type='image/vnd-ms.dds', body=data))
+    result = module_page.evaluate('''async data => {
+      const {parseDDS,loadDDSTexture,reloadDDSTexture} = await import('./js/textures/dds-loader.js');
+      const T = await import('three');
+      const padded = new Uint8Array(data.length + 7); padded.set(data, 3);
+      const bytes = padded.subarray(3,3+data.length);
+      const parsed = parseDDS(bytes);
+      const unchanged = data.every((v,i)=>v===bytes[i]);
+      const rejected = [];
+      let end = data.length - 72;
+      for(const mip of parsed.mipmaps) {
+        end += mip.data.length;
+        try {parseDDS(bytes.subarray(0,end-1)); rejected.push(false);} catch {rejected.push(true);}
+      }
+      let texture;
+      await new Promise((resolve,reject)=>{
+        texture = loadDDSTexture('/fixture.dds',resolve,reject);
+        texture.colorSpace = T.NoColorSpace;
+      });
+      await reloadDDSTexture(texture,'/fixture.dds');
+      const state = {data:texture.isDataTexture,compressed:texture.isCompressedTexture,
+        flipY:texture.flipY,repeat:texture.repeat.toArray(),offset:texture.offset.toArray(),
+        colorSpace:texture.colorSpace,filter:texture.minFilter===T.LinearMipmapLinearFilter,
+        generateMipmaps:texture.generateMipmaps,mipCount:texture.mipmaps.length};
+      texture.dispose();
+      return {format:parsed.formatId,compressed:parsed.compressed,requiresBC:parsed.requiresBC,
+        mips:parsed.mipmaps.map(m=>[m.width,m.height,[...m.data]]),unchanged,rejected,state};
+    }''', list(data))
+    expected_mips = []
+    for width, height, pixel in [(3, 5, [11, 47, 193, 7]), (1, 2, [31, 61, 101, 127]), (1, 1, [5, 9, 13, 23])]:
+        if bgra:
+            pixel[0], pixel[2] = pixel[2], pixel[0]
+        if not alpha:
+            pixel[3] = 255
+        expected_mips.append([width, height, pixel * (width * height)])
+    assert result == {
+        'format': format_id, 'compressed': False, 'requiresBC': False,
+        'mips': expected_mips, 'unchanged': True, 'rejected': [True] * 3,
+        'state': {'data': True, 'compressed': False, 'flipY': True,
+                  'repeat': [1, 1], 'offset': [0, 0], 'colorSpace': '',
+                  'filter': True, 'generateMipmaps': False, 'mipCount': 3},
+    }
+
+
+@pytest.mark.parametrize('offset,value', [
+    (80, 0), (128, 27), (128, 30), (128, 90), (128, 92),
+    (132, 4), (136, 4), (140, 2),
+])
+def test_uncompressed_dds_rejects_unsupported_resources(module_page, offset, value):
+    data = uncompressed_dds(bytes(64), dxgi_format=29)
+    assert module_page.evaluate('''({data,offset,value}) => import('./js/textures/dds-loader.js').then(({parseDDS})=>{
+      const bytes = new Uint8Array(data);
+      new DataView(bytes.buffer).setUint32(offset,value,true);
+      try {parseDDS(bytes); return false;} catch {return true;}
+    })''', dict(data=list(data), offset=offset, value=value))
+
 
 @pytest.mark.parametrize('indexed,start,count,membership,expected', [
     (True, 3, 3, None, [1]),
