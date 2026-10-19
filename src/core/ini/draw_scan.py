@@ -171,11 +171,20 @@ def _split_animation_conditions(conditions, animation_vars):
     return ordinary, animated
 
 
-def _index_draws_at_join(authored, history, visibility_vars):
-    """Resolve supported IB alternatives without dropping an untouched draw."""
-    if len({item["resource"] for item in history}) <= 1 or any(
-            authored.animation_conditions):
+def _buffer_resource_at_draw(history, conditions, fallback):
+    """Use the latest assignment implied by the draw, not an unknown write."""
+    return next((item["resource"] for item in reversed(history)
+                 if _condition_difference(conditions, item["conditions"]) is None), fallback)
+
+
+def _index_draws_at_join(authored, history, visibility_vars, vertex_history):
+    """Keep IB alternatives and their direct vertex snapshots consistent."""
+    if not history or any(authored.animation_conditions):
         return [authored]
+    fallback = replace(authored, index_resource=_buffer_resource_at_draw(
+        history, authored.binding_conditions, None))
+    if len({item["resource"] for item in history}) <= 1 and fallback.index_resource:
+        return [fallback]
     remaining = authored.binding_conditions
     draws = []
     for item in reversed(history):
@@ -188,17 +197,31 @@ def _index_draws_at_join(authored, history, visibility_vars):
             clause["var"] for group in item["conditions"] for clause in group
             if clause["var"] not in visibility_vars})
         if unknown and _condition_difference(authored.binding_conditions, unknown) is not None:
-            return [authored]
+            # An unknown write cannot prove a replacement; retain earlier
+            # supported alternatives instead of the last scanned resource.
+            continue
         draws.append(replace(
             authored, index_resource=item["resource"], binding_conditions=applicable,
             conditions=normalize_dnf(applicable, visibility_vars)))
         remaining = _condition_difference(remaining, item["conditions"])
         if remaining is None:
             break
-    if remaining is not None:
-        draws.append(replace(authored, binding_conditions=remaining,
-                             conditions=normalize_dnf(remaining, visibility_vars)))
-    return list(reversed(draws)) or [authored]
+    else:
+        if remaining is not None:
+            draws.append(replace(fallback, binding_conditions=remaining,
+                                 conditions=normalize_dnf(remaining, visibility_vars)))
+    # Each IB branch uses only bindings already authored at this draw. An
+    # absent slot stays untouched; an explicit null remains an occupied slot.
+    missing = object()
+    for draw in draws:
+        draw.vertex_resources = {}
+        for slot in authored.vertex_resources:
+            value = _buffer_resource_at_draw(
+                [item for item in vertex_history if item["slot"] == slot],
+                draw.binding_conditions, missing)
+            if value is not missing:
+                draw.vertex_resources[slot] = value
+    return list(reversed(draws)) or [fallback]
 
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
@@ -543,7 +566,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     slot_textures=slot_snapshot(info),
                 )
                 info["draws"].extend(_index_draws_at_join(
-                    authored, info["index_binding_history"], visibility_vars))
+                    authored, info["index_binding_history"], visibility_vars,
+                    info["vertex_binding_history"]))
             semantic = re.match(
                 r"^(Resource[\\/]"
                 r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"

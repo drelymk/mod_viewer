@@ -9,9 +9,9 @@ from ..geometry.skinning import resolve_skinning_source
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
-    _hash_wide_overrides, _select_draw_sections, _buffer_resource_at_draw,
+    _hash_wide_overrides, _select_draw_sections,
 )
-from .draw_scan import _scan_sections_for_draws
+from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable
 from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
 
@@ -270,6 +270,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         draws = []
         animation_bindings = []
         for number, authored in enumerate(authored_draws, 1):
+            # None with authored IB assignments is unresolved, not the group's
+            # first replacement. Keep it in the scan without inventing geometry.
+            if (info.get("index_binding_history") and authored.index_resource is None
+                    and authored.count is not None):
+                continue
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,
@@ -333,7 +338,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     file, stride = resolve_vertex_resource(resource)
                     if file or resource is None:
                         setattr(draw, f"{role}_file", file)
-                        setattr(draw, f"{role}_stride", stride if file else None)
+                        default_stride = POSITION_STRIDE if role == "position" else 20
+                        setattr(draw, f"{role}_stride", (stride or default_stride) if file else None)
                         if role == "position":
                             effective_position_resource = resource
 

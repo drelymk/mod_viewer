@@ -61,20 +61,23 @@ drawindexed = 3, 6, 0
 """ + standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
     files = triangle_geometry()
     files["i.buf"] = struct.pack("<9I", 0, 1, 2, 3, 4, 5, 0, 1, 2)
-    files["alternate-position.buf"] = files["p.buf"] + struct.pack(
-        "<9f", 10, 0, 0, 11, 0, 0, 10, 1, 0)
-    files["alternate-texcoord.buf"] = files["t.buf"] * 2
+    files["alternate-position.buf"] = b"".join(
+        struct.pack("<3f", *position) + b"\0" * 28 for position in (
+            (0, 0, 0), (1, 0, 0), (0, 1, 0), (10, 0, 0), (11, 0, 0), (10, 1, 0)))
+    files["alternate-texcoord.buf"] = b"\0" * 20 * 6
     files["base-blend.buf"] = struct.pack("<4f4I", 1, 0, 0, 0, 1, 0, 0, 0) * 3
     files["alternate-blend.buf"] = files["base-blend.buf"] * 2
     files["normal.buf"] = b"\0" * 12
     for resource, filename, stride in [
-        ("AlternatePosition", "alternate-position.buf", 12),
-        ("AlternateTexcoord", "alternate-texcoord.buf", 8),
+        ("AlternatePosition", "alternate-position.buf", None),
+        ("AlternateTexcoord", "alternate-texcoord.buf", None),
         ("BaseBlend", "base-blend.buf", 32),
         ("AlternateBlend", "alternate-blend.buf", 32),
         ("Normal", "normal.buf", 4),
     ]:
-        text += f"[Resource{resource}]\nfilename = {filename}\nstride = {stride}\n"
+        text += f"[Resource{resource}]\nfilename = {filename}\n"
+        if stride is not None:
+            text += f"stride = {stride}\n"
     for name, data in files.items():
         (tmp_path / name).write_bytes(data)
     analysis = analyze_ini(parse_sections(str(tmp_path / "source.ini"), text=text),
@@ -91,6 +94,7 @@ drawindexed = 3, 6, 0
         assert sorted(geometry_values(result.geometry, entry["pos"])[0::3]) == (
             [10, 10, 11] if mode else [0, 0, 1])
         assert draw.texcoord_file == ("alternate-texcoord.buf" if mode else "t.buf")
+        assert (draw.position_stride, draw.texcoord_stride) == ((40, 20) if mode else (12, 8))
         assert draw.skinning_source.file == ("alternate-blend.buf" if mode else "base-blend.buf")
         assert text.splitlines()[draw.sources[0]["line_no"] - 1].startswith("drawindexed")
     assert draws[2].position_file == "p.buf"

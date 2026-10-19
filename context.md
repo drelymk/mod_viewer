@@ -147,7 +147,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Select conditional component buffers only when the draw guard proves the
   binding. Resolve supported IB branches at the authored draw, preserving an
   untouched fallback, direct/null bindings and baked-animation behavior. Runtime
-  guards are matching evidence, not additional visibility controls.
+  guards are matching evidence, not additional visibility controls. IB branches
+  carry matching direct VB snapshots; an unproven IB stays unresolved rather than
+  inheriting a scanned conditional replacement.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
 - Original Asset texture fallback is available only when a draw has no mod

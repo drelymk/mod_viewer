@@ -7,8 +7,6 @@ from ..geometry.buffers import POSITION_STRIDE, _res_get
 from ..geometry.vertex_attributes import VertexAttributeSource
 from .draw_scan import (_reachable_execution_sections, _run_target_name)
 from .sections import ResourceTable
-from .dnf import DNF_TRUE, dnf_and
-from .texture_roles import _condition_difference, _condition_group_is_consistent
 from .command_phases import parse_command_line, phase_commands
 
 
@@ -427,16 +425,6 @@ def _component_roles_for_sections(section_info):
         )
         result[name] = selected[:2]
     return result
-
-
-def _buffer_resource_at_draw(history, conditions, fallback):
-    """Select a proven applicable assignment; leave ambiguous state unchanged."""
-    for item in reversed(history):
-        if any(_condition_group_is_consistent(group) for group in dnf_and(
-                conditions or DNF_TRUE, item["conditions"] or DNF_TRUE)):
-            return (item["resource"] if _condition_difference(
-                conditions, item["conditions"]) is None else fallback)
-    return fallback
 
 
 def _resolve_component_buffers(section_info, resources, resource_copy_sources,

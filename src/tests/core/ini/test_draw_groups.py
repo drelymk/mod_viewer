@@ -37,18 +37,65 @@ format = R16_UINT
     sections = parse_sections("source-01.ini", text=text)
     draws = build_draw_groups(sections, extract_resources(sections),
                               gating_vars={"mode"})[0]["draws"]
+    scanned = _scan_sections_for_draws(sections, gating_vars={"mode"})[
+        "TextureOverrideComponent01A"]["draws"]
     for mode in (0, 1, 2):
-        active = [draw for draw in draws if visible(draw.conditions, {"mode": str(mode)})]
-        expected = "alternate.ib" if (
-            mode == 1 or "Ready" in guard or mode == 2 and not initial
-        ) else "component01.ib"
-        assert [(draw.ib_file, draw.start) for draw in active] == [
-            (expected, 0), ("component01.ib", 3)]
-        assert active[0].index_size == (2 if expected == "alternate.ib" else 4)
-        assert [draw.occurrence.ordinal for draw in active] == [0, 1]
+        state = {"mode": str(mode)}
+        expected = "component01.ib" if initial or mode == 0 else None
+        if guard == "$mode == 1" and mode == 1:
+            expected = "alternate.ib"
+        authored = [draw for draw in scanned if draw.start == 0 and visible(draw.conditions, state)]
+        assert len(authored) == 1
+        assert authored[0].occurrence.ordinal == 0
+        assert authored[0].index_resource == (
+            "ResourceAlternateIB" if expected == "alternate.ib" else
+            "ResourceComponent01IB" if expected else None)
+        active = [draw for draw in draws if visible(draw.conditions, state)]
+        assert [(draw.ib_file, draw.start) for draw in active] == (
+            [(expected, 0)] if expected else []) + [("component01.ib", 3)]
+        if expected:
+            assert active[0].index_size == (2 if expected == "alternate.ib" else 4)
+        assert [draw.occurrence.ordinal for draw in active] == ([0] if expected else []) + [1]
         for draw in active:
             line = text.splitlines()[draw.sources[0]["line_no"] - 1]
             assert line.endswith(f"drawindexed = 3, {draw.start}, 0")
+
+
+def test_index_branch_join_restores_matching_direct_vertex_slots():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+if $Mode == 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+else
+ib = ResourceAlternateIB
+vb0 = ResourceAlternatePosition
+vb1 = ResourceAlternateTexcoord
+endif
+drawindexed = 3, 0, 0
+post vb0 = null
+post drawindexed = 3, 3, 0
+[ResourceAlternateIB]
+filename = alternate.ib
+format = R16_UINT
+[ResourceAlternatePosition]
+filename = alternate-position.buf
+stride = 12
+[ResourceAlternateTexcoord]
+filename = alternate-texcoord.buf
+stride = 8
+""" + standard_component_resources())
+    draws = build_draw_groups(sections, extract_resources(sections),
+                              gating_vars={"Mode"})[0]["draws"]
+    for mode in (0, 1):
+        active = [draw for draw in draws if visible(draw.conditions, {"Mode": str(mode)})]
+        assert len(active) == 2
+        first, null = active
+        assert (first.ib_file, first.position_file, first.texcoord_file) == (
+            ("alternate.ib", "alternate-position.buf", "alternate-texcoord.buf") if mode else
+            ("component01.ib", "component01-position.buf", "component01-texcoord.buf"))
+        assert null.position_file is None
+        assert [draw.occurrence.ordinal for draw in active] == [0, 1]
 
 
 @pytest.mark.parametrize("command", [
