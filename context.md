@@ -85,11 +85,12 @@ of documentation, comments and tests; use portable fixtures instead.
   IB with explicit R16_UINT/R32_UINT format and complete triangles. A shared
   auto may move into its complete same-INI/hash family only when distinct
   `match_first_index` components own distinct buffers and execute before a
-  shared skip-only draw owner in 3DMigoto's priority/name order. The canonical
-  draw scan and resource analysis establish eligibility; the editor never
-  interprets command lists or re-resolves resource declarations. Local auto
-  edits replace the exact instruction in place through the shared authored-draw
-  resolver, without migration restrictions. Loading never migrates INIs.
+  shared skip-only draw owner in 3DMigoto's priority/name order. All command-list
+  calls must resolve in the same INI; unresolved calls block shared migration.
+  The canonical draw scan and resource analysis establish eligibility; the
+  editor never interprets command lists or re-resolves resource declarations.
+  Local auto edits replace the exact instruction in place through the shared
+  authored-draw resolver, without migration restrictions. Loading never migrates INIs.
 - Stage dependent INI and IB changes atomically. Export revalidates the IB source
   hash, writes a collision-safe sibling backup, verifies an equal-length temporary
   file and atomically replaces the buffer before its dependent INIs. A failed IB

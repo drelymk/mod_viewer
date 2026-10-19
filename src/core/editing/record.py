@@ -553,7 +553,7 @@ def _target_identity(ref, target_ini=None):
     except (KeyError, TypeError, ValueError) as exc:
         raise te.ToggleEditError(
             "Record targets must include a numeric source line, section, and "
-            "three numeric drawindexed values plus draw occurrence") from exc
+            "drawindexed auto or three numeric values plus draw occurrence") from exc
     if (line_no < 1 or not section or occurrence_ordinal < 0
             or not occurrence_section.strip()
             or occurrence_section.casefold() != section.casefold()):

@@ -10,7 +10,7 @@ from core.geometry.identity import mesh_identity_for_draw
 from core.geometry.semantics import _rel_source
 from core.mod_source import DirectoryModSource
 from tests.support_snapshot import snapshot_context
-from tests.support.provenance import geometry_values
+from tests.support.provenance import geometry_values, visible
 
 
 def _fixture(tmp_path):
@@ -381,7 +381,7 @@ def _auto_fixture(tmp_path, index_size=2, transform=lambda text: text):
             f"[TextureOverrideFamily{suffix}]\nhash = 10101010\n"
             f"match_first_index = {number * 9}\nib = ResourceIndices{number}\n"
             "vb0 = ResourceVertices\nvb1 = ResourceUV\n"
-            f"ps-t0 = ResourceTexture{number}\nrun = CommandList\\shared\\Material\\Bind\n")
+            f"ps-t0 = ResourceTexture{number}\nrun = CommandListMaterial\n")
         text += (
             f"[ResourceIndices{number}]\ntype = Buffer\n"
             f"format = R{index_size * 8}_UINT\nfilename = indices{number}.ib\n"
@@ -390,7 +390,8 @@ def _auto_fixture(tmp_path, index_size=2, transform=lambda text: text):
             struct.pack("<6" + ("H" if index_size == 2 else "I"), *range(6)))
     text += (
         "[ResourceVertices]\nfilename = vertices.buf\nstride = 12\n"
-        "[ResourceUV]\nfilename = uv.buf\nstride = 8\n")
+        "[ResourceUV]\nfilename = uv.buf\nstride = 8\n"
+        "[CommandListMaterial]\nps-t1 = null\n")
     ini.write_text(transform(text), encoding="utf-8")
     (tmp_path / "vertices.buf").write_bytes(struct.pack(
         "<18f", 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0, 2, 1, 0))
@@ -476,6 +477,7 @@ def test_shared_auto_apply_export_reload_and_subsequent_local_edits(
     ("filename = indices1.ib", "filename = missing.ib"),
     ("drawindexed = auto ; original", "post drawindexed = auto"),
     ("filename = indices1.ib", "filename = indices1.ib\nbyte_width = 6"),
+    ("run = CommandListMaterial", r"run = CommandList\shared\Material\Bind"),
 ])
 def test_shared_auto_rejects_ambiguous_families_without_partial_staging(tmp_path, old, new):
     ini = _auto_fixture(tmp_path, transform=lambda text: text.replace(old, new))
@@ -511,13 +513,26 @@ def test_auto_migration_rolls_back_every_section_and_buffer_on_staging_failure(t
 @pytest.mark.parametrize("phase", ["", "post "])
 def test_local_auto_rewrites_in_place_without_migration_restrictions(tmp_path, phase):
     def local_draws(text):
-        return text.replace("drawindexed = auto ; original\n", "").replace(
-            "run = CommandList\\shared\\Material\\Bind\n",
+        text = text.replace("ps-t0 = ResourceTexture1", "ps-t0 = ResourceTexture1\n"
+                            "Resource\\GIMI\\Diffuse = ResourceTexture1")
+        text = text.replace("drawindexed = auto ; original\n", "").replace(
+            "run = CommandListMaterial\n",
             "run = CommandList\\shared\\Material\\Bind\n"
-            f"if $ready == 1\n{phase}drawindexed = auto ; local\nendif\npost ps-t0 = null\n")
+            f"if $ready == 1\n{phase}drawindexed = auto ; local\nendif\n"
+            f"{phase}ps-t0 = null\n{phase}Resource\\GIMI\\Diffuse = null\n"
+            f"{phase}vb0 = null\n")
+        return ("[Constants]\nglobal persist $ready = 0\n"
+                "[KeyReady]\nkey = k\ntype = cycle\n$ready = 0, 1\n" + text)
 
     ini = _auto_fixture(tmp_path, transform=local_draws)
     context = _auto_context(ini)
+    _parsed, draws = mesh_edit.resolved_draws(context)
+    original = next(draw for draw, group in draws.values() if group["name"] == "FamilyB")
+    assert original.conditions == [[{"var": "ready", "value": "1", "negate": False}]]
+    assert not visible(original.conditions, {"ready": "0"})
+    assert visible(original.conditions, {"ready": "1"})
+    assert original.position_file == "vertices.buf"
+    assert original.texture_default_file == "texture1.dds"
     request = _auto_request(context, "B")
     before = context.docs[str(ini)].to_string().replace("\r\n", "\n").splitlines(keepends=True)
     line = request["mesh"]["sources"][0]["line"]
@@ -526,6 +541,23 @@ def test_local_auto_rewrites_in_place_without_migration_restrictions(tmp_path, p
     assert mesh_edit.apply_component_mesh_changes(context, request) == {
         "ok": True, "component": "FamilyB"}
     assert edit_session.peek(str(tmp_path), str(ini)).to_string().replace("\r\n", "\n") == "".join(before)
+    for exported in (False, True):
+        if exported:
+            result = edit_session.export(str(tmp_path))
+            assert result["saved"] == ["model.ini"]
+            assert not result["failed"] and not result["buffers_failed"]
+            edit_session.discard(str(tmp_path))
+            edit_session.load_documents(str(tmp_path), [str(ini)])
+        _parsed, draws = mesh_edit.resolved_draws(_auto_context(ini))
+        parts = [draw for draw, group in draws.values() if group["name"] == "FamilyB"]
+        assert [(draw.count, draw.start) for draw in parts] == [(3, 0), (3, 3)]
+        for draw in parts:
+            assert draw.conditions == original.conditions
+            assert draw.animation_conditions == original.animation_conditions
+            assert draw.position_file == original.position_file
+            assert draw.texcoord_file == original.texcoord_file
+            assert draw.texture_default_file == original.texture_default_file
+            assert draw.slot_textures == original.slot_textures
 
 
 @pytest.mark.parametrize("corruption", [
@@ -537,7 +569,7 @@ def test_auto_rejects_invalid_buffer_or_provenance(tmp_path, corruption, monkeyp
         if corruption != "shared-local-source":
             return text
         return text.replace("drawindexed = auto ; original\n", "").replace(
-            r"run = CommandList\shared\Material\Bind", "run = CommandListDraw") + (
+            "run = CommandListMaterial", "run = CommandListDraw") + (
                 "[CommandListDraw]\ndrawindexed = auto\n")
 
     ini = _auto_fixture(tmp_path, transform=shared_source)

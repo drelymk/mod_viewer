@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 from .command_phases import parse_command_line, run_target_phases
-from .migoto_semantics import classify_run_target, unique_command_metadata
+from .migoto_semantics import unique_command_metadata
 
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
@@ -615,8 +615,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if run_match:
                 target_name = _run_target_name(line, section_lookup)
-                if (target_name in visiting or
-                        (not target_name and classify_run_target(run_match[1]) != "namespaced")):
+                if not target_name or target_name in visiting:
                     info["execution_resolved"] = False
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)

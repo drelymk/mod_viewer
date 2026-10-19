@@ -293,9 +293,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         group_normal_source = _resolve_normal_source(
             group_vertex_resources, resources, position_file, position_stride,
             resolve_vertex_info)
-        # A selected part without numeric ranges shares its family's authored
-        # auto draw, represented by the complete replacement IB.
-        authored_draws = list(info["draws"]) or [AuthoredDrawCall(
+        local = info["auto_draws"]
+        local_binding = (len(local) == 1 and local[0].index_resource
+                         and local[0].index_resource.casefold() == ib_resource.casefold())
+        # An eligible local auto uses its authored execution snapshot. Shared
+        # auto needs the component's end-state fallback below.
+        authored_draws = list(info["draws"]) or (local if local_binding else []) or [AuthoredDrawCall(
             count=None, start=0, base=0, source=info["src"],
             occurrence=DrawOccurrence(section_name, None),
             diffuse_variants=info.get("diffuse_variants_at_end") or [],
@@ -338,10 +341,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     authored, resolve_texture_file),
             )
             if authored.count is None:
-                draw.sources = list(auto_sources)
-                local = info["auto_draws"]
-                local_binding = (len(local) == 1 and local[0].index_resource
-                                 and local[0].index_resource.casefold() == ib_resource.casefold())
+                if not local_binding:
+                    draw.sources = list(auto_sources)
                 if (ib_info.get("index_editable") and
                         (local_binding or (not local and family in auto_families))):
                     draw.auto_draw = {

@@ -387,9 +387,10 @@ vb1 = ResourceImplicitTexcoord
 
 [TextureOverrideImplicitA]
 ib = ResourceImplicitIB
-drawindexed = auto
 ps-t0 = Resource\\GIMI\\Diffuse
 ps-t0 = ResourceImplicitDiffuse
+drawindexed = auto
+ps-t0 = null
 
 [ResourceImplicitIB]
 filename = implicit.ib
@@ -412,7 +413,7 @@ filename = implicit.dds
 """
 
 
-def test_authored_auto_whole_buffer_draw_keeps_its_diffuse():
+def test_authored_auto_whole_buffer_draw_uses_its_texture_snapshot():
     with tempfile.TemporaryDirectory() as tmp:
         path = write(tmp, "mod.ini", AUTO_DRAW_DIFFUSE_INI)
         secs = merge_sections([path])

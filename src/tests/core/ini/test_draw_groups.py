@@ -182,7 +182,7 @@ vb1 = ResourceComponent01Texcoord
     assert [group["name"] for group in groups] == ["Component01A"]
     assert groups[0]["draws"][0].count is None
     assert groups[0]["draws"][0].sources[0]["line_no"] == 7
-    assert groups[0]["draws"][0].occurrence.ordinal is None
+    assert groups[0]["draws"][0].occurrence.ordinal == 0
 
 
 def test_draw_texture_history_keeps_only_applicable_branches_in_execution_order():
