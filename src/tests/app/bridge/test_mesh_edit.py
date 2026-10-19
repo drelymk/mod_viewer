@@ -431,7 +431,11 @@ def _runtime_draws(doc, first_index, buffers):
             if key in {"ib", "vb0", "vb1", "ps-t0"}:
                 state[key] = target
             elif key == "run":
-                execute(sections[target.casefold()])
+                if target.casefold() in sections:
+                    execute(sections[target.casefold()])
+                else:
+                    # Model an external native library's texture side effect.
+                    state["ps-t0"] = "NativeTexture"
             elif key == "handling":
                 state["handling"] = target
             elif key == "drawindexed":
@@ -452,11 +456,14 @@ def _runtime_draws(doc, first_index, buffers):
 
 @pytest.mark.parametrize("index_size", [2, 4])
 @pytest.mark.parametrize("first_edit", list("ABC"))
+@pytest.mark.parametrize("calls", ["local", "native-tail"])
 def test_shared_auto_apply_export_reload_and_subsequent_local_edits(
-        tmp_path, index_size, first_edit):
+        tmp_path, index_size, first_edit, calls):
     from core.geometry.mesh_builder import build_mesh_result
 
-    ini = _auto_fixture(tmp_path, index_size)
+    ini = _auto_fixture(tmp_path, index_size, transform=lambda text: text.replace(
+        "run = CommandListBindings", r"run = CommandList\shared\Library\Bind")
+        if calls == "native-tail" else text)
     original_text = ini.read_bytes()
     originals = {number: (tmp_path / f"indices{number}.ib").read_bytes() for number in range(3)}
     buffers = {f"ResourceIndices{number}": (data, index_size) for number, data in originals.items()}
@@ -535,6 +542,9 @@ def test_shared_auto_apply_export_reload_and_subsequent_local_edits(
     ("run = CommandListBindings", "drawindexed = auto"),
     ("if $enabled == 1", "run = CommandListBindings\nif $enabled == 1"),
     ("filename = indices1.ib", "filename = indices1.ib\nbyte_width = 6"),
+    ("run = CommandListBindings", "run = CommandListMissing"),
+    ("run = CommandListBindings", "run = CommandList\\shared\\Library\\Bind\nps-t0 = ResourceTexture0"),
+    ("if $enabled == 1", "run = CommandList\\shared\\Library\\Bind\nif $enabled == 1"),
 ])
 def test_shared_auto_rejects_ambiguous_families_without_partial_staging(tmp_path, old, new):
     ini = _auto_fixture(tmp_path, transform=lambda text: text.replace(old, new))

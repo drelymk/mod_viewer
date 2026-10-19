@@ -922,6 +922,7 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .mesh-edit-badge[data-state="applied"] { color: var(--accent-soft); }
 .mesh-history-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; }
 .mesh-history-actions[hidden] { display: none; }
+.mesh-history-actions button[hidden] { display: none; }
 .icon-btn.mesh-history-btn { width: 22px; height: 22px; min-height: 22px; }
 .inspector-edit-summary { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .dialog-range-field {

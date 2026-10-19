@@ -87,6 +87,8 @@ of documentation, comments and tests; use portable fixtures instead.
   `match_first_index` components own distinct buffers and execute before a
   shared skip-only draw owner in 3DMigoto's priority/name order. Reject phased,
   conflicting or unproven execution dependencies; loading never migrates INIs.
+  Preserve unresolved namespaced native calls only as unconditional tails at
+  the draw boundary; never inline them or move a draw across their commands.
 - Stage dependent INI and IB changes atomically. Export revalidates the IB source
   hash, writes a collision-safe sibling backup, verifies an equal-length temporary
   file and atomically replaces the buffer before its dependent INIs. A failed IB
@@ -428,7 +430,8 @@ of documentation, comments and tests; use portable fixtures instead.
   choices; exit/reset/topology replacement clears the filter. New edit controls
   follow the `edit_mesh` UI gate; feature hiding never replaces backend validation or
   the Export boundary.
-  Component MESHES headers own preview Undo/Redo icons beside Edited; Ctrl+Z/Y
+  Component MESHES headers order Edited, Apply/Cancel, then preview Undo/Redo;
+  header actions share component inspection/context-menu behavior. Ctrl+Z/Y
   use the same history and must defer to text editors, dialogs, and rig gestures.
   Apply/Cancel Mesh Changes belong to component inspection and context menus,
   never individual mesh inspection.

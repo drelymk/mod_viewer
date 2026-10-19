@@ -161,7 +161,7 @@ def _section(doc, name):
 
 def _validate_auto_commands(doc, section, visiting=(), draw_line=None,
                             protected_resources=()):
-    """Prove that calls before a relocated draw cannot draw or run post work."""
+    """Validate local dependencies without moving across native tail calls."""
     if section.name.casefold() in visiting or len(visiting) >= 64:
         raise ValueError("Automatic draws cannot migrate recursive command lists.")
     for line in section.lines:
@@ -180,6 +180,17 @@ def _validate_auto_commands(doc, section, visiting=(), draw_line=None,
             target = value.strip()
             if not target.casefold().startswith("commandlist"):
                 raise ValueError("Automatic draw migration requires plain command lists.")
+            targets = [item for item in doc.sections
+                       if item.name.casefold() == target.casefold()]
+            if not targets and re.fullmatch(r"CommandList(?:[\\/][\w.-]+)+", target, re.I):
+                # Native libraries live outside the mod. Preserve an opaque
+                # unconditional tail call immediately before the draw, including
+                # its native pre/post behavior; never inline or cross the call.
+                following = [item for item in section.lines if item.no > line.no
+                             and item.kind not in (BLANK, COMMENT) and item is not draw_line]
+                if visiting or line.depth or following:
+                    raise ValueError("Native command lists must remain at the automatic draw boundary.")
+                continue
             _validate_auto_commands(
                 doc, _section(doc, target), (*visiting, section.name.casefold()),
                 protected_resources=protected_resources)
