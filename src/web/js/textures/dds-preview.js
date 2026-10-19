@@ -13,7 +13,7 @@ async function renderPreview(
   canvas,
   url,
   isCurrent,
-  { size = PREVIEW_SIZE, preserveAspect = false, texture: sharedTexture },
+  { size = PREVIEW_SIZE, preserveAspect = false, preserveAlpha = true, texture: sharedTexture },
 ) {
   if (!isCurrent()) return;
   const { renderer, rendererReady } = await import('../scene/scene.js');
@@ -83,6 +83,11 @@ async function renderPreview(
     for (let y = 0; y < outputHeight; y += 1) {
       image.data.set(pixels.subarray(y * stride, y * stride + rowBytes), y * rowBytes);
     }
+    // UV inspection needs RGB even where authored alpha stores material data.
+    // Set opacity before Canvas can discard RGB during premultiplication.
+    if (!preserveAlpha) {
+      for (let offset = 3; offset < image.data.length; offset += 4) image.data[offset] = 255;
+    }
     context.putImageData(image, 0, 0);
     canvas.dataset.previewReady = 'true';
   } finally {
@@ -107,13 +112,15 @@ export async function getDDSPreview(url, isCurrent, options = {}) {
   if (!isCurrent()) return null;
   const size = Math.max(1, Math.min(2048, Math.round(options.size || PREVIEW_SIZE)));
   const preserveAspect = options.preserveAspect === true;
-  let key = JSON.stringify([url, size, preserveAspect]);
+  const preserveAlpha = options.preserveAlpha !== false;
+  let key = JSON.stringify([url, size, preserveAspect, preserveAlpha]);
   let entry = previews.get(key);
   if (!entry) {
     for (const [candidateKey, candidate] of previews) {
       if (
         candidate.url === url &&
         candidate.preserveAspect === preserveAspect &&
+        candidate.preserveAlpha === preserveAlpha &&
         candidate.size >= size &&
         (!entry || candidate.size < entry.size)
       ) {
@@ -123,11 +130,11 @@ export async function getDDSPreview(url, isCurrent, options = {}) {
     }
   }
   if (!entry) {
-    entry = { url, size, preserveAspect, consumers: new Set(), invalid: false, complete: false };
+    entry = { url, size, preserveAspect, preserveAlpha, consumers: new Set(), invalid: false, complete: false };
     const current = () => !entry.invalid && [...entry.consumers].some((consumer) => consumer());
     const canvas = document.createElement('canvas');
     entry.pending = previewQueue.then(async () => {
-      await renderPreview(canvas, url, current, { ...options, size, preserveAspect });
+      await renderPreview(canvas, url, current, { ...options, size, preserveAspect, preserveAlpha });
       return canvas.dataset.previewReady === 'true' && !entry.invalid ? canvas : null;
     });
     previewQueue = entry.pending.catch(() => {});

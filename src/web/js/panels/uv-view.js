@@ -136,7 +136,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
   function syncLabels() {
     label.textContent = t('inspector.uv');
     stage.setAttribute('aria-label', label.textContent);
-    expand.title = t('inspector.uvExpand');
+    expand.title = t(overlay ? 'inspector.uvClose' : 'inspector.uvExpand');
     expand.setAttribute('aria-label', expand.title);
     expand.setAttribute('aria-pressed', String(!!overlay));
     const close = overlay?.querySelector('.uv-viewport-close');
@@ -301,6 +301,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
         loaded = await getDDSPreview(url, isCurrent, {
           size,
           preserveAspect: true,
+          preserveAlpha: false,
           texture: getReadyTextureForPreview(source.userData.texKey),
         });
       } else {
@@ -360,7 +361,7 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     event.preventDefault();
     event.stopPropagation();
     if (overlay) {
-      overlay.querySelector('.uv-viewport-close').focus();
+      closeOverlay();
       return;
     }
     section.open = true;

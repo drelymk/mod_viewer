@@ -1053,6 +1053,12 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
     for action in ['cancelSelection', 'applySelection']:
         page.locator('.draw-item').first.click(button='right')
         page.locator('[data-i18n="mesh.separateBySelection"]').click()
+        header_apply = page.locator('.draw-item [data-mesh-header-action="applySelection"]')
+        header_cancel = page.locator('.draw-item [data-mesh-header-action="cancelSelection"]')
+        assert header_apply.is_visible() and header_apply.is_disabled()
+        assert header_cancel.is_visible() and header_cancel.is_enabled()
+        assert header_apply.get_attribute('aria-label') == 'Apply Selection'
+        assert page.locator('.draw-item .mesh-header-edit-actions:visible').count() == 1
         page.mouse.click(*point, button='right')
         apply = page.locator('[data-i18n="mesh.applySelection"]')
         assert apply.is_disabled()
@@ -1076,14 +1082,15 @@ def test_face_selection_cancel_and_apply_preserve_complete_authored_partition(vi
         assert apply.is_enabled()
         assert apply.get_attribute('title') == ''
         assert page.locator('[data-i18n="mesh.cancelSelection"]').is_visible()
-        page.locator(f'[data-i18n="mesh.{action}"]').click()
+        assert header_apply.is_enabled()
+        page.locator(f'.draw-item [data-mesh-header-action="{action}"]').click()
+        assert page.locator('.draw-item .mesh-header-edit-actions:visible').count() == 0
         assert bridge_calls(page, 'meshApply') == []
         if action == 'cancelSelection':
             assert page.locator('.draw-item').count() == 1
             assert page.evaluate('!window.__bridge.pending["fixture-01"]')
     assert page.locator('.draw-item').count() == 2
-    page.locator('.group-name').first.click(button='right')
-    page.locator('[data-i18n="mesh.applyMeshChanges"]').click()
+    page.locator('.group-hdr [data-mesh-header-action="apply"]').click()
     page.locator('#dialog-backdrop.show').wait_for()
     page.locator('#dialog-ok').click()
     page.wait_for_function('window.__bridge.calls.some(call => call.name === "meshApply")')
@@ -1176,6 +1183,7 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
     page.evaluate('window.modViewer.activeMeshes[0].userData.componentDescriptor.meshEditApplying = false')
     page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
     assert mode.is_hidden()
+    assert page.locator('.draw-item .mesh-header-edit-actions:visible').count() == 0
     page.evaluate("""() => {
       const mesh = window.modViewer.activeMeshes[0];
       mesh.userData.componentDescriptor.getMeshEditTools(mesh).setMode('extend');
@@ -1192,6 +1200,12 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
           return ['set','extend','subtract','difference','intersect'].map(value => t(`mesh.selectionMode.${value}`));
         }""")
         assert buttons.evaluate_all('buttons => buttons.map(button => button.getAttribute("aria-label"))') == expected
+        expected_actions = page.evaluate('''async () => {
+          const {t} = await import('./js/i18n/index.js');
+          return ['applySelection','cancelSelection'].map(action => t(`mesh.${action}`));
+        }''')
+        assert page.locator('.draw-item .mesh-header-edit-actions:visible button').evaluate_all(
+            'buttons => buttons.map(button => button.getAttribute("aria-label"))') == expected_actions
         assert active_mode() == 'intersect'
     for width in (1280, 960, 800):
         page.set_viewport_size({'width': width, 'height': 900})
@@ -1210,8 +1224,18 @@ def test_face_selection_modes_combine_clicks_and_rectangles_only_while_editing(v
     page.locator('[data-i18n="mesh.separateBySelection"]').click()
     assert active_mode() == 'set'
     mode.locator('[data-face-selection-mode="extend"]').click()
-    page.locator('.inspector-heading [data-mesh-edit-action="cancelSelection"]').click()
+    assert rows.first.locator('[data-mesh-header-action="cancelSelection"]').is_enabled()
+    assert rows.nth(1).locator('.mesh-header-edit-actions').is_hidden()
+    component_actions = page.locator('.group-hdr [data-mesh-header-action]')
+    assert component_actions.count() == 2
+    assert all(component_actions.nth(index).is_disabled() for index in range(2))
+    rows.first.locator('[data-mesh-header-action="cancelSelection"]').click()
     assert mode.is_hidden()
+    assert page.locator('.draw-item .mesh-header-edit-actions:visible').count() == 0
+    page.locator('.group-hdr [data-mesh-header-action="cancel"]').click()
+    page.locator('#dialog-ok').click()
+    assert rows.count() == 1
+    assert page.locator('.group-hdr .mesh-header-edit-actions').is_hidden()
     assert bridge_calls(page, 'meshApply') == bridge_calls(page, 'export') == []
     assert page.evaluate('!window.__bridge.pending["fixture-01"]')
 
@@ -1612,6 +1636,17 @@ def test_uv_inspector_tracks_textures_faces_and_parts_without_edit_gate(viewer):
     assert page.locator('#texture-modal-backdrop').is_hidden()
     assert overlay.is_visible()
     uv.locator('summary').click()
+    assert overlay.is_visible()
+    assert uv.locator('.inspector-uv-expand').get_attribute('aria-pressed') == 'true'
+    assert uv.locator('.inspector-uv-expand').get_attribute('aria-label') == 'Close expanded UV view'
+    uv.locator('.inspector-uv-expand').click()
+    assert overlay.count() == 0
+    assert uv.get_attribute('open') is not None
+    assert uv.locator('.inspector-uv-expand').get_attribute('aria-pressed') == 'false'
+    assert uv.locator('.inspector-uv-expand').get_attribute('aria-label') == 'Expand UV view'
+    assert uv.locator('.inspector-uv-expand').evaluate('button => button === document.activeElement')
+    assert uv.locator('.inspector-uv-inline').is_visible()
+    assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-inline .inspector-uv-outlines')")
     uv.locator('.inspector-uv-expand').click()
     assert overlay.is_visible()
     assert page.evaluate("window.uvCanvas === document.querySelector('.inspector-uv-outlines')")
@@ -1689,6 +1724,11 @@ def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):
     header = page.locator('.group-hdr').first
     undo = header.locator('[data-mesh-edit-action="undo"]')
     redo = header.locator('[data-mesh-edit-action="redo"]')
+    apply = header.locator('[data-mesh-header-action="apply"]')
+    cancel = header.locator('[data-mesh-header-action="cancel"]')
+    assert apply.is_enabled() and cancel.is_enabled()
+    assert apply.get_attribute('aria-label') == 'Apply Mesh Changes'
+    assert cancel.get_attribute('aria-label') == 'Cancel Mesh Changes'
     assert undo.get_attribute('aria-keyshortcuts') == 'Control+Z'
     assert undo.get_attribute('aria-label') == 'Undo'
     assert redo.get_attribute('title') == 'Redo (Ctrl+Y)'
@@ -1697,14 +1737,14 @@ def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):
     assert page.locator('.group-hdr').nth(1).locator('.mesh-history-actions').is_hidden()
     for width in (1280, 960):
         page.set_viewport_size({'width': width, 'height': 900})
-        bounds = [item.bounding_box() for item in (header.locator('.mesh-edit-badge'), undo, redo)]
-        assert bounds[0]['x'] + bounds[0]['width'] <= bounds[1]['x']
-        assert bounds[1]['x'] + bounds[1]['width'] <= bounds[2]['x']
+        bounds = [item.bounding_box() for item in (header.locator('.mesh-edit-badge'), apply, cancel, undo, redo)]
+        assert all(left['x'] + left['width'] <= right['x'] for left, right in zip(bounds, bounds[1:]))
         outer = header.bounding_box()
-        assert bounds[2]['x'] + bounds[2]['width'] <= outer['x'] + outer['width'] + 0.5
+        assert bounds[-1]['x'] + bounds[-1]['width'] <= outer['x'] + outer['width'] + 0.5
     page.keyboard.press('Control+z')
     assert rows.count() == 2
     assert header.locator('.mesh-edit-badge').is_hidden()
+    assert apply.is_hidden() and cancel.is_hidden()
     assert redo.is_visible() and redo.is_enabled()
     page.keyboard.press('Control+y')
     assert rows.count() == 3
@@ -1721,18 +1761,19 @@ def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):
           if (tag === 'div') editor.contentEditable = 'true';
           document.body.appendChild(editor); editor.focus();
         }""", tag)
-        page.keyboard.type('fixture text')
+        page.keyboard.type('x')
         page.keyboard.press('Control+z')
         assert rows.count() == 3
         assert page.locator('#fixture-editor').evaluate('node => node.value ?? node.textContent') == ''
         page.evaluate('document.getElementById("fixture-editor").remove()')
     page.locator('.group-hdr .group-name').first.click()
-    page.locator('[data-mesh-edit-action="cancel"]').click()
+    cancel.click()
     page.keyboard.press('Control+z')
     assert rows.count() == 3
     page.locator('#dialog-cancel').click()
     page.evaluate("document.body.classList.add('feature-edit-mesh-off')")
     assert undo.is_hidden() and redo.is_hidden()
+    assert apply.is_hidden() and cancel.is_hidden()
     page.keyboard.press('Control+z')
     assert rows.count() == 3
     page.evaluate("document.body.classList.remove('feature-edit-mesh-off')")
@@ -1742,6 +1783,7 @@ def test_component_history_icons_and_shortcuts_respect_editing_context(viewer):
           component[field] = value; component.syncEditState();
         }""", [field, value])
         assert undo.is_disabled()
+        assert apply.is_disabled() and cancel.is_disabled()
         page.keyboard.press('Control+z')
         assert rows.count() == 3
         page.evaluate("""([field, value]) => {

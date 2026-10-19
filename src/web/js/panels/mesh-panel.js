@@ -88,11 +88,20 @@ const meshByRow = new WeakMap();
 const PANEL_SELECTION_THRESHOLD = 5;
 let previewHistory = { source: null, undo: [], redo: [] };
 let restoringPreview = false;
+let faceHeaderTarget = null;
 
 function notifyEditToolsChanged() {
   groupsUI.forEach((group) => group.componentDescriptor.syncEditState?.());
+  syncFaceSelectionHeader();
   syncFaceSelectionModes();
   window.dispatchEvent(new CustomEvent('mod-viewer-mesh-edit-tools-changed'));
+}
+
+function syncFaceSelectionHeader() {
+  const target = getFaceSelection()?.target || null;
+  if (faceHeaderTarget !== target) getMeshView(faceHeaderTarget)?.syncEditActions?.();
+  faceHeaderTarget = target;
+  getMeshView(target)?.syncEditActions?.();
 }
 
 function syncFaceSelectionModes() {
@@ -779,6 +788,41 @@ export function refreshAutomaticTextureBoundaries() {
   groupsUI.forEach((group) => recomputeAutomaticTextureBoundaries(group.itemObjs));
 }
 
+function buildHeaderEditActions(mesh, descriptor, ids) {
+  const controls = document.createElement('span');
+  controls.className = 'mesh-header-edit-actions';
+  controls.hidden = true;
+  const buttons = new Map();
+  const sync = () => {
+    controls.hidden = mesh ? getFaceSelection()?.target !== mesh : descriptor?.meshEditState !== 'edited';
+    if (controls.hidden) return;
+    const actions = inspectorEditTools(mesh, descriptor).actions.filter((action) => ids.includes(action.id));
+    for (const action of actions) {
+      let button = buttons.get(action.id);
+      if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-btn mesh-header-edit-btn';
+        button.dataset.meshHeaderAction = action.id;
+        button.appendChild(createIcon(action.id.startsWith('apply') ? 'check' : 'close'));
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          void inspectorEditTools(mesh, descriptor).run(action.id);
+        });
+        button.addEventListener('dblclick', (event) => event.stopPropagation());
+        buttons.set(action.id, button);
+        controls.appendChild(button);
+      }
+      const label = t(action.key);
+      button.setAttribute('aria-label', label);
+      button.title = action.reason ? `${label}: ${t(action.reason)}` : label;
+      button.disabled = action.disabled;
+    }
+  };
+  sync();
+  return { controls, sync };
+}
+
 function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, componentDescriptor = null) {
   const hdr = document.createElement('div');
   hdr.className = 'group-hdr';
@@ -814,6 +858,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
   editBadge.className = 'mesh-edit-badge';
   editBadge.hidden = true;
   editBadge.textContent = t('toolbar.edited');
+  const editActions = buildHeaderEditActions(null, componentDescriptor, ['apply', 'cancel']);
   const historyControls = document.createElement('span');
   historyControls.className = 'mesh-history-actions';
   const historyButtons = ['undo', 'redo'].map((direction) => {
@@ -832,6 +877,9 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
     return button;
   });
   const syncEditState = () => {
+    editActions.sync();
+    const face = getFaceSelection();
+    if (face && componentForMesh(face.source) === componentDescriptor) getMeshView(face.target)?.syncEditActions?.();
     const state = componentDescriptor?.meshEditState || 'clean';
     editBadge.hidden = state !== 'edited';
     editBadge.dataset.state = state;
@@ -847,7 +895,7 @@ function buildGroupHeader(groupName, itemsWrap, onComponentSelected = null, comp
       button.title = `${t(`mesh.${direction}`)} (Ctrl+${direction === 'undo' ? 'Z' : 'Y'})`;
     });
   };
-  hdr.append(editBadge, historyControls);
+  hdr.append(editBadge, editActions.controls, historyControls);
   nameSpan.addEventListener('click', (event) => {
     event.stopPropagation();
     onComponentSelected?.();
@@ -965,6 +1013,11 @@ function buildDrawRow(
   const displayLabel = labelOverride || mesh.userData.loosePartLabel || mesh.userData.displayName || label;
   labelSpan.textContent = displayLabel;
   row.append(cb, labelSpan);
+  const editActions = buildHeaderEditActions(mesh, componentForMesh(getMeshEditSource(mesh)), [
+    'applySelection',
+    'cancelSelection',
+  ]);
+  row.appendChild(editActions.controls);
   const updateStateIndicator = (m) => {
     const visible = meshUnderlyingVisible(m);
     cb.checked = visible;
@@ -982,6 +1035,7 @@ function buildDrawRow(
     row,
     stateButton: cb,
     syncStateIndicator: () => updateStateIndicator(mesh),
+    syncEditActions: editActions.sync,
   });
   meshByRow.set(row, mesh);
   row.addEventListener('click', (event) => selectPanelRow(event, mesh));
@@ -1434,6 +1488,7 @@ export function appendMeshPanel(meshes, liveMeshes, modPath, options = {}) {
   const replace = options.replace !== false;
   closeMeshContextMenu();
   if (replace) {
+    faceHeaderTarget = null;
     previewHistory = { source: null, undo: [], redo: [] };
     list.innerHTML = '';
     groupsUI = [];
