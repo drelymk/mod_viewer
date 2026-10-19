@@ -246,7 +246,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     visibility_vars = {f"{var_prefix or ''}{name}" for name in tracked_vars}
     visibility_vars.update((qualified_vars or {}).values())
     section_lookup = {str(name).lower(): name for name in sections}
-    commands = {name: tuple(parse_command_line(raw) for raw in lines)
+    commands = {name: tuple(command for raw in lines
+                            if (command := parse_command_line(raw)).text)
                 for name, lines in sections.items()}
     alias_map = (condition_aliases if condition_aliases is not None
                  else build_bool_alias_map(sections))
@@ -615,8 +616,14 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if run_match:
                 target_name = _run_target_name(line, section_lookup)
-                if not target_name or target_name in visiting:
-                    info["execution_resolved"] = False
+                # Keep an opaque tail call at its original pre/post site. The
+                # shared draw moves across the skip-only owner, not this call.
+                external_tail = (
+                    not execution_path and not cond_stack and command.phase is None
+                    and run_match[1].casefold().startswith("commandlist\\")
+                    and command is commands[section_name][-1])
+                if target_name in visiting or (not target_name and not external_tail):
+                    info["auto_execution_safe"] = False
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     for target_phase in run_target_phases(
@@ -641,7 +648,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "auto_sources": [],
             "auto_draws": [], "auto_owner_safe": True, "handling_skip": False,
             "matching_safe": True, "_match_keys": set(), "match_priority": 0,
-            "execution_resolved": True,
+            "auto_execution_safe": True,
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},

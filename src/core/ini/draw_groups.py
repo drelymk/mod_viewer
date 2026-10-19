@@ -139,7 +139,7 @@ def _auto_families(section_info):
                 or len(owner["auto_sources"]) != 1 or not members
                 or None in indices or len(set(indices)) != len(indices)):
             continue
-        if all(info["matching_safe"] and info["execution_resolved"]
+        if all(info["matching_safe"] and info["auto_execution_safe"]
                and not info["draws"] and not info["auto_draws"]
                and not info.get("unresolved_draws")
                and len(info["index_binding_history"]) == 1

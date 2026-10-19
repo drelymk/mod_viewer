@@ -85,8 +85,10 @@ of documentation, comments and tests; use portable fixtures instead.
   IB with explicit R16_UINT/R32_UINT format and complete triangles. A shared
   auto may move into its complete same-INI/hash family only when distinct
   `match_first_index` components own distinct buffers and execute before a
-  shared skip-only draw owner in 3DMigoto's priority/name order. All command-list
-  calls must resolve in the same INI; unresolved calls block shared migration.
+  shared skip-only draw owner in 3DMigoto's priority/name order. Unresolved calls
+  block shared migration except an unconditional, unqualified namespaced
+  CommandList call at the component's end. Keep that opaque call at the same
+  pre/post execution site; the draw crosses only the shared skip-only owner.
   The canonical draw scan and resource analysis establish eligibility; the
   editor never interprets command lists or re-resolves resource declarations.
   Local auto edits replace the exact instruction in place through the shared
