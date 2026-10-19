@@ -61,14 +61,16 @@ format = R16_UINT
             assert line.endswith(f"drawindexed = 3, {draw.start}, 0")
 
 
-def test_index_branch_join_restores_matching_direct_vertex_slots():
-    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
-if $Mode == 0
+@pytest.mark.parametrize("switch_index", [False, True])
+def test_branch_join_restores_matching_direct_vertex_slots(switch_index):
+    alternate_ib = "ib = ResourceAlternateIB" if switch_index else ""
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01]
 ib = ResourceComponent01IB
+if $Mode == 0
 vb0 = ResourceComponent01Position
 vb1 = ResourceComponent01Texcoord
 else
-ib = ResourceAlternateIB
+{alternate_ib}
 vb0 = ResourceAlternatePosition
 vb1 = ResourceAlternateTexcoord
 endif
@@ -92,7 +94,8 @@ stride = 8
         assert len(active) == 2
         first, null = active
         assert (first.ib_file, first.position_file, first.texcoord_file) == (
-            ("alternate.ib", "alternate-position.buf", "alternate-texcoord.buf") if mode else
+            ("alternate.ib" if switch_index else "component01.ib",
+             "alternate-position.buf", "alternate-texcoord.buf") if mode else
             ("component01.ib", "component01-position.buf", "component01-texcoord.buf"))
         assert null.position_file is None
         assert [draw.occurrence.ordinal for draw in active] == [0, 1]
@@ -511,17 +514,19 @@ filename = component01-light-map.dds
 """ + standard_component_resources())
     authored = _scan_sections_for_draws(sections, gating_vars={"mode"})[
         "TextureOverrideComponent01"]["draws"]
-    assert [(draw.start, draw.vertex_resources)
-            for draw in authored] == [
-        (start, {0: "ResourceComponent01PositionAlt", 1: "ResourceComponent01Texcoord"})
-        for start in (0, 3)
-    ]
+    for mode in (0, 1):
+        active = [draw for draw in authored if visible(draw.conditions, {"mode": str(mode)})]
+        assert [(draw.start, draw.vertex_resources) for draw in active] == (
+            [(start, {0: "ResourceComponent01PositionAlt", 1: "ResourceComponent01Texcoord"})
+             for start in (0, 3)] if mode else
+            [(3, {0: "ResourceComponent01Position"})])
     groups = build_draw_groups(
         sections, extract_resources(sections), gating_vars={"mode"})
     draws = groups[0]["draws"]
 
     assert [(item.start, item.position_file) for item in draws] == [
         (0, "component01-position-alt.buf"),
+        (3, "component01-position.buf"),
         (3, "component01-position-alt.buf")]
     assert draws[0].texture_default("diffuse") == "component01-diffuse.dds"
     assert draws[0].texture_default("light_map") is None

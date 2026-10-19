@@ -178,50 +178,56 @@ def _buffer_resource_at_draw(history, conditions, fallback):
 
 
 def _index_draws_at_join(authored, history, visibility_vars, vertex_history):
-    """Keep IB alternatives and their direct vertex snapshots consistent."""
-    if not history or any(authored.animation_conditions):
+    """Resolve conditional IB and direct VB snapshots at the authored draw."""
+    if any(authored.animation_conditions):
         return [authored]
-    fallback = replace(authored, index_resource=_buffer_resource_at_draw(
-        history, authored.binding_conditions, None))
-    if len({item["resource"] for item in history}) <= 1 and fallback.index_resource:
-        return [fallback]
-    remaining = authored.binding_conditions
-    draws = []
-    for item in reversed(history):
-        applicable = [group for group in dnf_and(
-            remaining or DNF_TRUE, item["conditions"] or DNF_TRUE)
-            if _condition_group_is_consistent(group)]
-        if not applicable:
-            continue
-        unknown = normalize_dnf(item["conditions"], {
-            clause["var"] for group in item["conditions"] for clause in group
-            if clause["var"] not in visibility_vars})
-        if unknown and _condition_difference(authored.binding_conditions, unknown) is not None:
-            # An unknown write cannot prove a replacement; retain earlier
-            # supported alternatives instead of the last scanned resource.
-            continue
-        draws.append(replace(
-            authored, index_resource=item["resource"], binding_conditions=applicable,
-            conditions=normalize_dnf(applicable, visibility_vars)))
-        remaining = _condition_difference(remaining, item["conditions"])
-        if remaining is None:
-            break
-    else:
-        if remaining is not None:
-            draws.append(replace(fallback, binding_conditions=remaining,
-                                 conditions=normalize_dnf(remaining, visibility_vars)))
-    # Each IB branch uses only bindings already authored at this draw. An
-    # absent slot stays untouched; an explicit null remains an occupied slot.
+    vertex_histories = {
+        slot: [item for item in vertex_history if item["slot"] == slot]
+        for slot in authored.vertex_resources}
+    draws = [authored]
+    for assignments in [history, *vertex_histories.values()]:
+        resolved = []
+        for draw in draws:
+            remaining = draw.binding_conditions
+            branches = []
+            for item in reversed(assignments):
+                applicable = [group for group in dnf_and(
+                    remaining or DNF_TRUE, item["conditions"] or DNF_TRUE)
+                    if _condition_group_is_consistent(group)]
+                if not applicable:
+                    continue
+                unknown = normalize_dnf(item["conditions"], {
+                    clause["var"] for group in item["conditions"] for clause in group
+                    if clause["var"] not in visibility_vars})
+                if unknown and _condition_difference(draw.binding_conditions, unknown) is not None:
+                    # An unknown write cannot prove a replacement; retain earlier
+                    # supported alternatives instead of the last scanned resource.
+                    continue
+                branches.append(replace(
+                    draw, binding_conditions=applicable,
+                    conditions=normalize_dnf(applicable, visibility_vars)))
+                remaining = _condition_difference(remaining, item["conditions"])
+                if remaining is None:
+                    break
+            else:
+                if remaining is not None:
+                    branches.append(replace(
+                        draw, binding_conditions=remaining,
+                        conditions=normalize_dnf(remaining, visibility_vars)))
+            resolved.extend(reversed(branches))
+        draws = resolved
+    # Select every binding from the same guard. An absent slot stays untouched;
+    # an explicit null remains an occupied slot.
     missing = object()
     for draw in draws:
+        draw.index_resource = _buffer_resource_at_draw(
+            history, draw.binding_conditions, None) if history else authored.index_resource
         draw.vertex_resources = {}
-        for slot in authored.vertex_resources:
-            value = _buffer_resource_at_draw(
-                [item for item in vertex_history if item["slot"] == slot],
-                draw.binding_conditions, missing)
+        for slot, assignments in vertex_histories.items():
+            value = _buffer_resource_at_draw(assignments, draw.binding_conditions, missing)
             if value is not missing:
                 draw.vertex_resources[slot] = value
-    return list(reversed(draws)) or [fallback]
+    return draws
 
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
