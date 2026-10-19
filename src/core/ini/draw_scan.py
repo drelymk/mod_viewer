@@ -13,12 +13,13 @@ from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
 from .menu import extract_menu_var_names
 from .state import extract_state_rules
 from .toggles import extract_toggle_var_names
+from .draw_bindings import resolve_index_bindings
 from .texture_roles import (
     _collect_structural_slot_role_hints, _collect_texture_override_index,
     _effective_role_assignments, _legacy_texture_evidence,
     _semantic_texture_role,
 )
-from .sections import line_source
+from .sections import canonical_var_names, line_source
 
 
 _RUN_SKIP_PREFIXES = (
@@ -171,12 +172,16 @@ def _split_animation_conditions(conditions, animation_vars):
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                              animation_vars=None, qualified_vars=None, *,
-                             resources=None, condition_aliases=None):
+                             resources=None, condition_aliases=None,
+                             canonical_vars=None):
     """Scan TextureOverride and CommandList execution state into snapshots."""
     toggle_vars = (gating_vars if gating_vars is not None else
                    gating_var_names(sections))
     animation_vars = set(animation_vars or ())
     tracked_vars = set(toggle_vars) | animation_vars
+    canon = (canonical_vars if canonical_vars is not None
+             else canonical_var_names(sections))
+    vertex_vars = tracked_vars | set(canon.values())
     section_lookup = {str(name).lower(): name for name in sections}
     commands = {name: tuple(parse_command_line(raw) for raw in lines)
                 for name, lines in sections.items()}
@@ -399,6 +404,16 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 value = None if resource.lower() == "null" else resource
                 if cond_stack:
                     info["vertex_bindings_conditional"] = True
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                info["vertex_binding_history"].append({
+                    "slot": slot, "resource": value,
+                    "conditions": normalize_dnf(
+                        combined, tracked_vars, var_prefix, qualified_vars),
+                    "guard": normalize_dnf(
+                        combined, vertex_vars, var_prefix, qualified_vars),
+                })
                 if slot == 0 and value and animation_vars:
                     # Command lists often put the animated vb0 assignment in
                     # an ``elif DRAW_TYPE`` branch.  Unknown runtime branch
@@ -439,6 +454,16 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if not info["ib"]:
                     info["ib"] = match.group(1)
                 info["_cur_ib"] = match.group(1)
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                info["index_binding_history"].append({
+                    "resource": match.group(1),
+                    "conditions": normalize_dnf(
+                        combined, tracked_vars, var_prefix, qualified_vars),
+                    "guard": normalize_dnf(
+                        combined, vertex_vars, var_prefix, qualified_vars),
+                })
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
             if match:
                 occurrence = DrawOccurrence(
@@ -465,9 +490,11 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         **source,
                         "occurrence": occurrence.to_dict(),
                     }
-                info["draws"].append(AuthoredDrawCall(
+                authored = AuthoredDrawCall(
                     count=arguments[0], start=arguments[1],
                     base=arguments[2], conditions=conditions,
+                    binding_conditions=normalize_dnf(
+                        combined, vertex_vars, var_prefix, qualified_vars),
                     animation_conditions=animation_conditions,
                     source=source,
                     occurrence=occurrence,
@@ -485,7 +512,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     skinning_remap_resources=dict(
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
-                ))
+                )
+                info["draws"].extend(resolve_index_bindings(
+                    authored, info["index_binding_history"]))
             semantic = re.match(
                 r"^(Resource[\\/]"
                 r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
@@ -527,6 +556,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "referenced_textures": {},
             "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
+            "vertex_binding_history": [],
+            "index_binding_history": [],
             "_cur_compute_resources": {},
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,

@@ -488,6 +488,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
     component_vertex_resources = {}
     component_blend_vertex_resources = {}
     component_animation_vertex_bindings = {}
+    component_vertex_binding_history = {}
     hash_positions, hash_texcoords = {}, {}
     component_roles = _component_roles_for_sections(section_info)
 
@@ -497,6 +498,15 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         parsed = component_roles.get(name)
         if parsed:
             component_name, component_suffix = parsed
+            history = info.get("vertex_binding_history") or []
+            # Baked frame bindings keep their existing animation reconstruction.
+            # Static role overrides can be inherited by an indexed draw instead.
+            if (history and not info.get("animation_vertex_bindings")
+                    and not info["draws"] and not info["drawindexed_auto"]):
+                role_history = component_vertex_binding_history.setdefault(
+                    component_name.lower(), {})
+                role_history.setdefault(component_suffix.lower(), []).extend(
+                    history)
             resources_for_component = component_vertex_resources.setdefault(
                 component_name.lower(), {})
             for slot, resource in (
@@ -601,6 +611,7 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         "component_blend_vertex_resources": component_blend_vertex_resources,
         "component_animation_vertex_bindings": (
             component_animation_vertex_bindings),
+        "component_vertex_binding_history": component_vertex_binding_history,
         "hash_buffers": {
             value: {"position": position, "texcoord": hash_texcoords[value]}
             for value, position in hash_positions.items()

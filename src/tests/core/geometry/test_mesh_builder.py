@@ -8,7 +8,143 @@ from core.ini.parser import (build_draw_groups, extract_resources,
                              extract_toggle_keys, merge_sections)
 from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
+from core.ini.analysis import analyze_ini
+from core.ini.sections import parse_sections
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
+from tests.support.provenance import visible
+
+
+def test_conditional_component_streams_keep_geometry_and_weights_aligned(tmp_path):
+    controls = """[Constants]
+global $Mode = 0
+global $Damage = 0
+global $Special = 0
+global $Top = 0
+[KeyMode]
+type = cycle
+$Mode = 0,1,2,3
+[KeyDamage]
+type = cycle
+$Damage = 0,1,2
+[KeyTop]
+type = cycle
+$Top = 0,1
+[KeySpecial]
+type = cycle
+$Special = 0,1
+"""
+
+    def branches(command):
+        return f"""if $special == 1
+if $Top == 0
+{command(0)}
+else
+{command(1)}
+endif
+else
+if $Damage == 0
+if $Mode == 0
+{command(2)}
+else if $Mode == 1
+{command(3)}
+else if $Mode == 2
+{command(4)}
+else
+{command(5)}
+endif
+else if $Damage == 1
+{command(6)}
+else
+{command(7)}
+endif
+endif
+"""
+
+    def index_resource(index):
+        return "ResourceComponent01Variant0IB" if index == 0 else f"ResourceIndex{index}"
+
+    text = controls
+    for role, slot, stride in (("Position", 0, 40), ("Texcoord", 1, 20),
+                               ("Blend", 1, 32)):
+        text += f"[TextureOverrideComponent01{role}]\n"
+        text += branches(lambda i: f"vb{slot} = ResourceStream{i}{role}")
+        for i in range(8):
+            text += (f"[ResourceStream{i}{role}]\n"
+                     f"filename = stream{i}-{role.lower()}.buf\n"
+                     f"stride = {stride}\n")
+            data = bytearray()
+            for vertex in range(6):
+                if role == "Position":
+                    data.extend(struct.pack(
+                        "<10f", i * 10 + vertex % 3, vertex % 2, 0,
+                        0, 0, 1, 0, 0, 0, 0))
+                elif role == "Blend":
+                    data.extend(struct.pack("<4f4I", 1, 0, 0, 0, i, 0, 0, 0))
+                else:
+                    data.extend(struct.pack("<I4f", 0, vertex % 2,
+                                            vertex % 3 / 2, 0, 0))
+            (tmp_path / f"stream{i}-{role.lower()}.buf").write_bytes(data)
+    text += "[TextureOverrideComponent01A]\nib = ResourceComponent01IB\n"
+    text += "drawindexed = 3, 0, 0\n"
+    text += "[TextureOverrideComponent01B]\n"
+    text += branches(lambda i: (
+        f"ib = {index_resource(i)}\ndrawindexed = 3, 0, 0"))
+    text += "[TextureOverrideComponent01C]\n"
+    text += branches(lambda i: f"ib = {index_resource(i)}")
+    text += "drawindexed = 3, 0, 0\n"
+    for name, filename, indices in [
+        ("ResourceComponent01IB", "shared.ib", (0, 1, 2)),
+        *[(index_resource(i), f"variant{i}.ib", (3, 4, 5))
+          for i in range(8)],
+    ]:
+        short = filename in {f"variant{i}.ib" for i in (1, 3, 5, 7)}
+        text += (f"[{name}]\nfilename = {filename}\n"
+                 f"format = {'R16_UINT' if short else 'R32_UINT'}\n")
+        (tmp_path / filename).write_bytes(struct.pack(
+            "<3H" if short else "<3I", *indices))
+
+    path = tmp_path / "source.ini"
+    path.write_text(text, encoding="utf-8")
+    analysis = analyze_ini(parse_sections(str(path)), var_prefix="source::")
+    assert "source::Special" in analysis.gating_vars
+    groups = analysis.draw_groups
+    assert [len(group["draws"]) for group in groups] == [8, 8, 8]
+    assert len({draw.occurrence for draw in groups[0]["draws"]}) == 1
+    assert len({draw.occurrence for draw in groups[1]["draws"]}) == 8
+    assert len({draw.occurrence for draw in groups[2]["draws"]}) == 1
+    for draw in groups[0]["draws"]:
+        assert text.splitlines()[draw.sources[0]["line_no"] - 1] == (
+            "drawindexed = 3, 0, 0")
+    result = build_mesh_result(groups, str(tmp_path))
+    assert len(result.meshes) == 24
+    for special in (0, 1):
+        for top in (0, 1):
+            for damage in range(3):
+                for mode in range(4):
+                    state = {f"source::{name}": str(value) for name, value in (
+                        ("Special", special), ("Top", top),
+                        ("Damage", damage), ("Mode", mode))}
+                    expected = (top if special else
+                                mode + 2 if damage == 0 else damage + 5)
+                    for group in groups:
+                        draws = [draw for draw in group["draws"]
+                                 if visible(draw.conditions, state)]
+                        assert len(draws) == 1
+                        draw = draws[0]
+                        assert draw.position_file == f"stream{expected}-position.buf"
+                        assert draw.texcoord_file == f"stream{expected}-texcoord.buf"
+                        assert draw.skinning_source.file == f"stream{expected}-blend.buf"
+                        if group is not groups[0]:
+                            assert draw.ib_file == f"variant{expected}.ib"
+                            assert draw.index_size == (2 if expected % 2 else 4)
+                        entry = result.meshes[draw.label]
+                        positions = geometry_values(result.geometry, entry["pos"])
+                        assert sorted(positions[0::3]) == [
+                            expected * 10 + value for value in (0, 1, 2)]
+                        manifest = result.skinning_manifest[draw.label]
+                        assert manifest.skinning_source == draw.skinning_source
+                        assert manifest.used_vertices == (
+                            (0, 1, 2) if group is groups[0] else (3, 4, 5))
 
 IB_REASSIGN_INI = """[TextureOverrideComponent01Blend]
 ib = ResourceComponent01HeadIB

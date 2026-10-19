@@ -144,6 +144,13 @@ of documentation, comments and tests; use portable fixtures instead.
   `role::mod-relative-path` for `diffuse`, `normal_map`, `normal_data`, `light_map`,
   `material_map` and `emission_map`. Diffuse is sRGB; auxiliary roles are non-color
   data. Normalize legacy path-only keys using the caller's known role.
+- Separate component Position/Texcoord/Blend overrides retain ordered conditional
+  bindings per numeric slot. Resolve conditional IB assignments at each draw,
+  including draws after branch joins, and inherit compatible vertex streams.
+  Runtime guards are binding evidence, not new visibility controls; ambiguous
+  unsupported state retains the static fallback. Preserve direct bindings,
+  explicit nulls and authored provenance; baked frames retain their separate
+  animation reconstruction.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
 - Original Asset texture fallback is available only when a draw has no mod
