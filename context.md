@@ -434,10 +434,12 @@ of documentation, comments and tests; use portable fixtures instead.
   choices; exit/reset/topology replacement clears the filter. New edit controls
   follow the `edit_mesh` UI gate; feature hiding never replaces backend validation or
   the Export boundary.
-  Component MESHES headers own preview Undo/Redo icons beside Edited; Ctrl+Z/Y
-  use the same history and must defer to text editors, dialogs, and rig gestures.
-  Apply/Cancel Mesh Changes belong to component inspection and context menus,
-  never individual mesh inspection.
+  Component MESHES headers place Apply/Cancel Mesh Changes between Edited and
+  preview Undo/Redo icons; Ctrl+Z/Y use the same history and must defer to text
+  editors, dialogs, and rig gestures. Apply/Cancel Mesh Changes belong to component
+  headers, inspection and context menus, never individual mesh inspection.
+  During face selection, the active mesh or part row exposes Apply/Cancel
+  Selection using the shared edit-action availability and handlers.
   Inspector edit actions are header icons before the mesh visibility eye;
   Isolate Selected remains in the shared viewport/MESHES mesh context menu,
   including after isolation; changing the selection permits another isolation.
@@ -448,11 +450,13 @@ of documentation, comments and tests; use portable fixtures instead.
   current mesh's wireframe and resolve highlights directly from selected face
   IDs; texture changes never rebuild that geometry. The section follows Color;
   viewport expansion reparents the same canvases, preserves aspect and side
-  panels, and follows mesh selection without closing. Only its X button closes
-  the zoomed view during inspection; section/header clicks preserve it. UV does
+  panels, and follows mesh selection without closing. Its X button or a second
+  click on the zoom button closes it; section/header clicks preserve it. UV does
   not intercept Escape; dialogs and mesh-edit cancellation keep their handlers.
   Model teardown still releases it. Reuse the
   current diffuse publication and DDS preview across panel rebuilds and closing.
+  UV DDS previews expose RGB independently of authored alpha; menu previews
+  retain transparency. Keep both alpha policies distinct in the preview cache.
   Size embedded DDS previews for the panel; upgrade only when the displayed
   texture needs more pixels, up to 2048 on its longest edge in viewport mode.
   Render upgrades from the ready model texture and retain the larger cached

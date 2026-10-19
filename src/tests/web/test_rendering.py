@@ -4,6 +4,7 @@ import base64
 import io
 import struct
 
+import pytest
 from PIL import Image
 from app.assets.loader import AssetLoadResult, AssetMeshPart
 from app.assets.loader.models import AssetTexture
@@ -769,8 +770,10 @@ def test_active_uv_refreshes_when_dds_is_replaced_at_the_same_url(viewer, tmp_pa
         publication.release()
 
 
-def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
-    expected = [(96, 144, 192, 128), (192, 96, 48, 128)]
+@pytest.mark.parametrize('alpha', [0, 128])
+def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path, alpha):
+    expected = [(96, 144, 192, alpha), (192, 96, 48, alpha)]
+    transparent_expected = expected if alpha else [(0, 0, 0, 0)] * 2
     blocks = []
     for *rgb, alpha in expected:
         bits = int.from_bytes(mode6_block(tuple((value, value) for value in rgb)), 'little')
@@ -805,7 +808,7 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
           [...document.querySelector('#menu-list canvas').getContext('2d').getImageData(128, y, 1, 1).data])})""")
         assert result['state'] == before_state
         assert all(max(abs(left - right) for left, right in zip(actual, reference)) <= 4
-                   for actual, reference in zip(result['pixels'], expected))
+                   for actual, reference in zip(result['pixels'], transparent_expected))
         assert max(abs(left - right) for left, right in zip(before_pixels, mesh_pixel(page))) < 5
         page.evaluate('''async url => {
           const {addTexture} = await import('./js/mesh/mesh-factory.js');
@@ -846,7 +849,15 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
             .getImageData(canvas.width/2,canvas.height*y,1,1).data])})''')
         assert 0.45 < uv['aspect'] < 0.6
         assert all(max(abs(left-right) for left,right in zip(actual,reference)) <= 4
-                   for actual,reference in zip(uv['pixels'],expected))
+                   for actual,reference in zip(uv['pixels'], [(*rgba[:3], 255) for rgba in expected]))
+        alpha_preview = page.evaluate('''async url => {
+          const {getDDSPreview} = await import('./js/textures/dds-preview.js');
+          const canvas = await getDDSPreview(url,()=>true,{size:32,preserveAspect:true});
+          return [0.25,0.75].map(y => [...canvas.getContext('2d')
+            .getImageData(canvas.width/2,canvas.height*y,1,1).data]);
+        }''', url)
+        assert all(max(abs(left-right) for left,right in zip(actual,reference)) <= 4
+                   for actual,reference in zip(alpha_preview, transparent_expected))
         assert page.evaluate('previewState()') == state_before_uv
         inline_size = page.evaluate('Math.max(...uvPreviewTargets.at(-1))')
         assert inline_size <= 512
@@ -884,7 +895,7 @@ def test_menu_dds_canvas_preserves_pixels_and_viewport(viewer, tmp_path):
           const {getReadyTextureForPreview} = await import('./js/mesh/mesh-factory.js');
           const texture = getReadyTextureForPreview('diffuse::texture-03.dds');
           let disposals = 0; texture.addEventListener('dispose',()=>disposals++);
-          const options = {size:32,preserveAspect:true,texture};
+          const options = {size:32,preserveAspect:true,preserveAlpha:false,texture};
           const before = previewReads;
           const a = await getDDSPreview(url,()=>true,options);
           const b = await getDDSPreview(url,()=>true,options);

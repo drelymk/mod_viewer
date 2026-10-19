@@ -920,9 +920,9 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
   white-space: nowrap;
 }
 .mesh-edit-badge[data-state="applied"] { color: var(--accent-soft); }
-.mesh-history-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; }
-.mesh-history-actions[hidden] { display: none; }
-.icon-btn.mesh-history-btn { width: 22px; height: 22px; min-height: 22px; }
+.mesh-history-actions, .mesh-header-edit-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; }
+.mesh-history-actions[hidden], .mesh-header-edit-actions[hidden] { display: none; }
+.icon-btn.mesh-history-btn, .icon-btn.mesh-header-edit-btn { width: 22px; height: 22px; min-height: 22px; }
 .inspector-edit-summary { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .dialog-range-field {
   display: none; flex-direction: column; gap: 4px; margin-top: 12px;
@@ -957,6 +957,7 @@ body.feature-edit-mesh-off .mesh-edit-context-action { display: none; }
 body.feature-edit-mesh-off .inspector-mesh-edit-section { display: none; }
 body.feature-edit-mesh-off .inspector-mesh-edit-actions { display: none; }
 body.feature-edit-mesh-off .mesh-history-actions { display: none; }
+body.feature-edit-mesh-off .mesh-header-edit-actions { display: none; }
 body.feature-edit-mesh-off .mesh-selection-modes { display: none; }
 .inspector-mesh-edit-actions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; }
 .icon-btn.inspector-edit-btn { width: 22px; height: 22px; min-height: 22px; }
