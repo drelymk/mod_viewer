@@ -29,6 +29,7 @@ _STATE_ADD_RE = re.compile(
     r'^\$(\w+)\s*=\s*\$(\w+)\s*\+\s*\$(\w+)$')
 _BUTTON_RE = re.compile(r'CommandListButton(\d+)(Left|Right)', re.I)
 _IMAGE_BINDING_RE = re.compile(r'ps-t100\s*=\s*(\S+)', re.I)
+_RUN_RE = re.compile(r'run\s*=\s*(CommandList\w+)$', re.I)
 _RECT_BINDING_RE = re.compile(r'([xyzw]87)\s*=\s*(.*)', re.I)
 
 _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">"}
@@ -103,8 +104,8 @@ def _slot_chains(parsed, image_chains=None):
                                       branch["body"]))
             if len(parts) >= _MIN_SLOTS and image_chains is not None:
                 image_chains.append(parts)
-            if len(parts) >= _MIN_SLOTS and not nested:
-                found.append([part[:3] for part in parts])
+            if len(parts) >= _MIN_SLOTS:
+                found.append(parts)
             found.extend(nested)
         return found
 
@@ -188,66 +189,57 @@ def _branch_image(nodes, resources):
     return _resource_file(resources, names[0]) if len(names) == 1 else None
 
 
-def _variable_images(blocks, resources, variables, region_vars=None):
-    """Resolve first artwork, matching authored click and draw regions when known."""
+def _variable_images(blocks, resources, variables, region_vars=None, *, regions=None):
+    """Resolve first artwork through shared variable and hit-region evidence."""
     if resources is None or not variables:
         return {}
     roots = [parsed[1] for parsed in blocks if parsed is not None]
-    regions = {}
+    regions = {var: set(values) for var, values in (regions or {}).items()}
     images = {}
+    for root in roots:
+        for _block, branch, _guard_node, _axes, _count, region in _walk_branches(root):
+            if region:
+                for node in branch["body"]:
+                    assignment = _ASSIGN_RE.fullmatch(node) if isinstance(node, str) else None
+                    if assignment:
+                        regions.setdefault(assignment.group(1).casefold(), set()).add(region)
+    for variable, pulse in (region_vars or {}).items():
+        if pulse in regions:
+            regions.setdefault(variable, set()).update(regions[pulse])
 
-    def cursor_variables(text):
-        axes = {"x": set(), "y": set()}
+    def rectangle_region(state):
+        return tuple(frozenset(state.get(register) for register in pair)
+                     for pair in (("x87", "z87"), ("y87", "w87")))
 
-        def visit(part):
-            if isinstance(part, condition.Paren):
-                visit(part.inner)
-            elif isinstance(part, condition.And):
-                for child in part.parts:
-                    visit(child)
-            elif isinstance(part, condition.Cmp) and part.op in ("<", "<=", ">", ">="):
-                for axis in axes:
-                    if re.search(rf'\bcursor_{axis}\b', part.render(), re.I):
-                        axes[axis].update(name.casefold() for name in part.variables())
+    def publish(variable, names, region):
+        if variable not in variables or variable in images:
+            return
+        if variable in regions and region not in regions[variable]:
+            return
+        for name in names:
+            image = _resource_file(resources, name)
+            if image:
+                images[variable] = image
+                break
 
-        try:
-            visit(condition.parse(text or ""))
-        except condition.ConditionError:
-            pass
-        return axes
-
-    def click_regions(nodes, axes):
+    def collect(nodes, state, variable=None):
         for node in nodes:
             if isinstance(node, str):
-                assignment = _ASSIGN_RE.fullmatch(node)
-                if assignment and all(len(names) == 2 for names in axes.values()):
-                    region = tuple(frozenset(axes[axis]) for axis in ("x", "y"))
-                    regions.setdefault(assignment.group(1).casefold(), set()).add(region)
-                continue
-            for branch in node["branches"]:
-                bounds = cursor_variables(branch["condition"])
-                click_regions(branch["body"],
-                              {axis: axes[axis] | bounds[axis] for axis in axes})
-
-    def collect(nodes, rectangle, variable=None):
-        assigned = set()
-        for node in nodes:
-            if isinstance(node, str):
-                binding = _RECT_BINDING_RE.fullmatch(node)
-                if binding:
-                    register, value = binding.groups()
-                    register = register.casefold()
-                    name = re.fullmatch(r'\$(\w+)', value.strip())
-                    rectangle[register] = name.group(1).casefold() if name else None
-                    assigned.add(register)
-                if variable:
-                    region = tuple(frozenset(rectangle.get(register) for register in pair)
-                                   for pair in (("x87", "z87"), ("y87", "w87")))
-                    if variable in regions and region not in regions[variable]:
-                        continue
-                    image = _section_image((node,), resources)
-                    if image:
-                        images.setdefault(variable, image)
+                rect = _RECT_BINDING_RE.fullmatch(node)
+                binding = _IMAGE_BINDING_RE.fullmatch(node)
+                if rect:
+                    register, value = rect.groups()
+                    # Pressed-button displacement retains the authored rectangle.
+                    name = re.fullmatch(r'\$(\w+)(?:\s*[+-]\s*\d+(?:\.\d+)?)?', value.strip())
+                    state[register.casefold()] = name.group(1).casefold() if name else None
+                elif binding:
+                    state["images"] = (binding.group(1),)
+                    publish(variable, state["images"], rectangle_region(state))
+                elif re.fullmatch(r'run\s*=\s*CustomShader\w+', node, re.I):
+                    region = rectangle_region(state)
+                    for target in variables:
+                        if region in regions.get(target, ()):
+                            publish(target, state.get("images", ()), region)
                 continue
             branches = node["branches"]
             try:
@@ -257,22 +249,19 @@ def _variable_images(blocks, resources, variables, region_vars=None):
             except condition.ConditionError:
                 names = set()
             branch_variable = next(iter(names)) if len(names) == 1 else None
-            if branch_variable not in variables:
-                branch_variable = None
-            changed = set()
-            for branch in branches:
-                changed.update(collect(branch["body"], dict(rectangle), branch_variable))
-            # Conditional coordinate writes cannot leak into later draw regions.
-            for register in changed:
-                rectangle.pop(register, None)
-            assigned.update(changed)
-        return assigned
+            alternatives = [collect(branch["body"], dict(state), branch_variable)
+                            for branch in branches]
+            if branches[-1]["condition"] is not None:
+                alternatives.append(dict(state))
+            for register in set().union(*(part.keys() for part in alternatives)):
+                values = [part.get(register) for part in alternatives]
+                if register == "images":
+                    state[register] = tuple(dict.fromkeys(
+                        name for value in values for name in (value or ())))
+                else:
+                    state[register] = values[0] if all(value == values[0] for value in values) else None
+        return state
 
-    for root in roots:
-        click_regions(root, {"x": set(), "y": set()})
-    for variable, pulse in (region_vars or {}).items():
-        if pulse in regions:
-            regions.setdefault(variable, set()).update(regions[pulse])
     for root in roots:
         collect(root, {})
     return images
@@ -336,13 +325,59 @@ def _negate(guard):
     return None if not guard else {**guard, "op": _NEGATED_OP[guard["op"]]}
 
 
-def _parse_branch(body, numeric_defaults=None, require_finite=False):
+def _literal_cycle(block):
+    branches = block["branches"]
+    if len(branches) < 2 or branches[-1]["condition"] is not None:
+        return None
+    variable, transitions, outputs = None, {}, []
+    for branch in branches:
+        body = [node for node in branch["body"] if node != ""]
+        assignment = _ASSIGN_RE.fullmatch(body[0]) if len(body) == 1 and isinstance(body[0], str) else None
+        if not assignment:
+            return None
+        name, value = assignment.groups()
+        value = _integer_value(value)
+        variable = variable or name
+        if value is None or not _same_var(name, variable):
+            return None
+        outputs.append(str(value))
+        if branch["condition"] is not None:
+            guard = _guard(branch["condition"])
+            if not guard or guard["op"] != "==" or not _same_var(guard["var"], variable):
+                return None
+            state = _integer_value(guard["value"])
+            if state is None or str(state) in transitions:
+                return None
+            transitions[str(state)] = outputs[-1]
+    missing = set(outputs) - transitions.keys()
+    if len(missing) != 1 or len(set(outputs)) != len(branches):
+        return None
+    transitions[missing.pop()] = outputs[-1]
+    values, current = [], min(transitions, key=int)
+    while current not in values and current in transitions:
+        values.append(current)
+        current = transitions[current]
+    if len(values) != len(transitions) or current != values[0]:
+        return None
+    return variable, values
+
+
+def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=None,
+                  strict=False):
     """Return (var, values, effects) for one slot, or None if it cycles nothing.
 
     `effects` are the branch's other assignments — the mutual-exclusion rules a
     real click also applies (`if $bikinitop == 0 then $nipplepasties = 1`) —
     as [{when: {var, op, value} | None, var, value}] in source order.
     """
+    if nodes is None:
+        parsed = _conditional_blocks(body)
+        nodes = parsed[1] if parsed is not None else []
+    meaningful = [node for node in nodes if node != ""]
+    if len(meaningful) == 1 and isinstance(meaningful[0], dict):
+        literal = _literal_cycle(meaningful[0])
+        if literal:
+            return *literal, []
     var, values, effects = None, None, []
     cycle_kind, finite = None, False
     stack = []                    # {guard, branches, body} per open `if`
@@ -380,18 +415,24 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
 
         m = _ASSIGN_RE.fullmatch(line)
         if not m:
+            if strict and line:
+                return None
             continue
         lhs, rhs = m.group(1), m.group(2).strip()
         guard = stack[-1]["guard"] if stack else None
 
         flip = _FLIP_RE.fullmatch(rhs)
         if flip and _same_var(flip.group(1), lhs):
+            if strict and var is not None:
+                return None
             var, values = lhs, ["0", "1"]
             cycle_kind = "flip"
             finite = True
             continue
         incr_mod = _INCR_MOD_RE.fullmatch(rhs)
         if incr_mod and _same_var(incr_mod.group(1), lhs):
+            if strict and var is not None:
+                return None
             count = int(incr_mod.group(2))
             if count > 0:
                 var, values = lhs, _cycle_values(0, count - 1)
@@ -400,6 +441,8 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
             continue
         incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
         if incr and _same_var(incr.group(1), lhs):
+            if strict and var is not None:
+                return None
             var, values = lhs, ["0", "1"]   # Placeholder until the wrap count is known.
             cycle_kind = "increment"
             finite = False
@@ -409,6 +452,8 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
             continue
         mod = _MOD_RE.fullmatch(rhs)
         if mod and _same_var(mod.group(1), lhs) and _same_var(lhs, var):
+            if strict and (cycle_kind != "increment" or finite):
+                return None
             count = int(mod.group(2))
             if count > 0:
                 values = _cycle_values(0, count - 1)
@@ -416,6 +461,8 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
             continue
 
         if not _LITERAL_RE.fullmatch(rhs):
+            if strict:
+                return None
             continue
         if cycle_kind == "increment" and _same_var(lhs, var) and stack:
             reset_body = tuple(frame["body"] for frame in stack)
@@ -461,6 +508,104 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False):
     if var is None or (require_finite and not finite):
         return None
     return var, values, effects
+
+
+def _body_lines(nodes):
+    for node in nodes:
+        if isinstance(node, str):
+            yield node
+            continue
+        for index, branch in enumerate(node["branches"]):
+            test = branch["condition"]
+            yield (f"{'if' if index == 0 else 'elif'} {test}" if test else "else")
+            yield from _body_lines(branch["body"])
+        yield "endif"
+
+
+def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
+                     require_finite=True, active=(), budget=None):
+    """Resolve finite actions, following only bounded, pure local helper calls."""
+    budget = [128] if budget is None else budget
+    budget[0] -= 1
+    if len(active) >= 16 or budget[0] < 0:
+        return None
+    lines = [line for line in _body_lines(nodes) if line]
+    assignments = [_ASSIGN_RE.fullmatch(line) for line in lines]
+    writers = {match.group(1).casefold() for match in assignments if match}
+    cycle_vars = {match.group(1).casefold() for match in assignments if match
+                  and re.search(rf'\${re.escape(match.group(1))}\b', match.group(2), re.I)}
+    cycle_vars.update(cycle[0].casefold()
+                      for body in _conditional_bodies(nodes) for node in body
+                      if isinstance(node, dict) and (cycle := _literal_cycle(node)))
+    syntax = all(match or line.lower().startswith(("if ", "elif ", "else if "))
+                 or line.lower() in ("else", "endif")
+                 for line, match in zip(lines, assignments))
+    meaningful = [node for node in nodes if node != ""]
+    wrapped = (len(meaningful) == 1 and isinstance(meaningful[0], dict)
+               and len(meaningful[0]["branches"]) == 1)
+    if syntax and not wrapped and len(cycle_vars) <= 1 and (allow_effects or len(writers) == 1):
+        action = _parse_branch(lines, defaults, require_finite=require_finite, nodes=nodes, strict=True)
+        if action and (allow_effects or not action[2]):
+            return [action]
+    result = []
+    groups = []
+    for node in nodes:
+        if node == "":
+            continue
+        names = {match.group(1).casefold() for line in _body_lines([node])
+                 if (match := _ASSIGN_RE.fullmatch(line))}
+        if len(names) == 1 and groups and groups[-1][0] == names:
+            groups[-1][1].append(node)
+        else:
+            groups.append((names, [node]))
+    for names, group in groups:
+        wrapped = (len(group) == 1 and isinstance(group[0], dict)
+                   and len(group[0]["branches"]) == 1)
+        action = (_parse_branch(list(_body_lines(group)), defaults, nodes=group,
+                               require_finite=require_finite, strict=True)
+                  if len(names) == 1 and not wrapped else None)
+        if action and not action[2]:
+            result.append(action)
+            continue
+        if len(group) != 1:
+            return None
+        node = group[0]
+        if isinstance(node, str):
+            call = _RUN_RE.fullmatch(node)
+            target = call.group(1).casefold() if call else None
+            if target in active or blocks.get(target) is None:
+                return None
+            actions = _resolve_actions(blocks[target][1], blocks, defaults,
+                                       active=(*active, target), budget=budget)
+        else:
+            literal = _literal_cycle(node)
+            if literal:
+                actions = [(*literal, [])]
+            elif len(node["branches"]) == 1:
+                branch = node["branches"][0]
+                try:
+                    guard = condition.parse(branch["condition"])
+                except condition.ConditionError:
+                    return None
+                actions = _resolve_actions(branch["body"], blocks, defaults,
+                                           allow_effects=allow_effects,
+                                           require_finite=require_finite,
+                                           active=active, budget=budget)
+                names = {name.casefold() for name in guard.variables()}
+                if (_inactive(guard, defaults)
+                        or actions and any(var.casefold() in names for var, _values, _effects in actions)):
+                    return None
+            else:
+                return None
+        if not actions:
+            return None
+        result.extend(actions)
+    # Independent cycles may share one button; repeated writes and interleaved
+    # effects require a richer execution model and must remain unresolved.
+    if (result and len({var.casefold() for var, _values, _effects in result}) == len(result)
+            and (len(result) == 1 or not any(effects for _var, _values, effects in result))):
+        return result
+    return None
 
 
 def _prefixed(name, var_prefix):
@@ -561,73 +706,105 @@ def _mouse_press_vars(sections):
     return pressed
 
 
-def _condition_facts(text, defaults, pressed):
-    """Cursor bounds, static impossibility, and mouse activation for a guard."""
-    if text is None:
-        return 0, False, False
-    try:
-        node = condition.parse(text)
-    except condition.ConditionError:
-        return 0, False, False
-
-    def cursor_bounds(part):
-        if isinstance(part, condition.Paren):
-            return cursor_bounds(part.inner)
-        if isinstance(part, (condition.And, condition.Or)):
-            counts = [cursor_bounds(child) for child in part.parts]
-            return sum(counts) if isinstance(part, condition.And) else max(counts)
-        if isinstance(part, condition.Cmp) and part.op in ("<", "<=", ">", ">="):
-            return bool(re.search(r'\bcursor_[xy]\b', part.render(), re.I))
-        return 0
-
-    names = node.variables()
-    bindings = {name: defaults[name.casefold()] for name in names
-                if name.casefold() in defaults}
-    inactive = condition.reduce(node, bindings) == condition.FALSE
-    mouse = any(
-        condition.reduce(node, {name: "0"}) == condition.FALSE
-        and condition.reduce(node, {name: pressed[name.casefold()]}) != condition.FALSE
-        for name in names if name.casefold() in pressed)
-    return cursor_bounds(node), inactive, mouse
+def _cursor_facts(node):
+    """Collect conjunctive cursor evidence; OR cannot prove a hit region."""
+    axes, count, sides = {"x": set(), "y": set()}, 0, set()
+    if isinstance(node, condition.Paren):
+        return _cursor_facts(node.inner)
+    if isinstance(node, condition.And):
+        for child in node.parts:
+            bounds, size, directions = _cursor_facts(child)
+            count += size
+            sides.update(directions)
+            for axis in axes:
+                axes[axis].update(bounds[axis])
+    elif isinstance(node, condition.Cmp) and node.op in ("<", "<=", ">", ">="):
+        for axis in axes:
+            if re.search(rf'\bcursor_{axis}\b', node.render(), re.I):
+                axes[axis].update(name.casefold() for name in node.variables())
+                count += 1
+                if node.left.render().casefold() == f"cursor_{axis}":
+                    sides.add((axis, node.op[0]))
+                elif node.right.render().casefold() == f"cursor_{axis}":
+                    sides.add((axis, "<" if node.op[0] == ">" else ">"))
+    return axes, count, sides
 
 
-def _mouse_button_items(sections, blocks):
-    """Find finite click actions inside bounded cursor hit regions."""
-    defaults = _static_numeric_defaults(sections)
-    pressed = _mouse_press_vars(sections)
+def _region(axes):
+    return tuple(frozenset(axes[axis]) for axis in ("x", "y"))
+
+
+def _walk_branches(nodes, guards=(), axes=None, count=0, sides=frozenset()):
+    """Walk the shared condition tree with ancestors and sibling exclusions."""
+    axes = axes or {"x": set(), "y": set()}
+    for block in nodes:
+        if not isinstance(block, dict):
+            continue
+        exclusions = []
+        for branch in block["branches"]:
+            try:
+                test = condition.parse(branch["condition"]) if branch["condition"] else None
+            except condition.ConditionError:
+                break
+            bounds, size, directions = _cursor_facts(test)
+            combined = {axis: axes[axis] | bounds[axis] for axis in axes}
+            combined_sides = sides | directions
+            inherited = guards + tuple(exclusions) + ((test,) if test else ())
+            region = (_region(combined) if len(combined_sides) == 4
+                      and all(len(names) == 2 for names in combined.values()) else None)
+            yield block, branch, condition.And(list(inherited)), combined, count + size, region
+            yield from _walk_branches(branch["body"], inherited, combined, count + size, combined_sides)
+            if test:
+                exclusions.append(condition.Not(test))
+
+
+def _requires(guard, name, value):
+    return (condition.reduce(guard, {name: "0"}) == condition.FALSE
+            and condition.reduce(guard, {name: value}) != condition.FALSE)
+
+
+def _inactive(guard, defaults):
+    return condition.reduce(guard, {
+        name: defaults[name.casefold()] for name in guard.variables()
+        if name.casefold() in defaults}) == condition.FALSE
+
+
+def _mouse_button_items(sections, blocks, defaults, pressed):
+    """Discover inline and helper actions through the same mouse hit regions."""
     if not pressed:
         return []
-    found, ordinal = [], 0
-    for section, parsed in blocks.items():
-        if parsed is None:
+    branches = [(section, *record) for section, parsed in blocks.items()
+                if parsed is not None for record in _walk_branches(parsed[1])]
+    latches = {}
+    for _section, _block, branch, guard, _axes, _count, region in branches:
+        if (region is None
+                or not any(_requires(guard, name, pressed[name.casefold()])
+                           for name in guard.variables() if name.casefold() in pressed)):
             continue
-        cleaned, root = parsed
-        lines = sections[section]
+        for line in branch["body"]:
+            match = _ASSIGN_RE.fullmatch(line) if isinstance(line, str) else None
+            if match and _integer_value(match.group(2)) == 1:
+                latches.setdefault(match.group(1).casefold(), set()).add(region)
 
-        def walk(nodes, cursor_bounds=0, inactive=False):
-            nonlocal ordinal
-            for block in nodes:
-                if not isinstance(block, dict):
-                    continue
-                for branch in block["branches"]:
-                    bounds, impossible, mouse = _condition_facts(
-                        branch["condition"], defaults, pressed)
-                    total_bounds = cursor_bounds + bounds
-                    if mouse and total_bounds >= 2:
-                        action = _parse_branch(
-                            cleaned[branch["start"]:branch["end"]],
-                            numeric_defaults=defaults, require_finite=True)
-                        if action:
-                            slot = ordinal
-                            ordinal += 1
-                            if not (inactive or impossible):
-                                found.append((slot, section, *action,
-                                              line_source(lines[block["start"]])
-                                              or first_source(lines) or {}))
-                            continue
-                    walk(branch["body"], total_bounds, inactive or impossible)
-
-        walk(root)
+    found, ordinal, consumed = [], 0, {}
+    lookup = {name.casefold(): parsed for name, parsed in blocks.items()}
+    for section, _block, branch, guard, _axes, count, region in branches:
+        if branch["start"] < consumed.get(section, -1) or count < 2:
+            continue
+        activated = any(
+            _requires(guard, name, pressed[name.casefold()]) if name.casefold() in pressed else
+            region in latches.get(name.casefold(), ()) and _requires(guard, name, "1")
+            for name in guard.variables())
+        if not activated:
+            continue
+        actions = _resolve_actions(branch["body"], lookup, defaults, allow_effects=True)
+        if not actions:
+            continue
+        consumed[section] = branch["end"]
+        slot, ordinal = ordinal, ordinal + 1
+        if not _inactive(guard, defaults):
+            src = line_source(sections[section][branch["start"] - 1]) or first_source(sections[section]) or {}
+            found.append((slot, section, actions, src, region))
     return found if len(found) >= _MIN_SLOTS else []
 
 
@@ -776,7 +953,7 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     blocks = {name: _conditional_blocks(lines) for name, lines in sections.items()
-              if name.casefold().startswith("commandlist")}
+              if name.casefold().startswith("commandlist") or name.casefold() == "present"}
     section_lookup = {name.casefold(): lines for name, lines in sections.items()}
     image_chains = []
     slot_groups = []
@@ -823,34 +1000,48 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         else:
             missing_images.append((variable.casefold(), entry))
         menu[key] = entry
+        return entry
 
+    def add_actions(section, slot, actions, **options):
+        variable, values, effects = actions[0]
+        entry = add_entry(section, slot, variable, values, effects, **options)
+        if len(actions) > 1:
+            entry["cycles"] = [{"var": _prefixed(declared(var), var_prefix),
+                                "values": vals} for var, vals, _effects in actions]
+        return entry
+
+    defaults, pressed = _static_numeric_defaults(sections), _mouse_press_vars(sections)
+    lookup = {name.casefold(): parsed for name, parsed in blocks.items()}
     for name, parsed_blocks in blocks.items():
+        if name.casefold() == "present":
+            continue
         for chain in _slot_chains(
                 parsed_blocks, image_chains if resources is not None else None):
             parsed = []
-            for _slot_var, slot_value, body in chain:
-                info = _parse_branch(body)
-                if info:
-                    parsed.append((slot_value, info))
+            for _slot_var, slot_value, _body, nodes in chain:
+                actions = _resolve_actions(nodes, lookup, defaults, allow_effects=True,
+                                           require_finite=False)
+                if actions:
+                    parsed.append((slot_value, actions))
             if len(parsed) < _MIN_SLOTS:
                 continue
 
             slot_groups.append({int(slot) for slot, _info in parsed})
             src = first_source(sections[name]) or {}
-            for slot_value, (var, values, effects) in parsed:
-                add_entry(name, slot_value, var, values, effects, src=src)
+            for slot_value, actions in parsed:
+                add_actions(name, slot_value, actions, src=src)
 
     for slot, section, variable, values, src in _arrow_button_items(sections):
         button_section = re.sub(r"(?:Left|Right)$", "", section, flags=re.I)
         add_entry(section, slot, variable, values, src=src,
                   key_section=button_section)
-    for slot, section, variable, values, effects, src in _mouse_button_items(
-            sections, blocks):
+    regions = {}
+    for slot, section, actions, src, region in _mouse_button_items(sections, blocks, defaults, pressed):
         image = _section_image(
-            section_lookup.get(f"commandlistdrawbutton_{slot}", ()),
-            resources, last=True)
-        add_entry(section, slot, variable, values, effects, src=src,
-                  kind="mouse_region", image=image)
+            section_lookup.get(f"commandlistdrawbutton_{slot}", ()), resources, last=True)
+        add_actions(section, slot, actions, src=src, kind="mouse_region", image=image)
+        if region:
+            regions.setdefault(actions[0][0].casefold(), set()).add(region)
     images = _slot_images(image_chains, {info["slot"] for info in menu.values()},
                           slot_groups, resources)
     for info in menu.values():
@@ -859,7 +1050,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     missing_images = [(variable, info) for variable, info in missing_images
                       if "image_file" not in info]
     variable_images = _variable_images(
-        blocks.values(), resources, {variable for variable, _info in missing_images})
+        blocks.values(), resources, {variable for variable, _info in missing_images},
+        regions=regions)
     for variable, info in missing_images:
         if variable in variable_images:
             info["image_file"] = variable_images[variable]
@@ -876,5 +1068,6 @@ def extract_menu_var_names(sections, var_prefix=None, menu=None,
                                  canonical_vars=canonical_vars))
     for info in menu.values():
         found.add(info["var"])
+        found.update(cycle["var"] for cycle in info.get("cycles", ()))
         found.update(e["var"] for e in info["effects"])
     return found

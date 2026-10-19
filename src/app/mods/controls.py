@@ -162,6 +162,9 @@ def build_menu_panel(menu_slots, toggle_defaults, mod_dir=None, source=None,
             "default": toggle_defaults.get(info["var"], info["values"][0]),
             "effects": info["effects"],
         }
+        if info.get("cycles"):
+            panel[key]["cycles"] = [{**cycle, "default": toggle_defaults.get(
+                cycle["var"], cycle["values"][0])} for cycle in info["cycles"]]
         _attach_menu_image(panel[key], info, mod_dir, source, image_source)
     return panel
 

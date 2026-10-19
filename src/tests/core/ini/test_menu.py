@@ -455,6 +455,196 @@ filename = badge.dds
     assert _menu(text + "[Present]\n$Limit = 4\n") == {}
 
 
+def _called_menu_text():
+    text = r"""
+[Constants]
+global persist $Mode = 0
+global persist $Accent = 1
+global persist $Palette = 0
+global $Visible = 1
+[KeyMouse]
+key = VK_LBUTTON
+type = hold
+$pressed = 1
+[CommandListMode]
+if $Mode == 0
+$Mode = 1
+else
+$Mode = 0
+endif
+[CommandListAccent]
+if $Accent == 0
+$Accent = 1
+else
+$Accent = 0
+endif
+[CommandListPair]
+if $\Generated\Master\enabled == 7
+run = CommandListMode
+run = CommandListAccent
+endif
+[CommandListPalette]
+if $PALETTE == 0
+$Palette = 2
+else if $Palette == 2
+$PALETTE = 1
+else
+$Palette = 0
+endif
+[CommandListAnchor]
+if $anchor == 1
+$anchor = 2
+else
+$anchor = 1
+endif
+"""
+    text += "[Present]\nif $Visible\nif $pressed && $dragging == 0\n"
+
+    def bounds(index):
+        return (f"cursor_x > $left{index} && cursor_x < $left{index} + $width{index}"
+                f" && cursor_y > $top{index} && cursor_y < $top{index} + $height{index}")
+
+    for index in range(3):
+        text += f"if {bounds(index)}\n$latch{index} = 1\nendif\n"
+    text += "else\n"
+    for index, target in enumerate(("Pair", "Palette", "Anchor")):
+        text += (f"if $latch{index} == 1\nif {bounds(index)}\n"
+                 f"run = CommandList{target}\nendif\n$latch{index} = 0\nendif\n")
+    text += "endif\n"
+    for index in range(3):
+        text += (f"if $Mode == 0\nps-t100 = ResourceBadge{index}\nelse\n"
+                 f"ps-t100 = ResourceOff{index}\nendif\nx87 = $width{index}\ny87 = $height{index}\n"
+                 f"z87 = $left{index}\nif $latch{index}\nw87 = $top{index} + 0.002\n"
+                 f"else\nw87 = $top{index}\nendif\nrun = CustomShaderDraw\n")
+    text += "endif\n"
+    for index in range(3):
+        text += (f"[ResourceBadge{index}]\nfilename = icons/badge{index}.png\n"
+                 f"[ResourceOff{index}]\nfilename = icons/off{index}.png\n")
+    return text
+
+
+def test_called_mouse_menu_preserves_paired_cycles_artwork_and_staged_state(tmp_path):
+    from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
+    from core.ini.document import IniDocument
+
+    path = str(tmp_path / "generated.ini")
+    text = _called_menu_text()
+    document = IniDocument.from_string(text, path=path)
+    snapshot = build_mod_ini_snapshot([path], str(tmp_path), {path: document})
+    parsed = analyze_mod_inis(snapshot)
+    pair, palette, anchor = parsed.menu.values()
+    assert pair["cycles"] == [{"var": "Mode", "values": ["0", "1"]},
+                              {"var": "Accent", "values": ["0", "1"]}]
+    assert palette["values"] == ["0", "2", "1"]
+    assert anchor["values"] == ["1", "2"]
+    assert [entry["image_file"] for entry in parsed.menu.values()] == [
+        f"icons/badge{index}.png" for index in range(3)]
+    assert all(entry["section"] == "Present" and entry["ini_path"] == path
+               for entry in parsed.menu.values())
+    assert set(parsed.present["target_inis"][0]["vars"]) >= {"Mode", "Accent", "Palette"}
+    panel = build_menu_panel(parsed.menu, parsed.defaults)
+    assert next(iter(panel.values()))["cycles"] == [
+        {"var": "Mode", "values": ["0", "1"], "default": "0"},
+        {"var": "Accent", "values": ["0", "1"], "default": "1"}]
+    analysis = analyze_ini(_sections(text), var_prefix="piece::")
+    assert {"piece::Mode", "piece::Accent", "piece::Palette"} <= analysis.gating_vars
+    assert "piece::Accent" in extract_menu_var_names(analysis.sections, menu=analysis.menu)
+    document = IniDocument.from_string(text.replace("global $Visible = 1", "global $Visible = 0"), path=path)
+    snapshot = build_mod_ini_snapshot([path], str(tmp_path), {path: document})
+    assert analyze_mod_inis(snapshot).menu == {}
+
+
+@pytest.mark.parametrize("original,replacement", [
+    ("key = VK_LBUTTON", "key = k"),
+    ("$latch1 = 1", "$latch1 = 0"),
+    ("if $latch1 == 1", "if $unrelated == 1"),
+    ("run = CommandListPalette", "run = CommandListMissing"),
+    ("run = CommandListPalette", "run = CommandListRecursive"),
+    ("run = CommandListPalette", "run = CommandListExternal\\Palette"),
+    ("run = CommandListPalette", "run = CommandListDeep0"),
+    ("$Palette = 2", "$other = 2"),
+    ("$PALETTE = 1", "$PALETTE = 2"),
+    ("$Palette = 0\nendif", "$Palette = 0\nrun = CommandListMode\nendif"),
+    ("[CommandListPalette]\n", "[CommandListPalette]\n$temporary = 1\n"),
+    ("[CommandListPalette]\n", "[CommandListPalette]\nrun = CommandListMode\nrun = CommandListMode\n"),
+    ("[CommandListPalette]\n", "[CommandListPalette]\nif $Palette == 0\n"),
+    ("if $latch1 == 1\nif cursor_x > $left1", "if $latch1 == 1\nif cursor_x > $otherLeft"),
+])
+def test_called_mouse_menu_rejects_unproven_actions(original, replacement):
+    text = _called_menu_text().replace(original, replacement)
+    text += "[CommandListRecursive]\nrun = CommandListRecursive\n"
+    text += "".join(f"[CommandListDeep{index}]\nrun = CommandListDeep{index + 1}\n"
+                    for index in range(18))
+    text += "[CommandListDeep18]\nrun = CommandListPalette\n"
+    assert "Palette" not in {entry["var"] for entry in _menu(text).values()}
+
+
+def _action_menu(action, driver, helper):
+    text = "[Constants]\nglobal persist $Mode = 0\nglobal persist $Accent = 1\n"
+    text += "[KeyMouse]\nkey = VK_LBUTTON\ntype = hold\n$pressed = 1\n"
+    if helper:
+        text += "[CommandListGeneratedAction]\n" + action + "\n"
+        action = "run = commandlistgeneratedaction"
+    items = [(4, action), (9, "$anchor = 1 - $anchor"), (12, "$guide = 1 - $guide")]
+    if driver == "slot":
+        return text + "[CommandListInput]\n" + _dispatch("picked", items)
+    if driver == "press-elif":
+        text += "[CommandListInput]\n"
+        for index, (slot, body) in enumerate(items):
+            text += (f"{'if' if index == 0 else 'elif'} $pressed"
+                     f" && cursor_y > $top{slot} && cursor_y < $top{slot} + $height{slot}\n"
+                     + body + "\n")
+        return text + "endif\n"
+    text += "[Present]\nif $pressed\n"
+    for slot, body in items:
+        text += (f"if cursor_x > $left{slot} && cursor_x < $left{slot} + $width{slot}\n"
+                 f"if cursor_y > $top{slot} && cursor_y < $top{slot} + $height{slot}\n")
+        text += f"$latch{slot} = 1\n" if driver == "release" else body + "\n"
+        text += "endif\nendif\n"
+    if driver == "release":
+        text += "else\n"
+        for slot, body in items:
+            text += (f"if $latch{slot} == 1\n"
+                     f"if cursor_x > $left{slot} && cursor_x < $left{slot} + $width{slot}\n"
+                     f"if cursor_y > $top{slot} && cursor_y < $top{slot} + $height{slot}\n"
+                     + body + "\nendif\nendif\nendif\n")
+    return text + "endif\n"
+
+
+@pytest.mark.parametrize("driver", ["slot", "press", "press-elif", "release"])
+@pytest.mark.parametrize("helper", [False, True], ids=["inline", "helper"])
+@pytest.mark.parametrize("action,values,paired", [
+    ("$Mode = 1 - $Mode", ["0", "1"], False),
+    ("$Mode = ($Mode + 1) % 3", ["0", "1", "2"], False),
+    ("$Mode = $Mode + 1\nif $Mode > 2\n$Mode = 0\nendif", ["0", "1", "2"], False),
+    ("if $Mode == 0\n$Mode = 2\nelif $Mode == 2\n$Mode = 1\nelse\n$Mode = 0\nendif",
+     ["0", "2", "1"], False),
+    ("$Mode = 1 - $Mode\n$Accent = ($Accent + 1) % 3", ["0", "1"], True),
+], ids=["flip", "modulo", "wrap", "literal", "paired"])
+def test_menu_drivers_share_inline_and_helper_action_semantics(driver, helper, action, values, paired):
+    controls = {entry["var"]: entry for entry in _menu(_action_menu(action, driver, helper)).values()}
+    assert controls["anchor"]["values"] == controls["guide"]["values"] == ["0", "1"]
+    mode = controls["Mode"]
+    assert mode["values"] == values
+    assert mode["effects"] == []
+    assert mode.get("cycles") == ([{"var": "Mode", "values": ["0", "1"]},
+                                   {"var": "Accent", "values": ["0", "1", "2"]}] if paired else None)
+
+
+@pytest.mark.parametrize("driver", ["slot", "press", "press-elif", "release"])
+@pytest.mark.parametrize("action", [
+    "if $Mode == 0\n$Mode = 1 - $Mode\nendif",
+    "$Mode = 1 - $Mode\n$Mode = $unresolved",
+    "$Mode = 1 - $Mode\n$Mode = 1 - $Mode",
+    "if $Mode == 0\nrun = CommandListCycle\nendif",
+])
+def test_all_menu_drivers_reject_partial_or_ambiguous_helpers(driver, action):
+    text = _action_menu(action, driver, True)
+    text += "[CommandListCycle]\n$Mode = 1 - $Mode\n"
+    controls = {entry["var"]: entry for entry in _menu(text).values()}
+    assert set(controls) == {"anchor", "guide"}
+
+
 @pytest.mark.parametrize("body", [
     "if $picked == 6\n$temporary = 1 - $temporary\nendif",
     "if $picked == 6\nps-t100 = ResourceBadge\nelif $picked == 9\nps-t100 = ResourceBadge\nendif",

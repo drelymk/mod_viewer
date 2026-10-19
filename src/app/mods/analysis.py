@@ -477,6 +477,8 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
                     continue
                 capture_vars.extend(info.get("vars", {}))
             capture_vars.extend(info.get("var") for info in ini_menu.values())
+            capture_vars.extend(cycle["var"] for info in ini_menu.values()
+                                for cycle in info.get("cycles", ()))
             capture_vars.extend(info.get("var") for info in shape_sliders)
             capture_vars = list(dict.fromkeys(
                 var for var in capture_vars if var))
