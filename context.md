@@ -78,9 +78,21 @@ of documentation, comments and tests; use portable fixtures instead.
 - Persisting separated mesh parts requires a writable, authored draw with one
   current canonical identity and exact source provenance. Accept only a complete,
   non-overlapping partition of every authored triangle in a 16- or 32-bit IB;
-  reject synthetic/stale draws, partial overlap with another draw, duplicate
+  reject unproven synthetic/stale draws, partial overlap with another draw, duplicate
   submissions and cross-component requests. Reorder only that draw's raw triangle
   records and rewrite every authored `drawindexed` source in one transaction.
+- Authored `drawindexed = auto` mesh edits require an exact literal replacement
+  IB with explicit R16_UINT/R32_UINT format and complete triangles. A shared
+  auto may move into its complete same-INI/hash family only when distinct
+  `match_first_index` components own distinct buffers and execute before a
+  shared skip-only draw owner in 3DMigoto's priority/name order. Unresolved calls
+  block shared migration except an unconditional, unqualified namespaced
+  CommandList call at the component's end. Keep that opaque call at the same
+  pre/post execution site; the draw crosses only the shared skip-only owner.
+  The canonical draw scan and resource analysis establish eligibility; the
+  editor never interprets command lists or re-resolves resource declarations.
+  Local auto edits replace the exact instruction in place through the shared
+  authored-draw resolver, without migration restrictions. Loading never migrates INIs.
 - Stage dependent INI and IB changes atomically. Export revalidates the IB source
   hash, writes a collision-safe sibling backup, verifies an equal-length temporary
   file and atomically replaces the buffer before its dependent INIs. A failed IB

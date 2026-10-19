@@ -13,6 +13,7 @@ from . import toggle as te
 from ..ini.document import (IniDocument, IF, ELIF, ELSE, ENDIF, DRAW, BLANK,
                            COMMENT)
 from ..ini.sections import sections_from_document
+from ..ini.command_phases import parse_command_line
 
 _COND_RE = re.compile(r"^(if|else\s+if|elif)\s+(.*)$", re.I)
 
@@ -472,9 +473,12 @@ def _draw_key(doc, line_no):
     if not 0 <= line_no < len(doc.lines):
         return None
     line = doc.lines[line_no]
-    if line.kind != DRAW or line.section is None:
+    if line.section is None:
         return None
-    m = _DRAW_RE.search(line.text)
+    text = parse_command_line(line.text).text
+    if re.fullmatch(r"drawindexed\s*=\s*auto", text, re.I):
+        return (line.section.name, None, 0, 0)
+    m = _DRAW_RE.match(text)
     if not m:
         return None
     return (line.section.name, int(m.group(1)), int(m.group(2)), int(m.group(3)))
@@ -489,7 +493,7 @@ def _draw_occurrence(doc, line_no):
         return None
     ordinal = sum(
         1 for item in doc.lines[line.section.start:line.no + 1]
-        if _draw_key(doc, item.no) is not None
+        if re.match(r"drawindexed\s*=", parse_command_line(item.text).text, re.I)
     ) - 1
     return {
         "section": line.section.name,
@@ -527,9 +531,12 @@ def _target_identity(ref, target_ini=None):
             raise TypeError
         section = section.strip()
         drawindexed = ref["drawindexed"]
-        if isinstance(drawindexed, (str, bytes)) or len(drawindexed) != 3:
+        if isinstance(drawindexed, str) and drawindexed.casefold() == "auto":
+            triple = (None, 0, 0)
+        elif isinstance(drawindexed, (str, bytes)) or len(drawindexed) != 3:
             raise ValueError
-        triple = tuple(int(value) for value in drawindexed)
+        else:
+            triple = tuple(int(value) for value in drawindexed)
         occurrence = ref["occurrence"]
         if not isinstance(occurrence, dict):
             raise ValueError
@@ -546,7 +553,7 @@ def _target_identity(ref, target_ini=None):
     except (KeyError, TypeError, ValueError) as exc:
         raise te.ToggleEditError(
             "Record targets must include a numeric source line, section, and "
-            "three numeric drawindexed values plus draw occurrence") from exc
+            "drawindexed auto or three numeric values plus draw occurrence") from exc
     if (line_no < 1 or not section or occurrence_ordinal < 0
             or not occurrence_section.strip()
             or occurrence_section.casefold() != section.casefold()):
@@ -580,6 +587,9 @@ def _resolve_target_refs(doc, target_lines, target_ini=None):
             lines_by_identity.setdefault(identity, []).append(line.no)
     for raw_ref in target_lines or []:
         submitted_line, expected = _target_identity(raw_ref, target_ini)
+        if (sum(section.name.casefold() == expected[0] for section in doc.sections) != 1
+                or not doc.is_safe_to_rewrite(expected[0])):
+            raise te.ToggleEditError("The authored draw section is ambiguous or unsafe to rewrite")
         path = _target_path(raw_ref)
         previous_submission = seen_submitted.get(submitted_line)
         if previous_submission is not None:
@@ -659,7 +669,7 @@ def verify_recording(path, report, text=None, document=None):
 
     conds_by_draw = {}
     for section_name, info in draw_info.items():
-        for draw in info["draws"]:
+        for draw in [*info["draws"], *info.get("auto_draws", [])]:
             key = (section_name, draw.count, draw.start, draw.base)
             conds_by_draw[key] = draw.conditions
 

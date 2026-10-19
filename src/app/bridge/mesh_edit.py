@@ -15,8 +15,8 @@ from core.mod_source import ModSourceError
 
 
 _DRAW_LINE = re.compile(
-    r"^(?P<indent>\s*)(?P<lhs>drawindexed\s*=\s*)"
-    r"(?P<count>\d+)\s*,\s*(?P<start>-?\d+)\s*,\s*(?P<base>-?\d+)"
+    r"^(?P<indent>\s*)(?P<lhs>(?:(?:pre|post)\s+)?drawindexed\s*=\s*)"
+    r"(?:auto|\d+\s*,\s*-?\d+\s*,\s*-?\d+)"
     r"(?P<tail>\s*(?:;.*)?)$", re.I)
 
 
@@ -104,6 +104,8 @@ def _validate_draw_overlap(context, authoritative, edited_draw, edited_path,
         if not (edited_range[0] < other_range[1]
                 and other_range[0] < edited_range[1]):
             continue
+        if edited_draw.auto_draw and other_draw is not edited_draw:
+            raise ValueError("The automatic draw has incompatible buffer ownership.")
         same_authored_range = (
             other_draw.start == edited_draw.start
             and other_draw.count == edited_draw.count
@@ -114,7 +116,7 @@ def _validate_draw_overlap(context, authoritative, edited_draw, edited_path,
                 "index buffer.")
 
 
-def _rewrite_draw_line(doc, line_no, ranges):
+def _draw_lines(doc, line_no, ranges):
     match = _DRAW_LINE.match(doc.lines[line_no].raw)
     if match is None:
         raise ValueError("The authored draw line is no longer writable.")
@@ -124,7 +126,50 @@ def _rewrite_draw_line(doc, line_no, ranges):
     for index, (count, start, base) in enumerate(ranges):
         lines.append(f"{prefix}{count}, {start}, {base}"
                      + (tail if index == 0 else ""))
-    doc.replace_lines(line_no, line_no + 1, lines)
+    return lines
+
+
+def _auto_index_count(draw, length):
+    if not draw.auto_draw or len(draw.sources) != 1:
+        raise ValueError("Unsupported automatic draw: authored ownership is ambiguous.")
+    fmt = str(draw.auto_draw["format"]).upper().removeprefix("DXGI_FORMAT_")
+    size = {"R16_UINT": 2, "R32_UINT": 4}.get(fmt)
+    if size not in (2, 4) or size != draw.index_size or not length or length % (3 * size):
+        raise ValueError("Invalid automatic index buffer format or triangle layout.")
+    return length // size
+
+
+def _auto_patches(context, draw, authoritative, doc, line_no, ranges):
+    family = draw.auto_draw["family"]
+    if not family:
+        instruction = (draw.sources[0]["ini_path"], draw.sources[0]["line_no"])
+        if any(other is not draw and any(
+                (source.get("ini_path"), source.get("line_no")) == instruction
+                for source in other.sources) for other, _ in authoritative.values()):
+            raise ValueError("Unsupported automatic draw: its instruction has multiple owners.")
+        return [(doc.path, line_no, line_no + 1, _draw_lines(doc, line_no, ranges))]
+
+    members = [other for other, _ in authoritative.values()
+               if other.auto_draw and other.auto_draw["family"] == family
+               and other.sources == draw.sources]
+    if (len(members) != len(family) or
+            {item.auto_draw["component"] for item in members} != set(family)):
+        raise ValueError("Unsupported automatic draw: the resolved family is incomplete.")
+    patches = [(doc.path, line_no, line_no + 1, [])]
+    overrides = edit_session.ib_overrides_for(context.mod_dir)
+    for member in members:
+        if member is not draw:
+            path = _resolve_ib_path(context, member)
+            length = len(overrides[path]) if path in overrides else os.path.getsize(path)
+            _auto_index_count(member, length)
+            _validate_draw_overlap(context, authoritative, member, path, (0, length), length)
+        section = doc.section(member.auto_draw["component"])
+        if section is None or not doc.is_safe_to_rewrite(section.name):
+            raise ValueError("Unsupported automatic draw: the component is not writable.")
+        lines = (_draw_lines(doc, line_no, ranges) if member is draw
+                 else [doc.lines[line_no].raw])
+        patches.append((doc.path, section.end, section.end, lines))
+    return patches
 
 
 def _payload_entry(request):
@@ -157,8 +202,6 @@ def apply_component_mesh_changes(context, request):
         if component is not None and (
                 group.get("display_name") or group.get("name")) != component:
             raise ValueError("The mesh does not belong to this component.")
-        if draw.count is None:
-            raise ValueError("Synthetic draws cannot receive mesh changes.")
         sources = entry.get("sources")
         if not isinstance(sources, list) or not sources:
             raise ValueError("Mesh changes require authored source provenance.")
@@ -167,7 +210,7 @@ def apply_component_mesh_changes(context, request):
             for item in draw.sources
         }
         submitted = {_source_key(item) for item in sources}
-        if submitted != expected:
+        if submitted != expected or len(submitted) != len(sources):
             raise ValueError("Mesh source provenance is stale.")
         parts = entry.get("parts")
         path = _resolve_ib_path(context, draw)
@@ -181,8 +224,11 @@ def apply_component_mesh_changes(context, request):
             original = existing["original_hash"]
         else:
             original = _sha256(data)
+        count, start, base = draw.count, draw.start, draw.base
+        if count is None:
+            count, start, base = _auto_index_count(draw, len(data)), 0, 0
         candidate, normalized = repack_index_bytes(
-            data, draw.start, draw.count, draw.index_size, parts)
+            data, start, count, draw.index_size, parts)
         byte_range = _draw_byte_range(draw, len(data))
         _validate_draw_overlap(
             context, authoritative, draw, path, byte_range, len(data))
@@ -191,32 +237,37 @@ def apply_component_mesh_changes(context, request):
                 for start, end in existing["ranges"]):
             raise ValueError("Mesh edits overlap in the same index buffer.")
 
-        ini_paths = []
         resolved_lines = []
-        ranges = drawindexed_ranges(draw.start, draw.base, normalized)
+        ranges = drawindexed_ranges(start, base, normalized)
         for source_ref in entry["sources"]:
             _ini_key, doc = edit_session.document(
                 context.mod_dir, source_ref.get("ini"))
-            if doc.path not in ini_paths:
-                ini_paths.append(doc.path)
             target = dict(source_ref)
-            target["drawindexed"] = [draw.count, draw.start, draw.base]
+            target["drawindexed"] = ("auto" if draw.count is None else
+                                     [draw.count, draw.start, draw.base])
             resolved = resolve_draw_references(
                 doc, [target], target_ini=source_ref.get("ini"))
             line_no = resolved[int(source_ref["line"])]
-            resolved_lines.append((doc.path, line_no, ranges))
+            if draw.count is None:
+                resolved_lines.extend(_auto_patches(
+                    context, draw, authoritative, doc, line_no, ranges))
+            else:
+                resolved_lines.append((doc.path, line_no, line_no + 1,
+                                       _draw_lines(doc, line_no, ranges)))
+        ini_paths = list(dict.fromkeys(item[0] for item in resolved_lines))
         ib_path = path
         with edit_session.transaction(context.mod_dir, ini_paths) as edit:
             patches = {}
-            for ini_path, line_no, ranges in resolved_lines:
+            for ini_path, line_no, end, lines in resolved_lines:
                 by_line = patches.setdefault(ini_path, {})
                 if line_no in by_line:
                     raise ValueError("A source draw was submitted more than once.")
-                by_line[line_no] = ranges
+                by_line[line_no] = (end, lines)
             for ini_path, by_line in patches.items():
                 doc = edit.document(ini_path)
                 for line_no in sorted(by_line, reverse=True):
-                    _rewrite_draw_line(doc, line_no, by_line[line_no])
+                    end, lines = by_line[line_no]
+                    doc.replace_lines(line_no, end, lines)
 
             edit.stage_ib_edit(
                 ib_path, candidate, original, [byte_range],
@@ -224,6 +275,6 @@ def apply_component_mesh_changes(context, request):
                     context.mod_dir, source_ref.get("ini"))[0]
                     for source_ref in entry.get("sources", [])})
         return {"ok": True, "component": component}
-    except (KeyError, TypeError, ValueError, ModSourceError,
+    except (KeyError, TypeError, ValueError, OSError, ModSourceError,
             MeshLayoutError) as error:
         return {"error": str(error)}
