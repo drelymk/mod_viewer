@@ -43,3 +43,21 @@ def mode6_block(endpoints=((20, 110), (40, 140), (60, 170))):
 def write_bc7_dds(path, width=4, height=4):
     payload = bytes(((width + 3) // 4) * ((height + 3) // 4) * 16)
     path.write_bytes(dx10_dds(payload, width=width, height=height))
+
+
+def uncompressed_dds(payload, *, width=4, height=4, mip_count=1,
+                     dxgi_format=None, bgra=False, alpha=True):
+    """Wrap authored four-byte pixels in DX10 or legacy channel-mask headers."""
+    if dxgi_format is not None:
+        return dx10_dds(payload, dxgi_format=dxgi_format, width=width,
+                        height=height, mip_count=mip_count)
+    header = bytearray(128)
+    header[:4] = b"DDS "
+    struct.pack_into("<II", header, 4, 124, 0x2100F)
+    struct.pack_into("<III", header, 12, height, width, width * 4)
+    struct.pack_into("<I", header, 28, mip_count)
+    struct.pack_into("<IIII", header, 76, 32, 0x41 if alpha else 0x40, 0, 32)
+    masks = ((0x00FF0000, 0x0000FF00, 0x000000FF) if bgra
+             else (0x000000FF, 0x0000FF00, 0x00FF0000))
+    struct.pack_into("<IIII", header, 92, *masks, 0xFF000000 if alpha else 0)
+    return bytes(header) + bytes(payload)

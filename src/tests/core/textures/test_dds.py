@@ -6,10 +6,14 @@ import pytest
 
 from core.textures.dds import (inspect_dds,
                                inspect_dds_header, inspect_dds_layout,
-                               native_dds_info, native_dds_info_from_header)
+                               native_dds_info, native_dds_info_from_header,
+                               dds_layout_for_info)
 
 
 _DXGI = {
+    "rgba8_unorm": 28, "rgba8_srgb": 29,
+    "bgra8_unorm": 87, "bgrx8_unorm": 88,
+    "bgra8_srgb": 91, "bgrx8_srgb": 93,
     "bc1_unorm": 71, "bc1_srgb": 72,
     "bc2_unorm": 74, "bc2_srgb": 75,
     "bc3_unorm": 77, "bc3_srgb": 78,
@@ -33,7 +37,7 @@ def _level_size(width, height, format_name):
 def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
          array_size=1, cube=False, volume=False, payload=True, fourcc=None):
     compressed = format_name.startswith("bc")
-    is_dx10 = compressed and fourcc is None
+    is_dx10 = format_name in _DXGI and fourcc is None
     header_size = 148 if is_dx10 else 128
     data = bytearray(header_size)
     data[:4] = b"DDS "
@@ -53,8 +57,11 @@ def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
         struct.pack_into("<II", data, 80, 0x41, 0)
         struct.pack_into("<I", data, 88, 32)
         masks = (0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000)
-        if format_name == "bgra8":
+        if format_name.startswith("bg"):
             masks = (0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+        if "x8" in format_name:
+            masks = (*masks[:3], 0)
+            struct.pack_into("<I", data, 80, 0x40)
         struct.pack_into("<IIII", data, 92, *masks)
     caps2 = (0x200 if cube else 0) | (0x200000 if volume else 0)
     struct.pack_into("<I", data, 112, caps2)
@@ -69,14 +76,24 @@ def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
 @pytest.mark.parametrize("format_name", list(_DXGI))
 def test_dx10_formats_are_reported_with_canonical_ids(tmp_path, format_name):
     path = tmp_path / f"{format_name}.dds"
-    path.write_bytes(_dds(format_name=format_name))
+    data = _dds(5, 7, format_name=format_name, mip_count=3)
+    path.write_bytes(data)
 
     info = inspect_dds(path)
 
     assert info is not None
     assert info.format == format_name
-    assert info.compressed
+    assert info.compressed is format_name.startswith("bc")
     assert native_dds_info(path).format == format_name
+    layout = inspect_dds_layout(path)
+    assert layout.data_offset == 148
+    assert layout.payload_end == len(data)
+    assert dds_layout_for_info(info) == layout
+    assert inspect_dds_header(data[:148], len(data)) == info
+    for mip in layout.mips:
+        truncated = data[:mip.offset + mip.length - 1]
+        assert inspect_dds(truncated) is None
+        assert inspect_dds_header(truncated[:148], len(truncated)) is None
 
 
 def test_legacy_compressed_formats_are_supported(tmp_path):
@@ -113,6 +130,11 @@ def test_typeless_dxgi_is_rejected(tmp_path):
 
 
 @pytest.mark.parametrize("field,value", [
+    (80, 0),  # Missing FOURCC flag
+    (128, 27),  # RGBA typeless
+    (128, 30),  # Integer RGBA
+    (128, 90),  # BGRA typeless
+    (128, 92),  # BGRX typeless
     (128, 97),  # BC7 typeless
     (128, 2),  # Unsupported DXGI format
     (132, 4),  # Volume resource
@@ -136,6 +158,7 @@ def test_malformed_and_truncated_dds_are_rejected(tmp_path):
 
 @pytest.mark.parametrize("dimension,format_name,accepted", [
     (8192, "bc7_unorm", True), (8193, "bc7_unorm", False), (8192, "rgba8", True),
+    (8192, "rgba8_srgb", True), (8193, "rgba8_srgb", False),
 ])
 def test_model_limit_uses_header_and_payload_size(dimension, format_name, accepted):
     header = _dds(dimension, dimension, format_name, payload=False)
@@ -153,6 +176,7 @@ def test_native_header_requires_a_known_valid_file_size(file_size):
 
 @pytest.mark.parametrize(("format_name", "width", "height", "expected"), [
     ("rgba8", 3, 5, [(3, 5, 60, 128), (1, 2, 8, 188), (1, 1, 4, 196)]),
+    ("rgba8_srgb", 3, 5, [(3, 5, 60, 148), (1, 2, 8, 208), (1, 1, 4, 216)]),
     ("bc1_unorm", 5, 7, [(5, 7, 32, 148), (2, 3, 8, 180), (1, 1, 8, 188)]),
 ])
 def test_layout_reports_exact_odd_dimension_mip_offsets(
@@ -171,7 +195,7 @@ def test_layout_reports_exact_odd_dimension_mip_offsets(
 @pytest.mark.parametrize("format_name", [
     # One format for each layout branch: 8-byte BC, 16-byte BC, and the two
     # uncompressed channel-mask layouts.
-    "bc1_unorm", "bc7_unorm", "rgba8", "bgra8",
+    "bc1_unorm", "bc7_unorm", "rgba8", "bgra8", "rgbx8", "bgrx8",
 ])
 def test_layout_uses_format_specific_unit_sizes(tmp_path, format_name):
     path = tmp_path / f"{format_name}.dds"

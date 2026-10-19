@@ -24,7 +24,7 @@ from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from core.mod_source import DirectoryModSource, SevenZipModSource, ZipModSource
 from core.sevenzip import SevenZipEntry
 from core.textures.pipeline import encode_texture_key
-from tests.support.dds_data import write_bc7_dds
+from tests.support.dds_data import dx10_dds, write_bc7_dds
 
 
 def test_unsupported_native_candidate_retains_choice_and_reports_manual_pick_error(tmp_path):
@@ -289,9 +289,12 @@ def test_hydrate_texture_pool_publishes_all_roles_without_rendering(tmp_path):
     }
 
 
-def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(tmp_path):
+@pytest.mark.parametrize("dxgi_format", [98, 28, 29, 87, 88, 91, 93])
+def test_native_dds_endpoint_streams_original_bytes_and_rejects_png_alias(
+        tmp_path, dxgi_format):
     dds = tmp_path / "native.dds"
-    write_bc7_dds(dds)
+    payload = bytes(16 if dxgi_format == 98 else 64)
+    dds.write_bytes(dx10_dds(payload, dxgi_format=dxgi_format))
     invalid = tmp_path / "unsupported.dds"
     invalid.write_bytes(b"not a DDS")
     publication = server.begin_texture_publication(str(tmp_path))
@@ -365,15 +368,17 @@ def test_model_and_menu_dds_share_the_dimension_limit(tmp_path):
         publication.discard()
 
 
-@pytest.mark.parametrize("extension,archived,content_type", [
-    ("png", False, "image/png"), ("jpg", True, "image/jpeg"),
-    ("dds", True, "image/vnd-ms.dds"),
+@pytest.mark.parametrize("extension,archived,content_type,dxgi_format", [
+    ("png", False, "image/png", None), ("jpg", True, "image/jpeg", None),
+    ("dds", True, "image/vnd-ms.dds", 98),
+    ("dds", True, "image/vnd-ms.dds", 29),
 ])
 def test_textures_stream_original_bytes_lazily_from_disk_and_archive(
-        tmp_path, extension, archived, content_type):
+        tmp_path, extension, archived, content_type, dxgi_format):
     path = tmp_path / f"image.{extension}"
     if extension == "dds":
-        write_bc7_dds(path)
+        path.write_bytes(dx10_dds(
+            bytes(16 if dxgi_format == 98 else 64), dxgi_format=dxgi_format))
     else:
         Image.new("RGBA" if extension == "png" else "RGB", (300, 2),
                   (30, 60, 90, 128) if extension == "png" else (30, 60, 90)).save(path)

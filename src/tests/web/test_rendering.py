@@ -10,7 +10,7 @@ from app.assets.loader import AssetLoadResult, AssetMeshPart
 from app.assets.loader.models import AssetTexture
 from app.runtime import server
 from core.geometry.transport import GeometryBlob
-from tests.support.dds_data import dx10_dds, mode6_block
+from tests.support.dds_data import dx10_dds, mode6_block, uncompressed_dds
 
 from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
 from .support import bridge_calls, mesh_pixel, mesh_pixels, open_model, project_mesh_points, wait_loaded, wait_texture
@@ -670,12 +670,24 @@ def test_close_zoom_surface_shadow_stays_smooth_without_redrawing_the_map(viewer
     assert states[1] == states[0]
 
 
-def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path):
+@pytest.mark.parametrize('format_id', [None, 28, 29, 87, 88, 91, 93, 'rgbx8', 'bgrx8'])
+def test_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path, format_id):
     dds = tmp_path / 'texture-01.dds'
-    dds.write_bytes(split_color_dds())
+    top, bottom = (255, 0, 0), (0, 0, 255)
+    if format_id is None:
+        dds.write_bytes(split_color_dds())
+    else:
+        top, bottom = (192, 32, 16), (16, 48, 192)
+        bgra = format_id in (87, 88, 91, 93, 'bgrx8')
+        alpha = format_id not in (88, 93, 'rgbx8', 'bgrx8')
+        pixels = b''.join(bytes((*(color[::-1] if bgra else color), 255 if alpha else 0)) * 8
+                          for color in (top, bottom))
+        dds.write_bytes(uncompressed_dds(
+            pixels, dxgi_format=format_id if isinstance(format_id, int) else None,
+            bgra=bgra, alpha=alpha))
     reference = tmp_path / 'texture-02.png'
-    with Image.new('RGB', (4, 4), (255, 0, 0)) as image:
-        image.paste((0, 0, 255), (0, 2, 4, 4))
+    with Image.new('RGB', (4, 4), top) as image:
+        image.paste(bottom, (0, 2, 4, 4))
         image.save(reference)
     publication = server.begin_texture_publication(str(tmp_path))
     urls = [publication.register(str(path)) for path in [dds, reference]]
@@ -689,13 +701,14 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
     payload['textures'] = dict(zip(['diffuse::texture-01.dds', 'diffuse::texture-02.png'], urls))
     page = _open_fixture(viewer, payload)
     wait_texture(page)
-    assert page.evaluate("""async () => {
+    assert page.evaluate("""async compressed => {
       const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
       const {renderer, rendererReady} = await import('./js/scene/scene.js');
       await rendererReady;
+      const texture = getGameMaterialTexture(window.modViewer.activeMeshes[0].material, 'diffuse');
       return renderer.backend.isWebGPUBackend && !renderer.backend.compatibilityMode
-        && getGameMaterialTexture(window.modViewer.activeMeshes[0].material, 'diffuse').isCompressedTexture;
-    }""")
+        && texture.isCompressedTexture === compressed && texture.colorSpace === 'srgb';
+    }""", format_id is None)
     points = [[0.5, 0.2, 0], [0.5, 0.8, 0]]
     compressed = mesh_pixels(page, points)
     page.locator('#inspector-tab').click()
@@ -708,7 +721,8 @@ def test_compressed_dds_upload_matches_reference_colors_and_orientation(viewer, 
         .getImageData(canvas.width/2,canvas.height*v,1,1).data]);
     }'''
     compressed_uv = page.evaluate(uv_pixels)
-    assert compressed_uv[0][2] > 240 and compressed_uv[1][0] > 240
+    assert all(max(abs(a-b) for a,b in zip(actual, expected)) <= 2
+               for actual, expected in zip(compressed_uv, [(*bottom, 255), (*top, 255)]))
     page.evaluate("""async () => {
       const {setManualTexOverride} = await import('./js/mesh/mesh-state.js');
       setManualTexOverride(window.modViewer.activeMeshes[0], 'diffuse::texture-02.png');

@@ -186,8 +186,10 @@ of documentation, comments and tests; use portable fixtures instead.
   Publish supported texture files as lazy URLs serving their original bytes;
   never encode PNG display copies or embed converted texture data. Detached
   core analysis keeps texture identities but requires a publisher for image URLs.
-  Native DDS uses validated eligibility only;
-  model and menu DDS must be supported, no larger than 8192 in either dimension,
+  Native DDS uses validated eligibility only. Supported formats include
+  BC formats, DX10 RGBA8/BGRA8/BGRX8 UNORM and sRGB, and legacy
+  32-bit RGBA/BGRA/RGBX/BGRX layouts. X channels always display as opaque alpha.
+  Model and menu DDS must be supported, no larger than 8192 in either dimension,
   and structurally valid; otherwise publication rejects them. There is no DDS
   file-byte cap. Menu DDS previews load only when visible
   and render through the shared WebGPU renderer into HTML canvases; dispose

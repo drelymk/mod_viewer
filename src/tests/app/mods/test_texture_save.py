@@ -769,9 +769,12 @@ def test_parallel_bc7_worker_failure_is_reported(tmp_path, monkeypatch):
     assert executor.shutdown_called
 
 
-def test_save_rejects_non_bc7_dds(tmp_path):
+@pytest.mark.parametrize("dxgi_format,payload_size", [
+    (71, 8), (28, 64), (29, 64), (87, 64), (88, 64), (91, 64), (93, 64),
+])
+def test_save_rejects_non_bc7_dds(tmp_path, dxgi_format, payload_size):
     source = tmp_path / "component01.dds"
-    source.write_bytes(dx10_dds(bytes(8), dxgi_format=71))
+    source.write_bytes(dx10_dds(bytes(payload_size), dxgi_format=dxgi_format))
 
     with pytest.raises(errors.TextureSaveError) as raised:
         request.inspect_save_texture(str(source))

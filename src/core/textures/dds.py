@@ -62,6 +62,8 @@ class DDSLayout:
 
 
 _DXGI_FORMATS = {
+    28: "rgba8_unorm",
+    29: "rgba8_srgb",
     71: "bc1_unorm",
     72: "bc1_srgb",
     74: "bc2_unorm",
@@ -72,13 +74,18 @@ _DXGI_FORMATS = {
     81: "bc4_snorm",
     83: "bc5_unorm",
     84: "bc5_snorm",
+    87: "bgra8_unorm",
+    88: "bgrx8_unorm",
+    91: "bgra8_srgb",
+    93: "bgrx8_srgb",
     95: "bc6h_ufloat",
     96: "bc6h_float",
     98: "bc7_unorm",
     99: "bc7_srgb",
 }
 
-_COMPRESSED_FORMATS = frozenset(_DXGI_FORMATS.values())
+_COMPRESSED_FORMATS = frozenset(
+    name for name in _DXGI_FORMATS.values() if name.startswith("bc"))
 
 
 def _u32(data, offset):
@@ -133,7 +140,7 @@ def _layout(info, data_offset):
 def dds_layout_for_info(info, data_offset=None):
     """Build a layout for validated metadata without rereading a file."""
     if data_offset is None:
-        data_offset = 148 if info.format in _COMPRESSED_FORMATS else 128
+        data_offset = 148 if info.format in _DXGI_FORMATS.values() else 128
     return _layout(info, data_offset)
 
 
@@ -163,7 +170,7 @@ def _inspect_header(header):
     pixel_flags = _u32(header, 80)
     fourcc = _fourcc(header, 84)
     if fourcc == _DX10_FOURCC:
-        if len(header) < 148:
+        if not (pixel_flags & _DDPF_FOURCC) or len(header) < 148:
             return None
         dxgi_format = _u32(header, 128)
         format_name = _DXGI_FORMATS.get(dxgi_format)
@@ -200,6 +207,10 @@ def _inspect_header(header):
         return _info(width, height, mip_count, "rgba8")
     if masks == (0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000):
         return _info(width, height, mip_count, "bgra8")
+    if masks == (0x000000FF, 0x0000FF00, 0x00FF0000, 0):
+        return _info(width, height, mip_count, "rgbx8")
+    if masks == (0x00FF0000, 0x0000FF00, 0x000000FF, 0):
+        return _info(width, height, mip_count, "bgrx8")
     return None
 
 
