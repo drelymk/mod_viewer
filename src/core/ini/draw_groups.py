@@ -9,10 +9,9 @@ from ..geometry.skinning import resolve_skinning_source
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
-    _hash_wide_overrides, _select_draw_sections,
+    _hash_wide_overrides, _select_draw_sections, _buffer_resource_at_draw,
 )
 from .draw_scan import _scan_sections_for_draws
-from .draw_bindings import inherit_vertex_bindings
 from .sections import ResourceTable
 from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
 
@@ -140,8 +139,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         "component_blend_vertex_resources"]
     component_animation_vertex_bindings = resolved_buffers[
         "component_animation_vertex_bindings"]
-    component_vertex_binding_history = resolved_buffers[
-        "component_vertex_binding_history"]
+    component_vertex_binding_history = resolved_buffers["component_vertex_binding_history"]
     hash_buffers = resolved_buffers["hash_buffers"]
     global_ib = resolved_buffers["global_ib"]
     global_position = resolved_buffers["global_position"]
@@ -271,16 +269,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         )]
         draws = []
         animation_bindings = []
-        inherited_draws = []
-        for authored in authored_draws:
-            effective_ib = authored.index_resource or ib_resource
-            histories = _lookup_component_value(
-                component_vertex_binding_history,
-                _ib_res_to_component(effective_ib)) or _lookup_component_value(
-                    component_vertex_binding_history, component) or {}
-            inherited_draws.extend(inherit_vertex_bindings(
-                authored, histories, resolve_vertex_info))
-        for number, (authored, inherited) in enumerate(inherited_draws, 1):
+        for number, authored in enumerate(authored_draws, 1):
             draw = DrawCall(
                 label=f"{label}-{number}", count=authored.count,
                 start=authored.start, base=authored.base,
@@ -324,18 +313,29 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                     draw.texcoord_file = texcoord
                     draw.texcoord_stride = texcoord_stride_for_draw or 20
 
-            for role in ("position", "texcoord"):
-                if role not in inherited:
+            histories = _lookup_component_value(
+                component_vertex_binding_history, _ib_res_to_component(effective_ib)
+            ) or _lookup_component_value(component_vertex_binding_history, component) or {}
+            # Select resources only when the authored guard proves one binding.
+            # Layout interpretation and direct/null overrides stay below.
+            for role, fallback in (("position", effective_position_resource),
+                                   ("texcoord", (draw_buffers or buffers)["texcoord"])):
+                history = histories.get(role, [])
+                slots = {item["slot"] for item in history
+                         if str(item["resource"]).casefold() == str(fallback).casefold()}
+                if len(slots) != 1:
                     continue
-                resource = inherited[role]["resource"]
-                file, stride = resolve_vertex_resource(resource)
-                if resource is None or file:
-                    setattr(draw, f"{role}_file", file)
-                    setattr(draw, f"{role}_stride", (
-                        stride or (POSITION_STRIDE if role == "position" else 20)
-                    ) if file else None)
-                    if role == "position":
-                        effective_position_resource = resource
+                slot = next(iter(slots))
+                resource = _buffer_resource_at_draw(
+                    [item for item in history if item["slot"] == slot],
+                    authored.binding_conditions, fallback)
+                if resource != fallback:
+                    file, stride = resolve_vertex_resource(resource)
+                    if file or resource is None:
+                        setattr(draw, f"{role}_file", file)
+                        setattr(draw, f"{role}_stride", stride if file else None)
+                        if role == "position":
+                            effective_position_resource = resource
 
             vertex_resources = authored.vertex_resources
             if 0 in vertex_resources:
@@ -375,9 +375,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 lookup_component_vertex_resources(
                     _ib_res_to_component(effective_ib)))
             effective_vertex_resources.update(group_vertex_resources)
-            effective_vertex_resources.update(inherited.get("normal_resources", {}))
-            if "position" in inherited:
-                effective_vertex_resources[0] = inherited["position"]["resource"]
             effective_vertex_resources.update(vertex_resources)
             draw.normal_source = _resolve_normal_source(
                 effective_vertex_resources, resources, draw.position_file,
@@ -410,16 +407,13 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             if skinning_source is None and skinning_error is None:
                 occupied_slots = set(vertex_resources)
                 blend_fallback = {
-                    slot: resource
+                    slot: _buffer_resource_at_draw(
+                        [item for item in histories.get("blend", []) if item["slot"] == slot],
+                        authored.binding_conditions, resource)
                     for slot, resource in lookup_component_blend_vertex_resources(
                         _ib_res_to_component(effective_ib)).items()
                     if slot not in occupied_slots
                 }
-                if "blend" in inherited:
-                    blend_fallback = {
-                        slot: resource for slot, resource in inherited["blend"].items()
-                        if slot not in occupied_slots
-                    }
                 skinning_resolution[
                     "legacy_component_candidate_count"] = len(blend_fallback)
                 skinning_source, skinning_error = resolve_skinning_source(

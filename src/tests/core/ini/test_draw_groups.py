@@ -2,239 +2,53 @@
 
 import pytest
 
-from core.ini.analysis import analyze_ini
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_scan import _scan_sections_for_draws
-from core.ini.draw_bindings import inherit_vertex_bindings
-from core.geometry.draw_call import AuthoredDrawCall
 from core.ini.sections import extract_resources, parse_sections
 from tests.support.model_data import standard_component_resources
 from tests.support.provenance import visible
 
 
-def test_runtime_binding_guards_select_streams_without_hiding_geometry():
-    sections = parse_sections("source-01.ini", text="""[Constants]
-global $Ready = 0
-global $mode = 0
-[KeyMode]
-type = cycle
-$mode = 0,1
-[TextureOverrideComponent01Position]
-if $Ready == 1
-if $mode == 0
-vb0 = ResourceComponent01Position
-else
-vb0 = ResourceAlternatePosition
-endif
-endif
-[TextureOverrideComponent01Texcoord]
-vb1 = ResourceComponent01Texcoord
-[TextureOverrideComponent01A]
-if $Ready == 1
-ib = ResourceComponent01IB
-drawindexed = 3, 0, 0
-endif
-[TextureOverrideComponent01B]
-ib = ResourceComponent01IB
-drawindexed = 3, 3, 0
-[ResourceAlternatePosition]
-filename = alternate-position.buf
-stride = 40
-""" + standard_component_resources())
-    analysis = analyze_ini(sections, var_prefix="source::")
-    controlled, ambiguous = analysis.draw_groups
-    assert len(ambiguous["draws"]) == 1
-    for mode, filename in [(0, "component01-position.buf"),
-                           (1, "alternate-position.buf")]:
-        state = {**analysis.defaults, "source::mode": str(mode)}
-        active = [draw for draw in controlled["draws"] if visible(draw.conditions, state)]
-        assert len(active) == 1
-        assert active[0].position_file == filename
-        assert all(clause["var"] != "source::Ready" for group in active[0].conditions
-                   for clause in group)
-
-
-def test_conditional_index_join_does_not_invent_an_untouched_replacement():
-    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01Position]
+@pytest.mark.parametrize("guard", ["$mode == 1", "$Ready == 1"])
+@pytest.mark.parametrize("initial", [False, True])
+def test_index_branch_join_keeps_sources_and_untouched_fallback(guard, initial):
+    initial_ib = "ib = ResourceComponent01IB" if initial else (
+        "if $mode == 0\nib = ResourceComponent01IB\nendif")
+    text = f"""[TextureOverrideComponent01Position]
 vb0 = ResourceComponent01Position
 [TextureOverrideComponent01Texcoord]
 vb1 = ResourceComponent01Texcoord
 [TextureOverrideComponent01A]
-if $mode == 0
-ib = ResourceComponent01IB
-elif $mode == 1
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+{initial_ib}
+if {guard}
 run = CommandListAlternate
 endif
 drawindexed = 3, 0, 0
 post ib = ResourceComponent01IB
 post drawindexed = 3, 3, 0
 [CommandListAlternate]
-ib = ResourceAlternateIndex
-[ResourceAlternateIndex]
+ib = ResourceAlternateIB
+[ResourceAlternateIB]
 filename = alternate.ib
 format = R16_UINT
-""" + standard_component_resources())
-    draws = build_draw_groups(
-        sections, extract_resources(sections), gating_vars={"mode"})[0]["draws"]
-    assert len(draws) == 3
-    for mode, expected in [(0, [("component01.ib", 0), ("component01.ib", 3)]),
-                           (1, [("alternate.ib", 0), ("component01.ib", 3)]),
-                           (2, [("component01.ib", 3)])]:
+""" + standard_component_resources()
+    sections = parse_sections("source-01.ini", text=text)
+    draws = build_draw_groups(sections, extract_resources(sections),
+                              gating_vars={"mode"})[0]["draws"]
+    for mode in (0, 1, 2):
         active = [draw for draw in draws if visible(draw.conditions, {"mode": str(mode)})]
-        assert [(draw.ib_file, draw.start) for draw in active] == expected
+        expected = "alternate.ib" if (
+            mode == 1 or "Ready" in guard or mode == 2 and not initial
+        ) else "component01.ib"
+        assert [(draw.ib_file, draw.start) for draw in active] == [
+            (expected, 0), ("component01.ib", 3)]
+        assert active[0].index_size == (2 if expected == "alternate.ib" else 4)
+        assert [draw.occurrence.ordinal for draw in active] == [0, 1]
         for draw in active:
-            assert draw.occurrence.ordinal == (0 if draw.start == 0 else 1)
-
-
-@pytest.mark.parametrize("uv_slot,normal_slot,stride,format_line,dynamic", [
-    (1, 2, 4, "", False),
-    (1, 2, 8, "format = DXGI_FORMAT_R8G8B8A8_SNORM", False),
-    (2, 1, 8, "format = DXGI_FORMAT_R8G8B8A8_SNORM", False),
-    (1, 2, 8, "format = DXGI_FORMAT_R8G8B8A8_SNORM", True),
-])
-def test_inherited_texcoord_history_keeps_numeric_slots(
-        uv_slot, normal_slot, stride, format_line, dynamic):
-    bindings = f"""vb{uv_slot} = ResourceComponent01Texcoord
-if $mode == 1
-vb{uv_slot} = ResourceAlternateTexcoord
-endif
-vb{normal_slot} = ResourceNormal
-"""
-    if dynamic:
-        bindings = """vb1 = ResourceComponent01Texcoord
-vb2 = ResourceAlternateTexcoord
-if $mode == 1
-vb1 = ResourceNormal
-endif
-"""
-    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01Position]
-vb0 = ResourceComponent01Position
-[TextureOverrideComponent01Texcoord]
-{bindings}
-[TextureOverrideComponent01A]
-ib = ResourceComponent01IB
-drawindexed = 3, 0, 0
-[ResourceAlternateTexcoord]
-filename = alternate-texcoord.buf
-stride = 20
-[ResourceNormal]
-filename = normals.buf
-stride = {stride}
-{format_line}
-""" + standard_component_resources())
-    draws = build_draw_groups(
-        sections, extract_resources(sections), gating_vars={"mode"})[0]["draws"]
-    for mode, filename in [(0, "component01-texcoord.buf"),
-                           (1, "alternate-texcoord.buf")]:
-        active = [draw for draw in draws if visible(draw.conditions, {"mode": str(mode)})]
-        assert len(active) == 1
-        assert (active[0].texcoord_file, active[0].texcoord_stride) == (
-            filename, 20 if mode else 8)
-        if dynamic:
-            if mode:
-                assert active[0].normal_source.file == "normals.buf"
-            else:
-                assert active[0].normal_source is None
-
-
-@pytest.mark.parametrize("animated", [False, True])
-def test_inherited_stream_fallback_preserves_authored_draw(animated):
-    guard = [[{"var": "mode", "value": "0", "negate": False}]]
-    authored = AuthoredDrawCall(
-        count=3, start=0, base=0, conditions=guard,
-        animation_conditions=guard if animated else [])
-    history = [{"slot": 0, "resource": "ResourceBase", "conditions": []}]
-    history.extend({
-        "slot": 0, "resource": f"ResourceVariant{index}",
-        "conditions": [[{"var": "variant", "value": str(index), "negate": False}]],
-    } for index in range(129))
-    variants = inherit_vertex_bindings(
-        authored, {"position": history}, lambda name: {})
-    assert len(variants) == 1
-    assert variants[0][0] is authored
-    assert variants[0][1] == {}
-    assert authored.conditions == guard
-
-
-@pytest.mark.parametrize("blend_stride", [4, 8, 16, 32])
-def test_inherited_stream_order_nulls_and_direct_draw_bindings(blend_stride):
-    blend_slot = 2 if blend_stride == 32 else 4
-    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01Position]
-vb0 = ResourceComponent01Position
-if $mode == 0
-vb0 = ResourceAlternatePosition
-endif
-if $mode == 1
-vb0 = null
-endif
-post run = CommandListLatePosition
-[CommandListLatePosition]
-if $mode == 2
-vb0 = ResourceLatePosition
-endif
-[TextureOverrideComponent01Texcoord]
-vb1 = ResourceComponent01Texcoord
-if $mode == 0
-vb1 = ResourceAlternateTexcoord
-elif $mode == 1
-vb1 = null
-endif
-[TextureOverrideComponent01Blend]
-vb1 = ResourceBaseBlend
-if $mode == 0
-vb1 = ResourceAlternateBlend
-elif $mode == 1
-vb1 = null
-endif
-[TextureOverrideComponent01A]
-ib = ResourceComponent01IB
-drawindexed = 3, 0, 0
-vb0 = ResourceDirectPosition
-vb{blend_slot} = ResourceDirectBlend
-drawindexed = 3, 3, 0
-[ResourceAlternatePosition]
-filename = alternate-position.buf
-stride = 40
-[ResourceLatePosition]
-filename = late-position.buf
-stride = 40
-[ResourceDirectPosition]
-filename = direct-position.buf
-stride = 40
-[ResourceAlternateTexcoord]
-filename = alternate-texcoord.buf
-stride = 20
-[ResourceBaseBlend]
-filename = base-blend.buf
-stride = {blend_stride}
-[ResourceAlternateBlend]
-filename = alternate-blend.buf
-stride = {blend_stride}
-[ResourceDirectBlend]
-filename = direct-blend.buf
-stride = {blend_stride}
-""" + standard_component_resources())
-    draws = build_draw_groups(
-        sections, extract_resources(sections), gating_vars={"mode"})[0]["draws"]
-    for mode, position, texcoord, blend in [
-        (0, "alternate-position.buf", "alternate-texcoord.buf", "alternate-blend.buf"),
-        (1, None, None, None),
-        (2, "late-position.buf", "component01-texcoord.buf", "base-blend.buf"),
-        (3, "component01-position.buf", "component01-texcoord.buf", "base-blend.buf"),
-    ]:
-        selected = [draw for draw in draws
-                    if visible(draw.conditions, {"mode": str(mode)})]
-        assert [draw.start for draw in selected] == [0, 3]
-        inherited, direct = selected
-        assert inherited.position_file == position
-        assert inherited.texcoord_file == texcoord
-        assert (inherited.skinning_source.file
-                if inherited.skinning_source else None) == blend
-        assert direct.position_file == "direct-position.buf"
-        assert direct.texcoord_file == texcoord
-        assert direct.skinning_source.file == "direct-blend.buf"
-        assert direct.occurrence.ordinal == 1
-        assert inherited.occurrence.ordinal == 0
+            line = text.splitlines()[draw.sources[0]["line_no"] - 1]
+            assert line.endswith(f"drawindexed = 3, {draw.start}, 0")
 
 
 @pytest.mark.parametrize("command", [

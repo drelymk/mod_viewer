@@ -1,6 +1,7 @@
 """Execution-order scanning of authored draw state."""
 
 import re
+from dataclasses import replace
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 from .command_phases import parse_command_line, run_target_phases
@@ -13,11 +14,11 @@ from .dnf import (DNF_TRUE, build_bool_alias_map, dnf_and, dnf_not, dnf_or,
 from .menu import extract_menu_var_names
 from .state import extract_state_rules
 from .toggles import extract_toggle_var_names
-from .draw_bindings import resolve_index_bindings
 from .texture_roles import (
     _collect_structural_slot_role_hints, _collect_texture_override_index,
     _effective_role_assignments, _legacy_texture_evidence,
     _semantic_texture_role,
+    _condition_difference, _condition_group_is_consistent,
 )
 from .sections import canonical_var_names, line_source
 
@@ -170,6 +171,36 @@ def _split_animation_conditions(conditions, animation_vars):
     return ordinary, animated
 
 
+def _index_draws_at_join(authored, history, visibility_vars):
+    """Resolve supported IB alternatives without dropping an untouched draw."""
+    if len({item["resource"] for item in history}) <= 1 or any(
+            authored.animation_conditions):
+        return [authored]
+    remaining = authored.binding_conditions
+    draws = []
+    for item in reversed(history):
+        applicable = [group for group in dnf_and(
+            remaining or DNF_TRUE, item["conditions"] or DNF_TRUE)
+            if _condition_group_is_consistent(group)]
+        if not applicable:
+            continue
+        unknown = normalize_dnf(item["conditions"], {
+            clause["var"] for group in item["conditions"] for clause in group
+            if clause["var"] not in visibility_vars})
+        if unknown and _condition_difference(authored.binding_conditions, unknown) is not None:
+            return [authored]
+        draws.append(replace(
+            authored, index_resource=item["resource"], binding_conditions=applicable,
+            conditions=normalize_dnf(applicable, visibility_vars)))
+        remaining = _condition_difference(remaining, item["conditions"])
+        if remaining is None:
+            break
+    if remaining is not None:
+        draws.append(replace(authored, binding_conditions=remaining,
+                             conditions=normalize_dnf(remaining, visibility_vars)))
+    return list(reversed(draws)) or [authored]
+
+
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                              animation_vars=None, qualified_vars=None, *,
                              resources=None, condition_aliases=None,
@@ -182,6 +213,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     canon = (canonical_vars if canonical_vars is not None
              else canonical_var_names(sections))
     vertex_vars = tracked_vars | set(canon.values())
+    visibility_vars = {f"{var_prefix or ''}{name}" for name in tracked_vars}
+    visibility_vars.update((qualified_vars or {}).values())
     section_lookup = {str(name).lower(): name for name in sections}
     commands = {name: tuple(parse_command_line(raw) for raw in lines)
                 for name, lines in sections.items()}
@@ -410,8 +443,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 info["vertex_binding_history"].append({
                     "slot": slot, "resource": value,
                     "conditions": normalize_dnf(
-                        combined, tracked_vars, var_prefix, qualified_vars),
-                    "guard": normalize_dnf(
                         combined, vertex_vars, var_prefix, qualified_vars),
                 })
                 if slot == 0 and value and animation_vars:
@@ -460,8 +491,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 info["index_binding_history"].append({
                     "resource": match.group(1),
                     "conditions": normalize_dnf(
-                        combined, tracked_vars, var_prefix, qualified_vars),
-                    "guard": normalize_dnf(
                         combined, vertex_vars, var_prefix, qualified_vars),
                 })
             match = re.fullmatch(r"drawindexed\s*=\s*(.*)", line, re.I)
@@ -513,8 +542,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
                 )
-                info["draws"].extend(resolve_index_bindings(
-                    authored, info["index_binding_history"]))
+                info["draws"].extend(_index_draws_at_join(
+                    authored, info["index_binding_history"], visibility_vars))
             semantic = re.match(
                 r"^(Resource[\\/]"
                 r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"
