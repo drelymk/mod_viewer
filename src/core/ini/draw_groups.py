@@ -154,11 +154,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
 
     # Hash-wide references are manual choices for each same-INI/hash part.
     family_references = {}
+    family_auto_sources = {}
     for provider in _hash_wide_overrides(section_info):
         match = provider["geometry_match_at_end"]
         family = ((provider.get("src") or {}).get("ini_path"), match.hash)
         family_references.setdefault(family, {}).update(
             provider["referenced_textures"])
+        family_auto_sources.setdefault(family, []).extend(
+            provider.get("auto_sources", []))
 
     ib_file_cache = {}
 
@@ -267,6 +270,11 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
         )]
+        match = info.get("geometry_match_at_end")
+        family = (((info.get("src") or {}).get("ini_path"), match.hash)
+                  if match else None)
+        auto_sources = (info.get("auto_sources") or
+                        family_auto_sources.get(family, []))
         draws = []
         animation_bindings = []
         for number, authored in enumerate(authored_draws, 1):
@@ -292,6 +300,12 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
             )
+            if authored.count is None and auto_sources:
+                draw.sources = list(auto_sources)
+                draw.auto_draw = {
+                    "component": section_name, "resource": ib_resource,
+                    "format": ib_info.get("format"),
+                }
             effective_ib = authored.index_resource or ib_resource
             if effective_ib != ib_resource:
                 resolved_ib = resolve_ib_file(effective_ib)

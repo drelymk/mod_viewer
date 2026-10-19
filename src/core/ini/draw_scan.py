@@ -528,6 +528,12 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     section_name, current_draw, execution_path)
                 if match[1].strip().casefold() == "auto":
                     info["drawindexed_auto"] = True
+                    source = line_source(raw)
+                    if source:
+                        info["auto_sources"].append({
+                            **source, "occurrence": occurrence.to_dict(),
+                            "phase": phase, "conditional": bool(cond_stack),
+                        })
                     continue
                 arguments = resolve_drawindexed(match[1], draw_constants)
                 if arguments is None:
@@ -609,6 +615,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "vb0": None, "vb1": None, "vb2": None, "ib": None,
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
             "drawindexed_auto": False, "_cur_diffuse_variants": [],
+            "auto_sources": [],
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},

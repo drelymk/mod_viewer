@@ -101,6 +101,8 @@ class DrawCall(MutableMapping):
     # rendered output and therefore not part of render_identity().
     occurrence: DrawOccurrence | tuple | None = None
 
+    # Authored full-buffer draw ownership; provenance only, never render state.
+    auto_draw: dict | None = None
     ib_file: str | None = None
     index_size: int | None = None
     position_file: str | None = None
@@ -147,7 +149,7 @@ class DrawCall(MutableMapping):
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
         "label", "conditions", "animation_conditions", "sources",
-        "occurrence", "geometry_match",
+        "occurrence", "geometry_match", "auto_draw",
         "slot_textures", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
         "skinning_bone_offset",
