@@ -1056,6 +1056,16 @@ def hydrate_textures(folder_path, payload, data=None, texture_source=None,
                 if encoded and not encoded.get("error"):
                     textures[encoded["tex_key"]] = encoded["uri"]
 
+    if texture_source is not None:
+        # Reuse publication eligibility; detached analysis has no image URLs.
+        for pool in texture_pools.values():
+            pool[:] = [option for option in pool
+                       if textures.get(option["tex_key"])]
+            for option in pool:
+                for field, _role in role_fields[1:]:
+                    if option.get(field) and not textures.get(option[field]):
+                        option.pop(field)
+
     payload["texture_pools"] = texture_pools
 
     return restored
