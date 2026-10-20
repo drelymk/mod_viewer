@@ -4,9 +4,8 @@ from .animation_clocks import (
     AnimationAnalysis, AnimationClock, compute_animation_control_vars,
     discover_animation_clocks, frame_condition,
 )
-from .animation_compute import (
-    discover_compute_animations, discover_wwmi_sparse_animations,
-)
+from .animation_compute import discover_compute_animations
+from .animation_wwmi import discover_wwmi_sparse_animations
 
 
 __all__ = [
