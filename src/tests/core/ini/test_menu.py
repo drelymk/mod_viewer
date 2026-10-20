@@ -479,7 +479,7 @@ else
 $Accent = 0
 endif
 [CommandListPair]
-if $\Generated\Master\enabled == 7
+if $Visible == 1
 run = CommandListMode
 run = CommandListAccent
 endif
@@ -642,6 +642,18 @@ def test_all_menu_drivers_reject_partial_or_ambiguous_helpers(driver, action):
     text = _action_menu(action, driver, True)
     text += "[CommandListCycle]\n$Mode = 1 - $Mode\n"
     controls = {entry["var"]: entry for entry in _menu(text).values()}
+    assert set(controls) == {"anchor", "guide"}
+
+
+def test_helper_cycle_requires_a_proven_wrapper_guard():
+    text = _action_menu("run = CommandListGuarded", "slot", True)
+    text = text.replace("global persist $Accent = 1\n", "global persist $Accent = 1\nglobal $Enabled = 1\n")
+    text += "[CommandListGuarded]\nif $Enabled == 1\n$Mode = 1 - $Mode\nendif\n"
+    controls = {entry["var"]: entry for entry in _menu(text).values()}
+    assert controls["Mode"]["values"] == ["0", "1"]
+
+    unknown = text.replace("global $Enabled = 1", "global persist $Enabled = 0")
+    controls = {entry["var"]: entry for entry in _menu(unknown).values()}
     assert set(controls) == {"anchor", "guide"}
 
 

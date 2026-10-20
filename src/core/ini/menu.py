@@ -523,7 +523,8 @@ def _body_lines(nodes):
 
 
 def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
-                     require_finite=True, active=(), budget=None):
+                     require_finite=True, active=(), budget=None,
+                     helper_context=False):
     """Resolve finite actions, following only bounded, pure local helper calls."""
     budget = [128] if budget is None else budget
     budget[0] -= 1
@@ -576,7 +577,8 @@ def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
             if target in active or blocks.get(target) is None:
                 return None
             actions = _resolve_actions(blocks[target][1], blocks, defaults,
-                                       active=(*active, target), budget=budget)
+                                       active=(*active, target), budget=budget,
+                                       helper_context=True)
         else:
             literal = _literal_cycle(node)
             if literal:
@@ -590,9 +592,12 @@ def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
                 actions = _resolve_actions(branch["body"], blocks, defaults,
                                            allow_effects=allow_effects,
                                            require_finite=require_finite,
-                                           active=active, budget=budget)
+                                           active=active, budget=budget,
+                                           helper_context=helper_context)
                 names = {name.casefold() for name in guard.variables()}
-                if (_inactive(guard, defaults)
+                guard_ok = (_satisfied(guard, defaults) if helper_context
+                            else not _inactive(guard, defaults))
+                if (not guard_ok
                         or actions and any(var.casefold() in names for var, _values, _effects in actions)):
                     return None
             else:
@@ -767,6 +772,13 @@ def _inactive(guard, defaults):
     return condition.reduce(guard, {
         name: defaults[name.casefold()] for name in guard.variables()
         if name.casefold() in defaults}) == condition.FALSE
+
+
+def _satisfied(guard, defaults):
+    """Return whether a guard is provably true in the modeled context."""
+    return condition.reduce(guard, {
+        name: defaults[name.casefold()] for name in guard.variables()
+        if name.casefold() in defaults}) == condition.TRUE
 
 
 def _mouse_button_items(sections, blocks, defaults, pressed):
