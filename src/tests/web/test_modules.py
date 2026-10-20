@@ -1530,6 +1530,47 @@ def test_loose_partition_merge_and_cleanup_preserve_authored_triangle_identity(m
     assert sorted(result['merged']) == [[0, 2], [1]]
 
 
+@pytest.mark.parametrize('scenario,expected', [
+    ('empty_gap', False), ('empty_corner', False), ('enclosing', True),
+    ('crossing_edge', True), ('unsampled_triangle', True), ('draw_range', False),
+    ('nonindexed', True), ('hidden', False), ('degenerate', False),
+])
+def test_mesh_rectangle_requires_drawn_triangle_intersection(module_page, scenario, expected):
+    result = module_page.evaluate('''async scenario => {
+      const THREE = await import('three/webgpu');
+      const picking = await import('./js/scene/model-picking.js');
+      const center = [-0.8,-0.8,0, 0.8,-0.8,0, 0,0.8,0];
+      const outside = [-0.9,-0.2,0, -0.6,-0.2,0, -0.9,0.2,0];
+      const fixtures = {
+        empty_gap: [...outside, 0.6,-0.2,0, 0.9,-0.2,0, 0.9,0.2,0],
+        empty_corner: [-0.8,-0.8,0, 0.8,-0.8,0, -0.8,0.8,0],
+        enclosing: center,
+        crossing_edge: [-0.8,-0.02,0, 0.8,-0.02,0, 0.8,0.02,0],
+        draw_range: [...center, ...outside],
+        degenerate: [-0.8,-0.8,0, 0.8,0.8,0, 0,0,0],
+        unsampled_triangle: Array.from({length:512}, (_, face) => face === 1 ? center : outside).flat(),
+      };
+      const coordinates = fixtures[scenario] || center;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(coordinates, 3));
+      if (scenario !== 'nonindexed') geometry.setIndex(Array.from({length:coordinates.length / 3}, (_, i) => i));
+      if (scenario === 'draw_range') geometry.setDrawRange(3,3);
+      const mesh = new THREE.Mesh(geometry);
+      mesh.visible = scenario !== 'hidden';
+      mesh.raycast = () => {throw new Error('Rectangle selection must not raycast');};
+      const camera = new THREE.OrthographicCamera(-1,1,1,-1,0.1,10);
+      camera.position.z = 5; camera.lookAt(0,0,0); camera.updateMatrixWorld(true);
+      const canvas = {getBoundingClientRect: () => ({left:100, top:50, width:400, height:400})};
+      const selectionRect = scenario === 'empty_corner'
+        ? {left:410, top:120, right:430, bottom:140}
+        : {left:290, top:240, right:310, bottom:260};
+      const options = {mesh, camera, canvas, selectionRect};
+      return {hit:picking.meshIntersectsClientRect(options),
+        selected:picking.meshesInClientRect({...options, meshes:[mesh]}).includes(mesh)};
+    }''', scenario)
+    assert result == {'hit': expected, 'selected': expected}
+
+
 def test_face_rectangle_and_raycast_preserve_draw_range_identity(module_page):
     result = module_page.evaluate("""async () => {
       const THREE = await import('three/webgpu');

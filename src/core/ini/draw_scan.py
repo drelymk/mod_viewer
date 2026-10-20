@@ -5,7 +5,6 @@ from dataclasses import replace
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
 from .command_phases import parse_command_line, run_target_phases
-from .migoto_semantics import unique_command_metadata
 
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
 from ..geometry.identity import (DrawOccurrence, GeometryMatch,
@@ -170,6 +169,11 @@ def _split_animation_conditions(conditions, animation_vars):
     if any(not group for group in ordinary):
         ordinary = []
     return ordinary, animated
+
+
+def _condition_path(cond_stack):
+    """Retain branch syntax, including runtime and namespaced conditions."""
+    return tuple(tuple(frame["branches"]) for frame in cond_stack)
 
 
 def _buffer_resource_at_draw(history, conditions, fallback):
@@ -393,27 +397,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             if info["src"] is None:
                 info["src"] = line_source(raw)
             low = line.lower()
-            key, _, value = low.partition("=")
-            key, value = key.strip(), value.strip()
-            info["auto_owner_safe"] &= (
-                not execution_path and not cond_stack and phase == "pre"
-                and key in {"hash", "match_priority", "handling", "drawindexed"}
-                and (key != "handling" or value == "skip")
-                and (key != "drawindexed" or value == "auto"))
-            if not execution_path and (unique_command_metadata(section_name, key)
-                                       or key.startswith("match_")):
-                info["matching_safe"] &= (
-                    key not in info["_match_keys"] and not cond_stack and phase == "pre"
-                    and key in {"hash", "match_first_index", "match_priority"})
-                info["_match_keys"].add(key)
-            if key == "match_priority" and not execution_path:
-                try:
-                    info["match_priority"] = int(value)
-                except ValueError:
-                    info["matching_safe"] = False
-            if key == "handling":
-                info["auto_owner_safe"] &= not info["handling_skip"]
-                info["handling_skip"] = value == "skip"
             bone_offset = _WWMI_BONE_OFFSET_RE.match(line)
             if bone_offset:
                 info["_cur_skinning_bone_offset"] = int(
@@ -426,17 +409,20 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                         match_elif.group(1).strip(), alias_map)
                     frame["cur"] = dnf_and(dnf_not(frame["seen"]), branch)
                     frame["seen"] = dnf_or(frame["seen"], branch)
+                    frame["branches"].append(line)
                 continue
             if low.startswith("if "):
                 branch = parse_condition_dnf(line[3:].strip(), alias_map)
                 seq_counter[0] += 1
                 cond_stack.append({
-                    "cur": branch, "seen": branch, "seq": seq_counter[0]})
+                    "cur": branch, "seen": branch, "seq": seq_counter[0],
+                    "branches": [line]})
                 continue
             if low == "else":
                 if cond_stack:
                     frame = cond_stack[-1]
                     frame["cur"] = dnf_not(frame["seen"])
+                    frame["branches"].append(line)
                 continue
             if low == "endif":
                 if cond_stack:
@@ -553,6 +539,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 automatic = match[1].strip().casefold() == "auto"
                 if automatic:
                     info["drawindexed_auto"] = True
+                    info["auto_guards"].append(_condition_path(cond_stack))
                 arguments = ((None, 0, 0) if automatic else
                              resolve_drawindexed(match[1], draw_constants))
                 if arguments is None:
@@ -616,14 +603,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if run_match:
                 target_name = _run_target_name(line, section_lookup)
-                # Keep an opaque tail call at its original pre/post site. The
-                # shared draw moves across the skip-only owner, not this call.
-                external_tail = (
-                    not execution_path and not cond_stack and command.phase is None
-                    and run_match[1].casefold().startswith("commandlist\\")
-                    and command is commands[section_name][-1])
-                if target_name in visiting or (not target_name and not external_tail):
-                    info["auto_execution_safe"] = False
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     for target_phase in run_target_phases(
@@ -646,9 +625,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "draws": [], "diffuse": None, "diffuse_pool": [], "src": None,
             "drawindexed_auto": False, "_cur_diffuse_variants": [],
             "auto_sources": [],
-            "auto_draws": [], "auto_owner_safe": True, "handling_skip": False,
-            "matching_safe": True, "_match_keys": set(), "match_priority": 0,
-            "auto_execution_safe": True,
+            "auto_draws": [], "auto_guards": [],
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
@@ -664,7 +641,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
         }
         for phase in ("pre", "post"):
             scan(info, [], {name}, name, phase)
-        info.pop("_match_keys")
         info.pop("_cur_ib", None)
         info["diffuse_variants_at_end"] = _effective_role_assignments(
             info.get("_cur_diffuse_variants") or [])
