@@ -7,6 +7,7 @@ import struct
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from urllib.error import HTTPError
 from urllib.request import urlopen
 from unittest.mock import patch
@@ -27,41 +28,99 @@ from core.textures.pipeline import encode_texture_key
 from tests.support.dds_data import dx10_dds, write_bc7_dds
 
 
-def test_unsupported_native_candidate_retains_choice_and_reports_manual_pick_error(tmp_path):
+@pytest.mark.parametrize("archived", [False, True])
+@pytest.mark.parametrize("rejected_format", [
+    "l8", "unsupported-dxgi", "truncated", "oversized",
+])
+def test_picker_filters_rejected_sources_without_decoding(
+        tmp_path, archived, rejected_format):
     header = bytearray(128)
     header[:4] = b'DDS '
     for offset, value in {4: 124, 8: 0x100F, 12: 4, 16: 4, 20: 4,
                           76: 32, 80: 0x20000, 88: 8, 92: 0xFF,
                           108: 0x1000}.items():
         struct.pack_into('<I', header, offset, value)
-    path = tmp_path / 'single-channel.dds'
-    path.write_bytes(bytes(header) + bytes([128]) * 16)
-    with Image.open(path) as image:
-        assert image.mode == 'L'
-        assert image.size == (4, 4)
-    key = 'diffuse::single-channel.dds'
-    publication = server.begin_texture_publication(str(tmp_path))
+    rejected = {
+        "l8": bytes(header) + bytes([128]) * 16,
+        "unsupported-dxgi": dx10_dds(bytes(16), dxgi_format=97),
+        "truncated": dx10_dds(bytes(15)),
+        "oversized": dx10_dds(bytes(2049 * 16), width=8193, height=1),
+    }[rejected_format]
+    for filename in ("unsupported.dds", "saved-unsupported.dds"):
+        (tmp_path / filename).write_bytes(rejected)
+    write_bc7_dds(tmp_path / "supported.dds")
+    (tmp_path / "rgba.dds").write_bytes(dx10_dds(bytes(64), dxgi_format=28))
+    Image.new("RGB", (1, 1), (128, 128, 32)).save(tmp_path / "image.png")
+    if archived:
+        archive_path = tmp_path / "mod.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            for path in tmp_path.iterdir():
+                if path.suffix in (".dds", ".png"):
+                    archive.write(path, path.name)
+        source = ZipModSource(archive_path)
+    else:
+        source = DirectoryModSource(tmp_path)
+    key = "diffuse::unsupported.dds"
+    saved = {"textures": {"mesh-identity-01": {
+        "tex_key": "diffuse::saved-unsupported.dds",
+        "label": "Saved unsupported", "manual": True,
+    }}}
+    payload = {"meshes": {"mesh-01": {
+        "component": "Component1",
+        "identity": {"key": "mesh-identity-01"},
+        "tex_key": key,
+        "texture_options": [
+            {"tex_key": key, "file": "unsupported.dds", "label": "Unsupported"},
+            {"tex_key": "diffuse::supported.dds", "label": "Supported",
+             **{role: f"{role}::unsupported.dds" for role in (
+                 "normal_map", "normal_data", "light_map", "material_map",
+                 "emission_map")},
+             "normal_data_manual": True},
+            {"tex_key": "diffuse::rgba.dds", "label": "RGBA",
+             "normal_data": "normal_data::supported.dds"},
+            {"tex_key": "diffuse::image.png", "label": "Image"},
+        ],
+    }}, "textures": {}}
+    payload["meshes"]["mesh-02"] = deepcopy(payload["meshes"]["mesh-01"])
+    payload["meshes"]["mesh-02"]["identity"] = {"key": "mesh-identity-02"}
+    detached = deepcopy(payload)
+    metadata.hydrate_textures(str(tmp_path), detached, data=saved, source=source)
+    assert len(detached["texture_pools"]["p0"]) == 5
+    original_saved = deepcopy(saved)
+    publication = server.begin_texture_publication(str(tmp_path), source=source)
     try:
-        with patch('PIL.Image.Image.save',
-                   side_effect=AssertionError('Model DDS must not render eagerly')):
-            payload = {'meshes': {'mesh-01': {
-                'component': 'Component1',
-                'identity': {'key': 'mesh-identity-01'},
-                'texture_options': [{'tex_key': key, 'file': path.name,
-                                     'label': 'single-channel'}],
-            }}, 'textures': {}}
+        with patch("PIL.Image.open", side_effect=AssertionError("image decode")), \
+                patch.object(source, "read_bytes", side_effect=AssertionError("full read")), \
+                patch.object(source, "read_prefix", wraps=source.read_prefix) as prefix:
             metadata.hydrate_textures(
-                str(tmp_path), payload, data={},
-                texture_source=publication.register, texture_profile='wuwa')
-            assert payload['texture_pools']['p0'][0]['tex_key'] == key
-            assert key not in payload['textures']
+                str(tmp_path), payload, data=saved, source=source,
+                texture_source=publication.register, texture_profile="wuwa")
+            pool = payload["texture_pools"]["p0"]
+            assert [option["tex_key"] for option in pool] == [
+                "diffuse::supported.dds", "diffuse::rgba.dds", "diffuse::image.png",
+            ]
+            assert pool[0] == {
+                "tex_key": "diffuse::supported.dds", "file": "supported.dds",
+                "label": "Supported", "normal_data_manual": True,
+            }
+            assert pool[1]["normal_data"] == "normal_data::supported.dds"
+            assert set(payload["textures"]) == {
+                "diffuse::supported.dds", "diffuse::rgba.dds", "diffuse::image.png",
+                "normal_data::supported.dds",
+            }
+            assert {entry["texture_pool_id"] for entry in payload["meshes"].values()} == {"p0"}
+            assert payload["meshes"]["mesh-01"]["tex_key"] == key
+            assert saved == original_saved
+            if archived:
+                assert prefix.call_count > 0
+                assert all(call.args[1] == 148 for call in prefix.call_args_list)
             result = encode_texture_key(
                 str(tmp_path), key, texture_source=functools.partial(
-                    publication.register, validate=True))
+                    publication.register, validate=True), source=source)
         assert result == {
             'error': 'Could not read this file as an image.',
-            'error_code': 'texture_load_failed', 'file': path.name}
-        assert not publication._sources
+            'error_code': 'texture_load_failed', 'file': 'unsupported.dds'}
+        assert (tmp_path / "unsupported.dds").read_bytes() == rejected
     finally:
         publication.discard()
 

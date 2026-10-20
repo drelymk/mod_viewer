@@ -187,6 +187,9 @@ of documentation, comments and tests; use portable fixtures instead.
   draw, preserving authored execution order, no-mod-diffuse Asset eligibility
   and game-specific normal transport. Final picker assembly consumes that
   component pool; saved/manual choices remain metadata hydration's concern.
+  Published picker pools omit rejected sources and unavailable auxiliary maps,
+  reusing publication eligibility without decoding images. Detached analysis
+  retains candidate identities when no texture publisher is supplied.
 - Texture pools and backend loading must not eagerly decode/render sources.
   Publish supported texture files as lazy URLs serving their original bytes;
   never encode PNG display copies or embed converted texture data. Detached
