@@ -111,6 +111,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Menu recognition requires nested self-assignment structure and outer guards.
   Increment/modulo cycles expose all `0..N-1` positions. Unsupported `&&` forms
   may weaken a guard rather than hide geometry; do not guess menu structure.
+  Slot and mouse menus share action resolution and artwork matching. Local
+  helper calls are bounded and require proven finite cycles; latched buttons
+  require matching press/release hit regions. Preserve paired button actions.
 - Texture bindings are per-draw execution-order state: retain the latest
   applicable assignment, conditional alternatives and no-map fallbacks for
   every role. Never collapse bindings to a component-level texture.

@@ -61,6 +61,8 @@ function queueMenuImage(image, url) {
 }
 
 function buildMenuItem(info) {
+  const cycles = info.cycles || [info];
+  const valueLabel = () => cycles.map((cycle) => getToggleValue(cycle.var)).join(', ');
   const item = document.createElement('div');
   item.className = 'menu-item';
 
@@ -88,11 +90,13 @@ function buildMenuItem(info) {
 
   const valSpan = document.createElement('span');
   valSpan.className = 'menu-value';
-  valSpan.textContent = getToggleValue(info.var);
+  valSpan.textContent = valueLabel();
 
   btn.addEventListener('click', () => {
-    const idx = info.values.indexOf(getToggleValue(info.var));
-    setToggleValue(info.var, info.values[(idx + 1) % info.values.length]);
+    for (const cycle of cycles) {
+      const idx = cycle.values.indexOf(getToggleValue(cycle.var));
+      setToggleValue(cycle.var, cycle.values[(idx + 1) % cycle.values.length]);
+    }
     // The game applies these right after the click, in source order, so a
     // later rule sees what an earlier one wrote.
     for (const e of info.effects || []) {
@@ -106,7 +110,7 @@ function buildMenuItem(info) {
     item,
     sync: () => {
       syncLabel();
-      valSpan.textContent = getToggleValue(info.var);
+      valSpan.textContent = valueLabel();
     },
   };
 }
@@ -200,8 +204,10 @@ export function buildMenuPanel(menu) {
   // wrong branch outputs (notably WWMI qipao combinations).
   for (const key of keys) {
     const info = menu[key];
-    if (getToggleValue(info.var) === undefined) {
-      setToggleValue(info.var, String(info.default));
+    for (const cycle of info.cycles || [info]) {
+      if (getToggleValue(cycle.var) === undefined) {
+        setToggleValue(cycle.var, String(cycle.default));
+      }
     }
   }
 

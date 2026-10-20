@@ -80,6 +80,8 @@ def analyze_ini(sections, *, resources=None, var_prefix=None, source=None,
         var for info in toggles.values() for var in info.get("vars", {})
     }
     gating_vars.update(info["var"] for info in menu.values())
+    gating_vars.update(cycle["var"] for info in menu.values()
+                       for cycle in info.get("cycles", ()))
     gating_vars.update(
         effect["var"] for info in menu.values()
         for effect in info.get("effects", [])

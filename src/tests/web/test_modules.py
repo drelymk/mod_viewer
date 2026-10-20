@@ -439,6 +439,41 @@ def test_payload_meshes_consume_identity_for_mod_and_asset_choices(module_page):
         ], 'rejected': True, 'built': 2}
 
 
+def test_menu_paired_actions_preserve_independent_states_through_rebuilds(module_page):
+    module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
+        content_type='text/javascript', body="""
+export {getControlValue as getToggleValue, setControlValue as setToggleValue}
+  from '../editing/control-state.js';
+export {syncViews as refreshAll} from '../scene/view-sync.js';
+"""))
+    result = module_page.evaluate("""async () => {
+      document.body.innerHTML = '<div id="menu-panel"><div id="menu-list"></div></div>';
+      const {buildMenuPanel} = await import('./js/panels/menu-panel.js');
+      const {getControlValue} = await import('./js/editing/control-state.js');
+      const menu = {pair: {name:'Mode',var:'Mode',values:['0','1'],default:'0',slot:0,
+        cycles:[{var:'Mode',values:['0','1'],default:'0'},
+                {var:'Accent',values:['0','1'],default:'1'}]},
+        palette:{name:'Palette',var:'Palette',values:['0','2','1'],default:'0',slot:1}};
+      const states = [];
+      const capture = () => states.push({mode:getControlValue('Mode'),accent:getControlValue('Accent'),
+        palette:getControlValue('Palette'),labels:[...document.querySelectorAll('.menu-value')].map(e=>e.textContent)});
+      buildMenuPanel(menu); capture();
+      document.querySelector('.menu-item button').click(); capture();
+      buildMenuPanel(menu); capture();
+      document.querySelector('.menu-item button').click();
+      for(let i=0;i<3;i++) {document.querySelectorAll('.menu-item button')[1].click();capture();}
+      return states;
+    }""")
+    assert result == [
+        {'mode': '0', 'accent': '1', 'palette': '0', 'labels': ['0, 1', '0']},
+        {'mode': '1', 'accent': '0', 'palette': '0', 'labels': ['1, 0', '0']},
+        {'mode': '1', 'accent': '0', 'palette': '0', 'labels': ['1, 0', '0']},
+        {'mode': '0', 'accent': '1', 'palette': '2', 'labels': ['0, 1', '2']},
+        {'mode': '0', 'accent': '1', 'palette': '1', 'labels': ['0, 1', '1']},
+        {'mode': '0', 'accent': '1', 'palette': '0', 'labels': ['0, 1', '0']},
+    ]
+
+
 def test_menu_grid_keeps_four_columns_and_icon_fallback_through_rebuilds(module_page):
     module_page.route('**/js/mesh/visibility.js', lambda route: route.fulfill(
         content_type='text/javascript', body="""
