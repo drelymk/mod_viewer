@@ -247,7 +247,8 @@ def test_mod_analysis_reuses_control_discovery_for_compute(tmp_path):
     with patch("core.ini.analysis.extract_toggle_keys", wraps=toggles.extract_toggle_keys) as keys, \
          patch("core.ini.analysis.extract_menu_toggles", wraps=menu.extract_menu_toggles) as menus, \
          patch("core.ini.analysis.build_bool_alias_map", wraps=dnf.build_bool_alias_map) as aliases, \
-         patch("core.ini.animations.build_bool_alias_map", side_effect=AssertionError("duplicate condition discovery")):
+         patch("core.ini.animation_clocks.build_bool_alias_map", side_effect=AssertionError("duplicate condition discovery")), \
+         patch("core.ini.animation_compute.build_bool_alias_map", side_effect=AssertionError("duplicate condition discovery")):
         mod_analysis.analyze_mod_inis([str(path)], str(tmp_path))
     assert keys.call_count == menus.call_count == aliases.call_count == 1
 
