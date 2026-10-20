@@ -912,12 +912,21 @@ def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(vi
         ('meshEditWritable', False, 'Mesh changes cannot be written'),
         ('meshEditApplying', True, 'Mesh changes are being applied'),
     ]:
-        page.evaluate('([field, value]) => {window.__editComponent[field] = value;}', [field, value])
+        page.evaluate('''([field, value]) => {
+          window.__editComponent[field] = value;
+          window.__editComponent.syncEditState();
+        }''', [field, value])
+        tools = page.evaluate('''window.__editComponent.getMeshEditTools().actions
+          .filter(action => ['apply', 'cancel'].includes(action.id))
+          .map(action => ({id: action.id, disabled: action.disabled, reason: action.reason}))''')
         page.locator('.group-name').first.click(button='right')
-        for key in ('applyMeshChanges', 'cancelMeshChanges'):
+        for state, key in zip(tools, ('applyMeshChanges', 'cancelMeshChanges')):
             action = page.locator(f'[data-i18n="mesh.{key}"]')
-            assert action.is_disabled()
+            assert action.is_disabled() == state['disabled'] is True
             assert action.get_attribute('title') == reason
+            header = page.locator(f'[data-mesh-header-action="{state["id"]}"]').first
+            assert header.is_disabled() == state['disabled']
+            assert header.get_attribute('title').endswith(reason)
         page.keyboard.press('Escape')
         page.evaluate('([field, value]) => {window.__editComponent[field] = value;}', [field, not value])
     page.locator('.group-name').first.click(button='right')
