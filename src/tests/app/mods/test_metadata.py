@@ -5,6 +5,54 @@ import pytest
 from app.mods import metadata
 
 
+def test_metadata_domains_serialize_updates_and_preserve_failed_replacement(
+        tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from app.mods import metadata_storage
+
+    root = str(tmp_path)
+    path = tmp_path / metadata.METADATA_NAME
+    path.write_text(json.dumps({"future": {"keep": True}}), encoding="utf-8")
+    ready = Barrier(3)
+
+    def update(operation):
+        ready.wait(timeout=10)
+        return operation()
+
+    operations = [
+        lambda: metadata.save_mesh_names(root, {"mesh-01": "Part"}),
+        lambda: metadata.save_rig_pose_preset(root, {
+            "id": "pose-01", "name": "Pose", "roots": [], "joints": []}),
+        lambda: metadata.save_present_name(
+            root, metadata.PRESENT_NAMES_KEY, 0, "Style"),
+    ]
+    with ThreadPoolExecutor(max_workers=3) as workers:
+        results = list(workers.map(update, operations))
+    assert all(result["saved"] for result in results)
+    saved = metadata.load(root)
+    assert saved == {
+        "future": {"keep": True}, "mesh_names": {"mesh-01": "Part"},
+        "rig": {"version": 1, "presets": [{
+            "id": "pose-01", "name": "Pose", "roots": [], "joints": []}]},
+        "present_names": {metadata.PRESENT_NAMES_KEY: {"0": "Style"}},
+    }
+    before = path.read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError("metadata replacement failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(metadata_storage.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="metadata replacement failed"):
+            metadata.rename_rig_pose_preset(root, "pose-01", "Changed")
+    assert path.read_bytes() == before
+    assert metadata.save_present_name(
+        root, metadata.PRESENT_NAMES_KEY, 0, "Updated")["saved"]
+    assert metadata.rig_pose_presets(root)["presets"] == saved["rig"]["presets"]
+
+
 def test_save_weight_selected_bones_preserves_unrelated_metadata(tmp_path):
     path = tmp_path / metadata.METADATA_NAME
     original = {
