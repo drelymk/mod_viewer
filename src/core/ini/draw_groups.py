@@ -117,7 +117,7 @@ def _resolve_slot_texture_files(authored, resolve_file):
 
 
 def _auto_families(section_info):
-    """Prove shared draw ownership from the existing execution scan."""
+    """Identify one authored shared auto and its same-INI/hash components."""
     families = {}
     for name, info in section_info.items():
         match = info.get("geometry_match_at_end")
@@ -128,26 +128,19 @@ def _auto_families(section_info):
     for key, family in families.items():
         owners = [(name, info) for name, info in family
                   if info["geometry_match_at_end"].first_index is None
-                  and info["drawindexed_auto"]]
+                  and info["drawindexed_auto"] and not info["ib"]]
         if len(owners) != 1:
             continue
-        name, owner = owners[0]
-        members = [(label, info) for label, info in family if info is not owner]
-        indices = [info["geometry_match_at_end"].first_index for _, info in members]
-        if (not owner["auto_owner_safe"] or not owner["matching_safe"]
-                or not owner["handling_skip"] or owner["ib"]
-                or len(owner["auto_sources"]) != 1 or not members
-                or None in indices or len(set(indices)) != len(indices)):
+        _name, owner = owners[0]
+        members = [(label, info) for label, info in family
+                   if info is not owner and info["ib"]]
+        if (len(owner["auto_sources"]) != 1
+                or len(owner["auto_guards"]) != 1 or not members
+                or owner["auto_sources"][0]["occurrence"]["path"]):
             continue
-        if all(info["matching_safe"] and info["auto_execution_safe"]
-               and not info["draws"] and not info["auto_draws"]
+        if all(not info["draws"] and not info["auto_draws"]
                and not info.get("unresolved_draws")
-               and len(info["index_binding_history"]) == 1
-               and not info["index_binding_history"][0]["conditional"]
-               and info["index_binding_history"][0]["phase"] == "pre"
-               and (info["match_priority"], label.casefold()) <
-                   (owner["match_priority"], name.casefold())
-               for label, info in members):
+               for _label, info in members):
             result[key] = tuple(label for label, _ in members)
     return result
 
@@ -191,6 +184,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
     # Hash-wide references are manual choices for each same-INI/hash part.
     family_references = {}
     family_auto_sources = {}
+    family_auto_guards = {}
+    family_auto_draws = {}
     auto_families = _auto_families(section_info)
     for provider in _hash_wide_overrides(section_info):
         match = provider["geometry_match_at_end"]
@@ -199,6 +194,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             provider["referenced_textures"])
         family_auto_sources.setdefault(family, []).extend(
             provider.get("auto_sources", []))
+        if family in auto_families and provider["drawindexed_auto"]:
+            family_auto_guards[family] = provider["auto_guards"][0]
+            family_auto_draws[family] = provider["auto_draws"][0]
 
     ib_file_cache = {}
 
@@ -295,11 +293,21 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             resolve_vertex_info)
         local = info["auto_draws"]
         local_binding = (len(local) == 1 and local[0].index_resource
-                         and local[0].index_resource.casefold() == ib_resource.casefold())
+                         and local[0].index_resource.casefold() != "null")
+        match = info.get("geometry_match_at_end")
+        family = (((info.get("src") or {}).get("ini_path"), match.hash)
+                  if match else None)
+        shared_auto = family_auto_draws.get(family)
         # An eligible local auto uses its authored execution snapshot. Shared
         # auto needs the component's end-state fallback below.
         authored_draws = list(info["draws"]) or (local if local_binding else []) or [AuthoredDrawCall(
             count=None, start=0, base=0, source=info["src"],
+            conditions=shared_auto.conditions if shared_auto else [],
+            animation_conditions=shared_auto.animation_conditions if shared_auto else [],
+            binding_conditions=shared_auto.binding_conditions if shared_auto else [],
+            index_resource=(_buffer_resource_at_draw(
+                info["index_binding_history"], shared_auto.binding_conditions, None)
+                if shared_auto else None),
             occurrence=DrawOccurrence(section_name, None),
             diffuse_variants=info.get("diffuse_variants_at_end") or [],
             diffuse_history=info.get("diffuse_history_at_end") or [],
@@ -310,9 +318,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
         )]
-        match = info.get("geometry_match_at_end")
-        family = (((info.get("src") or {}).get("ini_path"), match.hash)
-                  if match else None)
         auto_sources = (info.get("auto_sources") or
                         family_auto_sources.get(family, []))
         draws = []
@@ -340,17 +345,19 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
             )
+            effective_ib = authored.index_resource or ib_resource
+            effective_ib_info = _res_get(resources, effective_ib)
             if authored.count is None:
                 if not local_binding:
                     draw.sources = list(auto_sources)
-                if (ib_info.get("index_editable") and
+                if (effective_ib_info.get("index_editable") and
                         (local_binding or (not local and family in auto_families))):
                     draw.auto_draw = {
-                        "component": section_name, "resource": ib_resource,
-                        "format": ib_info.get("format"),
+                        "component": section_name, "resource": effective_ib,
+                        "format": effective_ib_info.get("format"),
                         "family": () if local else auto_families[family],
+                        "guard": () if local else family_auto_guards[family],
                     }
-            effective_ib = authored.index_resource or ib_resource
             if effective_ib != ib_resource:
                 resolved_ib = resolve_ib_file(effective_ib)
                 if resolved_ib:

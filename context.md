@@ -83,13 +83,15 @@ of documentation, comments and tests; use portable fixtures instead.
   records and rewrite every authored `drawindexed` source in one transaction.
 - Authored `drawindexed = auto` mesh edits require an exact literal replacement
   IB with explicit R16_UINT/R32_UINT format and complete triangles. A shared
-  auto may move into its complete same-INI/hash family only when distinct
-  `match_first_index` components own distinct buffers and execute before a
-  shared skip-only draw owner in 3DMigoto's priority/name order. Unresolved calls
-  block shared migration except an unconditional, unqualified namespaced
-  CommandList call at the component's end. Keep that opaque call at the same
-  pre/post execution site; the draw crosses only the shared skip-only owner.
-  The canonical draw scan and resource analysis establish eligibility; the
+  auto with one direct authored source may move into its complete same-INI/hash
+  family. Append edited ranges and sibling auto draws at each component's end,
+  retaining the shared draw's phase and full nested if/elif/else branch path.
+  Execution order, owner commands, helper calls, matching metadata and conditional
+  or repeated IB bindings do not gate migration. Keep existing commands in place.
+  Repeated bindings use the final applicable IB rather than the first declaration.
+  Components must resolve to distinct buffers; ambiguous authored sources,
+  incomplete families and overlapping buffer edits remain rejected.
+  The canonical draw scan and resource analysis supply component identities; the
   editor never interprets command lists or re-resolves resource declarations.
   Local auto edits replace the exact instruction in place through the shared
   authored-draw resolver, without migration restrictions. Loading never migrates INIs.
@@ -415,7 +417,9 @@ of documentation, comments and tests; use portable fixtures instead.
   event-driven set with one primary Inspector target: plain click replaces,
   Shift-click selects a range of expanded MESHES rows; Ctrl+Shift-click adds the
   range. Ctrl-click toggles and Ctrl-drag additively selects visible geometry
-  crossing the viewport rectangle. Rig picking/dragging owns its gestures and
+  crossing the viewport rectangle. Test drawn triangles, never sampled mesh
+  bounds; empty gaps inside a mesh's projected bounds cannot select it.
+  Rig picking/dragging owns its gestures and
   must block view selection. Visibility, reset, refresh and texture mutations
   publish shared state notifications so Inspector and rendering stay synchronized.
   Ctrl+A selects all mesh rows (including hidden/collapsed rows) in MESHES,

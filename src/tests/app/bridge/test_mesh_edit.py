@@ -420,11 +420,15 @@ def _auto_request(context, suffix):
 
 @pytest.mark.parametrize("index_size", [2, 4])
 @pytest.mark.parametrize("first_edit", list("ABC"))
+@pytest.mark.parametrize("rebind", [False, True])
 def test_shared_auto_apply_export_reload_and_subsequent_local_edits(
-        tmp_path, index_size, first_edit):
+        tmp_path, index_size, first_edit, rebind):
     from core.geometry.mesh_builder import build_mesh_result
 
-    ini = _auto_fixture(tmp_path, index_size)
+    ini = _auto_fixture(tmp_path, index_size, transform=(
+        lambda text: text.replace("ib = ResourceIndices1",
+                                  "ib = ResourceIndices0\nib = ResourceIndices1")
+        if rebind else text))
     original_text = ini.read_bytes()
     originals = {number: (tmp_path / f"indices{number}.ib").read_bytes() for number in range(3)}
     parsed, _draws = mesh_edit.resolved_draws(_auto_context(ini))
@@ -472,28 +476,173 @@ def test_shared_auto_apply_export_reload_and_subsequent_local_edits(
                         after.geometry, after.meshes[label][field])
 
 
+def _guard_auto_sections(text, guard):
+    from core.ini.document import IniDocument
+
+    doc = IniDocument.from_string(text)
+    for section in reversed(doc.sections):
+        if section.name.startswith("TextureOverrideFamily"):
+            doc.replace_lines(section.end, section.end, ["endif"] * len(guard))
+            doc.replace_lines(section.start + 1, section.start + 1,
+                              [line for branch in guard for line in branch])
+    return (
+        "[Constants]\nglobal persist $enabled = 1\nglobal persist $mode = 1\n"
+        "[KeyEnabled]\nkey = k\ntype = cycle\n$enabled = 0, 1\n"
+        "[KeyMode]\nkey = m\ntype = cycle\n$mode = 0, 1, 2\n" + doc.to_string())
+
+
+@pytest.mark.parametrize("guard", [
+    (("if $enabled == 1",),),
+    (("if $mode == 0", "elif $mode == 1"), ("if $enabled == 1",)),
+    (("if $mode == 0", "else if $mode == 1", "else"), ("if $enabled == 1",)),
+    ((r"if $\shared\variant == 3",), ("if $enabled == 1",)),
+])
+@pytest.mark.parametrize("call", [
+    "run = CommandListMissing",
+    "run = CommandList\\shared\\Material\\Bind\nps-t0 = null",
+    "if $enabled == 1\nrun = CommandListMissing\nendif",
+])
+def test_guarded_shared_auto_migrates_and_preserves_sibling_draws(tmp_path, guard, call):
+    def transform(text):
+        text = text.replace(r"run = CommandList\shared\Material\Bind", "")
+        for number in range(3):
+            text = text.replace(f"ib = ResourceIndices{number}",
+                                f"{call}\nib = ResourceIndices{number}")
+        return _guard_auto_sections(text, guard)
+
+    ini = _auto_fixture(tmp_path, index_size=4, transform=transform)
+    original = ini.read_bytes()
+    original_sections = {
+        section.name: [line.raw for line in section.lines]
+        for section in edit_session.peek(str(tmp_path), str(ini)).sections}
+    original_buffers = {number: (tmp_path / f"indices{number}.ib").read_bytes()
+                        for number in range(3)}
+    _parsed, draws = mesh_edit.resolved_draws(_auto_context(ini))
+    conditions = {group["name"]: draw.conditions for draw, group in draws.values()}
+    assert all(draw.auto_draw and draw.auto_draw["family"]
+               for draw, _group in draws.values())
+    active_mode = "2" if any("else" in branch for branch in guard) else "1"
+    for draw, _group in draws.values():
+        assert not visible(draw.conditions, {"enabled": "0", "mode": active_mode})
+        assert visible(draw.conditions, {"enabled": "1", "mode": active_mode})
+    assert not edit_session.has_pending(str(tmp_path))
+
+    for step, suffix in enumerate("ABC"):
+        context = _auto_context(ini)
+        assert mesh_edit.apply_component_mesh_changes(
+            context, _auto_request(context, suffix)) == {
+                "ok": True, "component": f"Family{suffix}"}
+        staged = edit_session.peek(str(tmp_path), str(ini))
+        assert not staged.structure_errors()
+        if step == 0:
+            assert ini.read_bytes() == original
+            assert not staged.section("TextureOverrideFamilyZ").find("draw")
+            for number, component in enumerate("ABC"):
+                section = staged.section(f"TextureOverrideFamily{component}")
+                texts = [line.text for line in section.lines]
+                expected = ([line for branch in guard for line in branch]
+                            + (["drawindexed = 3, 0, 0", "drawindexed = 3, 3, 0"]
+                               if component == "A" else ["drawindexed = auto"])
+                            + ["endif"] * len(guard))
+                assert texts[-len(expected):] == expected
+                assert [line.raw for line in section.lines[:-len(expected)]] == original_sections[section.name]
+                assert any("; original" in line.raw for line in section.find("draw"))
+                assert texts.count("run = " + call.split("run = ", 1)[1].splitlines()[0]) == 1
+                assert (tmp_path / f"indices{number}.ib").read_bytes() == original_buffers[number]
+        _parsed, current = mesh_edit.resolved_draws(_auto_context(ini))
+        for draw, group in current.values():
+            assert draw.conditions == conditions[group["name"]]
+        exported = edit_session.export(str(tmp_path))
+        assert exported["saved"] == ["model.ini"]
+        assert len(exported["buffers_saved"]) == 1
+        assert not exported["failed"] and not exported["buffers_failed"]
+        for number in range(3):
+            expected_buffer = original_buffers[number]
+            if number <= step:
+                expected_buffer = expected_buffer[12:] + expected_buffer[:12]
+            assert (tmp_path / f"indices{number}.ib").read_bytes() == expected_buffer
+        edit_session.discard(str(tmp_path))
+        edit_session.load_documents(str(tmp_path), [str(ini)])
+        _parsed, current = mesh_edit.resolved_draws(_auto_context(ini))
+        assert len(current) == 4 + step
+        for draw, group in current.values():
+            assert draw.conditions == conditions[group["name"]]
+
+
 @pytest.mark.parametrize("old,new", [
-    ("drawindexed = auto ; original", "drawindexed = auto\ndrawindexed = auto"),
+    ("handling = skip", ""),
     ("handling = skip", "if $enabled == 1\nhandling = skip\nendif"),
     ("handling = skip", "handling = skip\nps-t0 = ResourceTexture0"),
     ("match_first_index = 9", "match_first_index = 0"),
     ("match_first_index = 9", "match_first_index = 9\nmatch_index_count = 6"),
-    ("ib = ResourceIndices1", "ib = ResourceIndices0"),
-    ("filename = indices1.ib", "filename = indices0.ib"),
     ("TextureOverrideFamilyZ", "TextureOverrideFamily0"),
     ("match_first_index = 9", "match_first_index = 9\nmatch_priority = 1"),
-    ("format = R16_UINT", "format = UNKNOWN"),
-    ("filename = indices1.ib", "filename = missing.ib"),
     ("drawindexed = auto ; original", "post drawindexed = auto"),
-    ("filename = indices1.ib", "filename = indices1.ib\nbyte_width = 6"),
-    (r"run = CommandList\shared\Material\Bind",
-     "run = CommandListMissing"),
-    (r"run = CommandList\shared\Material\Bind",
-     "run = CommandList\\shared\\Material\\Bind\nps-t0 = null"),
-    (r"run = CommandList\shared\Material\Bind",
-     "if $enabled == 1\nrun = CommandList\\shared\\Material\\Bind\nendif"),
+    ("ib = ResourceIndices1", "if $enabled == 1\nib = ResourceIndices1\nendif"),
+    ("ib = ResourceIndices1", "ib = ResourceIndices1\nib = ResourceIndices1"),
+    ("ib = ResourceIndices1", "ib = ResourceIndices0\nib = ResourceIndices1"),
+    ("ib = ResourceIndices1", "post ib = ResourceIndices1"),
     (r"run = CommandList\shared\Material\Bind",
      r"post run = CommandList\shared\Material\Bind"),
+    (r"run = CommandList\shared\Material\Bind", "run = CustomShaderMissing"),
+    (r"run = CommandList\shared\Material\Bind", "run = CommandListRecursive"),
+])
+def test_shared_auto_migration_ignores_execution_restrictions(tmp_path, old, new):
+    def transform(text):
+        text = text.replace(old, new)
+        if new == "run = CommandListRecursive":
+            text += "[CommandListRecursive]\nrun = CommandListRecursive\n"
+        return text
+
+    ini = _auto_fixture(tmp_path, transform=transform)
+    original = ini.read_bytes()
+    original_buffers = {number: (tmp_path / f"indices{number}.ib").read_bytes()
+                        for number in range(3)}
+    documents = edit_session.peek(str(tmp_path), str(ini))
+    bodies = {section.name: [line.raw for line in section.lines]
+              for section in documents.sections}
+    draw_line = next(line for line in documents.lines
+                     if line.text.endswith("drawindexed = auto"))
+    owner = draw_line.section.name
+    phase = "post " if draw_line.text.startswith("post ") else ""
+    context = _auto_context(ini)
+    assert mesh_edit.apply_component_mesh_changes(
+        context, _auto_request(context, "A")) == {"ok": True, "component": "FamilyA"}
+    staged = edit_session.peek(str(tmp_path), str(ini))
+    assert not staged.structure_errors()
+    assert ini.read_bytes() == original
+    assert [line.raw for line in staged.section(owner).lines] == [
+        raw for raw in bodies[owner] if raw != draw_line.raw]
+    for number, component in enumerate("ABC"):
+        section = staged.section(f"TextureOverrideFamily{component}")
+        expected = ([f"{phase}drawindexed = 3, 0, 0",
+                     f"{phase}drawindexed = 3, 3, 0"]
+                    if component == "A" else [f"{phase}drawindexed = auto"])
+        assert [line.text for line in section.lines[-len(expected):]] == expected
+        assert [line.raw for line in section.lines[:-len(expected)]] == bodies[section.name]
+        assert (tmp_path / f"indices{number}.ib").read_bytes() == original_buffers[number]
+    exported = edit_session.export(str(tmp_path))
+    assert exported["saved"] == ["model.ini"]
+    assert exported["buffers_saved"] == [str(tmp_path / "indices0.ib")]
+    assert not exported["failed"] and not exported["buffers_failed"]
+    edit_session.discard(str(tmp_path))
+    edit_session.load_documents(str(tmp_path), [str(ini)])
+    _parsed, draws = mesh_edit.resolved_draws(_auto_context(ini))
+    assert len(draws) == 4
+    for number in range(3):
+        expected = original_buffers[number]
+        if number == 0:
+            expected = expected[6:] + expected[:6]
+        assert (tmp_path / f"indices{number}.ib").read_bytes() == expected
+
+
+@pytest.mark.parametrize("old,new", [
+    ("drawindexed = auto ; original", "drawindexed = auto\ndrawindexed = auto"),
+    ("ib = ResourceIndices1", "ib = ResourceIndices0"),
+    ("filename = indices1.ib", "filename = indices0.ib"),
+    ("format = R16_UINT", "format = UNKNOWN"),
+    ("filename = indices1.ib", "filename = missing.ib"),
+    ("filename = indices1.ib", "filename = indices1.ib\nbyte_width = 6"),
 ])
 def test_shared_auto_rejects_ambiguous_families_without_partial_staging(tmp_path, old, new):
     ini = _auto_fixture(tmp_path, transform=lambda text: text.replace(old, new))
@@ -507,8 +656,12 @@ def test_shared_auto_rejects_ambiguous_families_without_partial_staging(tmp_path
     assert ini.read_bytes() == original
 
 
-def test_auto_migration_rolls_back_every_section_and_buffer_on_staging_failure(tmp_path, monkeypatch):
-    ini = _auto_fixture(tmp_path)
+@pytest.mark.parametrize("guarded", [False, True])
+def test_auto_migration_rolls_back_every_section_and_buffer_on_staging_failure(
+        tmp_path, monkeypatch, guarded):
+    ini = _auto_fixture(tmp_path, transform=(
+        lambda text: _guard_auto_sections(text, (("if $enabled == 1",),))
+        if guarded else text))
     context = _auto_context(ini)
     request = _auto_request(context, "B")
     original = ini.read_bytes()

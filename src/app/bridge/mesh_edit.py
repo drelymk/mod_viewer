@@ -168,6 +168,9 @@ def _auto_patches(context, draw, authoritative, doc, line_no, ranges):
             raise ValueError("Unsupported automatic draw: the component is not writable.")
         lines = (_draw_lines(doc, line_no, ranges) if member is draw
                  else [doc.lines[line_no].raw])
+        guard = draw.auto_draw.get("guard", ())
+        lines = ([line for branch in guard for line in branch]
+                 + lines + ["endif"] * len(guard))
         patches.append((doc.path, section.end, section.end, lines))
     return patches
 

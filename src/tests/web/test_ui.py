@@ -167,6 +167,15 @@ def test_selection_and_panel_navigation_preserve_loaded_geometry(viewer):
     assert page.locator('#controls-panel').is_visible()
 
     rows.nth(2).click()
+    empty = project_mesh_points(page, [[0.7, 0.7, 0], [0.85, 0.85, 0]])
+    page.keyboard.down('Control')
+    page.mouse.move(*empty[0])
+    page.mouse.down()
+    page.mouse.move(*empty[1], steps=5)
+    page.mouse.up()
+    page.keyboard.up('Control')
+    assert page.locator('.draw-item.selected').count() == 1
+    assert rows.nth(2).evaluate('row => row.classList.contains("selected")')
     points = project_mesh_points(page, [[-0.1, 1.1, 0], [3.1, -0.1, 0]])
     page.keyboard.down('Control')
     page.mouse.move(*points[0])

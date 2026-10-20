@@ -3,8 +3,6 @@
 import * as THREE from 'three';
 import { getLooseParts } from '../mesh/loose-parts.js';
 
-export const MAX_BOX_SELECTION_SAMPLES = 64;
-
 function meshPickTargets(mesh) {
   const parts = getLooseParts(mesh);
   if (!parts.length) return [mesh];
@@ -75,58 +73,12 @@ function normalizedSelectionRect(selectionRect) {
   return [left, top, right, bottom].every(Number.isFinite) ? { left, top, right, bottom } : null;
 }
 
-/** Test a selectable mesh against a bounded current screen-space projection. */
-export function meshIntersectsClientRect({ mesh, camera, canvas, selectionRect } = {}) {
-  const targetRect = normalizedSelectionRect(selectionRect);
-  const canvasRect = canvas?.getBoundingClientRect?.();
-  const width = Number(canvasRect?.width);
-  const height = Number(canvasRect?.height);
-  const { index, position, drawStart, entryCount } = geometryRange(mesh);
-  if (
-    !targetRect ||
-    !mesh?.visible ||
-    !camera ||
-    !position ||
-    !canvasRect ||
-    width <= 0 ||
-    height <= 0 ||
-    entryCount <= 0
-  ) {
-    return false;
-  }
-
-  mesh.updateWorldMatrix?.(true, false);
-  const sampleCount = Math.min(MAX_BOX_SELECTION_SAMPLES, entryCount);
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let projectedCount = 0;
-  const point = new THREE.Vector3();
-  for (let sample = 0; sample < sampleCount; sample += 1) {
-    const entry = drawStart + (sampleCount === 1 ? 0 : Math.round((sample * (entryCount - 1)) / (sampleCount - 1)));
-    const vertex = index ? index.getX(entry) : entry;
-    if (!Number.isInteger(vertex) || vertex < 0 || vertex >= position.count) {
-      continue;
-    }
-    point
-      .set(position.getX(vertex), position.getY(vertex), position.getZ(vertex))
-      .applyMatrix4(mesh.matrixWorld)
-      .project(camera);
-    if (![point.x, point.y, point.z].every(Number.isFinite) || point.z < -1 || point.z > 1) continue;
-    const clientX = canvasRect.left + ((point.x + 1) * width) / 2;
-    const clientY = canvasRect.top + ((1 - point.y) * height) / 2;
-    minX = Math.min(minX, clientX);
-    minY = Math.min(minY, clientY);
-    maxX = Math.max(maxX, clientX);
-    maxY = Math.max(maxY, clientY);
-    projectedCount += 1;
-  }
-  if (!projectedCount) return false;
-  return minX <= targetRect.right && maxX >= targetRect.left && minY <= targetRect.bottom && maxY >= targetRect.top;
+/** Select a mesh only when one of its drawn triangles crosses the rectangle. */
+export function meshIntersectsClientRect(options = {}) {
+  return !intersectingClientTriangles(options).next().done;
 }
 
-/** Return visible model targets whose sampled screen rectangles intersect. */
+/** Return visible model targets whose drawn triangles intersect. */
 export function meshesInClientRect({ meshes, camera, canvas, selectionRect } = {}) {
   return modelPickTargets(meshes).filter((mesh) =>
     meshIntersectsClientRect({
@@ -180,6 +132,14 @@ function segmentsIntersect(a, b, c, d) {
 }
 
 function triangleIntersectsRect(triangle, rect) {
+  if (Math.abs(orientation(...triangle)) <= 1e-7) return false;
+  if (
+    triangle.every((point) => point.x < rect.left) ||
+    triangle.every((point) => point.x > rect.right) ||
+    triangle.every((point) => point.y < rect.top) ||
+    triangle.every((point) => point.y > rect.bottom)
+  )
+    return false;
   if (triangle.some((point) => pointInRect(point, rect))) return true;
   const corners = [
     { x: rect.left, y: rect.top },
@@ -195,8 +155,8 @@ function triangleIntersectsRect(triangle, rect) {
   );
 }
 
-/** Project each drawn triangle once; rectangle selection always selects through. */
-export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = {}) {
+/** Share triangle projection while allowing whole-mesh selection to stop at its first hit. */
+function* intersectingClientTriangles({ mesh, camera, canvas, selectionRect } = {}) {
   const targetRect = normalizedSelectionRect(selectionRect);
   const canvasRect = canvas?.getBoundingClientRect?.();
   const width = Number(canvasRect?.width);
@@ -212,11 +172,10 @@ export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = 
     height <= 0 ||
     entryCount < 3
   )
-    return [];
+    return;
 
   mesh.updateWorldMatrix?.(true, false);
   const point = new THREE.Vector3();
-  const selected = [];
   for (let face = 0; face * 3 + 2 < entryCount; face += 1) {
     const entries = [drawStart + face * 3, drawStart + face * 3 + 1, drawStart + face * 3 + 2];
     const vertices = entries.map((entry) => (index ? index.getX(entry) : entry));
@@ -238,10 +197,13 @@ export function trianglesInClientRect({ mesh, camera, canvas, selectionRect } = 
       triangle.every((vertex) => vertex.z > 1)
     )
       continue;
-    const authored = authoredTriangleOrdinal(mesh, Math.floor((drawStart + face * 3) / 3));
-    if (authored !== null && triangleIntersectsRect(triangle, targetRect)) {
-      selected.push(authored);
-    }
+    if (triangleIntersectsRect(triangle, targetRect)) yield Math.floor((drawStart + face * 3) / 3);
   }
-  return selected;
+}
+
+/** Project each drawn triangle once; rectangle selection always selects through. */
+export function trianglesInClientRect(options = {}) {
+  return [...intersectingClientTriangles(options)]
+    .map((face) => authoredTriangleOrdinal(options.mesh, face))
+    .filter((triangle) => triangle !== null);
 }
