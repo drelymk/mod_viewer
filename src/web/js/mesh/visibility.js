@@ -11,7 +11,6 @@ import {
 } from '../editing/control-state.js';
 import { activeMeshes, refreshMeshes, resetMeshes, resetMeshVisibility } from './mesh-state.js';
 import {
-  toggleGlossyMode,
   toggleSmoothShadingMode,
   toggleTextureDisplayMode,
   toggleToonShadingMode,
@@ -83,10 +82,6 @@ export function toggleWireframe() {
 
 export function toggleSmoothShading() {
   toggleSmoothShadingMode(activeMeshes);
-}
-
-export function toggleGlossy() {
-  toggleGlossyMode(activeMeshes);
 }
 
 export function toggleToonShading() {

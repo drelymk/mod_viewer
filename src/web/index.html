@@ -287,7 +287,8 @@
       <button id="ao-btn" class="tool-btn" title="Ambient occlusion: 0%" aria-label="Ambient occlusion: 0%"
               aria-expanded="false" aria-controls="ao-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-ao"></use></svg></button>
       <button id="bloom-btn" class="tool-btn off" title="Emission bloom: off" aria-label="Emission bloom: off" aria-pressed="false">B</button>
-      <button id="glossy-btn" class="tool-btn off" title="Glossy materials: off" aria-label="Glossy materials: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-glossy"></use></svg></button>
+      <button id="glossy-btn" class="tool-btn off" title="Glossy materials: 0%" aria-label="Glossy materials: 0%"
+              aria-expanded="false" aria-controls="glossy-popover"><svg class="ui-icon" aria-hidden="true"><use href="#icon-glossy"></use></svg></button>
       <button id="toon-btn" class="tool-btn off" title="Toon shadows: off" aria-label="Toon shadows: off" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#icon-toon"></use></svg></button>
       <button id="grid-btn" class="tool-btn" title="Grid visibility: on" aria-label="Grid visibility: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg></button>
       <button id="shading-btn" class="tool-btn" title="Smooth shading: on" aria-label="Smooth shading: on" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shading"></use></svg></button>
@@ -371,6 +372,15 @@
     </div>
     <input id="light-slider" class="range-control-slider" type="range"
            min="0" max="100" step="1" value="67"/>
+  </div>
+  <div id="glossy-popover" class="ui-popover tool-popover range-popover" role="dialog"
+       aria-label="Glossy materials" data-i18n-aria-label="render.glossyLabel" hidden>
+    <div class="range-control-row">
+      <label for="glossy-slider" data-i18n="render.glossyLabel">Glossy materials</label>
+      <output id="glossy-value" class="range-control-value" for="glossy-slider">0%</output>
+    </div>
+    <input id="glossy-slider" class="range-control-slider" type="range"
+           min="0" max="100" step="1" value="0"/>
   </div>
   <div id="ao-popover" class="ui-popover tool-popover range-popover" role="dialog"
        aria-label="Ambient occlusion" data-i18n-aria-label="render.ambientOcclusionLabel" hidden>

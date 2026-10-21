@@ -1,12 +1,6 @@
 // Persist viewer controls without serializing model or camera orientation.
 
-import {
-  activeMeshes,
-  toggleGlossy,
-  toggleSmoothShading,
-  toggleToonShading,
-  toggleWireframe,
-} from '../mesh/visibility.js';
+import { activeMeshes, toggleSmoothShading, toggleToonShading, toggleWireframe } from '../mesh/visibility.js';
 import {
   getBloomEnabled,
   setAmbientOcclusionStrength,
@@ -15,7 +9,7 @@ import {
   toggleGrid,
   toggleTrackballGizmo,
 } from '../scene/scene.js';
-import { setTextureDisplayMode } from '../scene/render-modes.js';
+import { setGlossyLevel, setTextureDisplayMode } from '../scene/render-modes.js';
 import { setOutlinesEnabled } from '../scene/outline-renderer.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { createPreferencePersistence } from './preference-persistence.js';
@@ -43,7 +37,6 @@ export function initViewerPreferences({ applyEnvironmentPreset, syncToolControls
         syncBloomControl();
       },
     ],
-    glossy: ['glossy-btn', toggleGlossy],
     toonShading: ['toon-btn', toggleToonShading],
     grid: ['grid-btn', toggleGrid],
     smoothShading: ['shading-btn', toggleSmoothShading],
@@ -66,6 +59,9 @@ export function initViewerPreferences({ applyEnvironmentPreset, syncToolControls
         syncToolControls();
       } else if (name === 'keyLightIntensity') {
         setKeyLightIntensity(value);
+        syncToolControls();
+      } else if (name === 'glossy') {
+        setGlossyLevel(value, activeMeshes);
         syncToolControls();
       }
     },
