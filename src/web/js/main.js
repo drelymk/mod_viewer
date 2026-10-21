@@ -58,6 +58,7 @@ import { getLoadBenchmark } from './app/load-benchmark.js';
 import { initEnvironmentControl, initToolPopovers, initToolbarOverflow } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
 import { initViewerPreferences } from './ui/viewer-preferences.js';
+import { initAnimationPlayback } from './ui/animation-playback.js';
 import { initPersistenceFeedback } from './ui/persistence-feedback.js';
 
 const $ = (id) => document.getElementById(id);
@@ -321,6 +322,7 @@ rendererReady.then(async (ready) => {
   let viewerPreferences;
   const savePreference = (...args) => viewerPreferences?.change(...args);
   const syncToolControls = initToolPopovers(savePreference);
+  initAnimationPlayback();
   syncBloomControl();
   window.addEventListener(LANGUAGE_CHANGED, syncBloomControl);
   for (const eventName of [

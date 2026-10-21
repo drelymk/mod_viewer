@@ -1417,6 +1417,19 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   min-width: 170px; max-width: calc(100vw - 16px);
 }
 
+.animation-playback {
+  position: fixed; left: 50%; bottom: calc(var(--footer-height) + 64px);
+  transform: translateX(-50%); z-index: 200;
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: rgba(13,17,23,var(--panel-opacity)); backdrop-filter: blur(var(--panel-blur));
+}
+.animation-playback[hidden] { display: none; }
+.animation-playback .tool-btn { width: 30px; height: 30px; min-width: 30px; }
+.animation-playback .ui-icon { width: 17px; height: 17px; }
+.animation-playback .range-control-slider { flex: 1; min-width: 0; width: auto; }
+.animation-playback output { font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 @media (max-width: 760px) {
   #toolbar { gap: 8px; padding: 0 10px; }
   .app-title { display: none; }

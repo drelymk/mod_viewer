@@ -17,6 +17,7 @@ import { attachOutline, detachOutline } from '../scene/outline-renderer.js';
 import { initializeMeshRenderModes } from '../scene/render-modes.js';
 import { requestRender } from '../scene/render-scheduler.js';
 import { notifyMeshStateChanged } from './mesh-state-events.js';
+import { wakeAnimationRuntime } from './animation-runtime.js';
 import {
   clearLooseParts,
   getLooseParts,
@@ -449,6 +450,7 @@ export function applyMeshVisibility(mesh, { notify = true, render = true } = {})
   mesh.visible = meshUnderlyingVisible(mesh) && isolationIncludes(mesh);
   const changed = previous !== mesh.visible;
   const owner = getLoosePartSource(mesh) || mesh;
+  if (changed && owner.userData.animationState) wakeAnimationRuntime();
   if (changed && mesh.visible && owner.visible && owner.userData.textureRequestsDeferred !== true) {
     refreshMeshTexture(owner, { render: false });
   }

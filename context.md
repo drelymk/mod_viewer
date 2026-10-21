@@ -236,6 +236,16 @@ of documentation, comments and tests; use portable fixtures instead.
   erasing other passes. Rig/Physics temporarily suspends animation ownership;
   release restores canonical geometry and bounds before resuming. Advance program
   time at render cadence but cap expensive compute-geometry application at 30 Hz.
+- Viewer playback pause freezes runtime time without changing INI controls;
+  control changes still evaluate compute programs with zero dt. Paused playback
+  schedules only explicit updates. Frame seeking reuses decoded baked frames
+  only for one active synchronized clock and respects Rig/Physics ownership.
+  Use one Play/Pause button: in the timeline for seekable baked animation, or in
+  the viewport toolbar for active compute or independent baked clocks. Hide both
+  presentations without visible, unsuspended active animation. Determine this
+  from clock/track metadata, never by scanning decoded frame buffers. Manual
+  visibility changes wake the existing runtime. Tracks using the same clock
+  retain its phase when becoming visible.
 
 ## Asset loading and composition
 
