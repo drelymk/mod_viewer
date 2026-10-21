@@ -1,6 +1,7 @@
 """Baked animation contracts at analysis and mesh publication boundaries."""
 
 import struct
+import zipfile
 
 import pytest
 
@@ -184,7 +185,8 @@ def test_baked_detection_compares_only_published_attributes(tmp_path, commandlis
     elif change == "unused-vertex":
         struct.pack_into("<f", second, 40, 9.)
     elif change == "normal-scale":
-        struct.pack_into("<3f", second, 12, 0., 3., 0.)
+        struct.pack_into("<3f", first, 12, .1, .2, .3)
+        struct.pack_into("<3f", second, 12, .3, .6, .9)
     elif change == "unpublished-normals":
         first[12:24] = b"\0" * 12
         struct.pack_into("<3f", second, 12, 2., 0., 0.)
@@ -195,7 +197,7 @@ def test_baked_detection_compares_only_published_attributes(tmp_path, commandlis
     elif change == "normal-direction":
         struct.pack_into("<3f", second, 12, 2., 0., 0.)
     elif change == "position":
-        struct.pack_into("<f", second, 0, .25)
+        struct.pack_into("<f", second, 0, 1e-8)
     (tmp_path / "position0.buf").write_bytes(first)
     (tmp_path / "position1.buf").write_bytes(second)
     _, built = load_mod(ini, tmp_path)
@@ -290,7 +292,8 @@ def test_baked_short_vertex_stream_uses_zero_reads_without_dropping_animation(
     assert entry["idx"]["length"] == 12
 
 
-def test_component_animation_stays_with_its_position_owner(tmp_path):
+@pytest.mark.parametrize("source_kind", ["directory", "zip"])
+def test_component_animation_stays_with_its_position_owner(tmp_path, source_kind):
     sections = {
         "Constants": ["$start = 0", "$end = 1"],
         "Present": ["$frame = (time * 30 % ($end - $start + 1) + $start) // 1"],
@@ -327,6 +330,7 @@ def test_component_animation_stays_with_its_position_owner(tmp_path):
         "ModelPinA": ("ModelPin", False), "ModelPinB": ("ModelPin", False),
         "ModelWingA": ("ModelWing", False), "ModelCharmA": ("ModelCharm", True),
         "ModelDirect": ("ModelPin", False), "ModelAlias": ("Model", True),
+        "ModelPathAlias": ("Model", True), "ModelDistinct": ("ModelPin", False),
     }
     for name in draws:
         sections[f"TextureOverride{name}"] = [
@@ -339,11 +343,30 @@ def test_component_animation_stays_with_its_position_owner(tmp_path):
     sections["CommandListAlias"] = [
         "ResourcePositionAlias = copy ResourceModelPosition.0"]
     sections["ResourcePositionAlias"] = []
+    (tmp_path / "Meshes").mkdir()
+    (tmp_path / "Other").mkdir()
+    write_vertices(tmp_path / "Meshes" / "Position.buf", points_by_component["Model"])
+    write_vertices(tmp_path / "Other" / "Position.buf", points_by_component["ModelPin"])
+    sections["ResourceModelPosition.0"] = ["filename = Meshes/Position.buf", "stride = 40"]
+    sections["ResourcePathAlias"] = ["filename = Meshes/./Position.buf", "stride = 40"]
+    sections["ResourceDistinct"] = ["filename = Other/Position.buf", "stride = 40"]
+    sections["TextureOverrideModelPathAlias"].insert(0, "vb0 = ResourcePathAlias")
+    sections["TextureOverrideModelDistinct"].insert(0, "vb0 = ResourceDistinct")
     (tmp_path / "index.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
     ini = tmp_path / "source-01.ini"
     save_sections(ini, sections)
 
-    parsed, built = load_mod(ini, tmp_path)
+    source = None
+    if source_kind == "zip":
+        from core.mod_source import ZipModSource
+        archive = tmp_path / "fixture.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            for path in tmp_path.rglob("*"):
+                if path.is_file() and path != archive:
+                    output.write(path, path.relative_to(tmp_path))
+        source = ZipModSource(str(archive))
+        ini = source.document_path("source-01.ini")
+    parsed, built = load_mod(ini, tmp_path, source=source)
     assert len(built.meshes) == len(draws)
     groups = {group["display_name"]: group for group in parsed.groups}
     for entry in built.meshes.values():

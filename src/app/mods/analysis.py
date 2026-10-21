@@ -18,6 +18,7 @@ from core.ini.animations import (
     discover_wwmi_sparse_animations,
 )
 from core.materials.game_profile import GameDetection, resolve_game_detection
+from core.mod_source import DirectoryModSource
 
 
 _DIRECT_FORWARD_RE = re.compile(
@@ -317,6 +318,7 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
                 build_mod_ini_snapshot(ini_paths, folder_path, documents,
                                        overrides, source))
     folder_path, source = snapshot.mod_dir, snapshot.source
+    resource_source = source or DirectoryModSource(folder_path or ".")
     groups = []
     toggle_keys, menu_slots, toggle_defaults, state_rules = {}, {}, {}, []
     present_infos, present_sources = [], []
@@ -399,7 +401,7 @@ def analyze_mod_inis(ini_paths, folder_path=None, overrides=None,
             seen=seen_labels,
             extra_gating_vars=record["extra_gating_vars"],
             qualified_vars=qualified_vars,
-            canonical_vars=record["canonical_vars"])
+            canonical_vars=record["canonical_vars"], resource_source=resource_source)
         compute = discover_compute_animations(
             secs, resources, mod_dir=folder_path, ini_path=ini_path,
             source=source, var_prefix=var_prefix,

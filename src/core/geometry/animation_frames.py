@@ -475,8 +475,11 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                     or len(packed_frame.normals) != normal_frame_bytes):
                 normal_possible = False
             else:
-                normals_changed = normals_changed or not _same_float32_attributes(
-                    packed_frame.normals, canonical_packed.normals)
+                # Magnitude-only changes can round differently after normalization.
+                normals_changed = normals_changed or any(
+                    abs(a[0] - b[0]) > 1e-6 for a, b in zip(
+                        struct.iter_unpack("<f", packed_frame.normals),
+                        struct.iter_unpack("<f", canonical_packed.normals)))
                 if normal_ref is None:
                     normal_ref = geometry.reserve(frame_count * normal_frame_bytes)
                 geometry.write(

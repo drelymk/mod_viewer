@@ -6,6 +6,7 @@ from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
 from ..geometry.identity import DrawOccurrence
 from ..geometry.skinning import resolve_skinning_source
+from ..mod_source import DirectoryModSource
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
@@ -147,9 +148,10 @@ def _auto_families(section_info):
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None, animation_vars=None,
-                      qualified_vars=None, *, section_info=None):
+                      qualified_vars=None, *, section_info=None, resource_source=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     resources = ResourceTable.normalize(resources)
+    resource_source = resource_source or DirectoryModSource(".")
     if seen is None:
         seen = {}
     if section_info is None:
@@ -246,8 +248,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         owner_file, owner_stride = resolve_vertex_resource(owner["position"])
         position_file, position_stride = resolve_vertex_resource(position_resource)
         if (not owner_file or not position_file
-                or owner_file.replace("\\", "/").casefold()
-                != position_file.replace("\\", "/").casefold()
+                or not resource_source.same_reference(
+                    resource_source.resolve_resource(owner_file),
+                    resource_source.resolve_resource(position_file))
                 or (owner_stride or POSITION_STRIDE)
                 != (position_stride or POSITION_STRIDE)):
             return []
