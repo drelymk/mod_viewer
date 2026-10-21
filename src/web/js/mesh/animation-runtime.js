@@ -8,19 +8,24 @@ import { requestRender } from '../scene/render-scheduler.js';
 
 const tracks = new Map();
 let rafId = null;
+let paused = false;
+let playbackNow = 0;
+let lastTickNow = null;
+let playbackListener = null;
+let lastPlaybackState = null;
 
 function positiveInteger(value, fallback = 0) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
 }
 
-export function frameForElapsed(clock, elapsedSeconds) {
+export function frameForElapsed(clock, elapsedSeconds, frameOffset = 0) {
   const start = Number(clock?.frame_start);
   const end = Number(clock?.frame_end);
   const fps = Number(clock?.fps ?? 0);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || !Number.isFinite(fps) || fps <= 0) return null;
   const count = end - start + 1;
-  const tick = Math.floor(Math.max(0, elapsedSeconds) * fps);
+  const tick = frameOffset + Math.floor(Math.max(0, elapsedSeconds) * fps);
   return start + (((tick % count) + count) % count);
 }
 
@@ -95,7 +100,7 @@ function executeGimiProgram(track, now) {
   syncGimiProgramControls(program);
   for (const output of track.outputs.values()) {
     output.shapePhases = [];
-    output.poseTime = 0;
+    output.poseTime = null;
   }
   let changed = false;
   let activeDtCommand = false;
@@ -463,8 +468,135 @@ function selectedClock(state) {
   return null;
 }
 
-function tick(now) {
+function playbackMeshes(state) {
+  return [...state.meshes].filter((mesh) => {
+    if (mesh.visible === false || mesh.userData?.animationSuspended === true) return false;
+    const decoded = state.meshesByMesh.get(mesh);
+    if (state.kind !== 'gimi_compute') return decoded.frameCount > 1;
+    const output = state.outputs.get(decoded.trackId);
+    return gimiMeshActive(decoded) && (Number.isFinite(output?.poseTime) || output?.shapePhases.some(Number.isFinite));
+  });
+}
+
+function playbackAvailable(state) {
+  if (!playbackMeshes(state).length) return false;
+  if (state.kind === 'gimi_compute') return true;
+  const clock = selectedClock(state)?.clock;
+  return clockFps(clock) > 0 && Number(clock.frame_end) > Number(clock.frame_start);
+}
+
+function sharedBakedClock() {
+  let shared = null;
+  for (const state of tracks.values()) {
+    const meshes = playbackMeshes(state);
+    if (!meshes.length) continue;
+    if (state.kind === 'gimi_compute') return null;
+    const selected = selectedClock(state);
+    if (!selected || !clockFps(selected.clock)) continue;
+    const start = Number(selected.clock.frame_start);
+    const end = Number(selected.clock.frame_end);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) continue;
+    if (!state.active || state.activeClockId !== selected.id) return null;
+    if (
+      meshes.some((mesh) => {
+        const decoded = state.meshesByMesh.get(mesh);
+        return decoded.frameStart > start || decoded.frameStart + decoded.frameCount - 1 < end;
+      })
+    )
+      return null;
+    if (
+      shared &&
+      (shared.id !== selected.id ||
+        shared.start !== start ||
+        shared.end !== end ||
+        shared.state.startedAt !== state.startedAt ||
+        shared.state.frameOffset !== state.frameOffset ||
+        clockFps(shared.clock) !== clockFps(selected.clock))
+    )
+      return null;
+    shared ||= { ...selected, start, end, state };
+  }
+  return shared;
+}
+
+export function getAnimationPlaybackState() {
+  const shared = sharedBakedClock();
+  return {
+    available: [...tracks.values()].some(playbackAvailable),
+    canSeek: shared !== null,
+    paused,
+    frameStart: shared?.start ?? null,
+    frameEnd: shared?.end ?? null,
+    frame: shared ? (shared.state.lastFrame ?? shared.start) : null,
+  };
+}
+
+function notifyPlayback() {
+  if (!playbackListener) return;
+  const state = getAnimationPlaybackState();
+  if (lastPlaybackState && Object.keys(state).every((key) => state[key] === lastPlaybackState[key])) return;
+  lastPlaybackState = state;
+  playbackListener(state);
+}
+
+/** Attach the viewport controls without polling or adding another frame loop. */
+export function setAnimationPlaybackListener(listener) {
+  playbackListener = listener;
+  lastPlaybackState = null;
+  notifyPlayback();
+}
+
+export function setAnimationPaused(value) {
+  if (paused === (value === true)) return;
+  paused = value === true;
+  // The next callback starts at the last presented runtime time, so neither
+  // baked clocks nor compute dt includes time spent paused.
+  lastTickNow = null;
+  if (paused) {
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    rafId = null;
+  } else {
+    for (const state of tracks.values()) {
+      if (state.kind === 'gimi_compute') state.lastNow = null;
+    }
+    schedule();
+  }
+  notifyPlayback();
+}
+
+/** Preview decoded baked frames without changing the mod's control variables. */
+export function setAnimationFrame(value) {
+  const shared = sharedBakedClock();
+  const number = Number(value);
+  if (!shared || !Number.isFinite(number)) return false;
+  const frame = Math.min(shared.end, Math.max(shared.start, Math.round(number)));
+  setAnimationPaused(true);
+  let changed = false;
+  for (const state of tracks.values()) {
+    if (state.kind === 'gimi_compute' || selectedClock(state)?.id !== shared.id) continue;
+    state.startedAt = playbackNow;
+    state.frameOffset = frame - shared.start;
+    state.lastFrame = frame;
+    state.activeClockId = shared.id;
+    state.active = true;
+    for (const mesh of state.meshes) {
+      if (mesh.visible === false || mesh.userData?.animationSuspended === true) continue;
+      changed = applyFrame(mesh, state.meshesByMesh.get(mesh), frame) || changed;
+    }
+  }
+  if (changed) {
+    invalidateCharacterShadowMap({ request: false });
+    requestRender();
+  }
+  notifyPlayback();
+  return true;
+}
+
+function tick(timestamp) {
   rafId = null;
+  if (!paused && lastTickNow !== null) playbackNow += Math.max(0, timestamp - lastTickNow);
+  lastTickNow = timestamp;
+  const now = playbackNow;
   let playing = false;
   let changed = false;
   for (const state of tracks.values()) {
@@ -521,15 +653,23 @@ function tick(now) {
       (mesh) => mesh.visible !== false && mesh.userData?.animationSuspended !== true,
     );
     if (!visibleMeshes.length) continue;
-    playing = true;
+    playing = playing || playbackAvailable(state);
     if (!state.active || state.activeClockId !== selected.id) {
-      state.startedAt = now;
+      const shared = [...tracks.values()].find(
+        (other) =>
+          other !== state &&
+          other.active &&
+          other.activeClockId === selected.id &&
+          selectedClock(other)?.id === selected.id,
+      );
+      state.startedAt = shared?.startedAt ?? now;
+      state.frameOffset = shared?.frameOffset ?? 0;
       state.lastFrame = null;
       state.activeClockId = selected.id;
       state.active = true;
     }
     const clock = { ...selected.clock, fps };
-    const frame = frameForElapsed(clock, (now - state.startedAt) / 1000);
+    const frame = frameForElapsed(clock, (now - state.startedAt) / 1000, state.frameOffset);
     if (frame === null) continue;
     state.meshes.forEach((mesh) => {
       if (mesh.userData?.animationSuspended === true || mesh.visible === false) {
@@ -538,6 +678,7 @@ function tick(now) {
       }
       changed = applyFrame(mesh, state.meshesByMesh.get(mesh), frame) || changed;
     });
+    state.lastFrame = frame;
   }
   if (changed) {
     // Character shadows are demand-driven. One invalidation covers every
@@ -545,7 +686,8 @@ function tick(now) {
     invalidateCharacterShadowMap({ request: false });
     requestRender();
   }
-  if (playing) schedule();
+  notifyPlayback();
+  if (playing && !paused) schedule();
 }
 
 function registerGimiMesh(mesh, animationId, geometry) {
@@ -615,7 +757,7 @@ function registerGimiMesh(mesh, animationId, geometry) {
     if (!state.outputs.has(trackId)) {
       state.outputs.set(trackId, {
         shapePhases: [],
-        poseTime: 0,
+        poseTime: null,
         coordinateTransform,
       });
     }
@@ -649,6 +791,7 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
       meshes: new Set(),
       meshesByMesh: new Map(),
       startedAt: 0,
+      frameOffset: 0,
       lastFrame: null,
       activeClockId: null,
       active: false,
@@ -689,6 +832,10 @@ export function resetAnimationRuntime() {
   }
   rafId = null;
   tracks.clear();
+  paused = false;
+  playbackNow = 0;
+  lastTickNow = null;
+  notifyPlayback();
 }
 
 /** Wake tracks after control or visibility state changes without rebuilding meshes. */

@@ -2272,6 +2272,102 @@ def test_control_conditions_preserve_or_groups_negation_and_contradictions(modul
     assert result == [True, False, True, False, True]
 
 
+def test_baked_playback_pause_seek_controls_and_ownership_lifecycle(module_page):
+    _prepare_compute_clock(module_page)
+    result = module_page.evaluate('''async () => {
+      const T = await import('three/webgpu');
+      const runtime = window.__animation, controls = window.__controls, mesh = window.__mesh;
+      const append = window.__appendGeometry;
+      const other = new T.Mesh(mesh.geometry.clone());
+      other.userData.basePositions = mesh.userData.basePositions.slice();
+      const frames = [0,1,2].flatMap(z => [0,0,z,1,0,z,0,1,z]);
+      const geometry = {frames:3,frame_start:10,position_frame_bytes:36,
+        positions:append(new Float32Array(frames))};
+      const clock = {frame_start:10,frame_end:12,fps:2,
+        conditions:[[{var:'input01',value:'1'}]]};
+      const stationary = new T.Mesh(mesh.geometry.clone());
+      stationary.userData.basePositions = mesh.userData.basePositions.slice();
+      controls.setControlValue('input01','1');
+      runtime.registerAnimatedMesh(stationary,'track-static',{...geometry,clock_ids:['clock-01'],
+        frames:1,positions:append(new Float32Array([0,0,0,1,0,0,0,1,0]))},
+        {'clock-01':clock});
+      window.__frame(1000);
+      const staticHidden = !runtime.getAnimationPlaybackState().available && window.__pendingFrames() === 0;
+      runtime.registerAnimatedMesh(mesh,'clock-01',geometry,{'clock-01':clock});
+      runtime.registerAnimatedMesh(other,'clock-01',geometry,{'clock-01':clock});
+      const decoded = mesh.userData.animationState.positions;
+      const positions = mesh.geometry.attributes.position;
+      window.__frame(1000); window.__frame(1600);
+      const before = runtime.getAnimationPlaybackState();
+      const controlState = JSON.stringify(controls.getControlState());
+      runtime.setAnimationPaused(true);
+      const frozen = [...positions.array], sleeping = window.__pendingFrames() === 0;
+      const noControlWrites = JSON.stringify(controls.getControlState()) === controlState;
+      runtime.setAnimationPaused(false); window.__frame(12000);
+      const resumed = [...positions.array];
+      window.__frame(12400);
+      const advanced = [...positions.array];
+      const sought = runtime.setAnimationFrame(11), selected = [...positions.array];
+      const seekingPaused = runtime.getAnimationPlaybackState().paused && window.__pendingFrames() === 0;
+      runtime.setAnimationPaused(false); window.__frame(20000);
+      const seekResumed = [...positions.array];
+      window.__frame(20500);
+      const seekAdvanced = [...positions.array];
+      mesh.userData.animationSuspended = true; positions.array.fill(7);
+      runtime.setAnimationFrame(10);
+      const owned = [...positions.array], otherFrame = [...other.geometry.attributes.position.array];
+      mesh.userData.animationSuspended = false; runtime.resumeAnimatedMesh(mesh);
+      window.__frame(30000);
+      const released = [...positions.array];
+      controls.setControlValue('input01','0'); runtime.wakeAnimationRuntime(); window.__frame(30010);
+      const disabled = [...positions.array], inactive = !runtime.getAnimationPlaybackState().available &&
+        runtime.getAnimationPlaybackState().frame === null;
+      controls.setControlValue('input01','1'); runtime.wakeAnimationRuntime(); window.__frame(30020);
+      const activated = runtime.getAnimationPlaybackState();
+      const late = new T.Mesh(mesh.geometry.clone());
+      late.userData.basePositions = mesh.userData.basePositions.slice();
+      runtime.registerAnimatedMesh(late,'track-02',{...geometry,clock_ids:['clock-01']},{'clock-01':clock});
+      window.__frame(30030);
+      const shared = runtime.getAnimationPlaybackState().frame === 10 && runtime.setAnimationFrame(11) &&
+        late.geometry.attributes.position.array[2] === 1;
+      mesh.visible = other.visible = late.visible = false;
+      runtime.wakeAnimationRuntime(); window.__frame(30040);
+      const hidden = !runtime.getAnimationPlaybackState().available;
+      mesh.visible = other.visible = late.visible = true;
+      const independent = new T.Mesh(mesh.geometry.clone());
+      independent.userData.basePositions = mesh.userData.basePositions.slice();
+      runtime.registerAnimatedMesh(independent,'clock-02',geometry,{'clock-02':clock});
+      window.__frame(30050);
+      const ambiguous = runtime.getAnimationPlaybackState();
+      const refused = !runtime.setAnimationFrame(12);
+      runtime.resetAnimationRuntime();
+      const cleared = runtime.getAnimationPlaybackState();
+      runtime.registerAnimatedMesh(mesh,'clock-01',geometry,{'clock-01':clock}); window.__frame(40000);
+      const automatic = !runtime.getAnimationPlaybackState().paused && window.__pendingFrames() === 1;
+      runtime.resetAnimationRuntime();
+      return {staticHidden,shared,hidden,before,frozen,sleeping,noControlWrites,resumed,advanced,sought,selected,seekingPaused,
+        seekResumed,seekAdvanced,owned,otherFrame,released,disabled,inactive,activated,ambiguous,refused,
+        cleared,automatic,stable:mesh.geometry.attributes.position === positions &&
+          decoded.buffer === mesh.userData.animationState.positions.buffer};
+    }''')
+    def frame(z):
+        return [0, 0, z, 1, 0, z, 0, 1, z]
+    assert result['before'] == {
+        'available': True, 'canSeek': True, 'paused': False, 'frameStart': 10, 'frameEnd': 12, 'frame': 11}
+    assert result['staticHidden'] and result['shared'] and result['hidden']
+    assert result['sleeping'] and result['noControlWrites'] and result['stable']
+    assert result['frozen'] == result['resumed'] == result['selected'] == result['seekResumed'] == frame(1)
+    assert result['advanced'] == result['seekAdvanced'] == frame(2)
+    assert result['sought'] and result['seekingPaused']
+    assert result['owned'] == [7] * 9
+    assert result['otherFrame'] == result['released'] == result['disabled'] == frame(0)
+    assert result['inactive'] and result['activated']['frame'] == 10
+    assert result['ambiguous']['available'] and not result['ambiguous']['canSeek'] and result['refused']
+    assert result['cleared'] == {
+        'available': False, 'canSeek': False, 'paused': False, 'frameStart': None, 'frameEnd': None, 'frame': None}
+    assert result['automatic']
+
+
 @pytest.mark.parametrize("pose_only", [False, True], ids=["shape-and-pose", "pose-only"])
 def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tmp_path, pose_only):
     from tests.support.animations import POSE_SHADER, compute_mod, load_mod, read_sections, save_sections
@@ -2317,16 +2413,32 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
       const throttled = positions();
       window.__frame(40);
       const advanced = positions();
-      controls.setControlValue('pause', '1'); window.__frame(80);
+      const controlState = JSON.stringify(controls.getControlState());
+      runtime.setAnimationPaused(true);
+      const viewerPaused = positions(), viewerSleeping = window.__pendingFrames() === 0;
+      const unchangedControls = JSON.stringify(controls.getControlState()) === controlState;
+      const noFrames = runtime.getAnimationPlaybackState().frame === null && !runtime.setAnimationFrame(1);
+      meshes[0].userData.animationSuspended = true;
+      meshes[0].geometry.attributes.position.array.fill(7);
+      runtime.wakeAnimationRuntime(); window.__frame(2000);
+      const viewerOwned = positions();
+      meshes[0].userData.animationSuspended = false; runtime.resumeAnimatedMesh(meshes[0]);
+      window.__frame(3000);
+      const viewerReleased = positions(), releasedSleeping = window.__pendingFrames() === 0;
+      runtime.setAnimationPaused(false); window.__frame(4000);
+      const viewerResumed = positions();
+      controls.setControlValue('pause', '1'); window.__frame(4040);
       const paused = positions(), sleeping = window.__pendingFrames() === 0;
-      controls.setControlValue('pause', '0'); runtime.wakeAnimationRuntime(); window.__frame(5000);
+      controls.setControlValue('pause', '0'); runtime.wakeAnimationRuntime(); window.__frame(9000);
       const resumed = positions();
-      window.__frame(5040);
+      window.__frame(9040);
       const continued = positions();
-      controls.setControlValue('anime_state', '1'); runtime.wakeAnimationRuntime(); window.__frame(5040);
+      controls.setControlValue('anime_state', '1'); runtime.wakeAnimationRuntime(); window.__frame(9040);
       const reset = positions(), trigger = controls.getControlValue('anime_state');
       runtime.resetAnimationRuntime();
       return {registered, first, throttled, advanced, paused, resumed, continued, reset, trigger, sleeping,
+        viewerPaused,viewerResumed,viewerSleeping,unchangedControls,noFrames,
+        viewerOwned,viewerReleased,releasedSleeping,
         stable: meshes.every((mesh, index) =>
           mesh.geometry.attributes.position === attributes[index].position &&
           mesh.geometry.attributes.normal === attributes[index].normal),
@@ -2335,6 +2447,11 @@ def test_shared_compute_program_plays_pauses_resets_and_releases(module_page, tm
     }""", entries)
     assert result["registered"] == [True, True]
     assert result["stable"] and result["sleeping"]
+    assert result['viewerPaused'] == result['viewerResumed'] == result['advanced']
+    assert result['viewerSleeping'] and result['unchangedControls'] and result['noFrames']
+    assert result['viewerOwned'][0] == [7] * 9
+    assert result['viewerOwned'][1] == result['advanced'][1]
+    assert result['viewerReleased'] == result['advanced'] and result['releasedSleeping']
     for state in ("first", "advanced", "paused", "resumed", "continued", "reset"):
         assert result[state][0] == pytest.approx(result[state][1])
     def positions(phase, translation, interpolation):
@@ -2386,15 +2503,19 @@ def test_branched_compute_children_play_separately_together_and_keep_missing_ver
       };
       window.__frame(0); const first = positions();
       window.__frame(40); const advanced = positions();
-      const second = select('2', 80);
-      window.__frame(120); const secondAdvanced = positions();
-      const both = select('3', 160);
-      window.__frame(200); const bothAdvanced = positions();
-      controls.setControlValue('hidden', '1'); runtime.wakeAnimationRuntime(); window.__frame(240);
-      window.__frame(280);
+      runtime.setAnimationPaused(true);
+      const second = select('2', 5000);
+      const pausedControls = runtime.getAnimationPlaybackState().paused && window.__pendingFrames() === 0;
+      runtime.setAnimationPaused(false); window.__frame(6000);
+      const resumed = positions();
+      window.__frame(6040); const secondAdvanced = positions();
+      const both = select('3', 6080);
+      window.__frame(6120); const bothAdvanced = positions();
+      controls.setControlValue('hidden', '1'); runtime.wakeAnimationRuntime(); window.__frame(6160);
+      window.__frame(6200);
       const blocked = positions(), sleeping = window.__pendingFrames() === 0;
       controls.setControlValue('hidden', '0');
-      const restarted = select('1', 5000);
+      const restarted = select('1', 9000);
       // Mutating a guard inside its selected branch must not select another branch.
       runtime.resetAnimationRuntime(); controls.resetControlState();
       const program = entry.animation_geometry.program;
@@ -2406,7 +2527,7 @@ def test_branched_compute_children_play_separately_together_and_keep_missing_ver
       window.__frame(0); const selectedBranch = positions();
       runtime.resetAnimationRuntime();
       return {registered, first, advanced, second, secondAdvanced, both, bothAdvanced,
-        blocked, sleeping, restarted, selectedBranch,
+        blocked, sleeping, restarted, selectedBranch,pausedControls,resumed,
         stable: mesh.geometry.attributes.position === attributes.position &&
           mesh.geometry.attributes.normal === attributes.normal};
     }""", entry)
@@ -2416,6 +2537,7 @@ def test_branched_compute_children_play_separately_together_and_keep_missing_ver
     initial, advanced = .5, .5 * (math.sin(.004 * 30) + 1)
     later = .5 * (math.sin(.008 * 30) + 1)
     assert result["registered"] and result["stable"] and result["sleeping"]
+    assert result['pausedControls'] and result['resumed'] == result['second']
     assert result["first"] == pytest.approx(positions(initial, 0))
     assert result["advanced"] == pytest.approx(positions(advanced, 0))
     assert result["second"] == pytest.approx(positions(0, initial))

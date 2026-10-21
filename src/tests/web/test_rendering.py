@@ -423,8 +423,25 @@ def test_shape_changes_update_stable_attributes_and_restore_authored_normals(vie
     assert result['stable']
 
 
-def test_animation_suspension_and_release_restore_canonical_geometry_then_resume(viewer):
-    payload = model_payload()
+def test_animation_suspension_and_release_restore_canonical_geometry_then_resume(viewer, tmp_path):
+    from tests.support.animations import compute_mod, load_mod
+
+    ini = compute_mod(tmp_path / 'mod')
+    parsed, built = load_mod(ini, ini.parent)
+    compute = model_payload()
+    compute['meshes'] = built.meshes
+    compute['_fixture_blob'] = bytes(built.geometry.data)
+    compute['state']['defaults'] = parsed.defaults
+    compute['state']['defaults']['input02'] = '0'
+    for entry in compute['meshes'].values():
+        program = entry['animation_geometry']['program']
+        program['external_variables'].append('input02')
+        for command in program['commands']:
+            command.setdefault('conditions', []).append({
+                'kind': 'compare', 'op': '==', 'left': {'kind': 'variable', 'variable': 'input02'},
+                'right': {'kind': 'literal', 'value': 1},
+            })
+    payload = model_payload(2)
     mesh = payload['meshes']['mesh-00']
     mesh['animation_id'] = 'clock-01'
     mesh['animation_geometry'] = {
@@ -432,9 +449,63 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
         'positions': append_stream(payload, 'f', [0,0,0,1,0,0,0,1,0, 0,0,0.5,1,0,0.5,0,1,0.5]),
     }
     payload['animations'] = {'clock-01': {'frame_start': 0, 'frame_end': 1, 'fps': 30}}
-    page = _open_fixture(viewer, payload, {'fixture-02': model_payload()})
+    mesh['conditions'] = [[{'var': 'input01', 'value': '1'}]]
+    stationary = payload['meshes']['mesh-01']
+    stationary['animation_id'] = 'track-static'
+    stationary['animation_geometry'] = {
+        **mesh['animation_geometry'], 'clock_ids': ['clock-01'], 'frames': 1,
+        'positions': append_stream(payload, 'f', [0,0,0,1,0,0,0,1,0]),
+    }
+    payload['state']['defaults'] = {'input01': '0'}
+    independent = model_payload(2)
+    independent['animations'] = {}
+    for index, entry in enumerate(independent['meshes'].values()):
+        clock = f'clock-{index:02d}'
+        entry['animation_id'] = clock
+        entry['animation_geometry'] = {
+            **mesh['animation_geometry'],
+            'positions': append_stream(independent, 'f', [0,0,0,1,0,0,0,1,0, 0,0,.5,1,0,.5,0,1,.5]),
+        }
+        independent['animations'][clock] = {'frame_start': 0, 'frame_end': 1, 'fps': 30}
+    page = _open_fixture(viewer, payload, {
+        'fixture-02': model_payload(), 'fixture-03': compute, 'fixture-04': independent})
+    assert page.locator('#animation-playback').is_hidden()
+    assert page.locator('#animation-play-pause').is_hidden()
+    page.evaluate('''async () => {
+      const {setToggleValue, refreshAll} = await import('./js/mesh/visibility.js');
+      window.__selectAnimation = value => { setToggleValue('input01', value); refreshAll(); };
+      window.__selectAnimation('1');
+    }''')
     page.wait_for_function('window.modViewer.activeMeshes[0].geometry.attributes.position.array[2] === 0.5')
+    assert page.locator('#animation-playback').is_visible()
+    assert page.locator('#animation-frame').is_visible()
+    page.evaluate('window.__playbackButton = document.getElementById("animation-play-pause")')
+    page.locator('.draw-item').nth(0).click()
+    page.locator('#inspector-tab').click()
+    page.evaluate('document.activeElement.blur()')
+    page.keyboard.press('h')
+    page.wait_for_function("document.getElementById('animation-play-pause').hidden")
+    page.wait_for_function("import('./js/mesh/animation-runtime.js').then(m => !m.animationRuntimeSnapshot().rafActive)")
+    page.locator('.inspector-visibility-btn').click()
+    page.wait_for_function("!document.getElementById('animation-playback').hidden")
+    version = page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position.version')
+    page.wait_for_function('version => window.modViewer.activeMeshes[0].geometry.attributes.position.version > version + 1', arg=version)
+    page.locator('#animation-play-pause').click()
+    assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Play animation'
+    page.locator('#animation-frame').evaluate('''slider => {
+      slider.value = '1'; slider.dispatchEvent(new Event('input',{bubbles:true}));
+    }''')
+    assert page.locator('#animation-frame-counter').text_content() == '1 / 1'
+    page.locator('.inspector-visibility-btn').click()
+    page.wait_for_function("document.getElementById('animation-play-pause').hidden")
+    page.locator('.inspector-visibility-btn').click()
+    page.wait_for_function("!document.getElementById('animation-playback').hidden")
+    assert page.evaluate("import('./js/mesh/animation-runtime.js').then(m => !m.animationRuntimeSnapshot().rafActive && m.getAnimationPlaybackState().frame === 1)")
+    assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position.array[2]') == .5
     page.evaluate('const mesh = window.modViewer.activeMeshes[0]; mesh.userData.animationSuspended = true; mesh.geometry.attributes.position.array.fill(7)')
+    page.locator('#animation-frame').evaluate('''slider => {
+      slider.value = '0'; slider.dispatchEvent(new Event('input',{bubbles:true}));
+    }''')
     page.evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
     assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position.array.every(value => value === 7)')
     result = page.evaluate("""async () => {
@@ -446,9 +517,69 @@ def test_animation_suspension_and_release_restore_canonical_geometry_then_resume
     }""")
     assert result == {'resumed': True, 'stable': True, 'canonical': [0,0,0,1,0,0,0,1,0]}
     page.wait_for_function('window.modViewer.activeMeshes[0].geometry.attributes.position.array[2] === 0.5')
+    assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.getAnimationPlaybackState().paused)")
+    page.evaluate("window.__selectAnimation('0')")
+    page.wait_for_function("document.getElementById('animation-playback').hidden")
+    assert page.locator('#animation-play-pause').is_hidden()
+    page.evaluate("window.__selectAnimation('1')")
+    page.wait_for_function("!document.getElementById('animation-frame').hidden")
+    assert page.locator('#animation-playback').is_visible()
     open_model(page, 'fixture-02')
     wait_loaded(page)
+    assert page.locator('#animation-playback').is_hidden()
+    assert page.locator('#animation-play-pause').is_hidden()
     assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.animationRuntimeSnapshot().clocks)") == 0
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    assert page.locator('#animation-playback').is_hidden()
+    page.evaluate("window.__selectAnimation('1')")
+    page.wait_for_function("!document.getElementById('animation-playback').hidden")
+    assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Pause animation'
+    assert not page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.getAnimationPlaybackState().paused)")
+    open_model(page, 'fixture-03')
+    wait_loaded(page)
+    assert page.locator('#animation-playback').is_hidden()
+    assert page.locator('#animation-frame').is_hidden()
+    assert page.locator('#animation-frame-counter').is_hidden()
+    assert page.locator('#animation-play-pause').is_hidden()
+    page.evaluate('''async () => {
+      const {setToggleValue, refreshAll} = await import('./js/mesh/visibility.js');
+      window.__selectCompute = value => { setToggleValue('input02', value); refreshAll(); };
+      window.__selectCompute('1');
+    }''')
+    page.wait_for_function("!document.getElementById('animation-play-pause').hidden")
+    assert page.locator('#tool-buttons > #animation-play-pause').is_visible()
+    assert page.evaluate('window.__playbackButton === document.getElementById("animation-play-pause")')
+    assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.animationRuntimeSnapshot().rafActive)")
+    assert not page.evaluate("import('./js/mesh/animation-runtime.js').then(module => module.getAnimationPlaybackState().paused)")
+    page.locator('#animation-play-pause').click()
+    assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Play animation'
+    assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => !module.animationRuntimeSnapshot().rafActive)")
+    page.evaluate("window.__selectCompute('0')")
+    page.wait_for_function("document.getElementById('animation-play-pause').hidden")
+    page.evaluate("window.__selectCompute('1')")
+    page.wait_for_function("!document.getElementById('animation-play-pause').hidden")
+    assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Play animation'
+    assert page.evaluate("import('./js/mesh/animation-runtime.js').then(module => !module.animationRuntimeSnapshot().rafActive)")
+    open_model(page, 'fixture-04')
+    wait_loaded(page, 2)
+    page.wait_for_function("document.getElementById('animation-play-pause').parentElement.id === 'tool-buttons'")
+    assert page.locator('#animation-playback').is_hidden()
+    page.locator('#animation-play-pause').click()
+    page.evaluate('''async () => {
+      const {setManualMeshVisibility} = await import('./js/mesh/mesh-state.js');
+      window.__setSecondVisible = visible => setManualMeshVisibility(window.modViewer.activeMeshes[1], visible);
+      window.__setSecondVisible(false);
+    }''')
+    page.wait_for_function("!document.getElementById('animation-playback').hidden")
+    assert page.locator('#animation-frame').is_visible()
+    assert page.locator('#animation-play-pause').get_attribute('aria-label') == 'Play animation'
+    page.evaluate('window.__setSecondVisible(true)')
+    page.wait_for_function("document.getElementById('animation-play-pause').parentElement.id === 'tool-buttons'")
+    assert page.locator('#animation-playback').is_hidden()
+    assert page.evaluate('window.__playbackButton === document.getElementById("animation-play-pause")')
+    assert bridge_calls(page, 'preferencesSave') == []
+    assert bridge_calls(page, 'export') == []
 
 
 def test_wireframe_suppresses_outlines_and_restores_preference_without_rebuilding(viewer):
