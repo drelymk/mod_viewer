@@ -56,6 +56,7 @@ class PreparedDrawVertices:
     streams: VertexStreams
     position_path: str
     texcoord_path: str
+    zero_out_of_bounds: bool = False
 
 
 def _prepare_draw_vertices(
@@ -68,6 +69,7 @@ def _prepare_draw_vertices(
     buffers: BufferStore,
     geometry_convention: GeometryConvention,
     source=None,
+    zero_out_of_bounds=False,
 ):
     """Select, validate, wind, and compact the vertices used by one draw."""
     resolve = source.resolve_resource if source is not None \
@@ -127,10 +129,16 @@ def _prepare_draw_vertices(
         if cached is not missing:
             return cached
         pos_offset = index * draw_streams.position_stride + POSITION_OFFSET
-        if pos_offset < 0 or pos_offset + 12 > len(pos_data):
+        if pos_offset < 0:
             decoded_vertices[index] = None
             return None
-        x, y, z = struct.unpack_from("<fff", pos_data, pos_offset)
+        if pos_offset + 12 > len(pos_data):
+            if not zero_out_of_bounds:
+                decoded_vertices[index] = None
+                return None
+            x = y = z = 0.
+        else:
+            x, y, z = struct.unpack_from("<fff", pos_data, pos_offset)
         if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
             decoded_vertices[index] = None
             return None
@@ -179,7 +187,7 @@ def _prepare_draw_vertices(
         remap={old: new for new, old in enumerate(used)},
         decoded_vertices=decoded_vertices,
         streams=draw_streams, position_path=draw_pos_path,
-        texcoord_path=draw_tc_path)
+        texcoord_path=draw_tc_path, zero_out_of_bounds=zero_out_of_bounds)
 
 
 @dataclass
@@ -324,7 +332,9 @@ def pack_draw_geometry(
         if normal_path and exists(normal_path):
             normal_data = (pos_data if same(normal_path, prepared.position_path)
                            else buffers.raw(normal_path))
-            normal_bytes = decode_normals(normal_source, normal_data, used)
+            normal_bytes = decode_normals(
+                normal_source, normal_data, used,
+                zero_out_of_bounds=prepared.zero_out_of_bounds)
 
     shape_buffers = _build_shape_buffers(
         group.get("shape_sliders"), mod_dir, prepared.position_path, used,
@@ -439,17 +449,17 @@ def pack_animation_frame_attributes(
 
 
 def _pack_animation_positions(data, stride, used_vertices):
-    """Validate and bound positions, copying tight contiguous records directly."""
+    """Pack finite positions with Direct3D zero reads beyond the buffer end."""
     count = len(used_vertices)
     bounds_min = [math.inf, math.inf, math.inf]
     bounds_max = [-math.inf, -math.inf, -math.inf]
     direct = (stride == 12 and count > 0
-              and used_vertices[-1] - used_vertices[0] + 1 == count)
+              and used_vertices[-1] - used_vertices[0] + 1 == count
+              and used_vertices[0] >= 0
+              and (used_vertices[-1] + 1) * 12 <= len(data))
     if direct:
         begin = used_vertices[0] * 12
         end = begin + count * 12
-        if begin < 0 or end > len(data):
-            return None
         output = data[begin:end]
         positions = struct.iter_unpack("<fff", output)
     else:
@@ -460,9 +470,12 @@ def _pack_animation_positions(data, stride, used_vertices):
             x, y, z = next(positions)
         else:
             offset = used_vertices[output_index] * stride + POSITION_OFFSET
-            if offset < 0 or offset + 12 > len(data):
+            if offset < 0:
                 return None
-            x, y, z = struct.unpack_from("<fff", data, offset)
+            if offset + 12 > len(data):
+                x = y = z = 0.
+            else:
+                x, y, z = struct.unpack_from("<fff", data, offset)
         if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
             return None
         if not direct:
@@ -517,7 +530,7 @@ def pack_animation_position_frame(
             normal_data = (position_data if same(normal_path, position_path)
                            else buffers.transient(normal_path))
             normal_bytes = decode_normals(
-                normal_source, normal_data, used_vertices)
+                normal_source, normal_data, used_vertices, zero_out_of_bounds=True)
     return PackedAnimationFrame(
         pos_bytes, normal_bytes, bounds_min, bounds_max)
 

@@ -373,6 +373,22 @@ def test_f32_bulk_normals_reject_invalid_records(data):
     assert decode_normals(source, data, [0]) is None
 
 
+@pytest.mark.parametrize("source,data", [
+    (VertexAttributeSource("normal.buf", 16, 4, "f32x3"),
+     struct.pack("<f3f", 9., 0., 2., 0.) + b"\0" * 8),
+    (VertexAttributeSource("normal.buf", 4, 1, "snorm8x3"),
+     bytes((99, 0, 127, 0, 99, 0))),
+])
+def test_baked_normal_reads_zero_missing_elements_without_relaxing_static_decode(
+        source, data):
+    indices = [2, 0, 1]
+    assert decode_normals(source, data, indices) is None
+    assert bytes(decode_normals(source, data, indices, zero_out_of_bounds=True)) == (
+        struct.pack("<9f", 0., 0., 0., 0., 1., 0., 0., 0., 0.))
+    assert bytes(decode_normals(source, data, [2, 3], zero_out_of_bounds=True)) == b"\0" * 24
+    assert decode_normals(source, data, [-1], zero_out_of_bounds=True) is None
+
+
 def test_f32_bulk_normals_reject_less_than_75_percent_plausible():
     source = VertexAttributeSource("normal.buf", 12, 0, "f32x3")
     data = b"".join(struct.pack("<3f", *(

@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import struct
 import time
 from copy import copy
 from dataclasses import replace
@@ -359,6 +360,13 @@ def _translated_frame_vertices(draw, canonical, *, mod_dir, buffers,
     return translated
 
 
+def _same_float32_attributes(left, right):
+    """Compare emitted values exactly, treating signed zero as the same value."""
+    return len(left) == len(right) and (
+        left == right or all(a == b for a, b in zip(
+            struct.iter_unpack("<f", left), struct.iter_unpack("<f", right))))
+
+
 def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                               mod_dir, group, default_streams,
                               default_index_size, buffers,
@@ -394,6 +402,8 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     normal_possible = canonical_packed.normals is not None
     normal_frame_bytes = (len(canonical_packed.normals)
                           if normal_possible else 0)
+    positions_changed = False
+    normals_changed = False
     bounds_min = [float("inf")] * 3
     bounds_max = [float("-inf")] * 3
     canonical_bounds = (canonical_packed.bounds_min,
@@ -448,6 +458,8 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                     pack_normals=normal_possible)
         if packed_frame is None or len(packed_frame.positions) != frame_bytes:
             return reject()
+        positions_changed = positions_changed or not _same_float32_attributes(
+            packed_frame.positions, canonical_packed.positions)
         frame_bounds = (canonical_bounds if frame == start else
                         (packed_frame.bounds_min, packed_frame.bounds_max))
         if frame_bounds[0] is None or frame_bounds[1] is None:
@@ -463,16 +475,22 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                     or len(packed_frame.normals) != normal_frame_bytes):
                 normal_possible = False
             else:
+                normals_changed = normals_changed or not _same_float32_attributes(
+                    packed_frame.normals, canonical_packed.normals)
                 if normal_ref is None:
                     normal_ref = geometry.reserve(frame_count * normal_frame_bytes)
                 geometry.write(
                     normal_ref["offset"] + frame_index * normal_frame_bytes,
                     packed_frame.normals)
+    has_normals = normal_possible and normal_ref is not None
+    # Only attributes that survive publication can make a draw animate. Raw
+    # record differences may belong to unused fields or unreferenced vertices.
+    if not positions_changed and not (has_normals and normals_changed):
+        return reject()
     if diagnostics is not None:
         diagnostics["animation_pack_seconds"] += (
             time.perf_counter() - pack_started)
         diagnostics["animation_frame_count"] += frame_count
-    has_normals = normal_possible and normal_ref is not None
     if not has_normals:
         if normal_ref is not None:
             geometry.truncate(normal_ref["offset"])

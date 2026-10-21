@@ -56,11 +56,12 @@ def decode_normal(source, data, vertex_index):
     return _normalize(values)
 
 
-def decode_normals(source, data, vertex_indices):
+def decode_normals(source, data, vertex_indices, *, zero_out_of_bounds=False):
     """Return canonical float32 XYZ normals for every requested vertex.
 
     The result is all-or-nothing: a truncated, non-finite, zero or implausible
     stream returns ``None`` so the caller can use geometric reconstruction.
+    Baked animation can preserve Direct3D's zero reads for missing elements.
     """
     try:
         count = len(vertex_indices)
@@ -74,10 +75,16 @@ def decode_normals(source, data, vertex_indices):
     if source.encoding == "f32x3":
         output = bytearray(count * 12)
         plausible = 0
+        present = count
         for output_index, vertex_index in enumerate(indices):
             offset = vertex_index * source.stride + source.offset
-            if vertex_index < 0 or offset + 12 > len(data):
+            if vertex_index < 0:
                 return None
+            if offset + 12 > len(data):
+                if not zero_out_of_bounds:
+                    return None
+                present -= 1
+                continue
             x, y, z = struct.unpack_from("<fff", data, offset)
             if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
                 return None
@@ -96,7 +103,7 @@ def decode_normals(source, data, vertex_indices):
             struct.pack_into("<fff", output, output_index * 12,
                              x * reciprocal, y * reciprocal, z * reciprocal)
 
-        if count >= 8 and plausible / count < 0.75:
+        if present >= 8 and plausible / present < 0.75:
             return None
         return output
 
@@ -105,8 +112,12 @@ def decode_normals(source, data, vertex_indices):
     output = bytearray(count * 12)
     for output_index, vertex_index in enumerate(indices):
         offset = vertex_index * source.stride + source.offset
-        if vertex_index < 0 or offset + 3 > len(data):
+        if vertex_index < 0:
             return None
+        if offset + 3 > len(data):
+            if not zero_out_of_bounds:
+                return None
+            continue
         x, y, z = data[offset], data[offset + 1], data[offset + 2]
         x = max(-1.0, (x if x < 128 else x - 256) / 127.0)
         y = max(-1.0, (y if y < 128 else y - 256) / 127.0)
