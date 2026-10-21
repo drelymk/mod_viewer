@@ -147,7 +147,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     draw, group, mod_dir=mod_dir,
                     default_streams=default_streams,
                     default_index_size=index_size, buffers=buffers,
-                    geometry_convention=geometry_convention, source=source)
+                    geometry_convention=geometry_convention, source=source,
+                    zero_out_of_bounds=family.get("position_switching", False))
                 animation_diagnostics["animation_prepare_calls"] += 1
                 animation_diagnostics["animation_prepare_seconds"] += (
                     time.perf_counter() - prepare_started)

@@ -60,7 +60,7 @@ def _pack_fixture(tmp_path, indices, positions, *, uvs=None, base=0,
 
 @pytest.mark.parametrize("position_data,expected", [
     (struct.pack("<6f", 1., 2., 3., 4., 5., 6.), (4., 5., 6.)),
-    (b"\0" * 23, None),
+    (b"\0" * 23, (0., 0., 0.)),
     (struct.pack("<6f", 1., 2., 3., float("nan"), 5., 6.), None),
 ], ids=["valid", "truncated", "nonfinite"])
 def test_position_only_animation_validates_frames_without_normal_decode(

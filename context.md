@@ -224,6 +224,14 @@ of documentation, comments and tests; use portable fixtures instead.
   match the narrow Present/two-pass shader contract and the exact shape-buffer
   layout. A matching authored plain slider with an externally driven phase remains
   a slider; synthetic sinusoidal or program-assigned phases remain compute tracks.
+- Baked position-switching tracks preserve Direct3D zero-valued position and
+  normal reads beyond a short vertex buffer, including the canonical first frame.
+  Keep the authored topology and remaining frames instead of rejecting the whole
+  track for missing vertices; unsupported layouts and non-finite data stay rejected.
+- Baked track detection compares published positions and decoded normals on the
+  drawn vertices. Changes to unused record fields, unreferenced vertices or
+  normals that are not published cannot activate playback. Keep this decision
+  in backend frame preparation rather than scanning frontend frame data.
 - Execute program assignments, resets, conditions and dispatches in authored
   order. Compile numeric and boolean expressions through the shared condition
   syntax tree; select if/elif/else branches once on entry, including child calls.
@@ -236,7 +244,8 @@ of documentation, comments and tests; use portable fixtures instead.
   erasing other passes. Rig/Physics temporarily suspends animation ownership;
   release restores canonical geometry and bounds before resuming. Advance program
   time at render cadence but cap expensive compute-geometry application at 30 Hz.
-- Viewer playback pause freezes runtime time without changing INI controls;
+- Visible active animation starts playback automatically. Viewer playback pause
+  freezes runtime time without changing INI controls;
   control changes still evaluate compute programs with zero dt. Paused playback
   schedules only explicit updates. Frame seeking reuses decoded baked frames
   only for one active synchronized clock and respects Rig/Physics ownership.

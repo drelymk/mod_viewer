@@ -6,6 +6,7 @@ from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
 from ..geometry.identity import DrawOccurrence
 from ..geometry.skinning import resolve_skinning_source
+from ..mod_source import DirectoryModSource
 from .draw_resources import (
     _collect_resource_copy_sources, _extract_hash, _ib_index_size,
     _ib_res_to_component, _resolve_component_buffers, _resolve_normal_source,
@@ -147,9 +148,10 @@ def _auto_families(section_info):
 
 def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=None,
                       gating_vars=None, animation_vars=None,
-                      qualified_vars=None, *, section_info=None):
+                      qualified_vars=None, *, section_info=None, resource_source=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     resources = ResourceTable.normalize(resources)
+    resource_source = resource_source or DirectoryModSource(".")
     if seen is None:
         seen = {}
     if section_info is None:
@@ -168,6 +170,15 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         "component_blend_vertex_resources"]
     component_animation_vertex_bindings = resolved_buffers[
         "component_animation_vertex_bindings"]
+    # Include static owners so an absent animation cannot fall through to a
+    # shorter component prefix belonging to a different position stream.
+    component_animation_owners = {
+        component: {
+            "position": resource,
+            "bindings": component_animation_vertex_bindings.get(component, []),
+        }
+        for component, resource in component_positions.items()
+    }
     component_vertex_binding_history = resolved_buffers["component_vertex_binding_history"]
     hash_buffers = resolved_buffers["hash_buffers"]
     global_ib = resolved_buffers["global_ib"]
@@ -230,9 +241,20 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
         return _lookup_component_value(
             component_blend_vertex_resources, component) or {}
 
-    def lookup_component_animation_vertex_bindings(component):
-        return _lookup_component_value(
-            component_animation_vertex_bindings, component) or []
+    def lookup_component_animation_vertex_bindings(component, position_resource):
+        owner = _lookup_component_value(component_animation_owners, component)
+        if not owner or not owner["bindings"] or not position_resource:
+            return []
+        owner_file, owner_stride = resolve_vertex_resource(owner["position"])
+        position_file, position_stride = resolve_vertex_resource(position_resource)
+        if (not owner_file or not position_file
+                or not resource_source.same_reference(
+                    resource_source.resolve_resource(owner_file),
+                    resource_source.resolve_resource(position_file))
+                or (owner_stride or POSITION_STRIDE)
+                != (position_stride or POSITION_STRIDE)):
+            return []
+        return owner["bindings"]
 
     groups = []
     for section_name, info in draw_sections:
@@ -505,7 +527,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 if draw.texture_default(role) or draw.texture_rules(role)
             }
             for binding in lookup_component_animation_vertex_bindings(
-                    _ib_res_to_component(effective_ib)):
+                    _ib_res_to_component(effective_ib), effective_position_resource):
                 item = {**binding, "position_file": draw.position_file,
                         "ib_file": draw.ib_file}
                 if item not in animation_bindings:
