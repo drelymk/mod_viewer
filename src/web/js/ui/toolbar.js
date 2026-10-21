@@ -11,7 +11,7 @@ import {
   setKeyLightIntensity,
 } from '../scene/scene.js';
 import { KEY_LIGHT_MAX_INTENSITY } from '../scene/key-light-controller.js';
-import { getTextureDisplayMode, setTextureDisplayMode } from '../scene/render-modes.js';
+import { getGlossyLevel, getTextureDisplayMode, setGlossyLevel, setTextureDisplayMode } from '../scene/render-modes.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 import { closeHeaderPopovers } from './header-popovers.js';
 
@@ -113,9 +113,13 @@ export function initToolPopovers(onChange = () => {}) {
   const textureButton = $('texture-btn');
   const lightButton = $('light-btn');
   const aoButton = $('ao-btn');
+  const glossyButton = $('glossy-btn');
   const texturePopover = $('texture-popover');
   const lightPopover = $('light-popover');
   const aoPopover = $('ao-popover');
+  const glossyPopover = $('glossy-popover');
+  const glossySlider = $('glossy-slider');
+  const glossyValue = $('glossy-value');
   const aoSlider = $('ao-slider');
   const aoValue = $('ao-value');
   const lightSlider = $('light-slider');
@@ -141,9 +145,11 @@ export function initToolPopovers(onChange = () => {}) {
     close(texturePopover);
     close(lightPopover);
     close(aoPopover);
+    close(glossyPopover);
     textureButton?.setAttribute('aria-expanded', 'false');
     lightButton?.setAttribute('aria-expanded', 'false');
     aoButton?.setAttribute('aria-expanded', 'false');
+    glossyButton?.setAttribute('aria-expanded', 'false');
     activeToolPopover = null;
   };
 
@@ -166,6 +172,18 @@ export function initToolPopovers(onChange = () => {}) {
     const level = normalizeAmbientOcclusionLevel(value);
     setAmbientOcclusionStrength((level / 100) * AO_MAX_STRENGTH);
     return updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
+  };
+
+  const updateGlossyControl = () => {
+    const level = getGlossyLevel();
+    if (glossySlider) glossySlider.value = String(level);
+    if (glossyValue) glossyValue.textContent = `${level}%`;
+    glossyButton?.classList.toggle('active', level === 100);
+    glossyButton?.classList.toggle('partial', level > 0 && level < 100);
+    glossyButton?.classList.toggle('off', level === 0);
+    const label = t('render.glossy', { level });
+    glossyButton?.setAttribute('aria-label', label);
+    if (glossyButton) glossyButton.title = label;
   };
 
   function renderTextureOptions() {
@@ -252,15 +270,32 @@ export function initToolPopovers(onChange = () => {}) {
     aoSlider?.focus();
   }
 
+  function toggleGlossyPopover() {
+    if (!glossyPopover) return;
+    const wasOpen = !glossyPopover.hidden;
+    closeAll();
+    if (wasOpen) return;
+    updateGlossyControl();
+    glossyPopover.hidden = false;
+    glossyButton?.setAttribute('aria-expanded', 'true');
+    activeToolPopover = { popover: glossyPopover, button: glossyButton };
+    positionPopover(glossyPopover, glossyButton);
+    glossySlider?.focus();
+  }
+
   textureButton?.setAttribute('aria-haspopup', 'menu');
   lightButton?.setAttribute('aria-haspopup', 'dialog');
   aoButton?.setAttribute('aria-haspopup', 'dialog');
+  glossyButton?.setAttribute('aria-haspopup', 'dialog');
   textureButton?.setAttribute('aria-expanded', 'false');
   lightButton?.setAttribute('aria-expanded', 'false');
   aoButton?.setAttribute('aria-expanded', 'false');
+  glossyButton?.setAttribute('aria-expanded', 'false');
+  updateGlossyControl();
   updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
   updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
   window.addEventListener(LANGUAGE_CHANGED, () => {
+    updateGlossyControl();
     updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
     updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
     if (texturePopover && !texturePopover.hidden) {
@@ -275,6 +310,17 @@ export function initToolPopovers(onChange = () => {}) {
   textureButton?.addEventListener('click', toggleTexturePopover);
   lightButton?.addEventListener('click', toggleLightPopover);
   aoButton?.addEventListener('click', toggleAmbientOcclusionPopover);
+  glossyButton?.addEventListener('click', toggleGlossyPopover);
+  glossySlider?.addEventListener('input', () => {
+    setGlossyLevel(glossySlider.value, activeMeshes);
+    updateGlossyControl();
+    onChange('glossy', getGlossyLevel(), { persist: false });
+  });
+  glossySlider?.addEventListener('change', () => {
+    setGlossyLevel(glossySlider.value, activeMeshes);
+    updateGlossyControl();
+    onChange('glossy', getGlossyLevel());
+  });
   lightSlider?.addEventListener('input', () => {
     applyKeyLightLevel(lightSlider.value);
     onChange('keyLightIntensity', getKeyLightIntensity(), { persist: false });
@@ -292,7 +338,11 @@ export function initToolPopovers(onChange = () => {}) {
     onChange('ambientOcclusion', getAmbientOcclusionStrength());
   });
   document.addEventListener('click', (event) => {
-    if (event.target.closest('#texture-btn, #texture-popover, #light-btn, #light-popover, #ao-btn, #ao-popover')) {
+    if (
+      event.target.closest(
+        '#texture-btn, #texture-popover, #light-btn, #light-popover, #ao-btn, #ao-popover, #glossy-btn, #glossy-popover',
+      )
+    ) {
       return;
     }
     closeAll();
@@ -307,6 +357,7 @@ export function initToolPopovers(onChange = () => {}) {
   });
 
   return () => {
+    updateGlossyControl();
     updateAmbientOcclusionControl(strengthToAmbientOcclusionLevel(getAmbientOcclusionStrength()));
     updateKeyLightControl(intensityToKeyLightLevel(getKeyLightIntensity()));
   };

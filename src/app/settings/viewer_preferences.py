@@ -5,14 +5,15 @@ from . import config
 
 PREFERENCES_KEY = "viewerPreferences"
 BOOLEAN_KEYS = {
-    "wireframe", "outlines", "bloom", "glossy", "toonShading", "grid",
+    "wireframe", "outlines", "bloom", "toonShading", "grid",
     "smoothShading", "navigationGizmo",
 }
 CHOICES = {
     "environment": ("default", "studio", "indoor", "outdoor", "sunset"),
     "textureMode": ("all", "diffuse-normal", "diffuse", "none"),
 }
-RANGES = {"ambientOcclusion": (0, 1), "keyLightIntensity": (0, 1.5)}
+RANGES = {"ambientOcclusion": (0, 1), "keyLightIntensity": (0, 1.5),
+          "glossy": (0, 100)}
 
 
 def _validated_preferences(value):
@@ -20,6 +21,8 @@ def _validated_preferences(value):
         raise ValueError("Viewer preferences must be an object.")
     validated = {}
     for key, setting in value.items():
+        if key == "glossy" and isinstance(setting, bool):
+            setting = 50 if setting else 0
         if key in BOOLEAN_KEYS:
             valid = isinstance(setting, bool)
         elif key in CHOICES:

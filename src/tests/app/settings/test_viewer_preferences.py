@@ -20,7 +20,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
     filename.write_text(json.dumps(original), encoding="utf-8")
     settings = {
         "environment": "sunset", "wireframe": True, "outlines": True,
-        "ambientOcclusion": 0.4, "bloom": True, "glossy": True,
+        "ambientOcclusion": 0.4, "bloom": True, "glossy": 73,
         "toonShading": True, "grid": False, "smoothShading": False,
         "textureMode": "diffuse", "keyLightIntensity": 0.75,
         "navigationGizmo": False,
@@ -34,7 +34,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
 
     defaults = {
         "environment": "default", "wireframe": False, "outlines": False,
-        "ambientOcclusion": 0, "bloom": False, "glossy": False,
+        "ambientOcclusion": 0, "bloom": False, "glossy": 0,
         "toonShading": False, "grid": True, "smoothShading": True,
         "textureMode": "all", "keyLightIntensity": 1,
         "navigationGizmo": True,
@@ -52,6 +52,22 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
     assert not filename.with_suffix(".json.tmp").exists()
 
 
+@pytest.mark.parametrize("legacy,level", [(True, 50), (False, 0)])
+def test_legacy_glossy_preferences_load_and_save_as_numeric_levels(tmp_path, legacy, level):
+    filename = tmp_path / "config.json"
+    value = {"version": 1, "modFolders": [],
+             "viewerPreferences": {"glossy": legacy}}
+    filename.write_text(json.dumps(value), encoding="utf-8")
+
+    loaded = viewer_preferences.load_preferences(filename)
+    assert loaded == {"glossy": level}
+    assert type(loaded["glossy"]) is int
+    viewer_preferences.save_preferences({"grid": False}, filename)
+    saved = json.loads(filename.read_text(encoding="utf-8"))["viewerPreferences"]
+    assert saved == {"glossy": level, "grid": False}
+    assert type(saved["glossy"]) is int
+
+
 @pytest.mark.parametrize("changes", [
     None, [], {"orientation": 90}, {"wireframe": 1}, {"grid": "false"},
     {"environment": "unknown"}, {"textureMode": "unknown"},
@@ -59,6 +75,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
     {"ambientOcclusion": 1.1}, {"keyLightIntensity": 1.6},
     {"keyLightIntensity": float("nan")}, {"keyLightIntensity": float("inf")},
     {"keyLightIntensity": 10 ** 1000},
+    {"glossy": -1}, {"glossy": 101}, {"glossy": float("nan")},
     {"environment": "studio", "bloom": "true"},
 ])
 def test_invalid_preference_patch_never_partially_writes(tmp_path, changes):

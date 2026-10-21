@@ -9,7 +9,7 @@ import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
 
 let wireframe = false;
 let smoothShading = true;
-let glossy = false;
+let glossyLevel = 0;
 let toonShading = false;
 const DEFAULT_ROUGHNESS = 1.0;
 const GLOSSY_ROUGHNESS = 0.2;
@@ -32,12 +32,6 @@ function updateRenderModeLabels() {
     const label = t('render.outlines', { state: stateWord(outlineButton.getAttribute('aria-pressed') === 'true') });
     outlineButton.title = label;
     outlineButton.setAttribute('aria-label', label);
-  }
-  const glossyButton = document.getElementById('glossy-btn');
-  if (glossyButton) {
-    const label = t('render.glossy', { state: stateWord(glossy) });
-    glossyButton.title = label;
-    glossyButton.setAttribute('aria-label', label);
   }
   const toonButton = document.getElementById('toon-btn');
   if (toonButton) {
@@ -69,10 +63,14 @@ function setMeshRoughness(mesh, roughness) {
   });
 }
 
+function glossyRoughness() {
+  return DEFAULT_ROUGHNESS - (DEFAULT_ROUGHNESS - GLOSSY_ROUGHNESS) * (glossyLevel / 100);
+}
+
 export function initializeMeshRenderModes(mesh) {
   mesh.material.wireframe = wireframe;
   mesh.material.flatShading = !smoothShading;
-  setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
+  setMeshRoughness(mesh, glossyRoughness());
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   materials.forEach((material) => {
     setGameMaterialRimEnabled(material, !wireframe);
@@ -119,22 +117,16 @@ export function toggleSmoothShadingMode(meshes) {
   requestRender();
 }
 
-export function toggleGlossyMode(meshes) {
-  glossy = !glossy;
-  const button = document.getElementById('glossy-btn');
-  // Glossy materials are off by default, like the other on/off display
-  // modes.  This control uses the shared `off` styling; toggling `active`
-  // leaves it looking enabled in both states because there is no glossy
-  // `.active` rule.
-  button.classList.toggle('off', !glossy);
-  const label = t('render.glossy', { state: stateWord(glossy) });
-  button.title = label;
-  button.setAttribute('aria-label', label);
-  button.setAttribute('aria-pressed', String(glossy));
-  meshes.forEach((mesh) => {
-    setMeshRoughness(mesh, glossy ? GLOSSY_ROUGHNESS : DEFAULT_ROUGHNESS);
-  });
+export function getGlossyLevel() {
+  return glossyLevel;
+}
+
+export function setGlossyLevel(value, meshes) {
+  const number = Number(value);
+  glossyLevel = Number.isFinite(number) ? Math.min(100, Math.max(0, Math.round(number))) : 0;
+  meshes.forEach((mesh) => setMeshRoughness(mesh, glossyRoughness()));
   requestRender();
+  return glossyLevel;
 }
 
 export function toggleToonShadingMode(meshes) {

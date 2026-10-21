@@ -796,7 +796,7 @@ def test_library_folder_context_menus_open_native_folders_without_loading(viewer
 def test_environment_and_tools_restore_and_save_without_orientation_or_source_edits(viewer):
     settings = {
         'environment': 'sunset', 'wireframe': True, 'outlines': True,
-        'ambientOcclusion': 0.4, 'bloom': True, 'glossy': True,
+        'ambientOcclusion': 0.4, 'bloom': True, 'glossy': 50,
         'toonShading': True, 'grid': False, 'smoothShading': False,
         'textureMode': 'diffuse', 'keyLightIntensity': 0.75,
         'navigationGizmo': False,
@@ -806,12 +806,13 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     assert page.locator('#environment-icon [data-environment-icon="sunset"]').is_visible()
     assert page.locator('#environment-btn').get_attribute('title') == 'Environment: Sunset (click to change)'
     assert bridge_calls(page, 'preferencesSave') == []
-    for control in ['wire', 'outline', 'glossy', 'toon']:
+    for control in ['wire', 'outline', 'toon']:
         assert page.locator(f'#{control}-btn').get_attribute('aria-pressed') == 'true'
     for control in ['grid', 'shading', 'trackball']:
         assert page.locator(f'#{control}-btn').get_attribute('aria-pressed') == 'false'
     assert page.locator('#ao-slider').input_value() == '40'
     assert page.locator('#light-slider').input_value() == '50'
+    assert page.locator('#glossy-slider').input_value() == '50'
     assert 'diffuse-only' in page.locator('#texture-btn').get_attribute('class')
     assert page.locator('#bloom-btn').is_disabled()
     assert page.evaluate('window.modViewer.getBloomEnabled()') is True
@@ -825,7 +826,7 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     page.locator('#texture-popover button').nth(2).click()
     assert page.evaluate("""() => {
       const material = window.modViewer.activeMeshes[0].material;
-      return material.wireframe && material.flatShading && material.roughness === 0.2;
+      return material.wireframe && material.flatShading && material.roughness === 0.6;
     }""")
     assert bridge_calls(page, 'preferencesSave') == []
     # Make emission capability observable without requesting a source texture.
@@ -837,14 +838,14 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
       window.dispatchEvent(new Event('mod-viewer-mesh-state-changed'));
     }""")
     assert page.locator('#bloom-btn').get_attribute('aria-pressed') == 'true'
-    for control in ['wire', 'outline', 'bloom', 'glossy', 'toon', 'grid', 'shading', 'trackball']:
+    for control in ['wire', 'outline', 'bloom', 'toon', 'grid', 'shading', 'trackball']:
         page.locator(f'#{control}-btn').click()
     page.locator('#environment-btn').click()
     page.locator('#environment-popover button').first.click()
     page.locator('#texture-btn').click()
     page.locator('#texture-popover button').first.click()
     page.evaluate("""() => {
-      for(const id of ['ao-slider','light-slider']) {
+      for(const id of ['ao-slider','light-slider','glossy-slider']) {
         const slider=document.getElementById(id); slider.value='0';
         slider.dispatchEvent(new Event('input',{bubbles:true}));
         slider.dispatchEvent(new Event('change',{bubbles:true}));
@@ -856,7 +857,7 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     saved = {name: value for args in patches for name, value in args[0].items()}
     expected = {
         'environment': 'default', 'wireframe': False, 'outlines': False,
-        'ambientOcclusion': 0, 'bloom': False, 'glossy': False,
+        'ambientOcclusion': 0, 'bloom': False, 'glossy': 0,
         'toonShading': False, 'grid': True, 'smoothShading': True,
         'textureMode': 'all', 'keyLightIntensity': 0, 'navigationGizmo': True,
     }
@@ -874,8 +875,51 @@ def test_environment_and_tools_restore_and_save_without_orientation_or_source_ed
     assert page.locator('#wire-btn').get_attribute('aria-pressed') == 'false'
     assert page.locator('#ao-slider').input_value() == '0'
     assert page.locator('#light-slider').input_value() == '0'
+    assert page.locator('#glossy-slider').input_value() == '0'
     assert bridge_calls(page, 'preferencesSave') == []
     assert bridge_calls(page, 'load') == []
+
+
+def test_glossy_slider_updates_materials_and_restores_level_for_new_meshes(viewer):
+    page = viewer({'fixture-01': model_payload(2), 'fixture-02': model_payload()})
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    assert page.locator('#glossy-slider').input_value() == '0'
+    page.locator('#glossy-btn').click()
+    assert page.locator('#glossy-popover').is_visible()
+    assert page.locator('#glossy-btn').get_attribute('aria-pressed') is None
+    for level, roughness in [(0, 1), (50, 0.6), (100, 0.2)]:
+        previous = page.evaluate('window.modViewer.getRenderCount()')
+        page.locator('#glossy-slider').evaluate('''(slider,level) => {
+          slider.value = String(level);
+          slider.dispatchEvent(new Event('input',{bubbles:true}));
+        }''', level)
+        page.wait_for_function('previous => window.modViewer.getRenderCount() > previous', arg=previous)
+        assert page.locator('#glossy-value').text_content() == f'{level}%'
+        assert page.evaluate('''roughness => window.modViewer.activeMeshes.every(mesh =>
+          Math.abs(mesh.material.roughness - roughness) < 1e-12)''', roughness)
+        assert bridge_calls(page, 'preferencesSave') == []
+    page.locator('#glossy-slider').dispatch_event('change')
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "preferencesSave")')
+    assert bridge_calls(page, 'preferencesSave') == [[{'glossy': 100}]]
+    page.keyboard.press('Escape')
+    assert page.locator('#glossy-popover').is_hidden()
+    open_model(page, 'fixture-02')
+    wait_loaded(page)
+    assert abs(page.evaluate('window.modViewer.activeMeshes[0].material.roughness') - 0.2) < 1e-12
+    page.reload()
+    page.wait_for_function('document.getElementById("glossy-slider").value === "100"')
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => Math.abs(mesh.material.roughness - 0.2) < 1e-12)')
+    page.locator('#glossy-slider').evaluate('''slider => {
+      slider.value = '0';
+      slider.dispatchEvent(new Event('input',{bubbles:true}));
+      slider.dispatchEvent(new Event('change',{bubbles:true}));
+    }''')
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => mesh.material.roughness === 1)')
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "preferencesSave")')
+    assert bridge_calls(page, 'preferencesSave') == [[{'glossy': 0}]]
 
 
 def test_loose_part_apply_requires_confirmation_and_stages_complete_partition(viewer):
