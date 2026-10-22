@@ -170,8 +170,7 @@ def _mesh_semantic_projection(parsed, context, active_mesh_keys=None):
     _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
     mesh_payload = build_mesh_semantics(
         parsed.groups, context.mod_dir, game_profile=parsed.game.game,
-        active_mesh_keys=active_mesh_keys, source=context.source,
-        animations=parsed.animations)
+        active_mesh_keys=active_mesh_keys, source=context.source)
     # Keep semantic refresh on the same authoritative material-resolution
     # chain as a full model load. Viewer-only choices affect evidence here but
     # never edit the source INI.

@@ -12,7 +12,6 @@ INDEX_SIZE = 4
 
 _MAX_BUFFER_FILE_BYTES = 512 * 1024 * 1024
 _MAX_TOTAL_BUFFER_BYTES = 2 * 1024 * 1024 * 1024
-_MAX_FRAME_CACHE_BYTES = 256 * 1024 * 1024
 
 
 def _res_get(resources, name):
@@ -158,42 +157,19 @@ class BufferStore:
         self._raw = {}
         self._streams = {}
         self._total_bytes = 0
-        self._frames = {}
-        self._frame_bytes = 0
         self.source = source
         self.overrides = dict(overrides or {})
 
     def raw(self, path):
         if path not in self._raw:
-            data = self._frames.pop(path, None)
-            if data is None:
-                data = self._read(path, cached=True)
-            else:
-                self._frame_bytes -= len(data)
-            # Permanent streams take priority over optional frame reuse.
-            while (self._frames and self._total_bytes + len(data)
-                   + self._frame_bytes > _MAX_TOTAL_BUFFER_BYTES):
-                _, removed = self._frames.popitem()
-                self._frame_bytes -= len(removed)
+            data = self._read(path, cached=True)
             self._raw[path] = data
             self._total_bytes += len(data)
         return self._raw[path]
 
     def transient(self, path):
-        """Reuse frame reads within a bounded, build-scoped admission cache."""
-        if path in self._raw:
-            return self._raw[path]
-        if path in self._frames:
-            return self._frames[path]
-        data = self._read(path, cached=False)
-        # Keep admitted frames instead of evicting them on every sequential
-        # scan: sibling draws commonly scan the same complete frame sequence.
-        budget = min(_MAX_FRAME_CACHE_BYTES,
-                     _MAX_TOTAL_BUFFER_BYTES - self._total_bytes)
-        if self._frame_bytes + len(data) <= budget:
-            self._frames[path] = data
-            self._frame_bytes += len(data)
-        return data
+        """Read one frame buffer without retaining it in the build cache."""
+        return self._read(path, cached=False)
 
     def _read(self, path, *, cached):
         override = self._override_for(path)

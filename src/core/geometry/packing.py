@@ -5,7 +5,9 @@ import os
 import struct
 from dataclasses import dataclass
 
-from .buffers import POSITION_OFFSET, POSITION_STRIDE, BufferStore, VertexStreams
+from .buffers import (
+    POSITION_OFFSET, POSITION_STRIDE, BufferStore, VertexStreams, _detect_uv_best,
+)
 from .conventions import GeometryConvention
 from .draw_call import DrawCall
 from .vertex_attributes import decode_normals
@@ -70,6 +72,7 @@ def _prepare_draw_vertices(
     geometry_convention: GeometryConvention,
     source=None,
     zero_out_of_bounds=False,
+    vertex_union=None,
 ):
     """Select, validate, wind, and compact the vertices used by one draw."""
     resolve = source.resolve_resource if source is not None \
@@ -123,6 +126,7 @@ def _prepare_draw_vertices(
     uv_size = struct.calcsize(uv_format)
     decoded_vertices = {}
     missing = object()
+    referenced = set(raw) if vertex_union is not None else None
 
     def decode_vertex(index):
         cached = decoded_vertices.get(index, missing)
@@ -146,9 +150,12 @@ def _prepare_draw_vertices(
         if tc_data:
             tc_offset = index * draw_streams.texcoord_stride + uv_offset
             if tc_offset < 0 or tc_offset + uv_size > len(tc_data):
-                decoded_vertices[index] = None
-                return None
-            u, v = struct.unpack_from(uv_format, tc_data, tc_offset)
+                if referenced is None or index in referenced:
+                    decoded_vertices[index] = None
+                    return None
+                u, v = 0., 1.
+            else:
+                u, v = struct.unpack_from(uv_format, tc_data, tc_offset)
             if not (math.isfinite(u) and math.isfinite(v)):
                 decoded_vertices[index] = None
                 return None
@@ -181,7 +188,9 @@ def _prepare_draw_vertices(
         return None
     raw = valid_raw
 
-    used = sorted(set(raw))
+    used = sorted(set(raw) if vertex_union is None else vertex_union)
+    if any(decode_vertex(vertex) is None for vertex in used):
+        return None
     return PreparedDrawVertices(
         raw_indices=raw, used_vertices=used,
         remap={old: new for new, old in enumerate(used)},
@@ -535,64 +544,61 @@ def pack_animation_position_frame(
         pos_bytes, normal_bytes, bounds_min, bounds_max)
 
 
-def pack_animation_topology_frame(draw, canonical, *, canonical_draw,
-                                   canonical_packed, mod_dir, buffers,
-                                   default_index_size, geometry_convention,
-                                   source=None):
-    """Pack changing IB/UV state against one stable source-vertex mapping.
-
-    The canonical draw already selected the vertices. Validate the new index
-    set once instead of decoding positions repeatedly for every triangle.
-    """
+def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
+                                   mod_dir, buffers, raw_indices, cache, source=None):
+    """Pack distinct IB/UV blocks using the family's stable union mapping."""
     resolve = source.resolve_resource if source is not None else \
         lambda value: safe_resource_path(mod_dir, value)
     exists = source.is_file if source is not None else os.path.exists
-    same = source.same_reference if source is not None else \
-        lambda left, right: left == right
-    ib_path, tc_path = resolve(draw.ib_file), resolve(draw.texcoord_file)
-    if not all(path and exists(path) for path in (ib_path, tc_path)):
+    tc_path = resolve(draw.texcoord_file)
+    if not tc_path or not exists(tc_path):
         return None
-    index_bytes = canonical_packed.indices
-    if (not same(ib_path, resolve(canonical_draw.ib_file))
-            or (draw.start, draw.count, draw.base, draw.index_size)
-            != (canonical_draw.start, canonical_draw.count,
-                canonical_draw.base, canonical_draw.index_size)):
-        raw = buffers.indices(ib_path, draw.start, draw.count,
-                              draw.index_size if draw.index_size is not None else default_index_size)
-        if (not raw or len(raw) % 3
-                or draw.count is not None and len(raw) != draw.count):
+    raw = raw_indices
+    index_key = ("indices", id(raw))
+    index_bytes = cache.get(index_key)
+    if index_bytes is None:
+        if (len(raw) != len(canonical.raw_indices)
+                or not set(raw).issubset(canonical.remap)):
             return None
-        if draw.base:
-            raw = [value + draw.base for value in raw]
-        if set(raw) != set(canonical.used_vertices):
-            return None
-        if geometry_convention.reverse_winding:
-            raw[1::3], raw[2::3] = raw[2::3], raw[1::3]
-        index_bytes = bytearray(len(raw) * 4)
-        for begin in range(0, len(raw), 65536):
-            chunk = raw[begin:begin + 65536]
-            struct.pack_into(f"<{len(chunk)}I", index_bytes, begin * 4,
-                             *(canonical.remap[value] for value in chunk))
-        index_bytes = bytes(index_bytes)
-    if (same(tc_path, canonical.texcoord_path)
-            and (draw.texcoord_stride or canonical.streams.texcoord_stride)
-            == canonical.streams.texcoord_stride):
-        return index_bytes, canonical_packed.texcoords
-    streams = buffers.vertex_streams(
-        canonical.position_path, canonical.streams.position_stride,
-        tc_path, draw.texcoord_stride or canonical.streams.texcoord_stride)
-    uv_bytes = bytearray(len(canonical.used_vertices) * 8) if streams.texcoord_data else None
-    uv_struct = struct.Struct(streams.uv_format)
-    if uv_bytes is not None:
-        for output, vertex in enumerate(canonical.used_vertices):
-            offset = vertex * streams.texcoord_stride + streams.uv_offset
-            if offset < 0 or offset + uv_struct.size > len(streams.texcoord_data):
+        if raw == canonical.raw_indices:
+            index_bytes = canonical_packed.indices
+        else:
+            output = bytearray(len(raw) * 4)
+            for begin in range(0, len(raw), 65536):
+                chunk = raw[begin:begin + 65536]
+                struct.pack_into(f"<{len(chunk)}I", output, begin * 4,
+                                 *(canonical.remap[value] for value in chunk))
+            index_bytes = bytes(output)
+        cache[index_key] = index_bytes
+    stride = draw.texcoord_stride or canonical.streams.texcoord_stride
+    data = buffers.transient(tc_path)
+    uv_key = ("uv", data, stride, id(raw))
+    if uv_key not in cache:
+        if data == canonical.streams.texcoord_data and stride == canonical.streams.texcoord_stride:
+            if data and (max(raw) * stride + canonical.streams.uv_offset
+                         + struct.calcsize(canonical.streams.uv_format) > len(data)):
                 return None
-            u, v = uv_struct.unpack_from(streams.texcoord_data, offset)
-            if not (math.isfinite(u) and math.isfinite(v)):
-                return None
-            struct.pack_into("<ff", uv_bytes, output * 8, u, 1. - v)
-    return index_bytes, bytes(uv_bytes) if uv_bytes is not None else None
+            uv_bytes = canonical_packed.texcoords
+        else:
+            uv_offset, uv_format = _detect_uv_best(tc_path, stride, data=data)
+            uv_struct = struct.Struct(uv_format)
+            output = bytearray(len(canonical.used_vertices) * 8) if data else None
+            referenced = set(raw)
+            if output is not None:
+                for index, vertex in enumerate(canonical.used_vertices):
+                    offset = vertex * stride + uv_offset
+                    if offset < 0 or offset + uv_struct.size > len(data):
+                        if vertex in referenced:
+                            return None
+                        u, v = 0., 1.
+                    else:
+                        u, v = uv_struct.unpack_from(data, offset)
+                    if not (math.isfinite(u) and math.isfinite(v)):
+                        return None
+                    struct.pack_into("<ff", output, index * 8, u, 1. - v)
+            uv_bytes = bytes(output) if output is not None else None
+        cache[uv_key] = uv_bytes
+    return index_bytes, cache[uv_key]
 
 
 __all__ = [

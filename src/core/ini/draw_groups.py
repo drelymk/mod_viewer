@@ -1,6 +1,7 @@
 """Assembly of resolved ``DrawCall`` records into component draw groups."""
 
 import re
+from dataclasses import replace
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
 from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
@@ -344,43 +345,14 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                         family_auto_sources.get(family, []))
         draws = []
         animation_bindings = []
-        for number, authored in enumerate(authored_draws, 1):
-            # None with authored IB assignments is unresolved, not the group's
-            # first replacement. Keep it in the scan without inventing geometry.
-            if (info.get("index_binding_history") and authored.index_resource is None
-                    and authored.count is not None):
-                continue
+        def resolve_geometry(authored):
             draw = DrawCall(
-                label=f"{label}-{number}", count=authored.count,
-                start=authored.start, base=authored.base,
-                conditions=authored.conditions,
-                animation_conditions=authored.animation_conditions,
-                animation_binding_join=authored.animation_binding_join,
-                sources=[authored.source] if authored.source else [],
-                occurrence=authored.occurrence,
+                count=authored.count, start=authored.start, base=authored.base,
                 ib_file=ib_file, index_size=index_size,
                 position_file=position_file, position_stride=position_stride,
                 texcoord_file=texcoord_file, texcoord_stride=texcoord_stride,
-                normal_source=group_normal_source,
-                geometry_match=authored.geometry_match,
-                skinning_bone_offset=authored.skinning_bone_offset,
-                texture_provenance=dict(authored.texture_provenance),
-                slot_textures=_resolve_slot_texture_files(
-                    authored, resolve_texture_file),
-            )
+                normal_source=group_normal_source)
             effective_ib = authored.index_resource or ib_resource
-            effective_ib_info = _res_get(resources, effective_ib)
-            if authored.count is None:
-                if not local_binding:
-                    draw.sources = list(auto_sources)
-                if (effective_ib_info.get("index_editable") and
-                        (local_binding or (not local and family in auto_families))):
-                    draw.auto_draw = {
-                        "component": section_name, "resource": effective_ib,
-                        "format": effective_ib_info.get("format"),
-                        "family": () if local else auto_families[family],
-                        "guard": () if local else family_auto_guards[family],
-                    }
             if effective_ib != ib_resource:
                 resolved_ib = resolve_ib_file(effective_ib)
                 if resolved_ib:
@@ -475,6 +447,55 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             draw.normal_source = _resolve_normal_source(
                 effective_vertex_resources, resources, draw.position_file,
                 draw.position_stride, resolve_vertex_info)
+            return draw, effective_position_resource, histories
+
+        for number, authored in enumerate(authored_draws, 1):
+            # None with authored IB assignments is unresolved, not the group's
+            # first replacement. Keep it in the scan without inventing geometry.
+            if (info.get("index_binding_history") and authored.index_resource is None
+                    and authored.count is not None):
+                continue
+            draw, effective_position_resource, histories = resolve_geometry(authored)
+            draw = replace(draw,
+                label=f"{label}-{number}", count=authored.count,
+                start=authored.start, base=authored.base,
+                conditions=authored.conditions,
+                animation_conditions=authored.animation_conditions,
+                sources=[authored.source] if authored.source else [],
+                occurrence=authored.occurrence,
+                geometry_match=authored.geometry_match,
+                skinning_bone_offset=authored.skinning_bone_offset,
+                texture_provenance=dict(authored.texture_provenance),
+                slot_textures=_resolve_slot_texture_files(
+                    authored, resolve_texture_file),
+            )
+            effective_ib = authored.index_resource or ib_resource
+            effective_ib_info = _res_get(resources, effective_ib)
+            if authored.count is None:
+                if not local_binding:
+                    draw.sources = list(auto_sources)
+                if (effective_ib_info.get("index_editable") and
+                        (local_binding or (not local and family in auto_families))):
+                    draw.auto_draw = {
+                        "component": section_name, "resource": effective_ib,
+                        "format": effective_ib_info.get("format"),
+                        "family": () if local else auto_families[family],
+                        "guard": () if local else family_auto_guards[family],
+                    }
+            vertex_resources = authored.vertex_resources
+            bindings = authored.animation_bindings
+            for binding in bindings:
+                frame_draw, _, _ = resolve_geometry(replace(authored, **binding))
+                draw.animation_bindings.append({
+                    "animation_conditions": binding["animation_conditions"],
+                    **{field: getattr(frame_draw, field) for field in (
+                        "ib_file", "index_size", "position_file", "position_stride",
+                        "texcoord_file", "texcoord_stride", "normal_source")},
+                })
+            if draw.animation_bindings:
+                for field, value in draw.animation_bindings[0].items():
+                    if field != "animation_conditions":
+                        setattr(draw, field, value)
             # AuthoredDrawCall.vertex_resources is the complete effective
             # state captured at this draw, including CommandList bindings and
             # explicit nulls.  Do not merge a section-end snapshot here: a

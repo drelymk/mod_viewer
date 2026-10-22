@@ -25,6 +25,7 @@ from ..resource_paths import safe_resource_path
 from .animation_frames import (
     _animation_clock_dict,
     animation_draws,
+    animation_vertex_union,
     _prepare_animation_family,
 )
 from .compute_geometry import (
@@ -78,8 +79,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         animation_clocks[animation_id] = value
     used_clock_ids = set()
     gimi_shared = {}
-    animation_frame_cache = {}
-    animation_ranges = set()
     animation_diagnostics = {
         "animation_family_count": 0,
         "animation_frame_count": 0,
@@ -87,7 +86,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         "animation_prepare_seconds": 0.0,
         "animation_pack_seconds": 0.0,
         "animation_geometry_bytes": 0,
-        "animation_reused_family_count": 0,
     }
 
     for group in groups:
@@ -118,13 +116,18 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             prepared = None
             if family is not None:
                 prepare_started = time.perf_counter()
+                vertex_union = animation_vertex_union(
+                    family, mod_dir=mod_dir, buffers=buffers,
+                    default_index_size=index_size,
+                    geometry_convention=geometry_convention, source=source)
                 prepared = _prepare_draw_vertices(
                     draw, group, mod_dir=mod_dir,
                     default_streams=default_streams,
                     default_index_size=index_size, buffers=buffers,
                     geometry_convention=geometry_convention, source=source,
                     zero_out_of_bounds=bool(family.get("position_switching")
-                                            or draw.animation_binding_join))
+                                            or family.get("binding_frames")),
+                    vertex_union=vertex_union)
                 animation_diagnostics["animation_prepare_calls"] += 1
                 animation_diagnostics["animation_prepare_seconds"] += (
                     time.perf_counter() - prepare_started)
@@ -152,12 +155,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     default_streams=default_streams,
                     default_index_size=index_size, buffers=buffers,
                     geometry_convention=geometry_convention, source=source,
-                    geometry=geometry, diagnostics=animation_diagnostics,
-                    frame_cache=animation_frame_cache)
-                if animation_payload is None:
-                    # A rejected family falls back to its representative
-                    # frame, never a partially mapped mesh.
-                    animation_payload = None
+                    geometry=geometry, diagnostics=animation_diagnostics)
 
             gimi_payload = None
             gimi = group.get("_compute_animation")
@@ -227,6 +225,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     if animation_payload.get(f"{attribute}_ref") is not None:
                         animation_geometry[attribute] = animation_payload[f"{attribute}_ref"]
                         animation_geometry[f"{prefix}_frame_bytes"] = animation_payload[f"{prefix}_frame_bytes"]
+                        animation_geometry[f"{prefix}_frames"] = animation_payload[f"{prefix}_frames"]
                 entry["animation_geometry"] = animation_geometry
                 used_clock_ids.update(animation_payload["clock_ids"])
                 animation_diagnostics["animation_family_count"] += 1
@@ -236,11 +235,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                                   animation_payload.get("texcoords_ref")):
                     if reference is None:
                         continue
-                    region = (reference["offset"], reference["length"])
-                    if region not in animation_ranges:
-                        animation_ranges.add(region)
-                        animation_diagnostics["animation_geometry_bytes"] += \
-                            reference["length"]
+                    animation_diagnostics["animation_geometry_bytes"] += reference["length"]
             if gimi_payload is not None:
                 entry["animation_id"] = gimi_payload["track_id"]
                 entry["animation_geometry"] = gimi_payload

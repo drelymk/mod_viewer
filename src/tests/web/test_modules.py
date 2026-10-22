@@ -2272,10 +2272,11 @@ def test_control_conditions_preserve_or_groups_negation_and_contradictions(modul
     assert result == [True, False, True, False, True]
 
 
-def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page, tmp_path):
+@pytest.mark.parametrize("change", ["all", "indices"], ids=["all-attributes", "topology-only"])
+def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page, tmp_path, change):
     from tests.support.animations import joined_baked_mod, load_mod
 
-    _, built = load_mod(joined_baked_mod(tmp_path), tmp_path)
+    _, built = load_mod(joined_baked_mod(tmp_path, change=change), tmp_path)
     entry = list(built.meshes.values())[-1]
     _prepare_compute_clock(module_page)
     _set_geometry_blob(module_page, built.geometry)
@@ -2302,6 +2303,11 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
       const canonical = snapshot();
       runtime.setAnimationFrame(1);
       const selected = snapshot();
+      const indexVersion = indexAttribute.version, uvVersion = uvAttribute.version;
+      runtime.setAnimationFrame(2);
+      const unchangedIndex = indexAttribute.version === indexVersion;
+      const uvUploaded = uvAttribute.version !== uvVersion;
+      runtime.setAnimationFrame(1);
       mesh.userData.animationSuspended = true;
       runtime.setAnimationFrame(2);
       const suspended = snapshot();
@@ -2315,15 +2321,22 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
       const disabled = snapshot();
       const stable = geometry.index === indexAttribute && geometry.attributes.uv === uvAttribute;
       runtime.resetAnimationRuntime();
-      return {registered,canonical,selected,suspended,restored,resumed,disabled,stable};
+      return {registered,canonical,selected,suspended,restored,resumed,disabled,stable,
+        unchangedIndex,uvUploaded};
     }''', {'entry': entry, 'clocks': built.animations})
     assert result['registered'] and result['stable']
+    assert result['unchangedIndex']
+    assert result['uvUploaded'] == (change == "all")
     assert result['canonical'] == result['restored'] == result['disabled']
     assert result['selected'] == result['suspended']
-    assert result['selected'] == {'z': 1, 'indices': [0, 2, 1, 1, 3, 2],
-                                  'uv': [.125, .875, .625, .875, .125, .375, .625, .375]}
-    assert result['resumed'] == {'z': 2, 'indices': [0, 2, 1, 1, 3, 2],
-                                 'uv': [.25, .75, .75, .75, .25, .25, .75, .25]}
+    assert result['selected'] == {'z': 1 if change == "all" else 0,
+                                  'indices': [0, 2, 1, 1, 3, 2],
+                                  'uv': ([.125, .875, .625, .875, .125, .375, .625, .375]
+                                         if change == "all" else result['canonical']['uv'])}
+    assert result['resumed'] == {'z': 2 if change == "all" else 0,
+                                 'indices': [0, 2, 1, 1, 3, 2],
+                                 'uv': ([.25, .75, .75, .75, .25, .25, .75, .25]
+                                        if change == "all" else result['canonical']['uv'])}
 
 
 def test_baked_playback_pause_seek_controls_and_ownership_lifecycle(module_page):

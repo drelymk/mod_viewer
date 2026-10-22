@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
+from .animation_clocks import frame_condition
 from .command_phases import parse_command_line, run_target_phases
 
 from ..geometry.draw_call import AuthoredDrawCall, SlotTextureBinding
@@ -190,8 +191,15 @@ def _index_draws_at_join(authored, history, visibility_vars, vertex_history,
     vertex_histories = {
         slot: [item for item in vertex_history if item["slot"] == slot]
         for slot in authored.vertex_resources}
+    # Partition ordinary guards only. Frame writes are an ordered program on
+    # this draw, not independent renderable alternatives.
+    def ordinary(item):
+        conditions, _ = _split_animation_conditions(item["conditions"], animation_vars)
+        return {**item, "conditions": conditions}
+
     draws = [authored]
     for assignments in [history, *vertex_histories.values()]:
+        assignments = [ordinary(item) for item in assignments]
         resolved = []
         for draw in draws:
             remaining = draw.binding_conditions
@@ -228,15 +236,57 @@ def _index_draws_at_join(authored, history, visibility_vars, vertex_history,
     for draw in draws:
         draw.conditions, draw.animation_conditions = _split_animation_conditions(
             draw.conditions, animation_vars)
-        draw.animation_binding_join = any(draw.animation_conditions)
         draw.index_resource = _buffer_resource_at_draw(
-            history, draw.binding_conditions, None) if history else authored.index_resource
+            [ordinary(item) for item in history], draw.binding_conditions, None
+        ) if history else authored.index_resource
         draw.vertex_resources = {}
         for slot, assignments in vertex_histories.items():
-            value = _buffer_resource_at_draw(assignments, draw.binding_conditions, missing)
+            value = _buffer_resource_at_draw(
+                [ordinary(item) for item in assignments], draw.binding_conditions, missing)
             if value is not missing:
                 draw.vertex_resources[slot] = value
+        draw.animation_bindings = _animation_binding_snapshots(
+            draw, history, vertex_history, animation_vars)
+        if draw.animation_bindings:
+            first = draw.animation_bindings[0]
+            draw.index_resource = first["index_resource"]
+            draw.vertex_resources = first["vertex_resources"]
     return draws
+
+
+def _animation_binding_snapshots(authored, history, vertex_history, animation_vars):
+    """Capture compact frame selections without copying authored draw state."""
+    candidates = {}
+    for item in [*history, *vertex_history]:
+        _, animated = _split_animation_conditions(item["conditions"], animation_vars)
+        candidate = frame_condition(animated, animation_vars)
+        if candidate is not None:
+            candidates[candidate] = animated
+    result = []
+    missing = object()
+    for _, animated in sorted(candidates.items()):
+        conditions = [group for group in dnf_and(
+            authored.binding_conditions or DNF_TRUE, animated)
+            if _condition_group_is_consistent(group)]
+        if not conditions:
+            continue
+        vertices = dict(authored.vertex_resources)
+        for slot in {item["slot"] for item in vertex_history}:
+            value = _buffer_resource_at_draw(
+                [item for item in vertex_history if item["slot"] == slot],
+                conditions, missing)
+            if value is not missing:
+                vertices[slot] = value
+            else:
+                vertices.pop(slot, None)
+        result.append({
+            "animation_conditions": animated,
+            "binding_conditions": conditions,
+            "index_resource": (_buffer_resource_at_draw(history, conditions, None)
+                               if history else authored.index_resource),
+            "vertex_resources": vertices,
+        })
+    return result
 
 
 def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,

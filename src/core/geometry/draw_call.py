@@ -38,7 +38,7 @@ class AuthoredDrawCall:
     # Binding guards distinguish streams without becoming visibility controls.
     binding_conditions: list = field(default_factory=list)
     animation_conditions: list = field(default_factory=list)
-    animation_binding_join: bool = False
+    animation_bindings: list = field(default_factory=list)
     source: dict | None = None
     occurrence: DrawOccurrence | tuple | None = None
     index_resource: str | None = None
@@ -97,8 +97,8 @@ class DrawCall(MutableMapping):
     base: int = 0
     conditions: list = field(default_factory=list)
     animation_conditions: list = field(default_factory=list)
-    # Frame alternatives of one authored draw, rather than separate draw rows.
-    animation_binding_join: bool = False
+    # Ordered geometry snapshots of one authored draw's frame bindings.
+    animation_bindings: list = field(default_factory=list)
     sources: list = field(default_factory=list)
     # Authored provenance used to distinguish separate displayed rows, not
     # rendered output and therefore not part of render_identity().
@@ -152,7 +152,6 @@ class DrawCall(MutableMapping):
     }
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
         "label", "conditions", "animation_conditions", "sources",
-        "animation_binding_join",
         "occurrence", "geometry_match", "auto_draw",
         "slot_textures", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
@@ -165,6 +164,7 @@ class DrawCall(MutableMapping):
         "position_file", "position_stride",
         "texcoord_file", "texcoord_stride",
         "normal_source",
+        "animation_bindings",
         "texture_default_file", "texture_variants", "texture_assignments",
         "normal_map_default_file", "normal_map_variants",
         "light_map_default_file", "light_map_variants",
@@ -240,8 +240,6 @@ class DrawCall(MutableMapping):
     # MutableMapping compatibility for existing low-level consumers.
     def _present(self, key):
         value = getattr(self, key)
-        if key == "animation_binding_join":
-            return value is True
         if key in self._ALWAYS_PRESENT:
             return True
         if isinstance(value, (list, dict)):

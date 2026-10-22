@@ -387,7 +387,7 @@ function restoreCanonical(mesh) {
     attribute.needsUpdate = true;
   }
   if (position && base && position.array.length === base.length) {
-    changed = position.array.some((value, index) => value !== base[index]);
+    changed = position.array.some((value, index) => value !== base[index]) || changed;
     position.array.set(base);
     position.needsUpdate = true;
   }
@@ -401,6 +401,10 @@ function restoreCanonical(mesh) {
     normal.needsUpdate = true;
   } else if (normal) {
     mesh.geometry.computeVertexNormals?.();
+  }
+  if (meshState) {
+    meshState.lastIndexFrame = -1;
+    meshState.lastTexcoordFrame = -1;
   }
   return changed;
 }
@@ -449,13 +453,30 @@ function applyFrame(mesh, state, frame) {
   position.array.set(positionFrame);
   position.needsUpdate = true;
 
-  for (const [attribute, values, frameSize] of [
-    [mesh.geometry?.index, state.indices, state.indexFrameValues],
-    [mesh.geometry?.attributes?.uv, state.texcoords, state.texcoordFrameFloats],
+  for (const [attribute, values, frameSize, selections, base, last] of [
+    [
+      mesh.geometry?.index,
+      state.indices,
+      state.indexFrameValues,
+      state.indexFrames,
+      state.baseIndices,
+      'lastIndexFrame',
+    ],
+    [
+      mesh.geometry?.attributes?.uv,
+      state.texcoords,
+      state.texcoordFrameFloats,
+      state.texcoordFrames,
+      state.baseTexcoords,
+      'lastTexcoordFrame',
+    ],
   ]) {
     if (!attribute || !values) continue;
-    attribute.array.set(values.subarray(index * frameSize, (index + 1) * frameSize));
+    const selection = selections[index];
+    if (selection === state[last]) continue;
+    attribute.array.set(selection === -1 ? base : values.subarray(selection * frameSize, (selection + 1) * frameSize));
     attribute.needsUpdate = true;
+    state[last] = selection;
   }
 
   const normal = mesh.geometry?.attributes?.normal;
@@ -829,9 +850,9 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
   const texcoordFrameFloats = positiveInteger(geometry.texcoord_frame_bytes) / 4;
   const indices = geometry.indices ? decodeU32(geometry.indices) : null;
   const texcoords = geometry.texcoords ? decodeF32(geometry.texcoords) : null;
-  for (const [attribute, values, frameSize, supplied] of [
-    [mesh.geometry?.index, indices, indexFrameValues, geometry.indices],
-    [mesh.geometry?.attributes?.uv, texcoords, texcoordFrameFloats, geometry.texcoords],
+  for (const [attribute, values, frameSize, supplied, selections] of [
+    [mesh.geometry?.index, indices, indexFrameValues, geometry.indices, geometry.index_frames],
+    [mesh.geometry?.attributes?.uv, texcoords, texcoordFrameFloats, geometry.texcoords, geometry.texcoord_frames],
   ]) {
     if (
       supplied &&
@@ -839,7 +860,10 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
         !values ||
         !Number.isInteger(frameSize) ||
         frameSize !== attribute.array.length ||
-        values.length !== frameSize * frameCount)
+        !Array.isArray(selections) ||
+        selections.length !== frameCount ||
+        values.length % frameSize !== 0 ||
+        !selections.every((value) => Number.isInteger(value) && value >= -1 && value < values.length / frameSize))
     )
       return false;
   }
@@ -853,6 +877,10 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
     texcoords,
     indexFrameValues,
     texcoordFrameFloats,
+    indexFrames: geometry.index_frames,
+    texcoordFrames: geometry.texcoord_frames,
+    lastIndexFrame: -1,
+    lastTexcoordFrame: -1,
     baseIndices: indices ? mesh.geometry.index.array.slice() : null,
     baseTexcoords: texcoords ? mesh.geometry.attributes.uv.array.slice() : null,
     frameCount,

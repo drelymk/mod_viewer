@@ -197,12 +197,11 @@ def _control_semantic_projection(parsed, context, pending_new_sections=None,
 
 
 def _gating_vars_from_groups(groups, mod_dir=None, game_profile=None,
-                             active_mesh_keys=None, source=None, animations=None):
+                             active_mesh_keys=None, source=None):
     """Collect gating variables without requiring geometry files."""
     if active_mesh_keys is not None:
         semantics = build_mesh_semantics(
-            groups, mod_dir, game_profile=game_profile, source=source,
-            animations=animations)
+            groups, mod_dir, game_profile=game_profile, source=source)
         return _gating_vars_from_mesh_semantics(semantics, active_mesh_keys)
 
     return _gating_vars_from_entries(
@@ -223,7 +222,7 @@ def load_control_state(context, pending_new_sections=None,
     enrich_mod_analysis(parsed, context)
     gating_vars = _gating_vars_from_groups(
                 parsed.groups, context.mod_dir, parsed.game.game, active_mesh_keys,
-                source=context.source, animations=parsed.animations)
+                source=context.source)
     return _control_semantic_projection(
         parsed, context, pending_new_sections, gating_vars=gating_vars,
         menu_image_source=menu_image_source)
