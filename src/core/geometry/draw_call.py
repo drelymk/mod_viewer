@@ -38,6 +38,7 @@ class AuthoredDrawCall:
     # Binding guards distinguish streams without becoming visibility controls.
     binding_conditions: list = field(default_factory=list)
     animation_conditions: list = field(default_factory=list)
+    animation_bindings: list = field(default_factory=list)
     source: dict | None = None
     occurrence: DrawOccurrence | tuple | None = None
     index_resource: str | None = None
@@ -96,6 +97,8 @@ class DrawCall(MutableMapping):
     base: int = 0
     conditions: list = field(default_factory=list)
     animation_conditions: list = field(default_factory=list)
+    # Ordered geometry snapshots of one authored draw's frame bindings.
+    animation_bindings: list = field(default_factory=list)
     sources: list = field(default_factory=list)
     # Authored provenance used to distinguish separate displayed rows, not
     # rendered output and therefore not part of render_identity().
@@ -161,6 +164,7 @@ class DrawCall(MutableMapping):
         "position_file", "position_stride",
         "texcoord_file", "texcoord_stride",
         "normal_source",
+        "animation_bindings",
         "texture_default_file", "texture_variants", "texture_assignments",
         "normal_map_default_file", "normal_map_variants",
         "light_map_default_file", "light_map_variants",

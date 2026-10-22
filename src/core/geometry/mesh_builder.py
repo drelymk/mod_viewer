@@ -24,7 +24,8 @@ from .skinning import SkinningManifestEntry
 from ..resource_paths import safe_resource_path
 from .animation_frames import (
     _animation_clock_dict,
-    _animation_families,
+    animation_draws,
+    animation_vertex_union,
     _prepare_animation_family,
 )
 from .compute_geometry import (
@@ -109,46 +110,24 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         # Preserve the original eager group-IB load and its build-scoped cache.
         buffers.raw(ib_path)
         unique = deduplicate_draws(group, max_draws=max_draws)
-        families = _animation_families(
-            unique, animation_clocks.values(), group=group)
-        family_by_draw = {}
-        for family in families:
-            family_by_draw[id(family["base_draw"])] = family
-            # Direct drawindexed families use the authored DrawCall objects
-            # themselves; command-list families use cloned frame views.  The
-            # latter are not in ``unique``, but mapping both forms keeps the
-            # original direct-family behavior intact.
-            for family_draw in family["draws"].values():
-                family_by_draw.setdefault(id(family_draw), family)
         group_entries = []
-        processed_families = set()
 
-        for draw in unique:
-            family = family_by_draw.get(id(draw))
-            if family is not None:
-                family_key = id(family)
-                if family_key in processed_families:
-                    continue
-                processed_families.add(family_key)
-                canonical_draw = family["draws"].get(
-                    int(family["frame_start"]))
-                if canonical_draw is None:
-                    # An incomplete family still gets one safe static draw.
-                    canonical_draw = family["draws"][
-                        min(family["draws"])]
-                if canonical_draw is None:
-                    continue
-                draw = canonical_draw
-
+        for draw, family in animation_draws(unique, animation_clocks.values(), group):
             prepared = None
             if family is not None:
                 prepare_started = time.perf_counter()
+                vertex_union = animation_vertex_union(
+                    family, mod_dir=mod_dir, buffers=buffers,
+                    default_index_size=index_size,
+                    geometry_convention=geometry_convention, source=source)
                 prepared = _prepare_draw_vertices(
                     draw, group, mod_dir=mod_dir,
                     default_streams=default_streams,
                     default_index_size=index_size, buffers=buffers,
                     geometry_convention=geometry_convention, source=source,
-                    zero_out_of_bounds=family.get("position_switching", False))
+                    zero_out_of_bounds=bool(family.get("position_switching")
+                                            or family.get("binding_frames")),
+                    vertex_union=vertex_union)
                 animation_diagnostics["animation_prepare_calls"] += 1
                 animation_diagnostics["animation_prepare_seconds"] += (
                     time.perf_counter() - prepare_started)
@@ -177,10 +156,6 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     default_index_size=index_size, buffers=buffers,
                     geometry_convention=geometry_convention, source=source,
                     geometry=geometry, diagnostics=animation_diagnostics)
-                if animation_payload is None:
-                    # A rejected family falls back to its representative
-                    # frame, never a partially mapped mesh.
-                    animation_payload = None
 
             gimi_payload = None
             gimi = group.get("_compute_animation")
@@ -246,15 +221,21 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         "normals_ref"]
                     animation_geometry["normal_frame_bytes"] = \
                         animation_payload["normal_frame_bytes"]
+                for attribute, prefix in (("indices", "index"), ("texcoords", "texcoord")):
+                    if animation_payload.get(f"{attribute}_ref") is not None:
+                        animation_geometry[attribute] = animation_payload[f"{attribute}_ref"]
+                        animation_geometry[f"{prefix}_frame_bytes"] = animation_payload[f"{prefix}_frame_bytes"]
+                        animation_geometry[f"{prefix}_frames"] = animation_payload[f"{prefix}_frames"]
                 entry["animation_geometry"] = animation_geometry
                 used_clock_ids.update(animation_payload["clock_ids"])
                 animation_diagnostics["animation_family_count"] += 1
-                animation_diagnostics["animation_geometry_bytes"] += (
-                    animation_payload["position_frame_bytes"]
-                    * animation_payload["frame_count"]
-                    + (animation_payload["normal_frame_bytes"]
-                       * animation_payload["frame_count"]
-                       if animation_payload["normals_ref"] is not None else 0))
+                for reference in (animation_payload["positions_ref"],
+                                  animation_payload["normals_ref"],
+                                  animation_payload.get("indices_ref"),
+                                  animation_payload.get("texcoords_ref")):
+                    if reference is None:
+                        continue
+                    animation_diagnostics["animation_geometry_bytes"] += reference["length"]
             if gimi_payload is not None:
                 entry["animation_id"] = gimi_payload["track_id"]
                 entry["animation_geometry"] = gimi_payload

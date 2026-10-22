@@ -1,6 +1,7 @@
 """Geometry-free draw projection used by staged semantic refreshes."""
 
 import os
+from dataclasses import replace
 
 from .draw_call import DrawCall
 from .identity import mesh_identity_for_draw
@@ -66,10 +67,9 @@ def deduplicate_draws(group, max_draws=0):
     for key in order:
         entry = merged[key]
         draw, alternatives = entry["draw"], entry["alts"]
-        draw.conditions = (
-            [] if any(not group for group in alternatives) else alternatives)
-        draw.sources = entry["sources"]
-        unique.append(draw)
+        unique.append(replace(
+            draw, conditions=([] if any(not group for group in alternatives) else alternatives),
+            sources=entry["sources"]))
     return unique[:max_draws] if max_draws else unique
 
 

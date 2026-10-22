@@ -235,6 +235,15 @@ of documentation, comments and tests; use portable fixtures instead.
   drawn vertices. Changes to unused record fields, unreferenced vertices or
   normals that are not published cannot activate playback. Keep this decision
   in backend frame preparation rather than scanning frontend frame data.
+- Joined buffer animations form one ordered sequence per authored draw. Resolve
+  inherited bindings under the same guard; frame clauses never become visibility
+  controls. Deduplicate whole sequences while preserving occurrences and source guards.
+- Joined frames share one union vertex mapping across all attributes, with compatible
+  index counts and valid referenced UVs; unused UV records may be absent. Unsupported
+  families retain one canonical draw. Playback and ownership release restore every
+  animated attribute from the canonical baseline.
+- Prove immutable topology/UV state from sources, layouts, ranges and contents before
+  using position-only packing. Keep preparation memory bounded across frames.
 - Execute program assignments, resets, conditions and dispatches in authored
   order. Compile numeric and boolean expressions through the shared condition
   syntax tree; select if/elif/else branches once on entry, including child calls.

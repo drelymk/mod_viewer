@@ -2272,6 +2272,82 @@ def test_control_conditions_preserve_or_groups_negation_and_contradictions(modul
     assert result == [True, False, True, False, True]
 
 
+@pytest.mark.parametrize("change", ["all", "indices"], ids=["all-attributes", "topology-only"])
+def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page, tmp_path, change):
+    from tests.support.animations import joined_baked_mod, load_mod
+
+    _, built = load_mod(joined_baked_mod(tmp_path, change=change), tmp_path)
+    entry = list(built.meshes.values())[-1]
+    _prepare_compute_clock(module_page)
+    _set_geometry_blob(module_page, built.geometry)
+    result = module_page.evaluate('''async ({entry, clocks}) => {
+      const T = await import('three/webgpu');
+      const {decodeF32, decodeU32} = await import('./js/textures/decode.js');
+      const runtime = window.__animation, controls = window.__controls;
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.BufferAttribute(decodeF32(entry.pos).slice(), 3));
+      geometry.setAttribute('normal', new T.BufferAttribute(decodeF32(entry.normal).slice(), 3));
+      geometry.setAttribute('uv', new T.BufferAttribute(decodeF32(entry.uv).slice(), 2));
+      geometry.setIndex(new T.BufferAttribute(decodeU32(entry.idx).slice(), 1));
+      const mesh = new T.Mesh(geometry);
+      mesh.userData.basePositions = geometry.attributes.position.array.slice();
+      mesh.userData.baseNormals = geometry.attributes.normal.array.slice();
+      const snapshot = () => ({z:geometry.attributes.position.array[2],
+        indices:[...geometry.index.array], uv:[...geometry.attributes.uv.array]});
+      const indexAttribute = geometry.index, uvAttribute = geometry.attributes.uv;
+      const clock = Object.values(clocks)[0];
+      clock.conditions = [[{var:'enabled',value:'1'}]];
+      controls.setControlValue('enabled','1');
+      const registered = runtime.registerAnimatedMesh(mesh,entry.animation_id,entry.animation_geometry,clocks);
+      window.__frame(1000);
+      const canonical = snapshot();
+      const baseVersions = [indexAttribute.version,uvAttribute.version];
+      runtime.resumeAnimatedMesh(mesh);
+      const canonicalNoUpload = indexAttribute.version === baseVersions[0] &&
+        uvAttribute.version === baseVersions[1];
+      runtime.setAnimationFrame(1);
+      const selected = snapshot();
+      const indexVersion = indexAttribute.version, uvVersion = uvAttribute.version;
+      runtime.setAnimationFrame(2);
+      const unchangedIndex = indexAttribute.version === indexVersion;
+      const uvUploaded = uvAttribute.version !== uvVersion;
+      runtime.setAnimationFrame(1);
+      mesh.userData.animationSuspended = true;
+      runtime.setAnimationFrame(2);
+      const suspended = snapshot();
+      mesh.userData.animationSuspended = false;
+      runtime.resumeAnimatedMesh(mesh);
+      const restored = snapshot();
+      const restoredVersions = [indexAttribute.version,uvAttribute.version];
+      runtime.resumeAnimatedMesh(mesh);
+      const repeatedRestoreNoUpload = indexAttribute.version === restoredVersions[0] &&
+        uvAttribute.version === restoredVersions[1];
+      runtime.setAnimationFrame(2);
+      const resumed = snapshot();
+      runtime.setAnimationPaused(false); window.__frame(2000);
+      controls.setControlValue('enabled','0'); runtime.wakeAnimationRuntime(); window.__frame(2001);
+      const disabled = snapshot();
+      const stable = geometry.index === indexAttribute && geometry.attributes.uv === uvAttribute;
+      runtime.resetAnimationRuntime();
+      return {registered,canonical,selected,suspended,restored,resumed,disabled,stable,
+        unchangedIndex,uvUploaded,canonicalNoUpload,repeatedRestoreNoUpload};
+    }''', {'entry': entry, 'clocks': built.animations})
+    assert result['registered'] and result['stable']
+    assert result['canonicalNoUpload'] and result['repeatedRestoreNoUpload']
+    assert result['unchangedIndex']
+    assert result['uvUploaded'] == (change == "all")
+    assert result['canonical'] == result['restored'] == result['disabled']
+    assert result['selected'] == result['suspended']
+    assert result['selected'] == {'z': 1 if change == "all" else 0,
+                                  'indices': [0, 2, 1, 1, 3, 2],
+                                  'uv': ([.125, .875, .625, .875, .125, .375, .625, .375]
+                                         if change == "all" else result['canonical']['uv'])}
+    assert result['resumed'] == {'z': 2 if change == "all" else 0,
+                                 'indices': [0, 2, 1, 1, 3, 2],
+                                 'uv': ([.25, .75, .75, .75, .25, .25, .75, .25]
+                                        if change == "all" else result['canonical']['uv'])}
+
+
 def test_baked_playback_pause_seek_controls_and_ownership_lifecycle(module_page):
     _prepare_compute_clock(module_page)
     result = module_page.evaluate('''async () => {

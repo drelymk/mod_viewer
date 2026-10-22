@@ -1,6 +1,6 @@
 // Playback for backend-normalized, frame-baked mesh attributes.
 
-import { decodeF32, decodeI32 } from '../textures/decode.js';
+import { decodeF32, decodeI32, decodeU32 } from '../textures/decode.js';
 import { getControlValue, setControlValue, dnfSatisfied } from '../editing/control-state.js';
 import { evaluateExpression, evaluateCondition } from '../editing/conditions.js';
 import { invalidateCharacterShadowGeometry, invalidateCharacterShadowMap } from '../scene/shadow-invalidation.js';
@@ -377,8 +377,19 @@ function restoreCanonical(mesh) {
     ? mesh.userData?.humanoidRestPositions || mesh.userData?.basePositions
     : mesh.userData?.basePositions;
   let changed = false;
+  for (const [attribute, baseArray] of [
+    [mesh.geometry?.index, meshState?.baseIndices],
+    [mesh.geometry?.attributes?.uv, meshState?.baseTexcoords],
+  ]) {
+    if (!attribute || !baseArray || attribute.array.length !== baseArray.length) continue;
+    if (attribute.array.some((value, index) => value !== baseArray[index])) {
+      attribute.array.set(baseArray);
+      attribute.needsUpdate = true;
+      changed = true;
+    }
+  }
   if (position && base && position.array.length === base.length) {
-    changed = position.array.some((value, index) => value !== base[index]);
+    changed = position.array.some((value, index) => value !== base[index]) || changed;
     position.array.set(base);
     position.needsUpdate = true;
   }
@@ -392,6 +403,10 @@ function restoreCanonical(mesh) {
     normal.needsUpdate = true;
   } else if (normal) {
     mesh.geometry.computeVertexNormals?.();
+  }
+  if (meshState) {
+    meshState.lastIndexFrame = -1;
+    meshState.lastTexcoordFrame = -1;
   }
   return changed;
 }
@@ -439,6 +454,32 @@ function applyFrame(mesh, state, frame) {
   if (!position || position.array.length !== positionFrame.length) return false;
   position.array.set(positionFrame);
   position.needsUpdate = true;
+
+  for (const [attribute, values, frameSize, selections, base, last] of [
+    [
+      mesh.geometry?.index,
+      state.indices,
+      state.indexFrameValues,
+      state.indexFrames,
+      state.baseIndices,
+      'lastIndexFrame',
+    ],
+    [
+      mesh.geometry?.attributes?.uv,
+      state.texcoords,
+      state.texcoordFrameFloats,
+      state.texcoordFrames,
+      state.baseTexcoords,
+      'lastTexcoordFrame',
+    ],
+  ]) {
+    if (!attribute || !values) continue;
+    const selection = selections[index];
+    if (selection === state[last]) continue;
+    attribute.array.set(selection === -1 ? base : values.subarray(selection * frameSize, (selection + 1) * frameSize));
+    attribute.needsUpdate = true;
+    state[last] = selection;
+  }
 
   const normal = mesh.geometry?.attributes?.normal;
   if (state.normals && normal) {
@@ -807,12 +848,43 @@ export function registerAnimatedMesh(mesh, animationId, geometry, animationClock
   if (!positions) return false;
   const normalFrameBytes = positiveInteger(geometry.normal_frame_bytes);
   const normals = geometry.normals && normalFrameBytes ? decodeF32(geometry.normals) : null;
+  const indexFrameValues = positiveInteger(geometry.index_frame_bytes) / 4;
+  const texcoordFrameFloats = positiveInteger(geometry.texcoord_frame_bytes) / 4;
+  const indices = geometry.indices ? decodeU32(geometry.indices) : null;
+  const texcoords = geometry.texcoords ? decodeF32(geometry.texcoords) : null;
+  for (const [attribute, values, frameSize, supplied, selections] of [
+    [mesh.geometry?.index, indices, indexFrameValues, geometry.indices, geometry.index_frames],
+    [mesh.geometry?.attributes?.uv, texcoords, texcoordFrameFloats, geometry.texcoords, geometry.texcoord_frames],
+  ]) {
+    if (
+      supplied &&
+      (!attribute ||
+        !values ||
+        !Number.isInteger(frameSize) ||
+        frameSize !== attribute.array.length ||
+        !Array.isArray(selections) ||
+        selections.length !== frameCount ||
+        values.length % frameSize !== 0 ||
+        !selections.every((value) => Number.isInteger(value) && value >= -1 && value < values.length / frameSize))
+    )
+      return false;
+  }
   const firstClock = state.clocks[state.clockIds[0]];
   const meshState = {
     frameStart: Number(geometry.frame_start ?? firstClock?.frame_start ?? 0),
     animationBounds: geometry.bounds || null,
     positions,
     normals,
+    indices,
+    texcoords,
+    indexFrameValues,
+    texcoordFrameFloats,
+    indexFrames: geometry.index_frames,
+    texcoordFrames: geometry.texcoord_frames,
+    lastIndexFrame: -1,
+    lastTexcoordFrame: -1,
+    baseIndices: indices ? mesh.geometry.index.array.slice() : null,
+    baseTexcoords: texcoords ? mesh.geometry.attributes.uv.array.slice() : null,
     frameCount,
     positionFrameFloats: positionFrameBytes / 4,
     normalFrameFloats: normalFrameBytes / 4,
