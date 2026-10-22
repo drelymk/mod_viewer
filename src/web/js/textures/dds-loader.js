@@ -202,15 +202,10 @@ export function parseDDS(input) {
   };
 }
 
-function setDDSOrientation(texture, compressed) {
-  texture.flipY = compressed ? false : true;
-  if (compressed) {
-    texture.repeat.y = -1;
-    texture.offset.y = 1;
-  } else {
-    texture.repeat.set(1, 1);
-    texture.offset.set(0, 0);
-  }
+function setDDSOrientation(texture) {
+  texture.flipY = false;
+  texture.repeat.set(1, -1);
+  texture.offset.set(0, 1);
   texture.updateMatrix();
 }
 
@@ -220,10 +215,11 @@ function applyParsedTexture(texture, parsed) {
   texture.format = parsed.format;
   texture.generateMipmaps = false;
   // DDS payload rows use the opposite convention from TextureLoader's
-  // browser image upload. Compressed uploads cannot use Three's flipY upload
-  // path, so express the same vertical inversion in the shared texture
-  // transform instead of branching on material role or game.
-  setDDSOrientation(texture, parsed.compressed);
+  // browser image upload. Use the texture transform for every mip and format:
+  // r185's data-texture flipY path flips mip 0 again after each mip upload.
+  // Compressed DDS already uses this transform because upload flipping is
+  // unavailable for compressed blocks.
+  setDDSOrientation(texture);
   texture.minFilter = parsed.mipCount === 1 ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
   texture.isCompressedTexture = parsed.compressed;
   texture.isDataTexture = !parsed.compressed;
@@ -253,9 +249,9 @@ export function loadDDSTexture(url, onLoad, onError) {
   // before the network request completes and a failed DDS can be evicted once.
   const texture = new THREE.CompressedTexture([], 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
   // The placeholder is bound before fetch resolves, so its matrix must carry
-  // the eventual compressed-texture orientation when the material graph is
+  // the eventual DDS orientation when the material graph is
   // first compiled.
-  setDDSOrientation(texture, true);
+  setDDSOrientation(texture);
   fetchDDSIntoTexture(texture, url, onLoad, onError).catch(() => {});
   return texture;
 }

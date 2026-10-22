@@ -801,6 +801,99 @@ def test_close_zoom_surface_shadow_stays_smooth_without_redrawing_the_map(viewer
     assert states[1] == states[0]
 
 
+@pytest.mark.parametrize('mip_count', [2, 3, 4])
+@pytest.mark.parametrize('format_id', [28, 29, 87, 88, 91, 93, 'rgba8', 'bgra8', 'rgbx8', 'bgrx8'])
+def test_uncompressed_dds_mips_keep_orientation_across_roles_and_reload(
+        module_page, format_id, mip_count):
+    bgra = format_id in (87, 88, 91, 93, 'bgra8', 'bgrx8')
+    alpha = format_id not in (88, 93, 'rgbx8', 'bgrx8')
+    top, bottom = (192, 32, 16), (16, 48, 192)
+
+    def fixture(reverse):
+        pixels = bytearray()
+        for level in range(mip_count):
+            size = 8 >> level
+            for y in range(size):
+                rgb = top if (y < size / 2) != reverse else bottom
+                pixels.extend(bytes((*(rgb[::-1] if bgra else rgb),
+                                     255 if alpha else 0)) * size)
+        return uncompressed_dds(pixels, width=8, height=8, mip_count=mip_count,
+                                dxgi_format=format_id if isinstance(format_id, int) else None,
+                                bgra=bgra, alpha=alpha)
+
+    data = {"initial": fixture(False), "reloaded": fixture(True)}
+    module_page.route('**/mips-*.dds', lambda route: route.fulfill(
+        content_type='image/vnd-ms.dds',
+        body=data[route.request.url.rsplit('mips-', 1)[1].split('.')[0]]))
+    result = module_page.evaluate('''async mipCount => {
+      const T = await import('three/webgpu');
+      const {uniform} = await import('three/tsl');
+      const {loadDDSTexture,reloadDDSTexture} = await import('./js/textures/dds-loader.js');
+      const {createGameMaterial,updateGameMaterialTextures,disposeGameMaterial} =
+        await import('./js/mesh/material-profile.js');
+      const renderer = new T.WebGPURenderer();
+      await renderer.init();
+      if(!renderer.backend.isWebGPUBackend || renderer.backend.compatibilityMode) {
+        throw Error('Native WebGPU required');
+      }
+      const errors = [];
+      renderer.backend.device.addEventListener('uncapturederror', event => errors.push(event.error.message));
+      const scene = new T.Scene();
+      const camera = new T.OrthographicCamera(-1,1,1,-1,0,2);camera.position.z=1;
+      const quad = new T.Mesh(new T.PlaneGeometry(2,2));scene.add(quad);
+      const gameMaterial = createGameMaterial(null,0xffffff);
+      const nodes = gameMaterial.userData.gameMaterial.bindings;
+      const results = [];
+      for(const role of ['diffuse','normal_map','normal_data','light_map','material_map','emission_map']) {
+        const colorSpace = role === 'diffuse' ? T.SRGBColorSpace : T.NoColorSpace;
+        const target = new T.RenderTarget(8,8,{depthBuffer:false,
+          colorSpace:role === 'diffuse' ? T.SRGBColorSpace : T.LinearSRGBColorSpace});
+        const mipLevel = uniform(0);
+        const material = new T.MeshBasicNodeMaterial();
+        material.colorNode = nodes[role].textureNode.level(mipLevel).setUpdateMatrix(true).rgb;
+        material.toneMapped = false;quad.material=material;
+        const sample = async () => {
+          renderer.setRenderTarget(target);renderer.render(scene,camera);
+          const pixels = await renderer.readRenderTargetPixelsAsync(target,0,0,8,8);
+          return [1,6].map(y=>Array.from(pixels.slice(y*256+16,y*256+19)));
+        };
+        // Compile the actual stable binding before its lazy DDS arrives.
+        await sample();
+        const source = await new Promise((resolve,reject)=>loadDDSTexture('/mips-initial.dds',resolve,reject));
+        source.colorSpace = colorSpace;
+        const mesh = {material:gameMaterial};
+        updateGameMaterialTextures(mesh,{[role]:source});
+        const levels = [];
+        for(let level=0;level<mipCount;level++) {mipLevel.value=level;levels.push(await sample());}
+        mipLevel.value=0;source.needsUpdate=true;
+        const uploadedAgain=await sample();
+        const reloaded=await reloadDDSTexture(source,'/mips-reloaded.dds');
+        const changedLevels = [];
+        for(let level=0;level<mipCount;level++) {mipLevel.value=level;changedLevels.push(await sample());}
+        results.push({role,levels,uploadedAgain,changedLevels,stable:reloaded===source && nodes[role].textureNode.value===source});
+        updateGameMaterialTextures(mesh,{[role]:null});
+        source.dispose();material.dispose();target.dispose();
+      }
+      disposeGameMaterial(gameMaterial);gameMaterial.dispose();
+      quad.geometry.dispose();renderer.dispose();
+      return {results,errors};
+    }''', mip_count)
+    assert result['errors'] == []
+    for state in result['results']:
+        assert state['stable']
+        expected = [[top, bottom] if (8 >> level) > 1 else [top, top]
+                    for level in range(mip_count)]
+        reversed_expected = [[bottom, top] if (8 >> level) > 1 else [bottom, bottom]
+                             for level in range(mip_count)]
+        for actual_levels, expected_levels in ((state['levels'], expected),
+                                                (state['changedLevels'], reversed_expected)):
+            assert all(max(abs(a-b) for a,b in zip(pixel, color)) <= 2
+                       for actual, colors in zip(actual_levels, expected_levels)
+                       for pixel, color in zip(actual, colors)), state
+        assert all(max(abs(a-b) for a,b in zip(pixel, color)) <= 2
+                   for pixel, color in zip(state['uploadedAgain'], [top, bottom])), state
+
+
 @pytest.mark.parametrize('format_id', [None, 28, 29, 87, 88, 91, 93, 'rgbx8', 'bgrx8'])
 def test_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path, format_id):
     dds = tmp_path / 'texture-01.dds'
