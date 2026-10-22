@@ -87,14 +87,18 @@ def _animation_track_id(frame_var, signature, label):
 
 def _animation_family(families, *, frame_var, draw, signature):
     key = (str(frame_var).casefold(), signature)
-    return families.setdefault(key, {
-        "track_id": _animation_track_id(frame_var, signature, draw.label),
-        "frame_var": frame_var,
-        "draws": {},
-        "base_draw": draw,
-        "clock_ids": {},
-        "position_switching": False,
-    })
+    family = families.get(key)
+    if family is None:
+        family = {
+            "track_id": _animation_track_id(frame_var, signature, draw.label),
+            "frame_var": frame_var,
+            "draws": {},
+            "base_draw": draw,
+            "clock_ids": {},
+            "position_switching": False,
+        }
+        families[key] = family
+    return family
 
 
 def _frame_source_draw(draw, binding):
@@ -126,6 +130,7 @@ def _animation_families(draws, clocks, group=None):
     families = {}
     for draw in draws:
         if draw.animation_bindings:
+            signature = draw.render_identity()
             for binding in draw.animation_bindings:
                 candidate = frame_condition(binding["animation_conditions"], by_var)
                 if candidate is None:
@@ -136,7 +141,7 @@ def _animation_families(draws, clocks, group=None):
                 if not candidates:
                     continue
                 family = _animation_family(
-                    families, frame_var=var, draw=draw, signature=draw.render_identity())
+                    families, frame_var=var, draw=draw, signature=signature)
                 family["binding_frames"] = True
                 family["alternatives"] = [draw]
                 family["clock_ids"].update(candidates)
@@ -182,6 +187,7 @@ def _animation_families(draws, clocks, group=None):
     for draw in draws:
         if draw.animation_bindings or any(draw.animation_conditions):
             continue
+        signature = draw.render_identity()
         for binding in (group or {}).get("animation_vertex_bindings") or ():
             if (binding.get("position_file") != draw.position_file
                     or binding.get("ib_file") != draw.ib_file):
@@ -211,7 +217,6 @@ def _animation_families(draws, clocks, group=None):
             frame_draw = _frame_source_draw(draw, binding)
             if frame_draw is None:
                 continue
-            signature = draw.render_identity()
             family = _animation_family(
                 families, frame_var=var, draw=draw, signature=signature)
             for animation_id, clock in ranged_candidates:
@@ -441,12 +446,11 @@ def animation_vertex_union(family, *, mod_dir, buffers, default_index_size,
         if not all(path and exists(path) for path in (ib_path, tc_path)):
             family["invalid_topology"] = True
             return None
-        data = buffers.transient(ib_path)
         index_size = draw.index_size if draw.index_size is not None else default_index_size
-        key = (data, draw.start, draw.count, draw.base, index_size)
+        key = (ib_path, draw.start, draw.count, draw.base, index_size)
         raw = distinct.get(key)
         if raw is None:
-            raw = read_indices(data, draw.start, draw.count, index_size)
+            raw = read_indices(buffers.raw(ib_path), draw.start, draw.count, index_size)
             if (not raw or len(raw) % 3
                     or draw.count is not None and len(raw) != draw.count):
                 family["invalid_topology"] = True
@@ -461,10 +465,13 @@ def animation_vertex_union(family, *, mod_dir, buffers, default_index_size,
             vertices.update(raw)
             size = len(raw)
         raw_frames[frame] = raw
-        uv_inputs.add((buffers.transient(tc_path), draw.texcoord_stride))
+        uv_inputs.add((tc_path, draw.texcoord_stride))
     family["raw_frames"] = raw_frames
     first = next(iter(raw_frames.values()))
-    if len(uv_inputs) == 1 and all(raw == first for raw in raw_frames.values()):
+    first_uv, first_stride = next(iter(uv_inputs))
+    fixed_uv = all(stride == first_stride and buffers.raw(path) == buffers.raw(first_uv)
+                   for path, stride in uv_inputs)
+    if fixed_uv and all(raw == first for raw in raw_frames.values()):
         family["position_switching"] = True
     return vertices
 

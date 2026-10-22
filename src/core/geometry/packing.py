@@ -554,7 +554,8 @@ def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
     if not tc_path or not exists(tc_path):
         return None
     raw = raw_indices
-    index_key = ("indices", id(raw))
+    index_key = ("indices", resolve(draw.ib_file), draw.start, draw.count,
+                 draw.base, draw.index_size)
     index_bytes = cache.get(index_key)
     if index_bytes is None:
         if (len(raw) != len(canonical.raw_indices)
@@ -571,9 +572,9 @@ def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
             index_bytes = bytes(output)
         cache[index_key] = index_bytes
     stride = draw.texcoord_stride or canonical.streams.texcoord_stride
-    data = buffers.transient(tc_path)
-    uv_key = ("uv", data, stride, id(raw))
+    uv_key = ("uv", tc_path, stride, index_key)
     if uv_key not in cache:
+        data = buffers.raw(tc_path)
         if data == canonical.streams.texcoord_data and stride == canonical.streams.texcoord_stride:
             if data and (max(raw) * stride + canonical.streams.uv_offset
                          + struct.calcsize(canonical.streams.uv_format) > len(data)):

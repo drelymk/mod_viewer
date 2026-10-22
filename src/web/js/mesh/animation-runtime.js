@@ -382,9 +382,11 @@ function restoreCanonical(mesh) {
     [mesh.geometry?.attributes?.uv, meshState?.baseTexcoords],
   ]) {
     if (!attribute || !baseArray || attribute.array.length !== baseArray.length) continue;
-    changed = attribute.array.some((value, index) => value !== baseArray[index]) || changed;
-    attribute.array.set(baseArray);
-    attribute.needsUpdate = true;
+    if (attribute.array.some((value, index) => value !== baseArray[index])) {
+      attribute.array.set(baseArray);
+      attribute.needsUpdate = true;
+      changed = true;
+    }
   }
   if (position && base && position.array.length === base.length) {
     changed = position.array.some((value, index) => value !== base[index]) || changed;

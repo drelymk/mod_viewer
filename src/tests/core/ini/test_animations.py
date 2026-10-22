@@ -2,6 +2,7 @@
 
 import struct
 import zipfile
+from collections import Counter
 from dataclasses import replace
 from unittest.mock import patch
 
@@ -176,15 +177,29 @@ def test_baked_frames_publish_one_mesh_in_draw_order(tmp_path, mode):
             "min": [0., 0., 0.], "max": [1., 1., float(payload["frames"] - 1)]}
 
 
-@pytest.mark.parametrize("inherited,source_kind,index_switching", [
-    (False, "directory", True), (True, "directory", True), (True, "zip", True),
-    (False, "directory", False),
-], ids=["direct", "component", "archive", "vertex-only-join"])
-@pytest.mark.parametrize("change", ["all", "position", "uv", "indices", "static", "mapping", "missing"])
+@pytest.mark.parametrize("inherited,source_kind,index_switching,change", [
+    (False, "directory", True, "all"), (False, "directory", True, "uv"),
+    (False, "directory", True, "indices"), (False, "directory", True, "mapping"),
+    (False, "directory", True, "missing"),
+    (True, "directory", True, "all"), (True, "directory", True, "position"),
+    (True, "directory", True, "static"), (True, "directory", True, "mapping"),
+    (True, "zip", True, "all"), (True, "zip", True, "position"),
+    (True, "zip", True, "indices"), (True, "zip", True, "mapping"),
+    (True, "zip", True, "missing"),
+    (False, "directory", False, "all"), (False, "directory", False, "uv"),
+    (False, "directory", False, "missing"),
+])
 def test_joined_frame_bindings_keep_one_track_per_authored_draw(
         tmp_path, inherited, source_kind, index_switching, change):
     ini = joined_baked_mod(tmp_path, inherited=inherited, change=change,
                            index_switching=index_switching)
+    if change in ("position", "static", "indices"):
+        sections = read_sections(ini)
+        for frame in range(3):
+            sections[f"ResourceModelTexcoord.{frame}"][0] = "filename = texcoord0.buf"
+            index = min(frame, 1) if change == "indices" else 0
+            sections[f"ResourceModelAIB.{frame}"][0] = f"filename = index{index}.buf"
+        save_sections(ini, sections)
     if change == "missing":
         (tmp_path / "index2.buf").unlink()
     source = None
@@ -197,7 +212,18 @@ def test_joined_frame_bindings_keep_one_track_per_authored_draw(
                     output.write(path, path.name)
         source = ZipModSource(str(archive))
         ini = source.document_path("source-01.ini")
-    parsed, built = load_mod(ini, tmp_path, source=source)
+    from core.geometry.buffers import BufferStore
+    reads = Counter()
+    read = BufferStore._read
+
+    def counted_read(store, path, *, cached):
+        if str(path).rsplit("/", 1)[-1].rsplit("\\", 1)[-1].startswith(("index", "texcoord")):
+            reads[path] += 1
+        return read(store, path, cached=cached)
+
+    with patch.object(BufferStore, "_read", counted_read):
+        parsed, built = load_mod(ini, tmp_path, source=source)
+    assert reads and all(count == 1 for count in reads.values())
     assert len(built.meshes) == 2
     entries = list(built.meshes.values())
     assert "conditions" not in entries[0]

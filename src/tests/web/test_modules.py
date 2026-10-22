@@ -2301,6 +2301,10 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
       const registered = runtime.registerAnimatedMesh(mesh,entry.animation_id,entry.animation_geometry,clocks);
       window.__frame(1000);
       const canonical = snapshot();
+      const baseVersions = [indexAttribute.version,uvAttribute.version];
+      runtime.resumeAnimatedMesh(mesh);
+      const canonicalNoUpload = indexAttribute.version === baseVersions[0] &&
+        uvAttribute.version === baseVersions[1];
       runtime.setAnimationFrame(1);
       const selected = snapshot();
       const indexVersion = indexAttribute.version, uvVersion = uvAttribute.version;
@@ -2314,6 +2318,10 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
       mesh.userData.animationSuspended = false;
       runtime.resumeAnimatedMesh(mesh);
       const restored = snapshot();
+      const restoredVersions = [indexAttribute.version,uvAttribute.version];
+      runtime.resumeAnimatedMesh(mesh);
+      const repeatedRestoreNoUpload = indexAttribute.version === restoredVersions[0] &&
+        uvAttribute.version === restoredVersions[1];
       runtime.setAnimationFrame(2);
       const resumed = snapshot();
       runtime.setAnimationPaused(false); window.__frame(2000);
@@ -2322,9 +2330,10 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
       const stable = geometry.index === indexAttribute && geometry.attributes.uv === uvAttribute;
       runtime.resetAnimationRuntime();
       return {registered,canonical,selected,suspended,restored,resumed,disabled,stable,
-        unchangedIndex,uvUploaded};
+        unchangedIndex,uvUploaded,canonicalNoUpload,repeatedRestoreNoUpload};
     }''', {'entry': entry, 'clocks': built.animations})
     assert result['registered'] and result['stable']
+    assert result['canonicalNoUpload'] and result['repeatedRestoreNoUpload']
     assert result['unchangedIndex']
     assert result['uvUploaded'] == (change == "all")
     assert result['canonical'] == result['restored'] == result['disabled']
