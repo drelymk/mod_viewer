@@ -2,7 +2,7 @@
 
 import os
 
-from .draw_call import DrawCall
+from .draw_call import DrawCall, _freeze
 from .identity import mesh_identity_for_draw
 from ..resource_paths import safe_resource_path
 from ..textures.pipeline import normalize_texture_role, texture_key
@@ -44,6 +44,8 @@ def deduplicate_draws(group, max_draws=0):
     for raw_draw in group["draws"]:
         draw = DrawCall.from_mapping(raw_draw, group)
         key = draw.render_identity()
+        if draw.animation_binding_join:
+            key = (key, _freeze(draw.occurrence), _freeze(draw.animation_conditions))
         if key not in merged:
             merged[key] = {"draw": draw, "alts": [], "sources": []}
             order.append(key)
@@ -154,16 +156,18 @@ def validate_draw_count(groups):
 
 
 def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
-                         active_mesh_keys=None, source=None):
+                         active_mesh_keys=None, source=None, animations=None):
     """Return draw visibility semantics without resolving any geometry."""
     validate_draw_count(groups)
     from ..textures.profiles import texture_profile_for
+    from .animation_frames import animation_draws
 
     texture_profile = texture_profile_for(game_profile)
     normal_role = texture_profile.normal_transport_role
     result = {}
     for group in groups:
-        for draw in deduplicate_draws(group, max_draws=max_draws):
+        draws = deduplicate_draws(group, max_draws=max_draws)
+        for draw, _family in animation_draws(draws, animations or (), group):
             if active_mesh_keys is not None and draw.label not in active_mesh_keys:
                 continue
             entry = {

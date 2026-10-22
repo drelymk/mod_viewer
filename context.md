@@ -235,6 +235,25 @@ of documentation, comments and tests; use portable fixtures instead.
   drawn vertices. Changes to unused record fields, unreferenced vertices or
   normals that are not published cannot activate playback. Keep this decision
   in backend frame preparation rather than scanning frontend frame data.
+- Baked tracks may share immutable packed frame ranges only for identical
+  ordered sources/layouts, canonical attributes and drawn vertex mappings.
+  Scope reuse to one build/blob; retain each mesh's topology, material,
+  visibility, provenance and playback identity independently. Repeated tracks
+  must not expand identical frame data beyond the geometry publication limit.
+- Capture frame-conditioned buffer selections at a branch join as one ordered
+  sequence per authored draw. Keep frame clauses out of visibility
+  controls, select inherited position/UV state under the same binding guard,
+  and never project a complete sequence onto each resolved frame alternative.
+  Joined tracks may change index and UV values only with a verified fixed
+  source-vertex mapping and fixed attribute sizes; otherwise retain one safe
+  canonical draw. Playback, seeking and ownership release restore all animated
+  attributes, including indices and UVs, from the canonical baseline.
+- Use one baked-frame preparation path and classify fixed topology/UV state
+  from resolved sources, layouts and draw ranges, not the binding syntax.
+  Validate fixed inputs once. Merge complete identical frame sequences only
+  on the same clocks, preserving the union of visibility guards and every
+  source's own guard. Geometry and semantic refreshes select the same canonical
+  draw; reuse of packed attributes never merges independent playback clocks.
 - Execute program assignments, resets, conditions and dispatches in authored
   order. Compile numeric and boolean expressions through the shared condition
   syntax tree; select if/elif/else branches once on entry, including child calls.

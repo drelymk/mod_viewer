@@ -355,6 +355,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 start=authored.start, base=authored.base,
                 conditions=authored.conditions,
                 animation_conditions=authored.animation_conditions,
+                animation_binding_join=authored.animation_binding_join,
                 sources=[authored.source] if authored.source else [],
                 occurrence=authored.occurrence,
                 ib_file=ib_file, index_size=index_size,
@@ -413,6 +414,8 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             for role, fallback in (("position", effective_position_resource),
                                    ("texcoord", (draw_buffers or buffers)["texcoord"])):
                 history = histories.get(role, [])
+                if role == "position" and not history:
+                    history = histories.get("blend", [])
                 slots = {item["slot"] for item in history
                          if str(item["resource"]).casefold() == str(fallback).casefold()}
                 if len(slots) != 1:

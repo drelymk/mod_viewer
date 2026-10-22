@@ -2,14 +2,20 @@
 
 import struct
 import zipfile
+from dataclasses import replace
+from unittest.mock import patch
 
 import pytest
 
 from core.geometry.mesh_builder import GeometryBlob
+from core.geometry.draw_call import DrawCall
+from core.geometry.vertex_attributes import VertexAttributeSource
 from core.ini.analysis import analyze_ini
 from core.ini.animations import discover_animation_clocks
 from core.ini.sections import extract_resources, parse_sections
-from tests.support.animations import load_mod, read_sections, save_sections, write_vertices
+from tests.support.animations import (
+    joined_baked_mod, load_mod, read_sections, save_sections, write_vertices,
+)
 from tests.support.provenance import geometry_values
 
 
@@ -170,20 +176,165 @@ def test_baked_frames_publish_one_mesh_in_draw_order(tmp_path, mode):
             "min": [0., 0., 0.], "max": [1., 1., float(payload["frames"] - 1)]}
 
 
+@pytest.mark.parametrize("inherited,source_kind,index_switching", [
+    (False, "directory", True), (True, "directory", True), (True, "zip", True),
+    (False, "directory", False),
+], ids=["direct", "component", "archive", "vertex-only-join"])
+@pytest.mark.parametrize("change", ["all", "position", "uv", "indices", "static", "mapping", "missing"])
+def test_joined_frame_bindings_keep_one_track_per_authored_draw(
+        tmp_path, inherited, source_kind, index_switching, change):
+    ini = joined_baked_mod(tmp_path, inherited=inherited, change=change,
+                           index_switching=index_switching)
+    if change == "missing":
+        (tmp_path / "index2.buf").unlink()
+    source = None
+    if source_kind == "zip":
+        from core.mod_source import ZipModSource
+        archive = tmp_path / "fixture.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            for path in tmp_path.iterdir():
+                if path.is_file() and path != archive:
+                    output.write(path, path.name)
+        source = ZipModSource(str(archive))
+        ini = source.document_path("source-01.ini")
+    parsed, built = load_mod(ini, tmp_path, source=source)
+    assert len(built.meshes) == 2
+    entries = list(built.meshes.values())
+    assert "conditions" not in entries[0]
+    assert entries[1]["conditions"] == [[{"var": "show", "value": "1", "negate": False}]]
+    assert all(clause["var"] != "frame" for entry in entries
+               for group in entry.get("conditions", []) for clause in group)
+    draws = parsed.groups[0]["draws"]
+    assert all(draw.animation_binding_join for draw in draws)
+    assert len({draw.occurrence for draw in draws}) == 2
+    from core.geometry.semantics import build_mesh_semantics
+    semantics = build_mesh_semantics(parsed.groups, str(tmp_path),
+                                     active_mesh_keys=set(built.meshes), source=source)
+    assert set(semantics) == set(built.meshes)
+    for label, entry in built.meshes.items():
+        assert semantics[label]["conditions"] == entry.get("conditions", [])
+        assert semantics[label]["identity"] == entry["identity"]
+    expected_tracks = (2 if change in ("all", "position", "uv")
+                       else 1 if change == "indices" and index_switching else 0)
+    assert sum("animation_geometry" in entry for entry in entries) == expected_tracks
+    assert built.diagnostics["animation_frame_count"] == expected_tracks * 3
+    assert built.diagnostics["animation_prepare_calls"] <= 6
+    references = [value for entry in entries
+                  for container in (entry, entry.get("animation_geometry", {}))
+                  for value in container.values()
+                  if isinstance(value, dict) and "offset" in value and "length" in value]
+    assert len(built.geometry) == sum(length for _, length in {
+        (reference["offset"], reference["length"]) for reference in references})
+    if expected_tracks:
+        entry = entries[-1]
+        animation = entry["animation_geometry"]
+        assert animation["frames"] == 3
+        assert ("indices" in animation) == (index_switching and change in ("all", "indices"))
+        assert ("texcoords" in animation) == (change in ("all", "uv"))
+        assert geometry_values(built.geometry, animation["positions"])[14] == (
+            1. if change in ("all", "position") else 0.)
+        if "indices" in animation:
+            reference = animation["indices"]
+            values = struct.unpack_from("<18I", built.geometry.data, reference["offset"])
+            assert values == (0, 1, 2, 1, 3, 2, 0, 2, 1, 1, 3, 2, 0, 2, 1, 1, 3, 2)
+        if "texcoords" in animation:
+            values = geometry_values(built.geometry, animation["texcoords"])
+            assert values == tuple(value for offset in (0., .125, .25)
+                                   for u, v in ((0., 0.), (.5, 0.), (0., .5), (.5, .5))
+                                   for value in (u + offset, 1. - v - offset))
+
+
+@pytest.mark.parametrize("case", ["equivalent", "late-difference", "independent-clock", "static", "auto"])
+def test_frame_sequence_equivalence_preserves_refresh_sources_and_fast_paths(tmp_path, case):
+    from app.mods.analysis import analyze_mod_inis
+    from core.geometry import animation_frames
+    from core.geometry.identity import DrawOccurrence
+    from core.geometry.mesh_builder import build_mesh_result, build_mesh_semantics
+
+    ini = joined_baked_mod(tmp_path, change="static" if case == "static" else "position")
+    sections = read_sections(ini)
+    for frame in range(3):
+        for resource, file in (("ResourceModelAIB", "index"), ("ResourceModelTexcoord", "texcoord")):
+            if case == "auto" and file == "index":
+                continue
+            sections[f"{resource}.{frame}"][0] = f"filename = {file}0.buf"
+    save_sections(ini, sections)
+    write_vertices(tmp_path / "different.buf", [(0., 0., 9.), (1., 0., 9.),
+                                                (0., 1., 9.), (1., 1., 9.), (2., 1., 9.)])
+
+    def inputs():
+        parsed = analyze_mod_inis([str(ini)], str(tmp_path))
+        group = parsed.groups[0]
+        originals = [draw for draw in group["draws"] if draw.count == 6]
+        if case == "auto":
+            originals = [replace(draw, count=None, start=0) for draw in originals]
+        copies = []
+        for frame, draw in enumerate(originals):
+            occurrence = DrawOccurrence(draw.occurrence.section, 2)
+            sources = [{**source, "line_no": 400, "occurrence": occurrence.to_dict()}
+                       for source in draw.sources]
+            other = replace(draw, label=f"copy-{frame}", occurrence=occurrence, sources=sources,
+                            conditions=[[{"var": "other", "value": "1", "negate": False}]])
+            if case == "late-difference" and frame == 2:
+                other.position_file = "different.buf"
+                other.normal_source = replace(draw.normal_source, file="different.buf")
+            if case == "independent-clock":
+                other.animation_conditions = [[{"var": "second_frame", "value": str(frame)}]]
+            copies.append(other)
+        clocks = list(parsed.animations)
+        if case == "independent-clock":
+            clocks.append({"id": "second-clock", "frame_var": "second_frame", "frame_start": 0,
+                           "frame_end": 2, "fps": 20})
+        return [{**group, "draws": originals + copies}], clocks
+
+    groups, clocks = inputs()
+    original_guards = [draw.conditions for draw in groups[0]["draws"]]
+    with patch.object(animation_frames, "pack_animation_topology_frame",
+                      wraps=animation_frames.pack_animation_topology_frame) as topology:
+        built = build_mesh_result(groups, str(tmp_path), animations=clocks)
+    assert topology.call_count == (2 if case == "auto" else 0)
+    assert [draw.conditions for draw in groups[0]["draws"]] == original_guards
+    equivalent = case in ("equivalent", "static", "auto")
+    assert len(built.meshes) == (1 if equivalent else 2)
+    if case == "static":
+        assert not built.animations
+    else:
+        assert all("animation_geometry" in entry for entry in built.meshes.values())
+    fresh_groups, fresh_clocks = inputs()
+    semantics = build_mesh_semantics(fresh_groups, str(tmp_path), animations=fresh_clocks,
+                                     active_mesh_keys=set(built.meshes))
+    assert set(semantics) == set(built.meshes)
+    for label, entry in built.meshes.items():
+        assert semantics[label]["conditions"] == entry["conditions"]
+        assert semantics[label]["sources"] == entry["sources"]
+        assert semantics[label]["identity"] == entry["identity"]
+    if equivalent:
+        entry = next(iter(built.meshes.values()))
+        assert [group[0]["var"] for group in entry["conditions"]] == ["show", "other"]
+        assert [source["conditions"][0][0]["var"] for source in entry["sources"]] == ["show", "other"]
+        assert [source["occurrence"]["ordinal"] for source in entry["sources"]] == [1, 2]
+
+
 @pytest.mark.parametrize("commandlist", [False, True], ids=["draw-branches", "commandlist"])
+@pytest.mark.parametrize("contiguous", [False, True], ids=["sparse", "contiguous"])
 @pytest.mark.parametrize("change,animated", [
     ("unused-data", False), ("unused-vertex", False), ("normal-scale", False),
     ("unpublished-normals", False), ("late-invalid-normals", False), ("signed-zero", False),
-    ("normal-direction", True), ("position", True),
+    ("normal-direction", True), ("position", True), ("nonfinite-position", False),
 ])
-def test_baked_detection_compares_only_published_attributes(tmp_path, commandlist, change, animated):
+def test_baked_detection_compares_only_published_attributes(
+        tmp_path, commandlist, contiguous, change, animated):
+    from core.geometry import animation_frames
+
     ini, _ = _baked_mod(tmp_path, commandlist=commandlist)
+    if contiguous:
+        (tmp_path / "index.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
     first = bytearray((tmp_path / "position0.buf").read_bytes())
     second = bytearray(first)
     if change == "unused-data":
         struct.pack_into("<f", second, 24, 9.)
     elif change == "unused-vertex":
-        struct.pack_into("<f", second, 40, 9.)
+        struct.pack_into("<f", second, 120 if contiguous else 40, 9.)
     elif change == "normal-scale":
         struct.pack_into("<3f", first, 12, .1, .2, .3)
         struct.pack_into("<3f", second, 12, .3, .6, .9)
@@ -198,9 +349,15 @@ def test_baked_detection_compares_only_published_attributes(tmp_path, commandlis
         struct.pack_into("<3f", second, 12, 2., 0., 0.)
     elif change == "position":
         struct.pack_into("<f", second, 0, 1e-8)
+    elif change == "nonfinite-position":
+        struct.pack_into("<f", second, 0, float("nan"))
     (tmp_path / "position0.buf").write_bytes(first)
     (tmp_path / "position1.buf").write_bytes(second)
-    _, built = load_mod(ini, tmp_path)
+    with patch.object(animation_frames, "pack_animation_position_frame",
+                      wraps=animation_frames.pack_animation_position_frame) as pack:
+        _, built = load_mod(ini, tmp_path)
+    if contiguous and change in {"unused-data", "unused-vertex"}:
+        assert pack.call_count == 0
     assert len(built.meshes) == 1
     entry = next(iter(built.meshes.values()))
     assert ("animation_geometry" in entry) == animated
@@ -211,6 +368,103 @@ def test_baked_detection_compares_only_published_attributes(tmp_path, commandlis
         references = [value for value in entry.values()
                       if isinstance(value, dict) and "offset" in value and "length" in value]
         assert len(built.geometry) == max(ref["offset"] + ref["length"] for ref in references)
+
+
+@pytest.mark.parametrize("animated", [False, True], ids=["static", "animated"])
+def test_repeated_tracks_share_only_exact_frame_attributes(tmp_path, animated):
+    from core.geometry import mesh_builder
+
+    points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.), (1., 1., 0.)]
+    for directory, height in (("first", 1.), ("second", 2.)):
+        folder = tmp_path / directory
+        folder.mkdir()
+        write_vertices(folder / "frame0.buf", points)
+        write_vertices(folder / "frame1.buf", [
+            (x, y, height if animated else z) for x, y, z in points])
+    for name, indices in (("base", (0, 1, 2)), ("reversed", (2, 1, 0)),
+                          ("subset", (1, 2, 3))):
+        (tmp_path / f"{name}.ib").write_bytes(struct.pack("<3I", *indices))
+    (tmp_path / "texcoord.buf").write_bytes(b"\0" * 80)
+    (tmp_path / "clock-texcoord.buf").write_bytes(b"\0" * 80)
+    (tmp_path / "normal.buf").write_bytes(struct.pack("<3f", 1., 0., 0.) * 4)
+    draws = []
+    for name, index, directory, variable in (
+        ("base", "base", "first", "frame"),
+        ("topology", "reversed", "first", "frame"),
+        ("clock", "base", "first", "other"),
+        ("subset", "subset", "first", "frame"),
+        ("source", "base", "second", "frame"),
+        ("normals", "base", "first", "frame"),
+    ):
+        for frame in range(2):
+            file = f"{directory}/frame{frame}.buf"
+            normal = (VertexAttributeSource("normal.buf", 12, 0, "f32x3")
+                      if name == "normals" else
+                      VertexAttributeSource(file, 40, 12, "f32x3"))
+            draws.append(DrawCall(
+                label=f"{name}-{frame}", count=3,
+                conditions=[[{"var": "mode", "value": name}]],
+                animation_conditions=[[{"var": variable, "value": str(frame)}]],
+                ib_file=f"{index}.ib", index_size=4, position_file=file,
+                position_stride=40, texcoord_file=(
+                    "clock-texcoord.buf" if name == "clock" else "texcoord.buf"),
+                texcoord_stride=20, normal_source=normal))
+    groups = [{
+        "name": "Component01", "position_file": "first/frame0.buf",
+        "position_stride": 40, "texcoord_file": "texcoord.buf",
+        "texcoord_stride": 20, "ib_file": "base.ib", "index_size": 4,
+        "draws": draws,
+    }]
+    clocks = [{"id": variable, "frame_var": variable, "frame_start": 0,
+               "frame_end": 1, "fps": 30} for variable in ("frame", "other")]
+    def build(**kwargs):
+        return mesh_builder.build_mesh_result(
+            groups, str(tmp_path), animations=clocks, **kwargs)
+
+    shared = build()
+    prepare = mesh_builder._prepare_animation_family
+
+    def without_sharing(*args, **kwargs):
+        kwargs.pop("frame_cache")
+        return prepare(*args, **kwargs)
+
+    with patch.object(mesh_builder, "_prepare_animation_family", without_sharing):
+        independent = build()
+
+    def expanded(value, blob):
+        if isinstance(value, dict):
+            if set(value) == {"offset", "length"}:
+                return bytes(blob.data[value["offset"]:
+                                       value["offset"] + value["length"]])
+            return {key: expanded(item, blob) for key, item in value.items()}
+        if isinstance(value, list):
+            return [expanded(item, blob) for item in value]
+        return value
+
+    assert len(shared.meshes) == 6
+    assert expanded(shared.meshes, shared.geometry) == expanded(
+        independent.meshes, independent.geometry)
+    assert shared.animations == independent.animations
+    assert shared.diagnostics["animation_reused_family_count"] == 2
+    if animated:
+        tracks = [entry["animation_geometry"] for entry in shared.meshes.values()]
+        assert tracks[0]["positions"] == tracks[1]["positions"] == tracks[2]["positions"]
+        assert all(track["positions"] != tracks[0]["positions"] for track in tracks[3:])
+        assert tracks[2]["clock_ids"] == ["other"]
+        assert len({entry["animation_id"] for entry in shared.meshes.values()}) == 6
+        assert len(shared.geometry) < len(independent.geometry)
+        assert shared.diagnostics["animation_geometry_bytes"] == sum(
+            reference["length"] for track in tracks[2:]
+            for reference in (track["positions"], track["normals"]))
+        changed = bytearray((tmp_path / "first/frame1.buf").read_bytes())
+        struct.pack_into("<f", changed, 0, 7.)
+        reloaded = build(buffer_overrides={
+            str(tmp_path / "first/frame1.buf"): bytes(changed)})
+        reference = reloaded.meshes["base-0"]["animation_geometry"]["positions"]
+        assert geometry_values(reloaded.geometry, reference)[9] == 7.
+    else:
+        assert not shared.animations
+        assert all("animation_geometry" not in entry for entry in shared.meshes.values())
 
 
 @pytest.mark.parametrize("case", ["compatible", "changed-uv", "changed-topology", "missing-frame"])

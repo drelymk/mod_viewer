@@ -42,6 +42,61 @@ def save_sections(ini, sections):
     ), encoding="utf-8")
 
 
+def joined_baked_mod(root, *, inherited=True, change="all", index_switching=True):
+    """Two authored draws after frame-conditioned buffer assignments."""
+    sections = {
+        "Constants": ["$start = 0", "$end = 2", "$show = 1"],
+        "KeyShow": ["key = s", "type = cycle", "$show = 0,1"],
+        "Present": ["$frame = (time * 30 % ($end - $start + 1) + $start) // 1"],
+        "TextureOverrideModelA": ["run = CommandListModelIndex",
+                                  "drawindexed = 3, 0, 0", "if $show == 1",
+                                  "drawindexed = 6, 3, 0", "endif"],
+    }
+    position, texcoord, index = [], [], []
+    for frame in range(3):
+        branch = "if" if frame == 0 else "elif"
+        for lines, slot, resource in (
+            (position, "vb0", "ResourceModelPosition"),
+            (texcoord, "vb1", "ResourceModelTexcoord"),
+            (index, "ib", "ResourceModelAIB"),
+        ):
+            lines.extend([f"{branch} $frame == {frame}", f"{slot} = {resource}.{frame}"])
+        z = float(frame) if change in ("all", "position") else 0.
+        points = [(0., 0., z), (1., 0., z), (0., 1., z), (1., 1., z), (2., 1., z)]
+        write_vertices(root / f"position{frame}.buf", points)
+        uv = frame / 8 if change in ("all", "uv") else 0.
+        (root / f"texcoord{frame}.buf").write_bytes(
+            b"".join(struct.pack("<ff", u + uv, v + uv)
+                     for u, v in ((0., 0.), (.5, 0.), (0., .5), (.5, .5), (1., 1.))))
+        values = [0, 1, 2, 0, 1, 2, 1, 3, 2]
+        if frame and change in ("all", "indices"):
+            values[4:6] = [2, 1]
+        if frame == 2 and change == "mapping":
+            values[7] = 4
+        (root / f"index{frame}.buf").write_bytes(struct.pack("<9I", *values))
+        for resource, filename, descriptor in (
+            ("ResourceModelPosition", "position", "stride = 40"),
+            ("ResourceModelTexcoord", "texcoord", "stride = 8"),
+            ("ResourceModelAIB", "index", "format = DXGI_FORMAT_R32_UINT"),
+        ):
+            sections[f"{resource}.{frame}"] = [f"filename = {filename}{frame}.buf", descriptor]
+    for lines in (position, texcoord, index):
+        lines.append("endif")
+    sections["CommandListModelIndex"] = index
+    if inherited:
+        sections["TextureOverrideModelBlend"] = ["run = CommandListModelBlend"]
+        sections["CommandListModelBlend"] = position
+        sections["TextureOverrideModelTexcoord"] = texcoord
+    else:
+        sections["CommandListModelIndex"] = position + texcoord + index
+    if not index_switching:
+        sections["CommandListModelIndex"] = ([] if inherited else position + texcoord) + [
+            "ib = ResourceModelAIB.0"]
+    ini = root / "source-01.ini"
+    save_sections(ini, sections)
+    return ini
+
+
 def compute_mod(root, *, shared_outputs=False, rotating_pose=False):
     root.mkdir(parents=True)
     (root / "shape.hlsl").write_text(SHAPE_SHADER, encoding="utf-8")

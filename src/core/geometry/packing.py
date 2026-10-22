@@ -535,8 +535,69 @@ def pack_animation_position_frame(
         pos_bytes, normal_bytes, bounds_min, bounds_max)
 
 
+def pack_animation_topology_frame(draw, canonical, *, canonical_draw,
+                                   canonical_packed, mod_dir, buffers,
+                                   default_index_size, geometry_convention,
+                                   source=None):
+    """Pack changing IB/UV state against one stable source-vertex mapping.
+
+    The canonical draw already selected the vertices. Validate the new index
+    set once instead of decoding positions repeatedly for every triangle.
+    """
+    resolve = source.resolve_resource if source is not None else \
+        lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    same = source.same_reference if source is not None else \
+        lambda left, right: left == right
+    ib_path, tc_path = resolve(draw.ib_file), resolve(draw.texcoord_file)
+    if not all(path and exists(path) for path in (ib_path, tc_path)):
+        return None
+    index_bytes = canonical_packed.indices
+    if (not same(ib_path, resolve(canonical_draw.ib_file))
+            or (draw.start, draw.count, draw.base, draw.index_size)
+            != (canonical_draw.start, canonical_draw.count,
+                canonical_draw.base, canonical_draw.index_size)):
+        raw = buffers.indices(ib_path, draw.start, draw.count,
+                              draw.index_size if draw.index_size is not None else default_index_size)
+        if (not raw or len(raw) % 3
+                or draw.count is not None and len(raw) != draw.count):
+            return None
+        if draw.base:
+            raw = [value + draw.base for value in raw]
+        if set(raw) != set(canonical.used_vertices):
+            return None
+        if geometry_convention.reverse_winding:
+            raw[1::3], raw[2::3] = raw[2::3], raw[1::3]
+        index_bytes = bytearray(len(raw) * 4)
+        for begin in range(0, len(raw), 65536):
+            chunk = raw[begin:begin + 65536]
+            struct.pack_into(f"<{len(chunk)}I", index_bytes, begin * 4,
+                             *(canonical.remap[value] for value in chunk))
+        index_bytes = bytes(index_bytes)
+    if (same(tc_path, canonical.texcoord_path)
+            and (draw.texcoord_stride or canonical.streams.texcoord_stride)
+            == canonical.streams.texcoord_stride):
+        return index_bytes, canonical_packed.texcoords
+    streams = buffers.vertex_streams(
+        canonical.position_path, canonical.streams.position_stride,
+        tc_path, draw.texcoord_stride or canonical.streams.texcoord_stride)
+    uv_bytes = bytearray(len(canonical.used_vertices) * 8) if streams.texcoord_data else None
+    uv_struct = struct.Struct(streams.uv_format)
+    if uv_bytes is not None:
+        for output, vertex in enumerate(canonical.used_vertices):
+            offset = vertex * streams.texcoord_stride + streams.uv_offset
+            if offset < 0 or offset + uv_struct.size > len(streams.texcoord_data):
+                return None
+            u, v = uv_struct.unpack_from(streams.texcoord_data, offset)
+            if not (math.isfinite(u) and math.isfinite(v)):
+                return None
+            struct.pack_into("<ff", uv_bytes, output * 8, u, 1. - v)
+    return index_bytes, bytes(uv_bytes) if uv_bytes is not None else None
+
+
 __all__ = [
     "PackedShapeTarget", "PackedDrawGeometry", "PackedAnimationFrame",
     "PreparedDrawVertices", "_prepare_draw_vertices", "pack_draw_geometry",
     "pack_animation_frame_attributes", "pack_animation_position_frame",
+    "pack_animation_topology_frame",
 ]

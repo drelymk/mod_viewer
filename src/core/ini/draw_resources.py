@@ -499,10 +499,9 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         if parsed:
             component_name, component_suffix = parsed
             history = info.get("vertex_binding_history") or []
-            # Baked frame bindings keep their existing animation reconstruction.
-            # Static role overrides can be inherited by an indexed draw instead.
-            if (history and not info.get("animation_vertex_bindings")
-                    and not info["draws"] and not info["drawindexed_auto"]):
+            # Frame-specific draws also need their matching inherited UV and
+            # position bindings. An unguarded draw still uses the proven fallback.
+            if (history and not info["draws"] and not info["drawindexed_auto"]):
                 role_history = component_vertex_binding_history.setdefault(
                     component_name.lower(), {})
                 role_history.setdefault(component_suffix.lower(), []).extend(

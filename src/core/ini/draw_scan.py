@@ -182,7 +182,8 @@ def _buffer_resource_at_draw(history, conditions, fallback):
                  if _condition_difference(conditions, item["conditions"]) is None), fallback)
 
 
-def _index_draws_at_join(authored, history, visibility_vars, vertex_history):
+def _index_draws_at_join(authored, history, visibility_vars, vertex_history,
+                         animation_vars=()):
     """Resolve conditional IB and direct VB snapshots at the authored draw."""
     if any(authored.animation_conditions):
         return [authored]
@@ -225,6 +226,9 @@ def _index_draws_at_join(authored, history, visibility_vars, vertex_history):
     # an explicit null remains an occupied slot.
     missing = object()
     for draw in draws:
+        draw.conditions, draw.animation_conditions = _split_animation_conditions(
+            draw.conditions, animation_vars)
+        draw.animation_binding_join = any(draw.animation_conditions)
         draw.index_resource = _buffer_resource_at_draw(
             history, draw.binding_conditions, None) if history else authored.index_resource
         draw.vertex_resources = {}
@@ -588,7 +592,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 )
                 info["auto_draws" if automatic else "draws"].extend(_index_draws_at_join(
                     authored, info["index_binding_history"], visibility_vars,
-                    info["vertex_binding_history"]))
+                    info["vertex_binding_history"], public_animation_vars))
             semantic = re.match(
                 r"^(Resource[\\/]"
                 r"(?:GIMI|ZZMI|RabbitFX|WWMI)[\\/]"

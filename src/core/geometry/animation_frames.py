@@ -11,6 +11,7 @@ from .buffers import POSITION_STRIDE
 from .packing import (
     PackedAnimationFrame, _prepare_draw_vertices,
     pack_animation_frame_attributes, pack_animation_position_frame,
+    pack_animation_topology_frame,
 )
 from .draw_call import _freeze
 from ..ini.animations import frame_condition
@@ -115,6 +116,51 @@ def _frame_source_draw(draw, binding):
     return result
 
 
+def _animation_signature(draw):
+    fields = _ANIMATION_STATIC_FIELDS
+    if draw.animation_binding_join:
+        fields = tuple(field for field in fields if field not in (
+            "ib_file", "index_size", "texcoord_file", "texcoord_stride"))
+    signature = _freeze(tuple(getattr(draw, field) for field in fields))
+    if draw.animation_binding_join:
+        signature = (signature, _freeze(draw.occurrence), draw.count, draw.start, draw.base)
+    return signature
+
+
+def _merge_animation_families(families):
+    """Merge only complete, identical frame sequences on the same clocks."""
+    merged = {}
+    result = []
+    for family in families:
+        family.setdefault("alternatives", []).extend(
+            [family["base_draw"], *family["draws"].values()])
+        frames = range(family["frame_start"], family["frame_end"] + 1)
+        if set(family["draws"]) != set(frames):
+            result.append(family)
+            continue
+        key = (tuple(sorted(family["clock_ids"])), tuple(
+            (frame, family["draws"][frame].render_identity()) for frame in frames))
+        previous = merged.get(key)
+        if previous is None:
+            merged[key] = family
+            result.append(family)
+            continue
+        previous["alternatives"].extend(family["alternatives"])
+        # Every source already carries its own ordinary guard. Keep those
+        # guards while OR-ing the visibility of the equivalent displayed draw.
+        def merge_views(draw, other):
+            return replace(
+                draw, conditions=([] if not draw.conditions or not other.conditions else
+                                  draw.conditions + [group for group in other.conditions
+                                                     if group not in draw.conditions]),
+                sources=draw.sources + [source for source in other.sources
+                                        if source not in draw.sources])
+        previous["base_draw"] = merge_views(previous["base_draw"], family["base_draw"])
+        previous["draws"] = {frame: merge_views(previous["draws"][frame], family["draws"][frame])
+                             for frame in frames}
+    return result
+
+
 def _animation_families(draws, clocks, group=None):
     """Group geometry tracks independently from their playback clocks."""
     by_var = {}
@@ -138,8 +184,7 @@ def _animation_families(draws, clocks, group=None):
         ]
         if not ranged_candidates:
             continue
-        signature = _freeze(tuple(
-            getattr(draw, field) for field in _ANIMATION_STATIC_FIELDS))
+        signature = _animation_signature(draw)
         family = _animation_family(
             families, frame_var=var, draw=draw, signature=signature)
         for animation_id, clock in ranged_candidates:
@@ -161,6 +206,8 @@ def _animation_families(draws, clocks, group=None):
     # frame.  Project those authored bindings onto the existing draw rows so
     # the normal topology/material path remains authoritative.
     for draw in draws:
+        if any(draw.animation_conditions):
+            continue
         for binding in (group or {}).get("animation_vertex_bindings") or ():
             if (binding.get("position_file") != draw.position_file
                     or binding.get("ib_file") != draw.ib_file):
@@ -229,8 +276,19 @@ def _animation_families(draws, clocks, group=None):
                == tuple(getattr(first, field) for field in topology_fields)
                for draw in family_draws[1:]):
             family["position_switching"] = True
-    return [family for family in families.values()
-            if family["draws"] and not family.get("ambiguous")]
+    result = [family for family in families.values()
+              if family["draws"] and not family.get("ambiguous")]
+    alternatives = {}
+    for draw in draws:
+        if draw.animation_binding_join:
+            alternatives.setdefault(_animation_signature(draw), []).append(draw)
+    for family in result:
+        if family["base_draw"].animation_binding_join:
+            signature = _animation_signature(family["base_draw"])
+            # An untouched/out-of-range fallback is part of the same authored
+            # draw, not an additional always-visible mesh beside its animation.
+            family["alternatives"] = alternatives[signature]
+    return _merge_animation_families(result)
 
 
 def _prepared_topology(prepared):
@@ -240,6 +298,23 @@ def _prepared_topology(prepared):
         _x, _y, _z, u, v = prepared.decoded_vertices[vertex]
         uvs.append((u, None if v is None else 1.0 - v))
     return indices, tuple(uvs)
+
+
+def animation_draws(draws, clocks, group=None):
+    """Select the same canonical draws for geometry and semantic refreshes."""
+    family_by_draw = {}
+    for family in _animation_families(draws, clocks, group):
+        for draw in family["alternatives"]:
+            family_by_draw.setdefault(id(draw), family)
+    processed = set()
+    for draw in draws:
+        family = family_by_draw.get(id(draw))
+        if family is not None:
+            if id(family) in processed:
+                continue
+            processed.add(id(family))
+            draw = family["draws"].get(family["frame_start"]) or family["draws"][min(family["draws"])]
+        yield draw, family
 
 
 def _compatible_prepared(canonical, other, canonical_topology=None):
@@ -262,15 +337,14 @@ def _compatible_prepared(canonical, other, canonical_topology=None):
 
 
 def _static_position_records(family, canonical, *, mod_dir, buffers, source):
-    """Recognize identical switched vertex records without retaining frame data."""
+    """Prove identical drawn attributes without decoding unused record fields."""
     used = canonical.used_vertices
     if not used or used[-1] - used[0] + 1 != len(used):
         return False
     stride = canonical.streams.position_stride
-    begin = used[0] * stride
-    end = (used[-1] + 1) * stride
+    columns = set(range(12))
     reference = canonical.streams.position_data
-    if begin < 0 or end > len(reference):
+    if stride < 12 or used[0] < 0:
         return False
     resolve = source.resolve_resource if source is not None else \
         lambda value: safe_resource_path(mod_dir, value)
@@ -279,9 +353,26 @@ def _static_position_records(family, canonical, *, mod_dir, buffers, source):
         lambda left, right: left == right
     canonical_draw = family["draws"][family["frame_start"]]
     canonical_normal = canonical_draw.normal_source
-    if canonical_normal is not None and not same(
-            resolve(canonical_normal.file), canonical.position_path):
+    if canonical_normal is not None:
+        normal_size = {"f32x3": 12, "snorm8x3": 3}.get(
+            canonical_normal.encoding)
+        if (normal_size is None or canonical_normal.stride != stride
+                or canonical_normal.offset + normal_size > stride
+                or not same(resolve(canonical_normal.file),
+                            canonical.position_path)):
+            return False
+        columns.update(range(canonical_normal.offset,
+                             canonical_normal.offset + normal_size))
+    columns = sorted(columns)
+    begin = used[0] * stride
+    end = used[-1] * stride + columns[-1] + 1
+    if end > len(reference):
         return False
+    # Column slices run in C and omit tangents/padding without a Python loop
+    # over every vertex. Exact byte equality is a proof, never a rejection:
+    # differing encodings, signed zero and normal scales use decoded fallback.
+    reference_columns = [reference[begin + column:end:stride]
+                         for column in columns]
     for frame, draw in family["draws"].items():
         if frame == family["frame_start"]:
             continue
@@ -302,7 +393,9 @@ def _static_position_records(family, canonical, *, mod_dir, buffers, source):
         if not path or not exists(path):
             return False
         data = buffers.transient(path)
-        if end > len(data) or data[begin:end] != reference[begin:end]:
+        if end > len(data) or any(
+                data[begin + column:end:stride] != expected
+                for column, expected in zip(columns, reference_columns)):
             return False
     return True
 
@@ -371,7 +464,7 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                               mod_dir, group, default_streams,
                               default_index_size, buffers,
                               geometry_convention, source, geometry,
-                              diagnostics=None):
+                              diagnostics=None, frame_cache=None):
     """Validate and pack changing attributes for one draw family."""
     start = int(family["frame_start"])
     end = int(family["frame_end"])
@@ -379,14 +472,41 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     if set(frames) != set(range(start, end + 1)):
         return None
 
+    cache_key = None
+    if frame_cache is not None and family.get("position_switching"):
+        # Only positions/normals vary on this proven path. Mesh topology,
+        # materials, visibility and playback identity remain owned by each draw.
+        cache_key = (
+            tuple(canonical_prepared.used_vertices),
+            canonical_packed.positions, bytes(canonical_packed.normals)
+            if canonical_packed.normals is not None else None,
+            tuple((frame, frames[frame].position_file,
+                   frames[frame].position_stride, frames[frame].normal_source)
+                  for frame in range(start, end + 1)),
+        )
+        if cache_key in frame_cache:
+            cached = frame_cache[cache_key]
+            if diagnostics is not None:
+                diagnostics["animation_reused_family_count"] += 1
+            return ({**cached, "track_id": family["track_id"],
+                     "clock_ids": list(family["clock_ids"]), "draws": frames}
+                    if cached is not None else None)
+
+    def remember(value):
+        if cache_key is not None:
+            frame_cache[cache_key] = value
+        return value
+
     if (family.get("position_switching")
             and _static_position_records(family, canonical_prepared,
                                          mod_dir=mod_dir, buffers=buffers,
                                          source=source)):
-        return None
+        return remember(None)
 
+    binding_frames = (family["base_draw"].animation_binding_join
+                      and not family.get("position_switching"))
     canonical_topology = None
-    if not family.get("position_switching"):
+    if not family.get("position_switching") and not binding_frames:
         canonical_topology = _prepared_topology(canonical_prepared)
 
     frame_count = end - start + 1
@@ -395,7 +515,7 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
 
     def reject():
         geometry.truncate(checkpoint)
-        return None
+        return remember(None)
 
     position_ref = geometry.reserve(frame_count * frame_bytes)
     normal_ref = None
@@ -404,16 +524,31 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                           if normal_possible else 0)
     positions_changed = False
     normals_changed = False
+    indices, texcoords = [], []
+    topology_changed = False
     bounds_min = [float("inf")] * 3
     bounds_max = [float("-inf")] * 3
     canonical_bounds = (canonical_packed.bounds_min,
                         canonical_packed.bounds_max)
     pack_started = time.perf_counter()
     for frame_index, frame in enumerate(range(start, end + 1)):
+        topology = (canonical_packed.indices, canonical_packed.texcoords)
         if frame == start:
             packed_frame = PackedAnimationFrame(
                 canonical_packed.positions, canonical_packed.normals)
-        elif family.get("position_switching"):
+        elif family.get("position_switching") or binding_frames:
+            if binding_frames:
+                prepare_started = time.perf_counter()
+                topology = pack_animation_topology_frame(
+                    frames[frame], canonical_prepared, canonical_draw=frames[start],
+                    canonical_packed=canonical_packed, mod_dir=mod_dir,
+                    buffers=buffers, default_index_size=default_index_size,
+                    geometry_convention=geometry_convention, source=source)
+                if diagnostics is not None:
+                    diagnostics["animation_prepare_calls"] += 1
+                    diagnostics["animation_prepare_seconds"] += time.perf_counter() - prepare_started
+                if topology is None:
+                    return reject()
             packed_frame = pack_animation_position_frame(
                 frames[frame], canonical_prepared.used_vertices,
                 mod_dir=mod_dir, buffers=buffers, source=source,
@@ -458,6 +593,14 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                     pack_normals=normal_possible)
         if packed_frame is None or len(packed_frame.positions) != frame_bytes:
             return reject()
+        if binding_frames:
+            index_data, uv_data = topology
+            if (len(index_data) != len(canonical_packed.indices)
+                    or len(uv_data or b"") != len(canonical_packed.texcoords or b"")):
+                return reject()
+            indices.append(index_data)
+            texcoords.append(uv_data or b"")
+            topology_changed |= topology != (canonical_packed.indices, canonical_packed.texcoords)
         positions_changed = positions_changed or not _same_float32_attributes(
             packed_frame.positions, canonical_packed.positions)
         frame_bounds = (canonical_bounds if frame == start else
@@ -476,10 +619,11 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                 normal_possible = False
             else:
                 # Magnitude-only changes can round differently after normalization.
-                normals_changed = normals_changed or any(
+                normals_changed = normals_changed or (
+                    packed_frame.normals != canonical_packed.normals and any(
                     abs(a[0] - b[0]) > 1e-6 for a, b in zip(
                         struct.iter_unpack("<f", packed_frame.normals),
-                        struct.iter_unpack("<f", canonical_packed.normals)))
+                        struct.iter_unpack("<f", canonical_packed.normals))))
                 if normal_ref is None:
                     normal_ref = geometry.reserve(frame_count * normal_frame_bytes)
                 geometry.write(
@@ -488,7 +632,7 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
     has_normals = normal_possible and normal_ref is not None
     # Only attributes that survive publication can make a draw animate. Raw
     # record differences may belong to unused fields or unreferenced vertices.
-    if not positions_changed and not (has_normals and normals_changed):
+    if not positions_changed and not (has_normals and normals_changed) and not topology_changed:
         return reject()
     if diagnostics is not None:
         diagnostics["animation_pack_seconds"] += (
@@ -498,7 +642,7 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         if normal_ref is not None:
             geometry.truncate(normal_ref["offset"])
         normal_ref = None
-    return {
+    return remember({
         "track_id": family["track_id"],
         "clock_ids": list(family["clock_ids"]),
         "draws": frames,
@@ -506,7 +650,13 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         "normals_ref": normal_ref,
         "position_frame_bytes": frame_bytes,
         "normal_frame_bytes": (normal_frame_bytes if has_normals else 0),
+        "indices_ref": (geometry.add(b"".join(indices)) if indices and
+                        any(data != canonical_packed.indices for data in indices) else None),
+        "index_frame_bytes": len(canonical_packed.indices),
+        "texcoords_ref": (geometry.add(b"".join(texcoords)) if texcoords and
+                          any(data != (canonical_packed.texcoords or b"") for data in texcoords) else None),
+        "texcoord_frame_bytes": len(canonical_packed.texcoords or b""),
         "frame_count": frame_count,
         "frame_start": start,
         "bounds": {"min": bounds_min, "max": bounds_max},
-    }
+    })
