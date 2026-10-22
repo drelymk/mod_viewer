@@ -546,7 +546,7 @@ def pack_animation_position_frame(
 
 def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
                                    mod_dir, buffers, raw_indices, cache, source=None):
-    """Pack distinct IB/UV blocks using the family's stable union mapping."""
+    """Pack IB/UV blocks after union validation and canonical preparation."""
     resolve = source.resolve_resource if source is not None else \
         lambda value: safe_resource_path(mod_dir, value)
     exists = source.is_file if source is not None else os.path.exists
@@ -558,9 +558,6 @@ def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
                  draw.base, draw.index_size)
     index_bytes = cache.get(index_key)
     if index_bytes is None:
-        if (len(raw) != len(canonical.raw_indices)
-                or not set(raw).issubset(canonical.remap)):
-            return None
         if raw == canonical.raw_indices:
             index_bytes = canonical_packed.indices
         else:

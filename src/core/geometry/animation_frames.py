@@ -85,7 +85,7 @@ def _animation_track_id(frame_var, signature, label):
     return f"track::{frame_var}::{digest}"
 
 
-def _animation_family(families, *, frame_var, draw, signature):
+def _animation_family(families, *, frame_var, draw, signature, candidates):
     key = (str(frame_var).casefold(), signature)
     family = families.get(key)
     if family is None:
@@ -98,6 +98,11 @@ def _animation_family(families, *, frame_var, draw, signature):
             "position_switching": False,
         }
         families[key] = family
+    family["clock_ids"].update(candidates)
+    family["frame_start"] = min(
+        int(clock["frame_start"]) for clock in family["clock_ids"].values())
+    family["frame_end"] = max(
+        int(clock["frame_end"]) for clock in family["clock_ids"].values())
     return family
 
 
@@ -141,12 +146,10 @@ def _animation_families(draws, clocks, group=None):
                 if not candidates:
                     continue
                 family = _animation_family(
-                    families, frame_var=var, draw=draw, signature=signature)
+                    families, frame_var=var, draw=draw, signature=signature,
+                    candidates=candidates)
                 family["binding_frames"] = True
                 family["alternatives"] = [draw]
-                family["clock_ids"].update(candidates)
-                family["frame_start"] = min(int(clock["frame_start"]) for clock in family["clock_ids"].values())
-                family["frame_end"] = max(int(clock["frame_end"]) for clock in family["clock_ids"].values())
                 family["draws"][frame] = replace(draw, animation_bindings=[], **binding)
             continue
         candidate = frame_condition(
@@ -165,15 +168,8 @@ def _animation_families(draws, clocks, group=None):
             continue
         signature = _freeze(tuple(getattr(draw, field) for field in _ANIMATION_STATIC_FIELDS))
         family = _animation_family(
-            families, frame_var=var, draw=draw, signature=signature)
-        for animation_id, clock in ranged_candidates:
-            family["clock_ids"].setdefault(animation_id, clock)
-        family["frame_start"] = min(
-            int(item[1]["frame_start"])
-            for item in family["clock_ids"].items())
-        family["frame_end"] = max(
-            int(item[1]["frame_end"])
-            for item in family["clock_ids"].items())
+            families, frame_var=var, draw=draw, signature=signature,
+            candidates=ranged_candidates)
         # Ambiguous duplicate branches are not a frame family.
         if frame in family["draws"]:
             family["ambiguous"] = True
@@ -218,15 +214,8 @@ def _animation_families(draws, clocks, group=None):
             if frame_draw is None:
                 continue
             family = _animation_family(
-                families, frame_var=var, draw=draw, signature=signature)
-            for animation_id, clock in ranged_candidates:
-                family["clock_ids"].setdefault(animation_id, clock)
-            family["frame_start"] = min(
-                int(item[1]["frame_start"])
-                for item in family["clock_ids"].items())
-            family["frame_end"] = max(
-                int(item[1]["frame_end"])
-                for item in family["clock_ids"].items())
+                families, frame_var=var, draw=draw, signature=signature,
+                candidates=ranged_candidates)
             if frame in family["draws"]:
                 # A direct drawindexed family already carries the same frame
                 # information in its resolved draw snapshot.  Keep that

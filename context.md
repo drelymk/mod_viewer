@@ -235,23 +235,15 @@ of documentation, comments and tests; use portable fixtures instead.
   drawn vertices. Changes to unused record fields, unreferenced vertices or
   normals that are not published cannot activate playback. Keep this decision
   in backend frame preparation rather than scanning frontend frame data.
-- Capture frame-conditioned buffer selections at a branch join as one ordered
-  sequence per authored draw during scanning. Partition ordinary guards with
-  the existing conditional-binding rules; frame clauses never become visibility
-  controls or separate renderable alternatives. Select inherited position/UV
-  state under the same binding guard. Deduplicate the complete resolved sequence,
-  preserving every occurrence and each source's original ordinary guard.
-- Joined tracks use the union of vertices referenced by that draw across its
-  frames, with one mapping for positions, normals, UVs and indices. Index counts
-  must remain compatible. Unused union vertices may have absent UV records;
-  referenced UV records must be valid. Unsupported families retain one canonical
-  draw. Pack distinct changed index/UV blocks once, select them by frame, and
-  upload only when their selection changes. Playback, seeking and ownership
-  release restore every animated attribute from the canonical baseline.
-- Use one baked-frame preparation path. Prove immutable topology/UV state from
-  sources, layouts, ranges and buffer contents; validate it once and use the
-  position-packing path for changing vertex streams. Keep build memory bounded
-  without retaining an extra cache of every animation source buffer.
+- Joined buffer animations form one ordered sequence per authored draw. Resolve
+  inherited bindings under the same guard; frame clauses never become visibility
+  controls. Deduplicate whole sequences while preserving occurrences and source guards.
+- Joined frames share one union vertex mapping across all attributes, with compatible
+  index counts and valid referenced UVs; unused UV records may be absent. Unsupported
+  families retain one canonical draw. Playback and ownership release restore every
+  animated attribute from the canonical baseline.
+- Prove immutable topology/UV state from sources, layouts, ranges and contents before
+  using position-only packing. Keep preparation memory bounded across frames.
 - Execute program assignments, resets, conditions and dispatches in authored
   order. Compile numeric and boolean expressions through the shared condition
   syntax tree; select if/elif/else branches once on entry, including child calls.

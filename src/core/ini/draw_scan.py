@@ -188,18 +188,27 @@ def _index_draws_at_join(authored, history, visibility_vars, vertex_history,
     """Resolve conditional IB and direct VB snapshots at the authored draw."""
     if any(authored.animation_conditions):
         return [authored]
-    vertex_histories = {
-        slot: [item for item in vertex_history if item["slot"] == slot]
-        for slot in authored.vertex_resources}
+    vertex_histories = {}
+    for item in vertex_history:
+        vertex_histories.setdefault(item["slot"], []).append(item)
+    candidates = {}
+    for item in [*history, *vertex_history]:
+        _, animated = _split_animation_conditions(item["conditions"], animation_vars)
+        candidate = frame_condition(animated, animation_vars)
+        if candidate is not None:
+            candidates[candidate] = animated
     # Partition ordinary guards only. Frame writes are an ordered program on
     # this draw, not independent renderable alternatives.
     def ordinary(item):
         conditions, _ = _split_animation_conditions(item["conditions"], animation_vars)
         return {**item, "conditions": conditions}
 
+    ordinary_history = [ordinary(item) for item in history]
+    ordinary_vertices = {
+        slot: [ordinary(item) for item in vertex_histories.get(slot, ())]
+        for slot in authored.vertex_resources}
     draws = [authored]
-    for assignments in [history, *vertex_histories.values()]:
-        assignments = [ordinary(item) for item in assignments]
+    for assignments in [ordinary_history, *ordinary_vertices.values()]:
         resolved = []
         for draw in draws:
             remaining = draw.binding_conditions
@@ -237,16 +246,16 @@ def _index_draws_at_join(authored, history, visibility_vars, vertex_history,
         draw.conditions, draw.animation_conditions = _split_animation_conditions(
             draw.conditions, animation_vars)
         draw.index_resource = _buffer_resource_at_draw(
-            [ordinary(item) for item in history], draw.binding_conditions, None
+            ordinary_history, draw.binding_conditions, None
         ) if history else authored.index_resource
         draw.vertex_resources = {}
-        for slot, assignments in vertex_histories.items():
+        for slot, assignments in ordinary_vertices.items():
             value = _buffer_resource_at_draw(
-                [ordinary(item) for item in assignments], draw.binding_conditions, missing)
+                assignments, draw.binding_conditions, missing)
             if value is not missing:
                 draw.vertex_resources[slot] = value
         draw.animation_bindings = _animation_binding_snapshots(
-            draw, history, vertex_history, animation_vars)
+            draw, history, vertex_histories, candidates)
         if draw.animation_bindings:
             first = draw.animation_bindings[0]
             draw.index_resource = first["index_resource"]
@@ -254,14 +263,8 @@ def _index_draws_at_join(authored, history, visibility_vars, vertex_history,
     return draws
 
 
-def _animation_binding_snapshots(authored, history, vertex_history, animation_vars):
+def _animation_binding_snapshots(authored, history, vertex_histories, candidates):
     """Capture compact frame selections without copying authored draw state."""
-    candidates = {}
-    for item in [*history, *vertex_history]:
-        _, animated = _split_animation_conditions(item["conditions"], animation_vars)
-        candidate = frame_condition(animated, animation_vars)
-        if candidate is not None:
-            candidates[candidate] = animated
     result = []
     missing = object()
     for _, animated in sorted(candidates.items()):
@@ -271,10 +274,9 @@ def _animation_binding_snapshots(authored, history, vertex_history, animation_va
         if not conditions:
             continue
         vertices = dict(authored.vertex_resources)
-        for slot in {item["slot"] for item in vertex_history}:
+        for slot, assignments in vertex_histories.items():
             value = _buffer_resource_at_draw(
-                [item for item in vertex_history if item["slot"] == slot],
-                conditions, missing)
+                assignments, conditions, missing)
             if value is not missing:
                 vertices[slot] = value
             else:
