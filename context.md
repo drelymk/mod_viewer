@@ -197,6 +197,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Native DDS uses validated eligibility only. Supported formats include
   BC formats, DX10 RGBA8/BGRA8/BGRX8 UNORM and sRGB, and legacy
   32-bit RGBA/BGRA/RGBX/BGRX layouts. X channels always display as opaque alpha.
+  All DDS formats use one vertical UV transform with upload `flipY` disabled;
+  r185's uncompressed upload flip repeatedly flips mip 0 and leaves smaller
+  mips unflipped. Keep this transform stable before and after lazy loading/reload.
   Model and menu DDS must be supported, no larger than 8192 in either dimension,
   and structurally valid; otherwise publication rejects them. There is no DDS
   file-byte cap. Menu DDS previews load only when visible

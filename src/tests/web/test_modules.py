@@ -58,8 +58,8 @@ def test_uncompressed_dds_pixels_mips_and_texture_lifecycle(
     assert result == {
         'format': format_id, 'compressed': False, 'requiresBC': False,
         'mips': expected_mips, 'unchanged': True, 'rejected': [True] * 3,
-        'state': {'data': True, 'compressed': False, 'flipY': True,
-                  'repeat': [1, 1], 'offset': [0, 0], 'colorSpace': '',
+        'state': {'data': True, 'compressed': False, 'flipY': False,
+                  'repeat': [1, -1], 'offset': [0, 1], 'colorSpace': '',
                   'filter': True, 'generateMipmaps': False, 'mipCount': 3},
     }
 
