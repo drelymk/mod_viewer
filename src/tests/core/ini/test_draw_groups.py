@@ -3,7 +3,7 @@
 import pytest
 
 from core.ini.draw_groups import build_draw_groups
-from core.ini.draw_scan import _scan_sections_for_draws
+from core.ini.draw_scan import _run_target_name, _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
 from tests.support.model_data import standard_component_resources
 from tests.support.provenance import visible
@@ -249,6 +249,118 @@ this = ResourceMystery
                 (1, "ResourceMystery", ("22222222",))]
     assert draw.diffuse_variants[0]["texture_hashes"] == ("11111111",)
     assert "texture_hashes" not in draw.auxiliary_maps["light_map"]["variants"][0]
+
+
+def test_texture_checks_keep_call_conditions_bound_resource_and_draw_order():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+ps-t3 = ResourceBase
+drawindexed = 3,0,0
+if $mode == 1
+run = CommandListCheck Part \u03a9
+endif
+ps-t3 = ResourceAlternate
+drawindexed = 3,3,0
+post checktextureoverride = ps-t6
+run = CommandListUnknownRuntime
+drawindexed = 3,6,0
+[CommandListCheck Part \u03a9]
+checktextureoverride = ps-t3
+[TextureOverrideBase]
+hash = 11111111
+this = ResourceBase
+[CommandListUnused]
+checktextureoverride = ps-t8
+""")
+    draws = _scan_sections_for_draws(sections, gating_vars={"mode"})[
+        "TextureOverrideComponent01"]["draws"]
+    assert draws[0].texture_checks == []
+    assert draws[1].texture_checks == [{
+        "slot": 3, "resource": "ResourceBase", "texture_hashes": ("11111111",),
+        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
+    }]
+    assert draws[1].slot_textures[0].resource == "ResourceAlternate"
+    assert draws[2].texture_checks is None
+
+    implicit = parse_sections("source-02.ini", text="""[TextureOverrideComponent01]
+drawindexed = 3,0,0
+[CommandListUnused]
+checktextureoverride = ps-t3
+""")
+    assert _scan_sections_for_draws(implicit)["TextureOverrideComponent01"][
+        "draws"][0].texture_checks is None
+    shader_scope = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+checktextureoverride = ps-t4
+drawindexed = 3,0,0
+[ShaderOverrideRuntime]
+run = CommandListShaderChecks
+[CommandListShaderChecks]
+checktextureoverride = ps-t3
+""")
+    assert _scan_sections_for_draws(shader_scope)["TextureOverrideComponent01"][
+        "draws"][0].texture_checks is None
+    for body, uncertain in (("x140 = 0", False), ("run = CommandListExternal", True)):
+        shader_scope["CommandListShaderChecks"] = [body]
+        checks = _scan_sections_for_draws(shader_scope)["TextureOverrideComponent01"][
+            "draws"][0].texture_checks
+        assert (checks is None) == uncertain
+        if not uncertain:
+            assert [check["slot"] for check in checks] == [4]
+
+
+def test_conditional_slot_history_and_checks_keep_their_execution_state():
+    text = """[TextureOverrideComponent01]
+ps-t4 = ResourceBase
+drawindexed = 3,0,0
+if $mode == 1
+ps-t4 = ResourceAlternate
+endif
+checktextureoverride = ps-t4
+drawindexed = 3,3,0
+if $mode == 1
+ps-t4 = null
+endif
+checktextureoverride = ps-t4
+drawindexed = 3,6,0
+ps-t4 = ResourceReset
+drawindexed = 3,9,0
+[TextureOverrideBase]
+hash = 11111111
+this = ResourceBase
+[TextureOverrideAlternate]
+hash = 22222222
+this = ResourceAlternate
+"""
+    draws = _scan_sections_for_draws(parse_sections("source-01.ini", text=text),
+                                     gating_vars={"mode"})["TextureOverrideComponent01"]["draws"]
+    assert [len(draw.slot_textures) for draw in draws] == [1, 2, 3, 1]
+    for value, expected in (("0", "ResourceBase"), ("1", "ResourceAlternate")):
+        assert next(item.resource for item in reversed(draws[1].slot_textures)
+                    if visible(item.dnf, {"mode": value})) == expected
+        checks = [check for check in draws[1].texture_checks
+                  if visible(check["conditions"], {"mode": value})]
+        assert [check["resource"] for check in checks] == [expected]
+    assert draws[2].slot_textures[-1].resource is None
+    # The second check sees null in mode 1; it cannot activate another override.
+    assert len(draws[2].texture_checks) == len(draws[1].texture_checks) + 1
+    assert draws[3].slot_textures[0].resource == "ResourceReset"
+    assert draws[1].slot_textures[0].role_hint is None
+
+
+@pytest.mark.parametrize("target", ["CommandListSkinTexture", r"CommandList\ZZMIv1\SkinTexture"])
+def test_documented_external_texture_checks_do_not_override_local_sections(target):
+    text = f"""[TextureOverrideComponent01]
+run = {target}
+drawindexed = 3,0,0
+[TextureOverrideComponent02]
+drawindexed = 3,0,0
+"""
+    scanned = _scan_sections_for_draws(parse_sections("source-01.ini", text=text))
+    assert [check["slot"] for check in scanned["TextureOverrideComponent01"][
+        "draws"][0].texture_checks] == list(range(1, 11))
+    assert scanned["TextureOverrideComponent02"]["draws"][0].texture_checks == []
+    local = parse_sections("source-01.ini", text=text + f"\n[{target}]\nps-t4 = ResourceOther\n")
+    assert _scan_sections_for_draws(local)["TextureOverrideComponent01"][
+        "draws"][0].texture_checks is None
 
 
 @pytest.mark.parametrize("phase", ["", "pre ", "PoSt\t"])
@@ -650,6 +762,7 @@ stride = 32
     assert draws[1].skinning_resolution["resolution_source"] == "direct"
 
 
+@pytest.mark.parametrize("suffix", ["", " Part 01", " Part \u03a9"])
 @pytest.mark.parametrize("prefix,target,starts", [
     ("", "CommandListPart", [0, 3, 6, 9]),
     ("pre ", "CommandListPart", [0, 6, 3, 9]),
@@ -659,25 +772,27 @@ stride = 32
     ("PoSt\t", "CustomShaderPart", [3, 0, 6, 9]),
 ])
 def test_nested_run_phases_preserve_order_guards_and_authored_sources(
-        prefix, target, starts):
+        prefix, target, starts, suffix):
+    target += suffix
+    nested_target = "CommandListNested" + suffix
     text = f"""[TextureOverrideComponent01]
 ib = ResourceComponent01IB
 vb0 = ResourceComponent01Position
 vb1 = ResourceComponent01Texcoord
 post run = CommandListEmpty
 if $mode == 1
-{prefix}run = {target} ; retain the call's authored ordinal
+{prefix}run = {target.swapcase()}   ; retain the call's authored ordinal
 endif
 drawindexed = 3, 3, 0
 post drawindexed = 3, 9, 0
 [{target}]
-run = CommandListNested
-[CommandListNested]
+run = {nested_target.swapcase()}
+[{nested_target}]
 drawindexed = 3, 0, 0
 post drawindexed = 3, 6, 0
 post run = {target}
-run = ResourceIgnored
-[ResourceIgnored]
+run = ResourceIgnored Block
+[ResourceIgnored Block]
 drawindexed = 3, 12, 0
 [CommandListEmpty]
 """ + standard_component_resources()
@@ -690,7 +805,7 @@ drawindexed = 3, 12, 0
     for start, ordinal in [(0, 0), (6, 1)]:
         draw = by_start[start]
         assert draw.conditions == [[{"var": "mode", "value": "1", "negate": False}]]
-        assert draw.occurrence.section == "CommandListNested"
+        assert draw.occurrence.section == nested_target
         assert draw.occurrence.ordinal == ordinal
         assert draw.occurrence.path == (
             ("TextureOverrideComponent01", 1), (target, 0))
@@ -701,3 +816,17 @@ drawindexed = 3, 12, 0
     assert not by_start[3].conditions
     assert not by_start[9].conditions
     assert [by_start[start].occurrence.ordinal for start in (3, 9)] == [0, 1]
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("run = CommandListPart", "CommandListPart"),
+    ("PoSt run = commandlistpart block 01  ; trailing comment", "CommandListPart Block 01"),
+    ("run = CommandListPart Block 01 Missing", None),
+    ("run = CommandListPart\tBlock 01", None),
+    ("run = ResourceIgnored Block", None),
+    ("run = ; no target", None),
+])
+def test_run_targets_require_the_complete_section_name(command, expected):
+    lookup = {name.lower(): name for name in (
+        "CommandListPart", "CommandListPart Block 01", "ResourceIgnored Block")}
+    assert _run_target_name(command, lookup) == expected

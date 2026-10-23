@@ -20,6 +20,7 @@ from .texture_roles import (
     _effective_role_assignments, _legacy_texture_evidence,
     _semantic_texture_role,
     _condition_difference, _condition_group_is_consistent,
+    _freeze_dnf,
 )
 from .sections import canonical_var_names, line_source
 
@@ -29,6 +30,12 @@ _RUN_SKIP_PREFIXES = (
     "Constants")
 _WWMI_BONE_OFFSET_RE = re.compile(
     r"^\$\\WWMIv1\\vg_offset\s*=\s*(\d+)\s*$", re.I)
+# These runtime entry points check native pixel texture slots 1 through 10.
+# A locally defined section always takes precedence over the external adapter.
+_EXTERNAL_TEXTURE_CHECKS = {
+    "commandlistskintexture": tuple(range(1, 11)),
+    r"commandlist\zzmiv1\skintexture": tuple(range(1, 11)),
+}
 
 
 class _ScannedSections(dict):
@@ -42,10 +49,12 @@ class _ScannedSections(dict):
 
 def _run_target_name(line, section_lookup):
     """Return a traversable ``run =`` target using scanner rules."""
-    match = re.match(r"run\s*=\s*(\S+)", parse_command_line(line).text, re.I)
+    # Section identity includes internal whitespace; a first-token fallback
+    # can silently call an unrelated shorter section or lose the draw entirely.
+    match = re.fullmatch(r"run\s*=\s*(.+)", parse_command_line(line).text, re.I)
     if not match:
         return None
-    target_name = section_lookup.get(match.group(1).lower())
+    target_name = section_lookup.get(match.group(1).strip().lower())
     target_low = target_name.lower() if target_name else ""
     if (not target_name
             or any(target_low.startswith(prefix.lower())
@@ -322,6 +331,40 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     seq_counter = [0]
     scope_legacy_resource_roles = {}
 
+    def record_texture_checks(info, slots, cond_stack):
+        combined = DNF_TRUE
+        for frame in cond_stack:
+            combined = dnf_and(combined, frame["cur"])
+        conditions = normalize_dnf(
+            combined, tracked_vars, var_prefix, qualified_vars)
+        info["_texture_checks_seen"] = True
+        for slot in slots:
+            remaining = conditions
+            for assignment in reversed(info["_slot_texture_history"].get(slot, [])):
+                applicable = [group for group in dnf_and(
+                    remaining or DNF_TRUE, assignment["conditions"] or DNF_TRUE)
+                    if _condition_group_is_consistent(group)]
+                if applicable and assignment["resource"] is not None:
+                    resource = assignment["resource"]
+                    info["_texture_checks"].append({
+                        "slot": slot, "resource": resource,
+                        "texture_hashes": resource_texture_hashes.get(
+                            str(resource or "").casefold(), ()),
+                        "conditions": [] if any(not group for group in applicable) else applicable,
+                    })
+                remaining = _condition_difference(remaining, assignment["conditions"])
+                if remaining is None:
+                    break
+            if remaining is not None:
+                info["_texture_checks"].append({
+                    "slot": slot, "resource": None, "texture_hashes": (),
+                    "conditions": remaining,
+                })
+
+    def texture_check_snapshot(info):
+        return (None if info["_texture_checks_unknown"] else
+                list(info["_texture_checks"]))
+
     def geometry_match(info):
         geometry_hash = info.get("_geometry_hash")
         if geometry_hash is None:
@@ -334,21 +377,22 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
 
     def slot_snapshot(info):
         result = []
-        for slot, resource in sorted(
-                info.get("_cur_slot_textures", {}).items()):
-            structural_role = structural_slot_roles.get(slot)
-            legacy_role = scope_legacy_resource_roles.get(resource.casefold())
-            role_hint = structural_role or legacy_role
-            result.append(SlotTextureBinding(
-                slot=slot,
-                resource=resource,
-                texture_hashes=resource_texture_hashes.get(
-                    resource.casefold(), ()),
-                role_hint=role_hint,
-                role_hint_source=(
-                    "mod_slot_mapping" if structural_role
-                    else "legacy_slot_mapping" if legacy_role else None),
-            ))
+        for slot, history in sorted(info["_slot_texture_history"].items()):
+            for assignment in history:
+                resource = assignment["resource"]
+                structural_role = structural_slot_roles.get(slot)
+                legacy_role = scope_legacy_resource_roles.get(str(resource or "").casefold())
+                role_hint = structural_role or legacy_role
+                result.append(SlotTextureBinding(
+                    slot=slot, resource=resource,
+                    texture_hashes=resource_texture_hashes.get(
+                        str(resource or "").casefold(), ()),
+                    role_hint=role_hint,
+                    role_hint_source=(
+                        "mod_slot_mapping" if structural_role
+                        else "legacy_slot_mapping" if legacy_role else None),
+                    conditions=_freeze_dnf(assignment["conditions"]),
+                ))
         return result
 
     def record_texture_assignment(info, role, res, cond_stack, *, source):
@@ -484,6 +528,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if cond_stack:
                     cond_stack.pop()
                 continue
+            check = re.fullmatch(r"checktextureoverride\s*=\s*ps-t(\d+)", line, re.I)
+            if check:
+                record_texture_checks(info, (int(check[1]),), cond_stack)
             match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
             if match:
                 info["_geometry_hash"] = normalize_geometry_hash(
@@ -499,10 +546,17 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             if match:
                 slot = int(match.group(1))
                 resource = match.group(2)
-                if resource.lower() == "null":
-                    info["_cur_slot_textures"].pop(slot, None)
-                else:
-                    info["_cur_slot_textures"][slot] = resource
+                combined = DNF_TRUE
+                for frame in cond_stack:
+                    combined = dnf_and(combined, frame["cur"])
+                conditions = normalize_dnf(
+                    combined, tracked_vars, var_prefix, qualified_vars)
+                history = info["_slot_texture_history"].setdefault(slot, [])
+                if not conditions and resource.lower() != "null":
+                    history.clear()
+                history.append({"resource": None if resource.lower() == "null" else resource,
+                                "conditions": conditions})
+                if resource.lower() != "null":
                     # Manual candidates retain every authored branch, independent
                     # of the effective slot snapshot and semantic role bindings.
                     info["referenced_textures"].setdefault(
@@ -516,6 +570,13 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                             info, role, resource, cond_stack,
                             source=("slot" if structural_role
                                     else "legacy_slot"))
+                else:
+                    roles = {item.role_hint for item in slot_snapshot(info)
+                             if item.slot == slot and item.role_hint}
+                    if len(roles) == 1:
+                        record_texture_assignment(
+                            info, next(iter(roles)), "null", cond_stack,
+                            source="slot" if structural_slot_roles.get(slot) else "legacy_slot")
             match = re.match(
                 r"cs-t(\d+)\s*=\s*(?:(?:ref|copy)\s+)?(\S+)",
                 line, re.I)
@@ -641,6 +702,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     skinning_remap_resources=dict(
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
+                    texture_checks=texture_check_snapshot(info),
                 )
                 info["auto_draws" if automatic else "draws"].extend(_index_draws_at_join(
                     authored, info["index_binding_history"], visibility_vars,
@@ -667,6 +729,17 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                              target_name, target_phase,
                              execution_path + ((section_name, current_run),))
                     visiting.discard(target_name)
+                elif target_name is None:
+                    external = line.split("=", 1)[1].strip().replace("/", "\\").casefold()
+                    if external in _EXTERNAL_TEXTURE_CHECKS:
+                        if command.phase is not None or phase == "pre":
+                            record_texture_checks(
+                                info, _EXTERNAL_TEXTURE_CHECKS[external], cond_stack)
+                    elif external.startswith(("commandlist", "customshader",
+                                              "builtincommandlist", "builtincustomshader")):
+                        # Unknown runtime helpers may perform checks outside the
+                        # parsed INI. Do not turn their absence into exclusion.
+                        info["_texture_checks_unknown"] = True
 
     scanned = _ScannedSections(texture_override_index=texture_override_index)
     for name, lines in sections.items():
@@ -684,7 +757,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "auto_draws": [], "auto_guards": [],
             "_diffuse_chain_key": None, "_diffuse_history": [],
             "_aux_maps": {}, "_texture_provenance": {},
-            "_cur_vertex_resources": {}, "_cur_slot_textures": {},
+            "_cur_vertex_resources": {},
+            "_slot_texture_history": {},
             "referenced_textures": {},
             "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
@@ -694,6 +768,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
             "_cur_skinning_bone_offset": 0,
+            "_texture_checks": [], "_texture_checks_seen": False,
+            "_texture_checks_unknown": False,
         }
         for phase in ("pre", "post"):
             scan(info, [], {name}, name, phase)
@@ -709,12 +785,33 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             info.get("_cur_vertex_resources") or {})
         info.pop("_cur_vertex_resources", None)
         info["slot_textures_at_end"] = slot_snapshot(info)
+        info["texture_checks_at_end"] = texture_check_snapshot(info)
         for key in (
-                "_cur_slot_textures", "_cur_diffuse_variants",
+                "_cur_diffuse_variants",
                 "_diffuse_chain_key", "_diffuse_last_cond",
                 "_diffuse_history", "_aux_maps", "_texture_provenance"):
             info.pop(key, None)
         scanned[name] = info
+    # Only a supported check reached from an authored draw scope establishes
+    # explicit execution. Unused helpers cannot disable implicit-only mods.
+    explicit_checks = any(
+        name.casefold().startswith("textureoverride")
+        and (info["draws"] or info["auto_draws"])
+        and info["_texture_checks_seen"] for name, info in scanned.items())
+    # Shader-scoped checks cannot be associated with a geometry draw without
+    # live shader identity. Preserve implicit compatibility for those INIs.
+    shader_checks = any(
+        re.fullmatch(r"checktextureoverride\s*=\s*ps-t\d+", command.text, re.I)
+        or (re.match(r"run\s*=", command.text, re.I)
+            and _run_target_name(command.text, section_lookup) is None)
+        for name in sections if name.casefold().startswith(("shaderoverride", "shaderregex"))
+        for target in _reachable_execution_sections(sections, name, section_lookup)
+        for command in commands[target])
+    if not explicit_checks or shader_checks:
+        for info in scanned.values():
+            info["texture_checks_at_end"] = None
+            for draw in [*info["draws"], *info["auto_draws"]]:
+                draw.texture_checks = None
     global_compute_candidates = {}
     for name, info in scanned.items():
         if not name.lower().startswith("commandlist"):

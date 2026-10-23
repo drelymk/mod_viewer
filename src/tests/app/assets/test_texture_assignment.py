@@ -10,7 +10,7 @@ import pytest
 from app.mods import metadata as metadata
 from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.enrichment import _apply_texture_enrichment
-from app.mods.loader import ModLoadContext, load_mod
+from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
 from app.assets import index as asset_index
 from app.assets.textures import collect_texture_inventory
 from app.assets.resolver import AssetComponentBinding
@@ -22,6 +22,7 @@ from core.mod_discovery import discover_ini_paths
 from core.mod_source import DirectoryModSource, ZipModSource
 from tests.support.model_data import standard_component_resources
 from core.materials.game_profile import GameDetection
+from tests.support.provenance import visible
 
 
 def _write_geometry(root):
@@ -30,6 +31,220 @@ def _write_geometry(root):
     (root / "t.buf").write_bytes(struct.pack(
         "<6f", 0, 0, 1, 0, 0, 1))
     (root / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
+
+
+def test_shared_asset_diffuse_keeps_check_scope_implicit_compatibility_and_range_fallback(
+        tmp_path, monkeypatch):
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    _write_geometry(mod)
+    names = ("PartA", "PartB", "PartC")
+    colors = [f"color-{value:02}.dds" for value in range(21)]
+    for filename in [*colors, "normal.dds", "normal-base.dds", "normal-alt.dds"]:
+        (mod / filename).write_bytes(b"synthetic texture")
+    text = "[Constants]\nglobal persist $style = 0\n"
+    text += "[KeyStyle]\nkey = x\ntype = cycle\n$style = " + ",".join(map(str, range(21))) + "\n"
+    for name, geometry_hash, first in zip(names, ("10101010", "10101010", "20202020"), (0, 3, 0)):
+        normal_history = "ps-t7 = ResourceMapBase\n" if name == "PartC" else ""
+        if normal_history:
+            for value in range(14, 21):
+                normal_history += f"if $style == {value}\nps-t7 = ResourceMapAlternate\nendif\n"
+        text += f"""[TextureOverride{name}]
+hash = {geometry_hash}
+match_first_index = {first}
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+{"__NORMAL_BINDING__" if name == "PartC" else ""}
+{normal_history}
+run = CommandListDraw {name}
+[CommandListDraw {name}]
+drawindexed = 3,0,0
+"""
+    text += standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    text += "[ResourceNormal]\nfilename = normal.dds\n"
+    text += """[ResourceMapBase]
+filename = normal-base.dds
+[ResourceMapAlternate]
+filename = normal-alt.dds
+[Resource_20202020_1_22222222_Slot_NormalMap]
+filename = normal-base.dds
+"""
+    override = "[TextureOverrideColor]\nhash = 11111111\nthis = ResourceColor0\n"
+    for value in range(1, 21):
+        override += f"if $style == {value}\nthis = ResourceColor{value}\nendif\n"
+    for value, filename in enumerate(colors):
+        text += f"[ResourceColor{value}]\nfilename = {filename}\n"
+    root = tmp_path / "assets"
+    asset = root / "Asset01"
+    asset.mkdir(parents=True)
+    (asset / "hash.json").write_text(json.dumps([
+        {"component_name": "Component01", "ib": "10101010", "object_indexes": [0, 3],
+         "object_classifications": ["A", "B"], "texture_hashes": [
+             [["Diffuse", ".dds", "11111111"], ["NormalMap", ".dds", "22222222"]],
+             [["Diffuse", ".dds", "11111111"], ["NormalMap", ".dds", "22222222"]]]},
+        {"component_name": "Component02", "ib": "20202020", "object_indexes": [0],
+         "object_classifications": ["A"],
+         "texture_hashes": [[["Diffuse", ".dds", "11111111"], ["NormalMap", ".dds", "22222222"]]]},
+    ]), encoding="utf-8")
+    originals = [asset / f"Asset01{component}Diffuse.dds"
+                 for component in ("Component01A", "Component01B", "Component02A")]
+    for path in originals:
+        path.write_bytes(b"shared original")
+        path.with_name(path.name.replace("Diffuse", "NormalMap")).write_bytes(b"original normal")
+    index = asset_index.build_index("ZZMI", str(root))
+    monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
+    monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
+        game="zzz", runtime="unknown", texture_api="zzmi", confidence="high", scores={}))
+    path = mod / "mod.ini"
+    # Adding an unrelated slot reference cannot claim another draw's diffuse.
+    for normal_binding, replacements in (("", override), ("ps-t4 = ResourceNormal", override),
+                                         ("ps-t3 = ResourceNormal\nchecktextureoverride = ps-t3", override),
+                                         ("run = CommandListSkinTexture\nps-t4 = ResourceNormal", override),
+                                         ("ps-t4 = ResourceNormal", "")):
+        path.write_text(text.replace("__NORMAL_BINDING__", normal_binding) + replacements, encoding="utf-8")
+        context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(path)], str(mod)),
+                                 asset_folders=[{"type": "ZZMI", "path": str(root), "enabled": True}])
+        payload = load_mod(context=context, geometry=GeometryBlob(),
+                           texture_source=lambda _path, role: f"/texture/test/{role}")
+        assert not payload.get("error")
+        metadata.hydrate_textures(str(mod), payload, data={}, source=context.source)
+        assert payload["asset_resolution"]["exact_draws"] == 3
+        assert set(payload["controls"]["toggles"]) == {"KeyStyle"}
+        for name, original in zip(names, originals):
+            mesh = payload["meshes"][name + "-1"]
+            explicit_check = "SkinTexture" in normal_binding or "checktextureoverride" in normal_binding
+            replaced = bool(replacements) and (not explicit_check or
+                                               ("SkinTexture" in normal_binding and name == "PartC"))
+            assert mesh["tex_key"] == ("diffuse::" + colors[0] if replaced
+                                       else asset_texture_key(str(root), str(original)))
+            pool = payload["texture_pools"][mesh["texture_pool_id"]]
+            assert asset_texture_key(str(root), str(original)) in {item["tex_key"] for item in pool}
+            if replacements:
+                assert {"diffuse::" + color for color in colors} <= {item["tex_key"] for item in pool}
+            if replaced:
+                for value, color in enumerate(colors):
+                    assert next(rule["tex_key"] for rule in reversed(mesh["texture_variants"])
+                                if visible(rule["conditions"], {"style": str(value)})) == "diffuse::" + color
+            else:
+                assert not mesh.get("texture_variants")
+            if name == "PartC":
+                assert mesh["normal_map_key"] == "normal_map::normal-base.dds"
+                for value in range(21):
+                    expected = "normal_map::normal-" + ("base" if value < 14 else "alt") + ".dds"
+                    assert next(rule["tex_key"] for rule in reversed(mesh["normal_map_variants"])
+                                if visible(rule["conditions"], {"style": str(value)})) == expected
+                if "ResourceNormal" in normal_binding:
+                    assert "diffuse::normal.dds" in {item["tex_key"] for item in pool}
+            elif explicit_check:
+                original_normal = original.with_name(original.name.replace("Diffuse", "NormalMap"))
+                assert mesh["normal_map_key"] == asset_texture_key(
+                    str(root), str(original_normal), "normal_map")
+                assert not mesh.get("normal_map_variants")
+    # A matching filename and descriptive name alone cannot prove the role.
+    path.write_text((text + override).replace("20202020_1_22222222_Slot", "10101010_1_22222222_Slot")
+                    .replace("__NORMAL_BINDING__", "run = CommandListSkinTexture"), encoding="utf-8")
+    context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(path)], str(mod)),
+                             asset_folders=[{"type": "ZZMI", "path": str(root), "enabled": True}])
+    unproven = load_mod(context=context, geometry=GeometryBlob(),
+                        texture_source=lambda _path, role: f"/texture/test/{role}")
+    assert not unproven.get("error")
+    assert not unproven["meshes"]["PartC-1"].get("normal_map_key")
+    assert not unproven["meshes"]["PartC-1"].get("normal_map_variants")
+
+
+def test_slot_material_lifecycle_keeps_native_defaults_replacements_and_null(tmp_path, monkeypatch):
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    _write_geometry(mod)
+    for name in ("color-base", "color-alt", "data-base", "data-alt"):
+        (mod / (name + ".dds")).write_bytes(b"synthetic texture")
+    root = tmp_path / "assets"
+    asset = root / "Asset01"
+    asset.mkdir(parents=True)
+    roles = ("Diffuse", "NormalMap", "LightMap")
+    (asset / "hash.json").write_text(json.dumps([{
+        "component_name": "Component01", "ib": "10101010", "object_indexes": [0],
+        "object_classifications": ["A"], "texture_hashes": [[
+            [role, ".dds", f"{value * 0x11111111:08x}"] for value, role in enumerate(roles, 1)]]
+    }]), encoding="utf-8")
+    for role in roles:
+        (asset / f"Asset01Component01A{role}.dds").write_bytes(b"original")
+    index = asset_index.build_index("ZZMI", str(root))
+    monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
+    monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
+        game="zzz", runtime="unknown", texture_api="zzmi", confidence="high", scores={}))
+    text = """[Constants]
+global persist $mode = 0
+[KeyMode]
+key = x
+type = cycle
+$mode = 0,1,2,3
+[TextureOverrideComponent01]
+hash = 10101010
+match_first_index = 0
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+__BASE__
+if $mode == 1
+ps-t5 = ResourceColorBase
+ps-t8 = ResourceDataBase
+elif $mode == 2
+ps-t5 = ResourceColorAlternate
+ps-t8 = ResourceDataAlternate
+elif $mode == 3
+ps-t5 = null
+ps-t8 = null
+endif
+drawindexed = 3,0,0
+[ResourceColorBase]
+filename = color-base.dds
+[ResourceColorAlternate]
+filename = color-alt.dds
+[ResourceDataBase]
+filename = data-base.dds
+[ResourceDataAlternate]
+filename = data-alt.dds
+[Resource_10101010_1_11111111_Slot_Diffuse]
+filename = color-base.dds
+[Resource_10101010_1_22222222_Slot_NormalMap]
+filename = data-base.dds
+""" + standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    path = mod / "mod.ini"
+    for base, branches in (("ps-t5 = ResourceColorBase\nps-t8 = ResourceDataBase", True),
+                           ("", True), ("", False)):
+        current = text.replace("__BASE__", base)
+        if not branches:
+            current = current.replace("elif $mode == 2\nps-t5 = ResourceColorAlternate\nps-t8 = ResourceDataAlternate\n"
+                                      "elif $mode == 3\nps-t5 = null\nps-t8 = null\n", "")
+        path.write_text(current, encoding="utf-8")
+        context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(path)], str(mod)),
+                                 asset_folders=[{"type": "ZZMI", "path": str(root), "enabled": True}])
+        payload = load_mod(context=context, geometry=GeometryBlob(),
+                           texture_source=lambda _path, role: f"/texture/test/{role}")
+        assert not payload.get("error")
+        mesh = payload["meshes"]["Component01-1"]
+        refreshed = load_semantic_state(context)
+        assert set(payload["controls"]["toggles"]) == {"KeyMode"}
+        assert refreshed["controls"] == payload["controls"]
+        semantic = refreshed["meshes"]["Component01-1"]
+        for field, role, filename in (("tex_key", "diffuse", "color"),
+                                       ("normal_map_key", "normal_map", "data"),
+                                       ("light_map_key", "light_map", None)):
+            variants = "texture_variants" if role == "diffuse" else role + "_variants"
+            assert semantic.get(field) == mesh.get(field)
+            assert semantic.get(variants) == mesh.get(variants)
+            for value in range(4):
+                effective = next((rule["tex_key"] for rule in reversed(mesh.get(variants, []))
+                                  if visible(rule["conditions"], {"mode": str(value)})), mesh.get(field))
+                if not base and (value == 0 or (not branches and value != 1)):
+                    suffix = {"diffuse": "Diffuse", "normal_map": "NormalMap", "light_map": "LightMap"}[role]
+                    expected = asset_texture_key(str(root), str(asset / f"Asset01Component01A{suffix}.dds"), role)
+                else:
+                    expected = (role + "::" + filename + ("-alt.dds" if value == 2 else "-base.dds")
+                                if filename and value != 3 else None)
+                assert effective == expected, (base, role, value)
 
 
 @pytest.mark.parametrize("archived", [False, True], ids=["directory", "zip"])

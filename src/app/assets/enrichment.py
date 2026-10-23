@@ -7,7 +7,9 @@ import re
 
 from core.geometry.identity import normalize_geometry_hash
 from core.geometry.draw_call import DrawCall
-from core.ini.parser import TextureOverrideIndex, _condition_difference
+from core.ini.parser import (TextureOverrideIndex, _condition_difference,
+                             _condition_group_is_consistent)
+from core.ini.dnf import DNF_TRUE, dnf_and, dnf_or
 from core.textures.classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
@@ -231,6 +233,15 @@ def _authored_texture_rules(draw, role):
             if default else [])
 
 
+def _mod_texture_conditions(draw, role):
+    if draw.texture_default(role):
+        return DNF_TRUE
+    conditions = []
+    for rule in draw.texture_rules(role):
+        conditions = dnf_or(conditions, rule.get("conditions") or DNF_TRUE)
+    return conditions
+
+
 def _texture_variant_list(draw, role):
     return getattr(draw, {
         "diffuse": "texture_variants",
@@ -251,12 +262,29 @@ def _apply_hash_replacements(draw, evidence, texture_index):
             item.texture_hash, ())
         if not replacements:
             continue
+        activation = DNF_TRUE
+        if draw.texture_checks is not None:
+            activation = []
+            for check in draw.texture_checks:
+                hashes = check.get("texture_hashes", ())
+                if (item.texture_hash in hashes
+                        or (not hashes and "resource" in check and check["resource"] is None)):
+                    activation = dnf_or(
+                        activation, check.get("conditions") or DNF_TRUE)
+            if not activation:
+                continue
         existing = _authored_texture_rules(draw, item.role)
         additions = []
         for replacement in replacements:
             if not replacement.file:
                 continue
-            conditions = replacement.dnf
+            conditions = [group for group in dnf_and(
+                replacement.dnf or DNF_TRUE, activation)
+                if _condition_group_is_consistent(group)]
+            if not conditions:
+                continue
+            if any(not group for group in conditions):
+                conditions = []
             # Authored role bindings outrank hash recovery. Replacements for
             # this hash share one ordered history: later matching writes win.
             for higher in existing:
@@ -408,58 +436,84 @@ def _append_replacement_evidence(draw, usage, replacement, classification,
     draw.asset_slot_evidence.append(item)
 
 
-def _apply_slot_hashes(draw, evidence):
-    """Use a component-local texture hash to identify a slot's role."""
+def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None):
+    """Promote one draw's slot history using corroborated component evidence."""
     by_hash = {}
     for item in evidence:
         by_hash.setdefault(item.texture_hash, []).append(item)
+    declared_roles = {}
+    for geometry, texture_hash, role, filename in declarations:
+        roles = {item.role for item in by_hash.get(texture_hash, ()) if item.role}
+        if geometry == geometry_hash and roles == {role}:
+            declared_roles.setdefault(filename, set()).add(role)
+    slot_roles = {}
     for binding in draw.slot_textures:
-        if not binding.texture_hashes or not binding.file:
-            continue
-        matches = {
-            item
-            for texture_hash in binding.texture_hashes
-            for item in by_hash.get(texture_hash, [])
-        }
+        matches = {item for texture_hash in binding.texture_hashes
+                   for item in by_hash.get(texture_hash, ())}
         roles = {item.role for item in matches if item.role}
+        if binding.file:
+            roles.update(declared_roles.get(_texture_file_identity(binding.file), ()))
         if binding.role_hint:
-            conflicting = roles - {binding.role_hint}
-            if conflicting:
-                for item in matches:
-                    if item.role not in conflicting:
-                        continue
+            for item in matches:
+                if item.role and item.role != binding.role_hint:
                     draw.asset_slot_evidence.append({
-                        "resource": binding.resource,
-                        "slot": binding.slot,
-                        "texture_hash": item.texture_hash,
-                        "role": binding.role_hint,
-                        "role_source": (
-                            binding.role_hint_source or "mod_slot_mapping"),
-                        "asset_hash_role": item.role,
-                        "conflict": True,
+                        "resource": binding.resource, "slot": binding.slot,
+                        "texture_hash": item.texture_hash, "role": binding.role_hint,
+                        "role_source": binding.role_hint_source or "mod_slot_mapping",
+                        "asset_hash_role": item.role, "conflict": True,
                     })
-                continue
-            if (roles == {binding.role_hint} and binding.file
-                    and not _has_mod_texture(draw, binding.role_hint)):
-                draw.set_texture_default(binding.role_hint, binding.file)
-                draw.texture_hashes.setdefault(binding.role_hint, []).append(
-                    next(iter(matches)).texture_hash)
-                provenance = (
-                    "mod_slot_legacy"
-                    if binding.role_hint_source == "legacy_slot_mapping"
-                    else "mod_slot_semantic")
-                draw.texture_provenance.setdefault(
-                    binding.role_hint, provenance)
+            roles.add(binding.role_hint)
+        slot_roles.setdefault(binding.slot, set()).update(roles)
+    resolved = {}
+    for binding in draw.slot_textures:
+        roles = slot_roles[binding.slot]
+        if len(roles) != 1 or (binding.resource is not None and not binding.file):
             continue
-        if len(roles) != 1:
+        role = next(iter(roles))
+        if _has_mod_texture(draw, role):
             continue
-        item = next(iter(matches))
-        if _has_mod_texture(draw, item.role):
+        conditions = binding.dnf
+        if draw.conditions and conditions and not any(
+                _condition_group_is_consistent([*left, *right])
+                for left in draw.conditions for right in conditions):
             continue
-        draw.set_texture_default(item.role, binding.file)
-        draw.texture_hashes.setdefault(item.role, []).append(
-            item.texture_hash)
-        draw.texture_provenance[item.role] = "mod_texture_hash"
+        resolved.setdefault(role, []).append({
+            "conditions": conditions, "file": binding.file,
+            "texture_hashes": binding.texture_hashes,
+        })
+    for role, rules in resolved.items():
+        unconditional = next((rule for rule in reversed(rules)
+                              if not rule["conditions"]), None)
+        if unconditional:
+            draw.set_texture_default(role, unconditional["file"])
+        if len(rules) > 1 or (rules and (rules[0]["conditions"] or rules[0]["file"] is None)):
+            draw.set_texture_variants(role, rules)
+        draw.texture_hashes[role] = list(dict.fromkeys(
+            texture_hash for rule in rules for texture_hash in rule["texture_hashes"]))
+        draw.texture_provenance.setdefault(role, "mod_texture_hash")
+
+
+def _texture_file_identity(filename):
+    return os.path.normcase(os.path.normpath(filename.replace("\\", "/")).replace("\\", "/"))
+
+
+def _texture_declarations(resources, inventory):
+    # Exported declarations are evidence only: the draw's exact Asset must
+    # independently confirm geometry, texture hash and role, and a bound file
+    # must match the declaration. The ordinal is not a shader slot number.
+    result = []
+    pattern = re.compile(
+        r"Resource_([0-9a-f]{8})_\d+_([0-9a-f]{8})_Slot_(Diffuse|NormalMap|LightMap|MaterialMap)$", re.I)
+    for name, resource in resources.items():
+        match = pattern.fullmatch(name)
+        filename = resource.get("filename")
+        if not match or not filename:
+            continue
+        identity = _texture_file_identity(filename)
+        if inventory.get(identity, {}).get("source") == "mod":
+            result.append((match[1].casefold(), match[2].casefold(),
+                           _ROLE_NAMES[match[3].casefold()], identity))
+    return result
 
 
 def _associate_textures(group, records, inventory, filename_matches,
@@ -583,6 +637,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
         if candidate["source"] == "mod"}
     asset_names = {}
     original_files = {}
+    declarations_by_ini = {}
     for group, group_bindings in zip(groups, bindings):
         for binding in group_bindings:
             if (asset_textures.exact_texture_binding(binding)
@@ -592,6 +647,10 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
     for position, group in enumerate(groups):
         group_bindings = bindings[position] if position < len(bindings) else ()
         index = group.get("_texture_override_index") or texture_index
+        resources = group.get("_texture_resources", {})
+        if id(resources) not in declarations_by_ini:
+            declarations_by_ini[id(resources)] = _texture_declarations(resources, inventory)
+        declarations = declarations_by_ini[id(resources)]
         records = []
         for draw, binding in zip(group.get("draws", ()), group_bindings):
             exact = asset_textures.exact_texture_binding(binding)
@@ -788,12 +847,11 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = _unique_evidence(
                 evidence + role_hint_evidence + dds_evidence)
+            _apply_slot_hashes(draw, evidence + role_hint_evidence, declarations, binding.geometry_hash)
             _apply_hash_replacements(draw, all_evidence, index)
-            _apply_slot_hashes(draw, evidence + role_hint_evidence)
-            # Resolve all mod bindings first. Original Asset maps belong to
-            # the fallback material used only when the mod has no diffuse.
-            if _has_mod_texture(draw, "diffuse"):
-                continue
+            # Use the existing Asset defaults only in states with no applicable
+            # mod binding. Conditional null rules are authored empty states.
+            diffuse_conditions = _mod_texture_conditions(draw, "diffuse")
             conflicting_asset_roles = {
                 item.get("asset_hash_role")
                 for item in draw.asset_slot_evidence
@@ -804,7 +862,10 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     continue
                 if item.role in conflicting_asset_roles:
                     continue
-                if _has_mod_texture(draw, item.role):
+                role_conditions = _mod_texture_conditions(draw, item.role)
+                covered = (role_conditions if item.role == "diffuse" else
+                           dnf_or(diffuse_conditions, role_conditions))
+                if covered and _condition_difference([], covered) is None:
                     continue
                 filename = item.file
                 if not filename:
@@ -815,3 +876,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                 }
                 draw.texture_provenance[item.role] = \
                     "asset_original_fallback"
+                if item.role != "diffuse" and diffuse_conditions:
+                    clear = (_condition_difference(diffuse_conditions, role_conditions)
+                             if role_conditions else diffuse_conditions)
+                    if clear is not None:
+                        draw.set_texture_variants(item.role, [
+                            *draw.texture_rules(item.role), {"conditions": clear, "file": None}])

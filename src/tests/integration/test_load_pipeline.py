@@ -31,7 +31,8 @@ from tests.support_snapshot import snapshot_context
 from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
-def test_deferred_component_loads_geometry_and_staged_reload_preserves_disk(tmp_path):
+@pytest.mark.parametrize("suffix", ["", " Part \u03a9"])
+def test_deferred_component_loads_geometry_and_staged_reload_preserves_disk(tmp_path, suffix):
     text = basic_model_ini().replace("drawindexed = 3, 0, 0", """if $mode == 1
 post run = CommandListReplacement
 endif
@@ -50,6 +51,8 @@ drawindexed = 3, 0, 0
 filename = replacement.buf
 stride = 12
 """
+    text = text.replace("CommandListReplacement", "CommandListReplacement" + suffix)
+    text = text.replace("CustomShaderReplacement", "CustomShaderReplacement" + suffix)
     ini = tmp_path / "mod.ini"
     ini.write_text(text, encoding="utf-8")
     for name, data in triangle_geometry().items():
@@ -63,13 +66,13 @@ stride = 12
     assert len(meshes) == 2
     assert meshes[0]["identity"] != meshes[1]["identity"]
     assert meshes[0]["sources"][0]["section"] == "TextureOverrideComponent01"
-    assert meshes[1]["sources"][0]["section"] == "CustomShaderReplacement"
+    assert meshes[1]["sources"][0]["section"] == "CustomShaderReplacement" + suffix
     assert meshes[1]["conditions"] == [
         [{"var": "mode", "value": "1", "negate": False}]]
     assert all(mesh["pos"]["length"] > 0 for mesh in meshes)
     assert not edit_session.has_pending(str(tmp_path))
 
-    staged = text.replace("post run = CommandListReplacement", "; deferred call removed")
+    staged = text.replace("post run = CommandListReplacement" + suffix, "; deferred call removed")
     payload = mod_loader.load_mod(
         str(tmp_path), overrides={str(ini): staged}, geometry=GeometryBlob())
     assert not payload.get("error")

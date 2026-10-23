@@ -180,7 +180,7 @@ def apply_draw_texture_bindings(entry, draw, *, registry):
         for variant in texture_rules:
             key = registry.ensure(
                 registry.resolve(variant["file"]))
-            if key:
+            if key or variant["file"] is None:
                 variants.append({
                     "conditions": variant["conditions"], "tex_key": key,
                 })
@@ -193,7 +193,7 @@ def apply_draw_texture_bindings(entry, draw, *, registry):
         for variant in rules:
             key = registry.ensure(
                 registry.resolve(variant["file"]), channel)
-            if key:
+            if key or variant["file"] is None:
                 variants.append({
                     "conditions": variant["conditions"], "tex_key": key,
                 })
@@ -204,7 +204,7 @@ def apply_draw_texture_bindings(entry, draw, *, registry):
     for variant in draw.texture_rules("normal_map"):
         key = registry.ensure(
             registry.resolve(variant["file"]), normal_role)
-        if key:
+        if key or variant["file"] is None:
             normal_variants.append({
                 "conditions": variant["conditions"], "tex_key": key,
             })
