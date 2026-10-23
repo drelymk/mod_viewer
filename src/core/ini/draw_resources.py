@@ -439,6 +439,27 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         return resource_source.is_file(
             resource_source.resolve_resource(filename))
 
+    def unambiguous_available_copy(copy_sources, visiting):
+        """Reject competing files without guessing which copies execute."""
+        pending = list(copy_sources)
+        visited = set(visiting)
+        available = None
+        while pending:
+            candidate = pending.pop()
+            if candidate in visited:
+                continue
+            visited.add(candidate)
+            candidate_file = _res_get(resources, candidate).get("filename")
+            reference = resource_source.resolve_resource(candidate_file)
+            if reference is None or not resource_source.is_file(reference):
+                pending.extend(resource_copy_sources.get(candidate.lower(), ()))
+                continue
+            if available is not None and not resource_source.same_reference(
+                    available, reference):
+                return False
+            available = reference
+        return available is not None
+
     def resolve_descriptor_info(resource_name, visiting=None):
         if not resource_name:
             return {}
@@ -479,7 +500,8 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         copy_sources = resource_copy_sources.get(cache_key.lower(), ())
         missing_file = (filename and copy_sources and resource_source is not None
                         and not file_available(filename))
-        if not filename or missing_file:
+        if not filename or (missing_file and unambiguous_available_copy(
+                copy_sources, visiting)):
             # Runtime copies can populate a resource whose initial file is absent.
             # Keep its declaration if no available authored source can replace it.
             resolved = dict(resource_info) if filename else {}

@@ -97,6 +97,44 @@ def test_missing_declared_buffer_uses_only_available_authored_copies(
         "position.buf"
 
 
+@pytest.mark.parametrize("commands, second_file, expected", [
+    ("ResourcePosition = copy ResourceB", "alternate.buf", "missing.buf"),
+    ("if $mode == 1\nResourcePosition = copy ResourceB\nendif",
+     "alternate.buf", "missing.buf"),
+    ("ResourcePosition = copy ResourceB", "./base.buf", "base.buf"),
+    ("if $mode == 1\nResourcePosition = copy ResourceB\nendif",
+     "./base.buf", "base.buf"),
+    ("ResourcePosition = copy ResourceAlias\n[CommandListCopies]\n"
+     "ResourceAlias = copy ResourceA\nResourceAlias = copy ResourceB",
+     "alternate.buf", "missing.buf"),
+])
+def test_missing_buffer_copy_fallback_rejects_ambiguous_sources(
+        tmp_path, commands, second_file, expected):
+    for name in ("base.buf", "alternate.buf"):
+        (tmp_path / name).write_bytes(b"buffer")
+    sections = parse_sections("source-01.ini", text=f"""
+[ResourcePosition]
+filename = missing.buf
+stride = 12
+[Present]
+ResourcePosition = copy ResourceA
+{commands}
+[ResourceA]
+filename = base.buf
+stride = 12
+[ResourceB]
+filename = {second_file}
+stride = 12
+""")
+    resources = extract_resources(sections)
+    resolved = _resolve_component_buffers(
+        {}, resources, _collect_resource_copy_sources(sections, resources),
+        sections=sections, resource_source=DirectoryModSource(tmp_path))
+
+    assert resolved["resolve_vertex_info"]("ResourcePosition")["filename"] == expected
+    assert resources["ResourcePosition"]["filename"] == "missing.buf"
+
+
 @pytest.mark.parametrize("reference", ("reference", "copy reference"))
 @pytest.mark.parametrize("phase", ("", "post "))
 def test_resource_reference_alias_resolves_file_backed_source(reference, phase):
