@@ -251,6 +251,62 @@ this = ResourceMystery
     assert "texture_hashes" not in draw.auxiliary_maps["light_map"]["variants"][0]
 
 
+def test_texture_checks_keep_call_conditions_bound_resource_and_draw_order():
+    sections = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+ps-t3 = ResourceBase
+drawindexed = 3,0,0
+if $mode == 1
+run = CommandListCheck Part \u03a9
+endif
+ps-t3 = ResourceAlternate
+drawindexed = 3,3,0
+post checktextureoverride = ps-t6
+run = CommandListUnknownRuntime
+drawindexed = 3,6,0
+[CommandListCheck Part \u03a9]
+checktextureoverride = ps-t3
+[TextureOverrideBase]
+hash = 11111111
+this = ResourceBase
+[CommandListUnused]
+checktextureoverride = ps-t8
+""")
+    draws = _scan_sections_for_draws(sections, gating_vars={"mode"})[
+        "TextureOverrideComponent01"]["draws"]
+    assert draws[0].texture_checks == []
+    assert draws[1].texture_checks == [{
+        "slot": 3, "resource": "ResourceBase", "texture_hashes": ("11111111",),
+        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
+    }]
+    assert draws[1].slot_textures[0].resource == "ResourceAlternate"
+    assert draws[2].texture_checks is None
+
+    implicit = parse_sections("source-02.ini", text="""[TextureOverrideComponent01]
+drawindexed = 3,0,0
+[CommandListUnused]
+checktextureoverride = ps-t3
+""")
+    assert _scan_sections_for_draws(implicit)["TextureOverrideComponent01"][
+        "draws"][0].texture_checks is None
+
+
+@pytest.mark.parametrize("target", ["CommandListSkinTexture", r"CommandList\ZZMIv1\SkinTexture"])
+def test_documented_external_texture_checks_do_not_override_local_sections(target):
+    text = f"""[TextureOverrideComponent01]
+run = {target}
+drawindexed = 3,0,0
+[TextureOverrideComponent02]
+drawindexed = 3,0,0
+"""
+    scanned = _scan_sections_for_draws(parse_sections("source-01.ini", text=text))
+    assert [check["slot"] for check in scanned["TextureOverrideComponent01"][
+        "draws"][0].texture_checks] == list(range(1, 11))
+    assert scanned["TextureOverrideComponent02"]["draws"][0].texture_checks == []
+    local = parse_sections("source-01.ini", text=text + f"\n[{target}]\nps-t4 = ResourceOther\n")
+    assert _scan_sections_for_draws(local)["TextureOverrideComponent01"][
+        "draws"][0].texture_checks is None
+
+
 @pytest.mark.parametrize("phase", ["", "pre ", "PoSt\t"])
 def test_texture_override_index_preserves_conditions_and_resolves_files(phase):
     sections = parse_sections("source-01.ini", text=f"""[KeyStyle]

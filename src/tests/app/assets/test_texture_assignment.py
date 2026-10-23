@@ -33,7 +33,7 @@ def _write_geometry(root):
     (root / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
 
 
-def test_shared_asset_diffuse_keeps_implicit_replacements_and_exact_range_fallback(
+def test_shared_asset_diffuse_keeps_check_scope_implicit_compatibility_and_range_fallback(
         tmp_path, monkeypatch):
     mod = tmp_path / "mod"
     mod.mkdir()
@@ -85,6 +85,7 @@ drawindexed = 3,0,0
     path = mod / "mod.ini"
     # Adding an unrelated slot reference cannot claim another draw's diffuse.
     for normal_binding, replacements in (("", override), ("ps-t4 = ResourceNormal", override),
+                                         ("run = CommandListSkinTexture\nps-t4 = ResourceNormal", override),
                                          ("ps-t4 = ResourceNormal", "")):
         path.write_text(text.replace("__NORMAL_BINDING__", normal_binding) + replacements, encoding="utf-8")
         context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(path)], str(mod)),
@@ -97,12 +98,14 @@ drawindexed = 3,0,0
         assert set(payload["controls"]["toggles"]) == ({"KeyStyle"} if replacements else set())
         for name, original in zip(names, originals):
             mesh = payload["meshes"][name + "-1"]
-            assert mesh["tex_key"] == ("diffuse::" + colors[0] if replacements
+            replaced = bool(replacements) and ("SkinTexture" not in normal_binding or name == "PartC")
+            assert mesh["tex_key"] == ("diffuse::" + colors[0] if replaced
                                        else asset_texture_key(str(root), str(original)))
             pool = payload["texture_pools"][mesh["texture_pool_id"]]
             assert asset_texture_key(str(root), str(original)) in {item["tex_key"] for item in pool}
             if replacements:
                 assert {"diffuse::" + color for color in colors} <= {item["tex_key"] for item in pool}
+            if replaced:
                 for value, color in enumerate(colors):
                     assert next(rule["tex_key"] for rule in reversed(mesh["texture_variants"])
                                 if visible(rule["conditions"], {"style": str(value)})) == "diffuse::" + color

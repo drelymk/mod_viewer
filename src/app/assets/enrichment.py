@@ -7,7 +7,9 @@ import re
 
 from core.geometry.identity import normalize_geometry_hash
 from core.geometry.draw_call import DrawCall
-from core.ini.parser import TextureOverrideIndex, _condition_difference
+from core.ini.parser import (TextureOverrideIndex, _condition_difference,
+                             _condition_group_is_consistent)
+from core.ini.dnf import DNF_TRUE, dnf_and, dnf_or
 from core.textures.classifier import (DDSClassification, classification_cache_key,
                                  classify_dds, is_color_candidate)
 from core.resource_paths import safe_resource_path
@@ -251,12 +253,28 @@ def _apply_hash_replacements(draw, evidence, texture_index):
             item.texture_hash, ())
         if not replacements:
             continue
+        activation = DNF_TRUE
+        if draw.texture_checks is not None:
+            activation = []
+            for check in draw.texture_checks:
+                hashes = check.get("texture_hashes", ())
+                if not hashes or item.texture_hash in hashes:
+                    activation = dnf_or(
+                        activation, check.get("conditions") or DNF_TRUE)
+            if not activation:
+                continue
         existing = _authored_texture_rules(draw, item.role)
         additions = []
         for replacement in replacements:
             if not replacement.file:
                 continue
-            conditions = replacement.dnf
+            conditions = [group for group in dnf_and(
+                replacement.dnf or DNF_TRUE, activation)
+                if _condition_group_is_consistent(group)]
+            if not conditions:
+                continue
+            if any(not group for group in conditions):
+                conditions = []
             # Authored role bindings outrank hash recovery. Replacements for
             # this hash share one ordered history: later matching writes win.
             for higher in existing:

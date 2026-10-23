@@ -55,6 +55,9 @@ class AuthoredDrawCall:
     # WWMI remapper uses cs-t35 for the per-vertex full VertexVG identities.
     skinning_remap_resources: dict[int, str | None] = field(default_factory=dict)
     slot_textures: list = field(default_factory=list)
+    # None preserves implicit compatibility when execution is unknown; an empty
+    # list means this draw precedes any supported check in an explicit scope.
+    texture_checks: list | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +131,7 @@ class DrawCall(MutableMapping):
     emission_map_variants: list = field(default_factory=list)
     geometry_match: GeometryMatch | None = None
     slot_textures: list = field(default_factory=list)
+    texture_checks: list | None = None
     asset_binding: object | None = None
     texture_provenance: dict = field(default_factory=dict)
     asset_texture_defaults: dict = field(default_factory=dict)
@@ -153,7 +157,7 @@ class DrawCall(MutableMapping):
     _NON_RENDER_FIELDS: ClassVar[frozenset[str]] = frozenset({
         "label", "conditions", "animation_conditions", "sources",
         "occurrence", "geometry_match", "auto_draw",
-        "slot_textures", "asset_binding", "texture_provenance",
+        "slot_textures", "texture_checks", "asset_binding", "texture_provenance",
         "asset_slot_evidence", "texture_hashes",
         "skinning_bone_offset",
         "skinning_source", "skinning_error", "skinning_resolution",
@@ -240,6 +244,8 @@ class DrawCall(MutableMapping):
     # MutableMapping compatibility for existing low-level consumers.
     def _present(self, key):
         value = getattr(self, key)
+        if key == "texture_checks":
+            return value is not None
         if key in self._ALWAYS_PRESENT:
             return True
         if isinstance(value, (list, dict)):

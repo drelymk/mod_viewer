@@ -340,6 +340,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             geometry_match=info.get("geometry_match_at_end"),
             vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
+            texture_checks=info.get("texture_checks_at_end"),
         )]
         auto_sources = (info.get("auto_sources") or
                         family_auto_sources.get(family, []))
@@ -468,6 +469,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 texture_provenance=dict(authored.texture_provenance),
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
+                texture_checks=authored.texture_checks,
             )
             effective_ib = authored.index_resource or ib_resource
             effective_ib_info = _res_get(resources, effective_ib)

@@ -29,6 +29,12 @@ _RUN_SKIP_PREFIXES = (
     "Constants")
 _WWMI_BONE_OFFSET_RE = re.compile(
     r"^\$\\WWMIv1\\vg_offset\s*=\s*(\d+)\s*$", re.I)
+# These runtime entry points check native pixel texture slots 1 through 10.
+# A locally defined section always takes precedence over the external adapter.
+_EXTERNAL_TEXTURE_CHECKS = {
+    "commandlistskintexture": tuple(range(1, 11)),
+    r"commandlist\zzmiv1\skintexture": tuple(range(1, 11)),
+}
 
 
 class _ScannedSections(dict):
@@ -324,6 +330,26 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     seq_counter = [0]
     scope_legacy_resource_roles = {}
 
+    def record_texture_checks(info, slots, cond_stack):
+        combined = DNF_TRUE
+        for frame in cond_stack:
+            combined = dnf_and(combined, frame["cur"])
+        conditions = normalize_dnf(
+            combined, tracked_vars, var_prefix, qualified_vars)
+        info["_texture_checks_seen"] = True
+        for slot in slots:
+            resource = info["_cur_slot_textures"].get(slot)
+            info["_texture_checks"].append({
+                "slot": slot, "resource": resource,
+                "texture_hashes": resource_texture_hashes.get(
+                    str(resource or "").casefold(), ()),
+                "conditions": conditions,
+            })
+
+    def texture_check_snapshot(info):
+        return (None if info["_texture_checks_unknown"] else
+                list(info["_texture_checks"]))
+
     def geometry_match(info):
         geometry_hash = info.get("_geometry_hash")
         if geometry_hash is None:
@@ -486,6 +512,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if cond_stack:
                     cond_stack.pop()
                 continue
+            check = re.fullmatch(r"checktextureoverride\s*=\s*ps-t(\d+)", line, re.I)
+            if check:
+                record_texture_checks(info, (int(check[1]),), cond_stack)
             match = re.match(r"hash\s*=\s*(\S+)", line, re.I)
             if match:
                 info["_geometry_hash"] = normalize_geometry_hash(
@@ -643,6 +672,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     skinning_remap_resources=dict(
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
+                    texture_checks=texture_check_snapshot(info),
                 )
                 info["auto_draws" if automatic else "draws"].extend(_index_draws_at_join(
                     authored, info["index_binding_history"], visibility_vars,
@@ -669,6 +699,17 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                              target_name, target_phase,
                              execution_path + ((section_name, current_run),))
                     visiting.discard(target_name)
+                elif target_name is None:
+                    external = line.split("=", 1)[1].strip().replace("/", "\\").casefold()
+                    if external in _EXTERNAL_TEXTURE_CHECKS:
+                        if command.phase is not None or phase == "pre":
+                            record_texture_checks(
+                                info, _EXTERNAL_TEXTURE_CHECKS[external], cond_stack)
+                    elif external.startswith(("commandlist", "customshader",
+                                              "builtincommandlist", "builtincustomshader")):
+                        # Unknown runtime helpers may perform checks outside the
+                        # parsed INI. Do not turn their absence into exclusion.
+                        info["_texture_checks_unknown"] = True
 
     scanned = _ScannedSections(texture_override_index=texture_override_index)
     for name, lines in sections.items():
@@ -696,6 +737,8 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "_geometry_hash": None, "_match_first_index": None,
             "_match_index_count": None,
             "_cur_skinning_bone_offset": 0,
+            "_texture_checks": [], "_texture_checks_seen": False,
+            "_texture_checks_unknown": False,
         }
         for phase in ("pre", "post"):
             scan(info, [], {name}, name, phase)
@@ -711,12 +754,24 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             info.get("_cur_vertex_resources") or {})
         info.pop("_cur_vertex_resources", None)
         info["slot_textures_at_end"] = slot_snapshot(info)
+        info["texture_checks_at_end"] = texture_check_snapshot(info)
         for key in (
                 "_cur_slot_textures", "_cur_diffuse_variants",
                 "_diffuse_chain_key", "_diffuse_last_cond",
                 "_diffuse_history", "_aux_maps", "_texture_provenance"):
             info.pop(key, None)
         scanned[name] = info
+    # Only a supported check reached from an authored draw scope establishes
+    # explicit execution. Unused helpers cannot disable implicit-only mods.
+    explicit_checks = any(
+        name.casefold().startswith("textureoverride")
+        and (info["draws"] or info["auto_draws"])
+        and info["_texture_checks_seen"] for name, info in scanned.items())
+    if not explicit_checks:
+        for info in scanned.values():
+            info["texture_checks_at_end"] = None
+            for draw in [*info["draws"], *info["auto_draws"]]:
+                draw.texture_checks = None
     global_compute_candidates = {}
     for name, info in scanned.items():
         if not name.lower().startswith("commandlist"):
