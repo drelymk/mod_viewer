@@ -174,9 +174,6 @@ of documentation, comments and tests; use portable fixtures instead.
 - Original Asset texture fallback is available only when a draw has no mod
   diffuse default or conditional assignment after mod texture resolution.
   A mod diffuse suppresses all original Asset maps; retain mod-authored maps.
-  Within one INI and exact Asset, shared hashes tied to an authored material
-  component do not automatically bind another, unreferenced Asset component.
-  Keep those files in its picker; unscoped implicit replacements remain valid.
 - Collect one lightweight inventory of all DDS/PNG/JPG/JPEG images through
   `ModSource`, including undeclared files, subfolders and compressed mods.
   Collect Asset images only from exact matched Asset directories, never by

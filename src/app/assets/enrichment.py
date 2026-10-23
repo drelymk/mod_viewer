@@ -583,36 +583,19 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
         if candidate["source"] == "mod"}
     asset_names = {}
     original_files = {}
-    component_evidence = {}
-    referenced_hash_components = {}
-    component_references = {
-        id(group): bool(group.get("referenced_texture_files") or any(
-            (draw := DrawCall.from_mapping(raw, group)).slot_textures
-            or any(_has_mod_texture(draw, role) for role in draw._TEXTURE_PREFIX)
-            for raw in group.get("draws", ())))
-        for group in groups}
     for group, group_bindings in zip(groups, bindings):
         for binding in group_bindings:
             if (asset_textures.exact_texture_binding(binding)
                     and binding.asset_type != "WWMI"):
                 asset_names.setdefault((binding.root, binding.asset), {})[id(group)] = (
                     binding.component_name or names[id(group)])
-                if binding.asset_type in ("GIMI", "ZZMI"):
-                    if binding not in component_evidence:
-                        component_evidence[binding] = _gimi_evidence(binding, metadata_cache)
-                    if component_references[id(group)] and binding.component_name:
-                        scope = (id(group.get("_texture_override_index") or texture_index),
-                                 binding.root, binding.asset)
-                        for item in component_evidence[binding]:
-                            referenced_hash_components.setdefault(
-                                (*scope, item.texture_hash), set()).add(binding.component_name)
     for position, group in enumerate(groups):
         group_bindings = bindings[position] if position < len(bindings) else ()
         index = group.get("_texture_override_index") or texture_index
         records = []
         for draw, binding in zip(group.get("draws", ()), group_bindings):
             exact = asset_textures.exact_texture_binding(binding)
-            evidence = (component_evidence.get(binding, [])
+            evidence = (_gimi_evidence(binding, metadata_cache)
                         if exact and binding.asset_type in ("GIMI", "ZZMI") else [])
             located_evidence = []
             for item in evidence:
@@ -805,14 +788,6 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = _unique_evidence(
                 evidence + role_hint_evidence + dds_evidence)
-            if not component_references[id(group)] and binding.component_name:
-                # A shared hash is not permission to copy a referenced
-                # component's material into another, unreferenced component.
-                scope = (id(index), binding.root, binding.asset)
-                all_evidence = [item for item in all_evidence
-                                if not (owners := referenced_hash_components.get(
-                                    (*scope, item.texture_hash)))
-                                or binding.component_name in owners]
             _apply_hash_replacements(draw, all_evidence, index)
             _apply_slot_hashes(draw, evidence + role_hint_evidence)
             # Resolve all mod bindings first. Original Asset maps belong to

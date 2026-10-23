@@ -215,6 +215,8 @@ def inventory(config, excluded, *, disabled_ini=False):
 def pipeline_signature(config):
     files = sorted((ROOT / "src").rglob("*.py"))
     files += sorted((ROOT / "src/web/js").rglob("*.js"))
+    files += sorted((ROOT / "src/web").rglob("*.html"))
+    files += sorted((ROOT / "src/web").rglob("*.css"))
     files += [Path(__file__)]
     hasher = hashlib.sha256(json.dumps(config, sort_keys=True).encode())
     for path in files:
@@ -223,6 +225,29 @@ def pipeline_signature(config):
     # Asset index changes can alter enrichment without changing mod files.
     for path in sorted((ROOT / "src/asset-index").glob("*.json")):
         hasher.update(json.dumps(file_stamp(path)).encode())
+        hasher.update(path.read_bytes())
+
+    # External metadata and texture edits need not rebuild the local index.
+    # Stat the enabled libraries once per audit, without reading texture bodies.
+    def onerror(error):
+        raise error
+
+    for entry in config.get("assetFolders", []):
+        if not entry.get("enabled", True):
+            continue
+        root = Path(entry["path"])
+        hasher.update(str(root).encode())
+        hasher.update(str(root.exists()).encode())
+        for folder, directories, filenames in os.walk(root, onerror=onerror):
+            directories[:] = sorted(
+                name for name in directories if not linked(Path(folder) / name)
+            )
+            for name in sorted(filenames):
+                path = Path(folder) / name
+                hasher.update(path.relative_to(root).as_posix().encode())
+                hasher.update(json.dumps(file_stamp(path)).encode())
+                if path.suffix.casefold() == ".json":
+                    hasher.update(path.read_bytes())
     return hasher.hexdigest()
 
 

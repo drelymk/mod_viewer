@@ -24,7 +24,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from tools.audit_mod_library import digest, write_json  # noqa: E402
+from tools.audit_mod_library import (  # noqa: E402
+    digest,
+    pipeline_signature,
+    write_json,
+)
+
+
+def probe_signature(config):
+    return hashlib.sha256(
+        pipeline_signature(config).encode()
+        + Path(__file__).read_bytes()
+        + (ROOT / "tools/benchmark_texture_pipeline.py").read_bytes()
+    ).hexdigest()
 
 
 def menu_position_count(menu):
@@ -365,10 +377,9 @@ def main():
     output = audit / "browser"
     output.mkdir(parents=True, exist_ok=True)
     results = {}
-    signature = hashlib.sha256(
-        Path(__file__).read_bytes()
-        + (ROOT / "tools/benchmark_texture_pipeline.py").read_bytes()
-    ).hexdigest()
+    signature = probe_signature(
+        json.loads((ROOT / "src/config.json").read_text(encoding="utf-8"))
+    )
     for entry in selected:
         result_path = output / "results" / f"{entry['id']}.json"
         cache_key = digest(

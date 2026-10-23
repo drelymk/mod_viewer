@@ -1,6 +1,7 @@
 """Corpus runner boundaries, read-only loading and resumable worker outcomes."""
 
 import json
+import os
 import subprocess
 import zipfile
 from pathlib import Path
@@ -129,6 +130,59 @@ def test_worker_resume_cache_and_report_are_scoped_to_current_manifest(tmp_path,
     assert summary['completed'] == 1
     assert summary['excluded'] == ['downloads']
     assert '&lt;model&gt;' in (tmp_path / 'report.html').read_text(encoding='utf-8')
+
+
+def test_resume_signatures_follow_external_assets_indexes_and_browser_ui(tmp_path, monkeypatch):
+    from tools import audit_mod_browser as browser
+
+    root = tmp_path / 'project'
+    files = ['src/loader.py', 'src/web/js/view.js', 'src/web/index.html',
+             'src/web/css/view.css', 'src/asset-index/index.json',
+             'tools/audit_mod_library.py', 'tools/audit_mod_browser.py',
+             'tools/benchmark_texture_pipeline.py']
+    for name in files:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('original', encoding='utf-8')
+    asset = tmp_path / 'assets' / 'Asset01'
+    asset.mkdir(parents=True)
+    metadata = asset / 'hash.json'
+    texture = asset / 'original.dds'
+    metadata.write_text('original', encoding='utf-8')
+    texture.write_bytes(b'original')
+    disabled = tmp_path / 'disabled-assets'
+    disabled.mkdir()
+    config = {'assetFolders': [{'path': str(asset.parent)},
+                              {'path': str(disabled), 'enabled': False}]}
+    monkeypatch.setattr(audit, 'ROOT', root)
+    monkeypatch.setattr(browser, 'ROOT', root)
+    monkeypatch.setattr(audit, '__file__', str(root / 'tools/audit_mod_library.py'))
+    monkeypatch.setattr(browser, '__file__', str(root / 'tools/audit_mod_browser.py'))
+
+    def signatures():
+        return audit.pipeline_signature(config), browser.probe_signature(config)
+
+    previous = signatures()
+    assert signatures() == previous
+    (disabled / 'ignored.dds').write_bytes(b'changed')
+    assert signatures() == previous
+    for path in [metadata, texture, root / 'src/asset-index/index.json',
+                 root / 'src/web/index.html', root / 'src/web/css/view.css']:
+        stamp = path.stat()
+        path.write_bytes(b'modified')
+        # Metadata content is relevant even when an indexer preserves its stamp.
+        mtime = stamp.st_mtime_ns + (1_000_000 if path == texture else 0)
+        os.utime(path, ns=(stamp.st_atime_ns, mtime))
+        current = signatures()
+        assert all(new != old for new, old in zip(current, previous)), path.name
+        previous = current
+    added = asset / 'extra.dds'
+    added.write_bytes(b'added')
+    assert signatures() != previous
+    added.unlink()
+    assert signatures() == previous
+    texture.rename(asset / 'renamed.dds')
+    assert signatures() != previous
 
 
 @pytest.mark.parametrize('outcome,status', [('timeout', 'timeout'), ('crash', 'worker_crash')])

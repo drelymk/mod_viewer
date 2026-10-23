@@ -62,67 +62,6 @@ def test_asset_hash_applies_conditional_mod_replacement(tmp_path):
     assert draw.texture_hashes["diffuse"] == ["11111111"]
 
 
-@pytest.mark.parametrize("reference_scope", ["none", "same_ini", "sibling_ini"])
-def test_shared_hash_stays_in_referenced_asset_component(tmp_path, reference_scope):
-    asset = tmp_path / "assets" / "Asset01"
-    asset.mkdir(parents=True)
-    (asset / "hash.json").write_text(json.dumps([
-        {"component_name": "Hair", "ib": "10101010", "object_indexes": [0, 12],
-         "object_classifications": ["A", "B"], "texture_hashes": [
-             [["Diffuse", ".dds", "11111111"]], [["Diffuse", ".dds", "11111111"]]]},
-        {"component_name": "Body", "ib": "20202020", "object_indexes": [0],
-         "object_classifications": ["A"],
-         "texture_hashes": [[["Diffuse", ".dds", "11111111"]]]},
-    ]), encoding="utf-8")
-    for suffix in ("HairA", "HairB", "BodyA"):
-        (asset / f"Asset01{suffix}Diffuse.dds").write_bytes(b"original")
-    filenames = [f"color-{value:02}.dds" for value in range(21)]
-    (tmp_path / "detail.dds").write_bytes(b"detail")
-    replacements = []
-    for value, filename in enumerate(filenames):
-        (tmp_path / filename).write_bytes(b"replacement")
-        conditions = [[{"var": "style", "value": str(value), "negate": False}]] if value else []
-        item = TextureReplacement.from_dnf(
-            "11111111", f"ResourceColor{value}", conditions, "TextureOverrideColor")
-        replacements.append(TextureReplacement(
-            item.original_hash, item.resource, item.conditions, item.source_section, filename))
-    index = TextureOverrideIndex(replacements_by_hash={"11111111": tuple(replacements)})
-    draws = [DrawCall(), DrawCall(), DrawCall()]
-    groups = [{"name": f"Part{position}", "draws": [draw], "_texture_override_index": index}
-              for position, draw in enumerate(draws)]
-    if reference_scope != "none":
-        groups[2]["referenced_texture_files"] = ["detail.dds"]
-    if reference_scope == "sibling_ini":
-        groups[2]["_texture_override_index"] = TextureOverrideIndex(
-            replacements_by_hash=index.replacements_by_hash)
-    bindings = [[AssetComponentBinding(
-        status="exact", component_status="exact", range_status="exact",
-        asset_type="GIMI", asset="Asset01", root=str(asset.parent),
-        geometry_hash=geometry_hash, component_name=component, first_index=first,
-        classification=classification, metadata="Asset01/hash.json")]
-        for geometry_hash, component, first, classification in (
-            ("10101010", "Hair", 0, "A"), ("10101010", "Hair", 12, "B"),
-            ("20202020", "Body", 0, "A"))]
-
-    apply(groups, bindings, mod_dir=str(tmp_path))
-
-    for position, draw in enumerate(draws[:2]):
-        if reference_scope == "same_ini":
-            assert draw.texture_default("diffuse") is None
-            assert draw.texture_rules("diffuse") == []
-            assert draw.asset_texture_defaults["diffuse"]["path"].endswith(
-                f"Asset01Hair{'AB'[position]}Diffuse.dds")
-        else:
-            assert draw.texture_default("diffuse") == filenames[0]
-            assert [rule["file"] for rule in draw.texture_rules("diffuse")] == filenames
-        assert set(filenames) <= {item["file"] for item in groups[position]["texture_candidates"]}
-    assert draws[2].texture_default("diffuse") == filenames[0]
-    assert [rule["file"] for rule in draws[2].texture_rules("diffuse")] == filenames
-    for value, filename in enumerate(filenames):
-        assert next(rule["file"] for rule in reversed(draws[2].texture_rules("diffuse"))
-                    if visible(rule["conditions"], {"style": str(value)})) == filename
-
-
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     entries = [{"type": "GIMI", "path": root, "enabled": True}]
