@@ -76,7 +76,7 @@ def _dds(width=4, height=4, format_name="bc7_unorm", mip_count=1,
 @pytest.mark.parametrize("format_name", list(_DXGI))
 def test_dx10_formats_are_reported_with_canonical_ids(tmp_path, format_name):
     path = tmp_path / f"{format_name}.dds"
-    data = _dds(5, 7, format_name=format_name, mip_count=3)
+    data = _dds(8, 12, format_name=format_name, mip_count=3)
     path.write_bytes(data)
 
     info = inspect_dds(path)

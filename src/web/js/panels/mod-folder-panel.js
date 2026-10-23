@@ -52,6 +52,7 @@ export function initModFolderPanel({ switchMod, onRegistryChanged }) {
     onDelete: (entry) => removeFolder(entry),
     renderLabel: (entry) => entry.name,
     classPrefix: 'mod-folder',
+    revealActivePath: true,
   });
 
   function selectFolder(path) {

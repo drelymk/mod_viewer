@@ -300,6 +300,10 @@ def native_dds_info_from_header(header, file_size,
     info = inspect_dds_header(header, file_size)
     if info is None or max(info.width, info.height) > max_size:
         return None
+    # Core WebGPU requires compressed base dimensions to cover whole blocks.
+    # Smaller mip levels may still end in partial blocks.
+    if info.compressed and (info.width % 4 or info.height % 4):
+        return None
     return info
 
 

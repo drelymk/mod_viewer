@@ -31,11 +31,14 @@ export function createFolderRegistryPanel({
   renderRootMeta,
   rootBusySelectors = [],
   classPrefix = 'folder',
+  revealActivePath = false,
 }) {
   const childCache = new Map();
+  const pendingExpansions = new WeakMap();
   let roots = [];
   let activePath = null;
   let activeMenu = null;
+  let revealRevision = 0;
 
   const className = (suffix) => `${classPrefix}-${suffix} folder-${suffix}`;
   const selector = (suffix) => `.${classPrefix}-${suffix}`;
@@ -67,6 +70,12 @@ export function createFolderRegistryPanel({
 
   function setActivePath(path) {
     activePath = canonicalPath(path);
+    highlightActivePath();
+    const revision = ++revealRevision;
+    if (revealActivePath) return revealActive(revision);
+  }
+
+  function highlightActivePath() {
     listElement.querySelectorAll(`[${pathAttribute}]`).forEach((row) => {
       const rowPath = canonicalPath(row.getAttribute(pathAttribute));
       row.classList.toggle('active', rowPath === activePath);
@@ -84,11 +93,13 @@ export function createFolderRegistryPanel({
       .querySelector(`:scope > ${selector('row')} ${selector('expand')}`)
       .classList.toggle('leaf', children.length === 0 && !node.classList.contains('expanded'));
     children.forEach((child) => childList.appendChild(createNode(child, false)));
+    highlightActivePath();
   }
 
-  async function expandNode(node, path, arrow) {
+  async function expandNode(node, path, arrow, ensureExpanded = false) {
     const childList = node.querySelector(`:scope > ${selector('children')}`);
     if (node.classList.contains('expanded')) {
+      if (ensureExpanded) return pendingExpansions.get(node);
       node.classList.remove('expanded');
       arrow.classList.remove('expanded');
       childList.hidden = true;
@@ -103,6 +114,7 @@ export function createFolderRegistryPanel({
     childList.hidden = false;
     arrow.setAttribute('aria-expanded', 'true');
     arrow.setAttribute('aria-label', t('folder.collapse', { name: arrow.dataset.folderName }));
+    if (pendingExpansions.has(node)) return pendingExpansions.get(node);
     const key = canonicalPath(path);
     if (childCache.has(key)) {
       renderChildren(node, childCache.get(key));
@@ -114,8 +126,16 @@ export function createFolderRegistryPanel({
     loading.className = className('child-error');
     loading.textContent = t('folder.loading');
     childList.appendChild(loading);
+    const pending = populateChildren(node, path, childList, key);
+    pendingExpansions.set(node, pending);
+    await pending;
+    pendingExpansions.delete(node);
+  }
+
+  async function populateChildren(node, path, childList, key) {
     try {
       const response = await listChildren(path);
+      if (!listElement.contains(node)) return;
       if (response?.error) throw new Error(response.error);
       const children = Array.isArray(response) ? response : response?.folders || [];
       childCache.set(key, children);
@@ -126,6 +146,35 @@ export function createFolderRegistryPanel({
       message.className = className('child-error');
       message.textContent = caught.message || String(caught);
       childList.appendChild(message);
+    }
+  }
+
+  async function revealActive(revision) {
+    const matchingNode = (nodes, parentPath = '') =>
+      [...nodes]
+        .map((node) => {
+          const row = node.querySelector(`:scope > ${selector('row')}`);
+          return { node, path: canonicalPath(row?.getAttribute(pathAttribute)) };
+        })
+        .filter(
+          ({ path }) => path.length > parentPath.length && (path === activePath || activePath.startsWith(`${path}/`)),
+        )
+        .sort((left, right) => right.path.length - left.path.length)[0]?.node;
+
+    if (!activePath) return;
+    let node = matchingNode(listElement.children);
+    while (node && revision === revealRevision && listElement.contains(node)) {
+      const row = node.querySelector(`:scope > ${selector('row')}`);
+      const path = row.getAttribute(pathAttribute);
+      if (canonicalPath(path) === activePath) {
+        row.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      const arrow = row.querySelector(selector('expand'));
+      if (arrow.disabled) return;
+      await expandNode(node, path, arrow, true);
+      if (revision !== revealRevision || !listElement.contains(node) || !node.classList.contains('expanded')) return;
+      node = matchingNode(node.querySelector(`:scope > ${selector('children')}`).children, canonicalPath(path));
     }
   }
 

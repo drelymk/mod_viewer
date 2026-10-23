@@ -964,6 +964,44 @@ def test_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path, f
                for left, right in zip(compressed, reference_pixels))
 
 
+def test_unaligned_dds_replacement_fails_locally_and_preserves_viewer(viewer, tmp_path):
+    path = tmp_path / 'texture-01.dds'
+    path.write_bytes(split_color_dds())
+    publication = server.begin_texture_publication(str(tmp_path))
+    url = publication.register(str(path))
+    publication.commit()
+    # A published source can change before its lazy browser request arrives.
+    path.write_bytes(dx10_dds(mode6_block() * 2, width=7, height=4, dxgi_format=99))
+    try:
+        payload = textured_payload()
+        key = 'diffuse::texture-01.dds'
+        payload['textures'] = {key: url}
+        payload['meshes']['mesh-00']['tex_key'] = key
+        page = viewer({'fixture-01': payload, 'fixture-02': model_payload()})
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.evaluate('''async () => {
+          const {hasTexture} = await import('./js/mesh/mesh-factory.js');
+          window.hasFixtureTexture = hasTexture;
+          const {renderer} = await import('./js/scene/scene.js');
+          window.gpuErrors = [];
+          renderer.backend.device.addEventListener('uncapturederror',event=>window.gpuErrors.push(event.error.message));
+        }''')
+        open_model(page, 'fixture-01')
+        wait_loaded(page)
+        page.wait_for_function('key => !window.hasFixtureTexture(key)', arg=key)
+        mesh_pixel(page)
+        assert page.locator('#renderer-error').is_hidden()
+        open_model(page, 'fixture-02')
+        wait_loaded(page)
+        mesh_pixel(page)
+        assert page.evaluate('window.gpuErrors') == []
+        assert page.locator('#renderer-error').is_hidden()
+        assert errors == []
+    finally:
+        publication.discard()
+
+
 def test_active_uv_refreshes_when_dds_is_replaced_at_the_same_url(viewer, tmp_path):
     path = tmp_path / 'texture-01.dds'
     original = split_color_dds()
