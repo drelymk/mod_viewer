@@ -429,41 +429,6 @@ checked-in settings hide disabled-mod loading and mesh editing. These are
 build-time UI settings; running from source enables every feature.
 
 
-## Auditing a local mod library
-
-With the development dependencies installed, run the read-only corpus audit
-against the Mod Folders and enabled Asset Folders in `src/config.json`:
-
-```console
-python tools/audit_mod_library.py --exclude downloads --workers 2
-python tools/audit_mod_browser.py --per-library 1
-python tools/triage_mod_library.py
-```
-
-`--exclude` accepts a configured library name or root and can be repeated.
-Use `--disabled-ini` to load only `DISABLED`-prefixed INIs through the viewer's
-disabled-INI option. Active and disabled INIs are never combined. This mode uses
-`mod-analysis/library-audit-disabled/` by default; `--output` can select a separate
-report directory. Browser and triage passes read the same mode from the manifest.
-The backend pass inventories directory and archive selections, runs the actual
-mod-open pipeline and diagnostics in isolated workers, and records timeouts and
-potentially omitted draws. Results resume when the input and pipeline signatures
-match. Reports, private corpus identities and logs stay under the ignored
-`mod-analysis/library-audit/` directory; source mods are never exported or edited.
-
-Open `report.html` for backend results and `browser/gallery.html` for screenshots.
-The triage pass writes `findings.md` and `triage.json`, separating selections
-without authored draws and expected zero-count omissions from compatibility
-candidates. These buckets still require inspection before declaring viewer bugs.
-The optional browser pass requires compatible local Edge/WebGPU support. It
-checks individual control cycles, slider endpoints, animation controls and reloads,
-and captures three model views. Use `--all` to cover every successful backend
-selection, or increase `--per-library` for a larger sample. `--max-states 0`
-removes its per-mod control budget. Browser coverage is separate from backend
-success: screenshots need visual review, and control combinations, Rig/Physics,
-editing and export remain outside this read-only audit. Keep corpus and GPU runs
-opt-in locally rather than adding them to ordinary GitHub CI.
-
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
