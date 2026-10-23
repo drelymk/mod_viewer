@@ -2,6 +2,7 @@
 
 import pytest
 
+from core.mod_source import DirectoryModSource
 from core.ini.draw_groups import build_draw_groups
 from core.ini.draw_resources import (
     _collect_resource_copy_sources, _collect_resource_descriptor_sources,
@@ -62,6 +63,38 @@ stride = 12
     assert resolved["resolve_vertex_info"]("ResourcePosition") == {
         "filename": "position-rest.buf", "stride": 12,
     }
+
+
+@pytest.mark.parametrize("declared_exists, copies, expected", [
+    (True, ("ResourceBase",), "position.buf"),
+    (False, ("ResourceBase",), "base.buf"),
+    (False, ("ResourceAbsent", "ResourceBase"), "base.buf"),
+    (False, ("ResourceAbsent",), "position.buf"),
+    (False, ("ResourcePosition",), "position.buf"),
+    (False, (), "position.buf"),
+])
+def test_missing_declared_buffer_uses_only_available_authored_copies(
+        tmp_path, declared_exists, copies, expected):
+    (tmp_path / "base.buf").write_bytes(b"base")
+    if declared_exists:
+        (tmp_path / "position.buf").write_bytes(b"position")
+    resources = ResourceTable({
+        "ResourcePosition": {"filename": "position.buf", "stride": 40},
+        "ResourceBase": {"filename": "base.buf", "stride": 12},
+        "ResourceAbsent": {"filename": "absent.buf", "stride": 12},
+    })
+    copy_sources = {"resourceposition": list(copies)}
+    resolved = _resolve_component_buffers(
+        {}, resources, copy_sources,
+        resource_source=DirectoryModSource(tmp_path))
+
+    assert resolved["resolve_vertex_info"]("ResourcePosition") == {
+        "filename": expected, "stride": 40 if expected == "position.buf" else 12,
+    }
+    assert resources["ResourcePosition"]["filename"] == "position.buf"
+    detached = _resolve_component_buffers({}, resources, copy_sources)
+    assert detached["resolve_vertex_info"]("ResourcePosition")["filename"] == \
+        "position.buf"
 
 
 @pytest.mark.parametrize("reference", ("reference", "copy reference"))
