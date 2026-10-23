@@ -587,8 +587,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
     referenced_hash_components = {}
     component_references = {
         id(group): bool(group.get("referenced_texture_files") or any(
-            draw.slot_textures or any(_has_mod_texture(draw, role) for role in draw._TEXTURE_PREFIX)
-            for draw in group.get("draws", ())))
+            (draw := DrawCall.from_mapping(raw, group)).slot_textures
+            or any(_has_mod_texture(draw, role) for role in draw._TEXTURE_PREFIX)
+            for raw in group.get("draws", ())))
         for group in groups}
     for group, group_bindings in zip(groups, bindings):
         for binding in group_bindings:
