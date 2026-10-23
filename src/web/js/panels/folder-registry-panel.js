@@ -98,8 +98,9 @@ export function createFolderRegistryPanel({
 
   async function expandNode(node, path, arrow, ensureExpanded = false) {
     const childList = node.querySelector(`:scope > ${selector('children')}`);
-    if (node.classList.contains('expanded')) {
-      if (ensureExpanded) return pendingExpansions.get(node);
+    const key = canonicalPath(path);
+    if (node.classList.contains('expanded') && ensureExpanded && childCache.has(key)) return;
+    if (node.classList.contains('expanded') && !ensureExpanded) {
       node.classList.remove('expanded');
       arrow.classList.remove('expanded');
       childList.hidden = true;
@@ -115,7 +116,6 @@ export function createFolderRegistryPanel({
     arrow.setAttribute('aria-expanded', 'true');
     arrow.setAttribute('aria-label', t('folder.collapse', { name: arrow.dataset.folderName }));
     if (pendingExpansions.has(node)) return pendingExpansions.get(node);
-    const key = canonicalPath(path);
     if (childCache.has(key)) {
       renderChildren(node, childCache.get(key));
       return;
@@ -389,20 +389,10 @@ export function createFolderRegistryPanel({
     );
     ordered.forEach((path) => {
       const node = findNode(path);
-      const arrow = node?.querySelector(`:scope > ${selector('row')} ${selector('expand')}`);
-      const children = node?.querySelector(`:scope > ${selector('children')}`);
-      if (!node || !arrow || arrow.disabled || !children) return;
-      node.classList.add('expanded');
-      arrow.classList.add('expanded');
-      arrow.setAttribute('aria-expanded', 'true');
-      arrow.setAttribute(
-        'aria-label',
-        t('folder.collapse', {
-          name: arrow.dataset.folderName,
-        }),
-      );
-      children.hidden = false;
-      if (childCache.has(path)) renderChildren(node, childCache.get(path));
+      const row = node?.querySelector(`:scope > ${selector('row')}`);
+      const arrow = row?.querySelector(selector('expand'));
+      if (!node || !arrow || arrow.disabled) return;
+      void expandNode(node, row.getAttribute(pathAttribute), arrow, true);
     });
   }
 
