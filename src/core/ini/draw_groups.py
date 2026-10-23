@@ -4,7 +4,7 @@ import re
 from dataclasses import replace
 
 from ..geometry.buffers import DEFAULT_UV_OFFSET, POSITION_STRIDE, _res_get
-from ..geometry.draw_call import AuthoredDrawCall, DrawCall, SlotTextureBinding
+from ..geometry.draw_call import AuthoredDrawCall, DrawCall
 from ..geometry.identity import DrawOccurrence
 from ..geometry.skinning import resolve_skinning_source
 from ..mod_source import DirectoryModSource
@@ -106,14 +106,7 @@ def _apply_auxiliary_map_state(draw, authored, resolve_file):
 
 def _resolve_slot_texture_files(authored, resolve_file):
     return [
-        SlotTextureBinding(
-            slot=item.slot,
-            resource=item.resource,
-            file=resolve_file(item.resource) or item.file,
-            texture_hashes=item.texture_hashes,
-            role_hint=item.role_hint,
-            role_hint_source=item.role_hint_source,
-        )
+        replace(item, file=(resolve_file(item.resource) if item.resource else None) or item.file)
         for item in authored.slot_textures
     ]
 

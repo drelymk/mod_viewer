@@ -65,11 +65,12 @@ class SlotTextureBinding:
     """Raw shader texture-slot evidence before semantic role resolution."""
 
     slot: int
-    resource: str
+    resource: str | None
     file: str | None = None
     texture_hashes: tuple[str, ...] = ()
     role_hint: str | None = None
     role_hint_source: str | None = None
+    conditions: tuple = ()
 
     def __post_init__(self):
         hashes = self.texture_hashes
@@ -83,6 +84,11 @@ class SlotTextureBinding:
     def texture_hash(self):
         """Compatibility view for callers that only handle one hash."""
         return self.texture_hashes[0] if len(self.texture_hashes) == 1 else None
+
+    @property
+    def dnf(self):
+        return [[{"var": var, "value": value, "negate": negate}
+                 for var, value, negate in group] for group in self.conditions]
 
 
 @dataclass(slots=True)

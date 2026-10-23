@@ -123,6 +123,9 @@ of documentation, comments and tests; use portable fixtures instead.
   pixel-slot checks and the external SkinTexture adapter gate hash replacement
   in that INI's explicit draw scopes. Unknown external execution and implicit-only
   INIs retain compatibility; unused helpers never establish a checking scope.
+  Retain ordered, conditional slot writes separately from material roles. Only
+  semantic or unambiguous component hash evidence can promote them to role
+  rules; an ambiguous numeric slot remains a manual choice, not a role default.
 - Draw discovery selects generic `pre`/`post` command phases before handling
   bindings or draws. Plain CommandList calls follow the caller's phase;
   explicit phase calls and CustomShader calls execute both target phases

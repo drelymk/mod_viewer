@@ -40,11 +40,15 @@ def test_shared_asset_diffuse_keeps_check_scope_implicit_compatibility_and_range
     _write_geometry(mod)
     names = ("PartA", "PartB", "PartC")
     colors = [f"color-{value:02}.dds" for value in range(21)]
-    for filename in [*colors, "normal.dds"]:
+    for filename in [*colors, "normal.dds", "normal-base.dds", "normal-alt.dds"]:
         (mod / filename).write_bytes(b"synthetic texture")
     text = "[Constants]\nglobal persist $style = 0\n"
     text += "[KeyStyle]\nkey = x\ntype = cycle\n$style = " + ",".join(map(str, range(21))) + "\n"
     for name, geometry_hash, first in zip(names, ("10101010", "10101010", "20202020"), (0, 3, 0)):
+        normal_history = "ps-t7 = ResourceMapBase\n" if name == "PartC" else ""
+        if normal_history:
+            for value in range(14, 21):
+                normal_history += f"if $style == {value}\nps-t7 = ResourceMapAlternate\nendif\n"
         text += f"""[TextureOverride{name}]
 hash = {geometry_hash}
 match_first_index = {first}
@@ -52,12 +56,24 @@ ib = ResourceComponent01IB
 vb0 = ResourceComponent01Position
 vb1 = ResourceComponent01Texcoord
 {"__NORMAL_BINDING__" if name == "PartC" else ""}
+{normal_history}
 run = CommandListDraw {name}
 [CommandListDraw {name}]
 drawindexed = 3,0,0
 """
     text += standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
     text += "[ResourceNormal]\nfilename = normal.dds\n"
+    text += """[ResourceMapBase]
+filename = normal-base.dds
+[ResourceMapAlternate]
+filename = normal-alt.dds
+[TextureOverrideMap]
+hash = 22222222
+this = ResourceMapBase
+if $style == 14
+this = ResourceMapAlternate
+endif
+"""
     override = "[TextureOverrideColor]\nhash = 11111111\nthis = ResourceColor0\n"
     for value in range(1, 21):
         override += f"if $style == {value}\nthis = ResourceColor{value}\nendif\n"
@@ -69,15 +85,17 @@ drawindexed = 3,0,0
     (asset / "hash.json").write_text(json.dumps([
         {"component_name": "Component01", "ib": "10101010", "object_indexes": [0, 3],
          "object_classifications": ["A", "B"], "texture_hashes": [
-             [["Diffuse", ".dds", "11111111"]], [["Diffuse", ".dds", "11111111"]]]},
+             [["Diffuse", ".dds", "11111111"], ["NormalMap", ".dds", "22222222"]],
+             [["Diffuse", ".dds", "11111111"], ["NormalMap", ".dds", "22222222"]]]},
         {"component_name": "Component02", "ib": "20202020", "object_indexes": [0],
          "object_classifications": ["A"],
-         "texture_hashes": [[["Diffuse", ".dds", "11111111"]]]},
+         "texture_hashes": [[["Diffuse", ".dds", "11111111"], ["NormalMap", ".dds", "22222222"]]]},
     ]), encoding="utf-8")
     originals = [asset / f"Asset01{component}Diffuse.dds"
                  for component in ("Component01A", "Component01B", "Component02A")]
     for path in originals:
         path.write_bytes(b"shared original")
+        path.with_name(path.name.replace("Diffuse", "NormalMap")).write_bytes(b"original normal")
     index = asset_index.build_index("ZZMI", str(root))
     monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
     monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
@@ -95,7 +113,7 @@ drawindexed = 3,0,0
         assert not payload.get("error")
         metadata.hydrate_textures(str(mod), payload, data={}, source=context.source)
         assert payload["asset_resolution"]["exact_draws"] == 3
-        assert set(payload["controls"]["toggles"]) == ({"KeyStyle"} if replacements else set())
+        assert set(payload["controls"]["toggles"]) == {"KeyStyle"}
         for name, original in zip(names, originals):
             mesh = payload["meshes"][name + "-1"]
             replaced = bool(replacements) and ("SkinTexture" not in normal_binding or name == "PartC")
@@ -111,6 +129,19 @@ drawindexed = 3,0,0
                                 if visible(rule["conditions"], {"style": str(value)})) == "diffuse::" + color
             else:
                 assert not mesh.get("texture_variants")
+            if name == "PartC":
+                assert mesh["normal_map_key"] == "normal_map::normal-base.dds"
+                for value in range(21):
+                    expected = "normal_map::normal-" + ("base" if value < 14 else "alt") + ".dds"
+                    assert next(rule["tex_key"] for rule in reversed(mesh["normal_map_variants"])
+                                if visible(rule["conditions"], {"style": str(value)})) == expected
+                if "ResourceNormal" in normal_binding:
+                    assert "diffuse::normal.dds" in {item["tex_key"] for item in pool}
+            elif "SkinTexture" in normal_binding:
+                original_normal = original.with_name(original.name.replace("Diffuse", "NormalMap"))
+                assert mesh["normal_map_key"] == asset_texture_key(
+                    str(root), str(original_normal), "normal_map")
+                assert not mesh.get("normal_map_variants")
 
 
 @pytest.mark.parametrize("archived", [False, True], ids=["directory", "zip"])

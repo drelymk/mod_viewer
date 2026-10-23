@@ -288,6 +288,55 @@ checktextureoverride = ps-t3
 """)
     assert _scan_sections_for_draws(implicit)["TextureOverrideComponent01"][
         "draws"][0].texture_checks is None
+    shader_scope = parse_sections("source-01.ini", text="""[TextureOverrideComponent01]
+checktextureoverride = ps-t4
+drawindexed = 3,0,0
+[ShaderOverrideRuntime]
+run = CommandListShaderChecks
+[CommandListShaderChecks]
+checktextureoverride = ps-t3
+""")
+    assert _scan_sections_for_draws(shader_scope)["TextureOverrideComponent01"][
+        "draws"][0].texture_checks is None
+
+
+def test_conditional_slot_history_and_checks_keep_their_execution_state():
+    text = """[TextureOverrideComponent01]
+ps-t4 = ResourceBase
+drawindexed = 3,0,0
+if $mode == 1
+ps-t4 = ResourceAlternate
+endif
+checktextureoverride = ps-t4
+drawindexed = 3,3,0
+if $mode == 1
+ps-t4 = null
+endif
+checktextureoverride = ps-t4
+drawindexed = 3,6,0
+ps-t4 = ResourceReset
+drawindexed = 3,9,0
+[TextureOverrideBase]
+hash = 11111111
+this = ResourceBase
+[TextureOverrideAlternate]
+hash = 22222222
+this = ResourceAlternate
+"""
+    draws = _scan_sections_for_draws(parse_sections("source-01.ini", text=text),
+                                     gating_vars={"mode"})["TextureOverrideComponent01"]["draws"]
+    assert [len(draw.slot_textures) for draw in draws] == [1, 2, 3, 1]
+    for value, expected in (("0", "ResourceBase"), ("1", "ResourceAlternate")):
+        assert next(item.resource for item in reversed(draws[1].slot_textures)
+                    if visible(item.dnf, {"mode": value})) == expected
+        checks = [check for check in draws[1].texture_checks
+                  if visible(check["conditions"], {"mode": value})]
+        assert [check["resource"] for check in checks] == [expected]
+    assert draws[2].slot_textures[-1].resource is None
+    # The second check sees null in mode 1; it cannot activate another override.
+    assert len(draws[2].texture_checks) == len(draws[1].texture_checks) + 1
+    assert draws[3].slot_textures[0].resource == "ResourceReset"
+    assert draws[1].slot_textures[0].role_hint is None
 
 
 @pytest.mark.parametrize("target", ["CommandListSkinTexture", r"CommandList\ZZMIv1\SkinTexture"])
