@@ -3,10 +3,16 @@
 import os
 import struct
 import tempfile
+import zipfile
 
+import pytest
+
+from core.mod_source import DirectoryModSource, ZipModSource
 from core.ini.analysis import analyze_ini
 from core.ini.sections import parse_sections
-from tests.support.model_data import standard_component_resources, triangle_geometry
+from tests.support.model_data import (
+    basic_model_ini, standard_component_resources, triangle_geometry,
+)
 from tests.support.provenance import visible
 
 from core.ini.parser import (build_draw_groups, extract_resources,
@@ -14,6 +20,47 @@ from core.ini.parser import (build_draw_groups, extract_resources,
 from core.geometry.draw_call import DrawCall
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.provenance import IB_R16_INI, build_mesh_fixture, geometry_values, write
+
+@pytest.mark.parametrize("source_kind", ["directory", "zip"])
+def test_runtime_position_copy_restores_geometry_without_changing_ini(
+        tmp_path, source_kind):
+    text = basic_model_ini() + """
+[Present]
+ResourceComponent01Position = copy ResourcePositionBase
+[ResourcePositionBase]
+filename = Meshes/base.buf
+stride = 12
+"""
+    files = triangle_geometry()
+    files["Meshes/base.buf"] = files.pop("p.buf")
+    files["source.ini"] = text.encode()
+    if source_kind == "zip":
+        path = tmp_path / "model.zip"
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, data in files.items():
+                archive.writestr(name, data)
+        source = ZipModSource(path)
+    else:
+        for name, data in files.items():
+            target = tmp_path / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        source = DirectoryModSource(tmp_path)
+    ini = source.document_path("source.ini")
+    sections = parse_sections(ini, text=source.read_text(ini))
+    analysis = analyze_ini(sections, resource_source=source)
+    result = build_mesh_result(analysis.draw_groups, str(tmp_path), source=source)
+
+    entry, = result.meshes.values()
+    assert geometry_values(result.geometry, entry["pos"]) == \
+        (0, 0, 0, 1, 0, 0, 0, 1, 0)
+    draw, = analysis.draw_groups[0]["draws"]
+    assert draw.position_file == "Meshes/base.buf"
+    assert text.splitlines()[draw.sources[0]["line_no"] - 1] == \
+        "drawindexed = 3, 0, 0"
+    assert source.read_bytes(ini) == files["source.ini"]
+    assert "p.buf" not in source.list_files()
+
 
 def test_conditional_component_streams_and_direct_overrides(tmp_path):
     text = """[Constants]

@@ -428,12 +428,37 @@ def _component_roles_for_sections(section_info):
 
 
 def _resolve_component_buffers(section_info, resources, resource_copy_sources,
-                               sections=None):
+                               sections=None, resource_source=None):
     """Resolve component, hash, and WWMI global buffer bindings."""
     resources = ResourceTable.normalize(resources)
     vertex_info_cache = {}
     descriptor_sources = _collect_resource_descriptor_sources(sections or {})
     descriptor_cache = {}
+
+    def file_available(filename):
+        return resource_source.is_file(
+            resource_source.resolve_resource(filename))
+
+    def unambiguous_available_copy(copy_sources, visiting):
+        """Reject competing files without guessing which copies execute."""
+        pending = list(copy_sources)
+        visited = set(visiting)
+        available = None
+        while pending:
+            candidate = pending.pop()
+            if candidate in visited:
+                continue
+            visited.add(candidate)
+            candidate_file = _res_get(resources, candidate).get("filename")
+            reference = resource_source.resolve_resource(candidate_file)
+            if reference is None or not resource_source.is_file(reference):
+                pending.extend(resource_copy_sources.get(candidate.lower(), ()))
+                continue
+            if available is not None and not resource_source.same_reference(
+                    available, reference):
+                return False
+            available = reference
+        return available is not None
 
     def resolve_descriptor_info(resource_name, visiting=None):
         if not resource_name:
@@ -471,12 +496,21 @@ def _resolve_component_buffers(section_info, resources, resource_copy_sources,
         visiting.add(cache_key)
         resource_info = _res_get(resources, resource_name)
         resolved = dict(resource_info)
-        if not resource_info.get("filename"):
-            resolved = {}
-            for candidate in resource_copy_sources.get(cache_key.lower(), ()):
-                resolved = resolve_vertex_info(candidate, visiting)
-                if resolved.get("filename"):
-                    resolved = dict(resolved)
+        filename = resource_info.get("filename")
+        copy_sources = resource_copy_sources.get(cache_key.lower(), ())
+        missing_file = (filename and copy_sources and resource_source is not None
+                        and not file_available(filename))
+        if not filename or (missing_file and unambiguous_available_copy(
+                copy_sources, visiting)):
+            # Runtime copies can populate a resource whose initial file is absent.
+            # Keep its declaration if no available authored source can replace it.
+            resolved = dict(resource_info) if filename else {}
+            for candidate in copy_sources:
+                candidate_info = resolve_vertex_info(candidate, visiting)
+                candidate_file = candidate_info.get("filename")
+                if candidate_file and (not missing_file
+                                       or file_available(candidate_file)):
+                    resolved = dict(candidate_info)
                     break
         if resolved.get("filename"):
             for descriptor_source in descriptor_sources.get(cache_key.lower(), ()):

@@ -152,7 +152,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                       qualified_vars=None, *, section_info=None, resource_source=None):
     """Build resolved component groups while preserving authored draw snapshots."""
     resources = ResourceTable.normalize(resources)
-    resource_source = resource_source or DirectoryModSource(".")
     if seen is None:
         seen = {}
     if section_info is None:
@@ -161,7 +160,9 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             resources=resources)
     resource_copy_sources = _collect_resource_copy_sources(sections, resources)
     resolved_buffers = _resolve_component_buffers(
-        section_info, resources, resource_copy_sources, sections=sections)
+        section_info, resources, resource_copy_sources, sections=sections,
+        resource_source=resource_source)
+    resource_source = resource_source or DirectoryModSource(".")
     resolve_vertex_info = resolved_buffers["resolve_vertex_info"]
     component_buffers = resolved_buffers["component_buffers"]
     component_positions = resolved_buffers["component_positions"]
