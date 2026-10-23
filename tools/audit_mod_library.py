@@ -237,7 +237,9 @@ def pipeline_signature(config):
             continue
         root = Path(entry["path"])
         hasher.update(str(root).encode())
-        hasher.update(str(root.exists()).encode())
+        if not root.is_dir():
+            hasher.update(b"unavailable")
+            continue
         for folder, directories, filenames in os.walk(root, onerror=onerror):
             directories[:] = sorted(
                 name for name in directories if not linked(Path(folder) / name)

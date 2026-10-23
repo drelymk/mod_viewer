@@ -152,8 +152,10 @@ def test_resume_signatures_follow_external_assets_indexes_and_browser_ui(tmp_pat
     texture.write_bytes(b'original')
     disabled = tmp_path / 'disabled-assets'
     disabled.mkdir()
+    missing = tmp_path / 'missing-assets'
     config = {'assetFolders': [{'path': str(asset.parent)},
-                              {'path': str(disabled), 'enabled': False}]}
+                              {'path': str(disabled), 'enabled': False},
+                              {'path': str(missing)}]}
     monkeypatch.setattr(audit, 'ROOT', root)
     monkeypatch.setattr(browser, 'ROOT', root)
     monkeypatch.setattr(audit, '__file__', str(root / 'tools/audit_mod_library.py'))
@@ -183,6 +185,11 @@ def test_resume_signatures_follow_external_assets_indexes_and_browser_ui(tmp_pat
     assert signatures() == previous
     texture.rename(asset / 'renamed.dds')
     assert signatures() != previous
+    previous = signatures()
+    missing.mkdir()
+    assert signatures() != previous
+    missing.rmdir()
+    assert signatures() == previous
 
 
 @pytest.mark.parametrize('outcome,status', [('timeout', 'timeout'), ('crash', 'worker_crash')])
