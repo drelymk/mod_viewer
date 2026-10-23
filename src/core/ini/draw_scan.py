@@ -434,20 +434,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 result.pop(role, None)
         return result
 
-    def record_texture_check(info, cond_stack, slot=None):
-        combined = DNF_TRUE
-        for frame in cond_stack:
-            combined = dnf_and(combined, frame["cur"])
-        if not combined:
-            return
-        check = {
-            "slot": slot,
-            "conditions": normalize_dnf(
-                combined, tracked_vars, var_prefix, qualified_vars),
-        }
-        if check not in info["texture_override_checks"]:
-            info["texture_override_checks"].append(check)
-
     def scan(info, cond_stack, visiting, section_name, phase,
              execution_path=()):
         draw_ordinal = 0
@@ -510,9 +496,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             match = re.match(r"match_index_count\s*=\s*(\d+)", line, re.I)
             if match:
                 info["_match_index_count"] = int(match.group(1))
-            match = re.fullmatch(r"checktextureoverride\s*=\s*ps-t(\d+)", line, re.I)
-            if match:
-                record_texture_check(info, cond_stack, int(match[1]))
             match = re.match(
                 r"ps-t(\d+)\s*=\s*(?:ref\s+)?(\S+)", line, re.I)
             if match:
@@ -660,7 +643,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     skinning_remap_resources=dict(
                         info.get("_cur_compute_resources") or {}),
                     slot_textures=slot_snapshot(info),
-                    texture_override_checks=list(info["texture_override_checks"]),
                 )
                 info["auto_draws" if automatic else "draws"].extend(_index_draws_at_join(
                     authored, info["index_binding_history"], visibility_vars,
@@ -676,17 +658,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                     record_texture_assignment(
                         info, role, semantic.group(2), cond_stack,
                         source="semantic")
-            run_match = re.fullmatch(r"run\s*=\s*(.+)", line, re.I)
+            run_match = re.match(r"run\s*=\s*(\S+)", line, re.I)
             if run_match:
                 target_name = _run_target_name(line, section_lookup)
-                imported_target = run_match[1].strip().casefold()
-                if (imported_target not in section_lookup
-                        and (imported_target == "commandlistskintexture"
-                             or re.fullmatch(
-                                 r"commandlist(?:[\\/][^\\/]+)*[\\/]skintexture",
-                                 imported_target))
-                        and (phase == "pre" or command.phase is not None)):
-                    record_texture_check(info, cond_stack)
                 if target_name and target_name not in visiting:
                     visiting.add(target_name)
                     for target_phase in run_target_phases(
@@ -714,7 +688,6 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
             "_aux_maps": {}, "_texture_provenance": {},
             "_cur_vertex_resources": {}, "_cur_slot_textures": {},
             "referenced_textures": {},
-            "texture_override_checks": [],
             "animation_vertex_bindings": [],
             "vertex_bindings_conditional": False,
             "vertex_binding_history": [],

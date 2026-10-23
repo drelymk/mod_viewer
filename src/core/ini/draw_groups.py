@@ -340,7 +340,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             geometry_match=info.get("geometry_match_at_end"),
             vertex_resources=info.get("vertex_resources_at_end") or {},
             slot_textures=info.get("slot_textures_at_end") or [],
-            texture_override_checks=info.get("texture_override_checks") or [],
         )]
         auto_sources = (info.get("auto_sources") or
                         family_auto_sources.get(family, []))
@@ -467,7 +466,6 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
                 geometry_match=authored.geometry_match,
                 skinning_bone_offset=authored.skinning_bone_offset,
                 texture_provenance=dict(authored.texture_provenance),
-                texture_override_checks=list(authored.texture_override_checks),
                 slot_textures=_resolve_slot_texture_files(
                     authored, resolve_texture_file),
             )

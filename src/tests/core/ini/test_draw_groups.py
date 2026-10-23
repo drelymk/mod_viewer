@@ -9,31 +9,6 @@ from tests.support.model_data import standard_component_resources
 from tests.support.provenance import visible
 
 
-@pytest.mark.parametrize("command, slot", [
-    ("run = CommandListSkinTexture", None),
-    (r"run = CommandList\Runtime01\SkinTexture", None),
-    (r"run = CommandList\Runtime02\Helpers\SkinTexture", None),
-    ("checktextureoverride = ps-t7", 7),
-])
-def test_texture_check_keeps_conditions_slots_and_draw_execution_order(command, slot):
-    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01]
-drawindexed = 3, 0, 0
-if $mode == 1
-run = CommandListRelay
-endif
-drawindexed = 3, 0, 0
-[CommandListRelay]
-{command.swapcase()}
-""")
-    draws = _scan_sections_for_draws(sections, gating_vars={"mode"})[
-        "TextureOverrideComponent01"]["draws"]
-    assert draws[0].texture_override_checks == []
-    assert draws[1].texture_override_checks == [{
-        "slot": slot,
-        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
-    }]
-
-
 @pytest.mark.parametrize("guard", ["$mode == 1", "$Ready == 1"])
 @pytest.mark.parametrize("initial", [False, True])
 def test_index_branch_join_keeps_sources_and_untouched_fallback(guard, initial):
