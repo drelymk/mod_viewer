@@ -72,7 +72,9 @@ def _apply_diffuse_state(draw, authored, resolve_file):
             texture_hash
             for item in variants
             for texture_hash in item.get("texture_hashes", ())))
-    if len(variants) > 1 or (variants and (variants[0]["conditions"] or variants[0]["file"] is None)):
+    if len(variants) > 1 or (variants and (
+            variants[0]["file"] is None or (variants[0]["conditions"]
+            and _condition_difference(draw.conditions, variants[0]["conditions"]) is not None))):
         draw.set_texture_variants("diffuse", variants)
 
     variant_variables = {
