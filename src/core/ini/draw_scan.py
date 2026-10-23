@@ -552,7 +552,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 conditions = normalize_dnf(
                     combined, tracked_vars, var_prefix, qualified_vars)
                 history = info["_slot_texture_history"].setdefault(slot, [])
-                if not conditions:
+                if not conditions and resource.lower() != "null":
                     history.clear()
                 history.append({"resource": None if resource.lower() == "null" else resource,
                                 "conditions": conditions})
@@ -570,6 +570,13 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                             info, role, resource, cond_stack,
                             source=("slot" if structural_role
                                     else "legacy_slot"))
+                else:
+                    roles = {item.role_hint for item in slot_snapshot(info)
+                             if item.slot == slot and item.role_hint}
+                    if len(roles) == 1:
+                        record_texture_assignment(
+                            info, next(iter(roles)), "null", cond_stack,
+                            source="slot" if structural_slot_roles.get(slot) else "legacy_slot")
             match = re.match(
                 r"cs-t(\d+)\s*=\s*(?:(?:ref|copy)\s+)?(\S+)",
                 line, re.I)
@@ -794,7 +801,9 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
     # Shader-scoped checks cannot be associated with a geometry draw without
     # live shader identity. Preserve implicit compatibility for those INIs.
     shader_checks = any(
-        re.match(r"(?:checktextureoverride\s*=\s*ps-t\d+|run\s*=)", command.text, re.I)
+        re.fullmatch(r"checktextureoverride\s*=\s*ps-t\d+", command.text, re.I)
+        or (re.match(r"run\s*=", command.text, re.I)
+            and _run_target_name(command.text, section_lookup) is None)
         for name in sections if name.casefold().startswith(("shaderoverride", "shaderregex"))
         for target in _reachable_execution_sections(sections, name, section_lookup)
         for command in commands[target])

@@ -107,7 +107,7 @@ def _semantic_texture_variants(draw, mod_dir, authored_role, transport_role=None
     for variant in draw.texture_rules(authored_role):
         key = _semantic_texture_key(
             mod_dir, variant.get("file"), role, source=source)
-        if key:
+        if key or ("file" in variant and variant["file"] is None):
             variants.append({"conditions": variant["conditions"], "tex_key": key})
     return variants
 
@@ -206,7 +206,7 @@ def build_mesh_semantics(groups, mod_dir, max_draws=0, game_profile=None,
 
             texture_variants = _semantic_texture_variants(
                 draw, mod_dir, "diffuse", source=source)
-            if len(texture_variants) > 1:
+            if len(texture_variants) > 1 or (texture_variants and texture_variants[0]["conditions"]):
                 entry["texture_variants"] = texture_variants
             for channel in ("light_map", "material_map", "emission_map"):
                 variants = _semantic_texture_variants(

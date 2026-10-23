@@ -123,9 +123,15 @@ of documentation, comments and tests; use portable fixtures instead.
   pixel-slot checks and the external SkinTexture adapter gate hash replacement
   in that INI's explicit draw scopes. Unknown external execution and implicit-only
   INIs retain compatibility; unused helpers never establish a checking scope.
+  An unknown native slot may match Asset hashes; an explicitly assigned resource
+  with no verified hash cannot activate unrelated replacements.
   Retain ordered, conditional slot writes separately from material roles. Only
   semantic or unambiguous component hash evidence can promote them to role
   rules; an ambiguous numeric slot remains a manual choice, not a role default.
+  Exported slot declarations need matching component geometry, an independently
+  labelled Asset texture hash/role, and the bound mod-relative filename. Once
+  established for that draw, the slot role applies to its conditional writes,
+  including null. Keep declarations per INI and never infer roles from slot numbers.
 - Draw discovery selects generic `pre`/`post` command phases before handling
   bindings or draws. Plain CommandList calls follow the caller's phase;
   explicit phase calls and CustomShader calls execute both target phases
@@ -178,9 +184,10 @@ of documentation, comments and tests; use portable fixtures instead.
   inheriting a scanned conditional replacement.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
-- Original Asset texture fallback is available only when a draw has no mod
-  diffuse default or conditional assignment after mod texture resolution.
-  A mod diffuse suppresses all original Asset maps; retain mod-authored maps.
+- Original Asset defaults apply in states without an applicable mod binding.
+  An active mod diffuse suppresses original Asset maps; retain mod-authored maps.
+  Publish explicit null variants as empty material states, preserving conditional
+  Asset defaults through the existing role-rule path.
 - Collect one lightweight inventory of all DDS/PNG/JPG/JPEG images through
   `ModSource`, including undeclared files, subfolders and compressed mods.
   Collect Asset images only from exact matched Asset directories, never by

@@ -298,6 +298,13 @@ checktextureoverride = ps-t3
 """)
     assert _scan_sections_for_draws(shader_scope)["TextureOverrideComponent01"][
         "draws"][0].texture_checks is None
+    for body, uncertain in (("x140 = 0", False), ("run = CommandListExternal", True)):
+        shader_scope["CommandListShaderChecks"] = [body]
+        checks = _scan_sections_for_draws(shader_scope)["TextureOverrideComponent01"][
+            "draws"][0].texture_checks
+        assert (checks is None) == uncertain
+        if not uncertain:
+            assert [check["slot"] for check in checks] == [4]
 
 
 def test_conditional_slot_history_and_checks_keep_their_execution_state():

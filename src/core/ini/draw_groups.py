@@ -15,7 +15,8 @@ from .draw_resources import (
 )
 from .draw_scan import _buffer_resource_at_draw, _scan_sections_for_draws
 from .sections import ResourceTable
-from .texture_roles import TextureOverrideIndex, _condition_group_is_consistent
+from .texture_roles import (TextureOverrideIndex, _condition_group_is_consistent,
+                            _condition_difference)
 
 
 def _lookup_component_value(mapping, component):
@@ -47,7 +48,7 @@ def _resolved_texture_assignments(assignments, resolve_file, draw_conditions=Non
                 for binding_group in assignment["cond"]):
             continue
         file = resolve_file(assignment["res"])
-        if not file:
+        if not file and str(assignment["res"]).casefold() != "null":
             continue
         item = {"conditions": assignment["cond"], "file": file}
         if assignment.get("texture_hashes"):
@@ -62,12 +63,16 @@ def _apply_diffuse_state(draw, authored, resolve_file):
     variants = _resolved_texture_assignments(
         authored.diffuse_variants, resolve_file, draw.conditions) or history
     if variants:
-        draw.set_texture_default("diffuse", variants[0]["file"])
+        if (any(not item["conditions"] for item in history)
+                or _condition_difference(draw.conditions, variants[0]["conditions"]) is None):
+            last_default = next((item for item in reversed(history) if not item["conditions"]), None)
+            draw.set_texture_default("diffuse", None if last_default and last_default["file"] is None
+                                     else variants[0]["file"])
         draw.texture_hashes["diffuse"] = list(dict.fromkeys(
             texture_hash
             for item in variants
             for texture_hash in item.get("texture_hashes", ())))
-    if len(variants) > 1:
+    if len(variants) > 1 or (variants and (variants[0]["conditions"] or variants[0]["file"] is None)):
         draw.set_texture_variants("diffuse", variants)
 
     variant_variables = {
@@ -100,7 +105,7 @@ def _apply_auxiliary_map_state(draw, authored, resolve_file):
             for texture_hash in item.get("texture_hashes", ())))
         if hashes:
             draw.texture_hashes[channel] = hashes
-        if len(resolved) > 1 or (resolved and resolved[0]["conditions"]):
+        if len(resolved) > 1 or (resolved and (resolved[0]["conditions"] or resolved[0]["file"] is None)):
             draw.set_texture_variants(channel, resolved)
 
 
@@ -588,6 +593,7 @@ def build_draw_groups(sections, resources, var_prefix=None, source=None, seen=No
             "draws": draws,
             "animation_vertex_bindings": animation_bindings,
             "_texture_override_index": texture_override_index,
+            "_texture_resources": resources,
         })
     return groups
 
