@@ -47,8 +47,10 @@ def test_inventory_groups_selected_inis_excludes_library_and_invalidates_changes
 @pytest.mark.parametrize('disabled_ini', [False, True], ids=['active', 'disabled'])
 def test_backend_worker_loads_geometry_and_preserves_source_bytes(tmp_path, monkeypatch, archived, disabled_ini):
     from app.assets import folders
+    from app.runtime import server
 
     monkeypatch.setattr(folders, 'load_registry', lambda: [])
+    monkeypatch.setattr(server.paths, 'has_vendored_three', lambda: False)
     mod = make_mod(tmp_path / 'mod')
     if disabled_ini:
         (mod / 'model.ini').rename(mod / 'DISABLED-model.ini')

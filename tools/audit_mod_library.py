@@ -312,7 +312,7 @@ def backend_audit(entry):
     result = {}
     disabled_ini = entry.get("disabled_ini", False)
     try:
-        server.start()
+        server.start(require_ui_assets=False)
         payload = api.load_mod(entry["path"], disabled_ini=disabled_ini)
         loaded = time.perf_counter()
         context = api._mod_preview.authoritative_context(

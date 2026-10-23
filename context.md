@@ -174,12 +174,16 @@ of documentation, comments and tests; use portable fixtures instead.
 - Original Asset texture fallback is available only when a draw has no mod
   diffuse default or conditional assignment after mod texture resolution.
   A mod diffuse suppresses all original Asset maps; retain mod-authored maps.
-  Asset hashes may identify the role of an explicitly bound INI texture, but
-  must not inject unrelated hash replacements into a draw. Without a draw-level
-  INI reference, use the original Asset texture; hash matches remain picker choices.
+  Exact component/range Asset metadata with an unambiguous texture hash and
+  labelled role may resolve same-INI hash replacements without a draw-level
+  check. Other hash associations remain picker choices. Fall back to original
+  Asset maps only when no mod diffuse default or conditional assignment resolves.
   Explicit texture-slot checks and imported `SkinTexture` calls count as texture
   references regardless of game or namespace. Retain their conditions, checked
   slots and execution position per draw before resolving hashes.
+  An absent mod slot binding leaves the game-bound texture unknown, not empty.
+  Inferred slot defaults must not suppress conditional hash replacements;
+  explicit semantic assignments retain precedence.
   A reference, hash association or DDS color score does not prove a diffuse
   role. Automatic diffuse selection requires INI semantics or labelled Asset
   evidence; color candidates remain picker choices for every game.

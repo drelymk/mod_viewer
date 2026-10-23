@@ -30,6 +30,7 @@ from core.geometry.mesh_builder import (GeometryBlob, MeshBuildResult,
                                build_mesh_semantics)
 from tests.support_snapshot import snapshot_context
 from tests.support.model_data import basic_model_ini, triangle_geometry
+from tests.support.provenance import visible
 
 
 @pytest.mark.parametrize("suffix", ["", " Part \u03a9"])
@@ -430,10 +431,10 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
 
 @pytest.mark.parametrize("reference", [
     "missing", "slot", "checked_slot", "helper", "imported", "namespaced",
-    "commented", "late", "local",
+    "commented", "late", "local", "game_bound", "unmatched",
 ])
 @pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI"])
-def test_texture_fallback_requires_draw_references_on_load_and_refresh(
+def test_exact_hash_compatibility_and_asset_fallback_on_load_and_refresh(
         tmp_path, monkeypatch, reference, asset_type):
     for filename, data in triangle_geometry().items():
         (tmp_path / filename).write_bytes(data)
@@ -451,6 +452,8 @@ def test_texture_fallback_requires_draw_references_on_load_and_refresh(
         "commented": ";run = CommandListSkinTexture\n",
         "late": "",
         "local": "run = CommandListSkinTexture\n",
+        "game_bound": "checktextureoverride = ps-t0\n",
+        "unmatched": "",
     }[reference]
     ini = ini.replace("drawindexed =", assignment + "drawindexed =")
     if reference == "late":
@@ -485,7 +488,8 @@ endif
     (asset_dir / "hash.json").write_text(json.dumps([{
         "ib": "10101010", "object_indexes": [0],
         "component_name": "Body", "object_classifications": ["A"],
-        "texture_hashes": [[["Diffuse", ".dds", "11111111"]]],
+        "texture_hashes": [[["Diffuse", ".dds",
+                             "22222222" if reference == "unmatched" else "11111111"]]],
     }]), encoding="utf-8")
     binding = AssetComponentBinding(
         status="exact", component_status="exact", range_status="exact",
@@ -502,19 +506,23 @@ endif
     metadata.hydrate_textures(str(tmp_path), full, data={})
     mesh = full["meshes"]["Component01-1"]
     pool = full["texture_pools"][mesh["texture_pool_id"]]
-    assert {"base.dds", "variant.dds"} <= {item["file"] for item in pool}
-    imported = reference in {"imported", "namespaced"}
+    if reference != "unmatched":
+        assert {"base.dds", "variant.dds"} <= {item["file"] for item in pool}
     expected_key = (
-        "diffuse::variant.dds" if reference in {"helper", "checked_slot"} else
-        "diffuse::base.dds" if reference == "slot" or imported else
-        asset_texture_key(str(asset_dir.parent), str(original)))
+        asset_texture_key(str(asset_dir.parent), str(original))
+        if reference == "unmatched" else
+        "diffuse::variant.dds" if reference == "helper" else "diffuse::base.dds")
     assert mesh["tex_key"] == expected_key
     assert mesh["tex_key"] in full["textures"]
     assert set(full["controls"]["toggles"]) == (
-        {"KeyVariant"} if reference == "helper" or imported else set())
+        {"KeyVariant"} if reference != "unmatched" else set())
     expected_variants = ({"diffuse::base.dds", "diffuse::variant.dds"}
-                         if reference == "helper" or imported else set())
+                         if reference != "unmatched" else set())
     assert {item["tex_key"] for item in mesh.get("texture_variants", [])} == expected_variants
+    if expected_variants:
+        for value, expected in (("0", "diffuse::base.dds"), ("1", "diffuse::variant.dds")):
+            assert next(rule["tex_key"] for rule in reversed(mesh["texture_variants"])
+                        if visible(rule["conditions"], {"variant": value})) == expected
     for refresh in (mod_loader.load_control_state, mod_loader.load_semantic_state):
         state = refresh(context, active_mesh_keys=set(full["meshes"]))
         assert state["controls"] == full["controls"]

@@ -146,6 +146,7 @@ def _texture_records(binding, raw):
             if texture_hash:
                 records.append(AssetTextureEvidence(
                     role, texture_hash, extension,
+                    source="asset_hash_role",
                     component_name=component_name,
                     classification=classification))
         if records:
@@ -227,6 +228,10 @@ def _authored_texture_rules(draw, role):
     rules = [dict(item) for item in draw.texture_rules(role)]
     if rules:
         return rules
+    if draw.texture_provenance.get(role) == "mod_texture_hash":
+        # A role inferred from a slot hash is a fallback, not an authored
+        # unconditional assignment that can mask replacement variants.
+        return []
     default = draw.texture_default(role)
     return ([{"conditions": [], "file": default}]
             if default else [])
@@ -241,18 +246,20 @@ def _texture_variant_list(draw, role):
     }[role])
 
 
-def _texture_check_conditions(draw, texture_hash):
+def _texture_check_conditions(draw, texture_hash, *, game_bound=False):
     """Return guards for checks of this hash in the draw's execution path."""
     conditions = []
     for check in draw.texture_override_checks:
         slot = check["slot"]
-        if slot is not None and not (
-                any(binding.slot == slot and texture_hash in binding.texture_hashes
-                    for binding in draw.slot_textures)
-                or any(usage.get("slot") == slot
-                       and usage.get("texture_hash") == texture_hash
-                       for usage in draw.asset_slot_evidence)):
-            continue
+        if slot is not None:
+            bindings = [binding for binding in draw.slot_textures if binding.slot == slot]
+            usages = [usage for usage in draw.asset_slot_evidence if usage.get("slot") == slot]
+            matched = (
+                any(texture_hash in binding.texture_hashes for binding in bindings)
+                or any(usage.get("texture_hash") == texture_hash for usage in usages))
+            # Absent mod bindings leave the game's slot unknown, not empty.
+            if not matched and not (game_bound and not bindings and not usages):
+                continue
         conditions = dnf_or(conditions, check["conditions"] or [[]])
     if not conditions:
         return None
@@ -260,21 +267,29 @@ def _texture_check_conditions(draw, texture_hash):
 
 
 def _apply_hash_replacements(draw, evidence, texture_index):
-    """Resolve replacements requested by explicit INI texture checks."""
-    if (not draw.texture_override_checks
-            or not isinstance(texture_index, TextureOverrideIndex)):
+    """Resolve exact labelled hashes and explicitly checked replacements."""
+    if not isinstance(texture_index, TextureOverrideIndex):
         return
+    roles_by_hash = {}
     for item in evidence:
-        if not item.role:
+        if item.role:
+            roles_by_hash.setdefault(item.texture_hash, set()).add(item.role)
+    for item in evidence:
+        if not item.role or len(roles_by_hash[item.texture_hash]) != 1:
             continue
-        checks = _texture_check_conditions(draw, item.texture_hash)
+        exact_role = item.source == "asset_hash_role"
+        checks = _texture_check_conditions(draw, item.texture_hash, game_bound=exact_role)
         if checks is None:
-            continue
+            if not exact_role:
+                continue
+            checks = []
         replacements = texture_index.replacements_by_hash.get(
             item.texture_hash, ())
         if not replacements:
             continue
         existing = _authored_texture_rules(draw, item.role)
+        inferred_default = (draw.texture_provenance.get(item.role) == "mod_texture_hash"
+                            and not draw.texture_rules(item.role))
         additions = []
         for replacement in replacements:
             if not replacement.file:
@@ -308,7 +323,7 @@ def _apply_hash_replacements(draw, evidence, texture_index):
                 _texture_variant_list(draw, item.role).extend(additions)
         else:
             _texture_variant_list(draw, item.role).extend(additions)
-        if not draw.texture_default(item.role):
+        if not draw.texture_default(item.role) or inferred_default:
             unconditional = next(
                 (rule for rule in additions if not rule["conditions"]), None)
             if unconditional:
@@ -816,8 +831,8 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                         and item.role not in draw.texture_provenance):
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = evidence + role_hint_evidence + dds_evidence
-            _apply_slot_hashes(draw, all_evidence)
             _apply_hash_replacements(draw, all_evidence, index)
+            _apply_slot_hashes(draw, all_evidence)
             # Resolve all mod bindings first. Original Asset maps belong to
             # the fallback material used only when the mod has no diffuse.
             if _has_mod_texture(draw, "diffuse"):

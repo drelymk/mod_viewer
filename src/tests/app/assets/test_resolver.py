@@ -24,8 +24,10 @@ def _index(root, asset_type="GIMI", metadata=None, *, asset="Asset01",
 
 
 @pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI"])
-@pytest.mark.parametrize("checked", [False, True])
-def test_hash_replacements_require_explicit_texture_checks(tmp_path, asset_type, checked):
+@pytest.mark.parametrize("checked", ["none", "imported", "game_bound"])
+@pytest.mark.parametrize("exact_range", [False, True])
+def test_exact_asset_hash_replacements_preserve_conditions(
+        tmp_path, asset_type, checked, exact_range):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     asset_dir = tmp_path / "assets" / "Asset01"
     asset_dir.mkdir(parents=True)
@@ -54,10 +56,11 @@ def test_hash_replacements_require_explicit_texture_checks(tmp_path, asset_type,
     index = TextureOverrideIndex(replacements_by_hash=replacements)
     check = [[{"var": "enabled", "value": "1", "negate": False}]]
     draw = DrawCall(texture_override_checks=[
-        {"slot": None, "conditions": check}] if checked else [])
+        {"slot": 0 if checked == "game_bound" else None, "conditions": check}]
+        if checked != "none" else [])
     binding = AssetComponentBinding(
         status="exact", asset_type=asset_type, asset="Asset01", root=root,
-        component_status="exact", range_status="exact",
+        component_status="exact", range_status="exact" if exact_range else "unknown",
         geometry_hash="10101010", component_name="Body",
         classification="B", first_index=12,
         metadata="Asset01/hash.json")
@@ -65,25 +68,25 @@ def test_hash_replacements_require_explicit_texture_checks(tmp_path, asset_type,
     group = {"draws": [draw]}
     apply([group], [[binding]], texture_index=index, mod_dir=str(tmp_path))
 
-    if checked:
+    if exact_range:
         assert draw.asset_texture_defaults == {}
         for role in roles:
             assert draw.texture_default(role) is None
             assert draw.texture_rules(role) == [{
-                "conditions": [[*conditions[0], *check[0]]],
+                "conditions": [[*conditions[0], *check[0]]]
+                if checked != "none" else conditions,
                 "file": f"replacement-{role}.dds",
                 "texture_hashes": (hashes[role],),
             }]
         assert draw.texture_hashes == {role: [hashes[role]] for role in roles}
     else:
-        assert set(draw.asset_texture_defaults) == set(roles)
-        assert draw.texture_provenance == {
-            role: "asset_original_fallback" for role in roles}
+        assert draw.asset_texture_defaults == {}
         assert all(draw.texture_default(role) is None
                    and draw.texture_rules(role) == [] for role in roles)
         assert draw.texture_hashes == {}
-    assert {f"replacement-{role}.dds" for role in roles} <= {
-        item["file"] for item in group["texture_candidates"]}
+    if exact_range:
+        assert {f"replacement-{role}.dds" for role in roles} <= {
+            item["file"] for item in group["texture_candidates"]}
 
 
 def test_resolver_uses_enabled_indexes_and_range_evidence(tmp_path, monkeypatch):
@@ -869,9 +872,22 @@ def test_slot_hash_role_precedence_lifecycle(tmp_path):
     apply([{"draws": [draw]}], [[binding]])
     assert draw.texture_default("diffuse") == str(texture)
     assert draw.texture_provenance["diffuse"] == "mod_texture_hash"
+    conditions = [[{"var": "variant", "value": "1", "negate": False}]]
+    conditional = TextureReplacement.from_dnf(
+        "11111111", "ResourceVariant", conditions, "TextureOverrideColor")
+    index = TextureOverrideIndex(replacements_by_hash={"11111111": (
+        TextureReplacement("11111111", "ResourceBase", (), "TextureOverrideColor", "base.dds"),
+        TextureReplacement(conditional.original_hash, conditional.resource,
+                           conditional.conditions, conditional.source_section, "variant.dds"),
+    )})
+    apply([{"draws": [draw]}], [[binding]], texture_index=index)
+    assert draw.texture_default("diffuse") == "base.dds"
+    assert [rule["file"] for rule in draw.texture_rules("diffuse")] == ["base.dds", "variant.dds"]
+    assert draw.texture_rules("diffuse")[1]["conditions"] == conditions
     draw.texture_default_file = "authored.dds"
+    draw.texture_variants = []
     draw.texture_provenance = {"diffuse": "mod_semantic"}
-    apply([{"draws": [draw]}], [[binding]])
+    apply([{"draws": [draw]}], [[binding]], texture_index=index)
     assert draw.texture_default("diffuse") == "authored.dds"
     assert draw.texture_provenance["diffuse"] == "mod_semantic"
     assert draw.asset_texture_defaults == {}
