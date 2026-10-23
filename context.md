@@ -123,6 +123,8 @@ of documentation, comments and tests; use portable fixtures instead.
   bindings or draws. Plain CommandList calls follow the caller's phase;
   explicit phase calls and CustomShader calls execute both target phases
   together. Preserve authored draw/call ordinals across phase selection.
+  Resolve complete trimmed `run` targets, retaining internal spaces and Unicode
+  in section identities; never fall back to a shorter first-token section.
 - Follow explicit `Resource = copy ...` and compute UAV copy/ref chains when
   resolving authored geometry and animation sources. Preserve ordered alternatives,
   stop cycles, and never infer a source through an unsupported shader operation.
@@ -172,6 +174,15 @@ of documentation, comments and tests; use portable fixtures instead.
 - Original Asset texture fallback is available only when a draw has no mod
   diffuse default or conditional assignment after mod texture resolution.
   A mod diffuse suppresses all original Asset maps; retain mod-authored maps.
+  Asset hashes may identify the role of an explicitly bound INI texture, but
+  must not inject unrelated hash replacements into a draw. Without a draw-level
+  INI reference, use the original Asset texture; hash matches remain picker choices.
+  Explicit texture-slot checks and imported `SkinTexture` calls count as texture
+  references regardless of game or namespace. Retain their conditions, checked
+  slots and execution position per draw before resolving hashes.
+  A reference, hash association or DDS color score does not prove a diffuse
+  role. Automatic diffuse selection requires INI semantics or labelled Asset
+  evidence; color candidates remain picker choices for every game.
 - Collect one lightweight inventory of all DDS/PNG/JPG/JPEG images through
   `ModSource`, including undeclared files, subfolders and compressed mods.
   Collect Asset images only from exact matched Asset directories, never by

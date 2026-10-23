@@ -55,6 +55,7 @@ class AuthoredDrawCall:
     # WWMI remapper uses cs-t35 for the per-vertex full VertexVG identities.
     skinning_remap_resources: dict[int, str | None] = field(default_factory=dict)
     slot_textures: list = field(default_factory=list)
+    texture_override_checks: list = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +129,8 @@ class DrawCall(MutableMapping):
     emission_map_variants: list = field(default_factory=list)
     geometry_match: GeometryMatch | None = None
     slot_textures: list = field(default_factory=list)
+    # Conditions and slots of explicit texture checks preceding this draw.
+    texture_override_checks: list = field(default_factory=list)
     asset_binding: object | None = None
     texture_provenance: dict = field(default_factory=dict)
     asset_texture_defaults: dict = field(default_factory=dict)
@@ -171,6 +174,7 @@ class DrawCall(MutableMapping):
         "material_map_default_file", "material_map_variants",
         "emission_map_default_file", "emission_map_variants",
         "asset_texture_defaults",
+        "texture_override_checks",
     )
 
     @classmethod

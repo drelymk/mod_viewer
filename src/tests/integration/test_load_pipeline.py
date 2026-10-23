@@ -18,6 +18,7 @@ from app.mods import enrichment as mod_enrichment
 from app.bridge import present as present_api
 from app.runtime import server as server
 from app.assets.resolver import AssetComponentBinding
+from app.assets.textures import asset_texture_key
 from app.bridge.api import ModViewerAPI
 from core.ini.analysis import analyze_ini
 from core.ini.document import IniDocument
@@ -31,7 +32,8 @@ from tests.support_snapshot import snapshot_context
 from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
-def test_deferred_component_loads_geometry_and_staged_reload_preserves_disk(tmp_path):
+@pytest.mark.parametrize("suffix", ["", " Part \u03a9"])
+def test_deferred_component_loads_geometry_and_staged_reload_preserves_disk(tmp_path, suffix):
     text = basic_model_ini().replace("drawindexed = 3, 0, 0", """if $mode == 1
 post run = CommandListReplacement
 endif
@@ -50,6 +52,8 @@ drawindexed = 3, 0, 0
 filename = replacement.buf
 stride = 12
 """
+    text = text.replace("CommandListReplacement", "CommandListReplacement" + suffix)
+    text = text.replace("CustomShaderReplacement", "CustomShaderReplacement" + suffix)
     ini = tmp_path / "mod.ini"
     ini.write_text(text, encoding="utf-8")
     for name, data in triangle_geometry().items():
@@ -63,13 +67,13 @@ stride = 12
     assert len(meshes) == 2
     assert meshes[0]["identity"] != meshes[1]["identity"]
     assert meshes[0]["sources"][0]["section"] == "TextureOverrideComponent01"
-    assert meshes[1]["sources"][0]["section"] == "CustomShaderReplacement"
+    assert meshes[1]["sources"][0]["section"] == "CustomShaderReplacement" + suffix
     assert meshes[1]["conditions"] == [
         [{"var": "mode", "value": "1", "negate": False}]]
     assert all(mesh["pos"]["length"] > 0 for mesh in meshes)
     assert not edit_session.has_pending(str(tmp_path))
 
-    staged = text.replace("post run = CommandListReplacement", "; deferred call removed")
+    staged = text.replace("post run = CommandListReplacement" + suffix, "; deferred call removed")
     payload = mod_loader.load_mod(
         str(tmp_path), overrides={str(ini): staged}, geometry=GeometryBlob())
     assert not payload.get("error")
@@ -424,16 +428,37 @@ def test_wuwa_candidates_reach_texture_pool_without_changing_draw_default(
         "existing.dds", "Components-0 t=candidate.dds"]
 
 
-def test_hash_replacements_reach_texture_manager_and_refreshed_toggles(
-        tmp_path, monkeypatch):
+@pytest.mark.parametrize("reference", [
+    "missing", "slot", "checked_slot", "helper", "imported", "namespaced",
+    "commented", "late", "local",
+])
+@pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI"])
+def test_texture_fallback_requires_draw_references_on_load_and_refresh(
+        tmp_path, monkeypatch, reference, asset_type):
     for filename, data in triangle_geometry().items():
         (tmp_path / filename).write_bytes(data)
     for filename in ("base.dds", "variant.dds"):
         (tmp_path / filename).write_bytes(b"texture")
     ini = basic_model_ini().replace(
         "ib = ResourceComponent01IB", "hash = 10101010\nib = ResourceComponent01IB")
+    assignment = {
+        "missing": "",
+        "slot": "ps-t7 = ResourceBase\n",
+        "checked_slot": "ps-t7 = ResourceVariant\nchecktextureoverride = ps-t7\n",
+        "helper": "run = CommandListBindings\n",
+        "imported": "run = CommandListSkinTexture\n",
+        "namespaced": "run = CommandList\\Runtime01\\SkinTexture\n",
+        "commented": ";run = CommandListSkinTexture\n",
+        "late": "",
+        "local": "run = CommandListSkinTexture\n",
+    }[reference]
+    ini = ini.replace("drawindexed =", assignment + "drawindexed =")
+    if reference == "late":
+        ini = ini.replace("drawindexed = 3, 0, 0", "drawindexed = 3, 0, 0\nrun = CommandListSkinTexture")
+    if reference == "local":
+        ini += "\n[CommandListSkinTexture]\nx = 0\n"
     path = tmp_path / "mod.ini"
-    path.write_text(ini + """[KeyVariant]
+    path.write_text(ini + f"""[KeyVariant]
 type = cycle
 $variant = 0,1
 [TextureOverrideColor]
@@ -446,17 +471,27 @@ endif
 filename = base.dds
 [ResourceVariant]
 filename = variant.dds
+[CommandListBindings]
+if $variant == 1
+Resource\\{asset_type}\\Diffuse = ResourceVariant
+else
+Resource\\{asset_type}\\Diffuse = ResourceBase
+endif
 """, encoding="utf-8")
     asset_dir = tmp_path / "assets" / "Asset01"
     asset_dir.mkdir(parents=True)
+    original = asset_dir / "Asset01BodyADiffuse.dds"
+    original.write_bytes(b"original texture")
     (asset_dir / "hash.json").write_text(json.dumps([{
         "ib": "10101010", "object_indexes": [0],
+        "component_name": "Body", "object_classifications": ["A"],
         "texture_hashes": [[["Diffuse", ".dds", "11111111"]]],
     }]), encoding="utf-8")
     binding = AssetComponentBinding(
         status="exact", component_status="exact", range_status="exact",
-        asset_type="ZZMI", asset="Asset01", root=str(asset_dir.parent),
-        geometry_hash="10101010", first_index=0, metadata="Asset01/hash.json")
+        asset_type=asset_type, asset="Asset01", root=str(asset_dir.parent),
+        geometry_hash="10101010", first_index=0, metadata="Asset01/hash.json",
+        component_name="Body", classification="A")
     monkeypatch.setattr(mod_enrichment.asset_resolver, "resolve_groups",
                         lambda groups, *_args, **_kwargs: [[binding] for _ in groups])
     context = snapshot_context(str(tmp_path), [path])
@@ -467,12 +502,26 @@ filename = variant.dds
     metadata.hydrate_textures(str(tmp_path), full, data={})
     mesh = full["meshes"]["Component01-1"]
     pool = full["texture_pools"][mesh["texture_pool_id"]]
-    assert [item["file"] for item in pool] == ["base.dds", "variant.dds"]
+    assert {"base.dds", "variant.dds"} <= {item["file"] for item in pool}
+    imported = reference in {"imported", "namespaced"}
+    expected_key = (
+        "diffuse::variant.dds" if reference in {"helper", "checked_slot"} else
+        "diffuse::base.dds" if reference == "slot" or imported else
+        asset_texture_key(str(asset_dir.parent), str(original)))
+    assert mesh["tex_key"] == expected_key
     assert mesh["tex_key"] in full["textures"]
-    assert set(full["controls"]["toggles"]) == {"KeyVariant"}
+    assert set(full["controls"]["toggles"]) == (
+        {"KeyVariant"} if reference == "helper" or imported else set())
+    expected_variants = ({"diffuse::base.dds", "diffuse::variant.dds"}
+                         if reference == "helper" or imported else set())
+    assert {item["tex_key"] for item in mesh.get("texture_variants", [])} == expected_variants
     for refresh in (mod_loader.load_control_state, mod_loader.load_semantic_state):
         state = refresh(context, active_mesh_keys=set(full["meshes"]))
         assert state["controls"] == full["controls"]
+        if "meshes" in state:
+            refreshed = state["meshes"]["Component01-1"]
+            assert refreshed["tex_key"] == expected_key
+            assert refreshed.get("texture_variants") == mesh.get("texture_variants")
 
 
 def _migration_payload(ambiguous=False):

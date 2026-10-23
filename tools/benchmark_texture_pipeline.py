@@ -434,6 +434,10 @@ def _run_browser(
     mod_path,
     sampler,
     browser_channel,
+    *,
+    audit_callback=None,
+    launch_args=None,
+    force_disabled_ini=False,
 ):
     from playwright.sync_api import sync_playwright
 
@@ -442,6 +446,8 @@ def _run_browser(
     geometry_responses = []
     page_errors = []
     console_errors = []
+    console_error_details = []
+    http_errors = []
     payload_holder = {}
     bridge_callback_timings = []
     bridge_json_serialization_timings = []
@@ -451,6 +457,8 @@ def _run_browser(
             requested_urls.add(request.url)
 
     def on_response(response):
+        if response.status >= 400:
+            http_errors.append({"url": response.url, "status": response.status})
         if "/texture/" not in response.url and "/geometry/" not in response.url:
             return
         try:
@@ -473,13 +481,16 @@ def _run_browser(
     def on_console(message):
         if message.type == "error":
             console_errors.append(message.text)
+            console_error_details.append(
+                {"text": message.text, "url": message.location.get("url", "")}
+            )
 
     def bridge_load_mod(path, disabled_ini=False):
         # This callback models the browser-side API call, but its transport is
         # Playwright's exposed-function channel rather than native pywebview.
         started = time.perf_counter()
         try:
-            result = api.load_mod(path, disabled_ini)
+            result = api.load_mod(path, force_disabled_ini or disabled_ini)
         finally:
             bridge_callback_timings.append(time.perf_counter() - started)
         payload_holder["payload"] = result
@@ -496,10 +507,14 @@ def _run_browser(
         return result
 
     with sync_playwright() as playwright:
+        if audit_callback is not None:
+            print("Launching audit browser", flush=True)
         browser = playwright.chromium.launch(
             channel=browser_channel,
             headless=True,
-            args=["--use-angle=swiftshader"],
+            args=launch_args
+            if launch_args is not None
+            else ["--use-angle=swiftshader"],
         )
         context = browser.new_context(
             viewport={"width": 1400, "height": 900}, bypass_csp=True
@@ -526,12 +541,20 @@ def _run_browser(
               get_mod_folders: async () => ({folders: []}),
               get_asset_folders: async () => ({folders: []}),
               get_panel_opacity: async () => ({value: 58}),
+              get_language: async () => ({value: 'en'}),
+              get_viewer_preferences: async () => ({value: window.__benchmarkPreferences || {}}),
+              set_viewer_preferences: async changes => {
+                window.__benchmarkPreferences = {...window.__benchmarkPreferences, ...changes};
+                return {value: window.__benchmarkPreferences};
+              },
             }};
             """
         )
 
         navigation_started = time.perf_counter()
         page.goto(base_url, wait_until="load", timeout=180000)
+        if audit_callback is not None:
+            print("Audit page navigation finished", flush=True)
         navigation_seconds = time.perf_counter() - navigation_started
 
         renderer_available = True
@@ -556,19 +579,28 @@ def _run_browser(
             if not renderer_available:
                 bootstrap_error = page.locator("#renderer-error").inner_text()
         frontend_started = time.perf_counter()
+        if audit_callback is not None:
+            print(f"Audit renderer available: {renderer_available}", flush=True)
         if renderer_available:
             bridge_result = page.evaluate(
-                """async path => {
-                  const loaded = await window.modViewer.switchMod(path);
+                """async ({path, audit}) => {
+                  let timer;
+                  const pending = window.modViewer.switchMod(path);
+                  const loaded = audit ? await Promise.race([
+                    pending,
+                    new Promise(resolve => {timer = setTimeout(() => resolve(false), 45000);}),
+                  ]) : await pending;
+                  clearTimeout(timer);
                   // Let the probe's first requestAnimationFrame callback run
                   // before returning its snapshot to Python.
                   await new Promise(resolve => requestAnimationFrame(resolve));
                   return {
                     loaded,
                     timing: window.modViewer.getLoadBenchmark(),
+                    dialog: document.getElementById('dialog-message')?.textContent,
                   };
                 }""",
-                mod_path,
+                {"path": mod_path, "audit": audit_callback is not None},
             )
         else:
             # Headless Edge can expose navigator.gpu while offering no usable
@@ -607,6 +639,11 @@ def _run_browser(
                 mod_path,
             )
         frontend_elapsed = time.perf_counter() - frontend_started
+        if audit_callback is not None:
+            print(
+                f"Audit model display returned after {frontend_elapsed:.2f}s",
+                flush=True,
+            )
         frontend = bridge_result.get("timing") or {}
         texture_started = frontend_started
         network_idle_error = None
@@ -701,6 +738,9 @@ def _run_browser(
                 response["bytes"] for response in texture_responses
             ),
             "geometry_response_count": len(geometry_responses),
+            "geometry_statuses": sorted(
+                {response["status"] for response in geometry_responses}
+            ),
             "geometry_bytes_served": sum(
                 response["bytes"] for response in geometry_responses
             ),
@@ -721,11 +761,19 @@ def _run_browser(
             "active_meshes": active_meshes,
             "page_errors": page_errors,
             "console_errors": console_errors,
+            "console_error_details": console_error_details,
+            "http_errors": http_errors,
             "network_idle_error": network_idle_error,
         }
         if not bridge_result.get("loaded"):
+            if audit_callback is not None:
+                audit_callback(page, None)
             raise RuntimeError(
-                f"Frontend mod load failed: {frontend.get('error') or bridge_result}"
+                f"Frontend mod load failed: {bridge_result.get('dialog') or frontend.get('error') or bridge_result}"
+            )
+        if audit_callback is not None:
+            browser_result["audit"] = audit_callback(
+                page, payload_holder.get("payload")
             )
         context.close()
         browser.close()

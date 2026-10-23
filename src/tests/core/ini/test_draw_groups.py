@@ -3,10 +3,35 @@
 import pytest
 
 from core.ini.draw_groups import build_draw_groups
-from core.ini.draw_scan import _scan_sections_for_draws
+from core.ini.draw_scan import _run_target_name, _scan_sections_for_draws
 from core.ini.sections import extract_resources, parse_sections
 from tests.support.model_data import standard_component_resources
 from tests.support.provenance import visible
+
+
+@pytest.mark.parametrize("command, slot", [
+    ("run = CommandListSkinTexture", None),
+    (r"run = CommandList\Runtime01\SkinTexture", None),
+    (r"run = CommandList\Runtime02\Helpers\SkinTexture", None),
+    ("checktextureoverride = ps-t7", 7),
+])
+def test_texture_check_keeps_conditions_slots_and_draw_execution_order(command, slot):
+    sections = parse_sections("source-01.ini", text=f"""[TextureOverrideComponent01]
+drawindexed = 3, 0, 0
+if $mode == 1
+run = CommandListRelay
+endif
+drawindexed = 3, 0, 0
+[CommandListRelay]
+{command.swapcase()}
+""")
+    draws = _scan_sections_for_draws(sections, gating_vars={"mode"})[
+        "TextureOverrideComponent01"]["draws"]
+    assert draws[0].texture_override_checks == []
+    assert draws[1].texture_override_checks == [{
+        "slot": slot,
+        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
+    }]
 
 
 @pytest.mark.parametrize("guard", ["$mode == 1", "$Ready == 1"])
@@ -650,6 +675,7 @@ stride = 32
     assert draws[1].skinning_resolution["resolution_source"] == "direct"
 
 
+@pytest.mark.parametrize("suffix", ["", " Part 01", " Part \u03a9"])
 @pytest.mark.parametrize("prefix,target,starts", [
     ("", "CommandListPart", [0, 3, 6, 9]),
     ("pre ", "CommandListPart", [0, 6, 3, 9]),
@@ -659,25 +685,27 @@ stride = 32
     ("PoSt\t", "CustomShaderPart", [3, 0, 6, 9]),
 ])
 def test_nested_run_phases_preserve_order_guards_and_authored_sources(
-        prefix, target, starts):
+        prefix, target, starts, suffix):
+    target += suffix
+    nested_target = "CommandListNested" + suffix
     text = f"""[TextureOverrideComponent01]
 ib = ResourceComponent01IB
 vb0 = ResourceComponent01Position
 vb1 = ResourceComponent01Texcoord
 post run = CommandListEmpty
 if $mode == 1
-{prefix}run = {target} ; retain the call's authored ordinal
+{prefix}run = {target.swapcase()}   ; retain the call's authored ordinal
 endif
 drawindexed = 3, 3, 0
 post drawindexed = 3, 9, 0
 [{target}]
-run = CommandListNested
-[CommandListNested]
+run = {nested_target.swapcase()}
+[{nested_target}]
 drawindexed = 3, 0, 0
 post drawindexed = 3, 6, 0
 post run = {target}
-run = ResourceIgnored
-[ResourceIgnored]
+run = ResourceIgnored Block
+[ResourceIgnored Block]
 drawindexed = 3, 12, 0
 [CommandListEmpty]
 """ + standard_component_resources()
@@ -690,7 +718,7 @@ drawindexed = 3, 12, 0
     for start, ordinal in [(0, 0), (6, 1)]:
         draw = by_start[start]
         assert draw.conditions == [[{"var": "mode", "value": "1", "negate": False}]]
-        assert draw.occurrence.section == "CommandListNested"
+        assert draw.occurrence.section == nested_target
         assert draw.occurrence.ordinal == ordinal
         assert draw.occurrence.path == (
             ("TextureOverrideComponent01", 1), (target, 0))
@@ -701,3 +729,17 @@ drawindexed = 3, 12, 0
     assert not by_start[3].conditions
     assert not by_start[9].conditions
     assert [by_start[start].occurrence.ordinal for start in (3, 9)] == [0, 1]
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("run = CommandListPart", "CommandListPart"),
+    ("PoSt run = commandlistpart block 01  ; trailing comment", "CommandListPart Block 01"),
+    ("run = CommandListPart Block 01 Missing", None),
+    ("run = CommandListPart\tBlock 01", None),
+    ("run = ResourceIgnored Block", None),
+    ("run = ; no target", None),
+])
+def test_run_targets_require_the_complete_section_name(command, expected):
+    lookup = {name.lower(): name for name in (
+        "CommandListPart", "CommandListPart Block 01", "ResourceIgnored Block")}
+    assert _run_target_name(command, lookup) == expected
