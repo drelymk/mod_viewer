@@ -173,6 +173,9 @@ export function parseDDS(input) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (view.getUint32(0, true) !== DDS_MAGIC) fail('invalid magic');
   const header = readFormat(view);
+  if (COMPRESSED_FORMATS.has(header.format) && (header.width % 4 || header.height % 4)) {
+    fail('compressed base dimensions must be multiples of 4 for WebGPU');
+  }
   const mipmaps = [];
   let offset = header.dataOffset;
   let width = header.width;

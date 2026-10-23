@@ -279,6 +279,33 @@ def test_auxiliary_publication_retains_active_mod_publication(tmp_path):
     assert server._lookup_texture(fill.token, "0") is None
 
 
+def test_native_texture_picker_rejects_incompatible_dds_without_publication_changes(tmp_path):
+    path = tmp_path / "texture.dds"
+    write_bc7_dds(path)
+    publication = server.begin_texture_publication(str(tmp_path))
+    publication.register(str(path))
+    publication.commit()
+    write_bc7_dds(path, width=7, height=4)
+
+    class Dialog:
+        def create_file_dialog(self, *_args, **_kwargs):
+            return [str(path)]
+
+    api = ModViewerAPI()
+    api._window = Dialog()
+    api._access.remember_mod_picker_selection(tmp_path)
+    try:
+        with patch("PIL.Image.open", side_effect=AssertionError("image decode")):
+            result = api.pick_texture_file(str(tmp_path))
+        assert result == {
+            "error": "Could not read this file as an image.",
+            "error_code": "texture_load_failed", "file": "texture.dds",
+        }
+        assert len(publication._sources) == 1
+    finally:
+        publication.release()
+
+
 def test_wuwa_manual_normal_pick_publishes_only_raw_source(tmp_path):
     path = tmp_path / "normal.png"
     Image.new("RGBA", (1, 1), (128, 128, 12, 34)).save(path)
@@ -399,7 +426,7 @@ def test_normal_roles_use_native_dds(tmp_path):
     normal_map_url = publication.register(str(dds), "normal_map")
     normal_data_url = publication.register(str(dds), "normal_data")
     within_limit = tmp_path / "within-limit.dds"
-    write_bc7_dds(within_limit, width=2049, height=4)
+    write_bc7_dds(within_limit, width=2052, height=4)
     within_limit_url = publication.register(str(within_limit))
 
     assert normal_map_url.endswith(".dds")

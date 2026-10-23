@@ -190,6 +190,7 @@ of documentation, comments and tests; use portable fixtures instead.
   Published picker pools omit rejected sources and unavailable auxiliary maps,
   reusing publication eligibility without decoding images. Detached analysis
   retains candidate identities when no texture publisher is supplied.
+  Native manual picks validate before changing pools or selections.
 - Texture pools and backend loading must not eagerly decode/render sources.
   Publish supported texture files as lazy URLs serving their original bytes;
   never encode PNG display copies or embed converted texture data. Detached
@@ -201,7 +202,9 @@ of documentation, comments and tests; use portable fixtures instead.
   r185's uncompressed upload flip repeatedly flips mip 0 and leaves smaller
   mips unflipped. Keep this transform stable before and after lazy loading/reload.
   Model and menu DDS must be supported, no larger than 8192 in either dimension,
-  and structurally valid; otherwise publication rejects them. There is no DDS
+  and structurally valid; compressed base dimensions must also be multiples of
+  four for core WebGPU (smaller mips may end in partial blocks). Otherwise
+  publication rejects them. There is no DDS
   file-byte cap. Menu DDS previews load only when visible
   and render through the shared WebGPU renderer into HTML canvases; dispose
   temporary GPU resources and ignore stale work when the panel is rebuilt.

@@ -833,6 +833,90 @@ def test_required_persistence_reports_failures_and_retains_pending_choices(modul
     }
 
 
+def test_mod_library_reveals_open_mod_through_lazy_registry_lifecycle(module_page):
+    result = module_page.evaluate("""async () => {
+      const html = await (await fetch('./index.html')).text();
+      document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
+      const {initModFolderPanel} = await import('./js/panels/mod-folder-panel.js');
+      const {LANGUAGE_CHANGED} = await import('./js/i18n/index.js');
+      const root = {name:'Library',path:'Root-01'};
+      const category = {name:'Category',path:'Root-01/Category'};
+      const mod = {name:'Mod',path:'Root-01/Category/Mod-01'};
+      const archive = {name:'Archive',path:'Root-01/archive.zip',kind:'archive',expandable:false};
+      const calls = [], switches = [];
+      let releaseRegistry, releaseCategory = null, categoryStarted;
+      const registry = new Promise(resolve=>releaseRegistry=resolve);
+      const initialCategory = new Promise(resolve=>categoryStarted=resolve);
+      window.pywebview = {api:{
+        get_mod_folders:()=>registry,
+        list_subfolders:async path=>{
+          calls.push(path);
+          if(path===root.path) return {folders:[category,archive,{name:'Other',path:'Root-01/other'}]};
+          if(path===category.path) {
+            if(categoryStarted) categoryStarted();
+            if(releaseCategory===null) return new Promise(resolve=>releaseCategory=resolve);
+            return {folders:[mod]};
+          }
+          throw new Error('Unexpected folder enumeration');
+        },
+      }};
+      const panel = initModFolderPanel({switchMod:async path=>{switches.push(path);return true;}});
+      const row = path => [...document.querySelectorAll('.mod-folder-row')]
+        .find(row=>row.getAttribute('data-mod-folder-path')===path);
+      const expanded = path => row(path)?.querySelector('.mod-folder-expand').getAttribute('aria-expanded')==='true';
+      const waitFor = predicate => new Promise(resolve=>{
+        if(predicate()) return resolve();
+        const observer = new MutationObserver(()=>{
+          if(predicate()) {observer.disconnect();resolve();}
+        });
+        observer.observe(document.getElementById('mod-folder-list'),{subtree:true,childList:true,attributes:true});
+      });
+      const loaded = path => window.dispatchEvent(new CustomEvent('mod-viewer-mod-loaded',{detail:{path}}));
+      loaded('ROOT-01\\\\CATEGORY\\\\MOD-01\\\\');
+      releaseRegistry({folders:[root,{name:'Other library',path:'root-02'}]});
+      await initialCategory;
+      const detachedCategory = releaseCategory;
+      releaseCategory = null;
+      window.dispatchEvent(new Event(LANGUAGE_CHANGED));
+      await Promise.resolve();
+      if(typeof releaseCategory!=='function') throw new Error('Restored expansion did not resume loading');
+      detachedCategory({folders:[]});
+      releaseCategory({folders:[mod]});
+      await waitFor(()=>row(mod.path)?.classList.contains('active'));
+      const startup = expanded(root.path) && expanded(category.path) && !expanded(mod.path) &&
+        !expanded('root-02') && calls.join('|')===[root.path,category.path,category.path].join('|');
+      row(root.path).querySelector('.mod-folder-expand').click();
+      loaded(mod.path);
+      await waitFor(()=>expanded(root.path) && expanded(category.path));
+      const reopened = row(mod.path).classList.contains('active') && calls.length===3;
+      await panel.refresh();
+      await waitFor(()=>row(mod.path)?.classList.contains('active'));
+      const refreshed = expanded(root.path) && expanded(category.path) && calls.length===5;
+
+      window.dispatchEvent(new Event('mod-viewer-mod-load-started'));
+      await panel.refresh();
+      const started = new Promise(resolve=>categoryStarted=resolve);
+      releaseCategory = null;
+      loaded(mod.path);
+      await started;
+      window.dispatchEvent(new Event('mod-viewer-mod-load-started'));
+      loaded(archive.path);
+      releaseCategory({folders:[mod]});
+      await waitFor(()=>!!row(mod.path));
+      const switched = row(archive.path).classList.contains('active') && !row(mod.path).classList.contains('active');
+      await panel.setActivePath(mod.path);
+      const resumed = row(mod.path).classList.contains('active') && calls.length===7;
+      row(archive.path).querySelector('.mod-folder-select').click();
+      await waitFor(()=>row(archive.path).classList.contains('active'));
+      return {startup,reopened,refreshed,switched,resumed,switches,calls};
+    }""")
+    assert result == {
+        'startup': True, 'reopened': True, 'refreshed': True, 'switched': True, 'resumed': True,
+        'switches': ['Root-01/archive.zip'],
+        'calls': ['Root-01', 'Root-01/Category', 'Root-01/Category'] + ['Root-01', 'Root-01/Category'] * 2,
+    }
+
+
 def test_bridge_readiness_is_shared_by_folders_and_presets_and_reports_failures(module_page):
     result = module_page.evaluate("""async () => {
       const html = await (await fetch('./index.html')).text();
