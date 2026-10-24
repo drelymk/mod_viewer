@@ -1485,7 +1485,7 @@ def test_rig_overlay_picking_follows_runtime_fk_ik_and_reset(module_page):
 
 def _stub_mesh_scene(page):
     page.route('**/js/panels/health-report.js', lambda route: route.fulfill(
-        content_type='text/javascript', body='export function setHealthReport() {}'))
+        content_type='text/javascript', body='export function setHealthReport() {}\nexport function refreshHealthReport() {}'))
     page.route('**/js/scene/scene.js', lambda route: route.fulfill(
         content_type='text/javascript', body="""
 export const scene = {};

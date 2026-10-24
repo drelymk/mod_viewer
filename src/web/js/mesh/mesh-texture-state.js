@@ -3,7 +3,7 @@
 import { activeMeshes } from './mesh-state.js';
 import { viewerState } from '../app/state.js';
 import { usesPackedNormal } from './material-profile.js';
-import { setHealthReport } from '../panels/health-report.js';
+import { refreshHealthReport, setHealthReport } from '../panels/health-report.js';
 import { bridgeReady, reportPersistenceFailure } from '../app/bridge.js';
 
 export {
@@ -54,7 +54,10 @@ export function saveTextureState(modPath) {
     .then((api) => api.save_mesh_textures(modPath, state))
     .then((result) => {
       if (result?.error) throw new Error(result.error);
-      if (viewerState.currentModPath === modPath) setHealthReport(null);
+      if (viewerState.currentModPath === modPath) {
+        setHealthReport(null);
+        void refreshHealthReport({ force: true });
+      }
       return result;
     });
   request.catch(reportPersistenceFailure);

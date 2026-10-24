@@ -195,7 +195,7 @@ export function setHealthReport(report, assetResolution = undefined) {
   button.classList.toggle('healthy', !!report && count === 0);
   button.classList.toggle('warning', !!report && count > 0 && errors === 0);
   button.classList.toggle('error', errors > 0);
-  $('health-count').textContent = String(count);
+  $('health-count').textContent = report ? String(count) : reportLoader ? '…' : '—';
   button.title = !report
     ? reportLoader
       ? t('health.run')

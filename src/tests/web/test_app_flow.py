@@ -318,3 +318,45 @@ def test_diagnostic_failure_does_not_fail_model_loading(viewer):
     assert page.locator('#open-btn').is_enabled()
     assert page.evaluate('window.modViewer.getCurrentSource().path') == 'fixture-01'
     assert page.locator('.draw-item').count() == 1
+
+
+def test_texture_save_refreshes_diagnostics_without_opening_the_report(viewer):
+    page = viewer({'fixture-01': model_payload()}, native={
+        'diagnostics': {'summary': {'issues': 3, 'errors': 0}, 'issues': []},
+    })
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.wait_for_function('document.querySelector("#health-count").textContent === "3"')
+    page.evaluate('''async () => {
+      window.__bridge.blocked.diagnostics = true;
+      const {refreshHealthReport} = await import('./js/panels/health-report.js');
+      window.__olderReport = refreshHealthReport();
+    }''')
+    page.wait_for_function('window.__bridge.waiters.diagnostics?.length === 1')
+    page.evaluate('''async () => {
+      window.__bridge.results.diagnostics = {summary: {issues: 2, errors: 0}, issues: []};
+      const {saveTextureState} = await import('./js/mesh/mesh-texture-state.js');
+      await saveTextureState('fixture-01');
+    }''')
+    page.wait_for_function('window.__bridge.waiters.diagnostics.length === 2')
+    assert page.locator('#health-count').inner_text() == '…'
+    assert page.locator('#health-btn').is_disabled()
+    assert page.locator('#health-modal-backdrop.show').count() == 0
+    page.evaluate('window.__bridge.waiters.diagnostics.pop()()')
+    page.wait_for_function('document.querySelector("#health-count").textContent === "2"')
+    page.evaluate('''async () => {
+      window.__bridge.release('diagnostics');
+      await window.__olderReport;
+    }''')
+    assert page.locator('#health-count').inner_text() == '2'
+    page.locator('#health-btn').click()
+    page.locator('#health-modal-backdrop.show').wait_for()
+    assert len(bridge_calls(page, 'diagnostics')) == 3
+    page.locator('#health-close-x').click()
+    page.evaluate('''async () => {
+      window.__bridge.results.diagnostics = {summary: {issues: 0, errors: 0}, issues: []};
+      const {saveTextureState} = await import('./js/mesh/mesh-texture-state.js');
+      await saveTextureState('fixture-01');
+    }''')
+    page.wait_for_function('document.querySelector("#health-count").textContent === "0"')
+    assert page.locator('#health-btn.healthy').is_enabled()

@@ -85,12 +85,17 @@ if $picked == 41
         $MODE = 0.0
         $SECOND = 1
     endif
+    run = CustomShaderRefresh
 else if $picked == 42
     $Accent = 1 - $ACCENT
     if $accent >= 1
         $ACCENT = 0
     endif
+    run = CustomShaderRefresh
 endif
+[CustomShaderRefresh]
+cs = refresh.hlsl
+dispatch = 1, 1, 1
 [CommandListIcon41]
 ps-t100 = ResourceBadge
 [CommandListIcon42]
@@ -103,6 +108,8 @@ vb1 = ResourceUV
 ib = ResourceIndex
 if $MODE == 1
     drawindexed = 3, 0, 0
+else
+    drawindexed = 3, 3, 0
 endif
 [ResourceIndex]
 filename = index.buf
@@ -138,6 +145,8 @@ stride = 20
     assert variables <= analysis.gating_vars
     assert analysis.draw_groups[0]["draws"][0].conditions == [[
         {"var": "piece::Mode", "value": "1", "negate": False}]]
+    assert analysis.draw_groups[0]["draws"][1].conditions == [[
+        {"var": "piece::Mode", "value": "1", "negate": True}]]
     panel = build_menu_panel(analysis.menu, analysis.defaults, mod_dir=str(tmp_path),
                              image_source=lambda _path: "/texture/test/0.png")
     displayed = panel["piece::CommandListChoose#41"]
@@ -615,12 +624,15 @@ def _action_menu(action, driver, helper):
 @pytest.mark.parametrize("helper", [False, True], ids=["inline", "helper"])
 @pytest.mark.parametrize("action,values,paired", [
     ("$Mode = 1 - $Mode", ["0", "1"], False),
+    ("$Mode = 1 - $Mode\nrun = CustomShaderRefresh", ["0", "1"], False),
     ("$Mode = ($Mode + 1) % 3", ["0", "1", "2"], False),
     ("$Mode = $Mode + 1\nif $Mode > 2\n$Mode = 0\nendif", ["0", "1", "2"], False),
     ("if $Mode == 0\n$Mode = 2\nelif $Mode == 2\n$Mode = 1\nelse\n$Mode = 0\nendif",
      ["0", "2", "1"], False),
     ("$Mode = 1 - $Mode\n$Accent = ($Accent + 1) % 3", ["0", "1"], True),
-], ids=["flip", "modulo", "wrap", "literal", "paired"])
+    ("run = customshaderRefresh\n$Mode = 1 - $Mode\n$Accent = ($Accent + 1) % 3\nrun = CustomShaderRefresh",
+     ["0", "1"], True),
+], ids=["flip", "shader-refresh", "modulo", "wrap", "literal", "paired", "paired-shader-refresh"])
 def test_menu_drivers_share_inline_and_helper_action_semantics(driver, helper, action, values, paired):
     controls = {entry["var"]: entry for entry in _menu(_action_menu(action, driver, helper)).values()}
     assert controls["anchor"]["values"] == controls["guide"]["values"] == ["0", "1"]
