@@ -522,6 +522,21 @@ def _body_lines(nodes):
         yield "endif"
 
 
+def _without_shader_refreshes(nodes):
+    """Copy action nodes without shader refreshes at any conditional depth."""
+    result = []
+    for node in nodes:
+        if isinstance(node, str):
+            if re.fullmatch(r'run\s*=\s*CustomShader\w+', node, re.I):
+                continue
+        else:
+            node = {**node, "branches": [
+                {**branch, "body": _without_shader_refreshes(branch["body"])}
+                for branch in node["branches"]]}
+        result.append(node)
+    return result
+
+
 def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
                      require_finite=True, active=(), budget=None,
                      helper_context=False):
@@ -530,10 +545,7 @@ def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
     budget[0] -= 1
     if len(active) >= 16 or budget[0] < 0:
         return None
-    # Shader refreshes are separate from the menu's variable cycles.
-    nodes = [node for node in nodes
-             if not (isinstance(node, str)
-                     and re.fullmatch(r'run\s*=\s*CustomShader\w+', node, re.I))]
+    nodes = _without_shader_refreshes(nodes)
     lines = [line for line in _body_lines(nodes) if line]
     assignments = [_ASSIGN_RE.fullmatch(line) for line in lines]
     writers = {match.group(1).casefold() for match in assignments if match}

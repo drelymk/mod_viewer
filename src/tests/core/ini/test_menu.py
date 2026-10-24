@@ -643,6 +643,20 @@ def test_menu_drivers_share_inline_and_helper_action_semantics(driver, helper, a
                                    {"var": "Accent", "values": ["0", "1", "2"]}] if paired else None)
 
 
+def test_menu_recognizes_literal_cycle_with_nested_shader_calls():
+    text = _action_menu("""if $Mode == 0
+$Mode = 1
+run = CustomShaderRefresh
+else
+$Mode = 0
+run = CustomShaderRefresh
+endif""", "slot", False)
+    controls = {entry["var"]: entry for entry in _menu(text).values()}
+    assert set(controls) == {"Mode", "anchor", "guide"}
+    assert controls["Mode"]["values"] == ["0", "1"]
+    assert controls["Mode"]["effects"] == []
+
+
 @pytest.mark.parametrize("driver", ["slot", "press", "press-elif", "release"])
 @pytest.mark.parametrize("action", [
     "if $Mode == 0\n$Mode = 1 - $Mode\nendif",
