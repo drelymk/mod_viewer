@@ -198,8 +198,24 @@ export function createUVView(mesh, { expanded = false, onExpanded = () => {}, ge
     const { x, y, width, height } = transform;
     const context = textureLayer.getContext('2d');
     context.clearRect(0, 0, textureLayer.width, textureLayer.height);
-    if (image) context.drawImage(image, x, y, width, height);
-    else {
+    if (image) {
+      const pattern = context.createPattern(image, 'repeat');
+      if (pattern) {
+        pattern.setTransform(
+          new DOMMatrix([
+            width / (image.naturalWidth || image.width),
+            0,
+            0,
+            height / (image.naturalHeight || image.height),
+            x,
+            y,
+          ]),
+        );
+        const { minU, minV, maxU, maxV } = display.bounds;
+        context.fillStyle = pattern;
+        context.fillRect(x + minU * width, y + (1 - maxV) * height, (maxU - minU) * width, (maxV - minV) * height);
+      }
+    } else {
       context.fillStyle = '#353b45';
       context.fillRect(x, y, width, height);
     }

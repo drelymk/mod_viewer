@@ -248,7 +248,9 @@ function createProfileNormalNode(profile, bindings, normalScaleNode, fallbackNor
     const sampled = vec3(binding.textureNode[xy[0]], binding.textureNode[xy[1]], 1);
     const packedNormal = normalMap(sampled, normalScaleNode);
     packedNormal.unpackNormalMode = NormalRGPacking;
-    return binding.enabledNode.select(packedNormal, fallbackNormal);
+    // Zero-filled RG cannot encode a unit normal; preserve the mesh normal there.
+    const hasNormal = binding.enabledNode.and(sampled.x.max(sampled.y).greaterThan(0));
+    return hasNormal.select(packedNormal, fallbackNormal);
   }
   const binding = bindings.normal_map;
   return binding.enabledNode.select(normalMap(binding.textureNode, normalScaleNode), fallbackNormal);

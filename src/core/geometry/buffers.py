@@ -1,5 +1,6 @@
 """Bounded binary buffer access and vertex-stream decoding helpers."""
 
+import math
 import struct
 from dataclasses import dataclass
 import os
@@ -32,7 +33,7 @@ _MIN_AXIS_SPREAD = 1e-4
 _MIN_IN_RANGE = 0.95
 
 
-def _uv_candidate_score(pairs, sampled, uv_off, fmt, *, signed=False):
+def _uv_candidate_score(pairs, sampled, uv_off, fmt, *, signed=False, balanced=False):
     """Rank plausible samples without letting isolated signed outliers win."""
     if not pairs or len(pairs) / sampled < _MIN_IN_RANGE:
         return None
@@ -51,6 +52,8 @@ def _uv_candidate_score(pairs, sampled, uv_off, fmt, *, signed=False):
     if signed:
         if not both_live:
             return None
+        if balanced:
+            return (in_range, min(spreads) / max(spreads), uv_off, fmt)
         # Reinterpreted half-floats can have a tiny U range and a large V range.
         # Require distributed variation and prefer evidence on the weaker axis.
         return (in_range, min(spreads), sum(spreads), uv_off, fmt)
@@ -61,8 +64,10 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
     """Detect half/float UV pairs at offset 0 or 4 from distributed samples.
 
     Preserve credible nonnegative layouts. When none varies on both axes, try
-    signed coordinates with robust axis spreads before retaining the original
-    degenerate or stride-fitting fallback. Detection never changes UV values.
+    signed coordinates with robust axis spreads, then finite layouts without a
+    coordinate limit by coverage and balanced robust axis variation. Retain
+    degenerate bounded layouts only before guessing from stride alone.
+    Detection never changes UV values.
     """
     if data is None:
         with open(tc_path, "rb") as file:
@@ -79,17 +84,19 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
             fmtsize = struct.calcsize(fmt)
             if uv_off + fmtsize > stride:
                 continue
-            pairs, sampled = [], 0
+            pairs, finite_pairs, sampled = [], [], 0
             for index in range(0, total, step):
                 offset = index * stride + uv_off
                 if offset + fmtsize > size:
                     break
                 u, v = struct.unpack_from(fmt, data, offset)
                 sampled += 1
+                if math.isfinite(u) and math.isfinite(v):
+                    finite_pairs.append((u, v))
                 # Bounded positive comparisons also exclude NaN and infinity.
                 if -2.0 <= u <= 2.0 and -2.0 <= v <= 2.0:
                     pairs.append((u, v))
-            candidates.append((pairs, sampled, uv_off, fmt))
+            candidates.append((pairs, sampled, uv_off, fmt, finite_pairs))
             nonnegative = [(u, v) for u, v in pairs
                            if u >= -0.01 and v >= -0.01]
             score = _uv_candidate_score(nonnegative, sampled, uv_off, fmt)
@@ -99,12 +106,20 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
     if best is not None and best[0]:
         return best[-2:]
     signed_scores = []
-    for pairs, sampled, uv_off, fmt in candidates:
+    for pairs, sampled, uv_off, fmt, _finite_pairs in candidates:
         score = _uv_candidate_score(pairs, sampled, uv_off, fmt, signed=True)
         if score is not None:
             signed_scores.append(score)
     if signed_scores:
         return max(signed_scores)[-2:]
+    finite_scores = []
+    for _pairs, sampled, uv_off, fmt, finite_pairs in candidates:
+        score = _uv_candidate_score(
+            finite_pairs, sampled, uv_off, fmt, signed=True, balanced=True)
+        if score is not None:
+            finite_scores.append(score)
+    if finite_scores:
+        return max(finite_scores)[-2:]
     if best is not None:
         return best[-2:]
     for uv_off in (DEFAULT_UV_OFFSET, 0):

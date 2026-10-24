@@ -201,8 +201,11 @@ of documentation, comments and tests; use portable fixtures instead.
   share candidate textures. Filename associations supply choices,
   never automatic roles. Apply semantic/slot/conditional selection once per
   draw, preserving authored execution order, no-mod-diffuse Asset eligibility
-  and game-specific normal transport. Final picker assembly consumes that
-  component pool; saved/manual choices remain metadata hydration's concern.
+  and game-specific normal transport. Original Asset defaults select unique
+  files from that same component pool using metadata-proven roles and ranges;
+  cache selections per pool, including when metadata omits a component name.
+  Final picker assembly consumes the pool; saved/manual choices remain metadata
+  hydration's concern.
   Published picker pools omit rejected sources and unavailable auxiliary maps,
   reusing publication eligibility without decoding images. Detached analysis
   retains candidate identities when no texture publisher is supplied.
@@ -217,6 +220,8 @@ of documentation, comments and tests; use portable fixtures instead.
   All DDS formats use one vertical UV transform with upload `flipY` disabled;
   r185's uncompressed upload flip repeatedly flips mip 0 and leaves smaller
   mips unflipped. Keep this transform stable before and after lazy loading/reload.
+  Model texture samplers repeat authored UV tiles. UV inspection repeats the
+  image across the displayed bounds without changing authored UV coordinates.
   Model and menu DDS must be supported, no larger than 8192 in either dimension,
   and structurally valid; compressed base dimensions must also be multiples of
   four for core WebGPU (smaller mips may end in partial blocks). Otherwise
@@ -368,7 +373,8 @@ of documentation, comments and tests; use portable fixtures instead.
   regions. ZZZ LightMap G supplies conservative metalness and MaterialMap B
   specular response; MaterialMap R stays ID data and G stays packed/unknown.
 - Genshin and ZZZ reconstruct authored `normal_map` RG in TSL. WuWa
-  reconstructs authored `normal_data` RG in TSL; B/A remain diagnostic or
+  reconstructs authored `normal_data` RG in TSL. Zero-filled RG falls back to
+  geometry normals; B/A remain diagnostic or
   profile-specific. RabbitFX uses LightMap G for shadow; its base is shadow-only
   and Normalmap B/A response requires reliable exact body-profile evidence.
 - Gate diagnostic modes by material capability; unsupported modes preserve

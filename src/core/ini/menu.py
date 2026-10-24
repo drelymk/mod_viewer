@@ -15,7 +15,6 @@ _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
 
 _ASSIGN_RE  = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
 _FLIP_RE    = re.compile(r'^1\s*-\s*\$(\w+)$')       # $v = 1 - $v
-_INCR_RE    = re.compile(r'^\$(\w+)\s*\+\s*1$')      # $v = $v + 1
 _INCR_REV_RE = re.compile(r'^1\s*\+\s*\$(\w+)$')     # $v = 1 + $v
 _INCR_MOD_RE = re.compile(                              # $v = ($v + 1) % N
     r'^\(\s*\$(\w+)\s*\+\s*1\s*\)\s*%\s*(\d+)$')
@@ -379,7 +378,7 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=No
         if literal:
             return *literal, []
     var, values, effects = None, None, []
-    cycle_kind, finite = None, False
+    cycle_kind, finite, decrement = None, False, False
     stack = []                    # {guard, branches, body} per open `if`
     step_body = ()
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
@@ -439,20 +438,23 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=No
                 cycle_kind = "increment_mod"
                 finite = True
             continue
-        incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
+        step = _STEP_RE.fullmatch(rhs)
+        incr = step or _INCR_REV_RE.fullmatch(rhs)
         if incr and _same_var(incr.group(1), lhs):
             if strict and var is not None:
                 return None
             var, values = lhs, ["0", "1"]   # Placeholder until the wrap count is known.
             cycle_kind = "increment"
+            decrement = bool(step and step.group(2) == "-")
             finite = False
             step_body = tuple(frame["body"] for frame in stack)
-            if guard and _same_var(guard["var"], lhs) and guard["op"] in ("<", "<="):
+            if (not decrement and guard and _same_var(guard["var"], lhs)
+                    and guard["op"] in ("<", "<=")):
                 wrap = (guard, len(stack))
             continue
         mod = _MOD_RE.fullmatch(rhs)
         if mod and _same_var(mod.group(1), lhs) and _same_var(lhs, var):
-            if strict and (cycle_kind != "increment" or finite):
+            if strict and (cycle_kind != "increment" or decrement or finite):
                 return None
             count = int(mod.group(2))
             if count > 0:
@@ -480,11 +482,11 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=No
                 return None
             finite = True
             continue
-        # `if $v > 2 / $v = 0 / endif` closes the cycle opened by `$v = $v + 1`.
+        # A reset at the matching bound closes an increment or decrement cycle.
         if (cycle_kind == "increment" and guard and _same_var(lhs, var)
                 and _same_var(guard["var"], var)
-                and guard["op"] in (">", ">=")):
-            values = _wrap_values(guard, rhs)
+                and guard["op"] in (("<", "<=") if decrement else (">", ">="))):
+            values = _wrap_values(guard, rhs, decrement=decrement)
             if values is None:
                 return None
             finite = True
@@ -665,7 +667,7 @@ def _parse_arrow_button(lines):
 
 
 def _arrow_button_items(sections):
-    """Recognise numbered arrow menus, retaining each item's first valid range."""
+    """Recognise numbered arrow menus, retaining distinct side actions."""
     items = {}
     for section, lines in sections.items():
         match = _BUTTON_RE.fullmatch(section)
@@ -674,11 +676,13 @@ def _arrow_button_items(sections):
         action = _parse_arrow_button(lines)
         if action:
             slot = int(match.group(1))
-            items.setdefault(slot, (section, *action, first_source(lines) or {}))
+            identity = (slot, action[0].casefold(), tuple(action[1]))
+            items.setdefault(identity, (section, *action, first_source(lines) or {}))
     # A lone step button is more likely ordinary bookkeeping than a menu.
-    if len(items) < _MIN_SLOTS:
+    if len({identity[0] for identity in items}) < _MIN_SLOTS:
         return []
-    return [(slot, *item) for slot, item in sorted(items.items())]
+    return [(identity[0], *item) for identity, item in sorted(
+        items.items(), key=lambda item: item[0][0])]
 
 
 def _static_numeric_defaults(sections):
@@ -1059,17 +1063,40 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
             for slot_value, actions in parsed:
                 add_actions(name, slot_value, actions, src=src)
 
+    mouse_items = _mouse_button_items(sections, blocks, defaults, pressed)
+    mouse_arrows = {}
+    for index, item in enumerate(mouse_items):
+        _slot, section, actions, _src, _region_value = item
+        match = _BUTTON_RE.fullmatch(section)
+        if match:
+            variable, values, _effects = actions[0]
+            identity = (int(match.group(1)), variable.casefold(), tuple(values))
+            mouse_arrows.setdefault(identity, []).append((index, item))
+    consumed_mouse = set()
     for slot, section, variable, values, src in _arrow_button_items(sections):
         button_section = re.sub(r"(?:Left|Right)$", "", section, flags=re.I)
-        add_entry(section, slot, variable, values, src=src,
-                  key_section=button_section)
+        candidates = mouse_arrows.get((slot, variable.casefold(), tuple(values)), [])
+        if candidates:
+            seen_actions = []
+            for index, (_slot, section, actions, src, _region_value) in candidates:
+                consumed_mouse.add(index)
+                identity = [(var.casefold(), vals, effects) for var, vals, effects in actions]
+                if identity in seen_actions:
+                    continue
+                seen_actions.append(identity)
+                add_actions(section, slot, actions, src=src, key_section=button_section)
+        else:
+            add_entry(section, slot, variable, values, src=src,
+                      key_section=button_section)
     regions = {}
-    for slot, section, actions, src, region in _mouse_button_items(sections, blocks, defaults, pressed):
+    for index, (slot, section, actions, src, region) in enumerate(mouse_items):
+        if region:
+            regions.setdefault(actions[0][0].casefold(), set()).add(region)
+        if index in consumed_mouse:
+            continue
         image = _section_image(
             section_lookup.get(f"commandlistdrawbutton_{slot}", ()), resources, last=True)
         add_actions(section, slot, actions, src=src, kind="mouse_region", image=image)
-        if region:
-            regions.setdefault(actions[0][0].casefold(), set()).add(region)
     images = _slot_images(image_chains, {info["slot"] for info in menu.values()},
                           slot_groups, resources)
     for info in menu.values():

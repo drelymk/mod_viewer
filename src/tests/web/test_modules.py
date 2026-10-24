@@ -153,6 +153,46 @@ export function getDDSPreview(url,isCurrent) {
     assert module_page.evaluate('!uvPending[2].isCurrent() && document.querySelector("canvas").width === 1')
 
 
+def test_uv_view_repeats_texture_across_authored_tiles(module_page):
+    module_page.route('**/js/textures/dds-preview.js', lambda route: route.fulfill(
+        content_type='text/javascript', body='''
+export function clearDDSPreviews() {}
+export async function getDDSPreview() {
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 8;
+  const context = canvas.getContext('2d');
+  context.fillStyle = 'rgb(240,40,20)'; context.fillRect(0,0,4,8);
+  context.fillStyle = 'rgb(20,40,240)'; context.fillRect(4,0,4,8);
+  return canvas;
+}
+'''))
+    result = module_page.evaluate('''async () => {
+      const T = await import('three/webgpu');
+      const {addTexture} = await import('./js/mesh/mesh-factory.js');
+      const {createUVView} = await import('./js/panels/uv-view.js');
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position', new T.Float32BufferAttribute([0,0,0,1,0,0,0,1,0],3));
+      const uv = new T.Float32BufferAttribute([8,8,9,8,8,9],2);
+      geometry.setAttribute('uv',uv); geometry.setIndex([0,1,2]);
+      const original = [...uv.array];
+      const mesh = new T.Mesh(geometry); mesh.userData.texKey = 'diffuse::texture-01.dds';
+      addTexture(mesh.userData.texKey,'/texture-01.dds');
+      const view = createUVView(mesh,{expanded:true,getFaceSelection:()=>null});
+      document.body.append(view.section); await view.sync();
+      const canvas = view.section.querySelector('.inspector-uv-texture');
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      const width = (canvas.width - 16*dpr)/9, height = (canvas.height - 16*dpr)/9;
+      const pixel = (u,v) => [...canvas.getContext('2d').getImageData(
+        Math.round(8*dpr + u*width),Math.round(8*dpr + (9-v)*height),1,1).data];
+      const colors = [pixel(.25,.5),pixel(8.25,8.5),pixel(8.75,8.5)];
+      const unchanged = original.every((value,index)=>uv.array[index]===value);
+      const warning = view.section.querySelector('.inspector-uv-warning').textContent;
+      view.dispose(); return {colors,unchanged,warning};
+    }''')
+    assert result['colors'] == [[240, 40, 20, 255], [240, 40, 20, 255], [20, 40, 240, 255]]
+    assert result['unchanged']
+    assert 'outside' in result['warning']
+
+
 def test_uv_view_retains_wireframe_and_visits_only_selected_faces(module_page):
     result = module_page.evaluate('''async () => {
       const T = await import('three/webgpu');
