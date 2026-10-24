@@ -202,28 +202,32 @@ def test_shared_texture_uploads_preserve_role_specific_color_spaces(viewer):
     assert result == {'shared': True, 'separate': True, 'color': 'srgb', 'data': ''}
 
 
-def test_asset_packed_normal_shading_ignores_blue_and_retains_rg_detail(viewer, tmp_path):
+@pytest.mark.parametrize('asset_type', ['GIMI', 'ZZMI'])
+def test_asset_packed_normal_shading_handles_empty_rg_and_retains_detail(viewer, tmp_path, asset_type):
     key = 'normal_map::texture-01.png'
+    # Native asset axes differ; keep the triangle facing the preview camera.
+    last_vertex = (0, 1, 0) if asset_type == 'GIMI' else (0, 0, 1)
+    normal = (0, 0, 1) if asset_type == 'GIMI' else (0, -1, 0)
     part = AssetMeshPart(
-        key='part-01', label='Component01', asset_type='ZZMI',
+        key='part-01', label='Component01', asset_type=asset_type,
         asset_path='Asset01', geometry_hash='12345678',
         component_name='Component01', classification='A',
         component_ordinal=0, first_index=0, index_count=3,
-        positions=struct.pack('<9f', 0, 0, 0, 1, 0, 0, 0, 0, 1),
+        positions=struct.pack('<9f', 0, 0, 0, 1, 0, 0, *last_vertex),
         indices=struct.pack('<3I', 0, 1, 2),
-        normals=struct.pack('<9f', 0, -1, 0, 0, -1, 0, 0, -1, 0),
+        normals=struct.pack('<9f', *(normal * 3)),
         uvs=struct.pack('<6f', 0, 0, 1, 0, 0, 1),
         textures={'normal_map': AssetTexture(
             'normal_map', 'texture-01.png', key, 'texture-01',
             uri=solid_texture((128, 128, 0)))})
     geometry = GeometryBlob()
     payload = AssetLoadResult.from_parts(
-        'ZZMI', str(tmp_path), {'path': 'Asset01'}, [part],
+        asset_type, str(tmp_path), {'path': 'Asset01'}, [part],
         geometry=geometry).payload
     payload['_fixture_blob'] = bytes(geometry.data)
     page = _open_fixture(viewer, payload)
     wait_texture(page, role='normal_map')
-    sample = [[0.25, 0, 0.25]]
+    sample = [[0.25, 0.25, 0] if asset_type == 'GIMI' else [0.25, 0, 0.25]]
     packed = mesh_pixels(page, sample)[0]
     page.evaluate("""async () => {
       const {updateGameMaterialTextures} = await import('./js/mesh/material-profile.js');
@@ -241,7 +245,7 @@ def test_asset_packed_normal_shading_ignores_blue_and_retains_rg_detail(viewer, 
         texture.needsUpdate = true;
         updateGameMaterialTextures(window.modViewer.activeMeshes[0], {normal_map: texture});
       };
-      window.__setNormalPixels([128, 128, 255, 255]);
+      window.__setNormalPixels([128, 128, 255, 0]);
     }""")
     other_blue = mesh_pixels(page, sample)[0]
     assert max(abs(a-b) for a,b in zip(packed, other_blue)) < 5
@@ -250,6 +254,13 @@ def test_asset_packed_normal_shading_ignores_blue_and_retains_rg_detail(viewer, 
     assert max(abs(a-b) for a,b in zip(packed, tilted)) > 10, (
         packed, geometry_normal, other_blue, tilted,
         page.evaluate('window.modViewer.activeMeshes[0].material.userData.gameMaterial.normalPacking'))
+    for empty in ([0, 0, 0, 0], [0, 0, 255, 255]):
+        page.evaluate('rgba => window.__setNormalPixels(rgba)', empty)
+        empty_normal = mesh_pixels(page, sample)[0]
+        assert max(abs(a-b) for a,b in zip(empty_normal, geometry_normal)) < 5
+    page.evaluate('window.__setNormalPixels([220, 128, 0, 255])')
+    restored = mesh_pixels(page, sample)[0]
+    assert max(abs(a-b) for a,b in zip(restored, tilted)) < 5
 
 
 def test_failed_texture_uses_renderable_fallback_without_retry_and_new_source_recovers(viewer):
@@ -962,6 +973,41 @@ def test_dds_upload_matches_reference_colors_and_orientation(viewer, tmp_path, f
     assert compressed[1][0] > compressed[1][2] + 60
     assert all(max(abs(a-b) for a,b in zip(left, right)) < 40
                for left, right in zip(compressed, reference_pixels))
+
+
+def test_model_dds_sampling_repeats_tiled_uvs_across_reload(viewer):
+    payload = model_payload()
+    payload['meshes']['mesh-00']['tex_key'] = 'diffuse::texture-01.dds'
+    payload['textures'] = {'diffuse::texture-01.dds': '/texture-01.dds'}
+    page = viewer({'fixture-01': payload})
+    page.route('**/texture-01.dds*', lambda route: route.fulfill(
+        content_type='image/vnd-ms.dds', body=split_color_dds()))
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    wait_texture(page)
+    points = [[.1,.2,0], [.1,.7,0]]
+    baseline = mesh_pixels(page, points)
+    assert max(abs(a-b) for a,b in zip(*baseline)) > 60
+    for shift in (8, -8):
+        assert page.evaluate('''async shift => {
+          const T = await import('three');
+          const {getGameMaterialTexture} = await import('./js/mesh/material-profile.js');
+          const mesh = window.modViewer.activeMeshes[0], uv = mesh.geometry.attributes.uv;
+          uv.array.set([shift,shift,shift+1,shift,shift,shift+1]); uv.needsUpdate = true;
+          const texture = getGameMaterialTexture(mesh.material,'diffuse');
+          return texture.wrapS === T.RepeatWrapping && texture.wrapT === T.RepeatWrapping;
+        }''', shift)
+        tiled = mesh_pixels(page, points)
+        assert all(max(abs(a-b) for a,b in zip(before, after)) <= 2
+                   for before, after in zip(baseline, tiled))
+    page.evaluate('''async () => {
+      const {reloadTextures} = await import('./js/mesh/mesh-factory.js');
+      await reloadTextures(['diffuse::texture-01.dds'],{force:true});
+    }''')
+    assert all(max(abs(a-b) for a,b in zip(before, after)) <= 2
+               for before, after in zip(baseline, mesh_pixels(page, points)))
+    assert page.evaluate('''() => [...window.modViewer.activeMeshes[0].geometry.attributes.uv.array]''') == [
+        -8, -8, -7, -8, -8, -7]
 
 
 def test_unaligned_dds_replacement_fails_locally_and_preserves_viewer(viewer, tmp_path):

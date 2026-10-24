@@ -310,6 +310,8 @@ function handleTextureReady(key, texture, uri) {
   }
   readyTextures.add(key);
   failedTextures.delete(key);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
   texture.needsUpdate = true;
   for (const mesh of textureUsers.get(key) || []) refreshMeshTexture(mesh);
 }

@@ -154,32 +154,39 @@ def _texture_records(binding, raw):
     return records
 
 
-def _locate_texture(binding, evidence, inventory):
-    asset_dir = _safe_asset_path(binding.root, binding.asset)
+def _matches_original_texture(binding, evidence, filename, *, require_component=False):
+    """Match a file to a role and range independently established by metadata."""
     component = binding.component_name or evidence.component_name
-    classification = binding.classification or evidence.classification
-    if (not asset_dir or not os.path.isdir(asset_dir)
-            or not isinstance(component, str) or not component.strip()):
-        return None
+    if component is not None and not isinstance(component, str):
+        return False
+    component = (component or "").strip()
+    classification = str(binding.classification or evidence.classification or "").strip()
+    role_suffix = _ROLE_SUFFIXES.get(evidence.role)
+    if (not role_suffix or not (component or classification)
+            or (require_component and not component)):
+        return False
     extension = (evidence.extension or "").casefold()
-    suffix = (component.strip()
-              + str(classification or "").strip()
-              + _ROLE_SUFFIXES.get(evidence.role, "")).casefold()
-    if not suffix:
+    suffix = (component + classification + role_suffix).casefold()
+    name = os.path.basename(filename).casefold()
+    return ((not extension or name.endswith(extension))
+            and os.path.splitext(name)[0].endswith(suffix))
+
+
+def _locate_texture(binding, evidence, candidates):
+    """Select a metadata-proven role from the component's picker candidates."""
+    asset_dir = _safe_asset_path(binding.root, binding.asset)
+    if not asset_dir or not os.path.isdir(asset_dir):
         return None
-    candidates = []
-    for candidate in inventory.values():
+    paths = set()
+    for candidate in candidates:
         if candidate["source"] != "asset":
             continue
         path = candidate["path"]
-        if os.path.normcase(os.path.dirname(path)) != os.path.normcase(asset_dir):
+        if asset_paths.relative_asset_path(asset_dir, path) is None:
             continue
-        name = os.path.basename(path).casefold()
-        if extension and not name.endswith(extension):
-            continue
-        if os.path.splitext(name)[0].endswith(suffix):
-            candidates.append(path)
-    return candidates[0] if len(candidates) == 1 else None
+        if _matches_original_texture(binding, evidence, path):
+            paths.add(path)
+    return next(iter(paths)) if len(paths) == 1 else None
 
 
 def _logical_key(binding, filename):
@@ -597,16 +604,11 @@ def _associate_textures(group, records, inventory, filename_matches,
             matches = asset_textures.component_texture_matches(
                 filename, names, wwmi=wwmi)
             if (id(group) in matches
-                    or any(value in filename.casefold() for value in asset_hashes)):
+                    or any(value in filename.casefold() for value in asset_hashes)
+                    or any(_matches_original_texture(
+                               binding, item, filename, require_component=True)
+                           for item in evidence)):
                 candidates.setdefault(identity, dict(candidate))
-        for item in evidence:
-            if not item.role:
-                continue
-            path = item.file
-            if path:
-                identity = _logical_key(binding, path)
-                identity = os.path.normcase(identity)
-                candidates.setdefault(identity, dict(inventory[identity]))
     group["texture_candidates"] = list(candidates.values())
 
 
@@ -656,13 +658,6 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
             exact = asset_textures.exact_texture_binding(binding)
             evidence = (_gimi_evidence(binding, metadata_cache)
                         if exact and binding.asset_type in ("GIMI", "ZZMI") else [])
-            located_evidence = []
-            for item in evidence:
-                cache_key = (binding, item)
-                if item.role and cache_key not in original_files:
-                    original_files[cache_key] = _locate_texture(binding, item, inventory)
-                located_evidence.append(replace(item, file=original_files.get(cache_key)))
-            evidence = located_evidence
             slots = (_wwmi_slot_evidence(binding, metadata_cache)
                      if exact and binding.asset_type == "WWMI" else {})
             records.append((draw, binding, evidence, slots))
@@ -670,6 +665,14 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
             group, records, inventory, filename_matches, asset_names,
             [index, *texture_indexes])
         for draw, binding, evidence, slots in records:
+            located_evidence = []
+            for item in evidence:
+                cache_key = (id(group), binding, item)
+                if item.role and cache_key not in original_files:
+                    original_files[cache_key] = _locate_texture(
+                        binding, item, group["texture_candidates"])
+                located_evidence.append(replace(item, file=original_files.get(cache_key)))
+            evidence = located_evidence
             if binding.status == "not_found" and not include_not_found:
                 continue
             draw.asset_binding = binding

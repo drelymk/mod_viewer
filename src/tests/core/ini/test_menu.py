@@ -263,6 +263,88 @@ filename = frame.dds
         assert controls["Palette"]["section"] == "CommandListButton7Right"
 
 
+@pytest.mark.parametrize("right_var,right_max,expected", [
+    ("MODE", 2, [(1, "Mode", ["0", "1", "2"])]),
+    ("Accent", 3, [(1, "Mode", ["0", "1", "2"]),
+                   (1, "Accent", ["0", "1", "2", "3"])]),
+    ("Mode", 3, [(1, "Mode", ["0", "1", "2"]),
+                 (1, "Mode", ["0", "1", "2", "3"])]),
+], ids=["shared-cycle", "distinct-side-actions", "different-ranges"])
+def test_numbered_mouse_arrows_share_artwork_and_preserve_distinct_actions(
+        tmp_path, right_var, right_max, expected):
+    def button(slot, side, variable, maximum):
+        hit = ("cursor_x > z87 && cursor_x < z87 + x87 / 2" if side == "Left"
+               else "cursor_x > z87 + x87 / 2 && cursor_x < z87 + x87")
+        step, guard, reset = (("-", "< 0", maximum) if side == "Left"
+                              else ("+", f"> {maximum}", 0))
+        return f"""
+[CommandListButton{slot}{side}]
+x87 = $size * res_height/res_width
+y87 = $size
+z87 = $offset_x + {slot} * $spacing
+w87 = $offset_y
+if {hit} && cursor_y > w87 && cursor_y < w87 + y87
+    if $click
+        if $latch == 0
+            ${variable} = ${variable} {step} 1
+            if ${variable} {guard}
+                ${variable} = {reset}
+            endif
+            $latch = 1
+        endif
+    endif
+endif
+"""
+
+    text = """
+[Constants]
+global persist $Mode = 1
+global persist $Accent = 0
+global persist $Anchor = 0
+global $click = 0
+global $latch = 0
+[KeyClick]
+key = VK_RBUTTON
+type = hold
+$click = 1
+"""
+    text += button(1, "Left", "Mode", 2) + button(1, "Right", right_var, right_max)
+    text += button(2, "Left", "Anchor", 1) + button(2, "Right", "Anchor", 1)
+    text += """
+[CommandListUtility]
+if $click && cursor_x > $left && cursor_x < $left + $width
+    if cursor_y > $top && cursor_y < $top + $height
+        $Utility = 1 - $Utility
+    endif
+endif
+"""
+    for slot in (1, 2):
+        text += (f"[CommandListIcon{slot}]\nps-t100 = ResourceBadge{slot}\n"
+                 f"[ResourceBadge{slot}]\nfilename = badge-{slot}.png\n")
+        Image.new("RGBA", (2, 2), (30, 60, 90, 255)).save(tmp_path / f"badge-{slot}.png")
+
+    menu = _menu(text, var_prefix="piece::")
+    entries = list(menu.values())
+    expected = [*expected, (2, "Anchor", ["0", "1"])]
+    assert [(entry["slot"], entry["var"], entry["values"])
+            for entry in entries[:-1]] == [
+                (slot, f"piece::{variable}", values) for slot, variable, values in expected]
+    assert [entry["image_file"] for entry in entries[:-1]] == [
+        f"badge-{slot}.png" for slot, _variable, _values in expected]
+    for entry in entries[:-1]:
+        if entry["section"].endswith("Right"):
+            assert entry["effects"] == [
+                {"when": None, "var": "piece::latch", "value": "1"}]
+    assert entries[-1]["var"] == "piece::Utility"
+    assert "image_file" not in entries[-1]
+    panel = build_menu_panel(menu, {"piece::Mode": "1"}, mod_dir=str(tmp_path),
+                             image_source=lambda _path: "/texture/test/badge.png")
+    assert len(panel) == len(entries)
+    assert [entry.get("image") for entry in panel.values()].count(
+        "/texture/test/badge.png") == len(expected)
+    assert panel["piece::CommandListButton1#1"]["default"] == "1"
+
+
 @pytest.mark.parametrize("action,expected", [
     ("$Palette = $PALETTE + $trigger\nif $palette > 3\n$PALETTE = 0.000\nendif",
      ["0", "1", "2", "3"]),

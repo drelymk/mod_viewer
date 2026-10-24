@@ -665,7 +665,7 @@ def _parse_arrow_button(lines):
 
 
 def _arrow_button_items(sections):
-    """Recognise numbered arrow menus, retaining each item's first valid range."""
+    """Recognise numbered arrow menus, retaining distinct side actions."""
     items = {}
     for section, lines in sections.items():
         match = _BUTTON_RE.fullmatch(section)
@@ -674,11 +674,13 @@ def _arrow_button_items(sections):
         action = _parse_arrow_button(lines)
         if action:
             slot = int(match.group(1))
-            items.setdefault(slot, (section, *action, first_source(lines) or {}))
+            identity = (slot, action[0].casefold(), tuple(action[1]))
+            items.setdefault(identity, (section, *action, first_source(lines) or {}))
     # A lone step button is more likely ordinary bookkeeping than a menu.
-    if len(items) < _MIN_SLOTS:
+    if len({identity[0] for identity in items}) < _MIN_SLOTS:
         return []
-    return [(slot, *item) for slot, item in sorted(items.items())]
+    return [(identity[0], *item) for identity, item in sorted(
+        items.items(), key=lambda item: item[0][0])]
 
 
 def _static_numeric_defaults(sections):
@@ -1059,17 +1061,38 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
             for slot_value, actions in parsed:
                 add_actions(name, slot_value, actions, src=src)
 
+    mouse_items = _mouse_button_items(sections, blocks, defaults, pressed)
+    mouse_arrows = {}
+    for index, item in enumerate(mouse_items):
+        _slot, section, actions, _src, _region_value = item
+        match = _BUTTON_RE.fullmatch(section)
+        if match:
+            variable, values, _effects = actions[0]
+            identity = (int(match.group(1)), variable.casefold(), tuple(values))
+            mouse_arrows.setdefault(identity, []).append((index, item))
+    consumed_mouse = set()
     for slot, section, variable, values, src in _arrow_button_items(sections):
         button_section = re.sub(r"(?:Left|Right)$", "", section, flags=re.I)
-        add_entry(section, slot, variable, values, src=src,
-                  key_section=button_section)
+        candidates = mouse_arrows.get((slot, variable.casefold(), tuple(values)), [])
+        if candidates:
+            _index, (_slot, section, actions, src, _region_value) = candidates[0]
+            # Reuse the richer mouse actions without duplicating the same cycle.
+            # Different side effects remain independent menu entries.
+            consumed_mouse.update(index for index, item in candidates
+                                  if item[2] == actions)
+            add_actions(section, slot, actions, src=src, key_section=button_section)
+        else:
+            add_entry(section, slot, variable, values, src=src,
+                      key_section=button_section)
     regions = {}
-    for slot, section, actions, src, region in _mouse_button_items(sections, blocks, defaults, pressed):
+    for index, (slot, section, actions, src, region) in enumerate(mouse_items):
+        if region:
+            regions.setdefault(actions[0][0].casefold(), set()).add(region)
+        if index in consumed_mouse:
+            continue
         image = _section_image(
             section_lookup.get(f"commandlistdrawbutton_{slot}", ()), resources, last=True)
         add_actions(section, slot, actions, src=src, kind="mouse_region", image=image)
-        if region:
-            regions.setdefault(actions[0][0].casefold(), set()).add(region)
     images = _slot_images(image_chains, {info["slot"] for info in menu.values()},
                           slot_groups, resources)
     for info in menu.values():

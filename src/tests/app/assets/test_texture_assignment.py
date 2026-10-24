@@ -33,6 +33,114 @@ def _write_geometry(root):
     (root / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
 
 
+def test_asset_defaults_share_picker_candidates_with_blank_component_metadata(
+        tmp_path, monkeypatch):
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    _write_geometry(mod)
+    (mod / "owned.dds").write_bytes(b"mod texture")
+    root = tmp_path / "assets"
+    asset = root / "Asset07"
+    asset.mkdir(parents=True)
+    roles = ("Diffuse", "NormalMap", "LightMap")
+    record = {
+        "component_name": "", "ib": "10101010", "object_indexes": [0, 3],
+        "object_classifications": ["Head", "Body"],
+        "texture_hashes": [
+            [[role, ".dds", f"{number * 0x11111111:08x}"]
+             for number, role in enumerate(roles, 1)],
+            [["Diffuse", ".dds", "44444444"]]],
+    }
+    metadata_path = asset / "hash.json"
+    metadata_path.write_text(json.dumps([record]), encoding="utf-8")
+    for filename in [*(f"Asset07Head{role}.dds" for role in roles),
+                     "Asset07BodyDiffuse.dds", "Asset07FaceHeadDiffuse.dds",
+                     "Asset07EffectHeadDiffuse.dds", "Asset07HeadChoice.dds",
+                     "Asset07DetailHeadDiffuse.dds"]:
+        (asset / filename).write_bytes(b"asset texture")
+    unrelated = root / "Unrelated"
+    unrelated.mkdir()
+    (unrelated / "Asset07HeadDiffuse.dds").write_bytes(b"unrelated texture")
+    index = asset_index.build_index("GIMI", str(root))
+    monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
+    monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
+        game="genshin", runtime="gimi", texture_api="gimi", confidence="high", scores={}))
+
+    def no_decode(*_args, **_kwargs):
+        raise AssertionError("Candidate association must not decode textures")
+
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
+    text = ""
+    for component, first, diffuse in (("Head", 0, "__HEAD_BINDING__"),
+                                       ("Body", 3, r"Resource\GIMI\Diffuse = ResourceOwned"),
+                                       ("DetailHead", 0, "")):
+        text += f"""[TextureOverrideAsset07{component}]
+hash = 10101010
+match_first_index = {first}
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+{diffuse}
+drawindexed = 3,0,0
+"""
+    text += "[ResourceOwned]\nfilename = owned.dds\n"
+    text += standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    ini = mod / "mod.ini"
+
+    def load(head_binding=""):
+        ini.write_text(text.replace("__HEAD_BINDING__", head_binding), encoding="utf-8")
+        context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(ini)], str(mod)),
+                                 asset_folders=[{"type": "GIMI", "path": str(root), "enabled": True}])
+        payload = load_mod(context=context, geometry=GeometryBlob(),
+                           texture_source=lambda _path, role: f"/texture/test/{role}")
+        assert not payload.get("error")
+        assert payload["asset_resolution"]["exact_draws"] == 3
+        semantic = load_semantic_state(context)["meshes"]["Asset07Head-1"]
+        head = payload["meshes"]["Asset07Head-1"]
+        assert semantic["tex_key"] == head["tex_key"]
+        metadata.hydrate_textures(str(mod), payload, data={}, source=context.source)
+        assert payload["meshes"]["Asset07Body-1"]["tex_key"] == "diffuse::owned.dds"
+        detail = payload["meshes"]["Asset07DetailHead-1"]
+        assert detail["tex_key"] == asset_texture_key(
+            str(root), str(asset / "Asset07DetailHeadDiffuse.dds"))
+        choices = payload["texture_pools"][head["texture_pool_id"]]
+        assert all("FaceHead" not in item["file"] and "EffectHead" not in item["file"]
+                   and "DetailHead" not in item["file"] and "Unrelated" not in item["file"]
+                   for item in choices)
+        return head, choices
+
+    diffuse_key = asset_texture_key(str(root), str(asset / "Asset07HeadDiffuse.dds"))
+    head, choices = load()
+    assert head["tex_key"] == diffuse_key
+    assert diffuse_key in {item["tex_key"] for item in choices}
+    assert any(item["file"].endswith("Asset07HeadChoice.dds") for item in choices)
+    for role, suffix in (("normal_map", "NormalMap"), ("light_map", "LightMap")):
+        assert head[role + "_key"] == asset_texture_key(
+            str(root), str(asset / f"Asset07Head{suffix}.dds"), role)
+
+    duplicate = asset / "variants" / "Asset07HeadDiffuse.dds"
+    duplicate.parent.mkdir()
+    duplicate.write_bytes(b"alternate asset texture")
+    head, choices = load()
+    assert head["tex_key"] is None
+    assert {diffuse_key, asset_texture_key(str(root), str(duplicate))} <= {
+        item["tex_key"] for item in choices}
+    duplicate.unlink()
+    head, _choices = load(r"Resource\GIMI\Diffuse = ResourceOwned")
+    assert head["tex_key"] == "diffuse::owned.dds"
+    assert not head.get("normal_map_key") and not head.get("light_map_key")
+
+    record["component_name"] = "   "
+    record["texture_hashes"][0] = [item for item in record["texture_hashes"][0]
+                                   if item[0] != "NormalMap"]
+    metadata_path.write_text(json.dumps([record]), encoding="utf-8")
+    head, choices = load()
+    assert head["tex_key"] == diffuse_key
+    assert not head.get("normal_map_key")
+    assert any(item["file"].endswith("Asset07HeadNormalMap.dds") for item in choices)
+
+
 def test_shared_asset_diffuse_keeps_check_scope_implicit_compatibility_and_range_fallback(
         tmp_path, monkeypatch):
     mod = tmp_path / "mod"

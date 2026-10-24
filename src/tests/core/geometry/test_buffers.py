@@ -72,6 +72,45 @@ def test_signed_uv_detection_preserves_published_mesh_coordinates(tmp_path):
         .25, 1.5, .75, .75, .5, .25)
 
 
+@pytest.mark.parametrize("offset,fmt,stride", [
+    (0, "<ff", 8), (4, "<ff", 20), (4, "<ee", 20),
+])
+def test_tiled_uv_detection_preserves_coordinates_and_authored_triangles(
+        tmp_path, offset, fmt, stride):
+    from core.geometry.mesh_builder import build_mesh_result
+
+    pairs = [(8.05 + column * .055, -8.95 + row * .055)
+             for row in range(17) for column in range(17)]
+    # This finite Float32 has a NaN in its low half when misread as Float16.
+    pairs[0] = (struct.unpack("<f", struct.pack("<I", 0x41007E00))[0], -8.75)
+    data = _texcoord_data(pairs, offset, fmt, stride)
+    path = tmp_path / "t.buf"
+    path.write_bytes(data)
+    assert buffers._detect_uv_best(path, stride) == (offset, fmt)
+    assert buffers._detect_uv_best(None, stride, data=data) == (offset, fmt)
+    positions = [value for row in range(17) for column in range(17)
+                 for value in (column / 16, row / 16, 0.)]
+    indices = [index for row in range(16) for column in range(16)
+               for index in (row * 17 + column, row * 17 + column + 1,
+                             (row + 1) * 17 + column, row * 17 + column + 1,
+                             (row + 1) * 17 + column + 1, (row + 1) * 17 + column)]
+    (tmp_path / "p.buf").write_bytes(struct.pack(f"<{len(positions)}f", *positions))
+    (tmp_path / "i.buf").write_bytes(struct.pack(f"<{len(indices)}I", *indices))
+    built = build_mesh_result([{
+        "name": "Component01", "position_file": "p.buf", "position_stride": 12,
+        "texcoord_file": "t.buf", "texcoord_stride": stride,
+        "ib_file": "i.buf", "index_size": 4,
+        "draws": [{"label": "Component01-1", "count": len(indices), "start": 0, "base": 0}],
+    }], str(tmp_path))
+    mesh = built.meshes["Component01-1"]
+    assert mesh["idx"]["length"] == len(indices) * 4
+    expected = [value for u, v in buffers.read_texcoords(path, stride, offset, fmt)
+                for value in (u, 1. - v)]
+    assert bytes(built.geometry.data[
+        mesh["uv"]["offset"]:mesh["uv"]["offset"] + mesh["uv"]["length"]]) == struct.pack(
+            f"<{len(expected)}f", *expected)
+
+
 def test_buffer_store_reads_shared_file_once(tmp_path):
     path = tmp_path / "shared.buf"
     path.write_bytes(b"shared")
