@@ -64,9 +64,9 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
     """Detect half/float UV pairs at offset 0 or 4 from distributed samples.
 
     Preserve credible nonnegative layouts. When none varies on both axes, try
-    signed coordinates with robust axis spreads before retaining the original
-    degenerate fallback. Before guessing from stride alone, rank finite layouts
-    without a coordinate limit by coverage and balanced robust axis variation.
+    signed coordinates with robust axis spreads, then finite layouts without a
+    coordinate limit by coverage and balanced robust axis variation. Retain
+    degenerate bounded layouts only before guessing from stride alone.
     Detection never changes UV values.
     """
     if data is None:
@@ -112,8 +112,6 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
             signed_scores.append(score)
     if signed_scores:
         return max(signed_scores)[-2:]
-    if best is not None:
-        return best[-2:]
     finite_scores = []
     for _pairs, sampled, uv_off, fmt, finite_pairs in candidates:
         score = _uv_candidate_score(
@@ -122,6 +120,8 @@ def _detect_uv_best(tc_path, stride, n=4096, data=None):
             finite_scores.append(score)
     if finite_scores:
         return max(finite_scores)[-2:]
+    if best is not None:
+        return best[-2:]
     for uv_off in (DEFAULT_UV_OFFSET, 0):
         if uv_off + 4 <= stride:
             return (uv_off, "<ee")

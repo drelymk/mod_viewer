@@ -73,7 +73,7 @@ def test_signed_uv_detection_preserves_published_mesh_coordinates(tmp_path):
 
 
 @pytest.mark.parametrize("offset,fmt,stride", [
-    (0, "<ff", 8), (4, "<ff", 20), (4, "<ee", 20),
+    (0, "<ff", 8), (4, "<ff", 20), (4, "<ee", 20), (0, "<ee", 8),
 ])
 def test_tiled_uv_detection_preserves_coordinates_and_authored_triangles(
         tmp_path, offset, fmt, stride):

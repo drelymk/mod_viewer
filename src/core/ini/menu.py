@@ -15,7 +15,6 @@ _SLOT_RE = re.compile(r'\$(\w+)\s*={2,3}\s*(\d+)$')
 
 _ASSIGN_RE  = re.compile(r'^\$(\w+)\s*=\s*(.+)$')
 _FLIP_RE    = re.compile(r'^1\s*-\s*\$(\w+)$')       # $v = 1 - $v
-_INCR_RE    = re.compile(r'^\$(\w+)\s*\+\s*1$')      # $v = $v + 1
 _INCR_REV_RE = re.compile(r'^1\s*\+\s*\$(\w+)$')     # $v = 1 + $v
 _INCR_MOD_RE = re.compile(                              # $v = ($v + 1) % N
     r'^\(\s*\$(\w+)\s*\+\s*1\s*\)\s*%\s*(\d+)$')
@@ -379,7 +378,7 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=No
         if literal:
             return *literal, []
     var, values, effects = None, None, []
-    cycle_kind, finite = None, False
+    cycle_kind, finite, decrement = None, False, False
     stack = []                    # {guard, branches, body} per open `if`
     step_body = ()
     wrap, in_wrap_else = None, False   # see the `$v < N` idiom below
@@ -439,20 +438,23 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=No
                 cycle_kind = "increment_mod"
                 finite = True
             continue
-        incr = (_INCR_RE.fullmatch(rhs) or _INCR_REV_RE.fullmatch(rhs))
+        step = _STEP_RE.fullmatch(rhs)
+        incr = step or _INCR_REV_RE.fullmatch(rhs)
         if incr and _same_var(incr.group(1), lhs):
             if strict and var is not None:
                 return None
             var, values = lhs, ["0", "1"]   # Placeholder until the wrap count is known.
             cycle_kind = "increment"
+            decrement = bool(step and step.group(2) == "-")
             finite = False
             step_body = tuple(frame["body"] for frame in stack)
-            if guard and _same_var(guard["var"], lhs) and guard["op"] in ("<", "<="):
+            if (not decrement and guard and _same_var(guard["var"], lhs)
+                    and guard["op"] in ("<", "<=")):
                 wrap = (guard, len(stack))
             continue
         mod = _MOD_RE.fullmatch(rhs)
         if mod and _same_var(mod.group(1), lhs) and _same_var(lhs, var):
-            if strict and (cycle_kind != "increment" or finite):
+            if strict and (cycle_kind != "increment" or decrement or finite):
                 return None
             count = int(mod.group(2))
             if count > 0:
@@ -480,11 +482,11 @@ def _parse_branch(body, numeric_defaults=None, require_finite=False, *, nodes=No
                 return None
             finite = True
             continue
-        # `if $v > 2 / $v = 0 / endif` closes the cycle opened by `$v = $v + 1`.
+        # A reset at the matching bound closes an increment or decrement cycle.
         if (cycle_kind == "increment" and guard and _same_var(lhs, var)
                 and _same_var(guard["var"], var)
-                and guard["op"] in (">", ">=")):
-            values = _wrap_values(guard, rhs)
+                and guard["op"] in (("<", "<=") if decrement else (">", ">="))):
+            values = _wrap_values(guard, rhs, decrement=decrement)
             if values is None:
                 return None
             finite = True
@@ -1075,12 +1077,14 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         button_section = re.sub(r"(?:Left|Right)$", "", section, flags=re.I)
         candidates = mouse_arrows.get((slot, variable.casefold(), tuple(values)), [])
         if candidates:
-            _index, (_slot, section, actions, src, _region_value) = candidates[0]
-            # Reuse the richer mouse actions without duplicating the same cycle.
-            # Different side effects remain independent menu entries.
-            consumed_mouse.update(index for index, item in candidates
-                                  if item[2] == actions)
-            add_actions(section, slot, actions, src=src, key_section=button_section)
+            seen_actions = []
+            for index, (_slot, section, actions, src, _region_value) in candidates:
+                consumed_mouse.add(index)
+                identity = [(var.casefold(), vals, effects) for var, vals, effects in actions]
+                if identity in seen_actions:
+                    continue
+                seen_actions.append(identity)
+                add_actions(section, slot, actions, src=src, key_section=button_section)
         else:
             add_entry(section, slot, variable, values, src=src,
                       key_section=button_section)
