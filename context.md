@@ -372,6 +372,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - Genshin LightMap R controls response, G toon shadow, B specular area and A
   regions. ZZZ LightMap G supplies conservative metalness and MaterialMap B
   specular response; MaterialMap R stays ID data and G stays packed/unknown.
+  Genshin's B highlight threshold follows the Toon shading toggle; ordinary
+  shading retains the physical glossy response with the LightMap enabled.
 - Genshin and ZZZ reconstruct authored `normal_map` RG in TSL. WuWa
   reconstructs authored `normal_data` RG in TSL. Zero-filled RG falls back to
   geometry normals; B/A remain diagnostic or

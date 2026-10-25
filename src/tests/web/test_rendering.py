@@ -10,6 +10,7 @@ from app.assets.loader import AssetLoadResult, AssetMeshPart
 from app.assets.loader.models import AssetTexture
 from app.runtime import server
 from core.geometry.transport import GeometryBlob
+from core.materials.profiles import material_profile_for
 from tests.support.dds_data import dx10_dds, mode6_block, uncompressed_dds
 
 from .payloads import append_stream, model_payload, solid_texture, split_color_dds, textured_payload, weighted_payload
@@ -181,6 +182,56 @@ def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
     page.wait_for_function('window.modViewer.activeMeshes[0].visible')
     restored = mesh_pixel(page)
     assert max(abs(a - b) for a, b in zip(before, restored)) < 15
+
+
+def test_genshin_light_map_preserves_glossy_response_outside_toon_mode(module_page):
+    result = module_page.evaluate("""async profile => {
+      const T = await import('three/webgpu');
+      const M = await import('./js/mesh/material-profile.js');
+      const renderer = new T.WebGPURenderer();
+      await renderer.init();
+      const scene = new T.Scene();
+      const camera = new T.OrthographicCamera(-1,1,1,-1,0.1,10);
+      camera.position.z = 2;
+      const light = new T.DirectionalLight(0xffffff,1);
+      light.position.set(0,0,2); scene.add(light);
+      const material = M.createGameMaterial(profile,0x000000);
+      M.setGameMaterialRimEnabled(material,false);
+      const mesh = new T.Mesh(new T.PlaneGeometry(2,2),material); scene.add(mesh);
+      const packed = new T.DataTexture(new Uint8Array([0,128,0,255]),1,1);
+      packed.needsUpdate = true;
+      const target = new T.RenderTarget(4,4,{depthBuffer:false});
+      renderer.setRenderTarget(target);
+      const sample = async (roughness,toon,map) => {
+        material.roughness = roughness;
+        M.setGameMaterialToonEnabled(material,toon);
+        M.updateGameMaterialTextures(mesh,{light_map:map});
+        renderer.render(scene,camera);
+        const pixels = await renderer.readRenderTargetPixelsAsync(target,0,0,4,4);
+        return pixels[0]+pixels[1]+pixels[2];
+      };
+      try {
+        const matte = await sample(1,false,packed);
+        const version = material.version;
+        const glossy = await sample(0.2,false,packed);
+        const masked = await sample(0.2,true,packed);
+        const noMap = await sample(0.2,true,null);
+        packed.image.data[2] = 153; packed.needsUpdate = true;
+        const authored = await sample(0.2,true,packed);
+        const restored = await sample(0.2,false,packed);
+        return {matte,glossy,masked,noMap,authored,restored,
+          stable:material.version===version,webgpu:renderer.backend.isWebGPUBackend===true};
+      } finally {
+        renderer.setRenderTarget(null); target.dispose(); packed.dispose();
+        mesh.geometry.dispose(); M.disposeGameMaterial(material); material.dispose(); renderer.dispose();
+      }
+    }""", material_profile_for('genshin', 'gimi').to_metadata())
+    assert result['webgpu'] and result['stable']
+    assert result['glossy'] > result['matte'] + 100, result
+    assert result['masked'] < result['glossy'] / 4, result
+    assert result['noMap'] > result['masked'] + 100, result
+    assert result['authored'] > result['masked'] + 100, result
+    assert abs(result['restored'] - result['glossy']) <= 3, result
 
 
 def test_shared_texture_uploads_preserve_role_specific_color_spaces(viewer):

@@ -41,7 +41,8 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
 
 1. Drag with the left mouse button to orbit, drag with the right mouse button
    to pan, and scroll to zoom. Use `Reset`, `Turn`, or `Tilt` in the viewport
-   toolbar to adjust the view, or click a navigation-gizmo axis to snap to it.
+   toolbar to adjust the view. Drag the navigation gizmo to orbit, click an
+   axis to snap to it, or use its toolbar button to show or hide the gizmo.
 2. Open `Meshes` on the left. Expand components and use the INI, component, or
    mesh eye buttons to show or hide their meshes. `Reset mesh visibility`
    restores visibility from the current controls. Right-click a mesh row or the
@@ -58,6 +59,9 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    selection together, using that eye's new state; an unselected mesh's eye
    affects only that mesh. Control changes update only meshes wired to the
    changed visibility variables, preserving other manual visibility choices.
+   Right-click the selection and choose `Isolate Selected` to focus on those
+   meshes; use `Exit Isolation` in the `Meshes` header to restore the view.
+   Isolation is available even when mesh editing is hidden.
 4. Select a component or mesh and open `Inspector` on the right. Choose a
    material kind under `Material`, or leave it on `Auto`. For a selected mesh,
    choose a texture, `Automatic`, or `None` under `Texture`. Use
@@ -65,13 +69,33 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    preview; these choices are saved separately from the INI bindings. Texture
    choices include discovered DDS, PNG, JPG, and JPEG files, including images
    not declared by the INIs.
-5. Hover over the viewport tools to find wireframe, outlines, smooth shading,
-   toon shadows, glossy materials, grid, and emission bloom. Use the texture
-   display menu to compare maps, and adjust key light or ambient occlusion.
-   The top-bar environment and panel-opacity controls change lighting presets
-   and panel transparency. Language, environment, panel opacity, and viewport
-   tool preferences persist between launches; camera and model orientation do
-   not.
+5. Use the viewport tools to toggle wireframe, silhouette outlines, smooth
+   shading, `Toon shadows`, and the grid. Click `Glossy materials` or
+   `Ambient occlusion` to adjust their strength from 0–100%. The texture display
+   menu offers `All maps`, `Diffuse and NormalMap`, `Diffuse only`, and
+   `No textures` for comparing the material response. `Emission bloom` is
+   available when a supported GlowMap is detected.
+6. Click `Key light` to adjust its intensity, including turning it off at 0%.
+   Drag the light marker in the viewport to move it across the view; hold Shift
+   when starting the drag to move it toward or away from the camera.
+7. Use the top-bar environment menu to choose `Default`, `Studio`, `Indoor`,
+   `Outdoor`, or `Sunset`, and the panel-opacity control to adjust panel
+   transparency. Language, environment, panel opacity, and viewport tool
+   preferences persist between launches; camera and model orientation do not.
+
+#### Inspect UVs and texture tiling
+
+1. Select a mesh or separated part and expand `UV` below `Color` in
+   `Inspector`. The view overlays its triangle wireframe on the current diffuse
+   texture. Meshes without a diffuse texture still show their UV layout.
+2. Click `Expand UV view` to display it over the viewport. The view follows
+   mesh selection and texture changes; use its close button or click the expand
+   button again to return to the inline view.
+3. UVs outside the 0–1 region display the repeated texture across their full
+   bounds, matching the model's texture tiling. During `Separate by Selection`,
+   selected faces are highlighted in the UV view as well.
+
+UV inspection is read-only and remains available when mesh editing is hidden.
 
 ### 3. Preview existing controls and save combinations
 
@@ -86,6 +110,22 @@ and shape animation, and narrow WWMI sparse shape animation patterns. Toggle
 and menu changes can activate or stop these tracks. Custom shader programs may
 remain static; this is a reconstruction of supported patterns, so playback can
 differ from the game.
+
+#### Pause animation or inspect a frame
+
+1. While a supported animation is active, click `Pause animation` to freeze
+   playback, or `Play animation` to resume it. The button appears in the
+   viewport toolbar or alongside the frame slider when one is available.
+2. For baked animations sharing one synchronized timeline, drag the
+   `Animation frame` slider to inspect a specific frame. Seeking pauses
+   playback and shows the current frame counter; click `Play animation` to
+   continue from that frame.
+3. Compute animations and independent timelines provide Play/Pause without
+   frame seeking. Playback controls appear only for visible animated geometry
+   that is not currently controlled by Rig or Physics.
+
+Pausing and seeking affect only the preview. They do not change the mod's
+control values or write animation data.
 
 #### Create and manage PRESENT combinations
 
@@ -171,7 +211,7 @@ Use the pencil or delete button beside an existing toggle to edit or remove
 it. Its record button lets you update which meshes appear at each position.
 All these INI changes stay in memory until `Export`.
 
-### 5. Separate and merge mesh parts (run from source only)
+### 5. Separate and merge mesh parts (when enabled)
 
 Mesh editing is optional and may be hidden in portable builds. It requires a
 writable mod folder and supported authored draws; archive previews and original
@@ -186,8 +226,8 @@ Assets cannot be edited this way.
      can connect nearby positions into the same part.
    - `Separate by Selection`: click faces to select them, Ctrl-click to add or
      remove faces, Ctrl+A to select every face of the mesh or part being edited,
-     or Ctrl-drag to add faces crossing a rectangle. Leave at
-     least one face unselected, then choose `Apply Selection`. Inspector also
+     or Ctrl-drag to select faces crossing a rectangle. Leave at least one face
+     unselected, then choose `Apply Selection`. Inspector also
      provides `Select Connected Faces` and `Invert Selection`. While selecting
      faces, use the mode icons to the right of the left-panel tabs. These appear
      only during Separate by Selection and control both clicks and Ctrl-drag
@@ -196,28 +236,27 @@ Assets cannot be edited this way.
      faces, and `Intersect` keeps only previously selected hits. Ctrl-click
      still toggles faces independently of the chosen mode. Clicks select the
      nearest visible face; enable `Select through (click)` to include faces
-     behind other faces. Rectangles always select through in one projection
-     pass; visible-only rectangle selection is deferred. `Cancel Selection` or
+     behind other faces. Rectangles always select through. `Cancel Selection` or
      Escape exits without splitting.
 
 2. Right-click a mesh in the viewport or MESHES panel and use `Isolate Selected`
    to show selected meshes or parts and hide all others. The action stays
-   available and can be repeated for a different selection; use the eyes or
-   `Reset mesh visibility` to show meshes again. To combine
-   parts, Ctrl-click or Shift-click two or more parts from the same original
+   available and can be repeated for a different selection; use `Exit Isolation`
+   in the `Meshes` header to restore the view. To combine parts, Ctrl-click or
+   Shift-click two or more parts from the same original
    mesh and choose `Merge Meshes`. Parts from different sources cannot be merged.
    Undo/Redo icons beside the component's `Edited` badge restore recent preview
    layouts and face selections. Ctrl+Z undoes and Ctrl+Y redoes; text inputs keep
    their normal editing shortcuts. History is cleared when changes are applied,
    canceled, or the model is reloaded.
 
-   Isolation is a visibility control and remains available when Edit Mesh is
-   disabled. Geometry editing and preview history still follow `edit_mesh`.
+   Isolation remains available when mesh editing is hidden; separation, merging,
+   and preview history require mesh editing to be enabled.
 3. Inspector shows part, mesh-selection and face-selection counts, plus preview
-   or staged status. Select the component and choose `Apply Mesh Changes` in
-   its Inspector header or context menu to stage the new draw ranges and
-   index-buffer layout in memory and reload the preview. `Cancel Mesh Changes` abandons the
-   unapplied layout.
+   or staged status. Choose `Apply Mesh Changes` beside the component's `Edited`
+   badge, or select the component and use its Inspector header or context menu,
+   to stage the new draw ranges and index-buffer layout in memory and reload
+   the preview. `Cancel Mesh Changes` abandons the unapplied layout.
 4. Check the reloaded parts, then click `Export` to write the staged buffer and
    INI changes with backups. Apply or cancel the current layout before starting
    another mesh edit; unapplied layouts block Export.

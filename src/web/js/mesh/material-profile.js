@@ -520,6 +520,7 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
       toonSpecularThresholdBiasNode,
       toonSpecularSoftnessNode,
       toonSpecularMetalCutoffNode,
+      toonEnabledNode,
     } = this.gameMaterialState;
     const maskRef = profile.shadow_mask;
     let boundary = toonLightCoordinate(lightDirection);
@@ -554,7 +555,11 @@ class GenshinLightingModel extends ThreePhysicalLightingModel {
       }
     }
     const specularContribution = reflectedLight.directSpecular.sub(specularBefore);
-    reflectedLight.directSpecular.assign(specularBefore.add(specularContribution.mul(areaGate)));
+    // The authored toon threshold can reject every highlight when B is zero.
+    // Apply it only in toon mode so the viewer's glossy physical response
+    // remains available with the LightMap enabled in ordinary shading.
+    const effectiveAreaGate = toonEnabledNode.select(areaGate, float(1));
+    reflectedLight.directSpecular.assign(specularBefore.add(specularContribution.mul(effectiveAreaGate)));
   }
 }
 
