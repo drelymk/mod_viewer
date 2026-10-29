@@ -64,6 +64,12 @@ of documentation, comments and tests; use portable fixtures instead.
   from discovery. A confirmed mod switch or restart discards the session; there
   is no standalone Discard action. Viewer metadata and confirmed texture saves
   have separate writes.
+- The Export dropdown's GLB snapshot captures detached visible geometry and
+  current bindings without committing or clearing staged edits. Its destination
+  comes only from the native save picker and is atomically replaced. Rigging,
+  animation tracks and packed shader reconstruction are deferred; retain original
+  texture bytes and role identities in GLB custom data. Archives and direct Assets
+  retain their existing export restrictions.
 - Namespaced globals are cross-INI and read-only. Toggle CRUD targets only plain
   variables declared in that INI. Existing unwired utility keys stay hidden;
   newly added unwired keys appear only while session-pending and block Export.

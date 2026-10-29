@@ -1,6 +1,7 @@
 // Model/source loading lifecycle and the application-facing transition flow.
 
 import { viewerState, samePath } from './state.js';
+import { syncModelExportAvailability } from './model-export.js';
 import { resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
@@ -129,6 +130,7 @@ function clearPendingState() {
   $('pending-indicator').classList.remove('show');
   $('export-btn').disabled = true;
   $('export-btn').title = '';
+  syncModelExportAvailability();
 }
 
 function setSourceUi(kind) {
@@ -465,12 +467,14 @@ export async function switchAsset(path, entry = {}, handlers = {}) {
 export async function runModTransition(operation) {
   if (viewerState.modTransitionInFlight || !isRendererAvailable()) return false;
   viewerState.modTransitionInFlight = true;
+  syncModelExportAvailability();
   const button = $('open-btn');
   button.disabled = true;
   try {
     return await operation();
   } finally {
     viewerState.modTransitionInFlight = false;
+    syncModelExportAvailability();
     button.disabled = !isRendererAvailable();
   }
 }

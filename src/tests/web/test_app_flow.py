@@ -38,6 +38,8 @@ def test_load_error_clears_stale_model_and_allows_recovery(viewer):
     assert page.evaluate('window.modViewer.activeMeshes.length') == 0
     assert page.locator('.draw-item').count() == 0
     assert page.locator('#export-btn').is_disabled()
+
+    assert page.locator('#export-menu-btn').is_disabled()
     page.locator('#dialog-ok').click()
     open_model(page, 'fixture-01')
     wait_loaded(page)
@@ -92,6 +94,7 @@ def test_archive_picker_routes_to_read_only_preview(viewer, extension):
     assert bridge_calls(page, 'load') == [[path, False]]
     assert page.evaluate('window.modViewer.getCurrentSource().readOnly')
     assert page.locator('#export-btn').is_disabled()
+    assert page.locator('#export-menu-btn').is_disabled()
 
 
 @pytest.mark.parametrize('startup', [

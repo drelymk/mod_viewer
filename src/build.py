@@ -73,6 +73,14 @@ VENV_DIR = os.path.join(HERE, ".venv-build")
 # offline.
 THREE_VERSION = "0.185.0"
 ASSET_FILES = {
+    "addons/exporters/GLTFExporter.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/exporters/GLTFExporter.js",
+        "sha256": "318c588c527d03528a60610a4fc420018375a5c1bcf520e48f3666c5bc28d90d",
+    },
+    "LICENSE": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/LICENSE",
+        "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
+    },
     "three.core.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.core.js",
         "sha256": "78b2c4218834ca8670547ed2315bfc21a00ff4dc3403bbffc8c31493d31d14de",

@@ -13,7 +13,7 @@ async function renderPreview(
   canvas,
   url,
   isCurrent,
-  { size = PREVIEW_SIZE, preserveAspect = false, preserveAlpha = true, texture: sharedTexture },
+  { size = PREVIEW_SIZE, preserveAspect = false, preserveAlpha = true, texture: sharedTexture, fullSize = false },
 ) {
   if (!isCurrent()) return;
   const { renderer, rendererReady } = await import('../scene/scene.js');
@@ -39,8 +39,8 @@ async function renderPreview(
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
     camera.position.z = 1;
     const largest = Math.max(width, height);
-    const outputWidth = preserveAspect ? Math.max(1, Math.round((size * width) / largest)) : size;
-    const outputHeight = preserveAspect ? Math.max(1, Math.round((size * height) / largest)) : size;
+    const outputWidth = fullSize ? width : preserveAspect ? Math.max(1, Math.round((size * width) / largest)) : size;
+    const outputHeight = fullSize ? height : preserveAspect ? Math.max(1, Math.round((size * height) / largest)) : size;
     geometry = new THREE.PlaneGeometry(
       preserveAspect ? 2 : (2 * width) / largest,
       preserveAspect ? 2 : (2 * height) / largest,
@@ -96,6 +96,18 @@ async function renderPreview(
     geometry?.dispose();
     if (!sharedTexture) texture?.dispose();
   }
+}
+
+/** Export-only full-resolution conversion, serialized with ordinary previews. */
+export function exportDDSCanvas(url, isCurrent) {
+  const canvas = document.createElement('canvas');
+  const pending = previewQueue.then(async () => {
+    await renderPreview(canvas, url, isCurrent, { fullSize: true, preserveAspect: true, preserveAlpha: false });
+    if (canvas.dataset.previewReady !== 'true') throw new Error('DDS export was interrupted.');
+    return canvas;
+  });
+  previewQueue = pending.catch(() => {});
+  return pending;
 }
 
 /** Clear only previews whose published source has changed, or the entire model lifetime. */

@@ -1,4 +1,12 @@
 export default {
+  'toolbar.chooseExport': 'エクスポート形式を選択',
+  'toolbar.exportOptions': 'エクスポート設定',
+  'toolbar.exportEdits': 'Mod の編集を保存',
+  'toolbar.exportGlb': 'Blender / glTF (.glb)…',
+  'model.exportingGlb': 'Blender 用モデルをエクスポート中…',
+  'model.exportNoMeshes': 'エクスポートする表示中のメッシュがありません。',
+  'model.exportGlbComplete': '{name} に {count} 個のメッシュを保存しました。',
+  'model.exportGlbWarnings': '一部のテクスチャを含めるか変換することができませんでした:\n{detail}',
   'errors.viewerPersistence': 'ビューアー設定を保存できませんでした。もう一度お試しください。',
   'mesh.rename': '名前を変更',
   'mesh.selectionSameComponent': '{count} 個のメッシュを選択 · {component}',

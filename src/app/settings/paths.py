@@ -57,6 +57,8 @@ def vendor_dir():
 
 def has_vendored_three():
     required = (
+        os.path.join("addons", "exporters", "GLTFExporter.js"),
+        "LICENSE",
         "three.core.js",
         "three.webgpu.js",
         "three.tsl.js",

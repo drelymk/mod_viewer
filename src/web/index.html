@@ -92,13 +92,24 @@
   <button id="health-btn" class="ui-button healthy toolbar-secondary" aria-label="Open INI diagnostics" data-i18n-aria-label="toolbar.openDiagnostics" disabled>
     <svg class="ui-icon" aria-hidden="true"><use href="#icon-diagnostics"></use></svg><span class="health-label" data-i18n="toolbar.diagnostics">Diagnostics</span><span id="health-count" class="health-count">—</span>
   </button>
-  <button id="export-btn" class="ui-button ui-button-export toolbar-secondary" disabled data-i18n="toolbar.export">Export</button>
+  <div id="export-control" class="open-mod-control toolbar-secondary">
+    <button id="export-btn" class="ui-button ui-button-export" disabled data-i18n="toolbar.export">Export</button>
+    <button id="export-menu-btn" class="open-menu-btn" type="button" disabled
+            aria-label="Choose export format" data-i18n-aria-label="toolbar.chooseExport"
+            aria-expanded="false" aria-haspopup="menu">▾</button>
+    <div id="export-menu" class="open-mod-menu" role="menu" hidden
+         aria-label="Export options" data-i18n-aria-label="toolbar.exportOptions">
+      <button id="export-edits-choice" type="button" role="menuitem" disabled data-i18n="toolbar.exportEdits">Save Mod Edits</button>
+      <button id="export-glb-choice" type="button" role="menuitem" disabled data-i18n="toolbar.exportGlb">Blender / glTF (.glb)…</button>
+    </div>
+  </div>
   <button id="toolbar-more" class="icon-btn" type="button" aria-label="More toolbar actions" data-i18n-aria-label="toolbar.moreActions"
           aria-expanded="false" aria-haspopup="menu"><svg class="ui-icon" aria-hidden="true"><use href="#icon-more"></use></svg></button>
   <div id="toolbar-overflow" class="toolbar-overflow" role="menu" hidden>
     <button type="button" role="menuitem" data-toolbar-target="ini-view-btn" data-i18n="toolbar.viewIni">View INI</button>
     <button type="button" role="menuitem" data-toolbar-target="health-btn" data-i18n="toolbar.diagnostics">Diagnostics</button>
     <button type="button" role="menuitem" data-toolbar-target="export-btn" data-i18n="toolbar.export">Export</button>
+    <button type="button" role="menuitem" data-toolbar-target="export-glb-choice" data-i18n="toolbar.exportGlb">Blender / glTF (.glb)…</button>
   </div>
   <div id="environment-control" class="header-control-wrap environment-control">
     <button id="environment-btn" class="icon-btn header-setting-btn environment-btn" type="button"
