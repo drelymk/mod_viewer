@@ -3,7 +3,6 @@
 import atexit
 import base64
 import binascii
-import io
 import json
 import os
 from pathlib import Path
@@ -65,31 +64,6 @@ def _destination(window, folder):
     return destination
 
 
-def save_glb(window, access, folder_path, encoded):
-    temporary = None
-    try:
-        folder = _authorize(access, folder_path)
-        data = _decode(encoded)
-        _validate(io.BytesIO(data), len(data))
-        destination = _destination(window, folder)
-        if destination is None:
-            return {"cancelled": True}
-        with tempfile.NamedTemporaryFile(
-                dir=destination.parent, prefix=".model-export-", delete=False) as stream:
-            temporary = stream.name
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-        temporary = None
-        return {"ok": True, "name": destination.name}
-    except (OSError, TypeError, ValueError) as error:
-        return {"error": str(error)}
-    finally:
-        if temporary is not None:
-            os.unlink(temporary)
-
-
 class ModelExport:
     """Keep one native destination private across small bridge messages."""
 
@@ -114,9 +88,7 @@ class ModelExport:
             try:
                 folder = _authorize(self._access, folder_path)
                 if not isinstance(data, dict):
-                    if self._pending is not None:
-                        raise ValueError("A model export is already in progress.")
-                    return save_glb(window, self._access, folder, data)
+                    raise ValueError("Invalid model export request.")
                 action = data.get("action")
                 if action == "begin":
                     if self._pending is not None:

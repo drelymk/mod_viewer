@@ -113,8 +113,18 @@ export function snapshotModel(meshes, textureSource = () => null) {
   }
 }
 
-// Preserve the pinned exporter's JSON and buffer order if its final Blob read fails.
+// Pack the pinned exporter's serialized data without whole-file Blob reads.
 function packSerializedGlb(writer) {
+  for (const [field, extensions] of [
+    ['extensionsUsed', writer.extensionsUsed],
+    ['extensionsRequired', writer.extensionsRequired],
+  ]) {
+    const names = Object.keys(extensions);
+    if (names.length) writer.json[field] = names;
+  }
+  if (writer.json.buffers?.length) {
+    writer.json.buffers[0].byteLength = writer.buffers.reduce((sum, part) => sum + part.byteLength, 0);
+  }
   const json = new TextEncoder().encode(JSON.stringify(writer.json));
   const jsonLength = Math.ceil(json.byteLength / 4) * 4;
   const binaryLength = writer.buffers.reduce((sum, part) => sum + part.byteLength, 0);
@@ -189,19 +199,43 @@ export async function encodeModelGlb(snapshot, { loadImage, releaseImage } = {})
     }
   }
   const exporter = new GLTFExporter();
-  let writer;
-  exporter.register((context) => {
-    writer = context;
+  exporter.register((writer) => {
+    // Scoped to this writer: upstream readers do not propagate all read failures.
+    writer.processBufferViewImage = async (blob) => {
+      const source = await blob.arrayBuffer();
+      const bytes = new Uint8Array(Math.ceil(source.byteLength / 4) * 4);
+      bytes.set(new Uint8Array(source));
+      const views = (writer.json.bufferViews ||= []);
+      const index =
+        views.push({
+          buffer: writer.processBuffer(bytes.buffer),
+          byteOffset: writer.byteOffset,
+          byteLength: bytes.byteLength,
+        }) - 1;
+      writer.byteOffset += bytes.byteLength;
+      return index;
+    };
+    writer.writeAsync = async (input, onDone, options) => {
+      writer.options = {
+        trs: false,
+        onlyVisible: true,
+        maxTextureSize: Infinity,
+        animations: [],
+        includeCustomExtensions: false,
+        ...options,
+      };
+      await writer.processInputAsync(input);
+      await Promise.all(writer.pending);
+      onDone(packSerializedGlb(writer));
+    };
     return {
       afterParse() {
-        // The writer has copied each source image before packing its final GLB.
         if (!releaseImage) return;
         const sources = new Set([...snapshot.textures].map((texture) => texture.image));
         for (const image of sources) releaseImage(image);
       },
     };
   });
-  const encoded = await exporter.parseAsync(snapshot.scene, { binary: true });
-  const buffer = encoded instanceof ArrayBuffer ? encoded : packSerializedGlb(writer);
+  const buffer = await exporter.parseAsync(snapshot.scene, { binary: true });
   return { buffer, meshCount: snapshot.scene.children.length, warnings: [...new Set(warnings)] };
 }

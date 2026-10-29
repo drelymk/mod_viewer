@@ -72,9 +72,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Embed only Blender-ready images; retain bound texture role keys as metadata.
   Cache successful and failed image loads by published source URL for one export.
   Release export-owned DDS canvases after the writer copies their images. Keep
-  fallback packing byte-equivalent to the pinned exporter when WebView2 cannot
-  read its final GLB Blob; base64 conversion also handles failed Blob reads.
-  Large snapshots use bounded chunks tied to one opaque native-picked save
+  packing byte-equivalent to the pinned exporter without whole-file Blob reads.
+  Image Blob reads reject normally; base64 conversion uses bounded byte arrays.
+  Every snapshot uses bounded chunks tied to one opaque native-picked save
   session. Cancel/errors remove its temporary file; Finish validates the full
   length and GLB document before atomic replacement. Browser paths are ignored.
   Archives and direct Assets retain their existing export restrictions.

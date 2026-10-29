@@ -1,12 +1,7 @@
-// Keep large payloads below native message limits without exposing destination paths.
+// One bounded save lifecycle for every export; destination paths stay native.
 import { base64Buffer } from './base64-buffer.js';
 
 export async function saveGlbBuffer(api, path, buffer, isCurrent = () => true) {
-  if (buffer.byteLength <= 2 * 1024 * 1024) {
-    const encoded = await base64Buffer(buffer);
-    if (!isCurrent()) return { cancelled: true };
-    return api.export_model_glb(path, encoded);
-  }
   if (!isCurrent()) return { cancelled: true };
   const opened = await api.export_model_glb(path, { action: 'begin', size: buffer.byteLength });
   if (opened.error || opened.cancelled) return opened;

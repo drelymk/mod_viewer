@@ -68,26 +68,27 @@ def test_glb_textured_animation_and_loose_part_lifecycle(viewer, tmp_path):
             assert values[2::3] == (0.5 if frame else 0,) * accessor['count']
 
 
-def test_switch_during_glb_encoding_cancels_stale_native_save(viewer):
+def test_switch_during_glb_destination_selection_cancels_stale_save(viewer):
     page = viewer({'fixture-01': model_payload(), 'fixture-02': model_payload(2)})
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.evaluate("""() => {
       window.__glbSaveCalls = [];
-      window.pywebview.api.export_model_glb = async (...args) => {window.__glbSaveCalls.push(args);return {cancelled:true};};
-      const read = FileReader.prototype.readAsDataURL;
-      FileReader.prototype.readAsDataURL = function(blob) {
-        window.__releaseEncoding = () => read.call(this,blob);
+      window.pywebview.api.export_model_glb = async (path,data) => {
+        window.__glbSaveCalls.push({path,action:data.action});
+        if(data.action==='begin')return new Promise(resolve=>{window.__releaseBegin=()=>resolve({token:'session-01'});});
+        return {cancelled:true};
       };
     }""")
     page.locator('#export-menu-btn').click()
     page.locator('#export-glb-choice').click()
-    page.wait_for_function('window.__releaseEncoding !== undefined')
+    page.wait_for_function('window.__releaseBegin !== undefined')
     assert page.evaluate('window.modViewer.switchMod("fixture-02")')
     wait_loaded(page, 2)
-    page.evaluate('window.__releaseEncoding()')
+    page.evaluate('window.__releaseBegin()')
     page.wait_for_function('!document.querySelector("#export-glb-choice").disabled')
-    assert page.evaluate('window.__glbSaveCalls') == []
+    assert page.evaluate('window.__glbSaveCalls') == [
+        {'path': 'fixture-01', 'action': 'begin'}, {'path': 'fixture-01', 'action': 'cancel'}]
     assert page.evaluate('window.modViewer.getCurrentSource().path') == 'fixture-02'
     assert page.locator('#dialog-backdrop').is_hidden()
 
@@ -125,7 +126,13 @@ def test_export_dropdown_snapshot_cancel_retry_and_narrow_toolbar(viewer):
       window.__glbSaves = [];
       window.__glbResult = {cancelled:true};
       window.pywebview.api.export_model_glb = async (path,data) => {
-        window.__glbSaves.push({path,data});
+        if(data.action==='begin'){
+          window.__glbSaves.push({path,chunks:[]});
+          return window.__glbResult.cancelled?{cancelled:true}:{token:'session-01'};
+        }
+        if(data.action==='append'){
+          window.__glbSaves.at(-1).chunks.push(data.chunk);return {ok:true};
+        }
         return window.__glbResult;
       };
     }""")
@@ -168,7 +175,7 @@ def test_export_dropdown_snapshot_cancel_retry_and_narrow_toolbar(viewer):
     assert bridge_calls(page, 'discard') == []
     assert page.evaluate("""() => {
       const saved = window.__glbSaves[2];
-      const bytes = Uint8Array.from(atob(saved.data), c => c.charCodeAt(0));
+      const bytes = Uint8Array.from(atob(saved.chunks[0]), c => c.charCodeAt(0));
       return saved.path === 'fixture-01' && new DataView(bytes.buffer).getUint32(0,true) === 0x46546c67;
     }""")
 
@@ -307,9 +314,11 @@ def test_glb_missing_texture_is_cached_across_materials_and_roles(module_page):
                       'requests': ['/folder-01/image.png', '/folder-02/image.png']}
 
 
-def test_glb_fallback_preserves_bytes_when_final_blob_read_fails(module_page):
-    result = module_page.evaluate("""async () => {
+@pytest.mark.parametrize('failed_read', [1, 2])
+def test_glb_packing_bypasses_both_upstream_binary_blob_reads(module_page, failed_read):
+    result = module_page.evaluate("""async failedRead => {
       const T = await import('three');
+      const {GLTFExporter} = await import('three/addons/exporters/GLTFExporter.js');
       const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
       const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
       mesh.name = 'Mesh \u03b1';
@@ -318,46 +327,70 @@ def test_glb_fallback_preserves_bytes_when_final_blob_read_fails(module_page):
       canvas.getContext('2d').fillRect(0,0,4,4);
       const snapshot = snapshotModel([mesh],()=>'/image.png');
       const options = {loadImage:async()=>canvas};
-      const normal = await encodeModelGlb(snapshot,options);
+      await encodeModelGlb(snapshot,options);
+      const normal = await new GLTFExporter().parseAsync(snapshot.scene,{binary:true});
       const read = FileReader.prototype.readAsArrayBuffer;
       let binaryReads = 0;
-      let fallback;
+      let packed;
+      let onError;
       try {
         FileReader.prototype.readAsArrayBuffer=function(blob){
-          if(blob.type==='application/octet-stream' && ++binaryReads===2){
+          if(blob.type==='application/octet-stream' && ++binaryReads===failedRead){
             Object.defineProperty(this,'result',{value:null});
             queueMicrotask(()=>this.onloadend());
           }else read.call(this,blob);
         };
-        fallback = await encodeModelGlb(snapshot,options);
-      }finally{FileReader.prototype.readAsArrayBuffer=read;snapshot.dispose();}
-      const left=new Uint8Array(normal.buffer),right=new Uint8Array(fallback.buffer);
+        const error = new Promise(resolve=>{
+          onError=event=>{event.preventDefault();resolve({error:event.message});};
+          window.addEventListener('error',onError);
+        });
+        packed = await Promise.race([encodeModelGlb(snapshot,options),error]);
+      }finally{
+        FileReader.prototype.readAsArrayBuffer=read;
+        window.removeEventListener('error',onError);snapshot.dispose();
+      }
+      if(packed.error)return {error:packed.error,binaryReads};
+      const left=new Uint8Array(normal),right=new Uint8Array(packed.buffer);
       return {binaryReads,sameGlb:left.length===right.length && left.every((value,index)=>value===right[index])};
+    }""", failed_read)
+    assert result == {'binaryReads': 0, 'sameGlb': True}
+
+
+def test_glb_image_blob_read_failure_rejects_instead_of_hanging(module_page):
+    result = module_page.evaluate("""async () => {
+      const T = await import('three');
+      const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+      const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
+      mesh.userData.texKey='diffuse::image.png';
+      const canvas=document.createElement('canvas');canvas.width=canvas.height=4;
+      const snapshot=snapshotModel([mesh],()=>'/image.png');
+      const read=Blob.prototype.arrayBuffer;
+      try{
+        Blob.prototype.arrayBuffer=function(){return Promise.reject(Error('fixture image read failure'));};
+        await encodeModelGlb(snapshot,{loadImage:async()=>canvas});
+        return 'unexpected success';
+      }catch(error){return error.message;}
+      finally{Blob.prototype.arrayBuffer=read;snapshot.dispose();}
     }""")
-    assert result == {'binaryReads': 2, 'sameGlb': True}
+    assert result == 'fixture image read failure'
 
 
-@pytest.mark.parametrize('size', [131075, 64 * 1024 * 1024 + 2])
-def test_base64_chunking_preserves_bytes_for_failed_and_large_blob_reads(module_page, size):
+@pytest.mark.parametrize('size', [0, 1, 2, 3, 49151, 49152, 49153, 1024 * 1024])
+def test_base64_preserves_padding_and_chunk_boundaries_without_blob_reads(module_page, size):
     result = module_page.evaluate("""async size => {
       const {base64Buffer} = await import('./js/export/base64-buffer.js');
       const bytes=new Uint8Array(size).map((_,index)=>(index*17)%256);
-      const read=FileReader.prototype.readAsDataURL;
-      let actual;
-      try {
-        FileReader.prototype.readAsDataURL=function(){queueMicrotask(()=>this.onerror());};
-        actual=await base64Buffer(bytes.buffer);
-      }finally{FileReader.prototype.readAsDataURL=read;}
-      const decoded=atob(actual);
+      const decoded=atob(base64Buffer(bytes.buffer));
       return {length:decoded.length,identical:bytes.every((value,index)=>value===decoded.charCodeAt(index))};
     }""", size)
     assert result == {'length': size, 'identical': True}
 
 
-def test_large_glb_transfer_is_bounded_atomic_and_cancellable(module_page):
-    result = module_page.evaluate("""async () => {
+@pytest.mark.parametrize(('size', 'append_count'), [(317, 1), (2 * 1024 * 1024 + 37, 3)])
+def test_all_glb_sizes_use_one_bounded_cancellable_save_lifecycle(module_page, size, append_count):
+    result = module_page.evaluate("""async size => {
       const {saveGlbBuffer} = await import('./js/export/glb-save.js');
-      const bytes=new Uint8Array(2*1024*1024+37).map((_,index)=>(index*17)%256);
+      const bytes=new Uint8Array(size).map((_,index)=>(index*17)%256);
       const run=async mode=>{
         const actions=[],decoded=[];let current=true,maxChunk=0;
         const api={export_model_glb:async(path,data)=>{
@@ -379,8 +412,8 @@ def test_large_glb_transfer_is_bounded_atomic_and_cancellable(module_page):
       };
       return {success:await run('success'),cancelled:await run('picker-cancel'),
               stale:await run('stale'),failed:await run('failure')};
-    }""")
-    assert result['success']['actions'] == ['begin', 'append', 'append', 'append', 'finish']
+    }""", size)
+    assert result['success']['actions'] == ['begin'] + ['append'] * append_count + ['finish']
     assert result['success']['maxChunk'] <= 1400000
     assert result['success']['identical']
     assert result['cancelled']['actions'] == ['begin']
