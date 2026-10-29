@@ -29,7 +29,7 @@ function copyDrawGeometry(mesh) {
     indices[offset] = vertices.get(index);
   }
   const geometry = new THREE.BufferGeometry();
-  for (const name of ['position', 'normal', 'uv', 'uv1', 'color', 'tangent']) {
+  for (const name of ['position', 'normal', 'uv']) {
     const attribute = original.attributes[name];
     if (!attribute) continue;
     const values = new Float32Array(vertices.size * attribute.itemSize);
@@ -86,6 +86,7 @@ export function snapshotModel(meshes, textureSource = () => null) {
             sources: data.sources,
             materialProfile: data.materialProfile,
             colorAdjustment: data.colorAdjustment,
+            textures: Object.fromEntries(Object.entries(roles).map(([role, { key }]) => [role, key])),
           }),
         );
         material.name = data.displayName || source.name;
@@ -112,23 +113,46 @@ export function snapshotModel(meshes, textureSource = () => null) {
   }
 }
 
-/** Pack original resources alongside standard material approximations. */
-export async function encodeModelGlb(snapshot, { loadImage, loadBytes } = {}) {
+// Preserve the pinned exporter's JSON and buffer order if its final Blob read fails.
+function packSerializedGlb(writer) {
+  const json = new TextEncoder().encode(JSON.stringify(writer.json));
+  const jsonLength = Math.ceil(json.byteLength / 4) * 4;
+  const binaryLength = writer.buffers.reduce((sum, part) => sum + part.byteLength, 0);
+  const paddedBinaryLength = Math.ceil(binaryLength / 4) * 4;
+  const bytes = new Uint8Array(28 + jsonLength + paddedBinaryLength);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, bytes.byteLength, true);
+  view.setUint32(12, jsonLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  bytes.fill(0x20, 20, 20 + jsonLength);
+  bytes.set(json, 20);
+  view.setUint32(20 + jsonLength, paddedBinaryLength, true);
+  view.setUint32(24 + jsonLength, 0x004e4942, true);
+  let offset = 28 + jsonLength;
+  for (const part of writer.buffers) {
+    bytes.set(new Uint8Array(part), offset);
+    offset += part.byteLength;
+  }
+  return bytes.buffer;
+}
+
+/** Embed only Blender-ready images; role identities remain lightweight metadata. */
+export async function encodeModelGlb(snapshot, { loadImage, releaseImage } = {}) {
   const warnings = [];
   const images = new Map();
-  const originals = new Map();
   const maps = new Map();
-  const imageFor = async (key, url) => {
-    if (!images.has(key)) {
+  const imageFor = (url) => {
+    if (!images.has(url)) {
       images.set(
-        key,
-        loadImage(url, key).catch(() => {
-          warnings.push(key);
-          return null;
-        }),
+        url,
+        Promise.resolve()
+          .then(() => loadImage(url))
+          .catch(() => null),
       );
     }
-    return images.get(key);
+    return images.get(url);
   };
   const textureFor = (key, image, colorSpace) => {
     if (!maps.has(key)) {
@@ -143,22 +167,14 @@ export async function encodeModelGlb(snapshot, { loadImage, loadBytes } = {}) {
   };
   for (const [material, { roles, hasUv, normalEnabled, normalYSign, profile }] of snapshot.materials) {
     for (const [role, { key, url }] of Object.entries(roles)) {
-      if (!url) {
-        if (!warnings.includes(key)) warnings.push(key);
-        continue;
-      }
-      if (!originals.has(key)) {
-        try {
-          originals.set(key, await loadBytes(url));
-        } catch {
-          if (!warnings.includes(key)) warnings.push(key);
-        }
-      }
       if (!hasUv || !['diffuse', 'normal_map', 'emission_map'].includes(role)) continue;
       if (role === 'normal_map' && !normalEnabled) continue;
       if (role === 'emission_map' && profile?.emission_source !== 'emission_map_rgb') continue;
-      const image = await imageFor(key, url);
-      if (!image) continue;
+      const image = url ? await imageFor(url) : null;
+      if (!image) {
+        warnings.push(key);
+        continue;
+      }
       const texture = textureFor(key, image, role === 'diffuse' ? THREE.SRGBColorSpace : THREE.NoColorSpace);
       if (role === 'diffuse') {
         material.map = texture;
@@ -173,25 +189,19 @@ export async function encodeModelGlb(snapshot, { loadImage, loadBytes } = {}) {
     }
   }
   const exporter = new GLTFExporter();
-  exporter.register((writer) => {
-    const buffers = new Map();
+  let writer;
+  exporter.register((context) => {
+    writer = context;
     return {
-      async writeMaterialAsync(material, definition) {
-        const roles = snapshot.materials.get(material)?.roles || {};
-        definition.extras.modViewer.textures = {};
-        for (const [role, { key }] of Object.entries(roles)) {
-          const bytes = originals.get(key);
-          if (!bytes) continue;
-          if (!buffers.has(key)) buffers.set(key, await writer.processBufferViewImage(new Blob([bytes])));
-          definition.extras.modViewer.textures[role] = {
-            key,
-            bufferView: buffers.get(key),
-            byteLength: bytes.byteLength,
-          };
-        }
+      afterParse() {
+        // The writer has copied each source image before packing its final GLB.
+        if (!releaseImage) return;
+        const sources = new Set([...snapshot.textures].map((texture) => texture.image));
+        for (const image of sources) releaseImage(image);
       },
     };
   });
-  const buffer = await exporter.parseAsync(snapshot.scene, { binary: true });
+  const encoded = await exporter.parseAsync(snapshot.scene, { binary: true });
+  const buffer = encoded instanceof ArrayBuffer ? encoded : packSerializedGlb(writer);
   return { buffer, meshCount: snapshot.scene.children.length, warnings: [...new Set(warnings)] };
 }

@@ -67,9 +67,17 @@ of documentation, comments and tests; use portable fixtures instead.
 - The Export dropdown's GLB snapshot captures detached visible geometry and
   current bindings without committing or clearing staged edits. Its destination
   comes only from the native save picker and is atomically replaced. Rigging,
-  animation tracks and packed shader reconstruction are deferred; retain original
-  texture bytes and role identities in GLB custom data. Archives and direct Assets
-  retain their existing export restrictions.
+  animation tracks and packed shader reconstruction are deferred. Export only
+  loader-supported geometry attributes, excluding temporary Weight heatmap colors.
+  Embed only Blender-ready images; retain bound texture role keys as metadata.
+  Cache successful and failed image loads by published source URL for one export.
+  Release export-owned DDS canvases after the writer copies their images. Keep
+  fallback packing byte-equivalent to the pinned exporter when WebView2 cannot
+  read its final GLB Blob; base64 conversion also handles failed Blob reads.
+  Large snapshots use bounded chunks tied to one opaque native-picked save
+  session. Cancel/errors remove its temporary file; Finish validates the full
+  length and GLB document before atomic replacement. Browser paths are ignored.
+  Archives and direct Assets retain their existing export restrictions.
 - Namespaced globals are cross-INI and read-only. Toggle CRUD targets only plain
   variables declared in that INI. Existing unwired utility keys stay hidden;
   newly added unwired keys appear only while session-pending and block Export.

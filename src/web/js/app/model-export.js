@@ -4,6 +4,7 @@ import { activeMeshes } from '../mesh/mesh-state.js';
 import { getTexturePreviewSource, isDDSUri } from '../mesh/mesh-factory.js';
 import { alertDialog } from '../ui/dialogs.js';
 import { t } from '../i18n/index.js';
+import { saveGlbBuffer } from '../export/glb-save.js';
 
 let exporting = false;
 const $ = (id) => document.getElementById(id);
@@ -21,21 +22,6 @@ export function syncModelExportAvailability() {
   if (trigger) trigger.disabled = exporting || (!available && $('export-btn').disabled);
   const edits = $('export-edits-choice');
   if (edits) edits.disabled = exporting || $('export-btn').disabled;
-}
-
-async function bytesAt(url) {
-  const response = await fetch(url, { cache: 'no-store' });
-  if (!response.ok) throw new Error('Texture download failed.');
-  return response.arrayBuffer();
-}
-
-function base64Buffer(buffer) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(',')[1]);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(new Blob([buffer]));
-  });
 }
 
 export async function exportModelGlb() {
@@ -56,7 +42,10 @@ export async function exportModelGlb() {
     snapshot = snapshotModel(activeMeshes, getTexturePreviewSource);
     if (!snapshot.scene.children.length) throw new Error(t('model.exportNoMeshes'));
     const result = await encodeModelGlb(snapshot, {
-      loadBytes: bytesAt,
+      releaseImage: (image) => {
+        // These DDS canvases belong only to this export, not the preview cache.
+        if (image instanceof HTMLCanvasElement) image.width = image.height = 0;
+      },
       loadImage: async (url) => {
         if (isDDSUri(url)) {
           const { exportDDSCanvas } = await import('../textures/dds-preview.js');
@@ -69,9 +58,7 @@ export async function exportModelGlb() {
       },
     });
     if (!isCurrent()) return;
-    const encoded = await base64Buffer(result.buffer);
-    if (!isCurrent()) return;
-    const saved = await window.pywebview.api.export_model_glb(path, encoded);
+    const saved = await saveGlbBuffer(window.pywebview.api, path, result.buffer, isCurrent);
     if (saved.error) throw new Error(saved.error);
     if (!saved.cancelled) {
       await alertDialog(

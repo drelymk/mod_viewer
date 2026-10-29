@@ -1,8 +1,71 @@
 """Blender-compatible snapshots preserve the live draw without changing it."""
 
-from .payloads import model_payload
+import base64
+import json
+import struct
+
+import pytest
+
+from .payloads import append_stream, model_payload, textured_payload
 from .support import bridge_calls, open_model, wait_loaded
 from tests.support.dds_data import uncompressed_dds
+
+
+def test_glb_textured_animation_and_loose_part_lifecycle(viewer, tmp_path):
+    payload = textured_payload()
+    mesh = payload['meshes']['mesh-00']
+    positions = [0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0]
+    animated = [value + (0.5 if index % 3 == 2 else 0) for index, value in enumerate(positions)]
+    mesh.update(pos=append_stream(payload, 'f', positions),
+                idx=append_stream(payload, 'I', [0,1,2,3,4,5]),
+                uv=append_stream(payload, 'f', [0,0,1,0,0,1] * 2), animation_id='clock-01',
+                animation_geometry={'frames': 2, 'frame_start': 0, 'position_frame_bytes': 72,
+                                    'positions': append_stream(payload, 'f', positions + animated)})
+    payload['animations'] = {'clock-01': {'frame_start': 0, 'frame_end': 1, 'fps': 30}}
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.evaluate("""async () => {
+      const {setAnimationFrame} = await import('./js/mesh/animation-runtime.js');
+      window.__setFrame = setAnimationFrame;
+      setAnimationFrame(0);
+      window.__exportSnapshot = async () => {
+        const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+        const {getTexturePreviewSource} = await import('./js/mesh/mesh-factory.js');
+        const snapshot = snapshotModel(window.modViewer.activeMeshes,getTexturePreviewSource);
+        try {
+          const result = await encodeModelGlb(snapshot, {loadImage:async url => {
+            const image = new Image(); image.src=url; await image.decode(); return image;
+          }});
+          return await new Promise(resolve => {
+            const reader = new FileReader(); reader.onload=()=>resolve(reader.result.split(',')[1]);
+            reader.readAsDataURL(new Blob([result.buffer]));
+          });
+        } finally {snapshot.dispose();}
+      };
+    }""")
+    for name, frame, parts in [('textured', 0, 1), ('animated', 1, 1), ('loose-parts', 1, 2)]:
+        if name == 'loose-parts':
+            page.evaluate("""async () => {
+              const {separateLooseParts} = await import('./js/mesh/loose-parts.js');
+              separateLooseParts(window.modViewer.activeMeshes[0]);
+            }""")
+        page.evaluate('frame => window.__setFrame(frame)', frame)
+        assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position.getZ(0)') == (0.5 if frame else 0)
+        data = base64.b64decode(page.evaluate('window.__exportSnapshot()'))
+        (tmp_path / f'{name}.glb').write_bytes(data)
+        json_length = struct.unpack_from('<I', data, 12)[0]
+        document = json.loads(data[20:20 + json_length])
+        assert len(document['meshes']) == parts
+        assert len(document['images']) == 1
+        for exported in document['meshes']:
+            attributes = exported['primitives'][0]['attributes']
+            assert set(attributes) == {'POSITION', 'NORMAL', 'TEXCOORD_0'}
+            accessor = document['accessors'][attributes['POSITION']]
+            view = document['bufferViews'][accessor['bufferView']]
+            values = struct.unpack_from(f'<{accessor["count"] * 3}f', data,
+                                        28 + json_length + view['byteOffset'] + accessor.get('byteOffset', 0))
+            assert values[2::3] == (0.5 if frame else 0,) * accessor['count']
 
 
 def test_switch_during_glb_encoding_cancels_stale_native_save(viewer):
@@ -120,7 +183,7 @@ def test_export_dropdown_snapshot_cancel_retry_and_narrow_toolbar(viewer):
     assert page.locator('#toolbar-overflow [data-toolbar-target="export-glb-choice"]').is_hidden()
 
 
-def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_page):
+def test_glb_snapshot_excludes_debug_attributes_and_keeps_texture_identity(module_page):
     result = module_page.evaluate("""async () => {
       const T = await import('three');
       const {snapshotModel, encodeModelGlb} = await import('./js/export/model-glb.js');
@@ -145,7 +208,7 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
         lightMapKey: 'light_map::folder-02/image.png', colorAdjustment: {hue: 30},
         sources: [{ini:'source-01.ini', line: 12}]};
       const hidden = mesh.clone(); hidden.visible = false;
-      const snapshot = snapshotModel([mesh, hidden], key => key ? 'data:application/octet-stream,' + key : null);
+      const snapshot = snapshotModel([mesh, hidden], key => key ? '/' + key.split('::')[1] : null);
       // Animation and viewer edits after the snapshot must not change its contents.
       geometry.attributes.position.setXYZ(1, 8,8,8);
       mesh.position.set(9,9,9);
@@ -153,9 +216,10 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
       const requests = [];
       const canvas = document.createElement('canvas'); canvas.width = canvas.height = 4;
       canvas.getContext('2d').fillRect(0,0,4,4);
+      let released = 0;
       const output = await encodeModelGlb(snapshot, {
-        loadImage: async () => canvas,
-        loadBytes: async url => { requests.push(url); return new Uint8Array([1,2,3,4,5]).buffer; }
+        releaseImage:image => {released++; image.width=image.height=0;},
+        loadImage: async url => { requests.push(url); return canvas; }
       });
       const view = new DataView(output.buffer);
       const jsonLength = view.getUint32(12,true);
@@ -168,15 +232,18 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
           accessor.count * {VEC2:2,VEC3:3,VEC4:4}[accessor.type]));
       };
       const extras = doc.materials[0].extras.modViewer;
-      const resources = Object.fromEntries(Object.entries(extras.textures).map(([role, info]) => {
-        const bv = doc.bufferViews[info.bufferView];
-        return [role, Array.from(new Uint8Array(output.buffer, binaryOffset + bv.byteOffset, info.byteLength))];
-      }));
+      const referencedViews = new Set([
+        ...doc.accessors.map(accessor => accessor.bufferView),
+        ...doc.images.map(image => image.bufferView),
+      ]);
       const first = {magic: view.getUint32(0,true), version:view.getUint32(4,true),
         size: view.getUint32(8,true) === output.buffer.byteLength, count: output.meshCount,
         positions:attribute('POSITION'), normals:attribute('NORMAL'), uvs:attribute('TEXCOORD_0'),
-        colors:attribute('COLOR_0'), name:doc.nodes[0].name, matrix:doc.nodes[0].matrix,
-        material:doc.materials[0], resources, requests:requests.length,
+        attributes:Object.keys(doc.meshes[0].primitives[0].attributes),
+        name:doc.nodes[0].name, matrix:doc.nodes[0].matrix,
+        material:doc.materials[0], textureKeys:extras.textures, requests,
+        noOriginals:referencedViews.size === doc.bufferViews.length, released,
+        imageWidth:new DataView(output.buffer).getUint32(binaryOffset + doc.bufferViews[doc.images[0].bufferView].byteOffset + 16),
         embedded:doc.images.every(image => image.bufferView !== undefined && !image.uri),
         warnings:output.warnings, color:extras.colorAdjustment.hue};
       snapshot.dispose();
@@ -199,12 +266,14 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
     assert first['positions'] == [0, 0, 0, 1, 0, 0, 0, 1, 0]
     assert first['normals'] == [0, 0, -1] * 3
     assert first['uvs'] == [0, 0, 2, 0, 0, 2]
-    assert first['colors'] == [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    assert set(first['attributes']) == {'POSITION', 'NORMAL', 'TEXCOORD_0'}
     assert first['matrix'][12:15] == [4, 5, 6]
     assert first['color'] == 30
-    assert first['requests'] == 6 and first['embedded'] and first['warnings'] == []
-    assert first['resources'] == {role: [1, 2, 3, 4, 5] for role in [
-        'diffuse', 'normal_map', 'normal_data', 'light_map', 'material_map', 'emission_map']}
+    assert first['requests'] == ['/folder-01/image.png']
+    assert first['embedded'] and first['noOriginals'] and first['warnings'] == []
+    assert first['released'] == 1 and first['imageWidth'] == 4
+    assert first['textureKeys'] == {role: f'{role}::folder-{2 if role == "light_map" else 1:02d}/image.png'
+                                    for role in ['diffuse', 'normal_map', 'normal_data', 'light_map', 'material_map', 'emission_map']}
     assert first['material']['pbrMetallicRoughness']['baseColorTexture']['index'] == 0
     assert len({first['material'][field]['index'] for field in ['normalTexture', 'emissiveTexture']} | {
         first['material']['pbrMetallicRoughness']['baseColorTexture']['index']}) == 3
@@ -213,19 +282,110 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
     assert result['second'] == {'count': 1, 'translation': [10, 9, 9], 'sourceRange': 0}
 
 
-def test_glb_missing_texture_is_reported_without_losing_geometry(module_page):
+def test_glb_missing_texture_is_cached_across_materials_and_roles(module_page):
     result = module_page.evaluate("""async () => {
       const T = await import('three');
       const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
       const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
-      mesh.userData.texKey = 'diffuse::image.png';
-      const snapshot = snapshotModel([mesh], () => '/missing-image.png');
+      mesh.userData.texKey = 'diffuse::folder-01/image.png';
+      mesh.userData.normalMapKey = 'normal_map::folder-01/image.png';
+      const shared = mesh.clone();
+      const distinct = mesh.clone();
+      distinct.userData.texKey = 'diffuse::folder-02/image.png';
+      distinct.userData.normalMapKey = null;
+      const snapshot = snapshotModel([mesh,shared,distinct], key => key ? '/' + key.split('::')[1] : null);
+      const requests = [];
       try {
         const result = await encodeModelGlb(snapshot, {
-          loadImage:async () => {throw Error('fixture failure');},
-          loadBytes:async () => {throw Error('fixture failure');}
+          loadImage:url => { requests.push(url); throw Error('fixture failure'); }
         });
-        return {count:result.meshCount, warnings:result.warnings};
+        return {count:result.meshCount, warnings:result.warnings,requests};
       } finally { snapshot.dispose(); }
     }""")
-    assert result == {'count': 1, 'warnings': ['diffuse::image.png']}
+    assert result == {'count': 3, 'warnings': ['diffuse::folder-01/image.png',
+                      'normal_map::folder-01/image.png', 'diffuse::folder-02/image.png'],
+                      'requests': ['/folder-01/image.png', '/folder-02/image.png']}
+
+
+def test_glb_fallback_preserves_bytes_when_final_blob_read_fails(module_page):
+    result = module_page.evaluate("""async () => {
+      const T = await import('three');
+      const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+      const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
+      mesh.name = 'Mesh \u03b1';
+      mesh.userData.texKey = 'diffuse::image.png';
+      const canvas = document.createElement('canvas');canvas.width=canvas.height=4;
+      canvas.getContext('2d').fillRect(0,0,4,4);
+      const snapshot = snapshotModel([mesh],()=>'/image.png');
+      const options = {loadImage:async()=>canvas};
+      const normal = await encodeModelGlb(snapshot,options);
+      const read = FileReader.prototype.readAsArrayBuffer;
+      let binaryReads = 0;
+      let fallback;
+      try {
+        FileReader.prototype.readAsArrayBuffer=function(blob){
+          if(blob.type==='application/octet-stream' && ++binaryReads===2){
+            Object.defineProperty(this,'result',{value:null});
+            queueMicrotask(()=>this.onloadend());
+          }else read.call(this,blob);
+        };
+        fallback = await encodeModelGlb(snapshot,options);
+      }finally{FileReader.prototype.readAsArrayBuffer=read;snapshot.dispose();}
+      const left=new Uint8Array(normal.buffer),right=new Uint8Array(fallback.buffer);
+      return {binaryReads,sameGlb:left.length===right.length && left.every((value,index)=>value===right[index])};
+    }""")
+    assert result == {'binaryReads': 2, 'sameGlb': True}
+
+
+@pytest.mark.parametrize('size', [131075, 64 * 1024 * 1024 + 2])
+def test_base64_chunking_preserves_bytes_for_failed_and_large_blob_reads(module_page, size):
+    result = module_page.evaluate("""async size => {
+      const {base64Buffer} = await import('./js/export/base64-buffer.js');
+      const bytes=new Uint8Array(size).map((_,index)=>(index*17)%256);
+      const read=FileReader.prototype.readAsDataURL;
+      let actual;
+      try {
+        FileReader.prototype.readAsDataURL=function(){queueMicrotask(()=>this.onerror());};
+        actual=await base64Buffer(bytes.buffer);
+      }finally{FileReader.prototype.readAsDataURL=read;}
+      const decoded=atob(actual);
+      return {length:decoded.length,identical:bytes.every((value,index)=>value===decoded.charCodeAt(index))};
+    }""", size)
+    assert result == {'length': size, 'identical': True}
+
+
+def test_large_glb_transfer_is_bounded_atomic_and_cancellable(module_page):
+    result = module_page.evaluate("""async () => {
+      const {saveGlbBuffer} = await import('./js/export/glb-save.js');
+      const bytes=new Uint8Array(2*1024*1024+37).map((_,index)=>(index*17)%256);
+      const run=async mode=>{
+        const actions=[],decoded=[];let current=true,maxChunk=0;
+        const api={export_model_glb:async(path,data)=>{
+          if(path!=='fixture-01' || typeof data==='string')throw Error('unexpected request');
+          actions.push(data.action);
+          if(data.action==='begin')return mode==='picker-cancel'?{cancelled:true}:{token:'session-01'};
+          if(data.token!=='session-01')throw Error('wrong session');
+          if(data.action==='append'){
+            maxChunk=Math.max(maxChunk,data.chunk.length);decoded.push(atob(data.chunk));
+            if(mode==='stale')current=false;
+            if(mode==='failure')return {error:'fixture failure'};
+          }
+          return {ok:true,name:'model.glb'};
+        }};
+        const result=await saveGlbBuffer(api,'fixture-01',bytes.buffer,()=>current);
+        const combined=decoded.join('');
+        return {actions,maxChunk,result,identical:combined.length===bytes.length &&
+                bytes.every((value,index)=>value===combined.charCodeAt(index))};
+      };
+      return {success:await run('success'),cancelled:await run('picker-cancel'),
+              stale:await run('stale'),failed:await run('failure')};
+    }""")
+    assert result['success']['actions'] == ['begin', 'append', 'append', 'append', 'finish']
+    assert result['success']['maxChunk'] <= 1400000
+    assert result['success']['identical']
+    assert result['cancelled']['actions'] == ['begin']
+    assert result['cancelled']['result'] == {'cancelled': True}
+    assert result['stale']['actions'] == ['begin', 'append', 'cancel']
+    assert result['stale']['result'] == {'cancelled': True}
+    assert result['failed']['actions'] == ['begin', 'append', 'cancel']
+    assert result['failed']['result'] == {'error': 'fixture failure'}
