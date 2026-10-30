@@ -22,6 +22,62 @@ def _codes(report):
     return [item["code"] for item in report["issues"]]
 
 
+def test_control_support_diagnostics_follow_staged_state_and_archive_identity(tmp_path):
+    text = """[Constants]
+global persist $Mode = 0
+global persist $Amount = 0
+[CommandList Actions]
+if $Picked == 11
+$Mode = $Mode + $Direction
+if $Mode > 2
+$Mode = 0
+endif
+elif $Picked == 19
+$Aux = 1 - $Aux
+endif
+[CommandList Update]
+if $Amount < 0
+$Amount = 0
+elif $Amount > 1
+$Amount = 1
+endif
+[CustomShader Deform]
+cs = shader.hlsl
+x3 = $Amount
+dispatch = 1, 1, 1
+"""
+    path = tmp_path / 'config.ini'
+    path.write_text(text, encoding='utf-8')
+    root = str(tmp_path)
+
+    def support_issues(report):
+        return [item for item in report['issues'] if item['code'] in {
+            'unsupported_menu_action', 'unsupported_shader_control'}]
+
+    original = support_issues(analyze_mod(root))
+    assert [(item['code'], item['variable'], item['ini']) for item in original] == [
+        ('unsupported_menu_action', 'Mode', 'config.ini'),
+        ('unsupported_menu_action', 'Aux', 'config.ini'),
+        ('unsupported_shader_control', 'Amount', 'config.ini')]
+    assert original[0]['slot'] == 11
+    assert original[1]['reason'] == 'insufficient_menu_actions'
+    assert original[2]['register'] == 'x3'
+    assert (original[2]['min'], original[2]['max']) == (0, 1)
+    assert all(item['category'] == 'viewer' and item['line'] > 0 for item in original)
+
+    staged = text.replace('$Mode + $Direction', '$Mode + 1')
+    staged = staged.replace('x3 = $Amount', 'x3 = 0')
+    assert support_issues(analyze_mod(root, overrides={str(path): staged})) == []
+    assert support_issues(analyze_mod(root)) == original
+    assert path.read_text(encoding='utf-8') == text
+
+    archive = tmp_path / 'generated.zip'
+    with zipfile.ZipFile(archive, 'w') as stream:
+        stream.writestr('config.ini', text)
+    archive_report = analyze_mod(str(archive))
+    assert support_issues(archive_report) == original
+
+
 def test_structure_resource_and_file_findings():
     with tempfile.TemporaryDirectory() as tmp:
         ini = os.path.join(tmp, "mod.ini")

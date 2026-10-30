@@ -54,6 +54,7 @@ import {
   refreshPresentState as refreshPresentStateFlow,
 } from './app/semantic-refresh.js';
 import { viewerState } from './app/state.js';
+import { initExportMenu } from './app/model-export.js';
 import { getLoadBenchmark } from './app/load-benchmark.js';
 import { initEnvironmentControl, initToolPopovers, initToolbarOverflow } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
@@ -302,6 +303,7 @@ initToolbarOverflow();
 initPanelOpacityControl();
 initLanguageControl();
 initOpenModMenu();
+initExportMenu();
 
 rendererReady.then(async (ready) => {
   if (!ready || !isRendererAvailable()) return;

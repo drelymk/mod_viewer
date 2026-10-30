@@ -1,5 +1,17 @@
 # Third-party notices
 
+## Three.js
+
+- Package: `three`
+- Version: 0.186.1
+- Source: https://github.com/mrdoob/three.js
+- License: MIT; see `src/assets/LICENSE`
+
+This application vendors the WebGPU and TSL builds, controls, sky, SSAO,
+depth-aware blur, bloom, and GLTFExporter addons without modifying upstream files.
+The viewer's deterministic soft PCF shadow filter is adapted from Three.js
+r185 under the same MIT license.
+
 ## Ace Editor
 
 - Package: `ace-builds`

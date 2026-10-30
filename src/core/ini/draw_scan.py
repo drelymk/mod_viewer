@@ -593,8 +593,13 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 if cond_stack:
                     info["vertex_bindings_conditional"] = True
                 combined = DNF_TRUE
+                # Project each level separately so an untracked runtime branch
+                # cannot erase surrounding variable guards from the history.
                 for frame in cond_stack:
-                    combined = dnf_and(combined, frame["cur"])
+                    current = normalize_dnf(
+                        frame["cur"], vertex_vars, qualified_vars=qualified_vars)
+                    if current:
+                        combined = dnf_and(combined, current)
                 info["vertex_binding_history"].append({
                     "slot": slot, "resource": value,
                     "conditions": normalize_dnf(

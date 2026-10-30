@@ -13,6 +13,7 @@ from .document import IniDocument, OTHER
 from . import migoto_semantics as semantics
 from .sections import extract_ini_namespace, sections_from_document
 from .draw_arguments import immutable_draw_constants, resolve_drawindexed
+from .control_diagnostics import control_support_issues
 from ..mod_discovery import discover_ini_paths
 from ..mod_source import ModSourceError, mod_source_for_path
 from ..resource_paths import safe_resource_path
@@ -365,6 +366,7 @@ def _analyze_document(doc, ini_rel, ini_path, mod_dir, issues, declared_files,
         ))
     _analyze_statements(
         doc, ini_rel, issues, global_variables, run_targets, ini_namespace)
+    issues.extend(control_support_issues(doc, ini_rel))
 
     resources = _resource_sections(doc)
     declared = set(resources)

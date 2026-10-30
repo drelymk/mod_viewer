@@ -11,6 +11,59 @@ from core.ini.document import IniDocument
 from core.ini.sections import extract_ini_namespace
 
 
+def test_caller_control_evidence_is_per_ini_and_follows_staged_documents(tmp_path):
+    text = """[Constants]
+global persist $Mode = 0
+[KeyForward]
+key = VK_LBUTTON
+$Step = 1
+run = CommandList Actions
+[CommandList Actions]
+if $Chosen == 11
+$Mode = $Mode + $Step
+if $Mode > 2
+$Mode = 0
+endif
+elif $Chosen == 19
+$Aux = 1 - $Aux
+elif $Chosen == 27
+$Anchor = 1 - $Anchor
+endif
+[CommandList Paint]
+$ID = 11
+ps-t23 = ResourceBadge
+run = CommandList Tile
+[CommandList Tile]
+if $Hit
+$Chosen = $ID
+endif
+run = CustomShader Paint
+[CustomShader Paint]
+draw = 4, 0
+[ResourceBadge]
+filename = icons/badge.dds
+"""
+    paths = [str(tmp_path / folder / 'config.ini') for folder in ('first', 'second')]
+    documents = {path: IniDocument.from_string(text, path=path) for path in paths}
+
+    def analyze(docs):
+        snapshot = build_mod_ini_snapshot(paths, str(tmp_path), docs)
+        return analyze_mod_inis(snapshot)
+
+    original = analyze(documents)
+    modes = [item for item in original.menu.values() if item['name'] == 'Mode']
+    assert len(modes) == 2 and len({item['var'] for item in modes}) == 2
+    assert {item['image_file'].replace('\\', '/') for item in modes} == {
+        'first/icons/badge.dds', 'second/icons/badge.dds'}
+    staged_text = text.replace('$Step = 1', '$Step = time')
+    staged_docs = {**documents, paths[0]: IniDocument.from_string(staged_text, path=paths[0])}
+    staged = analyze(staged_docs)
+    staged_modes = [item for item in staged.menu.values() if item['name'] == 'Mode']
+    assert len(staged_modes) == 1 and staged_modes[0]['ini_path'] == paths[1]
+    assert [item for item in staged.menu.values() if item['name'] == 'Aux']
+    assert len([item for item in original.menu.values() if item['name'] == 'Mode']) == 2
+
+
 def test_nested_sibling_ini_state_stays_isolated():
     ini = """[Constants]
 global persist $swapvar = 0

@@ -8,6 +8,7 @@ layout is a convention — `$clickedSlot` is not.
 import re
 
 from . import condition
+from .control_flow import ControlFlow
 from .sections import ResourceTable, canonical_var_names, first_source, line_source
 
 # A branch head that dispatches on an integer slot: `$clickedSlot == 3`.
@@ -28,7 +29,7 @@ _STATE_ADD_RE = re.compile(
     r'^\$(\w+)\s*=\s*\$(\w+)\s*\+\s*\$(\w+)$')
 _BUTTON_RE = re.compile(r'CommandListButton(\d+)(Left|Right)', re.I)
 _IMAGE_BINDING_RE = re.compile(r'ps-t100\s*=\s*(\S+)', re.I)
-_RUN_RE = re.compile(r'run\s*=\s*(CommandList\w+)$', re.I)
+_RUN_RE = re.compile(r'run\s*=\s*(CommandList.+?)\s*$', re.I)
 _RECT_BINDING_RE = re.compile(r'([xyzw]87)\s*=\s*(.*)', re.I)
 
 _NEGATED_OP = {"==": "!=", "!=": "==", "<": ">=", ">=": "<", ">": "<=", "<=": ">"}
@@ -130,7 +131,7 @@ def _integer_value(text):
     return None
 
 
-def _wrap_values(guard, reset, *, decrement=False):
+def _wrap_values(guard, reset, *, decrement=False, max_values=None):
     """Return an exact integer cycle; unsupported or reversed bounds have none."""
     boundary, reset = _integer_value(guard["value"]), _integer_value(reset)
     if boundary is None or reset is None:
@@ -140,7 +141,9 @@ def _wrap_values(guard, reset, *, decrement=False):
     else:
         lo = reset
         hi = boundary + {"<": 0, "<=": 1, ">": 0, ">=": -1}[guard["op"]]
-    return _cycle_values(lo, hi) if hi >= lo else None
+    if hi < lo or max_values is not None and hi - lo + 1 > max_values:
+        return None
+    return _cycle_values(lo, hi)
 
 
 def _conditional_bodies(nodes):
@@ -152,26 +155,27 @@ def _conditional_bodies(nodes):
                 yield from _conditional_bodies(branch["body"])
 
 
-def _wrap_ranges(nodes, variable, *, decrement=False):
+def _wrap_ranges(nodes, variable, *, decrement=False, max_values=None):
     """Find direct resets in wrap blocks at the current conditional depth."""
     ranges = set()
     for block in nodes:
         if not isinstance(block, dict):
             continue
-        branch = block["branches"][0]
-        guard = _guard(branch["condition"])
-        ops = ("<", "<=") if decrement else (">", ">=")
-        if not guard or not _same_var(guard["var"], variable) or guard["op"] not in ops:
-            continue
-        resets = []
-        for line in branch["body"]:
-            assignment = _ASSIGN_RE.fullmatch(line) if isinstance(line, str) else None
-            if assignment and _same_var(assignment.group(1), variable):
-                resets.append(assignment.group(2).strip())
-        if len(resets) == 1:
-            values = _wrap_values(guard, resets[0], decrement=decrement)
-            if values:
-                ranges.add(tuple(values))
+        for branch in block["branches"]:
+            guard = _guard(branch["condition"] or "")
+            ops = ("<", "<=") if decrement else (">", ">=")
+            if not guard or not _same_var(guard["var"], variable) or guard["op"] not in ops:
+                continue
+            resets = []
+            for line in branch["body"]:
+                assignment = _ASSIGN_RE.fullmatch(line) if isinstance(line, str) else None
+                if assignment and _same_var(assignment.group(1), variable):
+                    resets.append(assignment.group(2).strip())
+            if len(resets) == 1:
+                values = _wrap_values(guard, resets[0], decrement=decrement,
+                                      max_values=max_values)
+                if values:
+                    ranges.add(tuple(values))
     return ranges
 
 
@@ -529,7 +533,7 @@ def _without_shader_refreshes(nodes):
     result = []
     for node in nodes:
         if isinstance(node, str):
-            if re.fullmatch(r'run\s*=\s*CustomShader\w+', node, re.I):
+            if re.fullmatch(r'run\s*=\s*CustomShader.+', node, re.I):
                 continue
         else:
             node = {**node, "branches": [
@@ -539,14 +543,41 @@ def _without_shader_refreshes(nodes):
     return result
 
 
+def _resolved_steps(nodes, flow, section):
+    """Normalize proven caller-supplied steps with matching finite wrap ranges."""
+    result = []
+    for index, node in enumerate(nodes):
+        if isinstance(node, str):
+            assignment = _ASSIGN_RE.fullmatch(node)
+            if assignment:
+                variable, rhs = assignment.groups()
+                steps = flow.step(section, variable, rhs)
+                if steps:
+                    ranges = [_wrap_ranges(nodes[index + 1:], variable, decrement=step < 0,
+                                           max_values=4096)
+                              for step in steps]
+                    if all(len(values) == 1 for values in ranges) and all(
+                            values == ranges[0] for values in ranges):
+                        sign = '+' if 1 in steps else '-'
+                        node = f'${variable} = ${variable} {sign} 1'
+        else:
+            node = {**node, 'branches': [
+                {**branch, 'body': _resolved_steps(branch['body'], flow, section)}
+                for branch in node['branches']]}
+        result.append(node)
+    return result
+
+
 def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
                      require_finite=True, active=(), budget=None,
-                     helper_context=False):
+                     helper_context=False, flow=None, section=None):
     """Resolve finite actions, following only bounded, pure local helper calls."""
     budget = [128] if budget is None else budget
     budget[0] -= 1
     if len(active) >= 16 or budget[0] < 0:
         return None
+    if flow is not None and section is not None:
+        nodes = _resolved_steps(nodes, flow, section)
     nodes = _without_shader_refreshes(nodes)
     lines = [line for line in _body_lines(nodes) if line]
     assignments = [_ASSIGN_RE.fullmatch(line) for line in lines]
@@ -596,7 +627,7 @@ def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
                 return None
             actions = _resolve_actions(blocks[target][1], blocks, defaults,
                                        active=(*active, target), budget=budget,
-                                       helper_context=True)
+                                       helper_context=True, flow=flow, section=target)
         else:
             literal = _literal_cycle(node)
             if literal:
@@ -611,7 +642,8 @@ def _resolve_actions(nodes, blocks, defaults, *, allow_effects=False,
                                            allow_effects=allow_effects,
                                            require_finite=require_finite,
                                            active=active, budget=budget,
-                                           helper_context=helper_context)
+                                           helper_context=helper_context,
+                                           flow=flow, section=section)
                 names = {name.casefold() for name in guard.variables()}
                 guard_ok = (_satisfied(guard, defaults) if helper_context
                             else not _inactive(guard, defaults))
@@ -990,12 +1022,26 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     image_chains = []
     slot_groups = []
     missing_images = []
+    selectors = {}
+    chains = {name: _slot_chains(parsed, image_chains)
+              for name, parsed in blocks.items() if name.casefold() != 'present'}
+    selector_names = {part[0] for groups in chains.values()
+                      for chain in groups for part in chain}
+    flow_blocks = {**blocks, **{
+        name: _conditional_blocks(lines) for name, lines in sections.items()
+        if name.casefold().startswith('key')}}
+    defaults, pressed = _static_numeric_defaults(sections), _mouse_press_vars(sections)
+    renderers = {name for name, lines in sections.items()
+                 if name.casefold().startswith('customshader') and any(
+                     re.match(r'draw(?:indexed)?\s*=', _clean_line(line), re.I)
+                     for line in lines)}
+    flow = ControlFlow(flow_blocks, defaults, selector_names, renderers)
 
     def declared(name):
         return canon.get(name.lower(), name)
 
     def add_entry(section, slot, variable, values, effects=(), *,
-                  src=None, key_section=None, kind=None, image=None):
+                  src=None, key_section=None, kind=None, image=None, selector=None):
         if image is None and kind != "mouse_region":
             image = _section_image(
                 section_lookup.get(f"commandlisticon{slot}", ()), resources)
@@ -1032,6 +1078,8 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
         else:
             missing_images.append((variable.casefold(), entry))
         menu[key] = entry
+        if selector is not None:
+            selectors[key] = selector.casefold()
         return entry
 
     def add_actions(section, slot, actions, **options):
@@ -1042,26 +1090,24 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
                                 "values": vals} for var, vals, _effects in actions]
         return entry
 
-    defaults, pressed = _static_numeric_defaults(sections), _mouse_press_vars(sections)
     lookup = {name.casefold(): parsed for name, parsed in blocks.items()}
     for name, parsed_blocks in blocks.items():
         if name.casefold() == "present":
             continue
-        for chain in _slot_chains(
-                parsed_blocks, image_chains if resources is not None else None):
+        for chain in chains[name]:
             parsed = []
-            for _slot_var, slot_value, _body, nodes in chain:
+            for slot_var, slot_value, _body, nodes in chain:
                 actions = _resolve_actions(nodes, lookup, defaults, allow_effects=True,
-                                           require_finite=False)
+                                           require_finite=False, flow=flow, section=name)
                 if actions:
-                    parsed.append((slot_value, actions))
+                    parsed.append((slot_var, slot_value, actions))
             if len(parsed) < _MIN_SLOTS:
                 continue
 
-            slot_groups.append({int(slot) for slot, _info in parsed})
+            slot_groups.append({int(slot) for _selector, slot, _info in parsed})
             src = first_source(sections[name]) or {}
-            for slot_value, actions in parsed:
-                add_actions(name, slot_value, actions, src=src)
+            for selector, slot_value, actions in parsed:
+                add_actions(name, slot_value, actions, src=src, selector=selector)
 
     mouse_items = _mouse_button_items(sections, blocks, defaults, pressed)
     mouse_arrows = {}
@@ -1110,6 +1156,14 @@ def extract_menu_toggles(sections, var_prefix=None, source=None,
     for variable, info in missing_images:
         if variable in variable_images:
             info["image_file"] = variable_images[variable]
+    for key, selector in selectors.items():
+        info = menu[key]
+        if 'image_file' in info:
+            continue
+        candidates = {_resource_file(resources, resource) for resource in
+                      flow.artwork.get((selector, info['slot']), ())}
+        if len(candidates) == 1 and None not in candidates:
+            info['image_file'] = candidates.pop()
     return menu
 
 

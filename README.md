@@ -74,7 +74,8 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    `Ambient occlusion` to adjust their strength from 0–100%. The texture display
    menu offers `All maps`, `Diffuse and NormalMap`, `Diffuse only`, and
    `No textures` for comparing the material response. `Emission bloom` is
-   available when a supported GlowMap is detected.
+   available when a supported GlowMap is detected. Ambient occlusion adds soft
+   contact shading; setting it to 0% disables its rendering passes.
 6. Click `Key light` to adjust its intensity, including turning it off at 0%.
    Drag the light marker in the viewport to move it across the view; hold Shift
    when starting the drag to move it toward or away from the camera.
@@ -410,6 +411,35 @@ prevents the model from loading.
 
 In a narrow window, `View INI`, `Diagnostics`, and `Export` may be under the
 toolbar's `...` menu. Texture color saves use their own confirmation in step 8.
+
+#### Export the visible model for Blender
+
+Use the arrow beside `Export` and choose `Blender / glTF (.glb)…`, then select
+a destination in the native save dialog. In a narrow window this option is in
+the toolbar's `...` menu. Import the result in Blender with
+`File → Import → glTF 2.0 (.glb/.gltf)`. The main `Export` button and the
+dropdown's `Save Mod Edits` action still save pending mod edits as described above.
+
+GLB export works even when no mod edits are pending. It captures the currently
+visible draws and loose parts as separate named objects, including their current
+pose, shape, animation frame, orientation, normals, UVs, and available vertex
+colors. Standard materials include diffuse textures, supported RGB normal maps,
+and supported emission maps. DDS material maps are converted at their original
+resolution; textures are embedded so the file can be moved independently.
+
+Original bound texture bytes for all six roles are also embedded in GLB buffer
+views, indexed by `materials[].extras.modViewer.textures` with the role-specific
+key, buffer view, and original byte length. These preserve packed channels for
+later tooling; Blender does not automatically connect this custom data to shader
+nodes. Mesh identity, source draw provenance, material profiles, and color
+adjustment settings are preserved in `extras.modViewer`. Color adjustments and
+game-specific packed shader effects are not baked into standard materials yet.
+
+Editable rigs, animation tracks, shape keys, hidden toggle alternatives, and
+viewer lighting/debug effects are not exported. Missing or unconvertible textures
+are reported after saving; geometry and available resources still export. A GLB
+snapshot does not commit staged INI or buffer edits. Export remains unavailable
+for compressed mods and direct Asset previews.
 
 ### What is saved, and when
 

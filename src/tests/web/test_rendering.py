@@ -5,7 +5,7 @@ import io
 import struct
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 from app.assets.loader import AssetLoadResult, AssetMeshPart
 from app.assets.loader.models import AssetTexture
 from app.runtime import server
@@ -182,6 +182,130 @@ def test_webgpu_texture_and_visibility_reach_the_frame(viewer):
     page.wait_for_function('window.modViewer.activeMeshes[0].visible')
     restored = mesh_pixel(page)
     assert max(abs(a - b) for a, b in zip(before, restored)) < 15
+
+
+def test_filtered_ao_contacts_and_render_graph_lifecycle(module_page):
+    result = module_page.evaluate("""async profile => {
+      const T = await import('three/webgpu');
+      const M = await import('./js/mesh/material-profile.js');
+      const {createViewportRenderPipeline} = await import('./js/scene/viewport-render-pipeline.js');
+      const renderer = new T.WebGPURenderer({antialias:true, samples:4});
+      renderer._getFallback = null;
+      const errors = [];
+      renderer.onError = info => errors.push(info.message);
+      renderer.setPixelRatio(1); renderer.setSize(320,320);
+      document.body.append(renderer.domElement);
+      await renderer.init();
+      const scene = new T.Scene(); scene.background = new T.Color(0x203040);
+      const ambient = new T.AmbientLight(0xffffff,1); scene.add(ambient);
+      const key = new T.DirectionalLight(0xffffff,0); key.position.set(0,0,3); scene.add(key);
+      const camera = new T.PerspectiveCamera(45,1,0.01,10);
+      camera.position.z = 3;
+      const standard = M.createGameMaterial(null,0xcccccc,{hasUv:false});
+      const physical = M.createGameMaterial(profile,0xcccccc);
+      M.setGameMaterialRimEnabled(standard,false); M.setGameMaterialRimEnabled(physical,false);
+      const plate = new T.Mesh(new T.PlaneGeometry(2,2),standard);
+      const contact = new T.Mesh(new T.BoxGeometry(0.65,0.65,0.09),physical);
+      contact.position.z = 0.05;
+      const emissionMaterial = new T.MeshStandardNodeMaterial({color:0,emissive:0xff6600});
+      const emission = new T.Mesh(new T.PlaneGeometry(0.2,0.2),emissionMaterial);
+      emission.position.set(-0.65,0.65,0.02);
+      const transparentMaterial = new T.MeshStandardNodeMaterial({color:0xffffff,transparent:true,opacity:0.5});
+      const transparent = new T.Mesh(new T.PlaneGeometry(0.2,0.2),transparentMaterial);
+      transparent.position.set(0.65,0.65,0.02);
+      const helperMaterial = new T.MeshBasicNodeMaterial({color:0xffffff});
+      const helper = new T.Mesh(new T.PlaneGeometry(0.2,0.2),helperMaterial);
+      helper.position.set(0.65,-0.65,0.02);
+      const meshes = [plate,contact,emission,transparent];
+      meshes.forEach(mesh => mesh.layers.enable(1));
+      let draws = [];
+      for(const [index,mesh] of [...meshes,helper].entries()) {
+        scene.add(mesh);
+        mesh.onBeforeRender = (_renderer,currentScene) => {
+          if(currentScene.name === 'Character AO pre-pass') draws.push(index);
+        };
+      }
+      const pipeline = createViewportRenderPipeline({renderer,scene,camera});
+      pipeline.setMeshes(meshes);
+      const capture = async () => {
+        draws = [];
+        await new Promise(requestAnimationFrame); pipeline.render();
+        await renderer.backend.device.queue.onSubmittedWorkDone();
+        return {image:renderer.domElement.toDataURL(), state:pipeline.getDebugState(),
+          draws:[...draws], byteNormals:pipeline.getDebugState().prePassNormalType === T.UnsignedByteType};
+      };
+      try {
+        const direct = await capture();
+        pipeline.setAmbientOcclusionStrength(1);
+        const ao = await capture(), repeated = await capture();
+        pipeline.setAmbientOcclusionSuppressedByWireframe(true);
+        const wire = await capture();
+        pipeline.setAmbientOcclusionSuppressedByWireframe(false);
+        pipeline.setBloomAvailable(true); pipeline.setBloomEnabled(true);
+        const combined = await capture();
+        pipeline.setAmbientOcclusionStrength(0);
+        const bloom = await capture();
+        const memory = renderer.info.memory.textures;
+        for(let i=0;i<3;i++) {
+          pipeline.setAmbientOcclusionStrength(1); await capture();
+          pipeline.setAmbientOcclusionStrength(0); await capture();
+        }
+        const stableMemory = renderer.info.memory.textures === memory;
+        pipeline.setBloomEnabled(false);
+        ambient.intensity = 0; key.intensity = 1;
+        const directLight = await capture();
+        pipeline.setAmbientOcclusionStrength(1);
+        const directLightAO = await capture();
+        contact.visible = false;
+        const hidden = await capture();
+        renderer.setSize(321,241); camera.aspect = 321/241; camera.updateProjectionMatrix();
+        const resized = await capture();
+        pipeline.reset(); pipeline.setAmbientOcclusionStrength(0);
+        pipeline.setMeshes([plate]); pipeline.setAmbientOcclusionStrength(1);
+        const replaced = await capture();
+        pipeline.setAmbientOcclusionStrength(0);
+        const restored = await capture();
+        return {direct,ao,repeated,wire,combined,bloom,directLight,directLightAO,hidden,
+          resized,replaced,restored,stableMemory,errors,webgpu:renderer.backend.isWebGPUBackend===true};
+      } finally {
+        pipeline.dispose();
+        for(const mesh of [...meshes,helper]) mesh.geometry.dispose();
+        for(const material of [standard,physical]) {M.disposeGameMaterial(material); material.dispose();}
+        emissionMaterial.dispose(); transparentMaterial.dispose(); helperMaterial.dispose();
+        await renderer.dispose();
+      }
+    }""", material_profile_for('genshin', 'gimi').to_metadata())
+
+    def pixels(name):
+        data = result[name]['image'].split(',', 1)[1]
+        with Image.open(io.BytesIO(base64.b64decode(data))) as image:
+            return image.convert('RGB').copy()
+
+    direct, ao = pixels('direct'), pixels('ao')
+    darkened = ImageChops.subtract(direct.convert('L'), ao.convert('L')).histogram()
+    assert sum(darkened[4:]) > 50
+    for point in [(60, 260), (10, 10), (76, 76), (244, 76)]:
+        assert max(abs(a-b) for a, b in zip(direct.getpixel(point), ao.getpixel(point))) <= 2
+    assert pixels('repeated').tobytes() == ao.tobytes()
+    assert pixels('wire').tobytes() == direct.tobytes()
+    difference = ImageChops.difference(pixels('directLight'), pixels('directLightAO'))
+    assert all(maximum <= 2 for _minimum, maximum in difference.getextrema())
+    lit = pixels('directLight')
+    assert max(abs(a-b) for a, b in zip(lit.getpixel((160, 160)), lit.getpixel((60, 260)))) <= 5
+    for name, mode in [('direct', 'direct'), ('ao', 'ao'), ('wire', 'direct'),
+                       ('combined', 'ao-bloom'), ('bloom', 'bloom'), ('restored', 'direct')]:
+        assert result[name]['state']['activeRenderMode'] == mode
+    assert result['wire']['state']['strength'] == 1
+    assert result['ao']['state']['blurEnabled']
+    assert sorted(result['ao']['draws']) == [0, 1, 2]
+    assert 1 not in result['hidden']['draws']
+    for name in ['direct', 'wire', 'bloom', 'restored']:
+        assert result[name]['draws'] == []
+    for name in ['ao', 'combined', 'resized', 'replaced']:
+        assert result[name]['byteNormals']
+    assert result['resized']['state']['resolution'] == [161, 121]
+    assert result['replaced']['state']['modelSize'] > 0
+    assert result['stableMemory'] and result['webgpu'] and result['errors'] == []
 
 
 def test_genshin_light_map_preserves_glossy_response_outside_toon_mode(module_page):

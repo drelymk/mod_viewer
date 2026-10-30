@@ -1,4 +1,12 @@
 export default {
+  'toolbar.chooseExport': '选择导出格式',
+  'toolbar.exportOptions': '导出选项',
+  'toolbar.exportEdits': '保存模组编辑',
+  'toolbar.exportGlb': 'Blender / glTF (.glb)…',
+  'model.exportingGlb': '正在导出 Blender 模型…',
+  'model.exportNoMeshes': '没有可导出的可见网格。',
+  'model.exportGlbComplete': '已保存 {name}，包含 {count} 个网格对象。',
+  'model.exportGlbWarnings': '部分纹理无法包含或转换：\n{detail}',
   'errors.viewerPersistence': '无法保存查看器设置。请重试。',
   'mesh.rename': '重命名',
   'mesh.selectionSameComponent': '已选择 {count} 个网格 · {component}',

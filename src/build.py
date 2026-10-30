@@ -71,23 +71,27 @@ VENV_DIR = os.path.join(HERE, ".venv-build")
 # Kept in sync with THREE_VERSION in app/runtime/server.py. The layout below mirrors the
 # CDN so the import map can resolve the WebGPU and TSL entry points entirely
 # offline.
-THREE_VERSION = "0.185.0"
+THREE_VERSION = "0.186.1"
 ASSET_FILES = {
+    "addons/exporters/GLTFExporter.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/exporters/GLTFExporter.js",
+        "sha256": "d766b04f233fa8bc72bfaebacaac5ecb832c30ca3695ce8d84bbb7dccccdc842",
+    },
     "three.core.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.core.js",
-        "sha256": "78b2c4218834ca8670547ed2315bfc21a00ff4dc3403bbffc8c31493d31d14de",
+        "sha256": "9edde002b066a9a05676a6127f67735b62baf399bdea529f2f7e31657da769e6",
     },
     "three.webgpu.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.webgpu.js",
-        "sha256": "eb77cbb7759853dd9cd8661c38795ff4fcd0182a8852f942f687b9954f87d5eb",
+        "sha256": "15cfce5c653541704fd9a3463c39d3e8b854bb6265ccd854d7cfe74090625cc6",
     },
     "three.tsl.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/build/three.tsl.js",
-        "sha256": "c3844718a7becd4d2d10fef29a503e6a8789bd1636e2e62767f2cf00fa56f8c1",
+        "sha256": "6e6b92d8ce467818944f73815a96abadc6392fb34de577d479a23810b6aeeed0",
     },
     "addons/controls/ArcballControls.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/ArcballControls.js",
-        "sha256": "f80db7fe66685fc7f5438e3be44fed6684aed33a7b92b2442fe6958291156fb3",
+        "sha256": "5212985773f5d460c8e091d7ab6ff6ef886afd92536b3269686e364955af0ccd",
     },
     "addons/controls/TransformControls.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/controls/TransformControls.js",
@@ -95,15 +99,23 @@ ASSET_FILES = {
     },
     "addons/objects/SkyMesh.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/objects/SkyMesh.js",
-        "sha256": "a44cb7c543d04b2690b0079b8b473da9a36660629b2eb091f7eab8b4111d7b7a",
+        "sha256": "453215002329fa8a84920045898fcb7c274795992eb6fba43576f41cfacd8585",
     },
-    "addons/tsl/display/GTAONode.js": {
-        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/GTAONode.js",
-        "sha256": "516e86dc398b8e2d93f693a168144fdd7420f261a72aaa7da6eb7f110cc8e3ef",
+    "addons/tsl/display/SSAONode.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/SSAONode.js",
+        "sha256": "50221225f9f337028e1a2b951962e44dc9a6fbf435f86fb4361d79cc0ca8717a",
+    },
+    "addons/tsl/display/depthAwareBlur.js": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/depthAwareBlur.js",
+        "sha256": "63adcf205b903ca202a0a2c3b0ed4d230ddac1e761b580e76e23ab3ed18cf80e",
     },
     "addons/tsl/display/BloomNode.js": {
         "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/examples/jsm/tsl/display/BloomNode.js",
-        "sha256": "f80f40d013f4d94aa089c68c673cae6a8ab45fb290970a696bc1dded312e3fc8",
+        "sha256": "f28a279656a37cf44bc09e45fd2de5df93a17cffad77f6da0a5bcd979cfd6525",
+    },
+    "LICENSE": {
+        "url": f"https://cdn.jsdelivr.net/npm/three@{THREE_VERSION}/LICENSE",
+        "sha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc",
     },
 }
 

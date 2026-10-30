@@ -104,6 +104,12 @@ endif
         bindings = bindings.replace("vb0 =", "if DRAW_TYPE == 1\nvb0 =").replace(
             "elif $frame", "endif\nelse if $frame").replace(
                 "ResourcePosition1\nendif", "ResourcePosition1\nendif\nendif")
+        if commandlist in ("runtime-elif", "runtime-else"):
+            branch = "elif DRAW_TYPE == 1" if commandlist == "runtime-elif" else "else"
+            bindings = bindings.replace(
+                "if DRAW_TYPE == 1",
+                "if DRAW_TYPE == 2 || DRAW_TYPE == 4\n"
+                f"vb1 = ResourceComponent01Texcoord\n{branch}")
     ini = root / "source-01.ini"
     ini.write_text(f"""
 [Constants]
@@ -136,10 +142,13 @@ format = DXGI_FORMAT_R32_UINT
     return ini, [points[index] for index in sorted(indices)]
 
 
-@pytest.mark.parametrize("mode", ["draw-branches", "commandlist", "range-switch", "static"])
+@pytest.mark.parametrize("mode", [
+    "draw-branches", "commandlist", "runtime-elif", "runtime-else", "range-switch", "static",
+])
 def test_baked_frames_publish_one_mesh_in_draw_order(tmp_path, mode):
     ini, expected_points = _baked_mod(
-        tmp_path, commandlist=mode == "commandlist", static=mode == "static")
+        tmp_path, commandlist=(mode if mode in ("runtime-elif", "runtime-else")
+                              else mode == "commandlist"), static=mode == "static")
     if mode == "range-switch":
         sections = read_sections(ini)
         sections["Constants"].extend(["$animate = 1", "$longEnd = 2"])

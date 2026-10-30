@@ -68,7 +68,7 @@ const CHANNELS = new Set(['r', 'g', 'b', 'a']);
 
 // `normalView` delegates to the material's normal node outside its NORMAL
 // sub-build, so assigning it back to `material.normalNode` would recurse.
-// Keep the NORMAL-path behavior locally, including r185's flat-shading rule.
+// Keep the NORMAL-path behavior locally, including flat-shading orientation.
 const orientedGeometryNormal = /*@__PURE__*/ Fn((builder) => {
   let node = normalViewGeometry;
   if (builder.isFlatShading() !== true) node = negateOnBackSide(node);
@@ -243,17 +243,26 @@ function createSpecularAreaNode(profile, bindings) {
 
 function createProfileNormalNode(profile, bindings, normalScaleNode, fallbackNormal) {
   const xy = profileNormalXY(profile);
+  let hasNormal;
+  let mappedNormal;
   if (xy) {
     const binding = bindings[profile?.normal_source === 'normal_data' ? 'normal_data' : 'normal_map'];
     const sampled = vec3(binding.textureNode[xy[0]], binding.textureNode[xy[1]], 1);
-    const packedNormal = normalMap(sampled, normalScaleNode);
-    packedNormal.unpackNormalMode = NormalRGPacking;
+    mappedNormal = normalMap(sampled, normalScaleNode);
+    mappedNormal.unpackNormalMode = NormalRGPacking;
     // Zero-filled RG cannot encode a unit normal; preserve the mesh normal there.
-    const hasNormal = binding.enabledNode.and(sampled.x.max(sampled.y).greaterThan(0));
-    return hasNormal.select(packedNormal, fallbackNormal);
+    hasNormal = binding.enabledNode.and(sampled.x.max(sampled.y).greaterThan(0));
+  } else {
+    const binding = bindings.normal_map;
+    hasNormal = binding.enabledNode;
+    mappedNormal = normalMap(binding.textureNode, normalScaleNode);
   }
-  const binding = bindings.normal_map;
-  return binding.enabledNode.select(normalMap(binding.textureNode, normalScaleNode), fallbackNormal);
+  return Fn(() => {
+    // Both branches use the face direction. Initialize it before the normal
+    // map branch so a disabled map cannot leave the fallback normal at zero.
+    const geometryNormal = fallbackNormal.toVar();
+    return hasNormal.select(mappedNormal, geometryNormal);
+  })();
 }
 
 function createRawChannelNode(ref, bindings) {
@@ -408,7 +417,7 @@ function setStableMaterialNodes(material, state, fallbackColor) {
 
   if (!state.packedResponse) return;
 
-  // r185 exposes specularIntensityNode but MeshPhysicalNodeMaterial's
+  // The pinned renderer exposes specularIntensityNode but MeshPhysicalNodeMaterial's
   // built-in setup does not consume that override. GamePhysicalNodeMaterial
   // applies this stable response before the metallic mix instead.
   state.specularResponseNode = createSpecularResponseNode(profile, bindings);
@@ -436,7 +445,9 @@ function applyViewerRim(state, result) {
 }
 
 function applyViewerOutput(state, result) {
-  return applyDebugOverride(state, applyViewerRim(state, result));
+  // Rim and debug paths reuse RGB and alpha. Cache the lit result so those
+  // reads cannot redeclare the physical lighting model's shader constants.
+  return applyDebugOverride(state, applyViewerRim(state, result.toVar()));
 }
 
 function createEmissionNode(profile, bindings, hasUv) {

@@ -1,4 +1,12 @@
 export default {
+  'toolbar.chooseExport': 'Выбрать формат экспорта',
+  'toolbar.exportOptions': 'Параметры экспорта',
+  'toolbar.exportEdits': 'Сохранить изменения мода',
+  'toolbar.exportGlb': 'Blender / glTF (.glb)…',
+  'model.exportingGlb': 'Экспорт модели для Blender…',
+  'model.exportNoMeshes': 'Нет видимых мешей для экспорта.',
+  'model.exportGlbComplete': 'Файл {name} сохранён: объектов меша — {count}.',
+  'model.exportGlbWarnings': 'Не удалось включить или преобразовать некоторые текстуры:\n{detail}',
   'errors.viewerPersistence': 'Не удалось сохранить настройки просмотра. Попробуйте ещё раз.',
   'mesh.rename': 'Переименовать',
   'mesh.selectionSameComponent': 'Выбрано мешей: {count} · {component}',

@@ -3,6 +3,7 @@
 import * as THREE from 'three/webgpu';
 import { float, reference } from 'three/tsl';
 import { computeModelBounds } from './model-bounds.js';
+import { stableShadowFilter } from './stable-shadow-filter.js';
 
 const FIT_MARGIN = 0.12;
 const MAX_GROUND_REACH = 2.5;
@@ -68,6 +69,7 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
   const floorLight = new THREE.DirectionalLight();
   floorLight.shadow.autoUpdate = false;
   floorLight.shadow.mapSize.set(2048, 2048);
+  floorLight.shadow.filterNode = stableShadowFilter;
   const groundMaterial = new THREE.ShadowMaterial({
     color: 0x000000,
     opacity: shadowOpacityForIntensity(light.intensity),
@@ -87,10 +89,11 @@ export function createCharacterShadowController({ renderer, scene, light, grid =
   scene.add(ground);
 
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   light.castShadow = true;
   light.shadow.autoUpdate = false;
   light.shadow.mapSize.set(2048, 2048);
+  light.shadow.filterNode = stableShadowFilter;
 
   let meshes = [];
   let modelBoundsDirty = true;
