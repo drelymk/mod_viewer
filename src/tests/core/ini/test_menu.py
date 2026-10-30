@@ -166,6 +166,52 @@ filename = icons/first.dds
     assert controls['Aux']['image_file'] == 'icons/second.dds'
 
 
+@pytest.mark.parametrize('layout,expected', [
+    ('same-branch', 'icons/first.dds'),
+    ('exclusive-branches', None),
+    ('exclusive-nested-branches', None),
+    ('independent-unknown-branches', None),
+], ids=['shared-path', 'if-else', 'nested-if-else', 'ambiguous-paths'])
+def test_shared_artwork_does_not_combine_alternative_execution_paths(layout, expected):
+    actions = 'run = CommandList Hit\nrun = CommandList Render'
+    if layout == 'same-branch':
+        replacement = 'if $Gate == 1\n' + actions + '\nendif'
+    elif layout == 'exclusive-branches':
+        replacement = ('if $Gate == 1\nrun = CommandList Hit\n'
+                       'else\nrun = CommandList Render\nendif')
+    elif layout == 'exclusive-nested-branches':
+        replacement = ('if $Outer\nif $Gate == 1\nrun = CommandList Hit\n'
+                       'else\nrun = CommandList Render\nendif\nendif')
+    else:
+        replacement = ('if $Gate == 1\nrun = CommandList Hit\nendif\n'
+                       'if $Gate != 1\nrun = CommandList Render\nendif')
+    controls = {entry['var']: entry for entry in
+                _menu(_flow_menu().replace(actions, replacement)).values()}
+    assert controls['Mode']['values'] == ['0', '1', '2', '3']
+    assert controls['Mode'].get('image_file') == expected
+
+
+@pytest.mark.parametrize('failure', ['recursive', 'budget'])
+@pytest.mark.parametrize('placement', ['before', 'after'])
+def test_rejected_call_tree_preserves_independent_artwork(failure, placement):
+    partial = ('$DrawID = 11\nps-t23 = ResourceSecond\n'
+               'run = CommandList Tile\n')
+    if failure == 'recursive':
+        broken = ('[CommandList Broken]\n' + partial
+                  + 'run = CommandList Loop\n[CommandList Loop]\nrun = CommandList Loop\n')
+    else:
+        # One helper invocation is small, but repeated calls exhaust a root's
+        # bounded statement work before it can complete.
+        broken = ('[CommandList Broken]\n' + partial + 'run = CommandList Busy\n' * 600
+                  + '[CommandList Busy]\n' + '$Scratch = 0\n' * 40)
+    text = _flow_menu()
+    text = broken + text if placement == 'before' else text + broken
+    controls = {entry['var']: entry for entry in _menu(text).values()}
+    assert controls['Mode']['values'] == ['0', '1', '2', '3']
+    assert controls['Mode']['image_file'] == 'icons/first.dds'
+    assert controls['Aux']['image_file'] == 'icons/second.dds'
+
+
 @pytest.mark.parametrize("action,expected", [
     ("$Palette = 1 - $PALETTE", ["0", "1"]),
     ("$Palette = ($PALETTE + 1) % 4", ["0", "1", "2", "3"]),

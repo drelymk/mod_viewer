@@ -139,7 +139,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Control data flow is per INI and bounded: join unknown branches, retain caller
   inputs through local helpers, and reject unknown writes, recursion and conflicting
   wrap ranges. Shared artwork needs matching selector identity and render evidence;
-  do not infer it from file ordering. Lazy diagnostics explain unresolved menu
+  require compatible conditional paths, never file ordering. Failed call trees
+  discard their own artwork evidence and budgets, preserving independent roots.
+  Lazy diagnostics explain unresolved menu
   cycles and clamped compute controls without inventing shader deformations.
 - Texture bindings are per-draw execution-order state: retain the latest
   applicable assignment, conditional alternatives and no-map fallbacks for
