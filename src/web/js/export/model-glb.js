@@ -1,5 +1,6 @@
 // Detached model snapshots: no renderer helpers or live scene objects reach glTF.
 import * as THREE from 'three';
+import { attachExportWeights } from './model-weights.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
 const ROLE_FIELDS = {
@@ -11,7 +12,7 @@ const ROLE_FIELDS = {
   emission_map: 'emissionMapKey',
 };
 
-function copyDrawGeometry(mesh) {
+function copyDrawGeometry(mesh, skinning) {
   const original = mesh.geometry;
   const position = original?.attributes.position;
   if (!position) return null;
@@ -43,18 +44,25 @@ function copyDrawGeometry(mesh) {
     geometry.setAttribute(name, new THREE.BufferAttribute(values, attribute.itemSize));
   }
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  if (skinning?.loaded) attachExportWeights(geometry, vertices, skinning);
   return geometry;
 }
 
 /** Capture all geometry and binding decisions synchronously before texture I/O. */
-export function snapshotModel(meshes, textureSource = () => null) {
+export function snapshotModel(meshes, textureSource = () => null, skinning = new Map()) {
   const scene = new THREE.Scene();
   scene.name = 'Mod Viewer';
-  scene.userData.modViewer = { version: 1, snapshot: 'visible geometry with current pose and shapes' };
+  scene.userData.modViewer = {
+    version: 1,
+    snapshot: 'visible geometry with current pose and shapes',
+  };
   const materials = new Map();
   const textures = new Set();
   const dispose = () => {
-    for (const mesh of scene.children) mesh.geometry.dispose();
+    for (const mesh of scene.children) {
+      mesh.geometry.dispose();
+      mesh.skeleton?.dispose();
+    }
     for (const material of materials.keys()) material.dispose();
     for (const texture of textures) texture.dispose();
   };
@@ -66,7 +74,7 @@ export function snapshotModel(meshes, textureSource = () => null) {
       const parts = data.looseParts?.length ? data.looseParts : [source];
       for (const part of parts) {
         if (!part.visible) continue;
-        const geometry = copyDrawGeometry(part);
+        const geometry = copyDrawGeometry(part, skinning.get(source));
         if (!geometry) continue;
         const material = new THREE.MeshStandardMaterial({
           color: data.fallbackColor ?? 0xcccccc,
@@ -98,12 +106,20 @@ export function snapshotModel(meshes, textureSource = () => null) {
           normalYSign: data.normalMapYSign ?? -1,
           profile: metadata.materialProfile,
         });
-        const mesh = new THREE.Mesh(geometry, material);
+        const weights = geometry.userData.exportWeights;
+        delete geometry.userData.exportWeights;
+        const mesh = weights ? new THREE.SkinnedMesh(geometry, material) : new THREE.Mesh(geometry, material);
         mesh.name = part === source ? data.displayName || source.name : part.userData.loosePartLabel || part.name;
         mesh.matrixAutoUpdate = false;
         mesh.matrix.copy(part.matrixWorld);
         mesh.userData.modViewer = metadata;
         scene.add(mesh);
+        if (weights) {
+          mesh.add(weights.root);
+          mesh.updateWorldMatrix(true, true);
+          mesh.bind(new THREE.Skeleton(weights.bones));
+          mesh.userData.modViewer.weights = weights.metadata;
+        }
       }
     }
     return { scene, materials, textures, dispose };
@@ -237,5 +253,9 @@ export async function encodeModelGlb(snapshot, { loadImage, releaseImage } = {})
     };
   });
   const buffer = await exporter.parseAsync(snapshot.scene, { binary: true });
-  return { buffer, meshCount: snapshot.scene.children.length, warnings: [...new Set(warnings)] };
+  return {
+    buffer,
+    meshCount: snapshot.scene.children.length,
+    warnings: [...new Set(warnings)],
+  };
 }

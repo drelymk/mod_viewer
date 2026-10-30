@@ -5,6 +5,7 @@ export default {
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': '正在导出 Blender 模型…',
   'model.exportNoMeshes': '没有可导出的可见网格。',
+  'model.exportWeightsUnavailable': '无法加载 {name} 的蒙皮权重。',
   'model.exportGlbComplete': '已保存 {name}，包含 {count} 个网格对象。',
   'model.exportGlbWarnings': '部分纹理无法包含或转换：\n{detail}',
   'errors.viewerPersistence': '无法保存查看器设置。请重试。',

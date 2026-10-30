@@ -434,7 +434,17 @@ source draw provenance, material profiles, and color adjustment settings are
 preserved in `extras.modViewer`. Color adjustments and game-specific packed
 shader effects are not baked into standard materials yet.
 
-Editable rigs, animation tracks, shape keys, hidden toggle alternatives, and
+Authored skin weights are loaded on export and imported into Blender as numbered
+vertex groups, scoped to each exact Blend source. Up to eight influences per
+vertex are retained; duplicate IDs combine and weights normalize for glTF.
+Zero-weight vertices use an `Unweighted` placeholder group. Large authored bone
+IDs retain their numeric group names through a compact export palette. Export
+uses neutral placeholder joints to carry the groups while preserving the current
+mesh pose; these joints do not reconstruct game bone positions or hierarchy.
+Weight loading does not activate the viewer's Rig or Physics. If advertised
+weights cannot be loaded, export reports an error instead of silently omitting them.
+
+Editable game rigs, animation tracks, shape keys, hidden toggle alternatives, and
 viewer lighting/debug effects are not exported. Missing or unconvertible textures
 are reported after saving; geometry and available resources still export. A GLB
 snapshot does not commit staged INI or buffer edits. Export remains unavailable

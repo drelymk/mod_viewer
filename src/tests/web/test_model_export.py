@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from .payloads import append_stream, model_payload, textured_payload
+from .payloads import append_stream, model_payload, textured_payload, weighted_payload
 from .support import bridge_calls, open_model, wait_loaded
 from tests.support.dds_data import uncompressed_dds
 
@@ -422,3 +422,168 @@ def test_all_glb_sizes_use_one_bounded_cancellable_save_lifecycle(module_page, s
     assert result['stale']['result'] == {'cancelled': True}
     assert result['failed']['actions'] == ['begin', 'append', 'cancel']
     assert result['failed']['result'] == {'error': 'fixture failure'}
+
+
+@pytest.mark.parametrize('influences', [1, 4, 8])
+def test_glb_weight_palette_remapping_and_blender_groups(module_page, tmp_path, influences):
+    result = module_page.evaluate("""async count => {
+      const T = await import('three');
+      const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute([
+        0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0],3));
+      geometry.setAttribute('normal',new T.Float32BufferAttribute(Array(6).fill([0,0,1]).flat(),3));
+      geometry.setIndex([0,1,2,5,3,4]);geometry.setDrawRange(3,3);
+      const source = new T.Mesh(geometry,new T.MeshStandardMaterial());source.name='Mesh 01';
+      source.position.set(4,5,6);source.rotation.z=Math.PI/2;
+      const other = new T.Mesh(geometry,source.material);other.name='Mesh 02';other.position.x=-3;
+      const indices=Uint32Array.from({length:6*count},(_,i)=>100000+i%count);
+      const weights=Float32Array.from({length:6*count},(_,i)=>i%count+1);
+      // Duplicate influences must combine; an unweighted vertex must remain stationary.
+      if(count>1)indices[3*count+1]=indices[3*count];
+      weights.fill(0,4*count,5*count);
+      const state={loaded:true,influenceCount:count,indices,weights,
+        skinningSourceKey:'folder-01/blend.buf|offset=0',skinningSourceFile:'folder-01/blend.buf',skinningBoneOffset:0};
+      const original=[...weights];
+      const snapshot=snapshotModel([source,other],()=>null,new Map([
+        [source,state],[other,{...state,skinningSourceKey:'folder-02/blend.buf|offset=0'}]]));
+      try{
+        const output=await encodeModelGlb(snapshot);
+        const bytes=new Uint8Array(output.buffer);
+        let binary='';for(let i=0;i<bytes.length;i+=49152)binary+=String.fromCharCode(...bytes.subarray(i,i+49152));
+        const part=new T.Mesh(geometry.clone(),source.material);
+        source.add(part);part.geometry.setIndex([4,5,3]);part.geometry.setDrawRange(0,3);
+        source.userData.looseParts=[part];
+        const separated=snapshotModel([source],()=>null,new Map([[source,state]]));
+        const partWeights=[...separated.scene.children[0].geometry.attributes.skinWeight.array];
+        separated.dispose();
+        return {partWeights,encoded:btoa(binary),unchanged:original.every((v,i)=>weights[i]===v)&&
+          !geometry.attributes.skinWeight&&!source.isSkinnedMesh,count:output.meshCount};
+      }finally{snapshot.dispose();}
+    }""", influences)
+    assert result['unchanged'] and result['count'] == 2
+    assert result['partWeights'][:4] == [1, 0, 0, 0]
+    data = base64.b64decode(result['encoded'])
+    (tmp_path / f'weights-{influences}.glb').write_bytes(data)
+    json_length = struct.unpack_from('<I', data, 12)[0]
+    doc = json.loads(data[20:20 + json_length])
+    binary_offset = 28 + json_length
+
+    def values(accessor_id):
+        accessor = doc['accessors'][accessor_id]
+        view = doc['bufferViews'][accessor['bufferView']]
+        width = {'VEC3': 3, 'VEC4': 4}[accessor['type']]
+        code = {5126: 'f', 5123: 'H'}[accessor['componentType']]
+        return struct.unpack_from(f'<{accessor["count"] * width}{code}', data,
+                                  binary_offset + view.get('byteOffset', 0) + accessor.get('byteOffset', 0))
+
+    nodes = [node for node in doc['nodes'] if 'mesh' in node]
+    assert len(doc['skins']) == 2
+    palettes = []
+    for node in nodes:
+        skin = doc['skins'][node['skin']]
+        palette = [doc['nodes'][joint]['name'] for joint in skin['joints']]
+        palettes.append(set(skin['joints']))
+        attributes = doc['meshes'][node['mesh']]['primitives'][0]['attributes']
+        assert 'COLOR_0' not in attributes
+        assert ('WEIGHTS_1' in attributes) == (influences == 8)
+        assert values(attributes['POSITION']) == (2,1,0, 2,0,0, 3,0,0)
+        rows = [dict() for _ in range(3)]
+        for group in range((influences + 3) // 4):
+            joints = values(attributes[f'JOINTS_{group}'])
+            weights = values(attributes[f'WEIGHTS_{group}'])
+            for vertex, row in enumerate(rows):
+                for slot in range(4):
+                    index = vertex * 4 + slot
+                    if weights[index]:
+                        row[palette[joints[index]]] = weights[index]
+        total = influences * (influences + 1) / 2
+        assert rows[0] == pytest.approx({str(100000+i): (i+1)/total for i in range(influences)})
+        expected = {str(100000+i): (i+1)/total for i in range(influences)}
+        if influences > 1:
+            expected['100000'] += expected.pop('100001')
+        assert rows[1] == pytest.approx(expected)
+        assert rows[2] == {'Unweighted': 1}
+    assert palettes[0].isdisjoint(palettes[1])
+    assert {node['extras']['modViewer']['weights']['sourceKey'] for node in nodes} == {
+        'folder-01/blend.buf|offset=0', 'folder-02/blend.buf|offset=0'}
+
+
+def test_weight_export_reuse_and_mod_switch_refresh_metadata_before_rig_activation(viewer):
+    payload, weights = weighted_payload()
+    second, _ = weighted_payload()
+    for index, model in enumerate((payload, second), 1):
+        model['meshes']['mesh-00']['pos'] = append_stream(model, 'f', [-1,0,0, 1,0,0, 0,2,2])
+        model['metadata'] = {'rig': {
+            'version': 1,
+            'presets': [{'id': f'pose-{index:02d}', 'name': f'Pose {index:02d}', 'roots': [], 'joints': []}],
+            'humanoid_control_rig': {'version': 2, 'controls': {
+                'pelvis': {'semantic': {'sideN': index * 0.1, 'height01': 0.6, 'depthN': 0.05}}}},
+        }}
+    page = viewer({'fixture-01': payload, 'fixture-02': second, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    assert bridge_calls(page, 'weights') == []
+    page.evaluate("""() => {
+      window.__savedWeights=[];
+      window.pywebview.api.export_model_glb=async(path,data)=>{
+        if(data.action==='begin')return {token:'session-01'};
+        if(data.action==='append')window.__savedWeights.push(data.chunk);
+        return {cancelled:true};
+      };
+    }""")
+    for attempt in (1, 2):
+        page.locator('#export-menu-btn').click()
+        page.locator('#export-glb-choice').click()
+        page.wait_for_function('count=>window.__savedWeights.length===count', arg=attempt)
+        page.wait_for_function('!document.querySelector("#export-glb-choice").disabled')
+    assert len(bridge_calls(page, 'weights')) == 1
+    assert page.evaluate("""async()=>{
+      const boundary=await import('./js/weight-rig/weight-rig-feature.js');
+      if(boundary.getLoadedWeightRigFeature())return false;
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      return !core.weightRigApi.getModelRigState().loaded&&!core.weightRigApi.getModelPhysicsState().enabled;
+    }""")
+    data = base64.b64decode(page.evaluate('window.__savedWeights[0]'))
+    doc = json.loads(data[20:20 + struct.unpack_from('<I', data, 12)[0]])
+    assert doc['skins'] and 'WEIGHTS_0' in doc['meshes'][0]['primitives'][0]['attributes']
+    assert page.evaluate('window.modViewer.switchMod("fixture-02")')
+    wait_loaded(page)
+    pending = page.evaluate("""async()=>{
+      const boundary=await import('./js/weight-rig/weight-rig-feature.js');
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      const rig=core.weightRigApi.getModelRigState();
+      return {inactive:!boundary.getLoadedWeightRigFeature(),presets:rig.rigPresets.presets,
+        overrides:rig.humanoidRigEdit.hasSavedOverrides};
+    }""")
+    assert pending == {'inactive': True, 'presets': [{'id': 'pose-02', 'name': 'Pose 02'}], 'overrides': True}
+    activated = page.evaluate("""async()=>{
+      const {loadWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
+      const feature=await loadWeightRigFeature();await feature.activateWeightRig();
+      const rig=feature.getModelRigState();
+      return {loaded:rig.loaded,presets:rig.rigPresets.presets,pelvis:rig.humanoidControlRig.controls.pelvis};
+    }""")
+    assert activated['loaded']
+    assert activated['presets'] == [{'id': 'pose-02', 'name': 'Pose 02'}]
+    assert activated['pelvis']['source'] == 'manual_override'
+    assert activated['pelvis']['semantic'] == {'sideN': 0.2, 'height01': 0.6, 'depthN': 0.05}
+    assert len(bridge_calls(page, 'weights')) == 2
+
+
+def test_weight_export_failure_preserves_model_and_skips_native_save(viewer):
+    payload, weights = weighted_payload()
+    weights['meshes']['mesh-00'] = {'status': 'error', 'error': 'fixture weight failure'}
+    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    before = page.evaluate('Array.from(window.modViewer.activeMeshes[0].geometry.attributes.position.array)')
+    page.evaluate("""() => {
+      window.__nativeWeightSaves=0;
+      window.pywebview.api.export_model_glb=async()=>{window.__nativeWeightSaves++;return {cancelled:true};};
+    }""")
+    page.locator('#export-menu-btn').click()
+    page.locator('#export-glb-choice').click()
+    page.get_by_text("Skin weights could not be loaded", exact=False).wait_for()
+    assert 'Skin weights could not be loaded' in page.locator('#dialog-backdrop').inner_text()
+    assert page.evaluate('window.__nativeWeightSaves') == 0
+    assert page.evaluate('Array.from(window.modViewer.activeMeshes[0].geometry.attributes.position.array)') == before

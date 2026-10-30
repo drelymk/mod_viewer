@@ -66,7 +66,13 @@ of documentation, comments and tests; use portable fixtures instead.
   have separate writes.
 - The Export dropdown's GLB snapshot captures detached visible geometry and
   current bindings without committing or clearing staged edits. Its destination
-  comes only from the native save picker and is atomically replaced. Rigging,
+  comes only from the native save picker and is atomically replaced. Export lazily
+  reuses authored Weight data without activating Rig/Physics. Preserve exact
+  Blend-source identity, compact vertex mapping and all eight influences; merge
+  duplicate IDs and normalize only detached export weights. Neutral joints carry
+  numbered Blender groups without claiming a game hierarchy or bind pose.
+  Preserve zero-weight geometry with an explicit Unweighted placeholder.
+  Fail export if advertised weights cannot load. Game rig reconstruction,
   animation tracks and packed shader reconstruction are deferred. Export only
   loader-supported geometry attributes, excluding temporary Weight heatmap colors.
   Embed only Blender-ready images; retain bound texture role keys as metadata.

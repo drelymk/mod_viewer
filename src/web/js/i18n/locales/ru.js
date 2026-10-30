@@ -5,6 +5,7 @@ export default {
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': 'Экспорт модели для Blender…',
   'model.exportNoMeshes': 'Нет видимых мешей для экспорта.',
+  'model.exportWeightsUnavailable': 'Не удалось загрузить веса для {name}.',
   'model.exportGlbComplete': 'Файл {name} сохранён: объектов меша — {count}.',
   'model.exportGlbWarnings': 'Не удалось включить или преобразовать некоторые текстуры:\n{detail}',
   'errors.viewerPersistence': 'Не удалось сохранить настройки просмотра. Попробуйте ещё раз.',

@@ -5,6 +5,7 @@ export default {
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': 'Exportando modelo para Blender…',
   'model.exportNoMeshes': 'No hay mallas visibles para exportar.',
+  'model.exportWeightsUnavailable': 'No se pudieron cargar los pesos de {name}.',
   'model.exportGlbComplete': 'Se guardó {name} con {count} objetos de malla.',
   'model.exportGlbWarnings': 'No se pudieron incluir o convertir algunas texturas:\n{detail}',
   'errors.viewerPersistence': 'No se pudieron guardar los ajustes del visor. Inténtalo de nuevo.',

@@ -4,6 +4,7 @@ import { activeMeshes } from '../mesh/mesh-state.js';
 import { getTexturePreviewSource, isDDSUri } from '../mesh/mesh-factory.js';
 import { alertDialog } from '../ui/dialogs.js';
 import { t } from '../i18n/index.js';
+import { loadModelExportSkinning } from '../weight-rig/weight-rig-feature.js';
 import { saveGlbBuffer } from '../export/glb-save.js';
 
 let exporting = false;
@@ -39,7 +40,14 @@ export async function exportModelGlb() {
   try {
     const { snapshotModel, encodeModelGlb } = await import('../export/model-glb.js');
     if (!isCurrent()) return;
-    snapshot = snapshotModel(activeMeshes, getTexturePreviewSource);
+    const skinning = await loadModelExportSkinning(activeMeshes);
+    if (!isCurrent()) return;
+    for (const mesh of activeMeshes) {
+      if (mesh.visible && mesh.userData.skinningAvailable && !skinning.get(mesh)?.loaded) {
+        throw new Error(t('model.exportWeightsUnavailable', { name: mesh.name }));
+      }
+    }
+    snapshot = snapshotModel(activeMeshes, getTexturePreviewSource, skinning);
     if (!snapshot.scene.children.length) throw new Error(t('model.exportNoMeshes'));
     const result = await encodeModelGlb(snapshot, {
       releaseImage: (image) => {
@@ -62,8 +70,16 @@ export async function exportModelGlb() {
     if (saved.error) throw new Error(saved.error);
     if (!saved.cancelled) {
       await alertDialog(
-        t('model.exportGlbComplete', { name: saved.name, count: result.meshCount }) +
-          (result.warnings.length ? '\n\n' + t('model.exportGlbWarnings', { detail: result.warnings.join('\n') }) : ''),
+        t('model.exportGlbComplete', {
+          name: saved.name,
+          count: result.meshCount,
+        }) +
+          (result.warnings.length
+            ? '\n\n' +
+              t('model.exportGlbWarnings', {
+                detail: result.warnings.join('\n'),
+              })
+            : ''),
       );
     }
   } catch (error) {
