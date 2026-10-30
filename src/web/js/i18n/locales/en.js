@@ -46,6 +46,7 @@ export default {
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': 'Exporting model for Blender…',
   'model.exportNoMeshes': 'No visible meshes to export.',
+  'model.exportWeightsUnavailable': 'Skin weights could not be loaded for {name}.',
   'model.exportGlbComplete': 'Saved {name} with {count} mesh objects.',
   'model.exportGlbWarnings': 'Some textures could not be included or converted:\n{detail}',
   'toolbar.moreActions': 'More toolbar actions',

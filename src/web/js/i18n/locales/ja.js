@@ -5,6 +5,7 @@ export default {
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': 'Blender 用モデルをエクスポート中…',
   'model.exportNoMeshes': 'エクスポートする表示中のメッシュがありません。',
+  'model.exportWeightsUnavailable': '{name} のスキンウェイトを読み込めませんでした。',
   'model.exportGlbComplete': '{name} に {count} 個のメッシュを保存しました。',
   'model.exportGlbWarnings': '一部のテクスチャを含めるか変換することができませんでした:\n{detail}',
   'errors.viewerPersistence': 'ビューアー設定を保存できませんでした。もう一度お試しください。',

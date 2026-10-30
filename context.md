@@ -66,10 +66,24 @@ of documentation, comments and tests; use portable fixtures instead.
   have separate writes.
 - The Export dropdown's GLB snapshot captures detached visible geometry and
   current bindings without committing or clearing staged edits. Its destination
-  comes only from the native save picker and is atomically replaced. Rigging,
-  animation tracks and packed shader reconstruction are deferred; retain original
-  texture bytes and role identities in GLB custom data. Archives and direct Assets
-  retain their existing export restrictions.
+  comes only from the native save picker and is atomically replaced. Export lazily
+  reuses authored Weight data without activating Rig/Physics. Preserve exact
+  Blend-source identity, compact vertex mapping and all eight influences; merge
+  duplicate IDs and normalize only detached export weights. Neutral joints carry
+  numbered Blender groups without claiming a game hierarchy or bind pose.
+  Preserve zero-weight geometry with an explicit Unweighted placeholder.
+  Fail export if advertised weights cannot load. Game rig reconstruction,
+  animation tracks and packed shader reconstruction are deferred. Export only
+  loader-supported geometry attributes, excluding temporary Weight heatmap colors.
+  Embed only Blender-ready images; retain bound texture role keys as metadata.
+  Cache successful and failed image loads by published source URL for one export.
+  Release export-owned DDS canvases after the writer copies their images. Keep
+  packing byte-equivalent to the pinned exporter without whole-file Blob reads.
+  Image Blob reads reject normally; base64 conversion uses bounded byte arrays.
+  Every snapshot uses bounded chunks tied to one opaque native-picked save
+  session. Cancel/errors remove its temporary file; Finish validates the full
+  length and GLB document before atomic replacement. Browser paths are ignored.
+  Archives and direct Assets retain their existing export restrictions.
 - Namespaced globals are cross-INI and read-only. Toggle CRUD targets only plain
   variables declared in that INI. Existing unwired utility keys stay hidden;
   newly added unwired keys appear only while session-pending and block Export.

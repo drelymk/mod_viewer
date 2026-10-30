@@ -422,20 +422,30 @@ dropdown's `Save Mod Edits` action still save pending mod edits as described abo
 
 GLB export works even when no mod edits are pending. It captures the currently
 visible draws and loose parts as separate named objects, including their current
-pose, shape, animation frame, orientation, normals, UVs, and available vertex
-colors. Standard materials include diffuse textures, supported RGB normal maps,
-and supported emission maps. DDS material maps are converted at their original
+pose, shape, animation frame, orientation, normals, and UVs. Temporary Weight
+heatmap colors are excluded. Standard materials include diffuse textures,
+supported RGB normal maps, and supported emission maps. DDS material maps are converted at their original
 resolution; textures are embedded so the file can be moved independently.
 
-Original bound texture bytes for all six roles are also embedded in GLB buffer
-views, indexed by `materials[].extras.modViewer.textures` with the role-specific
-key, buffer view, and original byte length. These preserve packed channels for
-later tooling; Blender does not automatically connect this custom data to shader
-nodes. Mesh identity, source draw provenance, material profiles, and color
-adjustment settings are preserved in `extras.modViewer`. Color adjustments and
-game-specific packed shader effects are not baked into standard materials yet.
+Only Blender-ready images are embedded. Bound texture identities for all six
+roles are retained in `materials[].extras.modViewer.textures`, without embedding
+duplicate original resource bytes. Packed maps remain role keys for reference;
+Blender does not automatically reproduce their shader behavior. Mesh identity,
+source draw provenance, material profiles, and color adjustment settings are
+preserved in `extras.modViewer`. Color adjustments and game-specific packed
+shader effects are not baked into standard materials yet.
 
-Editable rigs, animation tracks, shape keys, hidden toggle alternatives, and
+Authored skin weights are loaded on export and imported into Blender as numbered
+vertex groups, scoped to each exact Blend source. Up to eight influences per
+vertex are retained; duplicate IDs combine and weights normalize for glTF.
+Zero-weight vertices use an `Unweighted` placeholder group. Large authored bone
+IDs retain their numeric group names through a compact export palette. Export
+uses neutral placeholder joints to carry the groups while preserving the current
+mesh pose; these joints do not reconstruct game bone positions or hierarchy.
+Weight loading does not activate the viewer's Rig or Physics. If advertised
+weights cannot be loaded, export reports an error instead of silently omitting them.
+
+Editable game rigs, animation tracks, shape keys, hidden toggle alternatives, and
 viewer lighting/debug effects are not exported. Missing or unconvertible textures
 are reported after saving; geometry and available resources still export. A GLB
 snapshot does not commit staged INI or buffer edits. Export remains unavailable

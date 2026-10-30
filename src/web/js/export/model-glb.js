@@ -1,5 +1,6 @@
 // Detached model snapshots: no renderer helpers or live scene objects reach glTF.
 import * as THREE from 'three';
+import { attachExportWeights } from './model-weights.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
 const ROLE_FIELDS = {
@@ -11,7 +12,7 @@ const ROLE_FIELDS = {
   emission_map: 'emissionMapKey',
 };
 
-function copyDrawGeometry(mesh) {
+function copyDrawGeometry(mesh, skinning) {
   const original = mesh.geometry;
   const position = original?.attributes.position;
   if (!position) return null;
@@ -29,7 +30,7 @@ function copyDrawGeometry(mesh) {
     indices[offset] = vertices.get(index);
   }
   const geometry = new THREE.BufferGeometry();
-  for (const name of ['position', 'normal', 'uv', 'uv1', 'color', 'tangent']) {
+  for (const name of ['position', 'normal', 'uv']) {
     const attribute = original.attributes[name];
     if (!attribute) continue;
     const values = new Float32Array(vertices.size * attribute.itemSize);
@@ -43,18 +44,25 @@ function copyDrawGeometry(mesh) {
     geometry.setAttribute(name, new THREE.BufferAttribute(values, attribute.itemSize));
   }
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  if (skinning?.loaded) attachExportWeights(geometry, vertices, skinning);
   return geometry;
 }
 
 /** Capture all geometry and binding decisions synchronously before texture I/O. */
-export function snapshotModel(meshes, textureSource = () => null) {
+export function snapshotModel(meshes, textureSource = () => null, skinning = new Map()) {
   const scene = new THREE.Scene();
   scene.name = 'Mod Viewer';
-  scene.userData.modViewer = { version: 1, snapshot: 'visible geometry with current pose and shapes' };
+  scene.userData.modViewer = {
+    version: 1,
+    snapshot: 'visible geometry with current pose and shapes',
+  };
   const materials = new Map();
   const textures = new Set();
   const dispose = () => {
-    for (const mesh of scene.children) mesh.geometry.dispose();
+    for (const mesh of scene.children) {
+      mesh.geometry.dispose();
+      mesh.skeleton?.dispose();
+    }
     for (const material of materials.keys()) material.dispose();
     for (const texture of textures) texture.dispose();
   };
@@ -66,7 +74,7 @@ export function snapshotModel(meshes, textureSource = () => null) {
       const parts = data.looseParts?.length ? data.looseParts : [source];
       for (const part of parts) {
         if (!part.visible) continue;
-        const geometry = copyDrawGeometry(part);
+        const geometry = copyDrawGeometry(part, skinning.get(source));
         if (!geometry) continue;
         const material = new THREE.MeshStandardMaterial({
           color: data.fallbackColor ?? 0xcccccc,
@@ -86,6 +94,7 @@ export function snapshotModel(meshes, textureSource = () => null) {
             sources: data.sources,
             materialProfile: data.materialProfile,
             colorAdjustment: data.colorAdjustment,
+            textures: Object.fromEntries(Object.entries(roles).map(([role, { key }]) => [role, key])),
           }),
         );
         material.name = data.displayName || source.name;
@@ -97,12 +106,20 @@ export function snapshotModel(meshes, textureSource = () => null) {
           normalYSign: data.normalMapYSign ?? -1,
           profile: metadata.materialProfile,
         });
-        const mesh = new THREE.Mesh(geometry, material);
+        const weights = geometry.userData.exportWeights;
+        delete geometry.userData.exportWeights;
+        const mesh = weights ? new THREE.SkinnedMesh(geometry, material) : new THREE.Mesh(geometry, material);
         mesh.name = part === source ? data.displayName || source.name : part.userData.loosePartLabel || part.name;
         mesh.matrixAutoUpdate = false;
         mesh.matrix.copy(part.matrixWorld);
         mesh.userData.modViewer = metadata;
         scene.add(mesh);
+        if (weights) {
+          mesh.add(weights.root);
+          mesh.updateWorldMatrix(true, true);
+          mesh.bind(new THREE.Skeleton(weights.bones));
+          mesh.userData.modViewer.weights = weights.metadata;
+        }
       }
     }
     return { scene, materials, textures, dispose };
@@ -112,23 +129,56 @@ export function snapshotModel(meshes, textureSource = () => null) {
   }
 }
 
-/** Pack original resources alongside standard material approximations. */
-export async function encodeModelGlb(snapshot, { loadImage, loadBytes } = {}) {
+// Pack the pinned exporter's serialized data without whole-file Blob reads.
+function packSerializedGlb(writer) {
+  for (const [field, extensions] of [
+    ['extensionsUsed', writer.extensionsUsed],
+    ['extensionsRequired', writer.extensionsRequired],
+  ]) {
+    const names = Object.keys(extensions);
+    if (names.length) writer.json[field] = names;
+  }
+  if (writer.json.buffers?.length) {
+    writer.json.buffers[0].byteLength = writer.buffers.reduce((sum, part) => sum + part.byteLength, 0);
+  }
+  const json = new TextEncoder().encode(JSON.stringify(writer.json));
+  const jsonLength = Math.ceil(json.byteLength / 4) * 4;
+  const binaryLength = writer.buffers.reduce((sum, part) => sum + part.byteLength, 0);
+  const paddedBinaryLength = Math.ceil(binaryLength / 4) * 4;
+  const bytes = new Uint8Array(28 + jsonLength + paddedBinaryLength);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, bytes.byteLength, true);
+  view.setUint32(12, jsonLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  bytes.fill(0x20, 20, 20 + jsonLength);
+  bytes.set(json, 20);
+  view.setUint32(20 + jsonLength, paddedBinaryLength, true);
+  view.setUint32(24 + jsonLength, 0x004e4942, true);
+  let offset = 28 + jsonLength;
+  for (const part of writer.buffers) {
+    bytes.set(new Uint8Array(part), offset);
+    offset += part.byteLength;
+  }
+  return bytes.buffer;
+}
+
+/** Embed only Blender-ready images; role identities remain lightweight metadata. */
+export async function encodeModelGlb(snapshot, { loadImage, releaseImage } = {}) {
   const warnings = [];
   const images = new Map();
-  const originals = new Map();
   const maps = new Map();
-  const imageFor = async (key, url) => {
-    if (!images.has(key)) {
+  const imageFor = (url) => {
+    if (!images.has(url)) {
       images.set(
-        key,
-        loadImage(url, key).catch(() => {
-          warnings.push(key);
-          return null;
-        }),
+        url,
+        Promise.resolve()
+          .then(() => loadImage(url))
+          .catch(() => null),
       );
     }
-    return images.get(key);
+    return images.get(url);
   };
   const textureFor = (key, image, colorSpace) => {
     if (!maps.has(key)) {
@@ -143,22 +193,14 @@ export async function encodeModelGlb(snapshot, { loadImage, loadBytes } = {}) {
   };
   for (const [material, { roles, hasUv, normalEnabled, normalYSign, profile }] of snapshot.materials) {
     for (const [role, { key, url }] of Object.entries(roles)) {
-      if (!url) {
-        if (!warnings.includes(key)) warnings.push(key);
-        continue;
-      }
-      if (!originals.has(key)) {
-        try {
-          originals.set(key, await loadBytes(url));
-        } catch {
-          if (!warnings.includes(key)) warnings.push(key);
-        }
-      }
       if (!hasUv || !['diffuse', 'normal_map', 'emission_map'].includes(role)) continue;
       if (role === 'normal_map' && !normalEnabled) continue;
       if (role === 'emission_map' && profile?.emission_source !== 'emission_map_rgb') continue;
-      const image = await imageFor(key, url);
-      if (!image) continue;
+      const image = url ? await imageFor(url) : null;
+      if (!image) {
+        warnings.push(key);
+        continue;
+      }
       const texture = textureFor(key, image, role === 'diffuse' ? THREE.SRGBColorSpace : THREE.NoColorSpace);
       if (role === 'diffuse') {
         material.map = texture;
@@ -174,24 +216,46 @@ export async function encodeModelGlb(snapshot, { loadImage, loadBytes } = {}) {
   }
   const exporter = new GLTFExporter();
   exporter.register((writer) => {
-    const buffers = new Map();
+    // Scoped to this writer: upstream readers do not propagate all read failures.
+    writer.processBufferViewImage = async (blob) => {
+      const source = await blob.arrayBuffer();
+      const bytes = new Uint8Array(Math.ceil(source.byteLength / 4) * 4);
+      bytes.set(new Uint8Array(source));
+      const views = (writer.json.bufferViews ||= []);
+      const index =
+        views.push({
+          buffer: writer.processBuffer(bytes.buffer),
+          byteOffset: writer.byteOffset,
+          byteLength: bytes.byteLength,
+        }) - 1;
+      writer.byteOffset += bytes.byteLength;
+      return index;
+    };
+    writer.writeAsync = async (input, onDone, options) => {
+      writer.options = {
+        trs: false,
+        onlyVisible: true,
+        maxTextureSize: Infinity,
+        animations: [],
+        includeCustomExtensions: false,
+        ...options,
+      };
+      await writer.processInputAsync(input);
+      await Promise.all(writer.pending);
+      onDone(packSerializedGlb(writer));
+    };
     return {
-      async writeMaterialAsync(material, definition) {
-        const roles = snapshot.materials.get(material)?.roles || {};
-        definition.extras.modViewer.textures = {};
-        for (const [role, { key }] of Object.entries(roles)) {
-          const bytes = originals.get(key);
-          if (!bytes) continue;
-          if (!buffers.has(key)) buffers.set(key, await writer.processBufferViewImage(new Blob([bytes])));
-          definition.extras.modViewer.textures[role] = {
-            key,
-            bufferView: buffers.get(key),
-            byteLength: bytes.byteLength,
-          };
-        }
+      afterParse() {
+        if (!releaseImage) return;
+        const sources = new Set([...snapshot.textures].map((texture) => texture.image));
+        for (const image of sources) releaseImage(image);
       },
     };
   });
   const buffer = await exporter.parseAsync(snapshot.scene, { binary: true });
-  return { buffer, meshCount: snapshot.scene.children.length, warnings: [...new Set(warnings)] };
+  return {
+    buffer,
+    meshCount: snapshot.scene.children.length,
+    warnings: [...new Set(warnings)],
+  };
 }

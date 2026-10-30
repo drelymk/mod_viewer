@@ -1,30 +1,94 @@
 """Blender-compatible snapshots preserve the live draw without changing it."""
 
-from .payloads import model_payload
+import base64
+import json
+import struct
+
+import pytest
+
+from .payloads import append_stream, model_payload, textured_payload, weighted_payload
 from .support import bridge_calls, open_model, wait_loaded
 from tests.support.dds_data import uncompressed_dds
 
 
-def test_switch_during_glb_encoding_cancels_stale_native_save(viewer):
+def test_glb_textured_animation_and_loose_part_lifecycle(viewer, tmp_path):
+    payload = textured_payload()
+    mesh = payload['meshes']['mesh-00']
+    positions = [0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0]
+    animated = [value + (0.5 if index % 3 == 2 else 0) for index, value in enumerate(positions)]
+    mesh.update(pos=append_stream(payload, 'f', positions),
+                idx=append_stream(payload, 'I', [0,1,2,3,4,5]),
+                uv=append_stream(payload, 'f', [0,0,1,0,0,1] * 2), animation_id='clock-01',
+                animation_geometry={'frames': 2, 'frame_start': 0, 'position_frame_bytes': 72,
+                                    'positions': append_stream(payload, 'f', positions + animated)})
+    payload['animations'] = {'clock-01': {'frame_start': 0, 'frame_end': 1, 'fps': 30}}
+    page = viewer({'fixture-01': payload})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    page.evaluate("""async () => {
+      const {setAnimationFrame} = await import('./js/mesh/animation-runtime.js');
+      window.__setFrame = setAnimationFrame;
+      setAnimationFrame(0);
+      window.__exportSnapshot = async () => {
+        const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+        const {getTexturePreviewSource} = await import('./js/mesh/mesh-factory.js');
+        const snapshot = snapshotModel(window.modViewer.activeMeshes,getTexturePreviewSource);
+        try {
+          const result = await encodeModelGlb(snapshot, {loadImage:async url => {
+            const image = new Image(); image.src=url; await image.decode(); return image;
+          }});
+          return await new Promise(resolve => {
+            const reader = new FileReader(); reader.onload=()=>resolve(reader.result.split(',')[1]);
+            reader.readAsDataURL(new Blob([result.buffer]));
+          });
+        } finally {snapshot.dispose();}
+      };
+    }""")
+    for name, frame, parts in [('textured', 0, 1), ('animated', 1, 1), ('loose-parts', 1, 2)]:
+        if name == 'loose-parts':
+            page.evaluate("""async () => {
+              const {separateLooseParts} = await import('./js/mesh/loose-parts.js');
+              separateLooseParts(window.modViewer.activeMeshes[0]);
+            }""")
+        page.evaluate('frame => window.__setFrame(frame)', frame)
+        assert page.evaluate('window.modViewer.activeMeshes[0].geometry.attributes.position.getZ(0)') == (0.5 if frame else 0)
+        data = base64.b64decode(page.evaluate('window.__exportSnapshot()'))
+        (tmp_path / f'{name}.glb').write_bytes(data)
+        json_length = struct.unpack_from('<I', data, 12)[0]
+        document = json.loads(data[20:20 + json_length])
+        assert len(document['meshes']) == parts
+        assert len(document['images']) == 1
+        for exported in document['meshes']:
+            attributes = exported['primitives'][0]['attributes']
+            assert set(attributes) == {'POSITION', 'NORMAL', 'TEXCOORD_0'}
+            accessor = document['accessors'][attributes['POSITION']]
+            view = document['bufferViews'][accessor['bufferView']]
+            values = struct.unpack_from(f'<{accessor["count"] * 3}f', data,
+                                        28 + json_length + view['byteOffset'] + accessor.get('byteOffset', 0))
+            assert values[2::3] == (0.5 if frame else 0,) * accessor['count']
+
+
+def test_switch_during_glb_destination_selection_cancels_stale_save(viewer):
     page = viewer({'fixture-01': model_payload(), 'fixture-02': model_payload(2)})
     open_model(page, 'fixture-01')
     wait_loaded(page)
     page.evaluate("""() => {
       window.__glbSaveCalls = [];
-      window.pywebview.api.export_model_glb = async (...args) => {window.__glbSaveCalls.push(args);return {cancelled:true};};
-      const read = FileReader.prototype.readAsDataURL;
-      FileReader.prototype.readAsDataURL = function(blob) {
-        window.__releaseEncoding = () => read.call(this,blob);
+      window.pywebview.api.export_model_glb = async (path,data) => {
+        window.__glbSaveCalls.push({path,action:data.action});
+        if(data.action==='begin')return new Promise(resolve=>{window.__releaseBegin=()=>resolve({token:'session-01'});});
+        return {cancelled:true};
       };
     }""")
     page.locator('#export-menu-btn').click()
     page.locator('#export-glb-choice').click()
-    page.wait_for_function('window.__releaseEncoding !== undefined')
+    page.wait_for_function('window.__releaseBegin !== undefined')
     assert page.evaluate('window.modViewer.switchMod("fixture-02")')
     wait_loaded(page, 2)
-    page.evaluate('window.__releaseEncoding()')
+    page.evaluate('window.__releaseBegin()')
     page.wait_for_function('!document.querySelector("#export-glb-choice").disabled')
-    assert page.evaluate('window.__glbSaveCalls') == []
+    assert page.evaluate('window.__glbSaveCalls') == [
+        {'path': 'fixture-01', 'action': 'begin'}, {'path': 'fixture-01', 'action': 'cancel'}]
     assert page.evaluate('window.modViewer.getCurrentSource().path') == 'fixture-02'
     assert page.locator('#dialog-backdrop').is_hidden()
 
@@ -62,7 +126,13 @@ def test_export_dropdown_snapshot_cancel_retry_and_narrow_toolbar(viewer):
       window.__glbSaves = [];
       window.__glbResult = {cancelled:true};
       window.pywebview.api.export_model_glb = async (path,data) => {
-        window.__glbSaves.push({path,data});
+        if(data.action==='begin'){
+          window.__glbSaves.push({path,chunks:[]});
+          return window.__glbResult.cancelled?{cancelled:true}:{token:'session-01'};
+        }
+        if(data.action==='append'){
+          window.__glbSaves.at(-1).chunks.push(data.chunk);return {ok:true};
+        }
         return window.__glbResult;
       };
     }""")
@@ -105,7 +175,7 @@ def test_export_dropdown_snapshot_cancel_retry_and_narrow_toolbar(viewer):
     assert bridge_calls(page, 'discard') == []
     assert page.evaluate("""() => {
       const saved = window.__glbSaves[2];
-      const bytes = Uint8Array.from(atob(saved.data), c => c.charCodeAt(0));
+      const bytes = Uint8Array.from(atob(saved.chunks[0]), c => c.charCodeAt(0));
       return saved.path === 'fixture-01' && new DataView(bytes.buffer).getUint32(0,true) === 0x46546c67;
     }""")
 
@@ -120,7 +190,7 @@ def test_export_dropdown_snapshot_cancel_retry_and_narrow_toolbar(viewer):
     assert page.locator('#toolbar-overflow [data-toolbar-target="export-glb-choice"]').is_hidden()
 
 
-def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_page):
+def test_glb_snapshot_excludes_debug_attributes_and_keeps_texture_identity(module_page):
     result = module_page.evaluate("""async () => {
       const T = await import('three');
       const {snapshotModel, encodeModelGlb} = await import('./js/export/model-glb.js');
@@ -145,7 +215,7 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
         lightMapKey: 'light_map::folder-02/image.png', colorAdjustment: {hue: 30},
         sources: [{ini:'source-01.ini', line: 12}]};
       const hidden = mesh.clone(); hidden.visible = false;
-      const snapshot = snapshotModel([mesh, hidden], key => key ? 'data:application/octet-stream,' + key : null);
+      const snapshot = snapshotModel([mesh, hidden], key => key ? '/' + key.split('::')[1] : null);
       // Animation and viewer edits after the snapshot must not change its contents.
       geometry.attributes.position.setXYZ(1, 8,8,8);
       mesh.position.set(9,9,9);
@@ -153,9 +223,10 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
       const requests = [];
       const canvas = document.createElement('canvas'); canvas.width = canvas.height = 4;
       canvas.getContext('2d').fillRect(0,0,4,4);
+      let released = 0;
       const output = await encodeModelGlb(snapshot, {
-        loadImage: async () => canvas,
-        loadBytes: async url => { requests.push(url); return new Uint8Array([1,2,3,4,5]).buffer; }
+        releaseImage:image => {released++; image.width=image.height=0;},
+        loadImage: async url => { requests.push(url); return canvas; }
       });
       const view = new DataView(output.buffer);
       const jsonLength = view.getUint32(12,true);
@@ -168,15 +239,18 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
           accessor.count * {VEC2:2,VEC3:3,VEC4:4}[accessor.type]));
       };
       const extras = doc.materials[0].extras.modViewer;
-      const resources = Object.fromEntries(Object.entries(extras.textures).map(([role, info]) => {
-        const bv = doc.bufferViews[info.bufferView];
-        return [role, Array.from(new Uint8Array(output.buffer, binaryOffset + bv.byteOffset, info.byteLength))];
-      }));
+      const referencedViews = new Set([
+        ...doc.accessors.map(accessor => accessor.bufferView),
+        ...doc.images.map(image => image.bufferView),
+      ]);
       const first = {magic: view.getUint32(0,true), version:view.getUint32(4,true),
         size: view.getUint32(8,true) === output.buffer.byteLength, count: output.meshCount,
         positions:attribute('POSITION'), normals:attribute('NORMAL'), uvs:attribute('TEXCOORD_0'),
-        colors:attribute('COLOR_0'), name:doc.nodes[0].name, matrix:doc.nodes[0].matrix,
-        material:doc.materials[0], resources, requests:requests.length,
+        attributes:Object.keys(doc.meshes[0].primitives[0].attributes),
+        name:doc.nodes[0].name, matrix:doc.nodes[0].matrix,
+        material:doc.materials[0], textureKeys:extras.textures, requests,
+        noOriginals:referencedViews.size === doc.bufferViews.length, released,
+        imageWidth:new DataView(output.buffer).getUint32(binaryOffset + doc.bufferViews[doc.images[0].bufferView].byteOffset + 16),
         embedded:doc.images.every(image => image.bufferView !== undefined && !image.uri),
         warnings:output.warnings, color:extras.colorAdjustment.hue};
       snapshot.dispose();
@@ -199,12 +273,14 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
     assert first['positions'] == [0, 0, 0, 1, 0, 0, 0, 1, 0]
     assert first['normals'] == [0, 0, -1] * 3
     assert first['uvs'] == [0, 0, 2, 0, 0, 2]
-    assert first['colors'] == [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    assert set(first['attributes']) == {'POSITION', 'NORMAL', 'TEXCOORD_0'}
     assert first['matrix'][12:15] == [4, 5, 6]
     assert first['color'] == 30
-    assert first['requests'] == 6 and first['embedded'] and first['warnings'] == []
-    assert first['resources'] == {role: [1, 2, 3, 4, 5] for role in [
-        'diffuse', 'normal_map', 'normal_data', 'light_map', 'material_map', 'emission_map']}
+    assert first['requests'] == ['/folder-01/image.png']
+    assert first['embedded'] and first['noOriginals'] and first['warnings'] == []
+    assert first['released'] == 1 and first['imageWidth'] == 4
+    assert first['textureKeys'] == {role: f'{role}::folder-{2 if role == "light_map" else 1:02d}/image.png'
+                                    for role in ['diffuse', 'normal_map', 'normal_data', 'light_map', 'material_map', 'emission_map']}
     assert first['material']['pbrMetallicRoughness']['baseColorTexture']['index'] == 0
     assert len({first['material'][field]['index'] for field in ['normalTexture', 'emissiveTexture']} | {
         first['material']['pbrMetallicRoughness']['baseColorTexture']['index']}) == 3
@@ -213,19 +289,301 @@ def test_glb_snapshot_geometry_materials_and_original_texture_identity(module_pa
     assert result['second'] == {'count': 1, 'translation': [10, 9, 9], 'sourceRange': 0}
 
 
-def test_glb_missing_texture_is_reported_without_losing_geometry(module_page):
+def test_glb_missing_texture_is_cached_across_materials_and_roles(module_page):
     result = module_page.evaluate("""async () => {
       const T = await import('three');
       const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
       const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
-      mesh.userData.texKey = 'diffuse::image.png';
-      const snapshot = snapshotModel([mesh], () => '/missing-image.png');
+      mesh.userData.texKey = 'diffuse::folder-01/image.png';
+      mesh.userData.normalMapKey = 'normal_map::folder-01/image.png';
+      const shared = mesh.clone();
+      const distinct = mesh.clone();
+      distinct.userData.texKey = 'diffuse::folder-02/image.png';
+      distinct.userData.normalMapKey = null;
+      const snapshot = snapshotModel([mesh,shared,distinct], key => key ? '/' + key.split('::')[1] : null);
+      const requests = [];
       try {
         const result = await encodeModelGlb(snapshot, {
-          loadImage:async () => {throw Error('fixture failure');},
-          loadBytes:async () => {throw Error('fixture failure');}
+          loadImage:url => { requests.push(url); throw Error('fixture failure'); }
         });
-        return {count:result.meshCount, warnings:result.warnings};
+        return {count:result.meshCount, warnings:result.warnings,requests};
       } finally { snapshot.dispose(); }
     }""")
-    assert result == {'count': 1, 'warnings': ['diffuse::image.png']}
+    assert result == {'count': 3, 'warnings': ['diffuse::folder-01/image.png',
+                      'normal_map::folder-01/image.png', 'diffuse::folder-02/image.png'],
+                      'requests': ['/folder-01/image.png', '/folder-02/image.png']}
+
+
+@pytest.mark.parametrize('failed_read', [1, 2])
+def test_glb_packing_bypasses_both_upstream_binary_blob_reads(module_page, failed_read):
+    result = module_page.evaluate("""async failedRead => {
+      const T = await import('three');
+      const {GLTFExporter} = await import('three/addons/exporters/GLTFExporter.js');
+      const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+      const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
+      mesh.name = 'Mesh \u03b1';
+      mesh.userData.texKey = 'diffuse::image.png';
+      const canvas = document.createElement('canvas');canvas.width=canvas.height=4;
+      canvas.getContext('2d').fillRect(0,0,4,4);
+      const snapshot = snapshotModel([mesh],()=>'/image.png');
+      const options = {loadImage:async()=>canvas};
+      await encodeModelGlb(snapshot,options);
+      const normal = await new GLTFExporter().parseAsync(snapshot.scene,{binary:true});
+      const read = FileReader.prototype.readAsArrayBuffer;
+      let binaryReads = 0;
+      let packed;
+      let onError;
+      try {
+        FileReader.prototype.readAsArrayBuffer=function(blob){
+          if(blob.type==='application/octet-stream' && ++binaryReads===failedRead){
+            Object.defineProperty(this,'result',{value:null});
+            queueMicrotask(()=>this.onloadend());
+          }else read.call(this,blob);
+        };
+        const error = new Promise(resolve=>{
+          onError=event=>{event.preventDefault();resolve({error:event.message});};
+          window.addEventListener('error',onError);
+        });
+        packed = await Promise.race([encodeModelGlb(snapshot,options),error]);
+      }finally{
+        FileReader.prototype.readAsArrayBuffer=read;
+        window.removeEventListener('error',onError);snapshot.dispose();
+      }
+      if(packed.error)return {error:packed.error,binaryReads};
+      const left=new Uint8Array(normal),right=new Uint8Array(packed.buffer);
+      return {binaryReads,sameGlb:left.length===right.length && left.every((value,index)=>value===right[index])};
+    }""", failed_read)
+    assert result == {'binaryReads': 0, 'sameGlb': True}
+
+
+def test_glb_image_blob_read_failure_rejects_instead_of_hanging(module_page):
+    result = module_page.evaluate("""async () => {
+      const T = await import('three');
+      const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+      const mesh = new T.Mesh(new T.PlaneGeometry(),new T.MeshStandardMaterial());
+      mesh.userData.texKey='diffuse::image.png';
+      const canvas=document.createElement('canvas');canvas.width=canvas.height=4;
+      const snapshot=snapshotModel([mesh],()=>'/image.png');
+      const read=Blob.prototype.arrayBuffer;
+      try{
+        Blob.prototype.arrayBuffer=function(){return Promise.reject(Error('fixture image read failure'));};
+        await encodeModelGlb(snapshot,{loadImage:async()=>canvas});
+        return 'unexpected success';
+      }catch(error){return error.message;}
+      finally{Blob.prototype.arrayBuffer=read;snapshot.dispose();}
+    }""")
+    assert result == 'fixture image read failure'
+
+
+@pytest.mark.parametrize('size', [0, 1, 2, 3, 49151, 49152, 49153, 1024 * 1024])
+def test_base64_preserves_padding_and_chunk_boundaries_without_blob_reads(module_page, size):
+    result = module_page.evaluate("""async size => {
+      const {base64Buffer} = await import('./js/export/base64-buffer.js');
+      const bytes=new Uint8Array(size).map((_,index)=>(index*17)%256);
+      const decoded=atob(base64Buffer(bytes.buffer));
+      return {length:decoded.length,identical:bytes.every((value,index)=>value===decoded.charCodeAt(index))};
+    }""", size)
+    assert result == {'length': size, 'identical': True}
+
+
+@pytest.mark.parametrize(('size', 'append_count'), [(317, 1), (2 * 1024 * 1024 + 37, 3)])
+def test_all_glb_sizes_use_one_bounded_cancellable_save_lifecycle(module_page, size, append_count):
+    result = module_page.evaluate("""async size => {
+      const {saveGlbBuffer} = await import('./js/export/glb-save.js');
+      const bytes=new Uint8Array(size).map((_,index)=>(index*17)%256);
+      const run=async mode=>{
+        const actions=[],decoded=[];let current=true,maxChunk=0;
+        const api={export_model_glb:async(path,data)=>{
+          if(path!=='fixture-01' || typeof data==='string')throw Error('unexpected request');
+          actions.push(data.action);
+          if(data.action==='begin')return mode==='picker-cancel'?{cancelled:true}:{token:'session-01'};
+          if(data.token!=='session-01')throw Error('wrong session');
+          if(data.action==='append'){
+            maxChunk=Math.max(maxChunk,data.chunk.length);decoded.push(atob(data.chunk));
+            if(mode==='stale')current=false;
+            if(mode==='failure')return {error:'fixture failure'};
+          }
+          return {ok:true,name:'model.glb'};
+        }};
+        const result=await saveGlbBuffer(api,'fixture-01',bytes.buffer,()=>current);
+        const combined=decoded.join('');
+        return {actions,maxChunk,result,identical:combined.length===bytes.length &&
+                bytes.every((value,index)=>value===combined.charCodeAt(index))};
+      };
+      return {success:await run('success'),cancelled:await run('picker-cancel'),
+              stale:await run('stale'),failed:await run('failure')};
+    }""", size)
+    assert result['success']['actions'] == ['begin'] + ['append'] * append_count + ['finish']
+    assert result['success']['maxChunk'] <= 1400000
+    assert result['success']['identical']
+    assert result['cancelled']['actions'] == ['begin']
+    assert result['cancelled']['result'] == {'cancelled': True}
+    assert result['stale']['actions'] == ['begin', 'append', 'cancel']
+    assert result['stale']['result'] == {'cancelled': True}
+    assert result['failed']['actions'] == ['begin', 'append', 'cancel']
+    assert result['failed']['result'] == {'error': 'fixture failure'}
+
+
+@pytest.mark.parametrize('influences', [1, 4, 8])
+def test_glb_weight_palette_remapping_and_blender_groups(module_page, tmp_path, influences):
+    result = module_page.evaluate("""async count => {
+      const T = await import('three');
+      const {snapshotModel,encodeModelGlb} = await import('./js/export/model-glb.js');
+      const geometry = new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute([
+        0,0,0, 1,0,0, 0,1,0, 2,0,0, 3,0,0, 2,1,0],3));
+      geometry.setAttribute('normal',new T.Float32BufferAttribute(Array(6).fill([0,0,1]).flat(),3));
+      geometry.setIndex([0,1,2,5,3,4]);geometry.setDrawRange(3,3);
+      const source = new T.Mesh(geometry,new T.MeshStandardMaterial());source.name='Mesh 01';
+      source.position.set(4,5,6);source.rotation.z=Math.PI/2;
+      const other = new T.Mesh(geometry,source.material);other.name='Mesh 02';other.position.x=-3;
+      const indices=Uint32Array.from({length:6*count},(_,i)=>100000+i%count);
+      const weights=Float32Array.from({length:6*count},(_,i)=>i%count+1);
+      // Duplicate influences must combine; an unweighted vertex must remain stationary.
+      if(count>1)indices[3*count+1]=indices[3*count];
+      weights.fill(0,4*count,5*count);
+      const state={loaded:true,influenceCount:count,indices,weights,
+        skinningSourceKey:'folder-01/blend.buf|offset=0',skinningSourceFile:'folder-01/blend.buf',skinningBoneOffset:0};
+      const original=[...weights];
+      const snapshot=snapshotModel([source,other],()=>null,new Map([
+        [source,state],[other,{...state,skinningSourceKey:'folder-02/blend.buf|offset=0'}]]));
+      try{
+        const output=await encodeModelGlb(snapshot);
+        const bytes=new Uint8Array(output.buffer);
+        let binary='';for(let i=0;i<bytes.length;i+=49152)binary+=String.fromCharCode(...bytes.subarray(i,i+49152));
+        const part=new T.Mesh(geometry.clone(),source.material);
+        source.add(part);part.geometry.setIndex([4,5,3]);part.geometry.setDrawRange(0,3);
+        source.userData.looseParts=[part];
+        const separated=snapshotModel([source],()=>null,new Map([[source,state]]));
+        const partWeights=[...separated.scene.children[0].geometry.attributes.skinWeight.array];
+        separated.dispose();
+        return {partWeights,encoded:btoa(binary),unchanged:original.every((v,i)=>weights[i]===v)&&
+          !geometry.attributes.skinWeight&&!source.isSkinnedMesh,count:output.meshCount};
+      }finally{snapshot.dispose();}
+    }""", influences)
+    assert result['unchanged'] and result['count'] == 2
+    assert result['partWeights'][:4] == [1, 0, 0, 0]
+    data = base64.b64decode(result['encoded'])
+    (tmp_path / f'weights-{influences}.glb').write_bytes(data)
+    json_length = struct.unpack_from('<I', data, 12)[0]
+    doc = json.loads(data[20:20 + json_length])
+    binary_offset = 28 + json_length
+
+    def values(accessor_id):
+        accessor = doc['accessors'][accessor_id]
+        view = doc['bufferViews'][accessor['bufferView']]
+        width = {'VEC3': 3, 'VEC4': 4}[accessor['type']]
+        code = {5126: 'f', 5123: 'H'}[accessor['componentType']]
+        return struct.unpack_from(f'<{accessor["count"] * width}{code}', data,
+                                  binary_offset + view.get('byteOffset', 0) + accessor.get('byteOffset', 0))
+
+    nodes = [node for node in doc['nodes'] if 'mesh' in node]
+    assert len(doc['skins']) == 2
+    palettes = []
+    for node in nodes:
+        skin = doc['skins'][node['skin']]
+        palette = [doc['nodes'][joint]['name'] for joint in skin['joints']]
+        palettes.append(set(skin['joints']))
+        attributes = doc['meshes'][node['mesh']]['primitives'][0]['attributes']
+        assert 'COLOR_0' not in attributes
+        assert ('WEIGHTS_1' in attributes) == (influences == 8)
+        assert values(attributes['POSITION']) == (2,1,0, 2,0,0, 3,0,0)
+        rows = [dict() for _ in range(3)]
+        for group in range((influences + 3) // 4):
+            joints = values(attributes[f'JOINTS_{group}'])
+            weights = values(attributes[f'WEIGHTS_{group}'])
+            for vertex, row in enumerate(rows):
+                for slot in range(4):
+                    index = vertex * 4 + slot
+                    if weights[index]:
+                        row[palette[joints[index]]] = weights[index]
+        total = influences * (influences + 1) / 2
+        assert rows[0] == pytest.approx({str(100000+i): (i+1)/total for i in range(influences)})
+        expected = {str(100000+i): (i+1)/total for i in range(influences)}
+        if influences > 1:
+            expected['100000'] += expected.pop('100001')
+        assert rows[1] == pytest.approx(expected)
+        assert rows[2] == {'Unweighted': 1}
+    assert palettes[0].isdisjoint(palettes[1])
+    assert {node['extras']['modViewer']['weights']['sourceKey'] for node in nodes} == {
+        'folder-01/blend.buf|offset=0', 'folder-02/blend.buf|offset=0'}
+
+
+def test_weight_export_reuse_and_mod_switch_refresh_metadata_before_rig_activation(viewer):
+    payload, weights = weighted_payload()
+    second, _ = weighted_payload()
+    for index, model in enumerate((payload, second), 1):
+        model['meshes']['mesh-00']['pos'] = append_stream(model, 'f', [-1,0,0, 1,0,0, 0,2,2])
+        model['metadata'] = {'rig': {
+            'version': 1,
+            'presets': [{'id': f'pose-{index:02d}', 'name': f'Pose {index:02d}', 'roots': [], 'joints': []}],
+            'humanoid_control_rig': {'version': 2, 'controls': {
+                'pelvis': {'semantic': {'sideN': index * 0.1, 'height01': 0.6, 'depthN': 0.05}}}},
+        }}
+    page = viewer({'fixture-01': payload, 'fixture-02': second, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    assert bridge_calls(page, 'weights') == []
+    page.evaluate("""() => {
+      window.__savedWeights=[];
+      window.pywebview.api.export_model_glb=async(path,data)=>{
+        if(data.action==='begin')return {token:'session-01'};
+        if(data.action==='append')window.__savedWeights.push(data.chunk);
+        return {cancelled:true};
+      };
+    }""")
+    for attempt in (1, 2):
+        page.locator('#export-menu-btn').click()
+        page.locator('#export-glb-choice').click()
+        page.wait_for_function('count=>window.__savedWeights.length===count', arg=attempt)
+        page.wait_for_function('!document.querySelector("#export-glb-choice").disabled')
+    assert len(bridge_calls(page, 'weights')) == 1
+    assert page.evaluate("""async()=>{
+      const boundary=await import('./js/weight-rig/weight-rig-feature.js');
+      if(boundary.getLoadedWeightRigFeature())return false;
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      return !core.weightRigApi.getModelRigState().loaded&&!core.weightRigApi.getModelPhysicsState().enabled;
+    }""")
+    data = base64.b64decode(page.evaluate('window.__savedWeights[0]'))
+    doc = json.loads(data[20:20 + struct.unpack_from('<I', data, 12)[0]])
+    assert doc['skins'] and 'WEIGHTS_0' in doc['meshes'][0]['primitives'][0]['attributes']
+    assert page.evaluate('window.modViewer.switchMod("fixture-02")')
+    wait_loaded(page)
+    pending = page.evaluate("""async()=>{
+      const boundary=await import('./js/weight-rig/weight-rig-feature.js');
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      const rig=core.weightRigApi.getModelRigState();
+      return {inactive:!boundary.getLoadedWeightRigFeature(),presets:rig.rigPresets.presets,
+        overrides:rig.humanoidRigEdit.hasSavedOverrides};
+    }""")
+    assert pending == {'inactive': True, 'presets': [{'id': 'pose-02', 'name': 'Pose 02'}], 'overrides': True}
+    activated = page.evaluate("""async()=>{
+      const {loadWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
+      const feature=await loadWeightRigFeature();await feature.activateWeightRig();
+      const rig=feature.getModelRigState();
+      return {loaded:rig.loaded,presets:rig.rigPresets.presets,pelvis:rig.humanoidControlRig.controls.pelvis};
+    }""")
+    assert activated['loaded']
+    assert activated['presets'] == [{'id': 'pose-02', 'name': 'Pose 02'}]
+    assert activated['pelvis']['source'] == 'manual_override'
+    assert activated['pelvis']['semantic'] == {'sideN': 0.2, 'height01': 0.6, 'depthN': 0.05}
+    assert len(bridge_calls(page, 'weights')) == 2
+
+
+def test_weight_export_failure_preserves_model_and_skips_native_save(viewer):
+    payload, weights = weighted_payload()
+    weights['meshes']['mesh-00'] = {'status': 'error', 'error': 'fixture weight failure'}
+    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    before = page.evaluate('Array.from(window.modViewer.activeMeshes[0].geometry.attributes.position.array)')
+    page.evaluate("""() => {
+      window.__nativeWeightSaves=0;
+      window.pywebview.api.export_model_glb=async()=>{window.__nativeWeightSaves++;return {cancelled:true};};
+    }""")
+    page.locator('#export-menu-btn').click()
+    page.locator('#export-glb-choice').click()
+    page.get_by_text("Skin weights could not be loaded", exact=False).wait_for()
+    assert 'Skin weights could not be loaded' in page.locator('#dialog-backdrop').inner_text()
+    assert page.evaluate('window.__nativeWeightSaves') == 0
+    assert page.evaluate('Array.from(window.modViewer.activeMeshes[0].geometry.attributes.position.array)') == before

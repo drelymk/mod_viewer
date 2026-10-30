@@ -5,6 +5,7 @@ export default {
   'toolbar.exportGlb': 'Blender / glTF (.glb)…',
   'model.exportingGlb': 'Blender용 모델 내보내는 중…',
   'model.exportNoMeshes': '내보낼 표시된 메시가 없습니다.',
+  'model.exportWeightsUnavailable': '{name}의 스킨 가중치를 불러오지 못했습니다.',
   'model.exportGlbComplete': '{name}에 메시 오브젝트 {count}개를 저장했습니다.',
   'model.exportGlbWarnings': '일부 텍스처를 포함하거나 변환하지 못했습니다:\n{detail}',
   'errors.viewerPersistence': '뷰어 설정을 저장할 수 없습니다. 다시 시도해 주세요.',
