@@ -1,5 +1,15 @@
 # Third-party notices
 
+## Three.js
+
+- Package: `three`
+- Version: 0.185.0
+- Source: https://github.com/mrdoob/three.js
+- License: MIT; see `src/assets/LICENSE`
+
+This application vendors the WebGPU and TSL builds, controls, sky, ambient
+occlusion, bloom, and GLTFExporter addons without modifying upstream files.
+
 ## Ace Editor
 
 - Package: `ace-builds`

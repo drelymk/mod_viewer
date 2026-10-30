@@ -18,6 +18,7 @@ from app.bridge import present as present_api
 from app.bridge.mod_preview import ModPreview
 from app.bridge.registry import AssetFolderRegistry, ModFolderRegistry
 from app.bridge import toggle as toggle_api
+from app.bridge.model_export import ModelExport
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class ModViewerAPI:
         # sends that reflection into infinite recursion.
         self._window = None
         self._access = FolderAccess()
+        self._model_export = ModelExport(self._access)
         self._startup_request = None
         if startup_mod is not None:
             try:
@@ -71,6 +73,10 @@ class ModViewerAPI:
         if not result:
             return None
         return self._access.remember_mod_picker_selection(result[0])
+
+    def export_model_glb(self, folder_path, data):
+        """Save a viewer snapshot without committing staged mod edits."""
+        return self._model_export.save(self._window, folder_path, data)
 
     def select_asset_folder(self):
         """Pick an Asset Folder without granting mod-folder access."""

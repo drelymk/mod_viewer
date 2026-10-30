@@ -33,6 +33,7 @@ EXPECTED_API_METHODS = {
     "edit_present",
     "edit_toggle",
     "export_changes",
+    "export_model_glb",
     "get_asset_folders",
     "get_control_state",
     "get_diagnostics",

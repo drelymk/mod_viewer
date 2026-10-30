@@ -1,4 +1,12 @@
 export default {
+  'toolbar.chooseExport': 'Elegir formato de exportación',
+  'toolbar.exportOptions': 'Opciones de exportación',
+  'toolbar.exportEdits': 'Guardar cambios del mod',
+  'toolbar.exportGlb': 'Blender / glTF (.glb)…',
+  'model.exportingGlb': 'Exportando modelo para Blender…',
+  'model.exportNoMeshes': 'No hay mallas visibles para exportar.',
+  'model.exportGlbComplete': 'Se guardó {name} con {count} objetos de malla.',
+  'model.exportGlbWarnings': 'No se pudieron incluir o convertir algunas texturas:\n{detail}',
   'errors.viewerPersistence': 'No se pudieron guardar los ajustes del visor. Inténtalo de nuevo.',
   'mesh.rename': 'Renombrar',
   'mesh.selectionSameComponent': '{count} mallas seleccionadas · {component}',
