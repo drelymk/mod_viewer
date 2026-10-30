@@ -193,7 +193,8 @@ def test_shared_artwork_does_not_combine_alternative_execution_paths(layout, exp
 
 @pytest.mark.parametrize('failure', ['recursive', 'budget'])
 @pytest.mark.parametrize('placement', ['before', 'after'])
-def test_rejected_call_tree_preserves_independent_artwork(failure, placement):
+@pytest.mark.parametrize('shared_helper', [False, True], ids=['independent', 'shared-actions'])
+def test_rejected_call_tree_preserves_successful_control_evidence(failure, placement, shared_helper):
     partial = ('$DrawID = 11\nps-t23 = ResourceSecond\n'
                'run = CommandList Tile\n')
     if failure == 'recursive':
@@ -204,6 +205,8 @@ def test_rejected_call_tree_preserves_independent_artwork(failure, placement):
         # bounded statement work before it can complete.
         broken = ('[CommandList Broken]\n' + partial + 'run = CommandList Busy\n' * 600
                   + '[CommandList Busy]\n' + '$Scratch = 0\n' * 40)
+    if shared_helper:
+        broken += 'run = CommandList Actions Ω\n'
     text = _flow_menu()
     text = broken + text if placement == 'before' else text + broken
     controls = {entry['var']: entry for entry in _menu(text).values()}

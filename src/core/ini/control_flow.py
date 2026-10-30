@@ -152,7 +152,6 @@ class ControlFlow:
             "$" + name.casefold(): frozenset([float(value)])
             for name, value in constants.items()
         }
-        tainted = set()
         for name in roots:
             self._budget = 16384
             self._calls = 1024
@@ -166,20 +165,6 @@ class ControlFlow:
                 self.complete = False
                 self.steps = previous_steps
                 self.artwork = previous_artwork
-                pending = [name]
-                while pending:
-                    target = pending.pop()
-                    if target in tainted:
-                        continue
-                    tainted.add(target)
-                    pending.extend(
-                        match.group(1).casefold()
-                        for line in self._lines(self.blocks.get(target, ()))
-                        if (match := _RUN.fullmatch(line))
-                    )
-        self.steps = {
-            key: value for key, value in self.steps.items() if key[0] not in tainted
-        }
 
     @staticmethod
     def _lines(nodes):
