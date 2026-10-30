@@ -15,8 +15,8 @@ def _sections(text, path="generated.ini"):
     return parse_sections(str(path), text=dedent(text))
 
 
-def _menu(text, **options):
-    parsed = _sections(text)
+def _menu(text, *, path="generated.ini", **options):
+    parsed = _sections(text, path)
     return extract_menu_toggles(parsed, resources=extract_resources(parsed), **options)
 
 
@@ -24,6 +24,195 @@ def _dispatch(selector, items):
     return "\n".join(
         f"{'if' if index == 0 else 'elif'} ${selector} == {slot}\n{body}"
         for index, (slot, body) in enumerate(items)) + "\nendif\n"
+
+
+def _flow_menu(step='$Mode + $Delta', *, prepare='', upper=3, lower=0,
+               resource='ResourceFirst', renderer='CustomShader Paint'):
+    return f"""
+[Constants]
+global persist $Mode = 0
+global $Delta = 7
+[KeyForward]
+key = VK_LBUTTON
+$Direction = 1
+run = CommandList Prepare
+[KeyBackward]
+key = VK_RBUTTON
+$Direction = -1
+run = CommandList Prepare
+[CommandList Prepare]
+$Delta = $Direction * 1
+{prepare}
+run = CommandList Actions Ω
+[CommandList Actions Ω]
+if $Picked == 11
+    $Mode = {step}
+    if $Mode > {upper}
+        $Mode = 0
+    elif $Mode < {lower}
+        $Mode = 3
+    endif
+elif $Picked == 19
+    $Aux = 1 - $Aux
+elif $Picked == 27
+    $Anchor = 1 - $Anchor
+endif
+[CommandList Paint]
+$DrawID = 11
+ps-t23 = {resource}
+run = CommandList Tile
+$DrawID = 19
+ps-t23 = ResourceSecond
+run = CommandList Tile
+[CommandList Tile]
+$AliasID = $DrawID + 0
+run = CommandList Hit
+run = CommandList Render
+[CommandList Hit]
+if $PointerX > $Left && $PointerY > $Top
+    $Picked = $AliasID
+endif
+[CommandList Render]
+run = {renderer}
+[CustomShader Paint]
+draw = 4, 0
+[ResourceFirst]
+filename = icons/first.dds
+[ResourceSecond]
+filename = icons/second.dds
+"""
+
+
+@pytest.mark.parametrize('step', [
+    '$Mode + $Delta', '($DELTA + $mode)', '$Mode - (0 - $Delta)',
+    '$Mode + ($Delta * 2) / 2',
+])
+def test_caller_values_and_shared_helpers_resolve_cycles_and_artwork(step):
+    text = _flow_menu(step)
+    entries = list(_menu(text, var_prefix='piece::').values())
+    assert [(entry['var'], entry['values'], entry.get('image_file')) for entry in entries] == [
+        ('piece::Mode', ['0', '1', '2', '3'], 'icons/first.dds'),
+        ('piece::Aux', ['0', '1'], 'icons/second.dds'),
+        ('piece::Anchor', ['0', '1'], None)]
+    # Reanalysis of staged text must not reuse caller values or artwork from
+    # another INI revision; identities are independent of helper spelling.
+    changed = text.replace('$Mode > 3', '$Mode > 2').replace('$Mode = 3', '$Mode = 2')
+    changed = changed.replace('icons/first.dds', 'icons/revised.dds')
+    changed_entries = list(_menu(changed, var_prefix='other::').values())
+    assert changed_entries[0]['var'] == 'other::Mode'
+    assert changed_entries[0]['values'] == ['0', '1', '2']
+    assert changed_entries[0]['image_file'] == 'icons/revised.dds'
+    assert entries[0]['values'] == ['0', '1', '2', '3']
+
+
+@pytest.mark.parametrize('options', [
+    {'prepare': '$Delta = time'},
+    {'prepare': '$Delta += time'},
+    {'prepare': 'run = CommandList External'},
+    {'prepare': 'run = CustomShader Unknown'},
+    {'prepare': '$Delta = 2'},
+    {'prepare': 'run = CommandList Prepare'},
+    {'upper': 2},
+    {'upper': 1000000000},
+    {'lower': 1},
+    {'step': '$Mode * $Mode + $Delta'},
+    {'step': '$Mode + $Delta / 0'},
+], ids=['runtime-value', 'unknown-write', 'external-call', 'shader-side-effects',
+        'non-unit-step', 'recursive-call', 'mismatched-high', 'excessive-range', 'mismatched-low',
+        'nonlinear', 'zero-division'])
+def test_control_flow_refuses_unproven_steps_without_hiding_known_controls(options):
+    controls = {entry['var']: entry for entry in _menu(_flow_menu(**options)).values()}
+    assert 'Mode' not in controls
+    assert controls['Aux']['values'] == ['0', '1']
+
+
+@pytest.mark.parametrize('replacement', [
+    ('run = CommandList Render', 'run = CommandList Missing'),
+    ('run = CustomShader Paint', 'run = CustomShader Missing'),
+    ('ps-t23 = ResourceFirst', 'ps-t23 = ResourceMissing'),
+    ('$DrawID = 11', '$DrawID = time'),
+    ('$Picked = $AliasID', '$OtherSelector = $AliasID'),
+    ('run = CommandList Render', '$AliasID = 19\nrun = CommandList Render'),
+    ('run = CommandList Render', 'ps-t23 = ResourceFirst\nrun = CommandList Render'),
+    ('run = CommandList Hit', 'run = CommandList Tile'),
+], ids=['unknown-helper', 'unknown-shader', 'unknown-resource', 'unknown-id',
+        'different-selector', 'changed-id', 'different-binding', 'recursive-helper'])
+def test_shared_artwork_requires_proven_identity_and_rendering(replacement):
+    text = _flow_menu().replace(*replacement)
+    controls = {entry['var']: entry for entry in _menu(text).values()}
+    assert controls['Mode']['values'] == ['0', '1', '2', '3']
+    assert controls['Mode'].get('image_file') is None
+
+
+@pytest.mark.parametrize('alternate,expected', [
+    ('ResourceFirst', 'icons/first.dds'),
+    ('ResourceAlias', 'icons/first.dds'),
+    ('ResourceSecond', None),
+    ('ResourceMissing', None),
+], ids=['same-resource', 'same-file', 'conflicting-artwork', 'missing-artwork'])
+def test_shared_artwork_joins_conflicts_and_follows_resource_references(alternate, expected):
+    text = _flow_menu().replace('ps-t23 = ResourceFirst',
+                               'ps-t31 = ResourceFirst\nResourceHeld = ref ps-t31\nps-t23 = ref ResourceHeld\nps-t31 = null')
+    text += f"""
+[CommandList Alternative]
+$DrawID = 11
+ps-t23 = {alternate}
+run = CommandList Tile
+[ResourceAlias]
+filename = icons/first.dds
+"""
+    controls = {entry['var']: entry for entry in _menu(text).values()}
+    assert controls['Mode'].get('image_file') == expected
+    assert controls['Aux']['image_file'] == 'icons/second.dds'
+
+
+@pytest.mark.parametrize('layout,expected', [
+    ('same-branch', 'icons/first.dds'),
+    ('exclusive-branches', None),
+    ('exclusive-nested-branches', None),
+    ('independent-unknown-branches', None),
+], ids=['shared-path', 'if-else', 'nested-if-else', 'ambiguous-paths'])
+def test_shared_artwork_does_not_combine_alternative_execution_paths(layout, expected):
+    actions = 'run = CommandList Hit\nrun = CommandList Render'
+    if layout == 'same-branch':
+        replacement = 'if $Gate == 1\n' + actions + '\nendif'
+    elif layout == 'exclusive-branches':
+        replacement = ('if $Gate == 1\nrun = CommandList Hit\n'
+                       'else\nrun = CommandList Render\nendif')
+    elif layout == 'exclusive-nested-branches':
+        replacement = ('if $Outer\nif $Gate == 1\nrun = CommandList Hit\n'
+                       'else\nrun = CommandList Render\nendif\nendif')
+    else:
+        replacement = ('if $Gate == 1\nrun = CommandList Hit\nendif\n'
+                       'if $Gate != 1\nrun = CommandList Render\nendif')
+    controls = {entry['var']: entry for entry in
+                _menu(_flow_menu().replace(actions, replacement)).values()}
+    assert controls['Mode']['values'] == ['0', '1', '2', '3']
+    assert controls['Mode'].get('image_file') == expected
+
+
+@pytest.mark.parametrize('failure', ['recursive', 'budget'])
+@pytest.mark.parametrize('placement', ['before', 'after'])
+@pytest.mark.parametrize('shared_helper', [False, True], ids=['independent', 'shared-actions'])
+def test_rejected_call_tree_preserves_successful_control_evidence(failure, placement, shared_helper):
+    partial = ('$DrawID = 11\nps-t23 = ResourceSecond\n'
+               'run = CommandList Tile\n')
+    if failure == 'recursive':
+        broken = ('[CommandList Broken]\n' + partial
+                  + 'run = CommandList Loop\n[CommandList Loop]\nrun = CommandList Loop\n')
+    else:
+        # One helper invocation is small, but repeated calls exhaust a root's
+        # bounded statement work before it can complete.
+        broken = ('[CommandList Broken]\n' + partial + 'run = CommandList Busy\n' * 600
+                  + '[CommandList Busy]\n' + '$Scratch = 0\n' * 40)
+    if shared_helper:
+        broken += 'run = CommandList Actions Ω\n'
+    text = _flow_menu()
+    text = broken + text if placement == 'before' else text + broken
+    controls = {entry['var']: entry for entry in _menu(text).values()}
+    assert controls['Mode']['values'] == ['0', '1', '2', '3']
+    assert controls['Mode']['image_file'] == 'icons/first.dds'
+    assert controls['Aux']['image_file'] == 'icons/second.dds'
 
 
 @pytest.mark.parametrize("action,expected", [
@@ -327,7 +516,7 @@ endif
                  f"[ResourceBadge{slot}]\nfilename = badge-{slot}.png\n")
         Image.new("RGBA", (2, 2), (30, 60, 90, 255)).save(tmp_path / f"badge-{slot}.png")
 
-    menu = _menu(text, var_prefix="piece::")
+    menu = _menu(text, path=tmp_path / 'generated.ini', var_prefix="piece::")
     entries = list(menu.values())
     expected = [*expected, (18, "Anchor", ["0", "1"])]
     assert [(entry["slot"], entry["var"], entry["values"])

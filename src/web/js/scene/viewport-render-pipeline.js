@@ -16,15 +16,15 @@ import {
   uniform,
   unpackRGBToNormal,
 } from 'three/tsl';
-import { ao } from 'three/addons/tsl/display/GTAONode.js';
+import { ssao } from 'three/addons/tsl/display/SSAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { computeModelBounds } from './model-bounds.js';
 import { CHARACTER_AO_LAYER } from './viewer-layers.js';
 
 const AO_RESOLUTION_SCALE = 0.5;
 const AO_SAMPLES = 8;
-const AO_RADIUS_FACTOR = 0.005;
-const AO_THICKNESS_RADIUS_RATIO = 4;
+const AO_RADIUS_FACTOR = 0.01;
+const AO_INTENSITY = 2;
 const BLOOM_STRENGTH = 0.35;
 const BLOOM_RADIUS = 0.2;
 const BLOOM_THRESHOLD = 0;
@@ -40,8 +40,18 @@ function readUniformValue(node, fallback = 0) {
   return Number.isFinite(node?.value) ? node.value : fallback;
 }
 function readResolution(node) {
-  const value = node?.value;
+  const value = node?.value ?? node;
   return value && Number.isFinite(value.x) && Number.isFinite(value.y) ? [value.x, value.y] : null;
+}
+
+class CharacterNormalPassNode extends THREE.PassNode {
+  setup(builder) {
+    const result = super.setup(builder);
+    // PassNode resets its output type during graph setup. Packed normals need
+    // their byte format restored before the render target is allocated.
+    this.renderTarget.texture.type = THREE.UnsignedByteType;
+    return result;
+  }
 }
 
 /** Create the one viewport render pipeline used by the scene renderer. */
@@ -62,23 +72,25 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     prePassCamera.copy(camera, false);
   };
 
-  const prePass = pass(scene, prePassCamera, { samples: 1 });
+  const prePass = new CharacterNormalPassNode(THREE.PassNode.COLOR, scene, prePassCamera, {
+    samples: 1,
+    type: THREE.UnsignedByteType,
+  });
   prePass.setResolutionScale(AO_RESOLUTION_SCALE);
   prePass.name = 'Character AO pre-pass';
   prePass.transparent = false;
   prePass.setLayers(aoLayers);
   prePass.setMRT(mrt({ output: packNormalToRGB(normalView) }));
-  prePass.getTexture('output').type = THREE.UnsignedByteType;
   const prePassNormal = sample((uv) => unpackRGBToNormal(prePass.getTextureNode().sample(uv)));
-  const aoPass = ao(prePass.getTextureNode('depth'), prePassNormal, camera);
+  const aoPass = ssao(prePass.getTextureNode('depth'), prePassNormal, camera);
   aoPass.resolutionScale = AO_RESOLUTION_SCALE;
   aoPass.samples.value = AO_SAMPLES;
-  aoPass.useTemporalFiltering = false;
+  aoPass.intensity.value = AO_INTENSITY;
   const aoStrengthNode = uniform(0);
   const effectiveAO = mix(float(1), aoPass.getTextureNode().sample(screenUV).r, aoStrengthNode);
 
   // Each output graph has only the work it needs: bloom-only deliberately has
-  // no AO context, so it cannot schedule GTAO's depth/normal pre-pass.
+  // no AO context, so it cannot schedule SSAO's depth/normal pre-pass.
   const aoScenePass = pass(scene, camera);
   aoScenePass.name = 'Viewport AO beauty pass';
   aoScenePass.contextNode = builtinAOContext(effectiveAO);
@@ -146,12 +158,10 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
   function updateSpatialParameters() {
     if (!isAmbientOcclusionEnabled()) {
       aoPass.radius.value = MIN_AO_RADIUS;
-      aoPass.thickness.value = MIN_AO_RADIUS * AO_THICKNESS_RADIUS_RATIO;
       return;
     }
     updateModelSize();
     aoPass.radius.value = modelSize * AO_RADIUS_FACTOR;
-    aoPass.thickness.value = aoPass.radius.value * AO_THICKNESS_RADIUS_RATIO;
   }
   const invalidateGeometry = () => {
     modelSizeDirty = true;
@@ -181,7 +191,6 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
     modelSizeDirty = false;
     bloomAvailable = false;
     aoPass.radius.value = MIN_AO_RADIUS;
-    aoPass.thickness.value = MIN_AO_RADIUS * AO_THICKNESS_RADIUS_RATIO;
     configureRenderGraph();
   }
   function setAmbientOcclusionStrength(value) {
@@ -272,7 +281,9 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       resolution: readResolution(aoPass.resolution),
       samples: readUniformValue(aoPass.samples),
       radius: readUniformValue(aoPass.radius),
-      thickness: readUniformValue(aoPass.thickness),
+      intensity: readUniformValue(aoPass.intensity),
+      bias: readUniformValue(aoPass.bias),
+      blurEnabled: aoPass.blurEnabled === true,
       modelSize,
       renderCount,
       directRenderCount,
@@ -283,11 +294,12 @@ export function createViewportRenderPipeline({ renderer, scene, camera }) {
       pipelineNeedsUpdate: renderPipeline.needsUpdate,
       hasRenderPipeline: !!renderPipeline,
       hasPrePass: !!prePass,
-      hasGTAO: !!aoPass,
+      hasSSAO: !!aoPass,
       hasBloom: !!bloomPass && !!aoBloomPass,
-      temporalFiltering: aoPass.useTemporalFiltering === true,
+      temporalFiltering: false,
       prePassLayerMask: prePass.getLayers()?.mask ?? 0,
       prePassSamples: prePass.renderTarget?.samples ?? 0,
+      prePassNormalType: prePass.getTexture('output').type,
       prePassResolutionScale: prePass.getResolutionScale(),
       beautyCameraIsSource:
         aoScenePass.camera === camera && bloomScenePass.camera === camera && aoBloomScenePass.camera === camera,

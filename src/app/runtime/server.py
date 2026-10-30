@@ -32,7 +32,7 @@ from core.mod_source import ModSourceError
 from core.textures.profiles import texture_profile_for
 from app.settings import features, paths
 
-THREE_VERSION = "0.185.0"
+THREE_VERSION = "0.186.1"
 REPO_URL = "https://github.com/drelymk/mod_viewer"
 
 _VENDOR_PREFIX = "/vendor/"

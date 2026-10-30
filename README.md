@@ -74,7 +74,8 @@ runs enable all features. See [Compatibility and limitations](#compatibility-and
    `Ambient occlusion` to adjust their strength from 0–100%. The texture display
    menu offers `All maps`, `Diffuse and NormalMap`, `Diffuse only`, and
    `No textures` for comparing the material response. `Emission bloom` is
-   available when a supported GlowMap is detected.
+   available when a supported GlowMap is detected. Ambient occlusion adds soft
+   contact shading; setting it to 0% disables its rendering passes.
 6. Click `Key light` to adjust its intensity, including turning it off at 0%.
    Drag the light marker in the viewport to move it across the view; hold Shift
    when starting the drag to move it toward or away from the camera.

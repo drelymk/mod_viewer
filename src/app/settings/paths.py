@@ -58,14 +58,15 @@ def vendor_dir():
 def has_vendored_three():
     required = (
         os.path.join("addons", "exporters", "GLTFExporter.js"),
-        "LICENSE",
         "three.core.js",
         "three.webgpu.js",
         "three.tsl.js",
         os.path.join("addons", "controls", "ArcballControls.js"),
         os.path.join("addons", "controls", "TransformControls.js"),
         os.path.join("addons", "objects", "SkyMesh.js"),
-        os.path.join("addons", "tsl", "display", "GTAONode.js"),
+        os.path.join("addons", "tsl", "display", "SSAONode.js"),
+        os.path.join("addons", "tsl", "display", "depthAwareBlur.js"),
         os.path.join("addons", "tsl", "display", "BloomNode.js"),
+        "LICENSE",
     )
     return all(os.path.isfile(os.path.join(vendor_dir(), rel)) for rel in required)

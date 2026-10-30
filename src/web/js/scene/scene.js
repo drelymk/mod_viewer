@@ -24,7 +24,7 @@ export const renderer = new THREE.WebGPURenderer({
   samples: 4,
   alpha: false,
 });
-// r185 installs an automatic WebGL2 fallback callback on WebGPURenderer. This
+// WebGPURenderer installs an automatic WebGL2 fallback callback. This
 // application is intentionally WebGPU-only, so disable that private hook
 // before init and verify the actual backend after init as a second guard.
 renderer._getFallback = null;

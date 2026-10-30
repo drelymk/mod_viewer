@@ -136,6 +136,13 @@ of documentation, comments and tests; use portable fixtures instead.
   Slot and mouse menus share action resolution and artwork matching. Local
   helper calls are bounded and require proven finite cycles; latched buttons
   require matching press/release hit regions. Preserve paired button actions.
+  Control data flow is per INI and bounded: join unknown branches, retain caller
+  inputs through local helpers, and reject unknown writes, recursion and conflicting
+  wrap ranges. Shared artwork needs matching selector identity and render evidence;
+  require compatible conditional paths, never file ordering. Failed call trees
+  discard their own artwork evidence and budgets, preserving independent roots.
+  Lazy diagnostics explain unresolved menu
+  cycles and clamped compute controls without inventing shader deformations.
 - Texture bindings are per-draw execution-order state: retain the latest
   applicable assignment, conditional alternatives and no-map fallbacks for
   every role. Never collapse bindings to a component-level texture.
@@ -384,6 +391,15 @@ of documentation, comments and tests; use portable fixtures instead.
   material kind are distinct. Resolve per-mesh profiles from structural evidence
   and `(game, texture_api, material_kind)`, with validated base fallback; weak
   component names or filenames cannot activate specialized semantics.
+- Character AO uses spatial filtering with no temporal settling frames. Preserve
+  character-only opaque depth/normals, ambient-only composition, independent
+  emission bloom, and the direct path when disabled or suppressed by wireframe.
+  Packed normal targets must remain byte textures after pass setup and graph
+  switches. Keep directional shadow filtering deterministic at close zoom.
+- Initialize the oriented geometry normal before branching on a normal map;
+  shared face-direction expressions inside an inactive branch can leave the
+  fallback at zero. Cache lit output before rim/debug paths reuse RGB and alpha
+  so physical lighting constants are generated once.
 - Deduplicate immutable `material_profile_id` metadata; conflicting IDs are
   programming errors. Keep packed RGBA and role bindings intact, without mapping
   channels to stock PBR inputs absent evidence. Binding updates use stable
