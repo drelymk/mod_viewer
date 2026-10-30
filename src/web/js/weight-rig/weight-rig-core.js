@@ -982,3 +982,9 @@ if (typeof window !== 'undefined') {
     modelPhysicsSession.handleMeshStateChanged(event.detail?.meshes || []);
   });
 }
+
+export async function loadModelExportSkinning(meshes) {
+  const result = await weightModelSession.ensureLoaded();
+  if (result.error) throw new Error(result.error);
+  return new Map(meshes.map((mesh) => [mesh, skinningRuntime.getSkinningState(mesh)]));
+}

@@ -2,12 +2,13 @@
 //
 // Keep this module free of static imports from the Weight/Rig graph. Normal
 // model loading can register mesh lifecycle state here without loading the
-// feature; the first explicit Weight/Rig activation hydrates that state into
-// the real runtime.
+// feature; explicit Weight/Rig activation or weighted export hydrates that
+// state into the real runtime.
 
 let featurePromise = null;
 let feature = null;
 let coreModule = null;
+let corePromise = null;
 let skinning = null;
 let pendingRigMetadata = null;
 let pendingHumanoidRigMetadata = null;
@@ -64,29 +65,39 @@ export async function loadWeightRigFeature() {
   if (featurePromise) return featurePromise;
 
   featurePromise = (async () => {
-    const core = await import('./weight-rig-core.js');
+    const core = await loadCore();
     const [panel, overlay, status] = await Promise.all([
       import('../panels/weight-rig-panel.js'),
       import('../scene/rig-overlay-controller.js'),
       import('./weight-rig-status.js'),
     ]);
-    coreModule = core;
-    skinning = core.weightRigSkinningRuntime;
-
     feature = {
       ...core.weightRigApi,
       createRigOverlayController: overlay.createRigOverlayController,
       weightRigStatus: status.weightRigStatus,
     };
-    for (const mesh of pendingSkinningMeshes) {
-      coreModule.registerWeightRigMesh(mesh);
-    }
-    feature.setRigMetadata(pendingRigMetadata);
-    feature.setHumanoidRigMetadata(pendingHumanoidRigMetadata);
-
     panel.initWeightRigPanel();
     return feature;
   })();
 
   return featurePromise;
+}
+
+async function loadCore() {
+  corePromise ||= import('./weight-rig-core.js').then((core) => {
+    coreModule = core;
+    skinning = core.weightRigSkinningRuntime;
+    for (const mesh of pendingSkinningMeshes) core.registerWeightRigMesh(mesh);
+    core.weightRigApi.setRigMetadata(pendingRigMetadata);
+    core.weightRigApi.setHumanoidRigMetadata(pendingHumanoidRigMetadata);
+    return core;
+  });
+  return corePromise;
+}
+
+// Load authored weights without activating panels, inferred rigs, or Physics.
+export async function loadModelExportSkinning(meshes) {
+  if (!meshes.some((mesh) => mesh.visible && mesh.userData.skinningAvailable)) return new Map();
+  const core = await loadCore();
+  return core.loadModelExportSkinning(meshes);
 }
