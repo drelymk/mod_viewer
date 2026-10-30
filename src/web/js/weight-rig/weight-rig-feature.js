@@ -20,12 +20,12 @@ export function getLoadedWeightRigFeature() {
 
 export function setPendingRigMetadata(metadata) {
   pendingRigMetadata = metadata;
-  if (feature) feature.setRigMetadata(metadata);
+  coreModule?.weightRigApi.setRigMetadata(metadata);
 }
 
 export function setPendingHumanoidRigMetadata(metadata) {
   pendingHumanoidRigMetadata = metadata;
-  if (feature) feature.setHumanoidRigMetadata(metadata);
+  coreModule?.weightRigApi.setHumanoidRigMetadata(metadata);
 }
 
 export function getSkinningBaseMaterial(mesh) {

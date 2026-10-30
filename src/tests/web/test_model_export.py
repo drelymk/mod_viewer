@@ -509,9 +509,18 @@ def test_glb_weight_palette_remapping_and_blender_groups(module_page, tmp_path, 
         'folder-01/blend.buf|offset=0', 'folder-02/blend.buf|offset=0'}
 
 
-def test_weight_export_loads_once_without_activating_rig_and_reuses_for_weight_ui(viewer):
+def test_weight_export_reuse_and_mod_switch_refresh_metadata_before_rig_activation(viewer):
     payload, weights = weighted_payload()
-    page = viewer({'fixture-01': payload, 'fixture-weights': weights})
+    second, _ = weighted_payload()
+    for index, model in enumerate((payload, second), 1):
+        model['meshes']['mesh-00']['pos'] = append_stream(model, 'f', [-1,0,0, 1,0,0, 0,2,2])
+        model['metadata'] = {'rig': {
+            'version': 1,
+            'presets': [{'id': f'pose-{index:02d}', 'name': f'Pose {index:02d}', 'roots': [], 'joints': []}],
+            'humanoid_control_rig': {'version': 2, 'controls': {
+                'pelvis': {'semantic': {'sideN': index * 0.1, 'height01': 0.6, 'depthN': 0.05}}}},
+        }}
+    page = viewer({'fixture-01': payload, 'fixture-02': second, 'fixture-weights': weights})
     open_model(page, 'fixture-01')
     wait_loaded(page)
     assert bridge_calls(page, 'weights') == []
@@ -538,11 +547,27 @@ def test_weight_export_loads_once_without_activating_rig_and_reuses_for_weight_u
     data = base64.b64decode(page.evaluate('window.__savedWeights[0]'))
     doc = json.loads(data[20:20 + struct.unpack_from('<I', data, 12)[0]])
     assert doc['skins'] and 'WEIGHTS_0' in doc['meshes'][0]['primitives'][0]['attributes']
-    page.evaluate("""async()=>{
+    assert page.evaluate('window.modViewer.switchMod("fixture-02")')
+    wait_loaded(page)
+    pending = page.evaluate("""async()=>{
+      const boundary=await import('./js/weight-rig/weight-rig-feature.js');
+      const core=await import('./js/weight-rig/weight-rig-core.js');
+      const rig=core.weightRigApi.getModelRigState();
+      return {inactive:!boundary.getLoadedWeightRigFeature(),presets:rig.rigPresets.presets,
+        overrides:rig.humanoidRigEdit.hasSavedOverrides};
+    }""")
+    assert pending == {'inactive': True, 'presets': [{'id': 'pose-02', 'name': 'Pose 02'}], 'overrides': True}
+    activated = page.evaluate("""async()=>{
       const {loadWeightRigFeature}=await import('./js/weight-rig/weight-rig-feature.js');
       const feature=await loadWeightRigFeature();await feature.activateWeightRig();
+      const rig=feature.getModelRigState();
+      return {loaded:rig.loaded,presets:rig.rigPresets.presets,pelvis:rig.humanoidControlRig.controls.pelvis};
     }""")
-    assert len(bridge_calls(page, 'weights')) == 1
+    assert activated['loaded']
+    assert activated['presets'] == [{'id': 'pose-02', 'name': 'Pose 02'}]
+    assert activated['pelvis']['source'] == 'manual_override'
+    assert activated['pelvis']['semantic'] == {'sideN': 0.2, 'height01': 0.6, 'depthN': 0.05}
+    assert len(bridge_calls(page, 'weights')) == 2
 
 
 def test_weight_export_failure_preserves_model_and_skips_native_save(viewer):
