@@ -777,7 +777,10 @@ def test_library_folder_context_menus_open_native_folders_without_loading(viewer
             row = page.locator(f'.{prefix}-row[data-{prefix}-path="{child}"]')
             row.click(button='right')
             menu = page.locator(f'.{prefix}-action-menu:not([hidden])')
-            assert menu.locator('button').count() == 1
+            expected = (['Update asset', 'Open Folder']
+                        if prefix == 'asset-folder' and child == 'root-02/asset'
+                        else ['Open Folder'])
+            assert menu.locator('button').all_text_contents() == expected
             menu.locator(f'.{prefix}-open').click()
         assert bridge_calls(page, method) == [[root], *[[child] for child in children]]
         root_row.click(button='right')

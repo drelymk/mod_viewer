@@ -1,4 +1,7 @@
 export default {
+  'asset.extracted': 'Asset saved: {components} components.',
+  'asset.extractedPartial':
+    'Asset saved: {components} components. Skipped resource groups: {skipped}. These may include scene/UI geometry or unsupported asset parts.',
   'mesh.rename': 'Rename',
   'mesh.selectionSameComponent': '{count} meshes selected · {component}',
   'mesh.selectionMultipleComponents': '{count} meshes selected · {components} components',
@@ -115,6 +118,14 @@ export default {
   'folder.chooseBrowse': 'Choose a folder with Browse.',
   'folder.editAsset': 'Edit Asset Folder',
   'folder.addAsset': 'Add Asset Folder',
+  'asset.add': 'Add asset',
+  'asset.update': 'Update asset',
+  'asset.name': 'Asset name',
+  'asset.dump': 'Dump folder',
+  'asset.extractHint': 'Extract an asset from a frame dump into this folder.',
+  'asset.replaceHint': 'Replace all current asset files with a new extraction from a frame dump.',
+  'asset.extracting': 'Extracting…',
+  'asset.required': 'Enter an asset name and choose a dump folder using Browse.',
   'folder.removeAsset':
     'Remove this Asset Folder?\n\nThis only removes it from Mod Viewer.\nFiles on disk will not be deleted.',
   'folder.buildingIndex': 'Building index…',

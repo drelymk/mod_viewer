@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 
 from .identity import normalize_geometry_hash
+from ..ini.command_phases import parse_command_line
 from ..ini.parser import (_reachable_execution_sections,
                           _scan_sections_for_draws)
 
@@ -45,6 +46,7 @@ _FIRST_RE = re.compile(r"^match_first_index\s*=\s*(\d+)$", re.I)
 _COUNT_RE = re.compile(r"^match_index_count\s*=\s*(\d+)$", re.I)
 _IB_RE = re.compile(r"^ib\s*=\s*(?!null\b)\S+", re.I)
 _DRAW_INDEXED_RE = re.compile(r"^drawindexed\s*=\s*\S+", re.I)
+_SKIP_RE = re.compile(r"^handling\s*=\s*skip$", re.I)
 _AUXILIARY_RE = re.compile(
     r"^(?:draw|vb\d+|override_vertex_count|override_byte_stride)\s*=\s*\S+",
     re.I,
@@ -54,7 +56,8 @@ _AUXILIARY_RE = re.compile(
 def collect_component_overrides(sections, ini_path):
     """Return geometry ownership declared by TextureOverride sections.
 
-    Component identity claims coverage independently of draw behavior.
+    Geometry ownership and explicit suppression claim component coverage.
+    Texture-only hooks leave the original geometry eligible for filling.
     Auxiliary buffer/compute hashes do not establish component identity.
     Follow the normal scanner's command-list closure for nested declarations.
     """
@@ -72,10 +75,11 @@ def collect_component_overrides(sections, ini_path):
         hashes = []
         explicit_asset_identity = False
         auxiliary_geometry = False
+        handling_skip = False
         last_first_index = None
         last_index_count = None
         for raw in scope_lines:
-            line = str(raw).split(";", 1)[0].strip()
+            line = parse_command_line(raw).text
             if not line:
                 continue
             match = _HASH_RE.match(line)
@@ -96,7 +100,16 @@ def collect_component_overrides(sections, ini_path):
                 explicit_asset_identity = True
             if _AUXILIARY_RE.match(line):
                 auxiliary_geometry = True
+            if _SKIP_RE.match(line):
+                handling_skip = True
         info = scanned.get(section, {})
+        texture_only = bool(
+            info.get("diffuse_history_at_end") or info.get("aux_maps_at_end")
+            or info.get("slot_textures_at_end"))
+        # Even an explicit null IB is a geometry operation, not a texture hook.
+        texture_only = texture_only and not info.get("index_binding_history")
+        component_identity = explicit_asset_identity or (
+            not auxiliary_geometry and (handling_skip or not texture_only))
         draw_matches = [
             item.geometry_match
             for item in info.get("draws", ())
@@ -131,7 +144,7 @@ def collect_component_overrides(sections, ini_path):
                 declarations.append((
                     end_match.hash, end_match.first_index,
                     end_match.index_count,
-                    explicit_asset_identity or not auxiliary_geometry))
+                    component_identity))
                 seen_declarations.add(key)
 
         fallback_first = (end_match.first_index if end_match is not None
@@ -143,7 +156,7 @@ def collect_component_overrides(sections, ini_path):
                 continue
             declarations.append((
                 geometry_hash, fallback_first, fallback_count,
-                explicit_asset_identity or not auxiliary_geometry))
+                component_identity))
 
         for geometry_hash, first_index, index_count, item_identity in declarations:
             result.append(AuthoredComponentOverride(

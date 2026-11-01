@@ -85,6 +85,13 @@ class ModViewerAPI:
             return None
         return self._access.remember_asset_picker_selection(result[0])
 
+    def select_asset_dump_folder(self):
+        return self.select_asset_folder()
+
+    def extract_asset(self, folder_path, name, dump_path, original_path=None):
+        return self._asset_registry.extract_asset(
+            folder_path, name, dump_path, original_path)
+
     # -- persistent Mod Folders registry -----------------------------------
 
     def get_mod_folders(self):

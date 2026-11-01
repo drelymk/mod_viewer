@@ -1,5 +1,6 @@
 """Coverage planning regressions for explicit original Asset filling."""
 
+import pytest
 
 from app.assets import composition as asset_composition
 from app.assets import index as asset_index
@@ -106,32 +107,60 @@ def test_collect_component_overrides_follows_nested_command_lists():
     assert result[0].asset_identity_evidence is True
 
 
-def test_component_identity_handles_range_independently_of_draw_behavior(
+def test_texture_only_geometry_replacement_and_skip_coverage_lifecycle(
         tmp_path, monkeypatch):
-    index = _index(_geometry("aaaaaaaa", (0, 12)), _geometry("bbbbbbbb", (0, 6)))
+    index = _index(_geometry("aaaaaaaa", (0, 12), (300, 24)),
+                   _geometry("bbbbbbbb", (0, 6)))
     monkeypatch.setattr(asset_index, "load_index",
                         lambda _type, _root: index)
     context = _context(tmp_path, {
         "mod.ini": _zzmi("bbbbbbbb") + (
             "[TextureOverrideComponent02IB]\n"
             "hash = aaaaaaaa\n"
-            "run = CommandList\\ZZMI\\SetTextures\n"),
+            "run = CommandList Surface Material\n"
+            "[CommandList Surface Material]\n"
+            "Resource\\ZZMI\\Diffuse = ref ResourceSurfaceDiffuse\n"),
     })
 
     plan = asset_composition.plan_missing_asset_parts(context)
 
-    assert plan.status == "nothing_missing"
-    assert plan.asset == {"path": "Asset01", "geometry": [
-        _geometry("aaaaaaaa", (0, 12)), _geometry("bbbbbbbb", (0, 6))]}
-    assert {part.geometry_hash for part in plan.covered_parts} == {"aaaaaaaa", "bbbbbbbb"}
-    assert not plan.missing_parts
-    context.ini.records[0].sections["TextureOverrideComponent02IB"].append(
-        "handling = skip")
-    assert asset_composition.plan_missing_asset_parts(context).to_dict() == plan.to_dict()
-    del context.ini.records[0].sections["TextureOverrideComponent02IB"]
-    absent = asset_composition.plan_missing_asset_parts(context)
-    assert absent.status == "ready"
-    assert [part.geometry_hash for part in absent.missing_parts] == ["aaaaaaaa"]
+    assert plan.status == "ready"
+    assert {part.geometry_hash for part in plan.covered_parts} == {"bbbbbbbb"}
+    assert [part.first_index for part in plan.missing_parts] == [0, 300]
+    helper = context.ini.records[0].sections["CommandList Surface Material"]
+    helper.append("post HaNdLiNg = SkIp ; suppress the original")
+    suppressed = asset_composition.plan_missing_asset_parts(context)
+    assert suppressed.status == "nothing_missing"
+    assert len(suppressed.covered_parts) == 3
+    assert not suppressed.missing_parts
+    helper[-1] = "ib = ResourceReplacementIB"
+    replaced = asset_composition.plan_missing_asset_parts(context)
+    assert replaced.status == "nothing_missing"
+    assert not replaced.missing_parts
+    helper.pop()
+    restored = asset_composition.plan_missing_asset_parts(context)
+    assert restored.to_dict() == plan.to_dict()
+
+
+@pytest.mark.parametrize("lines, expected", [
+    (["ps-t0 = ResourceSurface"], False),
+    (["ps-t0 = null"], False),
+    (["Resource\\GIMI\\NormalMap = ref ResourceSurface"], False),
+    (["ps-t0 = ResourceSurface", "handling = skip"], True),
+    (["ps-t0 = ResourceSurface", "ib = null"], True),
+    (["ps-t0 = ResourceSurface", "ib = ResourceIndices"], True),
+    (["ps-t0 = ResourceSurface", "drawindexed = auto"], True),
+    (["vb1 = ResourceBlend", "handling = skip"], False),
+    (["run = CommandList\\Unknown\\Helper"], True),
+    ([], True),
+])
+def test_texture_hook_coverage_preserves_explicit_geometry_and_legacy_identity(
+        lines, expected):
+    overrides = collect_component_overrides({
+        "TextureOverrideSurface": ["hash = aaaaaaaa", *lines],
+    }, "mod.ini")
+    assert len(overrides) == 1
+    assert overrides[0].asset_identity_evidence is expected
 
 
 def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(
@@ -327,19 +356,26 @@ def test_hash_only_component_identity_covers_all_ranges(tmp_path, monkeypatch):
 
 
 def test_plan_reads_staged_document_projection(tmp_path, monkeypatch):
-    index = _index(_geometry("aaaaaaaa", (0, 12)))
+    index = _index(_geometry("aaaaaaaa", (0, 12), (300, 24)),
+                   _geometry("bbbbbbbb", (0, 6)))
     monkeypatch.setattr(asset_index, "load_index",
                         lambda _type, _root: index)
-    path = str(tmp_path / "mod.ini")
-    document = IniDocument.from_string(
-        _zzmi("aaaaaaaa"), path=path)
-    context = snapshot_context(str(tmp_path), [path], {path: document})
-    context.asset_folders = [
-        {"type": "ZZMI", "path": "asset-root", "enabled": True}]
-
-    plan = asset_composition.plan_missing_asset_parts(context)
-
-    assert plan.status == "nothing_missing"
+    filename = tmp_path / "mod.ini"
+    text = (_zzmi("bbbbbbbb") + "[TextureOverrideComponent02]\n"
+            "hash = aaaaaaaa\nps-t0 = ResourceSurfaceDiffuse\n")
+    filename.write_text(text, encoding="utf-8")
+    saved_bytes = filename.read_bytes()
+    path = str(filename)
+    document = IniDocument.from_string(text, path=path)
+    def plan():
+        context = snapshot_context(str(tmp_path), [path], {path: document})
+        context.asset_folders = [
+            {"type": "ZZMI", "path": "asset-root", "enabled": True}]
+        return asset_composition.plan_missing_asset_parts(context)
+    assert [part.first_index for part in plan().missing_parts] == [0, 300]
+    document.insert_lines(len(document.lines), ["handling = skip"])
+    assert plan().status == "nothing_missing"
+    assert filename.read_bytes() == saved_bytes
 
 
 def test_plan_refuses_duplicate_original_assets(tmp_path, monkeypatch):

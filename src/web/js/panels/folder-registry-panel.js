@@ -26,6 +26,7 @@ export function createFolderRegistryPanel({
   onOpenFolder,
   onEdit,
   onDelete,
+  contextActions,
   renderLabel,
   renderRootExtras,
   renderRootMeta,
@@ -232,7 +233,8 @@ export function createFolderRegistryPanel({
     }
 
     const canOpenFolder = onOpenFolder && entry.kind !== 'archive';
-    if ((isRoot && (onEdit || onDelete)) || canOpenFolder) {
+    const extraActions = contextActions?.(entry, isRoot) || [];
+    if ((isRoot && (onEdit || onDelete)) || canOpenFolder || extraActions.length) {
       const actions = document.createElement('span');
       actions.className = className('actions');
       const more = document.createElement('button');
@@ -252,6 +254,19 @@ export function createFolderRegistryPanel({
       menu.className = className('action-menu');
       menu.setAttribute('role', 'menu');
       menu.hidden = true;
+      extraActions.forEach(({ label, action }) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('role', 'menuitem');
+        button.textContent = label;
+        button.disabled = entry.exists === false;
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          closeMenus();
+          action();
+        });
+        menu.appendChild(button);
+      });
       if (canOpenFolder) {
         const open = document.createElement('button');
         open.type = 'button';
@@ -407,7 +422,7 @@ export function createFolderRegistryPanel({
     setActivePath(activePath);
   }
 
-  function updateRoot(entry) {
+  function updateRoot(entry, { refreshChildren = false } = {}) {
     closeMenus();
     const key = canonicalPath(entry?.path);
     const index = roots.findIndex((root) => canonicalPath(root.path) === key);
@@ -423,10 +438,14 @@ export function createFolderRegistryPanel({
     const replacement = createNode(entry, true);
     const replacementArrow = replacement.querySelector(`:scope > ${selector('row')} ${selector('expand')}`);
     const replacementChildren = replacement.querySelector(`:scope > ${selector('children')}`);
-    if (currentChildren && replacementChildren) {
+    if (refreshChildren) {
+      for (const cachedPath of childCache.keys()) {
+        if (cachedPath === key || cachedPath.startsWith(`${key}/`)) childCache.delete(cachedPath);
+      }
+    } else if (currentChildren && replacementChildren) {
       replacementChildren.replaceWith(currentChildren);
     }
-    const preservedChildren = currentChildren || replacementChildren;
+    const preservedChildren = refreshChildren ? replacementChildren : currentChildren || replacementChildren;
     if (expanded) {
       replacement.classList.add('expanded');
       preservedChildren.hidden = false;
@@ -442,6 +461,7 @@ export function createFolderRegistryPanel({
     }
     currentNode.replaceWith(replacement);
     roots[index] = entry;
+    if (refreshChildren && expanded) void expandNode(replacement, entry.path, replacementArrow, true);
     setActivePath(activePath);
     return true;
   }

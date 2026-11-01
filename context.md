@@ -321,15 +321,29 @@ of documentation, comments and tests; use portable fixtures instead.
 
 ## Asset loading and composition
 
+- Add/Update Asset extracts only native-picker-authorized frame dumps into
+  registered Asset Folders. Extraction has no game-marker/type gate; unfamiliar
+  layouts fail explicitly. Stage compact output, swap whole directories and
+  rebuild the index under the shared config transaction; failed updates restore
+  the previous asset and index. Compact packages identify their format explicitly
+  so WWMI roots can load them alongside native WWMI metadata.
+  A partial capture is a committed success with saved/skipped counts and a
+  separate warning notice, never an extraction error or a completeness claim.
+  Automatic `Face/` grouping requires recognized facial material evidence on
+  every component part and successfully reconstructed expression data. Keep
+  shared textures at the root, face-only files with their nested `hash.json`,
+  and standalone all-face selections at the root. Preserve geometry, bindings
+  and source provenance; names, component ordinals and position are not evidence.
 - Index Assets through metadata only. Heavy geometry/textures require explicit
   indexed-Asset loading or the explicit missing-original-parts action.
   Direct Assets never synthesize INIs/mods, modify sources or write
   `.mod_viewer.json`; source paths stay within registered roots and texture
   choices remain session-only. Ambiguity may yield candidates, never bindings.
 - Asset Fill treats an authored component/range as handled when its component
-  identity is present in the mod, including staged documents. Draw/skip behavior
-  does not affect coverage.
-  Hash-only component overrides cover every range under that hash; auxiliary
+  identity is present in the mod, including staged documents. Geometry overrides
+  and component-level `handling = skip` prevent restoration. Proven texture-only
+  hooks do not claim geometry ownership, including through local command lists.
+  Bare hash-only component overrides cover every range under that hash; auxiliary
   buffer/compute hashes do not establish component identity. Automatic filling
   requires one unique Asset and retains component/range provenance; filled geometry is
   session-only and removed on reload/switch.

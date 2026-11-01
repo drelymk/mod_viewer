@@ -248,26 +248,28 @@ def _texture_records(entry, position, files, root, component, classification,
     items = (textures[position] if isinstance(textures, list)
              and position < len(textures) else ()) or ()
     result = {}
+    candidates = {}
     for item in items:
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
         role = _ROLE_NAMES.get(str(item[0]).replace(" ", "").casefold())
-        if not role:
-            continue
         filename = _texture_file(
             files, item[2], item[1], component, classification, role)
         if not filename:
             continue
         texture = make_texture(
-            root, filename, normalize_texture_role(role),
+            root, filename, normalize_texture_role(role) if role else None,
             texture_source=texture_source)
         if texture:
-            result[role] = texture
+            if role:
+                result[role] = texture
+            else:
+                candidates[texture.key] = texture
     if not items and ib_candidates and ib_cache is not None:
         result.update(_range_texture_records(
             files, ib_candidates, first, count, vertex_count, ib_cache,
             root, texture_source))
-    return result
+    return result, tuple(candidates.values())
 
 
 def _ranges(entry):
@@ -704,7 +706,7 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
             effective_count = (
                 count if count is not None
                 else ib_dump.index_count or len(ib_dump.indices))
-            textures = _texture_records(
+            textures, texture_candidates = _texture_records(
                 item.entry, ordinal, files, root, component, classification,
                 texture_source, ib_candidates=ib_files, first=first,
                 count=effective_count,
@@ -724,7 +726,8 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 component_ordinal=ordinal, first_index=first,
                 index_count=effective_count, positions=positions,
                 indices=indices,
-                uvs=uvs, normals=normals, textures=textures))
+                uvs=uvs, normals=normals, textures=textures,
+                texture_candidates=texture_candidates))
     if not parts:
         raise AssetLoadError("Asset contains no complete renderable parts.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

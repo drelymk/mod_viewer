@@ -5,6 +5,7 @@ import os
 from app.assets import catalog as asset_catalog
 from app.assets import folders as asset_folders
 from app.assets import index as asset_index
+from app.assets import extraction
 from app.settings import mod_folders, viewer_preferences
 
 
@@ -148,6 +149,19 @@ class AssetFolderRegistry:
 
     def open_folder(self, folder_path):
         return _open_folder(folder_path, self._access.asset_folder)
+
+    def extract_asset(self, folder_path, name, dump_path, original_path=None):
+        if not self._access.was_picker_selected(dump_path):
+            return {"error": "Choose the dump through the native folder picker first."}
+        try:
+            result = extraction.extract_asset(
+                folder_path, name, dump_path, original_path)
+        except (OSError, ValueError) as error:
+            return {"error": str(error)}
+        self._changed(result["entries"])
+        return {"folders": self._asset_folder_entries(result["entries"]),
+                "path": result["path"], "warnings": result["warnings"],
+                "extraction": result["extraction"]}
 
     @staticmethod
     def _asset_folder_entries(entries):

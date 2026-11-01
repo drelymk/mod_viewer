@@ -5,6 +5,7 @@ import { bridgeReady } from '../app/bridge.js';
 import { createFolderRegistryPanel } from './folder-registry-panel.js';
 import { createIcon } from '../ui/ui-icons.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { initAssetExtractionDialog } from './asset-extraction-dialog.js';
 
 const $ = (id) => document.getElementById(id);
 const ASSET_TYPES = ['ZZMI', 'GIMI', 'WWMI'];
@@ -48,9 +49,10 @@ function indexSummary(entry) {
   return t('folder.indexRequired');
 }
 
-export function initAssetFolderPanel({ switchAsset = null } = {}) {
+export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = () => null } = {}) {
   const list = $('asset-folder-list');
   const error = $('asset-folder-error');
+  const notice = $('asset-folder-notice');
   const add = $('asset-folder-add');
   const empty = $('asset-folder-empty');
   const backdrop = $('asset-folder-modal-backdrop');
@@ -67,6 +69,33 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
   let originalPath = null;
   let selectedPath = null;
   let editorBusy = false;
+  let extractionResult = null;
+
+  function renderExtractionNotice() {
+    const summary = extractionResult?.extraction;
+    const messages = [...(extractionResult?.warnings || [])];
+    if (summary) messages.unshift(t(summary.partial ? 'asset.extractedPartial' : 'asset.extracted', summary));
+    notice.textContent = messages.join('\n');
+    notice.hidden = !messages.length;
+    notice.classList.toggle('warning', !!summary?.partial || !!extractionResult?.warnings?.length);
+  }
+
+  const extraction = initAssetExtractionDialog({
+    onSaved: (response, original) => {
+      for (const entry of response.folders || []) {
+        tree.updateRoot(entry, { refreshChildren: true });
+      }
+      setTextError(error, '');
+      extractionResult = response;
+      renderExtractionNotice();
+      const current = getCurrentSource();
+      if (original && current?.kind === 'asset' && canonicalPath(current.path) === canonicalPath(original)) {
+        void Promise.resolve(switchAsset?.(response.path, { asset: true })).then((loaded) => {
+          if (loaded) tree.setActivePath(response.path);
+        });
+      }
+    },
+  });
 
   typeInput.replaceChildren(
     ...ASSET_TYPES.map((value) => {
@@ -96,6 +125,15 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
     onEdit: (entry) => openEditor('edit', entry),
     onOpenFolder: async (entry) => (await bridgeReady()).open_asset_folder(entry.path),
     onDelete: (entry) => removeFolder(entry),
+    contextActions: (entry, isRoot) =>
+      isRoot || entry.asset
+        ? [
+            {
+              label: t(entry.asset ? 'asset.update' : 'asset.add'),
+              action: () => extraction.open(entry),
+            },
+          ]
+        : [],
     rootBusySelectors: ['switch', 'rebuild', 'more', 'edit', 'remove'],
     renderRootExtras: (entry) => {
       const tools = document.createElement('span');
@@ -165,7 +203,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
           const updated = (response?.folders || []).find(
             (candidate) => canonicalPath(candidate.path) === canonicalPath(entry.path),
           );
-          if (!updated || !tree.updateRoot(updated)) applyRegistryResponse(response);
+          if (!updated || !tree.updateRoot(updated, { refreshChildren: true })) applyRegistryResponse(response);
         } catch (caught) {
           setTextError(error, caught.message || String(caught));
         } finally {
@@ -226,6 +264,7 @@ export function initAssetFolderPanel({ switchAsset = null } = {}) {
   }
 
   window.addEventListener(LANGUAGE_CHANGED, () => {
+    renderExtractionNotice();
     if (!backdrop.classList.contains('show')) return;
     title.textContent = editorMode === 'edit' ? t('folder.editAsset') : t('folder.addAsset');
     save.textContent = editorBusy
