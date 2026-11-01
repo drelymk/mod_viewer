@@ -21,7 +21,7 @@ from app.assets.wuwa_texture_names import texture_component_ordinals
 
 
 @pytest.mark.parametrize("influences", [4, 8])
-def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_identity(tmp_path, influences):
+def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_identity(tmp_path, influences, monkeypatch):
     dump = make_attribute_capture(tmp_path, influences)
     image = dump / "000001-ps-t0=66666666(77777777).png"
     Image.new("RGB", (16, 16), (80, 120, 160)).save(image)
@@ -42,6 +42,9 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
     assert [v for i in joints for v in mesh.vertices[1][i]] == list(range(influences))
     assert sum(v for i in weights for v in mesh.vertices[0][i]) == 0
     assert sum(v for i in weights for v in mesh.vertices[1][i]) == pytest.approx(1)
+    def reject_hash_layout(_meshes):
+        raise AssertionError("Native WWMI export must choose its own object folders")
+    monkeypatch.setattr("app.assets.extractor.export._component_folders", reject_hash_layout)
     report = export(package, tmp_path / "exports")
     asset = Path(report.output)
     assert not (asset / "hash.json").exists()
@@ -86,6 +89,21 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
                                  part_filter=[ComponentCoverageKey("11111111", 3, 3)])
     assert len(selected.parts) == 1 and selected.parts[0].first_index == 3
     assert {p.name: digest(p) for p in dump.iterdir()} == before
+    # Separate generated components remain independently editable even when
+    # their format, vertex, and index payloads are identical.
+    first_mesh, second_mesh = package.meshes
+    second_mesh.vertices = first_mesh.vertices
+    second_mesh.component.parts[0].base_vertex = first_mesh.component.parts[0].base_vertex
+    second_mesh.indices = first_mesh.indices
+    independent = Path(export(package, tmp_path / "independent").output) / "11111111"
+    for kind in ("fmt", "vb", "ib"):
+        first_file = independent / f"Component 0.{kind}"
+        second_file = independent / f"Component 1.{kind}"
+        original = second_file.read_bytes()
+        assert first_file.read_bytes() == original
+        assert not first_file.samefile(second_file)
+        first_file.write_bytes(b"edited")
+        assert second_file.read_bytes() == original
 
 
 @pytest.mark.parametrize("extension", [".dds", ".png", ".jpg", ".jpeg"])

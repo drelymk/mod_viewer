@@ -354,7 +354,9 @@ of documentation, comments and tests; use portable fixtures instead.
   source range, base and resource identity in provenance. Object folders use the position hash;
   explicit internal object names affect component labels. Each object owns its
   metadata, geometry and texture copies, with no parent/sibling references or
-  cross-object hardlinks. Do not write a root hash manifest or root textures.
+  cross-object hardlinks. Generated WWMI geometry files remain independent;
+  only textures may share output bytes within an object. Do not write a root
+  hash manifest or root textures.
   Discover hash-named object folders through native WWMI metadata, keeping the
   parent as one asset. WWMI `vb0_hash` identifies the position buffer separately
   from the captured IB hash. Keep native winding on export and apply the shared

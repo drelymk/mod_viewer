@@ -17,7 +17,7 @@ class Inventory:
     def __init__(self, dump, context=None):
         self.root = Path(dump).resolve()
         self.context = context or Context()
-        self.entries = defaultdict(list)
+        self.entries = defaultdict(lambda: defaultdict(list))
         self.files = {}
         self.targets = {}
         self.formats = {}
@@ -34,7 +34,7 @@ class Inventory:
                 self.files[p.name] = p
                 self.logical_bytes += p.stat().st_size
                 if m := FILE.match(p.name):
-                    self.entries[(m[1], m[2], m[3] or "", p.suffix.lower())].append(p.name)
+                    self.entries[m[1]][(m[2], m[3] or "", p.suffix.lower())].append(p.name)
 
     def path(self, name):
         p = (self.root / name).resolve()
@@ -49,7 +49,7 @@ class Inventory:
 
     def find(self, call_id, slot, resource, ext=".buf"):
         h = resource.hash if isinstance(resource, Resource) else resource
-        names = self.entries.get((call_id, slot, h, ext), [])
+        names = self.entries.get(call_id, {}).get((slot, h, ext), [])
         if len(names) != 1:
             raise Unsupported(f"Expected one {slot} {ext} snapshot at draw {call_id}; found {len(names)}")
         return names[0]
@@ -107,9 +107,9 @@ def parse_log(inventory, context=None):
                 target = "deduped/" + right.rsplit("\\", 1)[-1]
                 inventory.targets[name] = target
                 if m := FILE.match(name):
-                    key = (m[1], m[2], m[3] or "", Path(name).suffix.lower())
-                    if name not in inventory.entries[key]:
-                        inventory.entries[key].append(name)
+                    entries = inventory.entries[m[1]][(m[2], m[3] or "", Path(name).suffix.lower())]
+                    if name not in entries:
+                        entries.append(name)
                 inventory.formats[name] = right.rsplit("\\", 1)[-1].rsplit(".", 1)[0].split("-", 1)[-1]
                 continue
             if m := SLOT.match(line):

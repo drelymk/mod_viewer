@@ -22,32 +22,44 @@ def trace(resource, writers):
     return None, chain
 
 
-def classify_surface_overlaps(components, surface_signatures):
-    """Keep overlapping geometry reviewable; opt out only validated outline duplicates."""
+def _surface_overlap_groups(components):
+    outlines, colors = [], []
     for c in components:
+        if c.status != "included":
+            continue
+        if c.parts and all(
+            any(t.get("pass_kind") == "outline" for t in p.textures)
+            and not any(t.get("pass_kind") == "color" for t in p.textures) for p in c.parts):
+            outlines.append(c)
+        if any(t.get("pass_kind") == "color" for p in c.parts for t in p.textures):
+            colors.append(c)
+    return outlines, colors
+
+
+def _surface_signatures(mesh):
+    surfaces = set()
+    for part, indices in zip(mesh.component.parts, mesh.indices):
+        for j in range(0, len(indices), 3):
+            points = sorted(mesh.vertices[index + part.base_vertex][0] for index in indices[j:j + 3])
+            surfaces.add(hashlib.sha256(struct.pack("<9f", *(v for point in points for v in point))).digest())
+    return surfaces
+
+
+def classify_surface_overlaps(outlines, colors, surface_signatures):
+    """Exclude only validated outline duplicates of a supported color pass."""
+    for c in outlines:
         signatures = surface_signatures.get(c.id, set())
         if not signatures:
             continue
-        outline_only = bool(c.parts) and all(
-            any(t.get("pass_kind") == "outline" for t in p.textures)
-            and not any(t.get("pass_kind") == "color" for t in p.textures) for p in c.parts)
-        for other in components:
+        for other in colors:
             other_signatures = surface_signatures.get(other.id, set())
-            color_host = other.status == "included" and any(
-                t.get("pass_kind") == "color" for p in other.parts for t in p.textures)
-            if c.id == other.id or not signatures <= other_signatures:
+            if other.status != "included" or not signatures <= other_signatures:
                 continue
-            if outline_only and color_host:
-                c.provenance["duplicate_outline_pass"] = True
-                c.provenance["surface_overlap"] = dict(component=other.id, triangle_signatures=len(signatures),
-                    evidence="Exact triangle-position subset of a color-pass component; only outline material bindings captured")
-                c.diagnostics.append(f"Duplicate outline pass over {other.name}; excluded by default to avoid overlapping solid surfaces. It can be included manually.")
-                break
-            if len(signatures) < len(other_signatures):
-                c.provenance["surface_overlap"] = dict(component=other.id, triangle_signatures=len(signatures),
-                    evidence="Exact triangle-position subset; pass identity remains unconfirmed")
-                c.diagnostics.append(f"All triangle positions also occur in {other.name}. Retained because outline-only material evidence is absent.")
-                break
+            c.provenance["duplicate_outline_pass"] = True
+            c.provenance["surface_overlap"] = dict(component=other.id, triangle_signatures=len(signatures),
+                evidence="Exact triangle-position subset of a color-pass component; only outline material bindings captured")
+            c.diagnostics.append(f"Duplicate outline pass over {other.name}; excluded by default to avoid overlapping solid surfaces. It can be included manually.")
+            break
 
 
 def morph_trace(position, producer, writers, inv):
@@ -223,6 +235,8 @@ def analyze(dump, context=None):
             component.parts.append(part)
         components.append(component)
     components.sort(key=lambda c: (min(int(x) for p in c.parts for x in p.draws), c.id))
+    outlines, colors = _surface_overlap_groups(components)
+    surface_ids = {c.id for c in (*outlines, *colors)} if outlines and colors else set()
     surface_signatures, decoded_meshes = {}, {}
     for i, c in enumerate(components, 1):
         c.name = f"Component{i:03d}"
@@ -232,16 +246,13 @@ def analyze(dump, context=None):
                 c.provenance.get("geometry_kind") == "direct" or len(mesh.vertices) <= 4096
             ):
                 decoded_meshes[c.id] = mesh
-            surfaces = set()
-            for part, indices in zip(c.parts, mesh.indices):
-                for j in range(0, len(indices), 3):
-                    points = sorted(mesh.vertices[index + part.base_vertex][0] for index in indices[j:j + 3])
-                    surfaces.add(hashlib.sha256(struct.pack("<9f", *(v for point in points for v in point))).digest())
-            surface_signatures[c.id] = surfaces
+            if c.id in surface_ids:
+                surface_signatures[c.id] = _surface_signatures(mesh)
         except (ValueError, KeyError, OSError) as error:
             c.status = "unsupported"
             c.diagnostics.append(str(error))
-    classify_surface_overlaps(components, surface_signatures)
+    if surface_ids:
+        classify_surface_overlaps(outlines, colors, surface_signatures)
     if inv.gimi_evidence and not inv.zzz_evidence:
         from .profiles.gimi_faces import classify_faces
         components.extend(classify_faces(decoded_meshes, ctx))

@@ -11,11 +11,13 @@ from PIL import Image
 
 from app.assets import extraction, folders, index, loader
 from app.assets.extractor.core import Cancelled, Context
+from app.assets.extractor.capture import Inventory, parse_log
+from app.assets.extractor import discovery
 from app.assets.extractor.discovery import analyze
 from app.assets.extractor.export import (
     ExportOptions, Selection, _component_folders, export, extract,
 )
-from app.assets.extractor.textures import digest
+from app.assets.extractor.textures import collect, digest
 from app.assets.extractor.profiles.gimi import material_roles as gimi_material_roles
 from app.bridge.access import FolderAccess
 from app.bridge.registry import AssetFolderRegistry
@@ -35,6 +37,103 @@ def library(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "config_path", lambda: str(config))
     monkeypatch.setattr(paths, "asset_index_dir", lambda: str(tmp_path / "indexes"))
     return root, make_capture(tmp_path)
+
+
+@pytest.mark.parametrize("case,hashed,excluded", [
+    ("no_material", set(), False),
+    ("outline_only", set(), False),
+    ("color_only", set(), False),
+    ("mixed_pass", set(), False),
+    ("subset", {"44444444", "66666666"}, True),
+    ("different_surface", {"44444444", "66666666"}, False),
+    ("unsupported_color", {"66666666"}, False),
+])
+def test_outline_overlap_work_requires_outline_and_color_evidence(tmp_path, monkeypatch, case, hashed, excluded):
+    dump = make_capture(tmp_path)
+    source = next(dump.glob("000002-ib=*.txt"))
+    log = dump / "log.txt"
+    for call, identity in (("000004", "66666666"), ("000005", "77777777")):
+        target = dump / f"{call}-ib={identity}.txt"
+        target.write_text(source.read_text())
+        # Reverse winding; position subsets also account for the base vertex.
+        target.with_suffix(".buf").write_bytes(struct.pack("<6H", 3, 3, 3, 2, 1, 0))
+        base = 0 if call == "000004" and case == "different_surface" else 1
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write(f"{call} IASetIndexBuffer(pIndexBuffer:0x{call}, Format:57, Offset:0) hash={identity}\n"
+                         f"{call} DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:{base})\n")
+    if case == "subset":
+        log.write_text(log.read_text().replace(
+            "IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)",
+            "IndexCount:6, StartIndexLocation:3, BaseVertexLocation:0)", 2))
+        for path in dump.glob("*-ib=44444444*.txt"):
+            path.write_text(path.read_text().replace("index count: 3", "index count: 6"))
+            path.with_suffix(".buf").write_bytes(struct.pack("<9H", 3, 3, 3, 1, 2, 3, 0, 1, 2))
+    if case == "unsupported_color":
+        source.with_suffix(".buf").write_bytes(b"")
+
+    def material(_inv, draws, _ctx):
+        kinds = []
+        if draws[0].id == "000002" and case not in ("no_material", "outline_only"):
+            kinds = ["color"]
+        elif draws[0].id == "000004" and case not in ("no_material", "color_only"):
+            kinds = ["outline", "color"] if case == "mixed_pass" else ["outline"]
+        return [dict(file="log.txt", pass_kind=kind) for kind in kinds]
+
+    signed = []
+    original = discovery._surface_signatures
+    def signatures(mesh):
+        signed.append(mesh.component.ib)
+        return original(mesh)
+    monkeypatch.setattr(discovery, "collect", material)
+    monkeypatch.setattr(discovery, "_surface_signatures", signatures)
+    analysis = analyze(dump)
+    assert set(signed) == hashed
+    color, outline, unrelated = analysis.components
+    assert bool(outline.provenance.get("duplicate_outline_pass")) == excluded
+    assert outline.default_included is not excluded
+    assert "surface_overlap" not in unrelated.provenance
+    if excluded:
+        assert outline.provenance["surface_overlap"]["component"] == color.id
+        assert outline.provenance["surface_overlap"]["triangle_signatures"] == 1
+        assert {m.component.id for m in extract(analysis).meshes} == {color.id, unrelated.id}
+        assert extract(analysis, Selection(ids=[outline.id])).meshes[0].component.id == outline.id
+
+
+def test_texture_lookup_retains_log_only_snapshots_and_dynamic_alternates(tmp_path):
+    dump = make_capture(tmp_path)
+    dedup = dump / "deduped"
+    dedup.mkdir()
+    log = dump / "log.txt"
+    text = log.read_text(encoding="utf-8")
+    for call, color in (("000002", (40, 80, 120)), ("000003", (80, 120, 160))):
+        payload = dedup / f"{call}-unknown.png"
+        Image.new("RGB", (16, 16), color).save(payload)
+        text += (f"{call} 3DMigoto Dumping capture\\{call}-ps-t0=66666666.png"
+                 f" -> deduped\\{payload.name}\n")
+    Image.new("RGB", (16, 16)).save(dedup / "color.png")
+    text += "000002 3DMigoto Dumping capture\\000002-o0=77777777.png -> deduped\\color.png\n"
+    text += "000003 3DMigoto Dumping capture\\000003-o0=77777777.png -> deduped\\color.png\n"
+    log.write_text(text, encoding="utf-8")
+    Image.new("RGB", (16, 16), (200, 200, 200)).save(dump / "000099-ps-t0=66666666.png")
+    inv = Inventory(dump)
+    calls = parse_log(inv)
+
+    class DrawLookups(dict):
+        def __iter__(self):
+            raise AssertionError("Texture collection must not scan unrelated draws")
+
+        def items(self):
+            raise AssertionError("Texture collection must not scan unrelated draws")
+
+    inv.entries = DrawLookups(inv.entries)
+    draws = [call for call in calls if call.kind == "DrawIndexed"]
+    for _ in range(2):
+        textures = collect(inv, draws, Context())
+        assert [t["draw"] for t in textures] == ["000002", "000003"]
+        assert [t["role_confidence"] for t in textures] == ["unknown", "dynamic_alternate"]
+        assert [t["sha256"] for t in textures] == [digest(dedup / f"{call}-unknown.png")
+                                                   for call in ("000002", "000003")]
+        assert inv.find("000002", "ib", "44444444", ".txt") == next(dump.glob("000002-ib=*.txt")).name
 
 
 @pytest.mark.parametrize("role,declared,first,trim,expected", [
