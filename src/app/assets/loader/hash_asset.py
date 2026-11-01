@@ -425,6 +425,7 @@ def _component_face_kind(value):
     if component in exact:
         return exact[component]
     for prefix, kind in (
+        ("facepart", "face"),
         ("faceeyebrow", "brow"), ("facebrow", "brow"),
         ("faceeye", "eye"), ("facemouth", "mouth"),
         ("facenose", "nose"),

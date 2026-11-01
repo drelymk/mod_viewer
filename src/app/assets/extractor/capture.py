@@ -22,6 +22,7 @@ class Inventory:
         self.targets = {}
         self.formats = {}
         self.zzz_evidence = False
+        self.gimi_evidence = False
         self.logical_bytes = 0
         if not self.root.is_dir():
             raise ValueError("Choose an existing frame-dump directory")
@@ -94,6 +95,8 @@ def parse_log(inventory, context=None):
             line = raw.rstrip()
             if "3DMigoto" in line and re.search(r"\\ZZMI(?:v\d+)?\\", line, re.IGNORECASE):
                 inventory.zzz_evidence = True
+            if "3DMigoto" in line and re.search(r"\\GIMI(?:v\d+)?\\", line, re.IGNORECASE):
+                inventory.gimi_evidence = True
             # Dump targets are interpreted only beneath the chosen capture, never arbitrary log paths.
             if "3DMigoto Dumping " in line and " -> " in line:
                 left, right = line.split(" -> ", 1)

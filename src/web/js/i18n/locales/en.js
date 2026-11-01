@@ -1,7 +1,6 @@
 export default {
-  'asset.extracted': 'Asset saved: {components} components.',
   'asset.extractedPartial':
-    'Asset saved: {components} components. Skipped resource groups: {skipped}. These may include scene/UI geometry or unsupported asset parts.',
+    'Partial asset extraction: {components} components saved; {skipped} resource groups skipped. Parts may be missing. See extraction_report.json for details.',
   'mesh.rename': 'Rename',
   'mesh.selectionSameComponent': '{count} meshes selected · {component}',
   'mesh.selectionMultipleComponents': '{count} meshes selected · {components} components',
@@ -122,8 +121,7 @@ export default {
   'asset.update': 'Update asset',
   'asset.name': 'Asset name',
   'asset.dump': 'Dump folder',
-  'asset.extractHint': 'Extract an asset from a frame dump into this folder.',
-  'asset.replaceHint': 'Replace all current asset files with a new extraction from a frame dump.',
+  'asset.dumpHint': 'Choose the FrameAnalysis folder created by 3DMigoto for the asset you want to extract.',
   'asset.extracting': 'Extracting…',
   'asset.required': 'Enter an asset name and choose a dump folder using Browse.',
   'folder.removeAsset':

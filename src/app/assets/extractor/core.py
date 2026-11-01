@@ -77,8 +77,20 @@ class Component:
     bounds: list = field(default_factory=list)
 
     @property
+    def unproven_direct(self):
+        return (self.status == "included" and self.provenance.get("geometry_kind") == "direct"
+                and not self.provenance.get("gimi_face_family"))
+
+    @property
+    def requires_review(self):
+        return self.status in ("uncertain", "unsupported") or self.unproven_direct
+
+    @property
     def default_included(self):
-        return self.status == "included" and not self.provenance.get("duplicate_outline_pass")
+        return (self.status == "included" and not self.requires_review
+                and not self.provenance.get("duplicate_outline_pass")
+                and not self.provenance.get("duplicate_capture_pass")
+                and not self.provenance.get("auxiliary_face_layer"))
 
 
 @dataclass

@@ -69,15 +69,11 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
   let originalPath = null;
   let selectedPath = null;
   let editorBusy = false;
-  let extractionResult = null;
+  let partialExtraction = null;
 
-  function renderExtractionNotice() {
-    const summary = extractionResult?.extraction;
-    const messages = [...(extractionResult?.warnings || [])];
-    if (summary) messages.unshift(t(summary.partial ? 'asset.extractedPartial' : 'asset.extracted', summary));
-    notice.textContent = messages.join('\n');
-    notice.hidden = !messages.length;
-    notice.classList.toggle('warning', !!summary?.partial || !!extractionResult?.warnings?.length);
+  function renderExtractionWarning() {
+    notice.hidden = !partialExtraction;
+    notice.textContent = partialExtraction ? t('asset.extractedPartial', partialExtraction) : '';
   }
 
   const extraction = initAssetExtractionDialog({
@@ -86,8 +82,8 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
         tree.updateRoot(entry, { refreshChildren: true });
       }
       setTextError(error, '');
-      extractionResult = response;
-      renderExtractionNotice();
+      partialExtraction = response.extraction?.partial ? response.extraction : null;
+      renderExtractionWarning();
       const current = getCurrentSource();
       if (original && current?.kind === 'asset' && canonicalPath(current.path) === canonicalPath(original)) {
         void Promise.resolve(switchAsset?.(response.path, { asset: true })).then((loaded) => {
@@ -264,7 +260,7 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
   }
 
   window.addEventListener(LANGUAGE_CHANGED, () => {
-    renderExtractionNotice();
+    renderExtractionWarning();
     if (!backdrop.classList.contains('show')) return;
     title.textContent = editorMode === 'edit' ? t('folder.editAsset') : t('folder.addAsset');
     save.textContent = editorBusy

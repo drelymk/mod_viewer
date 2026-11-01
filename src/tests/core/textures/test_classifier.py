@@ -6,6 +6,7 @@ from PIL import Image
 
 from core.textures import classifier as dds_classifier
 from core.textures.dds import DDSInfo
+from tests.support.dds_data import uncompressed_dds
 
 
 def _write_rgba_dds(path, pixels, width, height):
@@ -32,6 +33,19 @@ def test_invalid_dds_is_unknown(tmp_path):
 
     assert result.role is None
     assert result.texture_class == "unknown"
+
+
+def test_color_classification_preserves_rgb_when_alpha_is_nonopacity_data(tmp_path):
+    colors = [(x * 29 % 256, y * 31 % 256, (x * 13 + y * 17) % 256)
+              for y in range(256) for x in range(256)]
+    results = []
+    for alpha in (0, 255):
+        path = tmp_path / f"sample-{alpha}.dds"
+        pixels = bytes(v for color in colors for v in (*color, alpha))
+        path.write_bytes(uncompressed_dds(pixels, width=256, height=256, dxgi_format=29))
+        results.append(dds_classifier.classify_dds(path))
+    assert results[0] == results[1]
+    assert results[0].color_score >= 0.7
 
 
 def test_bc5_is_a_high_confidence_normal_without_decoding(tmp_path):

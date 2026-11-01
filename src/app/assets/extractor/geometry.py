@@ -1,4 +1,4 @@
-"""Validated DXGI decoding, ZZZ stream assembly and conservative morph reversal."""
+"""Validated DXGI decoding, stream assembly and conservative morph reversal."""
 from dataclasses import dataclass
 import math
 import re
@@ -45,6 +45,8 @@ def codec(fmt):
 def stream_layout(inv, name, slot, role, vertex_count=None):
     header, raw = inv.header(name.replace(".buf", ".txt"))
     stride = int(header["stride"])
+    if stride <= 0:
+        raise Unsupported("Vertex stride must be positive")
     elements = []
     if role == "position":
         if stride != 40:
@@ -65,7 +67,16 @@ def stream_layout(inv, name, slot, role, vertex_count=None):
         for e in raw:
             if int(e.get("InputSlot", -1)) == slot and e.get("InputSlotClass") == "per-vertex":
                 elements.append(Element(e["SemanticName"], int(e["SemanticIndex"]), e["Format"], int(e["AlignedByteOffset"])))
-        if not elements or not any(e.semantic == "TEXCOORD" for e in elements):
+        if role == "direct_position":
+            if header.get("topology") != "trianglelist" or any(
+                not any(e.semantic == semantic and e.index == 0
+                        and e.format.removeprefix("DXGI_FORMAT_") == "R32G32B32_FLOAT"
+                        for e in elements)
+                for semantic in ("POSITION", "NORMAL")
+            ):
+                raise Unsupported("Direct geometry requires declared triangle-list positions and normals")
+            elements.sort(key=lambda e: (e.semantic != "POSITION", e.index))
+        elif not elements or not any(e.semantic == "TEXCOORD" for e in elements):
             raise Unsupported("Missing declared texture coordinate layout")
     for e in elements:
         size, _ = codec(e.format)
@@ -139,10 +150,13 @@ def decode_component(inv, component, context=None):
     source_position = b""
     morph_status = "not_detected"
     notes = []
-    for role in ("position", "blend", "texcoord"):
+    direct = component.provenance.get("geometry_kind") == "direct"
+    roles = ("position", "texcoord") if direct else ("position", "blend", "texcoord")
+    for role in roles:
         source = component.streams[role]
         name, slot = source["file"], source["slot"]
-        stride, elements, declared_count, first_vertex = stream_layout(inv, name, slot, role)
+        layout_role = "direct_position" if direct and role == "position" else role
+        stride, elements, declared_count, first_vertex = stream_layout(inv, name, slot, layout_role)
         data = inv.path(name).read_bytes()
         if len(data) % stride:
             raise Unsupported(f"Truncated {role} buffer")
@@ -151,11 +165,15 @@ def decode_component(inv, component, context=None):
             count = n
         if not n or n != count:
             raise Unsupported(f"Inconsistent {role} vertex count: {n}, expected {count}")
-        if first_vertex != 0 or declared_count not in (0, n):
+        # UV headers can describe only the drawn subset of a full resource dump.
+        # Its byte-derived count must still match the position stream.
+        complete_uv_payload = role == "texcoord" and 0 <= declared_count <= n
+        if first_vertex != 0 or (declared_count not in (0, n) and not complete_uv_payload):
             raise Unsupported(f"Partial vertex snapshot in {role}: first={first_vertex}, count={declared_count}, payload={n}")
         if role == "position":
             source_position = data
-            data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx)
+            if not direct:
+                data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx)
         decoded = []
         decoders = [(e.offset, codec(e.format)[1]) for e in elements]
         for i in range(n):
