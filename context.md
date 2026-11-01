@@ -221,11 +221,13 @@ of documentation, comments and tests; use portable fixtures instead.
   traversing the global library. Associate hash evidence, component-local
   `ps-tN` resources and filenames into one canonical source-identity pool per
   component. Generic filenames use the original component name and prefer a
-  unique most-specific match; WWMI retains `Components-N t=...dds`, including
-  multi-component ordinals. Resolve every INI's references and replacement
+  unique most-specific match; WWMI uses `Components-N t=...` names with DDS,
+  PNG or JPEG extensions, including multi-component ordinals. Resolve every INI's references and replacement
   index independently before aggregation. WWMI Asset ordinals and texture hash
   evidence belong to each exact draw's metadata object; sibling objects do not
-  share candidate textures. Filename associations supply choices,
+  share candidate textures. For WWMI, only filename ordinals establish candidate
+  membership; texture-hash substrings and explicit file references cannot add
+  another component's candidates. Filename associations supply choices,
   never automatic roles. Apply semantic/slot/conditional selection once per
   draw, preserving authored execution order, no-mod-diffuse Asset eligibility
   and game-specific normal transport. Original Asset defaults select unique
@@ -342,7 +344,8 @@ of documentation, comments and tests; use portable fixtures instead.
   identical source/layout identities; malformed headers remain rejected.
   Split skinned ATTRIBUTE captures require validated position, packed
   tangent/normal, UV and four/eight-influence blend layouts with matching full
-  binary counts. Alias declarations may share the same four-influence bytes.
+  binary counts. Alias declarations must share the four-influence stream's slot,
+  formats and byte offsets; reject partial aliases or declarations on other slots.
   Draw-subset header counts do not split complete ATTRIBUTE resources. Ignore
   shader-only deformation streams rather than interpreting unknown compute data.
   Export each ATTRIBUTE draw range as a separate component inside its source
@@ -409,12 +412,16 @@ of documentation, comments and tests; use portable fixtures instead.
   WWMI map roles or discard unknown candidates from those signatures.
   Preserve confirmed roles, never infer GIMI MaterialMap, and leave ambiguous
   or non-primary masks as suggestions in the provenance report.
-  Compact texture names retain asset, component, role and native hash. Shared
+  GIMI/ZZMI compact texture names retain asset, component, role and native hash. Shared
   hash/payload pairs use one file named for their first owning component; each
   consumer retains its own role and exact metadata reference. Distinct native
   hashes or differing payloads stay separate. Additional byte sharing may use
   output-only hardlinks. Scope WWMI sharing to one object folder, including
-  physical hardlinks. Keep unclassified GIMI textures as selectable candidates
+  physical hardlinks. WWMI textures use native `Components-0-1 t=hash.ext` names,
+  listing exactly the referencing component ordinals. Share each native-hash/payload
+  pair once per object; use a content suffix for same-hash payload collisions.
+  Preserve source encoding and metadata's exact filename and proven role.
+  Keep unclassified GIMI textures as selectable candidates
   without automatically binding them. Only actual auxiliary/unusable evidence
   excludes resources from normal output; retain provenance and optional debug files.
 - Index Assets through metadata only. Heavy geometry/textures require explicit

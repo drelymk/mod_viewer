@@ -5,6 +5,33 @@ import struct
 from .geometry import codec, encoder
 
 
+def texture_plan(meshes, refs):
+    """Name each object-local payload for every native component that uses it."""
+    ordinals, users, identities, contents = {}, {}, {}, {}
+    for mesh in meshes:
+        c = mesh.component
+        group = c.streams["position"]["hash"]
+        for part_index, part in enumerate(c.parts):
+            ordinal = ordinals.get(group, 0)
+            ordinals[group] = ordinal + 1
+            for texture in part.textures:
+                key = c.id, part_index, texture["file"]
+                if key not in refs:
+                    continue
+                ext, selected = refs[key]
+                identity = group, texture["hash"], texture["sha256"], ext, selected
+                identities[key] = identity
+                users.setdefault(identity, set()).add(ordinal)
+                contents.setdefault((group, texture["hash"]), set()).add(texture["sha256"])
+    filenames = {}
+    for identity, components in users.items():
+        group, native_hash, payload, ext, selected = identity
+        suffix = "-" + payload[:12] if len(contents[group, native_hash]) > 1 else ""
+        name = "Components-" + "-".join(map(str, sorted(components))) + " t=" + native_hash + suffix + ext
+        filenames[identity] = name if selected else "assets/" + name
+    return {key: filenames[identity] for key, identity in identities.items()}
+
+
 def write_component(directory, ordinal, mesh, part, indices, context):
     """Keep every vertex channel while giving each native component local indices."""
     used = sorted({index + part.base_vertex for index in indices})

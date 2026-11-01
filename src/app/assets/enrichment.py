@@ -16,7 +16,7 @@ from core.resource_paths import safe_resource_path
 
 from . import paths as asset_paths
 from . import textures as asset_textures
-from .package_format import is_viewer_metadata
+from .package_format import FORMAT, is_viewer_metadata
 
 
 _ROLE_NAMES = {
@@ -195,12 +195,19 @@ def _locate_texture(binding, evidence, candidates):
     asset_dir = _safe_asset_path(binding.root, binding.asset)
     if not asset_dir or not os.path.isdir(asset_dir):
         return None
+    wwmi = binding.asset_type == "WWMI"
+    directories = asset_textures.texture_asset_directories(binding) if wwmi else ()
     paths = set()
     for candidate in candidates:
         if candidate["source"] != "asset":
             continue
         path = candidate["path"]
         if asset_paths.relative_asset_path(asset_dir, path) is None:
+            continue
+        if wwmi and (not asset_textures.component_texture_matches(
+                path, {0: binding.component_ordinal}, wwmi=True)
+                or not any(os.path.normcase(os.path.dirname(path)) == os.path.normcase(directory)
+                           for directory in directories)):
             continue
         if _matches_original_texture(binding, evidence, path):
             paths.add(path)
@@ -214,7 +221,8 @@ def _logical_key(binding, filename):
 def _hash_evidence(binding, cache):
     filename = _safe_asset_path(binding.root, binding.metadata)
     raw = _json(cache, filename) if filename else None
-    if binding.asset_type == "WWMI" and not is_viewer_metadata(raw):
+    if binding.asset_type == "WWMI" and (
+            not isinstance(raw, dict) or raw.get("format") != FORMAT or not raw.get("vb0_hash")):
         return []
     return _texture_records(binding, raw)
 
@@ -590,22 +598,11 @@ def _associate_textures(group, records, inventory, filename_matches,
             for replacement in index.replacements_by_hash.get(texture_hash, ()):
                 add_mod(replacement.file)
     associated_assets = set()
-    for raw_draw, binding, evidence, slots in exact_records:
+    for _draw, binding, evidence, _slots in exact_records:
         wwmi = binding.asset_type == "WWMI"
-        asset_hashes = hashes
-        if wwmi:
-            draw = DrawCall.from_mapping(raw_draw, group)
-            asset_hashes = {
-                usage["texture_hash"] for usages in slots.values() for usage in usages}
-            asset_hashes.update(value for values in draw.texture_hashes.values()
-                                for value in values)
-            asset_hashes.update(value for slot in draw.slot_textures
-                                for value in slot.texture_hashes)
-            asset_hashes.update(item.texture_hash for item in evidence)
-        association = (binding, frozenset(asset_hashes))
-        if association in associated_assets:
+        if binding in associated_assets:
             continue
-        associated_assets.add(association)
+        associated_assets.add(binding)
         directories = asset_textures.texture_asset_directories(binding)
         names = ({id(group): binding.component_ordinal} if wwmi else
                  asset_names.get((binding.root, binding.asset), {}))
@@ -624,11 +621,11 @@ def _associate_textures(group, records, inventory, filename_matches,
             filename = os.path.basename(path)
             matches = asset_textures.component_texture_matches(
                 filename, names, wwmi=wwmi)
-            if (id(group) in matches
-                    or any(value in filename.casefold() for value in asset_hashes)
-                    or any(_matches_original_texture(
-                               binding, item, path, require_component=True)
+            if not wwmi and (any(value in filename.casefold() for value in hashes)
+                    or any(_matches_original_texture(binding, item, path, require_component=True)
                            for item in evidence)):
+                matches.add(id(group))
+            if id(group) in matches:
                 candidates.setdefault(identity, dict(candidate))
     group["texture_candidates"] = list(candidates.values())
 

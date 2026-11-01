@@ -5,7 +5,7 @@ import re
 
 _COMPONENT_TEXTURE_RE = re.compile(
     r"^Components-(?P<components>\d+(?:-\d+)*)"
-    r"\s+t=(?P<tag>.+?)\.dds$", re.I)
+    r"\s+t=(?P<tag>.+?)\.(?:dds|png|jpe?g)$", re.I)
 
 
 def texture_component_ordinals(filename: str) -> frozenset[int] | None:

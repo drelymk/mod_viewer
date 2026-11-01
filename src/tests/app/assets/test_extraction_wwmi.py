@@ -10,13 +10,14 @@ import pytest
 
 from app.assets import index, loader
 from app.assets.extractor.discovery import analyze
-from app.assets.extractor.export import Selection, export, extract
+from app.assets.extractor.export import ExportOptions, Selection, export, extract
 from app.assets.extractor.textures import digest
 from app.assets.extractor.profiles.wwmi import material_roles
 from core.geometry.mesh_builder import GeometryBlob
 from core.geometry.component_coverage import ComponentCoverageKey
 from tests.support.extraction_data import make_attribute_capture
 from tests.support.dds_data import dx10_dds
+from app.assets.wuwa_texture_names import texture_component_ordinals
 
 
 @pytest.mark.parametrize("influences", [4, 8])
@@ -24,6 +25,7 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
     dump = make_attribute_capture(tmp_path, influences)
     image = dump / "000001-ps-t0=66666666(77777777).png"
     Image.new("RGB", (16, 16), (80, 120, 160)).save(image)
+    shutil.copyfile(image, dump / "000002-ps-t0=66666666.png")
     before = {p.name: digest(p) for p in dump.iterdir()}
     analysis = analyze(dump)
     component, = analysis.components
@@ -58,8 +60,8 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
     assert struct.unpack("<3I", (asset / "11111111/Component 0.ib").read_bytes()) == (0, 1, 2)
     assert struct.unpack("<3I", (asset / "11111111/Component 1.ib").read_bytes()) == (0, 1, 2)
     usage = json.loads((asset / "11111111/TextureUsage.json").read_text())
-    assert usage == {"Component 0": {"ps-t0": [
-        "66666666-vs=aaaaaaaaaaaaaaaa-ps=bbbbbbbbbbbbbbbb"]}, "Component 1": {}}
+    assert usage == {f"Component {i}": {"ps-t0": [
+        "66666666-vs=aaaaaaaaaaaaaaaa-ps=bbbbbbbbbbbbbbbb"]} for i in range(2)}
     from core.geometry.migoto_format import parse_fmt
     from app.assets.extractor.geometry import codec
     layout = parse_fmt(asset / "11111111/Component 0.fmt")
@@ -78,11 +80,57 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
     assert list(struct.iter_unpack("<3f", first.normals)) == [(0, 0, 1)] * 3
     candidate, = first.texture_candidates
     assert candidate.role is None and digest(Path(candidate.path)) == digest(image)
-    assert entry["texture_hashes"][0][0][2] == "66666666"
+    assert entry["texture_hashes"][0][0][2:] == ["66666666", "Components-0-1 t=66666666.png"]
+    assert len(list((asset / "11111111").glob("*.png"))) == 1
     selected = loader.load_asset("WWMI", str(asset.parent), record, geometry=GeometryBlob(),
                                  part_filter=[ComponentCoverageKey("11111111", 3, 3)])
     assert len(selected.parts) == 1 and selected.parts[0].first_index == 3
     assert {p.name: digest(p) for p in dump.iterdir()} == before
+
+
+@pytest.mark.parametrize("extension", [".dds", ".png", ".jpg", ".jpeg"])
+def test_native_texture_names_preserve_membership_collisions_roles_and_encoding(tmp_path, extension):
+    dump = make_attribute_capture(tmp_path)
+    for ordinal, call in enumerate(("000001", "000002")):
+        path = dump / f"{call}-ps-t0=66666666{extension}"
+        if extension == ".dds":
+            path.write_bytes(dx10_dds(bytes([ordinal * 80, 40, 80, 255]) * 16,
+                                     dxgi_format=28, width=4, height=4))
+        else:
+            Image.new("RGB", (16, 16), (80 + ordinal * 80, 120, 160)).save(path)
+    package = extract(analyze(dump), Selection("Asset_001"))
+    shared = dump / ("shared" + extension)
+    shutil.copyfile(dump / f"000001-ps-t0=66666666{extension}", shared)
+    for ordinal, mesh in enumerate(package.meshes):
+        texture, = mesh.component.parts[0].textures
+        texture["role"] = "Diffuse" if ordinal == 0 else "NormalMap"
+        texture["auxiliary"] = False
+        mesh.component.parts[0].textures.append({**texture, "file": shared.name,
+                                               "hash": "77777777", "sha256": digest(shared),
+                                               "role": "TextureSlot09"})
+    report = export(package, tmp_path / "exports", options=ExportOptions(
+        layout="compatible" if extension == ".jpeg" else "compact"))
+    asset = Path(report.output) / "11111111"
+    metadata = json.loads((asset / "Metadata.json").read_text())
+    assert report.texture_files == 3
+    shared_name = f"Components-0-1 t=77777777{extension}"
+    assert digest(asset / shared_name) == digest(shared)
+    for ordinal, component in enumerate(metadata["components"]):
+        own, common = component["texture_hashes"][0]
+        source = dump / f"{ordinal + 1:06}-ps-t0=66666666{extension}"
+        assert own[3] == f"Components-{ordinal} t=66666666-{digest(source)[:12]}{extension}"
+        assert common[3] == shared_name
+        assert texture_component_ordinals(own[3]) == {ordinal}
+        assert texture_component_ordinals(shared_name) == {0, 1}
+        assert digest(asset / own[3]) == digest(source)
+    root = str(Path(report.output).parent)
+    loaded = loader.load_asset("WWMI", root, index.build_index("WWMI", root)["assets"][0], geometry=GeometryBlob())
+    for ordinal, part in enumerate(loaded.parts):
+        row = metadata["components"][ordinal]["texture_hashes"][0]
+        assert {Path(item.path).name for item in part.texture_candidates} == {item[3] for item in row}
+        role = "diffuse" if ordinal == 0 else "normal_data"
+        assert Path(part.textures[role].path).name == row[0][3]
+        assert part.textures[role].role == role
 
 
 def test_multiple_object_folders_are_self_contained_and_remain_one_asset(tmp_path):
@@ -263,9 +311,11 @@ def test_complete_hair_pass_outweighs_simple_pair_with_more_resources(tmp_path):
     assert diffuse["draw"] == "000002" and diffuse["slot"] == 1
 
 
-@pytest.mark.parametrize("case", ["normal", "duplicate", "stride", "first", "count", "truncated", "weights"])
+@pytest.mark.parametrize("case", ["normal", "duplicate", "stride", "first", "count", "truncated", "weights",
+                                "alias_slot", "alias_index_format", "alias_weight_format",
+                                "alias_index_offset", "alias_weight_offset", "alias_step", "alias_missing"])
 def test_attribute_skinning_rejects_unproven_or_incomplete_layouts(tmp_path, case):
-    dump = make_attribute_capture(tmp_path)
+    dump = make_attribute_capture(tmp_path, 4 if case.startswith("alias_") else 8)
     for call in ("000001", "000002"):
         normal = dump / f"{call}-vb1=22222222.txt"
         uv = dump / f"{call}-vb2=33333333.txt"
@@ -284,6 +334,24 @@ def test_attribute_skinning_rejects_unproven_or_incomplete_layouts(tmp_path, cas
         elif case == "weights":
             blend = dump / f"{call}-vb4=44444444.buf"
             blend.write_bytes(bytes([255]) * blend.stat().st_size)
+        else:
+            blend = dump / f"{call}-vb4=44444444.txt"
+            primary, aliases = blend.read_text().split("element[2]:", 1)
+            if case == "alias_slot":
+                aliases = aliases.replace("InputSlot: 4", "InputSlot: 5")
+            elif case == "alias_index_format":
+                aliases = aliases.replace("R8G8B8A8_UINT", "R8G8B8A8_UNORM")
+            elif case == "alias_weight_format":
+                aliases = aliases.replace("R8G8B8A8_UNORM", "R8G8B8A8_UINT")
+            elif case == "alias_index_offset":
+                aliases = aliases.replace("AlignedByteOffset: 0", "AlignedByteOffset: 4")
+            elif case == "alias_weight_offset":
+                aliases = aliases.replace("AlignedByteOffset: 4", "AlignedByteOffset: 0")
+            elif case == "alias_step":
+                aliases = aliases.replace("per-vertex", "per-instance")
+            elif case == "alias_missing":
+                aliases = aliases.split("element[3]:", 1)[0] + "\nvertex-data:\n"
+            blend.write_text(primary + "element[2]:" + aliases)
     analysis = analyze(dump)
     assert not any(c.default_included for c in analysis.components)
     with pytest.raises(ValueError, match="No supported components"):

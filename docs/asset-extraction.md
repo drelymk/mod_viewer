@@ -74,6 +74,13 @@ payloads are not hardlinked across objects. The index recognizes the child
 metadata and loads the parent as one asset. A copied object folder also works
 as a standalone asset. Descriptive object names supplied through the internal
 rename API label its components without changing the native folder identity.
+WWMI texture names follow `Components-0-1 t=12345678.dds`: the ordinals list
+exactly the components that reference that payload. Each native hash/payload
+pair is exported once per object, and distinct contents with the same native
+hash receive a content-hash suffix. PNG and JPEG captures keep their encoding
+and extension. Candidate membership uses these native names; matching a texture
+hash substring never associates another WWMI component's images. Exact component
+metadata references retain proven material roles for automatic assignment.
 In WWMI captures, complete bound format/size families can identify a
 diffuse at different slots and take priority over pixel inference and unrelated
 effects. Other maps remain unbound unless the existing fallback establishes a
@@ -121,7 +128,7 @@ texture payload relative to its `hash.json`. These associations keep captured
 resource versions separate when their hashes collide, including unknown texture
 roles. Legacy assets retain unique-hash lookup and component-associated dump
 matching; unresolved distinct same-hash geometry stays unbound.
-Compact texture filenames include the asset name, component, role and native hash,
+GIMI/ZZMI compact texture filenames include the asset name, component, role and native hash,
 such as `Asset_001-Body-Diffuse-12345678.dds`. Distinct payloads sharing one hash
 also retain a content suffix. Metadata references each file explicitly; identical
 hash/payload pairs share one file named for their first owning component, including

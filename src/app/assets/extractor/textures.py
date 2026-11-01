@@ -51,7 +51,7 @@ def collect(inv, draws, context):
     for draw in draws:
         images = []
         for (call_id, slot, h, ext), names in inv.entries.items():
-            if call_id != draw.id or not slot.startswith("ps-t") or ext not in (".dds", ".jpg", ".png"):
+            if call_id != draw.id or not slot.startswith("ps-t") or ext not in (".dds", ".jpg", ".jpeg", ".png"):
                 continue
             for name in names:
                 try:

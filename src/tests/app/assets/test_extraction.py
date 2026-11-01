@@ -384,7 +384,8 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     # Read the generated geometry using the viewer's real asset loader.
     loaded = loader.load_asset(asset_type, str(root), record, geometry=GeometryBlob())
     assert loaded.payload["meshes"]
-    assert list(asset.rglob("Asset_001-Component001-TextureSlot00-*.png"))
+    texture_pattern = "Components-0 t=*.png" if asset_type == "WWMI" else "Asset_001-Component001-TextureSlot00-*.png"
+    assert list(asset.rglob(texture_pattern))
     assert loaded.parts[0].texture_candidates
     assert not loaded.parts[0].textures
     stale = asset / "obsolete" / "old.bin"

@@ -110,7 +110,7 @@ class PayloadFiles:
             self.by_content[identity] = path
 
 
-def _texture_plan(meshes, name, options):
+def _texture_plan(meshes, name, options, *, wwmi=False):
     """Keep importer role/hash schema intact while sharing unambiguous payloads."""
     refs, omitted, hash_contents = {}, [], {}
     for mesh in meshes:
@@ -129,6 +129,9 @@ def _texture_plan(meshes, name, options):
                     raise Unsupported("Unsupported texture extension in analysis")
                 hash_contents.setdefault((t["hash"], ext), set()).add(t["sha256"])
                 refs[(c.id, i, t["file"])] = (ext, selected)
+    if wwmi:
+        from .wwmi_export import texture_plan
+        return texture_plan(meshes, refs), omitted
     result, shared = {}, {}
     for mesh in meshes:
         c = mesh.component
@@ -147,8 +150,7 @@ def _texture_plan(meshes, name, options):
                         filename = "assets/" + filename
                     else:
                         # Keep distinct native hashes and payload versions addressable.
-                        group = (c.streams["position"]["hash"] if options.asset_type == "WWMI"
-                                 else c.provenance.get("object_folder", ""))
+                        group = c.provenance.get("object_folder", "")
                         identity = group, t["hash"], t["sha256"], ext
                         filename = shared.setdefault(identity, filename)
                 else:
@@ -300,7 +302,7 @@ def export(package, output, context=None, *, options=None):
             m.component.provenance.get("geometry_kind") == "attribute_skinning"
             for m in package.meshes))
     metadata_name = WWMI_METADATA if wwmi else "hash.json"
-    texture_plan, omitted = _texture_plan(package.meshes, package.name, options)
+    texture_plan, omitted = _texture_plan(package.meshes, package.name, options, wwmi=wwmi)
     component_folders = _component_folders(package.meshes)
     object_folders = {m.component.id for m in package.meshes if m.component.provenance.get("object_folder")}
     if wwmi:

@@ -70,6 +70,10 @@ def material_roles(textures, color_target, shader):
 def layout(header, raw, slot, role):
     from ..geometry import Element
 
+    if role == "blend" and any(
+            e.get("SemanticName") == "ATTRIBUTE" and e.get("SemanticIndex") in ("14", "15")
+            and int(e.get("InputSlot", -1)) != slot for e in raw):
+        raise Unsupported("ATTRIBUTE14/15 aliases must use the declared blend stream")
     fields = [e for e in raw if int(e.get("InputSlot", -1)) == slot]
     if (header.get("topology") != "trianglelist" or not fields or any(
         e.get("SemanticName") != "ATTRIBUTE" or e.get("InputSlotClass") != "per-vertex"

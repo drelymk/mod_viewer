@@ -3,6 +3,7 @@ import struct
 import json
 import zipfile
 from types import SimpleNamespace
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +34,7 @@ def _write_geometry(root):
     (root / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
 
 
-def test_compact_wwmi_defaults_use_exact_range_file_references(tmp_path, monkeypatch):
+def test_native_wwmi_uses_ordinal_candidates_and_exact_role_references(tmp_path, monkeypatch):
     from app.assets.extractor.discovery import analyze
     from app.assets.extractor.export import Selection, export, extract
     from tests.support.extraction_data import make_attribute_capture
@@ -44,12 +45,16 @@ def test_compact_wwmi_defaults_use_exact_range_file_references(tmp_path, monkeyp
     asset = root / "Asset01" / "11111111"
     path = asset / "Metadata.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
+    def texture_file(ordinal, stem):
+        native_hash = {"color": "aaaaaaaa", "map": "bbbbbbbb", "choice": "cccccccc"}[stem]
+        return f"Components-{ordinal} t={native_hash}-{stem}.dds"
+
     for ordinal, entry in enumerate(raw["components"]):
-        entry["texture_hashes"] = [[["Diffuse", ".dds", "aaaaaaaa", f"color{ordinal}.dds"],
-                                    ["NormalMap", ".dds", "bbbbbbbb", f"map{ordinal}.dds"],
-                                    ["Unknown", ".dds", "cccccccc", f"choice{ordinal}.dds"]]]
+        entry["texture_hashes"] = [[["Diffuse", ".dds", "aaaaaaaa", texture_file(ordinal, "color")],
+                                    ["NormalMap", ".dds", "bbbbbbbb", texture_file(ordinal, "map")],
+                                    ["Unknown", ".dds", "cccccccc", texture_file(ordinal, "choice")]]]
         for stem in ("color", "map", "choice"):
-            (asset / f"{stem}{ordinal}.dds").write_bytes(b"synthetic texture")
+            (asset / texture_file(ordinal, stem)).write_bytes(f"synthetic {ordinal} {stem}".encode())
     path.write_text(json.dumps(raw), encoding="utf-8")
     sibling = asset.parent / "22222222"
     sibling.mkdir()
@@ -69,7 +74,7 @@ def test_compact_wwmi_defaults_use_exact_range_file_references(tmp_path, monkeyp
     for ordinal, mesh in enumerate(preview.payload["meshes"].values()):
         assert mesh["normal_map_key"] is None
         assert mesh["normal_data_key"] == asset_texture_key(
-            str(root), str(asset / f"map{ordinal}.dds"), "normal_data")
+            str(root), str(asset / texture_file(ordinal, "map")), "normal_data")
     mod = tmp_path / "mod"
     mod.mkdir()
     _write_geometry(mod)
@@ -100,23 +105,24 @@ drawindexed = 3,0,0
         for ordinal, mesh in enumerate(payload["meshes"].values()):
             choices = payload["texture_pools"][mesh["texture_pool_id"]]
             asset_keys = {item["tex_key"] for item in choices if "::asset/" in item["tex_key"]}
-            assert asset_keys == {asset_texture_key(str(root), str(asset / f"{stem}{ordinal}.dds"))
+            assert asset_keys == {asset_texture_key(str(root), str(asset / texture_file(ordinal, stem)))
                                   for stem in ("color", "map", "choice")}
             assert mesh["tex_key"] == ("diffuse::owned.dds" if binding else
-                                       asset_texture_key(str(root), str(asset / f"color{ordinal}.dds")))
+                                       asset_texture_key(str(root), str(asset / texture_file(ordinal, "color"))))
             assert mesh.get("normal_data_key") == (None if binding else asset_texture_key(
-                str(root), str(asset / f"map{ordinal}.dds"), "normal_data"))
+                str(root), str(asset / texture_file(ordinal, "map")), "normal_data"))
 
 
 @pytest.mark.parametrize("reference", ["missing.dds", "../Other/color.dds", "../../../outside.dds",
-                                       "C:/outside.dds", "", None])
+                                       "C:/outside.dds", "Components-1 t=aaaaaaaa.dds", "", None])
 def test_compact_wwmi_invalid_reference_never_uses_legacy_name(tmp_path, reference):
     mod = tmp_path / "mod"
     mod.mkdir()
     root = tmp_path / "assets"
     asset = root / "Asset01" / "11111111"
     asset.mkdir(parents=True)
-    (asset / "Asset01PartADiffuse.dds").write_bytes(b"legacy name")
+    (asset / "Components-0 t=aaaaaaaa.dds").write_bytes(b"own candidate")
+    (asset / "Components-1 t=aaaaaaaa.dds").write_bytes(b"other component")
     other = asset.parent / "Other"
     other.mkdir()
     (other / "color.dds").write_bytes(b"other object")
@@ -124,19 +130,25 @@ def test_compact_wwmi_invalid_reference_never_uses_legacy_name(tmp_path, referen
     (asset / "Metadata.json").write_text(json.dumps({
         "format": "mod-viewer", "vb0_hash": "11111111", "components": [{
             "component_name": "Part", "index_offset": 0, "index_count": 3,
-            "texture_hashes": [[["Diffuse", ".dds", "aaaaaaaa", reference]]]}]}), encoding="utf-8")
+            "texture_hashes": [[["Diffuse", ".dds", "aaaaaaaa", reference]]]}, {
+            "component_name": "OtherPart", "index_offset": 3, "index_count": 3,
+            "texture_hashes": [[["Diffuse", ".dds", "aaaaaaaa", "Components-1 t=aaaaaaaa.dds"]]]}]}), encoding="utf-8")
     binding = AssetComponentBinding(
         status="exact", component_status="exact", range_status="exact", asset_type="WWMI",
         root=str(root), asset="Asset01", metadata="Asset01/11111111/Metadata.json",
-        geometry_hash="11111111", first_index=0, classification="Part", component_name="Part")
+        geometry_hash="11111111", first_index=0, classification="Part", component_name="Part", component_ordinal=0)
     draw = DrawCall()
-    parsed = SimpleNamespace(groups=[{"name": "Component0", "draws": [draw]}],
+    other_draw = DrawCall()
+    other_binding = replace(binding, first_index=3, component_ordinal=1,
+                            classification="OtherPart", component_name="OtherPart")
+    parsed = SimpleNamespace(groups=[{"name": "Component0", "draws": [draw, other_draw]}],
                              resource_files=[], texture_override_indexes=[],
                              game=SimpleNamespace(game="wuwa"))
     context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod),
                               dds_classification_cache={})
-    _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
+    _apply_texture_enrichment(parsed, context, [[binding, other_binding]], complete_index=True)
     assert not draw.asset_texture_defaults
+    assert other_draw.asset_texture_defaults["diffuse"]["path"] == str(asset / "Components-1 t=aaaaaaaa.dds")
 
 
 def test_asset_defaults_share_picker_candidates_with_blank_component_metadata(
@@ -1014,9 +1026,8 @@ def test_wwmi_asset_candidates_keep_metadata_object_and_draw_scope(tmp_path):
 
     assert [{os.path.relpath(item["path"], asset).replace("\\", "/")
              for item in group["texture_candidates"]} for group in groups] == [
-        {"ObjectA/Components-0 t=owned-a.dds", "ObjectA/opaque_aaaaaaaa.dds",
-         "ObjectB/Components-1-2 t=shared-b.dds", "ObjectB/opaque_cccccccc.dds"},
-        {"ObjectB/Components-0 t=owned-b.dds", "ObjectB/opaque_bbbbbbbb.dds"},
+        {"ObjectA/Components-0 t=owned-a.dds", "ObjectB/Components-1-2 t=shared-b.dds"},
+        {"ObjectB/Components-0 t=owned-b.dds"},
     ]
     assert all(draw.texture_default("diffuse") is None
                and not draw.asset_texture_defaults
