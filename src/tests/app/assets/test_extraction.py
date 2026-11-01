@@ -2,6 +2,7 @@
 
 import copy
 import json
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -61,6 +62,17 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
         "components": 1, "parts": 1, "partial": True, "skipped": 1}
     assert result["warnings"] == []
     asset = Path(result["path"])
+    def installed_report(folder):
+        filename = folder / "extraction_report.json"
+        details = json.loads(filename.read_text(encoding="utf-8"))
+        assert Path(details["report"]["output"]) == folder
+        assert Path(details["report"]["report_path"]) == filename
+        assert details["analysis"]["dump"] == str(dump.resolve())
+        assert details["outputs"]
+        return details
+    original_report = installed_report(asset)
+    original_report["previous_report_marker"] = True
+    (asset / "extraction_report.json").write_text(json.dumps(original_report), encoding="utf-8")
     assert (asset / "hash.json").exists()
     assert result["folders"][0]["index"]["assetCount"] == 1
     current = index.load_index(asset_type, str(root))
@@ -82,10 +94,12 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     assert "error" not in result
     assert not stale.exists()
     assert (asset / "hash.json").exists()
+    assert "previous_report_marker" not in installed_report(asset)
     result = bridge.extract_asset(str(root), "Asset_002", str(dump), str(asset))
     assert "error" not in result
     assert not asset.exists()
     assert (root / "Asset_002" / "hash.json").exists()
+    installed_report(root / "Asset_002")
     assert index.find_asset_by_path(index.load_index(asset_type, str(root)), "Asset_002")
     assert not list(root.glob(".asset-extract-*"))
     assert len(events) == 3
@@ -263,3 +277,50 @@ def test_cancelled_nested_face_export_preserves_existing_output(library, tmp_pat
         export(package, output, Context(progress=progress))
     assert list(output.iterdir()) == [sentinel]
     assert sentinel.read_bytes() == b"preserve"
+
+
+def test_exported_payload_collisions_preserve_geometry_and_unknown_candidates(library, tmp_path):
+    _root, dump = library
+    package = _facial_package(dump)
+    expected = {}
+    for ordinal, mesh in enumerate(package.meshes):
+        mesh.component.ib = "aaaaaaaa"
+        mesh.component.streams["position"]["hash"] = "bbbbbbbb"
+        mesh.vertices = [[(row[0][0] + ordinal * 10, *row[0][1:]), *row[1:]]
+                         for row in mesh.vertices]
+        filename = f"unknown-{ordinal}.png"
+        Image.new("RGB", (16, 16), (50 + ordinal * 30, 80, 110)).save(dump / filename)
+        identity = digest(dump / filename)
+        expected[mesh.component.name] = (ordinal * 10 + 1, identity)
+        for part in mesh.component.parts:
+            part.textures.append({"role": "TextureSlot09", "file": filename,
+                                  "hash": "cccccccc", "sha256": identity, "auxiliary": False})
+    multi = package.meshes[1]
+    multi.component.parts[1].first = multi.component.parts[0].first
+    multi.indices[1] = list(reversed(multi.indices[0]))
+    report = export(package, tmp_path / "collisions")
+    root = Path(report.output).parent
+    asset = Path(report.output)
+    record = index.build_index("ZZMI", str(root))["assets"][0]
+    loaded = loader.load_asset("ZZMI", str(root), record, geometry=GeometryBlob())
+    assert len(loaded.parts) == 4
+    for part in loaded.parts:
+        first_x, identity = expected[part.component_name]
+        source = next(mesh for mesh in package.meshes if mesh.component.name == part.component_name)
+        positions = source.vertices
+        # The repeated-range IBs use different vertex orders; each must retain its own mapping.
+        first_vertex = source.indices[part.component_ordinal][0] + source.component.parts[part.component_ordinal].base_vertex
+        assert struct.unpack_from("<f", part.positions)[0] == positions[first_vertex][0][0]
+        assert first_x <= min(struct.unpack_from("<f", part.positions, offset)[0]
+                              for offset in range(0, len(part.positions), 12))
+        assert identity in {digest(Path(texture.path)) for texture in part.texture_candidates}
+        assert all(texture.role is None for texture in part.texture_candidates)
+    for metadata_file in asset.rglob("hash.json"):
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        for component in metadata["components"]:
+            assert (metadata_file.parent / component["vb_file"]).is_file()
+            assert all((metadata_file.parent / filename).is_file() for filename in component["ib_files"])
+            for textures in component["texture_hashes"]:
+                for texture in textures:
+                    assert len(texture) == 4
+                    assert (metadata_file.parent / texture[3]).is_file()

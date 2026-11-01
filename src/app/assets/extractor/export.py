@@ -309,7 +309,7 @@ def export(package, output, context=None, *, options=None):
                         position_vb=c.streams["position"]["hash"], blend_vb=c.streams["blend"]["hash"],
                         texcoord_vb=c.streams["texcoord"]["hash"], ib=c.ib,
                         object_indexes=[p.first for p in c.parts], object_index_counts=[p.count for p in c.parts],
-                        object_classifications=classes, texture_hashes=[])
+                        object_classifications=classes, texture_hashes=[], ib_files=[])
             main_vb = None
             for part_index, (part, label, indices) in enumerate(zip(c.parts, classes, mesh.indices)):
                 ctx.tick("Writing part " + c.name + label)
@@ -324,9 +324,11 @@ def export(package, output, context=None, *, options=None):
                     write_vb(stage / vbname, mesh, ctx)
                     payloads.generated(stage / vbname)
                     main_vb = stage / vbname
+                meta.setdefault("vb_file", os.path.basename(vbname))
                 ibname = f"{prefix_folder}{prefix}-ib={c.ib}.txt"
                 write_ib(stage / ibname, part, indices)
                 payloads.generated(stage / ibname)
+                meta["ib_files"].append(os.path.basename(ibname))
                 part_count += 1
                 texmeta, mappings = [], []
                 for texture in part.textures:
@@ -347,7 +349,8 @@ def export(package, output, context=None, *, options=None):
                     texname = texture_plan[key]
                     payloads.texture(source, texname, identity)
                     if not texture.get("auxiliary"):
-                        texmeta.append([texture["role"], source.suffix, texture["hash"]])
+                        texmeta.append([texture["role"], source.suffix, texture["hash"],
+                                        os.path.relpath(stage / texname, mesh_directory).replace(os.sep, "/")])
                     mappings.append(dict(output=texname, **texture))
                     associations += 1
                     textures.add(identity)

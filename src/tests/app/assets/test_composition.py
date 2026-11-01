@@ -129,10 +129,13 @@ def test_texture_only_geometry_replacement_and_skip_coverage_lifecycle(
     assert [part.first_index for part in plan.missing_parts] == [0, 300]
     helper = context.ini.records[0].sections["CommandList Surface Material"]
     helper.append("post HaNdLiNg = SkIp ; suppress the original")
+    helper.append("vb1 = ResourceBlend")
     suppressed = asset_composition.plan_missing_asset_parts(context)
     assert suppressed.status == "nothing_missing"
     assert len(suppressed.covered_parts) == 3
     assert not suppressed.missing_parts
+    helper.pop(-2)
+    assert [part.first_index for part in asset_composition.plan_missing_asset_parts(context).missing_parts] == [0, 300]
     helper[-1] = "ib = ResourceReplacementIB"
     replaced = asset_composition.plan_missing_asset_parts(context)
     assert replaced.status == "nothing_missing"

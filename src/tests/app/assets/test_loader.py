@@ -65,6 +65,37 @@ def _index_text(indices):
                          for index in range(0, len(indices), 3)) + "\n")
 
 
+def test_same_hash_geometry_prefers_component_files_and_rejects_ambiguous_payloads(tmp_path):
+    root = tmp_path / "assets"
+    asset = root / "Asset01"
+    asset.mkdir(parents=True)
+    entries = []
+    expected = {}
+    for ordinal, name in enumerate(("Surface01", "Surface02", "Unique")):
+        rows = [((ordinal * 10 + x, y, 0), (0, 0, 1), (0, 0))
+                for x, y in ((0, 0), (1, 0), (0, 1), (1, 1))]
+        vb_hash = "11111111" if ordinal < 2 else "22222222"
+        ib_hash = "aaaaaaaa" if ordinal < 2 else "bbbbbbbb"
+        prefix = name if ordinal < 2 else "Unlabelled"
+        _text_vb(asset / f"Asset01{prefix}-vb0={vb_hash}.txt", 32, rows)
+        indices = (0, 1, 2) if ordinal != 1 else (0, 2, 3)
+        (asset / f"Asset01{prefix}A-ib={ib_hash}.txt").write_text(
+            _index_text(indices), encoding="utf-8")
+        entries.append({"component_name": name, "ib": ib_hash, "position_vb": vb_hash,
+                        "object_indexes": [0], "object_index_counts": [3]})
+        expected[name] = struct.pack("<9f", *(value for i in indices for value in rows[i][0]))
+    _write_json(asset / "hash.json", entries)
+    record = build_index("ZZMI", str(root))["assets"][0]
+    loaded = load_asset("ZZMI", str(root), record, geometry=GeometryBlob())
+    assert {part.component_name: part.positions for part in loaded.parts} == expected
+    for entry in entries[:2]:
+        entry["component_name"] = "Unassociated" + entry["component_name"]
+    _write_json(asset / "hash.json", entries)
+    record = build_index("ZZMI", str(root))["assets"][0]
+    ambiguous = load_asset("ZZMI", str(root), record, geometry=GeometryBlob())
+    assert [part.component_name for part in ambiguous.parts] == ["Unique"]
+
+
 def _gimi_face_asset(root, *, include_eyes=True):
     asset = root / "Asset01"
     asset.mkdir(parents=True)

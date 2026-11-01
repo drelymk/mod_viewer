@@ -329,6 +329,8 @@ of documentation, comments and tests; use portable fixtures instead.
   so WWMI roots can load them alongside native WWMI metadata.
   A partial capture is a committed success with saved/skipped counts and a
   separate warning notice, never an extraction error or a completeness claim.
+  Keep the provenance report inside the installed asset with its final paths,
+  replacing and rolling it back with the asset directory.
   Automatic `Face/` grouping requires recognized facial material evidence on
   every component part and successfully reconstructed expression data. Keep
   shared textures at the root, face-only files with their nested `hash.json`,
@@ -344,9 +346,11 @@ of documentation, comments and tests; use portable fixtures instead.
   and component-level `handling = skip` prevent restoration. Proven texture-only
   hooks do not claim geometry ownership, including through local command lists.
   Bare hash-only component overrides cover every range under that hash; auxiliary
-  buffer/compute hashes do not establish component identity. Automatic filling
-  requires one unique Asset and retains component/range provenance; filled geometry is
-  session-only and removed on reload/switch.
+  buffer/compute hashes do not establish component identity. Once an Asset is
+  uniquely selected, explicit skips also cover its matching ranges alongside
+  auxiliary VB bindings; those hashes still cannot select a different Asset.
+  Automatic filling requires one unique Asset and retains component/range provenance;
+  filled geometry is session-only and removed on reload/switch.
 - GIMI head-local faces may use one geometry-derived rigid alignment from native
   full-body Eyes and a Face/FaceEye anchor. Transform positions and normals,
   preserve UVs/winding, leave native Eyes untouched and use no character offsets.
@@ -359,6 +363,9 @@ of documentation, comments and tests; use portable fixtures instead.
   immediate-component `hash.json` records retain their own metadata provenance
   and the selected Asset root.
 - GIMI/ZZMI geometry dumps require authored hashes, never same-label fallbacks.
+  Compact metadata supplies exact, metadata-relative VB, per-range IB and texture
+  files to preserve different same-hash payloads. Legacy collisions prefer their
+  declaring directory/component family; distinct unresolved payloads stay unbound.
   Parse same-hash IB candidates independently so malformed siblings cannot
   discard valid ranges; missing counts use the resolved IB header count.
 - WWMI metadata components recover independently. Texture candidates are rooted

@@ -1,6 +1,7 @@
 """Shared GIMI/ZZMI hash.json and 3DMigoto text-dump loader."""
 
 import json
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ class _HashAssetRecord:
     vb_hash: str | None
     ranges: tuple
     vb_file: str | None
-    ib_files: tuple[str, ...]
+    ib_files: tuple[str | None, ...]
 
 
 def _entries(value):
@@ -114,7 +115,7 @@ def _dump_prefix(path):
     return stem[:match.start()] if match else None
 
 
-def _find_dumps(files, kind, hash_value=None, label=None):
+def _find_dumps(files, kind, hash_value=None, label=None, directory=None):
     kind = kind.casefold()
     hash_value = normalize_geometry_hash(hash_value)
     if not hash_value:
@@ -130,12 +131,47 @@ def _find_dumps(files, kind, hash_value=None, label=None):
             continue
         if file_hash == hash_value:
             matching.append(path)
+    if len(matching) > 1 and directory:
+        local = [path for path in matching
+                 if os.path.normcase(os.path.dirname(path)) == os.path.normcase(directory)]
+        if local:
+            matching = local
+    if len(matching) > 1 and label:
+        associated = [path for path in matching if re.search(
+            re.escape(label) + r"(?:[A-Z]|Part\d+)?$", _dump_prefix(path) or "", re.I)]
+        if associated:
+            return associated
     return matching
 
 
-def _find_dump(files, kind, hash_value=None, label=None):
-    matches = _find_dumps(files, kind, hash_value, label)
-    return matches[0] if matches else None
+def _find_dump(files, kind, hash_value=None, label=None, directory=None):
+    matches = _find_dumps(files, kind, hash_value, label, directory)
+    if len(matches) == 1:
+        return matches[0]
+    # Compatible exports may contain identical per-part VB aliases.
+    identities = set()
+    try:
+        for path in matches:
+            with open(path, "rb") as stream:
+                identities.add(hashlib.file_digest(stream, "sha256").digest())
+    except OSError:
+        return None
+    return matches[0] if matches and len(identities) == 1 else None
+
+
+def _metadata_file(root, metadata_path, relative, files):
+    if not isinstance(relative, str):
+        return None
+    path = asset_paths.safe_asset_path(
+        root, os.path.join(os.path.dirname(metadata_path), relative))
+    return path if path and any(os.path.normcase(path) == os.path.normcase(candidate)
+                                for candidate in files) else None
+
+
+def _range_ib_files(record, ordinal):
+    candidates = (record.ib_files[ordinal:ordinal + 1]
+                  if "ib_files" in record.entry else record.ib_files)
+    return tuple(path for path in candidates if path)
 
 
 def _entry_hash(entry, keys):
@@ -241,7 +277,7 @@ def _range_texture_records(files, ib_candidates, first, count, vertex_count,
 
 def _texture_records(entry, position, files, root, component, classification,
                      texture_source, *, ib_candidates=(), first=0, count=None,
-                     vertex_count=0, ib_cache=None):
+                     vertex_count=0, ib_cache=None, metadata_path=""):
     textures = entry.get("texture_hashes")
     if not isinstance(textures, list) or position >= len(textures):
         textures = entry.get("textureHashes")
@@ -253,8 +289,9 @@ def _texture_records(entry, position, files, root, component, classification,
         if not isinstance(item, (list, tuple)) or len(item) < 3:
             continue
         role = _ROLE_NAMES.get(str(item[0]).replace(" ", "").casefold())
-        filename = _texture_file(
-            files, item[2], item[1], component, classification, role)
+        filename = (_metadata_file(root, metadata_path, item[3], files)
+                    if len(item) > 3 else _texture_file(
+                        files, item[2], item[1], component, classification, role))
         if not filename:
             continue
         texture = make_texture(
@@ -348,6 +385,8 @@ def _resolve_ib_dump(candidates, first, count, vertex_count, cache):
         parsed.append((path, dump))
     matching = [item for item in parsed if item[1].first_index == first
                 and (count is None or item[1].index_count == count)]
+    if matching and any(item[1].indices != matching[0][1].indices for item in matching[1:]):
+        return None, invalid, bool(parsed)
     return (matching[0] if matching else None, invalid, bool(parsed))
 
 
@@ -470,9 +509,9 @@ def _alignment_mesh(record, vertex_cache, ib_cache, *, with_indices,
         return None
     indices = []
     if with_indices:
-        for _ordinal, first, count, _classification in record.ranges:
+        for ordinal, first, count, _classification in record.ranges:
             resolved, _had_invalid, _had_valid = _resolve_ib_dump(
-                record.ib_files, first, count,
+                _range_ib_files(record, ordinal), first, count,
                 vertex_dump.layout.vertex_count, ib_cache)
             if resolved is not None:
                 indices.extend(resolved[1].indices)
@@ -598,13 +637,20 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
             vb_hash = _entry_hash(entry, (
                 "vb0", "vb0_hash", "vertex_buffer", "vertexBuffer",
                 "position_vb", "positionVB", "draw_vb", "drawVB"))
+            vb_candidates = _find_dumps(files, "vb", vb_hash)
+            ib_candidates = _find_dumps(files, "ib", geometry_hash)
             records.append(_HashAssetRecord(
                 metadata_path=metadata_path, entry=entry,
                 component_name=component, geometry_hash=geometry_hash,
                 vb_hash=vb_hash, ranges=tuple(ranges),
-                vb_file=_find_dump(files, "vb", vb_hash, component),
-                ib_files=tuple(_find_dumps(
-                    files, "ib", geometry_hash, component))))
+                vb_file=(_metadata_file(root, metadata_path, entry["vb_file"], vb_candidates)
+                         if "vb_file" in entry else _find_dump(
+                             vb_candidates, "vb", vb_hash, component, os.path.dirname(metadata_file))),
+                ib_files=(tuple(_metadata_file(root, metadata_path, relative, ib_candidates)
+                                for relative in entry["ib_files"])
+                          if isinstance(entry.get("ib_files"), list) else
+                          () if "ib_files" in entry else tuple(_find_dumps(
+                              ib_candidates, "ib", geometry_hash, component, os.path.dirname(metadata_file))))))
 
     selected_records = []
     for item in records:
@@ -659,8 +705,9 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 f"{component or geometry_hash} vertex dump skipped: {error}"))
             continue
         for ordinal, first, count, classification in selected_ranges:
+            range_ib_files = _range_ib_files(item, ordinal)
             resolved, had_invalid, had_valid = _resolve_ib_dump(
-                ib_files, first, count, vertex_dump.layout.vertex_count,
+                range_ib_files, first, count, vertex_dump.layout.vertex_count,
                 ib_cache)
             if resolved is None:
                 reason = "index_dump_invalid" if had_invalid and not had_valid \
@@ -708,10 +755,10 @@ def load_hash_asset(asset_type, root, record, *, texture_source=None,
                 else ib_dump.index_count or len(ib_dump.indices))
             textures, texture_candidates = _texture_records(
                 item.entry, ordinal, files, root, component, classification,
-                texture_source, ib_candidates=ib_files, first=first,
+                texture_source, ib_candidates=range_ib_files, first=first,
                 count=effective_count,
                 vertex_count=vertex_dump.layout.vertex_count,
-                ib_cache=ib_cache)
+                ib_cache=ib_cache, metadata_path=item.metadata_path)
             label = component or os.path.basename(asset_path)
             if classification:
                 label = f"{label} {classification}"

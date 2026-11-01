@@ -34,6 +34,7 @@ class AuthoredComponentOverride:
     ini: str
     section: str
     asset_identity_evidence: bool = True
+    handling_skip: bool = False
 
     @property
     def key(self):
@@ -166,6 +167,7 @@ def collect_component_overrides(sections, ini_path):
                 ini=ini_path,
                 section=str(section),
                 asset_identity_evidence=item_identity,
+                handling_skip=handling_skip,
             ))
     return tuple(result)
 

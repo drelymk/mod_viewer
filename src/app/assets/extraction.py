@@ -1,6 +1,7 @@
 """Extract compact assets and replace their directory/index as one transaction."""
 
 import os
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -65,6 +66,12 @@ def extract_asset(folder_path, name, dump_path, original_path=None):
         payload.mkdir()
         package = extract(analyze(dump), Selection(destination.name))
         report = export(package, payload)
+        report_file = Path(report.report_path)
+        details = json.loads(report_file.read_text(encoding="utf-8"))
+        details["report"].update(
+            output=str(destination), report_path=str(destination / "extraction_report.json"))
+        report_file.write_text(json.dumps(details, indent=2), encoding="utf-8")
+        report_file.rename(Path(report.output) / "extraction_report.json")
         if original is not None:
             original.rename(backup)
         try:

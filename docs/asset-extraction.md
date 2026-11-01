@@ -6,6 +6,9 @@ asset is indexed automatically. Right-click an indexed asset and choose
 **Update asset** to replace all of its files; its name is prefilled and editable.
 Extraction and indexing finish before the old files are removed. Failed updates
 restore the previous asset and index.
+The installed asset keeps `extraction_report.json` with source provenance and
+the final asset location; successful updates and renames replace that report
+along with the geometry.
 
 Extraction is available for all registered Asset Folder types. It reads captured
 resource history and validated stream layouts without requiring a game marker.
@@ -30,6 +33,12 @@ root. Loading the parent asset includes both metadata files. Component names,
 numbers and vertical position do not determine this grouping. Unproven components
 keep their existing location. A selection containing only facial components stays
 at the root so it remains a loadable standalone asset.
+
+Compact metadata names each component's VB file, each range's IB file and each
+texture payload relative to its `hash.json`. These associations keep captured
+resource versions separate when their hashes collide, including unknown texture
+roles. Legacy assets retain unique-hash lookup and component-associated dump
+matching; unresolved distinct same-hash geometry stays unbound.
 
 The dependency-free engine in `src/app/assets/extractor` derives from XXMI
 Extract 0.3.1, GPL-3.0-or-later. Its standalone GUI, CLI, packaging and Windows
