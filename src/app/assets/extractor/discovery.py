@@ -102,12 +102,23 @@ def analyze(dump, context=None):
         producer, chain = trace(vbs[0], writers)
         try:
             direct = producer is None and not chain
+            attribute_skinning = False
             if direct:
                 p = inv.find(draw.id, "vb0", vbs[0])
                 if 1 not in vbs:
                     raise Unsupported("Missing UV stream")
                 uvcall, uvslot, uv = draw, 1, vbs[1]
                 sources = {"position": dict(file=p, slot=0, hash=vbs[0].hash, resource=asdict(vbs[0]))}
+                _, elements = inv.header(p.replace(".buf", ".txt"))
+                attribute_skinning = {1, 2, 4} <= vbs.keys() and any(
+                    e.get("SemanticName") == "ATTRIBUTE" and e.get("SemanticIndex") == "0"
+                    and e.get("InputSlot") == "0" for e in elements)
+                if attribute_skinning:
+                    uvslot, uv = 2, vbs[2]
+                    for role, slot in (("normal", 1), ("blend", 4)):
+                        r = vbs[slot]
+                        sources[role] = dict(file=inv.find(draw.id, f"vb{slot}", r), slot=slot,
+                                             hash=r.hash, resource=asdict(r))
             else:
                 if not producer or producer.kind != "Draw" or not producer.outputs:
                     raise Unsupported("No supported stream-output skinning producer")
@@ -155,13 +166,13 @@ def analyze(dump, context=None):
                     source["sha256"] = digest(path)
                     stride, elements, declared, first_vertex = stream_layout(
                         inv, source["file"], source["slot"],
-                        "direct_position" if role == "position" else role)
-                    # Valid UV subset counts describe the draw, not a different layout.
-                    if role == "texcoord" and first_vertex == 0 and 0 <= declared <= path.stat().st_size // stride:
+                        "wwmi_" + role if attribute_skinning else "direct_position" if role == "position" else role)
+                    # Valid subset counts describe the draw, not a different layout.
+                    if (role == "texcoord" or attribute_skinning) and first_vertex == 0 and 0 <= declared <= path.stat().st_size // stride:
                         declared = 0
                     identity.append((source["resource"]["address"], source["resource"]["version"],
                                      source["sha256"], repr((stride, elements, declared, first_vertex))))
-                source_key = (ib.key, "direct", tuple(identity))
+                source_key = (ib.key, "attribute_skinning" if attribute_skinning else "direct", tuple(identity))
             else:
                 source_key = (ib.key, producer.sequence, uv.key)
             # Resource version + layout + content define components; never IB hash alone.
@@ -173,12 +184,13 @@ def analyze(dump, context=None):
                 token_source = (source_key, [x["sha256"] for x in sources.values()]) if direct else (
                     ib.key, producer.id, [x["sha256"] for x in sources.values()])
                 token = hashlib.sha256(repr(token_source).encode()).hexdigest()[:12]
-                reason = "Declared direct vertex streams; captured coordinates retained" if direct else "Validated stream-output skinning relationship"
+                reason = ("Validated split ATTRIBUTE skinning streams" if attribute_skinning else
+                          "Declared direct vertex streams; captured coordinates retained" if direct else "Validated stream-output skinning relationship")
                 component = Component(token, "", ib.hash, "included", reason, sources, [],
                                       dict(producer="" if direct else producer.id, root_vs=origin.shaders.get("vs", ""), draw_vb=vbs[0].hash,
                                            producer_line=origin.line, draw_evidence=[], copy_chain=[x.id for x in chain]))
                 if direct:
-                    component.provenance["geometry_kind"] = "direct"
+                    component.provenance["geometry_kind"] = "attribute_skinning" if attribute_skinning else "direct"
                 else:
                     component.morph = morph_trace(pvb[0], producer, writers, inv)
                 grouped[source_key] = (component, {})
@@ -242,7 +254,7 @@ def analyze(dump, context=None):
         draws = [r[0] for r in rows]
         components.append(Component("unresolved-" + h, f"Unresolved candidate {unresolved_index}", h, "uncertain", rows[0][1], {}, [],
                                     dict(draws=[d.id for d in draws], shaders=[d.shaders for d in draws])))
-    diagnostics = ["Validated stream-output skinning and declared direct position/normal/UV streams are supported. Direct coordinates are retained without skinning or placement conversion; other layouts remain unresolved.",
+    diagnostics = ["Validated stream-output skinning, split skinned ATTRIBUTE layouts and declared direct position/normal/UV streams are supported. ATTRIBUTE and direct streams retain their stored positions without shader deformation or placement conversion; other layouts remain unresolved.",
                    "Single-asset grouping is an assumption; this capture alone does not establish semantic identity or a complete skeleton.",
                    "Captured material signatures take priority over extraction-only pixel fallback. Ambiguous pixel evidence remains in the report; unclassified roles retain deterministic slot names. Auxiliary resources are separated."]
     if not any(c.status == "included" for c in components):

@@ -169,10 +169,6 @@ def _wwmi_candidates(root):
     candidates = []
     skipped = []
     for child in _safe_child_dirs(root, root):
-        compact = _compact_marker(child, root)
-        if compact:
-            candidates.append((child, compact, []))
-            continue
         direct = _safe_file(child, root, "Metadata.json")
         objects = _wwmi_object_markers(child, root)
         if direct or objects:
@@ -182,10 +178,6 @@ def _wwmi_candidates(root):
         nested = []
         if _name(child) in _WWMI_GROUPS:
             for grandchild in _safe_child_dirs(child, root):
-                compact = _compact_marker(grandchild, root)
-                if compact:
-                    nested.append((grandchild, compact, []))
-                    continue
                 nested_direct = _safe_file(grandchild, root, "Metadata.json")
                 nested_objects = _wwmi_object_markers(grandchild, root)
                 if nested_direct or nested_objects:
@@ -195,19 +187,6 @@ def _wwmi_candidates(root):
         else:
             skipped.append(child)
     return candidates, skipped
-
-
-def _compact_marker(path, root):
-    marker = _safe_file(path, root, "hash.json")
-    if marker:
-        try:
-            with open(marker, encoding="utf-8") as stream:
-                value = json.load(stream)
-            if isinstance(value, dict) and value.get("format") == "mod-viewer-compact":
-                return marker
-        except (OSError, ValueError):
-            pass
-    return None
 
 
 def _parse_hash_asset(asset_path, root, metadata_path, parser):
@@ -231,8 +210,6 @@ def _parse_hash_asset(asset_path, root, metadata_path, parser):
 
 
 def _parse_wwmi_asset(asset_path, root, direct, objects):
-    if direct and os.path.basename(direct).casefold() == "hash.json":
-        return _parse_hash_asset(asset_path, root, direct, gimi)
     if direct:
         return wwmi.parse_metadata_file(
             asset_path, root, direct, normalize_geometry_hash)

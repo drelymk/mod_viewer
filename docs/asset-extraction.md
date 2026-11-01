@@ -13,8 +13,12 @@ along with the geometry.
 Extraction is available for all registered Asset Folder types. It reads captured
 resource history and validated stream layouts without requiring a game marker.
 The engine reconstructs supported stream-output skinning layouts and declared
-direct position/normal/UV streams. Direct meshes retain captured coordinates
-without fabricated blend data. Compute-only skinning and unfamiliar layouts may
+direct position/normal/UV streams. It also accepts split skinned `ATTRIBUTE`
+layouts with declared float positions, packed tangent/normals, half-float UVs
+and four or eight blend influences. All streams must have matching complete
+binary payloads; draw-subset header counts do not discard the remaining vertices.
+Direct meshes retain captured coordinates without fabricated blend data.
+Compute-only skinning and unfamiliar layouts may
 still need support. Unsupported captures fail without replacing existing files. Partial
 extractions still save the identified asset components. Counts and skipped resource
 groups remain in `extraction_report.json`; unresolved/unsupported groups and
@@ -50,9 +54,41 @@ debug exports can include their original payloads under `assets/`.
 RGB pixel inspection resizes independently of alpha so near-zero data alpha does
 not distort the analyzed colors. Export preserves the original texture bytes.
 
-Compact `hash.json` packages carry the `mod-viewer-compact` format marker so they
-can also coexist with native WWMI assets in a WWMI Asset Folder. Native WWMI
-metadata and geometry retain their existing import path.
+Viewer exports carry the `mod-viewer` format marker. ZZMI/GIMI retain `hash.json`;
+WWMI uses native `Metadata.json`, `TextureUsage.json` and `Component N.fmt/.vb/.ib`.
+The metadata filename and structure identify the layout, independently of the
+shared format marker. Earlier ZZMI/GIMI viewer format markers remain readable.
+For WWMI captures, `vb0_hash` records the position-buffer hash used for asset
+matching separately from the captured IB hash. The original resource identities
+and ranges stay in the report. Native binary indices retain source winding;
+loading applies the viewer's existing WWMI convention once. Source buffers and captured
+positions remain unchanged. Shader-only expression/deformation streams are not
+reconstructed. Unknown texture roles remain selectable candidates.
+Each split WWMI draw range becomes its own component within its source object
+folder. Each native binary component retains only its referenced vertices,
+preserving all vertex channels and four/eight influences with local indices.
+Each object folder is named by its native position hash, matching the native
+WWMI multi-object layout, and contains its own component metadata, geometry and
+texture copies. There is no root metadata or root texture dependency, and
+payloads are not hardlinked across objects. The index recognizes the child
+metadata and loads the parent as one asset. A copied object folder also works
+as a standalone asset. Descriptive object names supplied through the internal
+rename API label its components without changing the native folder identity.
+WWMI texture names follow `Components-0-1 t=12345678.dds`: the ordinals list
+exactly the components that reference that payload. Each native hash/payload
+pair is exported once per object, and distinct contents with the same native
+hash receive a content-hash suffix. PNG and JPEG captures keep their encoding
+and extension. Candidate membership uses these native names; matching a texture
+hash substring never associates another WWMI component's images. Exact component
+metadata references retain proven material roles for automatic assignment.
+In WWMI captures, complete bound format/size families can identify a
+diffuse at different slots and take priority over pixel inference and unrelated
+effects. Other maps remain unbound unless the existing fallback establishes a
+role. No universal diffuse slot or color-format-only rule is assumed.
+Complete WWMI families outrank simpler texture pairs even when the simpler pass
+has more bound resources. Hair signatures allow compressed or uncompressed
+rectangular auxiliary masks. Eye signatures distinguish the larger iris atlas
+from an sRGB-encoded data map, before pixel fallback runs.
 
 When reconstructed expression data and recognized facial material evidence agree,
 the extractor groups those components in `Face/` with their own `hash.json`.
@@ -87,18 +123,25 @@ explicitly selected through the internal API; no new component-selection UI is
 provided. Direct-only GIMI dumps without a native Eyes reference cannot establish
 a facial family and therefore cannot be extracted through Add/Update.
 
-Compact metadata names each component's VB file, each range's IB file and each
+ZZMI/GIMI compact metadata names each component's VB file, each range's IB file and each
 texture payload relative to its `hash.json`. These associations keep captured
 resource versions separate when their hashes collide, including unknown texture
 roles. Legacy assets retain unique-hash lookup and component-associated dump
 matching; unresolved distinct same-hash geometry stays unbound.
-Compact texture filenames include the asset name, component, role and native hash,
+GIMI/ZZMI compact texture filenames include the asset name, component, role and native hash,
 such as `Asset_001-Body-Diffuse-12345678.dds`. Distinct payloads sharing one hash
 also retain a content suffix. Metadata references each file explicitly; identical
 hash/payload pairs share one file named for their first owning component, including
 across components and parts. Shared face/body textures remain at the asset root.
 Distinct native hash aliases and differing payloads stay separately addressable;
 identical bytes can additionally share storage through output-only hardlinks.
+
+WWMI component metadata also retains explicit `texture_hashes` file/role records;
+`TextureUsage.json` contains captured `Component N` / `ps-tN` hash/shader evidence.
+Mod previews read exact component texture references. Proven roles supply original
+Asset defaults when the mod has no applicable binding; unknown roles remain
+selectable candidates. Native WWMI `TextureUsage.json` retains its candidate-only
+meaning, without assigning roles from numeric slots.
 
 The dependency-free engine in `src/app/assets/extractor` derives from XXMI
 Extract 0.3.1, GPL-3.0-or-later. Its standalone GUI, CLI, packaging and Windows

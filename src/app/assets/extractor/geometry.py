@@ -18,7 +18,7 @@ class Element:
         return self.semantic + (str(self.index) if self.index else "")
 
 
-def codec(fmt):
+def _storage_format(fmt):
     fmt = fmt.removeprefix("DXGI_FORMAT_")
     fields, kind = fmt.rsplit("_", 1)
     bits = [int(x) for x in re.findall(r"[RGBA](\d+)", fields)]
@@ -31,7 +31,11 @@ def codec(fmt):
             ("UNORM", 16): "H", ("SNORM", 8): "b", ("SNORM", 16): "h"}.get((kind, width))
     if not code:
         raise Unsupported(f"Unsupported DXGI format {fmt}")
-    st = struct.Struct("<" + code * len(bits))
+    return struct.Struct("<" + code * len(bits)), kind, width
+
+
+def codec(fmt):
+    st, kind, width = _storage_format(fmt)
     def decode(data, offset):
         values = st.unpack_from(data, offset)
         if kind == "UNORM":
@@ -42,13 +46,25 @@ def codec(fmt):
     return st.size, decode
 
 
+def encoder(fmt):
+    """Encode the same validated DXGI formats used when reading capture streams."""
+    st, kind, width = _storage_format(fmt)
+    if kind in ("UNORM", "SNORM"):
+        scale = (1 << (width if kind == "UNORM" else width - 1)) - 1
+        return lambda values: st.pack(*(round(value * scale) for value in values))
+    return lambda values: st.pack(*values)
+
+
 def stream_layout(inv, name, slot, role, vertex_count=None):
     header, raw = inv.header(name.replace(".buf", ".txt"))
     stride = int(header["stride"])
     if stride <= 0:
         raise Unsupported("Vertex stride must be positive")
     elements = []
-    if role == "position":
+    if role.startswith("wwmi_"):
+        from .profiles.wwmi import layout
+        elements = layout(header, raw, slot, role.removeprefix("wwmi_"))
+    elif role == "position":
         if stride != 40:
             raise Unsupported(f"ZZZ pre-skinning position stride {stride} is not supported")
         elements = [Element("POSITION", 0, "R32G32B32_FLOAT", 0),
@@ -151,11 +167,13 @@ def decode_component(inv, component, context=None):
     morph_status = "not_detected"
     notes = []
     direct = component.provenance.get("geometry_kind") == "direct"
-    roles = ("position", "texcoord") if direct else ("position", "blend", "texcoord")
+    attribute_skinning = component.provenance.get("geometry_kind") == "attribute_skinning"
+    roles = (("position", "normal", "blend", "texcoord") if attribute_skinning else
+             ("position", "texcoord") if direct else ("position", "blend", "texcoord"))
     for role in roles:
         source = component.streams[role]
         name, slot = source["file"], source["slot"]
-        layout_role = "direct_position" if direct and role == "position" else role
+        layout_role = "wwmi_" + role if attribute_skinning else "direct_position" if direct and role == "position" else role
         stride, elements, declared_count, first_vertex = stream_layout(inv, name, slot, layout_role)
         data = inv.path(name).read_bytes()
         if len(data) % stride:
@@ -165,14 +183,14 @@ def decode_component(inv, component, context=None):
             count = n
         if not n or n != count:
             raise Unsupported(f"Inconsistent {role} vertex count: {n}, expected {count}")
-        # UV headers can describe only the drawn subset of a full resource dump.
-        # Its byte-derived count must still match the position stream.
-        complete_uv_payload = role == "texcoord" and 0 <= declared_count <= n
-        if first_vertex != 0 or (declared_count not in (0, n) and not complete_uv_payload):
+        # UV and split ATTRIBUTE headers may describe a drawn subset of a full resource.
+        # All byte-derived stream counts must still match the position stream.
+        complete_subset_payload = (role == "texcoord" or attribute_skinning) and 0 <= declared_count <= n
+        if first_vertex != 0 or (declared_count not in (0, n) and not complete_subset_payload):
             raise Unsupported(f"Partial vertex snapshot in {role}: first={first_vertex}, count={declared_count}, payload={n}")
         if role == "position":
             source_position = data
-            if not direct:
+            if not direct and not attribute_skinning:
                 data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx)
         decoded = []
         decoders = [(e.offset, codec(e.format)[1]) for e in elements]
@@ -188,7 +206,11 @@ def decode_component(inv, component, context=None):
                 decoded = [[(1.0,), row[0]] for row in decoded]
                 elements.insert(0, Element("BLENDWEIGHTS", 0, "R32_FLOAT", 0))
             for row in decoded:
-                if any(v < -0.00001 or v > 1.00001 for v in row[0]) or abs(sum(row[0]) - 1) > 0.02:
+                weights = [v for e, values in zip(elements, row) if e.semantic == "BLENDWEIGHTS" for v in values]
+                total = sum(weights)
+                if any(v < -0.00001 or v > 1.00001 for v in weights) or (
+                    abs(total - 1) > 0.02 and not (attribute_skinning and total == 0)
+                ):
                     raise Unsupported("Invalid or unsupported blend weights")
         streams[role] = decoded
         layouts.extend(elements)

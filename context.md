@@ -221,16 +221,22 @@ of documentation, comments and tests; use portable fixtures instead.
   traversing the global library. Associate hash evidence, component-local
   `ps-tN` resources and filenames into one canonical source-identity pool per
   component. Generic filenames use the original component name and prefer a
-  unique most-specific match; WWMI retains `Components-N t=...dds`, including
-  multi-component ordinals. Resolve every INI's references and replacement
+  unique most-specific match; WWMI uses `Components-N t=...` names with DDS,
+  PNG or JPEG extensions, including multi-component ordinals. Resolve every INI's references and replacement
   index independently before aggregation. WWMI Asset ordinals and texture hash
   evidence belong to each exact draw's metadata object; sibling objects do not
-  share candidate textures. Filename associations supply choices,
+  share candidate textures. For WWMI, only filename ordinals establish candidate
+  membership; texture-hash substrings and explicit file references cannot add
+  another component's candidates. Filename associations supply choices,
   never automatic roles. Apply semantic/slot/conditional selection once per
   draw, preserving authored execution order, no-mod-diffuse Asset eligibility
   and game-specific normal transport. Original Asset defaults select unique
   files from that same component pool using metadata-proven roles and ranges;
   cache selections per pool, including when metadata omits a component name.
+  Viewer-generated packages use their explicit metadata-relative texture files
+  and geometry hash, including WWMI object folders. Invalid explicit references
+  cannot fall back to legacy filename guesses. Native WWMI TextureUsage slots
+  remain candidate evidence without automatic material roles.
   Final picker assembly consumes the pool; saved/manual choices remain metadata
   hydration's concern.
   Published picker pools omit rejected sources and unavailable auxiliary maps,
@@ -325,8 +331,9 @@ of documentation, comments and tests; use portable fixtures instead.
   registered Asset Folders. Extraction has no game-marker/type gate; unfamiliar
   layouts fail explicitly. Stage compact output, swap whole directories and
   rebuild the index under the shared config transaction; failed updates restore
-  the previous asset and index. Compact packages identify their format explicitly
-  so WWMI roots can load them alongside native WWMI metadata.
+  the previous asset and index. Viewer exports use the `mod-viewer` format marker.
+  ZZMI/GIMI retain `hash.json`; WWMI uses native `Metadata.json`, `TextureUsage.json`
+  and `Component N.fmt/.vb/.ib`. A shared format marker never identifies a game.
   A partial capture is a committed success, never an extraction error or a
   completeness claim. Keep ordinary success silent, show a nonblocking warning
   for partial extraction/update, and keep failures inline in the open dialog.
@@ -335,6 +342,24 @@ of documentation, comments and tests; use portable fixtures instead.
   Direct unskinned meshes use declared position/normal and UV streams with
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
+  Split skinned ATTRIBUTE captures require validated position, packed
+  tangent/normal, UV and four/eight-influence blend layouts with matching full
+  binary counts. Alias declarations must share the four-influence stream's slot,
+  formats and byte offsets; reject partial aliases or declarations on other slots.
+  Draw-subset header counts do not split complete ATTRIBUTE resources. Ignore
+  shader-only deformation streams rather than interpreting unknown compute data.
+  Export each ATTRIBUTE draw range as a separate component inside its source
+  object's folder. Native WWMI components store only referenced vertices with
+  local indices, retaining all channels and four/eight influences. Keep exact
+  source range, base and resource identity in provenance. Object folders use the position hash;
+  explicit internal object names affect component labels. Each object owns its
+  metadata, geometry and texture copies, with no parent/sibling references or
+  cross-object hardlinks. Do not write a root hash manifest or root textures.
+  Discover hash-named object folders through native WWMI metadata, keeping the
+  parent as one asset. WWMI `vb0_hash` identifies the position buffer separately
+  from the captured IB hash. Keep native winding on export and apply the shared
+  viewer convention once on load. GIMI/ZZMI hash metadata retains IB precedence
+  independently of the viewer format marker.
   Decodability alone does not prove asset membership. Direct geometry defaults
   to excluded unless the facial-family proof establishes its relationship to the
   asset; retain their source provenance and a separate unproven-candidate count
@@ -378,13 +403,25 @@ of documentation, comments and tests; use portable fixtures instead.
   from packed LightMap channels using active pixels and the bound primary
   material family; unused atlas padding and normal B detail are not normal Z.
   Prefer complete GIMI material triplets over larger inherited resource sets.
+  WWMI capture evidence, a color pass and bound shader/resource identities may
+  establish diffuse atlases from validated neighboring format/size families.
+  Prefer complete WWMI material families over simpler pairs from another pass,
+  before comparing resource counts. Packed eye data may use an sRGB encoding;
+  identify its separate iris atlas through the complete bound eye family.
+  Prefer those material passes over unrecognized effects; do not infer other
+  WWMI map roles or discard unknown candidates from those signatures.
   Preserve confirmed roles, never infer GIMI MaterialMap, and leave ambiguous
   or non-primary masks as suggestions in the provenance report.
-  Compact texture names retain asset, component, role and native hash. Shared
+  GIMI/ZZMI compact texture names retain asset, component, role and native hash. Shared
   hash/payload pairs use one file named for their first owning component; each
   consumer retains its own role and exact metadata reference. Distinct native
   hashes or differing payloads stay separate. Additional byte sharing may use
-  output-only hardlinks. Keep unclassified GIMI textures as selectable candidates
+  output-only hardlinks. Scope WWMI sharing to one object folder, including
+  physical hardlinks. WWMI textures use native `Components-0-1 t=hash.ext` names,
+  listing exactly the referencing component ordinals. Share each native-hash/payload
+  pair once per object; use a content suffix for same-hash payload collisions.
+  Preserve source encoding and metadata's exact filename and proven role.
+  Keep unclassified GIMI textures as selectable candidates
   without automatically binding them. Only actual auxiliary/unusable evidence
   excludes resources from normal output; retain provenance and optional debug files.
 - Index Assets through metadata only. Heavy geometry/textures require explicit
@@ -421,9 +458,10 @@ of documentation, comments and tests; use portable fixtures instead.
   declaring directory/component family; distinct unresolved payloads stay unbound.
   Parse same-hash IB candidates independently so malformed siblings cannot
   discard valid ranges; missing counts use the resolved IB header count.
-- WWMI metadata components recover independently. Texture candidates are rooted
-  at the registered Asset Folder, using only `Components-N...` ordinal matching;
-  exclude unknown filenames and never infer roles from that association.
+- WWMI metadata components recover independently. Native texture candidates use
+  `Components-N...` ordinal matching within the exact metadata object. Viewer
+  exports also retain explicit component texture references and proven roles;
+  numeric TextureUsage slots never establish automatic material roles.
 - Report recoverable part failures as Asset warnings; fail the load only when
   no renderable parts survive.
 
