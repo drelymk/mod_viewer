@@ -1,4 +1,6 @@
 export default {
+  'asset.extractedPartial':
+    'Partial asset extraction: {components} components saved; {skipped} resource groups skipped. Parts may be missing. See extraction_report.json for details.',
   'mesh.rename': 'Rename',
   'mesh.selectionSameComponent': '{count} meshes selected · {component}',
   'mesh.selectionMultipleComponents': '{count} meshes selected · {components} components',

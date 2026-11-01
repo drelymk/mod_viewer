@@ -85,6 +85,7 @@ def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     assert direct.provenance["geometry_kind"] == "direct"
     assert direct.parts[0].draws == ["000004", "000005"]
     assert "blend" not in direct.streams
+    assert direct.requires_review and not direct.default_included
     direct.provenance["gimi_face_family"] = direct.id
     package = extract(analysis, Selection("Face", [direct.id], {direct.id: "Attachment"}))
     mesh, = package.meshes
@@ -119,6 +120,34 @@ def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     standalone = export(package, tmp_path / "standalone")
     assert (Path(standalone.output) / "hash.json").is_file()
     assert not (Path(standalone.output) / "Face").exists()
+
+
+@pytest.mark.parametrize("asset_type", ["ZZMI", "GIMI", "WWMI"])
+def test_unproven_direct_geometry_is_reported_but_requires_explicit_selection(library, monkeypatch, asset_type):
+    root, dump = library
+    add_direct_mesh(dump)
+    log = dump / "log.txt"
+    log.write_text(log.read_text(encoding="utf-8").replace("ZZMIv1", asset_type + "v1"), encoding="utf-8")
+    monkeypatch.setattr(folders, "load_registry", lambda: [
+        {"type": asset_type, "path": folders.normalize_path(root)}])
+    analysis = analyze(dump)
+    skinned, direct = analysis.components
+    assert direct.status == "included" and direct.vertex_count == 4
+    assert direct.requires_review and not direct.default_included
+    assert "membership is unproven" in direct.reason
+    package = extract(analysis)
+    assert [m.component.id for m in package.meshes] == [skinned.id]
+    assert package.partial
+    report = export(package, root / "exports")
+    details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
+    candidate, = [c for c in details["analysis"]["components"] if c["id"] == direct.id]
+    assert candidate["streams"] == direct.streams and candidate["parts"][0]["count"] == 3
+    assert direct.id not in {c["id"] for c in details["components"]}
+    explicit = extract(analysis, Selection("Reviewed", [direct.id]))
+    assert not explicit.partial
+    assert [v[0] for v in explicit.meshes[0].vertices] == [(i, 2, -1) for i in range(4)]
+    saved = extraction.extract_asset(str(root), "Asset_001", str(dump))
+    assert saved["extraction"] == {"components": 1, "parts": 1, "partial": True, "skipped": 1}
 
 
 @pytest.mark.parametrize("count,first,merged", [(3, 0, True), (5, 0, False), (3, 1, False)])
@@ -223,12 +252,17 @@ def test_gimi_material_pass_exports_named_diffuse_and_loads_automatically(tmp_pa
     assert digest(Path(part.textures["diffuse"].path)) == diffuse["sha256"]
     assert all(t["role"] in ("Diffuse",) or t["role"].startswith("TextureSlot")
                for t in component.parts[0].textures)
-    assert all(t["auxiliary"] for t in component.parts[0].textures if t["role"].startswith("TextureSlot"))
-    assert report.texture_files == 1
-    assert report.omitted_texture_associations >= 1
+    candidates = [t for t in component.parts[0].textures if not t.get("auxiliary")]
+    assert report.texture_files == len(candidates)
+    unknown = [t for t in component.parts[0].textures if t["role"].startswith("TextureSlot") and not t.get("auxiliary")]
+    assert len(part.texture_candidates) == len(unknown)
+    assert {digest(Path(t.path)) for t in part.texture_candidates} == {t["sha256"] for t in unknown}
+    assert all(t.role is None for t in part.texture_candidates)
+    assert len(unknown) == sum(fmt == "BC7_UNORM" for fmt in formats)
     debug = export(extract(analysis, Selection("Asset_001")), tmp_path / "debug",
                    options=ExportOptions(debug_assets=True))
-    assert list((Path(debug.output) / "assets").glob("*.dds"))
+    if report.omitted_texture_associations:
+        assert list((Path(debug.output) / "assets").iterdir())
     log.write_text(text.replace("GIMIv8", "Unrecognized"), encoding="utf-8")
     unrecognized = analyze(dump)
     assert all(t["role"].startswith("TextureSlot") for c in unrecognized.components

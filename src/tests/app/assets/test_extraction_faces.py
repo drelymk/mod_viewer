@@ -63,10 +63,17 @@ def _family():
     return {m.component.id: m for m in (eyes, anchor, lower, brow, duplicate)}
 
 
-@pytest.mark.parametrize("case", ["family", "missing_anchor", "ambiguous_eyes", "missing_material", "ambiguous_material", "different_uv", "unrelated_material", "unrelated_geometry"])
+@pytest.mark.parametrize("case", ["family", "normal_map", "unknown_map", "conflicting_normal", "missing_anchor", "ambiguous_eyes", "missing_material", "ambiguous_material", "different_uv", "unrelated_material", "unrelated_geometry"])
 def test_face_family_requires_unique_reference_loops_and_matching_materials(case):
     meshes = _family()
-    if case == "missing_anchor":
+    if case in ("normal_map", "unknown_map", "conflicting_normal"):
+        for mesh in meshes.values():
+            mesh.component.parts[0].textures.append(dict(
+                role="TextureSlot03" if case == "unknown_map" else "NormalMap",
+                hash="00000009", sha256="9" * 64, auxiliary=False))
+        if case == "conflicting_normal":
+            meshes["alternate-pass"].component.parts[0].textures[-1]["sha256"] = "a" * 64
+    elif case == "missing_anchor":
         del meshes["surface-2"]
         del meshes["alternate-pass"]
     elif case == "ambiguous_eyes":
@@ -87,9 +94,11 @@ def test_face_family_requires_unique_reference_loops_and_matching_materials(case
         for vertex in meshes["surface-3"].vertices:
             vertex[0] = tuple(v + 99 for v in vertex[0])
     classify_faces(meshes, Context())
-    if case not in ("family", "unrelated_material", "unrelated_geometry"):
+    if case not in ("family", "normal_map", "unknown_map", "unrelated_material", "unrelated_geometry"):
         assert not any(m.component.provenance.get("gimi_face_family") for m in meshes.values())
-        assert all(m.component.default_included for m in meshes.values())
+        assert all(m.component.requires_review for m in meshes.values()
+                   if m.component.provenance.get("geometry_kind") == "direct")
+        assert meshes["surface-1"].component.default_included
         return
     assert meshes["surface-1"].component.provenance["suggested_name"] == "Eyes"
     assert meshes["surface-2"].component.provenance["suggested_name"] == "FaceEye"
@@ -100,11 +109,13 @@ def test_face_family_requires_unique_reference_loops_and_matching_materials(case
     folders = _component_folders(selected)
     assert folders["surface-2"] == folders["surface-4"] == "Face"
     assert "surface-1" not in folders
-    if case == "family":
+    if case in ("family", "normal_map", "unknown_map"):
         assert meshes["surface-3"].component.provenance["suggested_name"] == "Face"
         assert folders["surface-3"] == "Face"
     else:
         assert "surface-3" not in folders
+        assert meshes["surface-3"].component.requires_review
+        assert not meshes["surface-3"].component.default_included
     assert _component_folders([m for m in selected if m.component.id in folders]) == {}
 
 

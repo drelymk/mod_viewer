@@ -1,4 +1,6 @@
 export default {
+  'asset.extractedPartial':
+    '资产提取不完整：已保存 {components} 个组件，跳过 {skipped} 个资源组。可能缺少部件。详情请查看 extraction_report.json。',
   'asset.add': '添加资产',
   'asset.update': '更新资产',
   'asset.name': '资产名称',

@@ -1,4 +1,6 @@
 export default {
+  'asset.extractedPartial':
+    'Ассет извлечён частично: сохранено компонентов — {components}, пропущено групп ресурсов — {skipped}. Некоторые части могут отсутствовать. Подробности — в extraction_report.json.',
   'asset.add': 'Добавить ассет',
   'asset.update': 'Обновить ассет',
   'asset.name': 'Имя ассета',

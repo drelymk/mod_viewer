@@ -1,4 +1,6 @@
 export default {
+  'asset.extractedPartial':
+    'アセットの抽出は一部のみ完了しました：{components} 個のコンポーネントを保存し、{skipped} 個のリソースグループをスキップしました。パーツが不足している可能性があります。詳細は extraction_report.json を確認してください。',
   'asset.add': 'アセットを追加',
   'asset.update': 'アセットを更新',
   'asset.name': 'アセット名',

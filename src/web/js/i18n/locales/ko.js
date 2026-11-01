@@ -1,4 +1,6 @@
 export default {
+  'asset.extractedPartial':
+    '에셋이 일부만 추출되었습니다. 구성 요소 {components}개를 저장하고 리소스 그룹 {skipped}개를 건너뛰었습니다. 일부 파트가 누락될 수 있습니다. 자세한 내용은 extraction_report.json을 확인하세요.',
   'asset.add': '에셋 추가',
   'asset.update': '에셋 업데이트',
   'asset.name': '에셋 이름',

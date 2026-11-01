@@ -328,22 +328,30 @@ of documentation, comments and tests; use portable fixtures instead.
   the previous asset and index. Compact packages identify their format explicitly
   so WWMI roots can load them alongside native WWMI metadata.
   A partial capture is a committed success, never an extraction error or a
-  completeness claim. Keep counts and warnings in the extraction report without
-  an add/update completion banner; show failures inline in the open dialog.
+  completeness claim. Keep ordinary success silent, show a nonblocking warning
+  for partial extraction/update, and keep failures inline in the open dialog.
   Keep the provenance report inside the installed asset with its final paths,
   replacing and rolling it back with the asset directory.
   Direct unskinned meshes use declared position/normal and UV streams with
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
+  Decodability alone does not prove asset membership. Direct geometry defaults
+  to excluded unless the facial-family proof establishes its relationship to the
+  asset; retain unproven candidates in the report and partial/skipped counts.
+  Explicit internal component selection can export supported direct candidates;
+  the Add/Update dialog does not expose component or overlay selection.
   Preserve captured coordinates and omit fabricated
   blend data; do not fall back through an unsupported shader writer.
   Automatic ZZMI `Face/` grouping requires recognized facial material evidence on
   every component part and successfully reconstructed expression data. GIMI uses
   a unique bilateral native Eyes mesh, a matching eye-loop anchor and shared
-  diffuse/light payloads on nearby direct geometry. Label that proven family for
-  the existing viewer alignment; retain captured positions and UVs. Equivalent
-  facial passes require matching rendered attributes, resource versions, ranges
-  and materials before excluding a duplicate by default.
+  diffuse/light payloads on nearby direct geometry. Group that proven family
+  using those two required identities; extra recognized maps and
+  unclassified candidates do not disqualify the family. Duplicate-pass exclusion
+  also requires matching additional recognized material identities.
+  Label the family for the existing viewer alignment; retain captured positions
+  and UVs. Equivalent facial passes require matching rendered attributes,
+  resource versions, ranges and materials before excluding a duplicate by default.
   GIMI face anchors may separate an auxiliary shell only when a contiguous
   triangle suffix has matching UV0/UV1/UV2, the retained triangles have zero UV2,
   no triangle mixes those tags, and both shells match bounds and their largest
@@ -374,8 +382,9 @@ of documentation, comments and tests; use portable fixtures instead.
   hash/payload pairs use one file named for their first owning component; each
   consumer retains its own role and exact metadata reference. Distinct native
   hashes or differing payloads stay separate. Additional byte sharing may use
-  output-only hardlinks. Once a GIMI material has a diffuse, omit unclassified
-  shader resources from normal output; retain provenance and optional debug files.
+  output-only hardlinks. Keep unclassified GIMI textures as selectable candidates
+  without automatically binding them. Only actual auxiliary/unusable evidence
+  excludes resources from normal output; retain provenance and optional debug files.
 - Index Assets through metadata only. Heavy geometry/textures require explicit
   indexed-Asset loading or the explicit missing-original-parts action.
   Direct Assets never synthesize INIs/mods, modify sources or write

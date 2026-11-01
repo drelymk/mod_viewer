@@ -1,4 +1,6 @@
 export default {
+  'asset.extractedPartial':
+    'Extracción parcial: se guardaron {components} componentes y se omitieron {skipped} grupos de recursos. Pueden faltar partes. Consulta extraction_report.json para más detalles.',
   'asset.add': 'Añadir recurso',
   'asset.update': 'Actualizar recurso',
   'asset.name': 'Nombre del recurso',

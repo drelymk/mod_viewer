@@ -233,6 +233,10 @@ def analyze(dump, context=None):
     if inv.gimi_evidence and not inv.zzz_evidence:
         from .profiles.gimi_faces import classify_faces
         components.extend(classify_faces(decoded_meshes, ctx))
+    for component in components:
+        if component.status == "included" and component.requires_review:
+            component.reason = "Decodable direct geometry; target-asset membership is unproven"
+            component.diagnostics.append("Direct geometry without proven asset membership is excluded by default; its source streams and ranges remain in the analysis for explicit internal selection.")
     for unresolved_index, (h, rows) in enumerate(sorted(unsupported.items()), 1):
         # Noncharacter evidence is deliberately narrow: missing producer remains visible.
         draws = [r[0] for r in rows]

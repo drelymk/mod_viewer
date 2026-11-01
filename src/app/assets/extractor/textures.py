@@ -113,11 +113,4 @@ def collect(inv, draws, context):
     # Decode only during extraction, after all reliable signatures and exclusions.
     from .pixel_roles import apply_fallback
     apply_fallback(inv, result, color, context)
-    if inv.gimi_evidence and not inv.zzz_evidence and any(
-        t["role"] == "Diffuse" and not t.get("auxiliary") for t in result
-    ):
-        for t in result:
-            if t["role"].startswith("TextureSlot"):
-                t["auxiliary"] = True
-                t.setdefault("role_note", "Unclassified GIMI shader resource; omitted from material output and retained in the report or debug assets.")
     return result

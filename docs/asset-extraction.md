@@ -16,10 +16,11 @@ The engine reconstructs supported stream-output skinning layouts and declared
 direct position/normal/UV streams. Direct meshes retain captured coordinates
 without fabricated blend data. Compute-only skinning and unfamiliar layouts may
 still need support. Unsupported captures fail without replacing existing files. Partial
-extractions still save the supported components. Counts and skipped resource
+extractions still save the identified asset components. Counts and skipped resource
 groups remain in `extraction_report.json`; those groups may be scene/UI geometry
-or unsupported asset parts. Add/Update closes on success without a completion
-message. Failures, including duplicate asset names, stay visible in the dialog.
+or unsupported asset parts. Add/Update closes on success without a routine completion
+message. Partial results show a warning because some asset parts may be missing,
+including after an update. Failures, including duplicate asset names, stay visible in the dialog.
 The dump-field description identifies the FrameAnalysis folder to select.
 Unknown texture roles remain available without
 inventing material bindings. Recognized ZZMI material signatures retain their
@@ -42,10 +43,10 @@ LightMap channels in the primary material family. It excludes unused atlas
 padding, including uniform colored borders, and allows normal B to carry detail instead of normal Z. It does
 not infer MaterialMap for GIMI. Complete GIMI material triplets take priority over
 larger inherited resource sets; confirmed roles still take priority over pixels.
-Once a GIMI material has a diffuse, normal exports keep its classified material
-maps and omit unclassified shader resources. The report retains omitted resources;
-debug exports can include their original payloads under `assets/`. Materials with
-no identified diffuse retain their unknown candidates for inspection.
+GIMI exports preserve unclassified textures as selectable candidates, including
+when a diffuse is recognized. Unknown roles never become automatic material
+bindings. Resources with auxiliary or unusable evidence remain in the report;
+debug exports can include their original payloads under `assets/`.
 RGB pixel inspection resizes independently of alpha so near-zero data alpha does
 not distort the analyzed colors. Export preserves the original texture bytes.
 
@@ -62,17 +63,24 @@ keep their existing location. A selection containing only facial components stay
 at the root so it remains a loadable standalone asset.
 GIMI grouping is automatic when one bilateral native Eyes reference and a matching
 eye-loop surface establish a face family with shared diffuse/light payloads.
+Additional recognized maps, such as NormalMap, and unclassified texture candidates
+do not prevent grouping; duplicate passes still require matching recognized maps.
 Related nearby direct meshes receive the face labels used by the viewer's existing
 alignment. Equivalent captured facial passes are excluded by default while their
 provenance remains in the report; differing UVs or ambiguous references stay separate.
 Some GIMI face captures also contain a separate shell over the eye openings.
 When its UV tags, contiguous index range, bounds and shared outer boundary prove
 that separation, extraction keeps it as an optional `FaceEyeOverlay` component
-and excludes it by default. The report retains its source range and streams;
-explicit component selection can still export it. Facial vertices are unchanged.
+and excludes it by default. The report retains its source range and streams.
+Only explicit selection through the internal extractor API can export it; the
+Add/Update dialog currently has no component or overlay selector. Facial vertices are unchanged.
 Boundary matching allows a small shell offset within 0.01% of the face bounds'
 diagonal, with one-to-one vertex and matching UV checks. The report records the
 measured errors and tolerance; larger offsets and ambiguous matches stay included.
+Other decodable direct geometry has unproven asset membership and is excluded
+from default extraction. It remains in the analysis report and contributes to
+partial/skipped counts. Supported direct candidates can also be explicitly
+selected through the internal API; no new component-selection UI is provided.
 
 Compact metadata names each component's VB file, each range's IB file and each
 texture payload relative to its `hash.json`. These associations keep captured

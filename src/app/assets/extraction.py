@@ -94,8 +94,7 @@ def extract_asset(folder_path, name, dump_path, original_path=None):
                 "extraction": {
                     "components": report.components, "parts": report.parts,
                     "partial": report.partial,
-                    "skipped": sum(component.status in ("uncertain", "unsupported")
-                                   for component in package.analysis.components),
+                    "skipped": sum(component.requires_review for component in package.analysis.components),
                 }}
     finally:
         # Retain the backup if a rollback itself failed; never delete recovery data.

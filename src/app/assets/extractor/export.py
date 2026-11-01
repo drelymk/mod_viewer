@@ -193,9 +193,10 @@ def extract(analysis, selection=None, context=None):
         supported = [c for c in supported if c.default_included]
     if not supported:
         raise Unsupported("No supported components selected; no empty package was written")
+    selected_ids = {c.id for c in supported}
     meshes, diagnostics = [], list(analysis.diagnostics)
     for c in analysis.components:
-        if c.status == "included" and c.id not in {x.id for x in supported} and not c.default_included:
+        if c.status == "included" and c.id not in selected_ids and not c.default_included:
             diagnostics.extend(c.diagnostics)
     used_names = set()
     for i, c in enumerate(supported):
@@ -218,10 +219,10 @@ def extract(analysis, selection=None, context=None):
         mesh = decode_component(inv, c, ctx)
         meshes.append(mesh)
         diagnostics.extend(c.diagnostics)
-    unresolved = [c for c in analysis.components if c.status in ("uncertain", "unsupported")]
+    unresolved = [c for c in analysis.components if c.requires_review and c.id not in selected_ids]
     partial = bool(unresolved)
     if partial:
-        diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved/unsupported geometry candidates are not exported. Static attachments may be missing.")
+        diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved, unsupported or unproven geometry candidates are not exported. Static attachments may be missing.")
     return ModelPackage(analysis, name, meshes, list(dict.fromkeys(diagnostics)), partial, time.perf_counter() - started)
 
 

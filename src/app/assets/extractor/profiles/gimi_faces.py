@@ -38,7 +38,7 @@ def _eye_reference(mesh):
 def _material(mesh):
     signatures = []
     for part in mesh.component.parts:
-        selected = [t for t in part.textures if not t.get("auxiliary")]
+        selected = [t for t in part.textures if not t.get("auxiliary") and t["role"] in {"Diffuse", "LightMap"}]
         maps = {t["role"]: (t["hash"], t["sha256"]) for t in selected}
         if len(selected) != 2 or set(maps) != {"Diffuse", "LightMap"}:
             return None
@@ -57,6 +57,9 @@ def _signature(mesh):
     c = mesh.component
     return (c.ib, digest.hexdigest(), tuple(
         (p.first, p.count, p.base_vertex, p.index_offset, p.sha256) for p in c.parts),
+        tuple(tuple(sorted((t["role"], t["hash"], t["sha256"]) for t in p.textures
+                           if not t.get("auxiliary") and not t["role"].startswith("TextureSlot")))
+              for p in c.parts),
         tuple((role, s["hash"], s["resource"]["address"], s["resource"]["version"])
               for role, s in sorted(c.streams.items())))
 
