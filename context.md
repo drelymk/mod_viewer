@@ -138,8 +138,8 @@ of documentation, comments and tests; use portable fixtures instead.
   require matching press/release hit regions. Preserve paired button actions.
   Control data flow is per INI and bounded: join unknown branches, retain caller
   inputs through local helpers, and reject unknown writes, recursion and conflicting
-  wrap ranges. Shared artwork needs matching selector identity and render evidence;
-  require compatible conditional paths, never file ordering. Failed call trees
+  wrap ranges. Match artwork by selector identity and image binding, never file
+  ordering. Hit testing and drawing may occur in separate passes. Failed call trees
   discard their own artwork evidence and budgets, preserving independent roots.
   Lazy diagnostics explain unresolved menu
   cycles and clamped compute controls without inventing shader deformations.

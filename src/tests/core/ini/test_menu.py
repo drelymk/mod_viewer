@@ -166,13 +166,11 @@ filename = icons/first.dds
     assert controls['Aux']['image_file'] == 'icons/second.dds'
 
 
-@pytest.mark.parametrize('layout,expected', [
-    ('same-branch', 'icons/first.dds'),
-    ('exclusive-branches', None),
-    ('exclusive-nested-branches', None),
-    ('independent-unknown-branches', None),
-], ids=['shared-path', 'if-else', 'nested-if-else', 'ambiguous-paths'])
-def test_shared_artwork_does_not_combine_alternative_execution_paths(layout, expected):
+@pytest.mark.parametrize('layout', [
+    'same-branch', 'exclusive-branches', 'exclusive-nested-branches',
+    'independent-unknown-branches',
+])
+def test_shared_artwork_matches_identity_across_hit_and_draw_passes(layout):
     actions = 'run = CommandList Hit\nrun = CommandList Render'
     if layout == 'same-branch':
         replacement = 'if $Gate == 1\n' + actions + '\nendif'
@@ -188,7 +186,7 @@ def test_shared_artwork_does_not_combine_alternative_execution_paths(layout, exp
     controls = {entry['var']: entry for entry in
                 _menu(_flow_menu().replace(actions, replacement)).values()}
     assert controls['Mode']['values'] == ['0', '1', '2', '3']
-    assert controls['Mode'].get('image_file') == expected
+    assert controls['Mode']['image_file'] == 'icons/first.dds'
 
 
 @pytest.mark.parametrize('failure', ['recursive', 'budget'])
