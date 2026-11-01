@@ -33,6 +33,112 @@ def _write_geometry(root):
     (root / "i.buf").write_bytes(struct.pack("<3I", 0, 1, 2))
 
 
+def test_compact_wwmi_defaults_use_exact_range_file_references(tmp_path, monkeypatch):
+    from app.assets.extractor.discovery import analyze
+    from app.assets.extractor.export import Selection, export, extract
+    from tests.support.extraction_data import make_attribute_capture
+
+    export(extract(analyze(make_attribute_capture(tmp_path)), Selection("Asset01")),
+           tmp_path / "assets")
+    root = tmp_path / "assets"
+    asset = root / "Asset01" / "11111111"
+    path = asset / "Metadata.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for ordinal, entry in enumerate(raw["components"]):
+        entry["texture_hashes"] = [[["Diffuse", ".dds", "aaaaaaaa", f"color{ordinal}.dds"],
+                                    ["NormalMap", ".dds", "bbbbbbbb", f"map{ordinal}.dds"],
+                                    ["Unknown", ".dds", "cccccccc", f"choice{ordinal}.dds"]]]
+        for stem in ("color", "map", "choice"):
+            (asset / f"{stem}{ordinal}.dds").write_bytes(b"synthetic texture")
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    sibling = asset.parent / "22222222"
+    sibling.mkdir()
+    (sibling / "opaque-aaaaaaaa.dds").write_bytes(b"unrelated object")
+    index = asset_index.build_index("WWMI", str(root))
+    monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
+    monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
+        game="wuwa", runtime="wwmi", texture_api="wwmi", confidence="high", scores={}))
+
+    def no_decode(*_args, **_kwargs):
+        raise AssertionError("Metadata-proven candidates must stay lazy")
+
+    monkeypatch.setattr("app.assets.enrichment.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
+    from app.assets.loader import load_asset
+    preview = load_asset("WWMI", str(root), index["assets"][0], geometry=GeometryBlob())
+    for ordinal, mesh in enumerate(preview.payload["meshes"].values()):
+        assert mesh["normal_map_key"] is None
+        assert mesh["normal_data_key"] == asset_texture_key(
+            str(root), str(asset / f"map{ordinal}.dds"), "normal_data")
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    _write_geometry(mod)
+    (mod / "owned.dds").write_bytes(b"mod texture")
+    ini = mod / "mod.ini"
+    text = ""
+    for ordinal in range(2):
+        text += f"""[TextureOverrideComponent{ordinal}]
+hash = 11111111
+match_first_index = {ordinal * 3}
+match_index_count = 3
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+__BINDING__
+drawindexed = 3,0,0
+"""
+    text += "[ResourceOwned]\nfilename = owned.dds\n"
+    text += standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    for binding in ("", r"Resource\WWMI\Diffuse = ResourceOwned"):
+        ini.write_text(text.replace("__BINDING__", binding), encoding="utf-8")
+        context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(ini)], str(mod)),
+                                 asset_folders=[{"type": "WWMI", "path": str(root), "enabled": True}])
+        payload = load_mod(context=context, geometry=GeometryBlob(),
+                           texture_source=lambda _path, role: f"/texture/test/{role}")
+        assert payload["asset_resolution"]["exact_draws"] == 2
+        metadata.hydrate_textures(str(mod), payload, data={}, source=context.source)
+        for ordinal, mesh in enumerate(payload["meshes"].values()):
+            choices = payload["texture_pools"][mesh["texture_pool_id"]]
+            asset_keys = {item["tex_key"] for item in choices if "::asset/" in item["tex_key"]}
+            assert asset_keys == {asset_texture_key(str(root), str(asset / f"{stem}{ordinal}.dds"))
+                                  for stem in ("color", "map", "choice")}
+            assert mesh["tex_key"] == ("diffuse::owned.dds" if binding else
+                                       asset_texture_key(str(root), str(asset / f"color{ordinal}.dds")))
+            assert mesh.get("normal_data_key") == (None if binding else asset_texture_key(
+                str(root), str(asset / f"map{ordinal}.dds"), "normal_data"))
+
+
+@pytest.mark.parametrize("reference", ["missing.dds", "../Other/color.dds", "../../../outside.dds",
+                                       "C:/outside.dds", "", None])
+def test_compact_wwmi_invalid_reference_never_uses_legacy_name(tmp_path, reference):
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    root = tmp_path / "assets"
+    asset = root / "Asset01" / "11111111"
+    asset.mkdir(parents=True)
+    (asset / "Asset01PartADiffuse.dds").write_bytes(b"legacy name")
+    other = asset.parent / "Other"
+    other.mkdir()
+    (other / "color.dds").write_bytes(b"other object")
+    (tmp_path / "outside.dds").write_bytes(b"outside root")
+    (asset / "Metadata.json").write_text(json.dumps({
+        "format": "mod-viewer", "vb0_hash": "11111111", "components": [{
+            "component_name": "Part", "index_offset": 0, "index_count": 3,
+            "texture_hashes": [[["Diffuse", ".dds", "aaaaaaaa", reference]]]}]}), encoding="utf-8")
+    binding = AssetComponentBinding(
+        status="exact", component_status="exact", range_status="exact", asset_type="WWMI",
+        root=str(root), asset="Asset01", metadata="Asset01/11111111/Metadata.json",
+        geometry_hash="11111111", first_index=0, classification="Part", component_name="Part")
+    draw = DrawCall()
+    parsed = SimpleNamespace(groups=[{"name": "Component0", "draws": [draw]}],
+                             resource_files=[], texture_override_indexes=[],
+                             game=SimpleNamespace(game="wuwa"))
+    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod),
+                              dds_classification_cache={})
+    _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
+    assert not draw.asset_texture_defaults
+
+
 def test_asset_defaults_share_picker_candidates_with_blank_component_metadata(
         tmp_path, monkeypatch):
     mod = tmp_path / "mod"

@@ -363,6 +363,7 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
         "components": 1, "parts": 1, "partial": True, "skipped": 1, "unproven_candidates": 0}
     assert result["warnings"] == []
     asset = Path(result["path"])
+    metadata_name = "Metadata.json" if asset_type == "WWMI" else "hash.json"
     def installed_report(folder):
         filename = folder / "extraction_report.json"
         details = json.loads(filename.read_text(encoding="utf-8"))
@@ -374,7 +375,7 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     original_report = installed_report(asset)
     original_report["previous_report_marker"] = True
     (asset / "extraction_report.json").write_text(json.dumps(original_report), encoding="utf-8")
-    assert (asset / "hash.json").exists()
+    assert list(asset.rglob(metadata_name))
     assert result["folders"][0]["index"]["assetCount"] == 1
     current = index.load_index(asset_type, str(root))
     assert current["stats"]["skippedCount"] == 0
@@ -383,7 +384,7 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     # Read the generated geometry using the viewer's real asset loader.
     loaded = loader.load_asset(asset_type, str(root), record, geometry=GeometryBlob())
     assert loaded.payload["meshes"]
-    assert list(asset.glob("Asset_001-Component001-TextureSlot00-*.png"))
+    assert list(asset.rglob("Asset_001-Component001-TextureSlot00-*.png"))
     assert loaded.parts[0].texture_candidates
     assert not loaded.parts[0].textures
     stale = asset / "obsolete" / "old.bin"
@@ -394,12 +395,12 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     result = bridge.extract_asset(str(root), "Asset_001", str(dump), str(asset))
     assert "error" not in result
     assert not stale.exists()
-    assert (asset / "hash.json").exists()
+    assert list(asset.rglob(metadata_name))
     assert "previous_report_marker" not in installed_report(asset)
     result = bridge.extract_asset(str(root), "Asset_002", str(dump), str(asset))
     assert "error" not in result
     assert not asset.exists()
-    assert (root / "Asset_002" / "hash.json").exists()
+    assert list((root / "Asset_002").rglob(metadata_name))
     installed_report(root / "Asset_002")
     assert index.find_asset_by_path(index.load_index(asset_type, str(root)), "Asset_002")
     assert not list(root.glob(".asset-extract-*"))
@@ -523,6 +524,7 @@ def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
     asset = Path(report.output)
     root_meta = json.loads((asset / "hash.json").read_text(encoding="utf-8"))
     face_meta = json.loads((asset / "Face" / "hash.json").read_text(encoding="utf-8"))
+    assert root_meta["format"] == face_meta["format"] == "mod-viewer"
     assert [item["component_name"] for item in root_meta["components"]] == ["Surface01"]
     assert [item["component_name"] for item in face_meta["components"]] == ["Surface02", "Surface03"]
     assert report.components == flat.components == 3
@@ -549,7 +551,7 @@ def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
                 assert texture["output"].startswith("Face/")
             if texture["role"] == "NormalMap":
                 assert not texture["output"].startswith("Face/")
-    for asset_type in ("ZZMI", "GIMI", "WWMI"):
+    for asset_type in ("ZZMI", "GIMI"):
         before_index = index.build_index(asset_type, str(Path(flat.output).parent))
         after_index = index.build_index(asset_type, str(asset.parent))
         before = loader.load_asset(asset_type, str(Path(flat.output).parent),
@@ -614,7 +616,8 @@ def test_cancelled_nested_face_export_preserves_existing_output(library, tmp_pat
     assert sentinel.read_bytes() == b"preserve"
 
 
-def test_exported_payload_collisions_preserve_geometry_and_unknown_candidates(library, tmp_path):
+@pytest.mark.parametrize("marker", ["mod-viewer", "mod-viewer-compact"])
+def test_exported_payload_collisions_preserve_geometry_and_unknown_candidates(library, tmp_path, marker):
     _root, dump = library
     package = _facial_package(dump)
     expected = {}
@@ -636,9 +639,17 @@ def test_exported_payload_collisions_preserve_geometry_and_unknown_candidates(li
     report = export(package, tmp_path / "collisions")
     root = Path(report.output).parent
     asset = Path(report.output)
+    for metadata_file in asset.rglob("hash.json"):
+        document = json.loads(metadata_file.read_text(encoding="utf-8"))
+        assert document["format"] == "mod-viewer"
+        document["format"] = marker
+        for component in document["components"]:
+            component["geometry_hash"] = "dddddddd"
+        metadata_file.write_text(json.dumps(document), encoding="utf-8")
     record = index.build_index("ZZMI", str(root))["assets"][0]
     loaded = loader.load_asset("ZZMI", str(root), record, geometry=GeometryBlob())
     assert len(loaded.parts) == 4
+    assert {part.geometry_hash for part in loaded.parts} == {"aaaaaaaa"}
     for part in loaded.parts:
         first_x, identity = expected[part.component_name]
         source = next(mesh for mesh in package.meshes if mesh.component.name == part.component_name)

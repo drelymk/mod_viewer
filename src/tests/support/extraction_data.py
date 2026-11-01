@@ -74,3 +74,49 @@ def add_direct_mesh(root):
 000004 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)
 000005 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)
 """)
+
+
+def make_attribute_capture(tmp_path, influences=8):
+    """Generate a split skinned layout with two ranges and complete binary snapshots."""
+    root = tmp_path / "capture"
+    root.mkdir()
+    blend_stride = influences * 2
+    blend = bytes(range(influences)) + bytes([255 // influences] * (influences - 1)
+                                           + [255 - (influences - 1) * (255 // influences)])
+    blends = [("ATTRIBUTE", 3, "R8G8B8A8_UINT", 0),
+              ("ATTRIBUTE", 4, "R8G8B8A8_UNORM", blend_stride // 2),
+              ("ATTRIBUTE", 14, "R8G8B8A8_UINT", 4 if influences == 8 else 0),
+              ("ATTRIBUTE", 15, "R8G8B8A8_UNORM", 12 if influences == 8 else 4)]
+    streams = [
+        (0, "11111111", 12, [("ATTRIBUTE", 0, "R32G32B32_FLOAT", 0)],
+         b"".join(struct.pack("<3f", i, i % 2, 0) for i in range(4))),
+        (1, "22222222", 8, [("ATTRIBUTE", 1, "R8G8B8A8_SNORM", 0),
+                            ("ATTRIBUTE", 2, "R8G8B8A8_SNORM", 4)], bytes([127, 0, 0, 127, 0, 0, 127, 127]) * 4),
+        (2, "33333333", 16, [("ATTRIBUTE", 5 + n, "R16G16_FLOAT", n * 4) for n in range(4)],
+         b"".join(struct.pack("<8e", i / 4, 0.25, 0, 0, 0, 0, 0, 0) for i in range(4))),
+        (4, "44444444", blend_stride, blends, bytes(blend_stride) + blend * 3),
+    ]
+    for call in ("000001", "000002"):
+        for slot, h, stride, elements, data in streams:
+            name = root / f"{call}-vb{slot}={h}"
+            name.with_suffix(".buf").write_bytes(data)
+            name.with_suffix(".txt").write_text(header(stride, slot, elements).replace(
+                "pointlist", "trianglelist").replace("vertex count: 4", "vertex count: 3"))
+        name = root / f"{call}-ib=55555555"
+        name.with_suffix(".buf").write_bytes(struct.pack("<6H", 0, 1, 2, 0, 1, 2))
+        first = 0 if call == "000001" else 3
+        name.with_suffix(".txt").write_text(f"first index: {first}\nindex count: 3\ntopology: trianglelist\nformat: DXGI_FORMAT_R16_UINT\n\n0 1 2\n")
+    (root / "log.txt").write_text("""000001 IASetVertexBuffers(StartSlot:0, NumBuffers:5)
+       0: resource=0x10 hash=11111111
+       1: resource=0x20 hash=22222222
+       2: resource=0x30 hash=33333333
+       4: resource=0x40 hash=44444444
+000001 VSSetShader(pVertexShader:0x90) hash=aaaaaaaaaaaaaaaa
+000001 PSSetShader(pPixelShader:0xa0) hash=bbbbbbbbbbbbbbbb
+000001 PSSetShaderResources(StartSlot:0, NumViews:1)
+       0: resource=0x60 hash=66666666
+000001 IASetIndexBuffer(pIndexBuffer:0x50, Format:57, Offset:0) hash=55555555
+000001 DrawIndexed(IndexCount:3, StartIndexLocation:0, BaseVertexLocation:0)
+000002 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)
+""", encoding="utf-8")
+    return root

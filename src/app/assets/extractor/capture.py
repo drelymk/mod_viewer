@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from .core import Resource, Call, Context, Unsupported
 
-FILE = re.compile(r"^(\d{6})-((?:[a-z]+-)?(?:vb|ib|t|cb|u|o)\d*)(?:=(?:!.!=)?([a-f0-9]{8}))?(?=[-.])")
+FILE = re.compile(r"^(\d{6})-((?:[a-z]+-)?(?:vb|ib|t|cb|u|o)\d*)(?:=(?:!.!=)?([a-f0-9]{8})(?:\([a-f0-9]{8}\))?)?(?=[-.])")
 API = re.compile(r"^(\d{6}) ([A-Za-z][A-Za-z0-9]*)\((.*)\)(.*)$")
 SLOT = re.compile(r"^\s+(\d+):.*?resource=(0x[0-9a-fA-F]+).*?hash=([a-f0-9]+)")
 ARGS = re.compile(r"(\w+):([^,)]+)")
@@ -23,6 +23,7 @@ class Inventory:
         self.formats = {}
         self.zzz_evidence = False
         self.gimi_evidence = False
+        self.wwmi_evidence = False
         self.logical_bytes = 0
         if not self.root.is_dir():
             raise ValueError("Choose an existing frame-dump directory")
@@ -97,6 +98,8 @@ def parse_log(inventory, context=None):
                 inventory.zzz_evidence = True
             if "3DMigoto" in line and re.search(r"\\GIMI(?:v\d+)?\\", line, re.IGNORECASE):
                 inventory.gimi_evidence = True
+            if "3DMigoto" in line and re.search(r"\\WWMI(?:v\d+)?\\", line, re.IGNORECASE):
+                inventory.wwmi_evidence = True
             # Dump targets are interpreted only beneath the chosen capture, never arbitrary log paths.
             if "3DMigoto Dumping " in line and " -> " in line:
                 left, right = line.split(" -> ", 1)

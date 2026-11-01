@@ -11,6 +11,7 @@ from .capture import Inventory
 from .geometry import decode_component, codec
 from .textures import digest
 from . import __version__
+from ..package_format import FORMAT, WWMI_METADATA
 
 
 def safe_name(name):
@@ -68,6 +69,7 @@ class ExportReport:
 class ExportOptions:
     layout: str = "compact"
     debug_assets: bool = False
+    asset_type: str | None = None
 
 
 class PayloadFiles:
@@ -145,7 +147,9 @@ def _texture_plan(meshes, name, options):
                         filename = "assets/" + filename
                     else:
                         # Keep distinct native hashes and payload versions addressable.
-                        identity = t["hash"], t["sha256"], ext
+                        group = (c.streams["position"]["hash"] if options.asset_type == "WWMI"
+                                 else c.provenance.get("object_folder", ""))
+                        identity = group, t["hash"], t["sha256"], ext
                         filename = shared.setdefault(identity, filename)
                 else:
                     filename = name + c.name + label + t["role"] + ext
@@ -163,6 +167,9 @@ def _component_folders(meshes):
     """Group facial families proven by game-specific material/topology evidence."""
     folders = {}
     for mesh in meshes:
+        if mesh.component.provenance.get("object_folder"):
+            folders[mesh.component.id] = safe_name(mesh.component.provenance["object_folder"])
+            continue
         if mesh.component.provenance.get("gimi_face_family"):
             folders[mesh.component.id] = "Face"
             continue
@@ -177,7 +184,8 @@ def _component_folders(meshes):
         ):
             folders[mesh.component.id] = "Face"
     # A standalone facial selection must keep a usable root metadata document.
-    return folders if len(folders) < len(meshes) else {}
+    return folders if len(folders) < len(meshes) or any(
+        m.component.provenance.get("object_folder") for m in meshes) else {}
 
 
 def extract(analysis, selection=None, context=None):
@@ -208,7 +216,9 @@ def extract(analysis, selection=None, context=None):
         # Do not mutate the review state when renaming a package.
         import copy
         c = copy.deepcopy(c)
-        c.name = safe_name((selection.renames or {}).get(c.id, c.provenance.get("suggested_name", c.name)))
+        attribute_skinning = c.provenance.get("geometry_kind") == "attribute_skinning"
+        default_name = "Object_" + c.streams["position"]["hash"] if attribute_skinning else c.name
+        c.name = safe_name((selection.renames or {}).get(c.id, c.provenance.get("suggested_name", default_name)))
         if c.name.casefold() in used_names:
             raise ValueError("Component names must be unique")
         used_names.add(c.name.casefold())
@@ -221,7 +231,15 @@ def extract(analysis, selection=None, context=None):
             if part.sha256 and digest(inv.path(part.ib_file.replace(".txt", ".buf"))) != part.sha256:
                 raise Unsupported("Index buffer changed since analysis; analyze it again")
         mesh = decode_component(inv, c, ctx)
-        meshes.append(mesh)
+        if attribute_skinning:
+            from .profiles.wwmi import split_components
+            for child in split_components(mesh):
+                if child.component.name.casefold() in used_names:
+                    raise ValueError("Component names must be unique")
+                used_names.add(child.component.name.casefold())
+                meshes.append(child)
+        else:
+            meshes.append(mesh)
         diagnostics.extend(c.diagnostics)
     unresolved = [c for c in analysis.components if c.status in ("uncertain", "unsupported")]
     unproven = sum(c.unproven_direct and c.id not in selected_ids for c in analysis.components)
@@ -277,8 +295,17 @@ def export(package, output, context=None, *, options=None):
     inv = Inventory(dump, ctx)
     # Restore only recorded, capture-relative dedup paths; no log rescan required.
     inv.targets.update(package.analysis.metrics.get("dedup_targets", {}))
+    wwmi = options.asset_type == "WWMI" or (
+        options.asset_type is None and any(
+            m.component.provenance.get("geometry_kind") == "attribute_skinning"
+            for m in package.meshes))
+    metadata_name = WWMI_METADATA if wwmi else "hash.json"
     texture_plan, omitted = _texture_plan(package.meshes, package.name, options)
     component_folders = _component_folders(package.meshes)
+    object_folders = {m.component.id for m in package.meshes if m.component.provenance.get("object_folder")}
+    if wwmi:
+        component_folders = {m.component.id: m.component.streams["position"]["hash"] for m in package.meshes}
+        object_folders = set(component_folders)
     texture_folders = {}
     texture_identities = {}
     for mesh in package.meshes:
@@ -291,10 +318,14 @@ def export(package, output, context=None, *, options=None):
                 identity = texture["sha256"]
                 texture_identities[key] = identity
                 texture_folders.setdefault(identity, set()).add(component_folders.get(c.id, ""))
-    texture_plan = {
-        key: "Face/" + filename if texture_folders[texture_identities[key]] == {"Face"} else filename
-        for key, filename in texture_plan.items()
-    }
+    for key, filename in list(texture_plan.items()):
+        if key[0] in object_folders:
+            folder = component_folders[key[0]]
+        else:
+            folders = texture_folders[texture_identities[key]]
+            folder = next(iter(folders)) if len(folders) == 1 else ""
+        if folder:
+            texture_plan[key] = folder + "/" + filename
     for mesh in package.meshes:
         safe_name(mesh.component.name)
         for h in (mesh.component.ib, mesh.component.streams["position"]["hash"]):
@@ -302,7 +333,9 @@ def export(package, output, context=None, *, options=None):
                 raise Unsupported("Invalid geometry identity in analysis")
     stage = Path(tempfile.mkdtemp(prefix=".xxmi-stage-", dir=output))
     metadata, sources, part_count = {"": []}, [], 0
-    payloads = PayloadFiles(stage)
+    wwmi_usage = {}
+    wwmi_objects = {}
+    payload_groups = {}
     textures, texture_names, checked_sources = set(), set(), {}
     associations = 0
     committed_report_digest = None
@@ -311,34 +344,51 @@ def export(package, output, context=None, *, options=None):
             c = mesh.component
             ctx.tick("Exporting " + c.name)
             folder = component_folders.get(c.id, "")
+            group = folder if wwmi else c.provenance.get("object_folder", "")
+            if group not in payload_groups:
+                payload_groups[group] = PayloadFiles(stage)
+            payloads = payload_groups[group]
             prefix_folder = folder + "/" if folder else ""
             mesh_directory = stage / folder
             mesh_directory.mkdir(exist_ok=True)
             classes = [_part_label(i) for i in range(len(c.parts))]
-            meta = dict(component_name=c.name, root_vs=c.provenance["root_vs"], draw_vb=c.provenance["draw_vb"],
-                        position_vb=c.streams["position"]["hash"], blend_vb=c.streams.get("blend", {}).get("hash", ""),
-                        texcoord_vb=c.streams["texcoord"]["hash"], ib=c.ib,
-                        object_indexes=[p.first for p in c.parts], object_index_counts=[p.count for p in c.parts],
-                        object_classifications=classes, texture_hashes=[], ib_files=[])
+            if not wwmi:
+                meta = dict(component_name=c.name, root_vs=c.provenance["root_vs"], draw_vb=c.provenance["draw_vb"],
+                            position_vb=c.streams["position"]["hash"], blend_vb=c.streams.get("blend", {}).get("hash", ""),
+                            texcoord_vb=c.streams["texcoord"]["hash"], ib=c.ib,
+                            object_indexes=[p.first for p in c.parts], object_index_counts=[p.count for p in c.parts],
+                            object_classifications=classes, texture_hashes=[], ib_files=[])
             main_vb = None
             for part_index, (part, label, indices) in enumerate(zip(c.parts, classes, mesh.indices)):
                 ctx.tick("Writing part " + c.name + label)
-                prefix = package.name + c.name + label
-                vbprefix = package.name + c.name if options.layout == "compact" else prefix
-                vbname = f"{prefix_folder}{vbprefix}-vb0={meta['position_vb']}.txt"
-                if main_vb and main_vb != stage / vbname:
-                    payloads.alias(main_vb, stage / vbname)
-                elif main_vb:
-                    pass
+                if wwmi:
+                    from .wwmi_export import write_component, texture_usage
+                    ordinal = len(metadata.setdefault(folder, []))
+                    native_files, vertex_count = write_component(mesh_directory, ordinal, mesh, part, indices, ctx)
+                    for name in native_files.values():
+                        payloads.generated(mesh_directory / name)
+                    vbname, ibname = (prefix_folder + native_files[kind] for kind in ("vb", "ib"))
+                    native = dict(component_name=c.name, classification=label, index_offset=part.first,
+                                  index_count=part.count, vertex_count=vertex_count, ib_hash=c.ib)
+                    metadata[folder].append(native)
+                    wwmi_objects.setdefault(folder, dict(vb0_hash=c.streams["position"]["hash"],
+                                                        vertex_count=c.vertex_count, index_count=0))["index_count"] += part.count
+                    wwmi_usage.setdefault(folder, {})[f"Component {ordinal}"] = texture_usage(c, part)
                 else:
-                    write_vb(stage / vbname, mesh, ctx)
-                    payloads.generated(stage / vbname)
-                    main_vb = stage / vbname
-                meta.setdefault("vb_file", os.path.basename(vbname))
-                ibname = f"{prefix_folder}{prefix}-ib={c.ib}.txt"
-                write_ib(stage / ibname, part, indices)
-                payloads.generated(stage / ibname)
-                meta["ib_files"].append(os.path.basename(ibname))
+                    prefix = package.name + c.name + label
+                    vbprefix = package.name + c.provenance.get("object_folder", c.name) if options.layout == "compact" else prefix
+                    vbname = f"{prefix_folder}{vbprefix}-vb0={meta['position_vb']}.txt"
+                    if main_vb and main_vb != stage / vbname:
+                        payloads.alias(main_vb, stage / vbname)
+                    elif not main_vb:
+                        write_vb(stage / vbname, mesh, ctx)
+                        payloads.generated(stage / vbname)
+                        main_vb = stage / vbname
+                    meta.setdefault("vb_file", os.path.basename(vbname))
+                    ibname = f"{prefix_folder}{prefix}-ib={c.ib}.txt"
+                    write_ib(stage / ibname, part, indices)
+                    payloads.generated(stage / ibname)
+                    meta["ib_files"].append(os.path.basename(ibname))
                 part_count += 1
                 texmeta, mappings = [], []
                 for texture in part.textures:
@@ -365,16 +415,27 @@ def export(package, output, context=None, *, options=None):
                     associations += 1
                     textures.add(identity)
                     texture_names.add(texname)
-                meta["texture_hashes"].append(texmeta)
-                sources.append(dict(component=c.id, part=label, metadata=prefix_folder + "hash.json",
+                if wwmi:
+                    native["texture_hashes"] = [texmeta]
+                else:
+                    meta["texture_hashes"].append(texmeta)
+                sources.append(dict(component=c.id, part=label, metadata=prefix_folder + metadata_name,
                                     vb=vbname, ib=ibname, original_range=asdict(part), textures=mappings))
-            metadata.setdefault(folder, []).append(meta)
+            if not wwmi:
+                metadata.setdefault(folder, []).append(meta)
             if options.debug_assets and mesh.morph_status != "not_detected":
                 (mesh_directory / "source_geometry").mkdir(exist_ok=True)
                 (mesh_directory / "source_geometry" / (c.name + "-captured-position.buf")).write_bytes(mesh.source_position)
         for folder, components in metadata.items():
-            (stage / folder / "hash.json").write_text(json.dumps(
-                {"format": "mod-viewer-compact", "components": components}, indent=2), encoding="utf-8")
+            if not components:
+                continue
+            document = {"format": FORMAT, "components": components}
+            if wwmi:
+                document.update(wwmi_objects[folder])
+                (stage / folder / "TextureUsage.json").write_text(json.dumps(
+                    wwmi_usage[folder], indent=2), encoding="utf-8")
+            (stage / folder / metadata_name).write_text(json.dumps(
+                document, indent=2), encoding="utf-8")
         if options.debug_assets:
             (stage / "diagnostic.log").write_text("\n".join(package.diagnostics), encoding="utf-8")
         files = [p for p in stage.rglob("*") if p.is_file()]
@@ -386,7 +447,8 @@ def export(package, output, context=None, *, options=None):
         report = ExportReport(str(destination), package.partial, len(package.meshes), part_count, len(textures),
                               time.perf_counter() - started, package.diagnostics,
                               texture_associations=associations, texture_files=len(texture_names), files=len(files),
-                              hardlink_aliases=payloads.hardlinks, copy_fallbacks=payloads.fallbacks,
+                              hardlink_aliases=sum(p.hardlinks for p in payload_groups.values()),
+                              copy_fallbacks=sum(p.fallbacks for p in payload_groups.values()),
                               logical_bytes=sum(p.stat().st_size for p in files), stored_bytes=sum(unique_files.values()),
                               omitted_texture_associations=len(omitted), report_path=str(report_path), layout=options.layout,
                               skipped=package.skipped, unproven_candidates=package.unproven_candidates)
@@ -394,7 +456,7 @@ def export(package, output, context=None, *, options=None):
                        components=[asdict(m.component) for m in package.meshes], outputs=sources,
                        extraction_seconds=package.extraction_seconds,
                        omitted_assets=omitted, options=asdict(options),
-                       geometry_notes="Component-local bone IDs and vertex order retained. No welding, original skeleton or animations recovered. Base vertex applied in exported IB text; original values recorded.",
+                       geometry_notes="Component-local bone IDs and vertex order retained. No welding, original skeleton or animations recovered. Base vertex applied in exported IB text; original values recorded. Split ATTRIBUTE captures use the viewer's WWMI winding convention without changing source buffers.",
                        storage_notes="Shared textures use native resource hashes. Hash collisions retain per-part aliases. Hardlinks only join output files; unsupported filesystems use copies. Editing a shared file changes its linked aliases.")
         staged_report = stage / ".extraction-report.json"
         staged_report.write_text(json.dumps(details, indent=2), encoding="utf-8")

@@ -10,7 +10,7 @@ from app.settings import config
 from . import folders, index
 from .paths import relative_asset_path
 from .extractor.discovery import analyze
-from .extractor.export import Selection, export, extract, safe_name
+from .extractor.export import ExportOptions, Selection, export, extract, safe_name
 
 
 def _target(folder_path, name, original_path):
@@ -65,7 +65,7 @@ def extract_asset(folder_path, name, dump_path, original_path=None):
     try:
         payload.mkdir()
         package = extract(analyze(dump), Selection(destination.name))
-        report = export(package, payload)
+        report = export(package, payload, options=ExportOptions(asset_type=asset_type))
         report_file = Path(report.report_path)
         details = json.loads(report_file.read_text(encoding="utf-8"))
         details["report"].update(

@@ -9,11 +9,13 @@ from core.geometry.conventions import geometry_convention_for
 from core.geometry.transport import canonicalize_uvs
 from core.geometry.migoto_format import MigotoFormatError, parse_fmt
 from core.geometry.vertex_attributes import VertexAttributeSource, decode_normals
+from core.textures.profiles import texture_profile_for
 
 from app.assets import paths as asset_paths
 from app.assets import textures as asset_textures
+from ..package_format import is_viewer_metadata
 from .models import (AssetAdapterResult, AssetLoadError, AssetMeshPart,
-                     AssetTexture, part_filter_matches)
+                     AssetTexture, make_texture, part_filter_matches)
 
 
 _IMAGE_EXTENSIONS = (".dds", ".png", ".jpg", ".jpeg")
@@ -229,6 +231,34 @@ def _warning(component, ordinal, reason, message):
             "reason": reason, "message": message}
 
 
+def _explicit_textures(root, metadata_relative, component, files, texture_source):
+    """Use proven metadata roles and exact files; numeric slots remain candidates."""
+    roles = {"diffuse": "diffuse", "normalmap": texture_profile_for("wuwa").normal_transport_role,
+             "lightmap": "light_map", "materialmap": "material_map"}
+    candidates, by_role = {}, {}
+    rows = component.get("texture_hashes")
+    for row in rows if isinstance(rows, list) else ():
+        for item in row if isinstance(row, list) else ():
+            if not isinstance(item, list) or len(item) < 4 or not isinstance(item[3], str):
+                continue
+            path = asset_paths.safe_asset_path(root, os.path.join(os.path.dirname(metadata_relative), item[3]))
+            if not path or path not in files:
+                continue
+            candidate = make_texture(root, path, None, texture_source=texture_source, source="candidate")
+            if candidate:
+                candidates[path] = candidate
+            role = roles.get(str(item[0]).replace("_", "").casefold())
+            if role:
+                by_role.setdefault(role, set()).add(path)
+    textures = {}
+    for role, paths in by_role.items():
+        if len(paths) == 1:
+            texture = make_texture(root, next(iter(paths)), role, texture_source=texture_source)
+            if texture:
+                textures[role] = texture
+    return textures, tuple(candidates.values())
+
+
 def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
     parts = []
     warnings = []
@@ -338,6 +368,11 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
             key = f"{source_path}::{label}::{geometry_hash or 'unknown'}::{ordinal}"
             candidates = _component_texture_candidates(
                 component_files, root, ordinal, texture_source)
+            textures = {}
+            if is_viewer_metadata(raw):
+                textures, explicit = _explicit_textures(
+                    root, metadata_relative, component, component_files, texture_source)
+                candidates = tuple({item.key: item for item in (*candidates, *explicit)}.values())
             parts.append(AssetMeshPart(
                 key=key, label=label, asset_type="WWMI", asset_path=source_path,
                 geometry_hash=geometry_hash, component_name=name,
@@ -345,7 +380,7 @@ def load_wwmi_asset(root, record, *, texture_source=None, part_filter=None):
                                 if component.get("classification") else name),
                 component_ordinal=ordinal, first_index=first_index,
                 index_count=index_count, positions=pos, indices=packed_indices,
-                uvs=uv, normals=normal, texture_candidates=candidates))
+                uvs=uv, normals=normal, textures=textures, texture_candidates=candidates))
     if not parts:
         raise AssetLoadError("WWMI Asset contains no renderable components.")
     return AssetAdapterResult(tuple(parts), tuple(warnings))

@@ -16,6 +16,7 @@ from core.resource_paths import safe_resource_path
 
 from . import paths as asset_paths
 from . import textures as asset_textures
+from .package_format import is_viewer_metadata
 
 
 _ROLE_NAMES = {
@@ -48,6 +49,8 @@ class TextureSemanticEvidence:
     evidence: tuple[str, ...] = ()
     component_name: str | None = None
     classification: str | None = None
+    # None permits legacy naming; an empty reference is explicitly invalid.
+    file_reference: str | None = None
 
 
 # Preserve the AssetTextureEvidence import name for existing callers.
@@ -105,11 +108,14 @@ def _texture_records(binding, raw):
     if binding.range_status != "exact":
         return []
     records = []
+    compact = is_viewer_metadata(raw)
+    native_wwmi = compact and binding.asset_type == "WWMI" and raw.get("vb0_hash")
     for entry in _entries(raw):
         if not isinstance(entry, dict):
             continue
         geometry_hash = normalize_geometry_hash(
-            entry.get("ib") or entry.get("ib_hash")
+            (raw.get("vb0_hash") if native_wwmi else None)
+            or entry.get("ib") or entry.get("ib_hash")
             or entry.get("geometry_hash") or entry.get("geometryHash"))
         if geometry_hash != binding.geometry_hash:
             continue
@@ -119,6 +125,9 @@ def _texture_records(binding, raw):
         classifications = _values(entry, (
             "object_classifications", "objectClassifications",
             "classifications"))
+        if native_wwmi:
+            first_values = [entry.get("index_offset", 0)]
+            classifications = [entry.get("component_name")]
         positions = [
             position for position, value in enumerate(first_values)
             if _integer(value) == binding.first_index
@@ -144,11 +153,17 @@ def _texture_records(binding, raw):
             role = _ROLE_NAMES.get(str(item[0]).replace("_", "").lower())
             texture_hash = normalize_geometry_hash(item[2])
             extension = item[1] if isinstance(item[1], str) else None
+            file_reference = None
+            if compact and len(item) > 3:
+                relative = item[3]
+                file_reference = (asset_paths.safe_asset_path(
+                    binding.root, os.path.join(os.path.dirname(binding.metadata), relative))
+                    if isinstance(relative, str) else None) or ""
             if texture_hash:
                 records.append(AssetTextureEvidence(
                     role, texture_hash, extension,
                     component_name=component_name,
-                    classification=classification))
+                    classification=classification, file_reference=file_reference))
         if records:
             return records
     return records
@@ -156,6 +171,9 @@ def _texture_records(binding, raw):
 
 def _matches_original_texture(binding, evidence, filename, *, require_component=False):
     """Match a file to a role and range independently established by metadata."""
+    if evidence.file_reference is not None:
+        return bool(evidence.file_reference) and os.path.normcase(filename) == \
+            os.path.normcase(evidence.file_reference)
     component = binding.component_name or evidence.component_name
     if component is not None and not isinstance(component, str):
         return False
@@ -193,9 +211,11 @@ def _logical_key(binding, filename):
     return asset_textures.asset_logical_key(binding.root, filename)
 
 
-def _gimi_evidence(binding, cache):
+def _hash_evidence(binding, cache):
     filename = _safe_asset_path(binding.root, binding.metadata)
     raw = _json(cache, filename) if filename else None
+    if binding.asset_type == "WWMI" and not is_viewer_metadata(raw):
+        return []
     return _texture_records(binding, raw)
 
 
@@ -581,6 +601,7 @@ def _associate_textures(group, records, inventory, filename_matches,
                                 for value in values)
             asset_hashes.update(value for slot in draw.slot_textures
                                 for value in slot.texture_hashes)
+            asset_hashes.update(item.texture_hash for item in evidence)
         association = (binding, frozenset(asset_hashes))
         if association in associated_assets:
             continue
@@ -606,7 +627,7 @@ def _associate_textures(group, records, inventory, filename_matches,
             if (id(group) in matches
                     or any(value in filename.casefold() for value in asset_hashes)
                     or any(_matches_original_texture(
-                               binding, item, filename, require_component=True)
+                               binding, item, path, require_component=True)
                            for item in evidence)):
                 candidates.setdefault(identity, dict(candidate))
     group["texture_candidates"] = list(candidates.values())
@@ -656,8 +677,7 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
         records = []
         for draw, binding in zip(group.get("draws", ()), group_bindings):
             exact = asset_textures.exact_texture_binding(binding)
-            evidence = (_gimi_evidence(binding, metadata_cache)
-                        if exact and binding.asset_type in ("GIMI", "ZZMI") else [])
+            evidence = _hash_evidence(binding, metadata_cache) if exact else []
             slots = (_wwmi_slot_evidence(binding, metadata_cache)
                      if exact and binding.asset_type == "WWMI" else {})
             records.append((draw, binding, evidence, slots))
@@ -704,10 +724,9 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                                   "material_map")
                 if _has_mod_texture(draw, role)
             }
-            if binding.asset_type in ("GIMI", "ZZMI"):
-                known_roles.update(item.role for item in evidence if item.role)
-                roleless_evidence.extend(
-                    item for item in evidence if item.role is None)
+            known_roles.update(item.role for item in evidence if item.role)
+            roleless_evidence.extend(
+                item for item in evidence if item.role is None)
             if binding.asset_type == "WWMI":
                 for item in draw.slot_textures:
                     for usage in slots.get(item.slot, []):

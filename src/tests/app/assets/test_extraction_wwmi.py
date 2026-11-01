@@ -1,0 +1,290 @@
+"""Split ATTRIBUTE extraction retains native identity and captured geometry."""
+
+import json
+import struct
+import shutil
+from pathlib import Path
+
+from PIL import Image
+import pytest
+
+from app.assets import index, loader
+from app.assets.extractor.discovery import analyze
+from app.assets.extractor.export import Selection, export, extract
+from app.assets.extractor.textures import digest
+from app.assets.extractor.profiles.wwmi import material_roles
+from core.geometry.mesh_builder import GeometryBlob
+from core.geometry.component_coverage import ComponentCoverageKey
+from tests.support.extraction_data import make_attribute_capture
+from tests.support.dds_data import dx10_dds
+
+
+@pytest.mark.parametrize("influences", [4, 8])
+def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_identity(tmp_path, influences):
+    dump = make_attribute_capture(tmp_path, influences)
+    image = dump / "000001-ps-t0=66666666(77777777).png"
+    Image.new("RGB", (16, 16), (80, 120, 160)).save(image)
+    before = {p.name: digest(p) for p in dump.iterdir()}
+    analysis = analyze(dump)
+    component, = analysis.components
+    assert component.default_included and not component.requires_review
+    assert component.provenance["geometry_kind"] == "attribute_skinning"
+    package = extract(analysis, Selection("Asset_001", renames={component.id: "ObjectA"}))
+    assert len(package.meshes) == 2
+    mesh = package.meshes[0]
+    assert not package.partial and component.vertex_count == 4
+    assert [(p.first, p.count, p.base_vertex) for p in component.parts] == [(0, 3, 0), (3, 3, 1)]
+    weights = [i for i, e in enumerate(mesh.elements) if e.semantic == "BLENDWEIGHTS"]
+    joints = [i for i, e in enumerate(mesh.elements) if e.semantic == "BLENDINDICES"]
+    assert len(weights) == len(joints) == influences // 4
+    assert [v for i in joints for v in mesh.vertices[1][i]] == list(range(influences))
+    assert sum(v for i in weights for v in mesh.vertices[0][i]) == 0
+    assert sum(v for i in weights for v in mesh.vertices[1][i]) == pytest.approx(1)
+    report = export(package, tmp_path / "exports")
+    asset = Path(report.output)
+    assert not (asset / "hash.json").exists()
+    metadata = json.loads((asset / "11111111/Metadata.json").read_text(encoding="utf-8"))
+    entry, second = metadata["components"]
+    assert metadata["format"] == "mod-viewer"
+    assert not (asset / "11111111/hash.json").exists()
+    assert all(item["metadata"] == "11111111/Metadata.json" for item in json.loads(
+        Path(report.report_path).read_text())["outputs"])
+    assert entry["component_name"] == "ObjectA Component001"
+    assert second["component_name"] == "ObjectA Component002"
+    assert metadata["vb0_hash"] == "11111111" and entry["ib_hash"] == "55555555"
+    assert [entry["index_offset"], second["index_offset"]] == [0, 3]
+    assert all((asset / "11111111" / f"Component {i}.{kind}").is_file()
+               for i in range(2) for kind in ("fmt", "vb", "ib"))
+    assert struct.unpack("<3I", (asset / "11111111/Component 0.ib").read_bytes()) == (0, 1, 2)
+    assert struct.unpack("<3I", (asset / "11111111/Component 1.ib").read_bytes()) == (0, 1, 2)
+    usage = json.loads((asset / "11111111/TextureUsage.json").read_text())
+    assert usage == {"Component 0": {"ps-t0": [
+        "66666666-vs=aaaaaaaaaaaaaaaa-ps=bbbbbbbbbbbbbbbb"]}, "Component 1": {}}
+    from core.geometry.migoto_format import parse_fmt
+    from app.assets.extractor.geometry import codec
+    layout = parse_fmt(asset / "11111111/Component 0.fmt")
+    data = (asset / "11111111/Component 0.vb").read_bytes()
+    for local, source in enumerate((0, 1, 2)):
+        for element, values in zip(mesh.elements, mesh.vertices[source]):
+            assert codec(element.format)[1](data, local * layout.stride + element.offset) == pytest.approx(values)
+    current = index.build_index("WWMI", str(asset.parent))
+    record, = current["assets"]
+    assert index.lookup_geometry(current, "11111111") and not index.lookup_geometry(current, "55555555")
+    loaded = loader.load_asset("WWMI", str(asset.parent), record, geometry=GeometryBlob())
+    assert not loaded.payload["metadata"].get("warnings") and len(loaded.parts) == 2
+    first = loaded.parts[0]
+    assert first.geometry_hash == "11111111"
+    assert list(struct.iter_unpack("<3f", first.positions)) == [(0, 0, 0), (2, 0, 0), (1, 1, 0)]
+    assert list(struct.iter_unpack("<3f", first.normals)) == [(0, 0, 1)] * 3
+    candidate, = first.texture_candidates
+    assert candidate.role is None and digest(Path(candidate.path)) == digest(image)
+    assert entry["texture_hashes"][0][0][2] == "66666666"
+    selected = loader.load_asset("WWMI", str(asset.parent), record, geometry=GeometryBlob(),
+                                 part_filter=[ComponentCoverageKey("11111111", 3, 3)])
+    assert len(selected.parts) == 1 and selected.parts[0].first_index == 3
+    assert {p.name: digest(p) for p in dump.iterdir()} == before
+
+
+def test_multiple_object_folders_are_self_contained_and_remain_one_asset(tmp_path):
+    dump = make_attribute_capture(tmp_path)
+    Image.new("RGB", (16, 16), (80, 120, 160)).save(dump / "000001-ps-t0=66666666.png")
+    for path in list(dump.iterdir()):
+        if path.name.startswith(("000001-", "000002-")):
+            name = path.name.replace("000001-", "000003-").replace("000002-", "000004-")
+            shutil.copyfile(path, dump / name.replace("11111111", "88888888"))
+    log = dump / "log.txt"
+    text = log.read_text()
+    log.write_text(text + text.replace("000001", "000003").replace("000002", "000004").replace(
+        "resource=0x10 hash=11111111", "resource=0x70 hash=88888888"))
+    analysis = analyze(dump)
+    assert len(analysis.components) == 2
+    package = extract(analysis, Selection("Asset_001", renames={
+        c.id: "ObjectA" if c.streams["position"]["hash"] == "11111111" else "ObjectB"
+        for c in analysis.components}))
+    report = export(package, tmp_path / "exports")
+    asset = Path(report.output)
+    assert report.components == report.parts == 4
+    assert not list(asset.glob("*.*"))
+    for folder in ("11111111", "88888888"):
+        assert len(list((asset / folder).glob("Component *.vb"))) == 2
+        document = json.loads((asset / folder / "Metadata.json").read_text())
+        assert len(document["components"]) == 2
+        relative = document["components"][0]["texture_hashes"][0][0][3]
+        assert Path(relative).parent == Path(".")
+        assert (asset / folder / relative).is_file()
+    first_image, = (asset / "11111111").glob("*.png")
+    second_image, = (asset / "88888888").glob("*.png")
+    assert digest(first_image) == digest(second_image) and not first_image.samefile(second_image)
+    assert not next((asset / "11111111").glob("Component *.vb")).samefile(
+        next((asset / "88888888").glob("Component *.vb")))
+    current = index.build_index("WWMI", str(asset.parent))
+    record, = current["assets"]
+    assert {g["hash"] for g in record["geometry"]} == {"11111111", "88888888"}
+    loaded = loader.load_asset("WWMI", str(asset.parent), record, geometry=GeometryBlob())
+    assert len(loaded.parts) == 4 and len({p.component_name for p in loaded.parts}) == 4
+    assert len({t.path for p in loaded.parts for t in p.texture_candidates}) == 2
+    # A copied object can load without the parent or its sibling's files.
+    detached_root = tmp_path / "detached"
+    detached = detached_root / "Asset_003"
+    shutil.copytree(asset / "11111111", detached)
+    detached_record, = index.build_index("WWMI", str(detached_root))["assets"]
+    copied = loader.load_asset("WWMI", str(detached_root), detached_record, geometry=GeometryBlob())
+    assert len(copied.parts) == 2 and copied.parts[0].texture_candidates
+    assert all(Path(t.path).parent == detached for p in copied.parts for t in p.texture_candidates)
+
+
+@pytest.mark.parametrize("case", ["named_folder", "nested_folder", "missing_hash", "shared_hash_filename"])
+def test_native_object_discovery_requires_hash_folder_and_native_fields(tmp_path, case):
+    root = tmp_path / "assets"
+    asset = root / "Asset_001"
+    folder = {"named_folder": "ObjectA", "nested_folder": "Nested/11111111", "missing_hash": "11111111", "shared_hash_filename": "11111111"}[case]
+    child = asset / folder
+    child.mkdir(parents=True)
+    document = {"format": "mod-viewer", "components": [{"index_offset": 0, "index_count": 3}]}
+    if case != "missing_hash":
+        document["vb0_hash"] = "11111111"
+    (child / ("hash.json" if case == "shared_hash_filename" else "Metadata.json")).write_text(json.dumps(document))
+    with pytest.raises(index.NoValidAssetsError):
+        index.build_index("WWMI", str(root))
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("main", 3), ("small_color_mask", 3), ("simple", 1), ("smaller_atlas", 2), ("hair", 1),
+    ("hair_uncompressed", 1), ("eye", 2), ("eye_unbound", None), ("eye_wrong_size", None),
+    ("no_color", None), ("no_shader", None), ("unbound", None), ("contaminated", None),
+    ("wrong_size", None), ("wrong_mask", None),
+])
+def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
+    formats = ["BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB"]
+    sizes = [(512, 512)] * 4
+    if case == "small_color_mask":
+        formats[2] = "BC7_UNORM_SRGB"
+        sizes[2] = (128, 128)
+    elif case == "simple":
+        formats = ["BC7_UNORM", "BC7_UNORM_SRGB"]
+    elif case == "smaller_atlas":
+        formats = ["BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB"]
+        sizes[2] = (256, 256)
+    elif case in ("hair", "hair_uncompressed"):
+        formats = ["BC3_UNORM", "BC7_UNORM_SRGB", "B8G8R8A8_UNORM", "BC1_UNORM", "R8_UNORM", "BC7_UNORM"]
+        sizes = [(256, 256), (512, 512), (128, 128), (256, 128), (128, 128), (512, 512)]
+        if case == "hair_uncompressed":
+            formats[3] = "B8G8R8A8_UNORM"
+    elif case.startswith("eye"):
+        formats = ["BC1_UNORM", "BC3_UNORM_SRGB", "BC7_UNORM_SRGB"]
+        sizes = [(256, 256), (256, 256), (512, 512)]
+    textures = [dict(slot=i, hash=f"{i + 1:08x}", resource={"hash": f"{i + 1:08x}"},
+                     format=fmt, width=sizes[i][0], height=sizes[i][1]) for i, fmt in enumerate(formats)]
+    if case == "unbound":
+        textures[3]["resource"] = None
+    elif case == "contaminated":
+        textures[3]["contaminated"] = True
+    elif case == "wrong_size":
+        textures[3]["width"] = 256
+    elif case == "wrong_mask":
+        textures[2]["format"] = "R16_FLOAT"
+    elif case == "eye_unbound":
+        textures[2]["resource"] = None
+    elif case == "eye_wrong_size":
+        textures[2]["width"] = textures[2]["height"] = 256
+    assert material_roles(textures, case != "no_color", "" if case == "no_shader" else "a" * 16) == (
+        {expected: "Diffuse"} if expected is not None else {})
+
+
+def _material_capture(dump, call_id, textures):
+    codes = {"BC7_UNORM": 98, "BC7_UNORM_SRGB": 99, "BC3_UNORM": 77,
+             "BC3_UNORM_SRGB": 78, "BC1_UNORM": 71, "R8_UNORM": 61, "B8G8R8A8_UNORM": 87}
+    bindings, dump_lines = [], []
+    for slot, (fmt, width, height) in enumerate(textures):
+        h = f"{0x10000000 + int(call_id) * 16 + slot:08x}"
+        name = f"{call_id}-ps-t{slot}={h}.dds"
+        size = width * height * (4 if fmt == "B8G8R8A8_UNORM" else 1)
+        if fmt == "BC1_UNORM":
+            size //= 2
+        (dump / name).write_bytes(dx10_dds(bytes(size), dxgi_format=codes[fmt], width=width, height=height))
+        bindings.append(f"       {slot}: resource=0x{slot + 6:x}0 hash={h}\n")
+        dump_lines.append(f"{call_id} 3DMigoto Dumping capture\\{name} -> deduped\\{h}-{fmt}.dds\n")
+    return (f"{call_id} PSSetShader(pPixelShader:0xa0) hash=cccccccccccccccc\n"
+            + f"{call_id} PSSetShaderResources(StartSlot:0, NumViews:{len(textures)})\n"
+            + "".join(bindings) + "".join(dump_lines))
+
+
+@pytest.mark.parametrize("family", ["main", "eye"])
+def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessing(tmp_path, family):
+    dump = make_attribute_capture(tmp_path)
+    log = dump / "log.txt"
+    text = log.read_text()
+    text = "000001 3DMigoto [ShaderRegex\\WWMIv1\\EnableTextureOverrides]\n" + text
+    textures = [(fmt, 128, 128) for fmt in ("BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB")]
+    if family == "eye":
+        textures = [("BC1_UNORM", 128, 128), ("BC3_UNORM_SRGB", 128, 128), ("BC7_UNORM_SRGB", 256, 256)]
+    text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n",
+                        _material_capture(dump, "000001", textures))
+    log.write_text(text)
+    Image.new("RGB", (16, 16)).save(dump / "000001-o0=aaaaaaaa.png")
+    analysis = analyze(dump)
+    diffuse, = [t for t in analysis.components[0].parts[0].textures if t["role"] == "Diffuse"]
+    assert diffuse["role_confidence"] == "inferred_wwmi_pass_format_bindings"
+    assert diffuse["slot"] == (2 if family == "eye" else 3)
+    if family == "eye":
+        assert analysis.components[0].parts[0].textures[1]["role"].startswith("TextureSlot")
+    report = export(extract(analysis, Selection("Asset_001")), tmp_path / "exports")
+    root = str(Path(report.output).parent)
+    loaded = loader.load_asset("WWMI", root, index.build_index("WWMI", root)["assets"][0], geometry=GeometryBlob())
+    assert digest(Path(loaded.parts[0].textures["diffuse"].path)) == diffuse["sha256"]
+
+
+def test_complete_hair_pass_outweighs_simple_pair_with_more_resources(tmp_path):
+    dump = make_attribute_capture(tmp_path)
+    log = dump / "log.txt"
+    text = "000001 3DMigoto [ShaderRegex\\WWMIv1\\EnableTextureOverrides]\n" + log.read_text()
+    simple = _material_capture(dump, "000001", [("BC7_UNORM", 256, 256), ("BC7_UNORM_SRGB", 256, 256)])
+    for slot in range(6, 10):
+        Image.new("RGB", (16, 16)).save(dump / f"000001-ps-t{slot}={slot:08x}.png")
+    hair = _material_capture(dump, "000002", [
+        ("BC3_UNORM", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
+        ("B8G8R8A8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 128),
+        ("R8_UNORM", 128, 128), ("BC7_UNORM", 256, 256),
+    ])
+    # Add enough unrelated snapshots for the simple pass to win a resource-count tie.
+    Image.new("RGB", (16, 16)).save(dump / "000001-ps-t10=aaaaaaaa.png")
+    text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n", simple)
+    text = text.replace("000002 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)",
+                        hair + "000002 DrawIndexed(IndexCount:3, StartIndexLocation:0, BaseVertexLocation:0)")
+    log.write_text(text)
+    second_ib = dump / "000002-ib=55555555.txt"
+    second_ib.write_text(second_ib.read_text().replace("first index: 3", "first index: 0"))
+    for call in ("000001", "000002"):
+        Image.new("RGB", (16, 16)).save(dump / f"{call}-o0=aaaaaaaa.png")
+    component, = analyze(dump).components
+    part, = component.parts
+    assert part.draws == ["000001", "000002"]
+    diffuse, = [t for t in part.textures if t["role"] == "Diffuse"]
+    assert diffuse["draw"] == "000002" and diffuse["slot"] == 1
+
+
+@pytest.mark.parametrize("case", ["normal", "duplicate", "stride", "first", "count", "truncated", "weights"])
+def test_attribute_skinning_rejects_unproven_or_incomplete_layouts(tmp_path, case):
+    dump = make_attribute_capture(tmp_path)
+    for call in ("000001", "000002"):
+        normal = dump / f"{call}-vb1=22222222.txt"
+        uv = dump / f"{call}-vb2=33333333.txt"
+        if case == "normal":
+            normal.write_text(normal.read_text().replace("SemanticIndex: 2", "SemanticIndex: 20"))
+        elif case == "duplicate":
+            normal.write_text(normal.read_text().replace("SemanticIndex: 2", "SemanticIndex: 1"))
+        elif case == "stride":
+            normal.write_text(normal.read_text().replace("stride: 8", "stride: 12"))
+        elif case == "first":
+            uv.write_text(uv.read_text().replace("first vertex: 0", "first vertex: 1"))
+        elif case == "count":
+            uv.write_text(uv.read_text().replace("vertex count: 3", "vertex count: 5"))
+        elif case == "truncated":
+            uv.with_suffix(".buf").write_bytes(uv.with_suffix(".buf").read_bytes()[:-1])
+        elif case == "weights":
+            blend = dump / f"{call}-vb4=44444444.buf"
+            blend.write_bytes(bytes([255]) * blend.stat().st_size)
+    analysis = analyze(dump)
+    assert not any(c.default_included for c in analysis.components)
+    with pytest.raises(ValueError, match="No supported components"):
+        extract(analysis)
