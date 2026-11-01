@@ -52,7 +52,6 @@ function indexSummary(entry) {
 export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = () => null } = {}) {
   const list = $('asset-folder-list');
   const error = $('asset-folder-error');
-  const notice = $('asset-folder-notice');
   const add = $('asset-folder-add');
   const empty = $('asset-folder-empty');
   const backdrop = $('asset-folder-modal-backdrop');
@@ -69,16 +68,6 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
   let originalPath = null;
   let selectedPath = null;
   let editorBusy = false;
-  let extractionResult = null;
-
-  function renderExtractionNotice() {
-    const summary = extractionResult?.extraction;
-    const messages = [...(extractionResult?.warnings || [])];
-    if (summary) messages.unshift(t(summary.partial ? 'asset.extractedPartial' : 'asset.extracted', summary));
-    notice.textContent = messages.join('\n');
-    notice.hidden = !messages.length;
-    notice.classList.toggle('warning', !!summary?.partial || !!extractionResult?.warnings?.length);
-  }
 
   const extraction = initAssetExtractionDialog({
     onSaved: (response, original) => {
@@ -86,8 +75,6 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
         tree.updateRoot(entry, { refreshChildren: true });
       }
       setTextError(error, '');
-      extractionResult = response;
-      renderExtractionNotice();
       const current = getCurrentSource();
       if (original && current?.kind === 'asset' && canonicalPath(current.path) === canonicalPath(original)) {
         void Promise.resolve(switchAsset?.(response.path, { asset: true })).then((loaded) => {
@@ -264,7 +251,6 @@ export function initAssetFolderPanel({ switchAsset = null, getCurrentSource = ()
   }
 
   window.addEventListener(LANGUAGE_CHANGED, () => {
-    renderExtractionNotice();
     if (!backdrop.classList.contains('show')) return;
     title.textContent = editorMode === 'edit' ? t('folder.editAsset') : t('folder.addAsset');
     save.textContent = editorBusy

@@ -327,15 +327,55 @@ of documentation, comments and tests; use portable fixtures instead.
   rebuild the index under the shared config transaction; failed updates restore
   the previous asset and index. Compact packages identify their format explicitly
   so WWMI roots can load them alongside native WWMI metadata.
-  A partial capture is a committed success with saved/skipped counts and a
-  separate warning notice, never an extraction error or a completeness claim.
+  A partial capture is a committed success, never an extraction error or a
+  completeness claim. Keep counts and warnings in the extraction report without
+  an add/update completion banner; show failures inline in the open dialog.
   Keep the provenance report inside the installed asset with its final paths,
   replacing and rolling it back with the asset directory.
-  Automatic `Face/` grouping requires recognized facial material evidence on
-  every component part and successfully reconstructed expression data. Keep
-  shared textures at the root, face-only files with their nested `hash.json`,
+  Direct unskinned meshes use declared position/normal and UV streams with
+  matching complete payloads. Valid UV draw-subset counts do not split otherwise
+  identical source/layout identities; malformed headers remain rejected.
+  Preserve captured coordinates and omit fabricated
+  blend data; do not fall back through an unsupported shader writer.
+  Automatic ZZMI `Face/` grouping requires recognized facial material evidence on
+  every component part and successfully reconstructed expression data. GIMI uses
+  a unique bilateral native Eyes mesh, a matching eye-loop anchor and shared
+  diffuse/light payloads on nearby direct geometry. Label that proven family for
+  the existing viewer alignment; retain captured positions and UVs. Equivalent
+  facial passes require matching rendered attributes, resource versions, ranges
+  and materials before excluding a duplicate by default.
+  GIMI face anchors may separate an auxiliary shell only when a contiguous
+  triangle suffix has matching UV0/UV1/UV2, the retained triangles have zero UV2,
+  no triangle mixes those tags, and both shells match bounds and their largest
+  closed boundary within 0.01% of the retained shell's diagonal. Require a
+  one-to-one boundary vertex match and UV0/UV1 agreement within 0.0001; retain
+  the measured errors in provenance without snapping vertices. Keep the shell as an opt-in component with its native
+  index range and source streams; default extraction omits its opaque overlay.
+  Keep shared textures at the root, face-only files with their nested `hash.json`,
   and standalone all-face selections at the root. Preserve geometry, bindings
   and source provenance; names, component ordinals and position are not evidence.
+  GIMI diffuse recognition requires capture evidence, a color pass, bound texture
+  identities and a supported neighboring format/size signature. Prefer recognized
+  material passes over effects with more resources.
+  Pixel fallback runs only during extraction on unclassified, uncontaminated,
+  non-auxiliary textures with supported color/data encodings; float, HDR and
+  typeless captures cannot establish fallback roles. Confirmed roles retain priority. Cache sampled features
+  by payload within that analysis; unsupported images remain unclassified.
+  Classify/downsample RGB independently of alpha, which may encode data rather
+  than opacity; copying textures must retain their original bytes and channels.
+  Unique strong color evidence or normal-vector pixels with matching diffuse
+  layout may assign a fallback role. GIMI may also distinguish NormalMap XY
+  from packed LightMap channels using active pixels and the bound primary
+  material family; unused atlas padding and normal B detail are not normal Z.
+  Prefer complete GIMI material triplets over larger inherited resource sets.
+  Preserve confirmed roles, never infer GIMI MaterialMap, and leave ambiguous
+  or non-primary masks as suggestions in the provenance report.
+  Compact texture names retain asset, component, role and native hash. Shared
+  hash/payload pairs use one file named for their first owning component; each
+  consumer retains its own role and exact metadata reference. Distinct native
+  hashes or differing payloads stay separate. Additional byte sharing may use
+  output-only hardlinks. Once a GIMI material has a diffuse, omit unclassified
+  shader resources from normal output; retain provenance and optional debug files.
 - Index Assets through metadata only. Heavy geometry/textures require explicit
   indexed-Asset loading or the explicit missing-original-parts action.
   Direct Assets never synthesize INIs/mods, modify sources or write
@@ -355,6 +395,8 @@ of documentation, comments and tests; use portable fixtures instead.
   full-body Eyes and a Face/FaceEye anchor. Transform positions and normals,
   preserve UVs/winding, leave native Eyes untouched and use no character offsets.
   Selective loads may read alignment dependencies without emitting them.
+  Eye-surface refinement reuses a bounded spatial index across candidate offsets;
+  nearest-point distances and the resulting alignment must match exhaustive search.
 - Asset UVs are viewer-space Float32 with V flipped exactly once. GIMI/ZZMI
   ranges resolve by parsed IB header identity; WWMI `Component N.fmt/.vb/.ib`
   supplies local geometry while metadata offsets remain provenance.

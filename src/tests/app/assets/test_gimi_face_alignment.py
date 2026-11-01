@@ -1,10 +1,12 @@
 import math
+import random
 import struct
 
 import pytest
 
 from app.assets.loader.gimi_face_alignment import (
-    AlignmentMesh, _fit_eye_surface_offset, solve, transform_normal_bytes,
+    AlignmentMesh, _fit_eye_surface_offset, _nearest_squared, _point_tree,
+    solve, transform_normal_bytes,
     transform_point, transform_position_bytes)
 
 
@@ -57,6 +59,11 @@ def _face_mesh_with_offset_surface(centers):
                 center[0], center[1] + 0.03,
                 center[2] + 0.01 * math.cos(angle)))
     return AlignmentMesh(base.name, tuple(positions), base.indices)
+
+
+def _squared_distance(first, second):
+    x, y, z = (a - b for a, b in zip(first, second))
+    return x*x + y*y + z*z
 
 
 def test_solver_recovers_rotation_translation_and_positive_determinant():
@@ -161,6 +168,44 @@ def test_surface_refinement_runs_through_solver_with_enough_eye_surface_points()
               for point in (face.positions[18], face.positions[50])]
     assert mapped[0][1] == pytest.approx(2.0, abs=0.01)
     assert mapped[1][1] == pytest.approx(2.0, abs=0.01)
+
+
+@pytest.mark.parametrize("shape", ["volume", "plane", "line", "duplicates"])
+def test_spatial_eye_search_matches_exhaustive_nearest_points(shape):
+    rng = random.Random(827)
+    points = [tuple(rng.uniform(-2, 2) for _ in range(3)) for _ in range(158)]
+    if shape == "plane":
+        points = [(x, y, 0) for x, y, _z in points]
+    elif shape == "line":
+        points = [(x, 0, 0) for x, _y, _z in points]
+    elif shape == "duplicates":
+        points = [(0, 0, 0)] * 158 + [(-1, 0, 0), (1, 0, 0)]
+    queries = points[:10] + [(0, 0, 0), (100, -100, 100)] + [
+        tuple(rng.uniform(-3, 3) for _ in range(3)) for _ in range(100)]
+    tree = _point_tree(points)
+    for query in queries:
+        expected = min(_squared_distance(query, p) for p in points)
+        assert _nearest_squared(tree, query) == expected
+    assert _point_tree([]) is None
+    assert _nearest_squared(None, (0, 0, 0)) == math.inf
+
+
+def test_surface_fit_preserves_exhaustive_search_result(monkeypatch):
+    from app.assets.loader import gimi_face_alignment as alignment
+
+    body = _dense_body_eyes((-0.75, 2, 3), (0.75, 2, 3))
+    face = _face_mesh_with_offset_surface(((4, -2, 6.25), (4, -2, 7.75)))
+    accelerated = solve(body, face)
+
+    def exhaustive(tree, point, best=math.inf):
+        if tree is None:
+            return best
+        _axis, candidate, left, right = tree
+        distance = _squared_distance(point, candidate)
+        return min(best, distance, exhaustive(left, point), exhaustive(right, point))
+
+    monkeypatch.setattr(alignment, "_nearest_squared", exhaustive)
+    assert solve(body, face) == accelerated
 
 
 def test_packed_helpers_transform_positions_and_authored_normals_only():

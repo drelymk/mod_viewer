@@ -1,13 +1,9 @@
 export default {
-  'asset.extracted': '资产已保存：{components} 个组件。',
-  'asset.extractedPartial':
-    '资产已保存：{components} 个组件。跳过的资源组：{skipped}。其中可能包含场景、界面几何体或尚不支持的资产部分。',
   'asset.add': '添加资产',
   'asset.update': '更新资产',
   'asset.name': '资产名称',
   'asset.dump': '转储文件夹',
-  'asset.extractHint': '从帧转储中提取资产到此文件夹。',
-  'asset.replaceHint': '用新的提取结果替换当前资产的所有文件。',
+  'asset.dumpHint': '选择由 3DMigoto 生成、包含要提取资产的 FrameAnalysis 文件夹。',
   'asset.extracting': '正在提取…',
   'asset.required': '请输入资产名称并通过浏览选择转储文件夹。',
   'toolbar.chooseExport': '选择导出格式',

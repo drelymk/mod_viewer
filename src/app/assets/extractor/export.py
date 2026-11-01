@@ -122,12 +122,8 @@ def _texture_plan(meshes, name, options):
                 if ext not in (".dds", ".png", ".jpg", ".jpeg"):
                     raise Unsupported("Unsupported texture extension in analysis")
                 hash_contents.setdefault((t["hash"], ext), set()).add(t["sha256"])
-                refs[(c.id, i, t["file"])] = (t, ext, selected)
-    payload_hashes = {}
-    for t, ext, selected in refs.values():
-        if selected and len(hash_contents[(t["hash"], ext)]) == 1:
-            payload_hashes.setdefault((t["sha256"], ext), set()).add(t["hash"])
-    result = {}
+                refs[(c.id, i, t["file"])] = (ext, selected)
+    result, shared = {}, {}
     for mesh in meshes:
         c = mesh.component
         for i, part in enumerate(c.parts):
@@ -136,13 +132,17 @@ def _texture_plan(meshes, name, options):
                 key = c.id, i, t["file"]
                 if key not in refs:
                     continue
-                _, ext, selected = refs[key]
+                ext, selected = refs[key]
                 collision = len(hash_contents[(t["hash"], ext)]) > 1
-                if options.layout == "compact" and selected and not collision:
-                    hashes = sorted(payload_hashes[(t["sha256"], ext)])
-                    # Bound each Windows filename component while retaining every hash lookup.
-                    begin = hashes.index(t["hash"]) // 24 * 24
-                    filename = "Texture-" + "-".join(hashes[begin:begin + 24]) + ext
+                if options.layout == "compact":
+                    suffix = "-" + t["sha256"][:12] if collision else ""
+                    filename = name + "-" + c.name + "-" + t["role"] + "-" + t["hash"] + suffix + ext
+                    if not selected:
+                        filename = "assets/" + filename
+                    else:
+                        # Keep distinct native hashes and payload versions addressable.
+                        identity = t["hash"], t["sha256"], ext
+                        filename = shared.setdefault(identity, filename)
                 else:
                     filename = name + c.name + label + t["role"] + ext
                     if not selected:
@@ -156,9 +156,12 @@ def _part_label(index):
 
 
 def _component_folders(meshes):
-    """Group proven facial materials with successfully reconstructed expressions."""
+    """Group facial families proven by game-specific material/topology evidence."""
     folders = {}
     for mesh in meshes:
+        if mesh.component.provenance.get("gimi_face_family"):
+            folders[mesh.component.id] = "Face"
+            continue
         if mesh.morph_status != "reversed_recognized" or not mesh.component.parts:
             continue
         if all(
@@ -200,7 +203,7 @@ def extract(analysis, selection=None, context=None):
         # Do not mutate the review state when renaming a package.
         import copy
         c = copy.deepcopy(c)
-        c.name = safe_name((selection.renames or {}).get(c.id, c.name))
+        c.name = safe_name((selection.renames or {}).get(c.id, c.provenance.get("suggested_name", c.name)))
         if c.name.casefold() in used_names:
             raise ValueError("Component names must be unique")
         used_names.add(c.name.casefold())
@@ -219,7 +222,7 @@ def extract(analysis, selection=None, context=None):
     partial = bool(unresolved)
     if partial:
         diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved/unsupported geometry candidates are not exported. Static attachments may be missing.")
-    return ModelPackage(analysis, name, meshes, diagnostics, partial, time.perf_counter() - started)
+    return ModelPackage(analysis, name, meshes, list(dict.fromkeys(diagnostics)), partial, time.perf_counter() - started)
 
 
 def write_vb(path, mesh, context):
@@ -306,7 +309,7 @@ def export(package, output, context=None, *, options=None):
             mesh_directory.mkdir(exist_ok=True)
             classes = [_part_label(i) for i in range(len(c.parts))]
             meta = dict(component_name=c.name, root_vs=c.provenance["root_vs"], draw_vb=c.provenance["draw_vb"],
-                        position_vb=c.streams["position"]["hash"], blend_vb=c.streams["blend"]["hash"],
+                        position_vb=c.streams["position"]["hash"], blend_vb=c.streams.get("blend", {}).get("hash", ""),
                         texcoord_vb=c.streams["texcoord"]["hash"], ib=c.ib,
                         object_indexes=[p.first for p in c.parts], object_index_counts=[p.count for p in c.parts],
                         object_classifications=classes, texture_hashes=[], ib_files=[])

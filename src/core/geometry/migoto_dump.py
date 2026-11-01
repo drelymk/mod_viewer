@@ -182,10 +182,12 @@ def parse_vertex_dump(path, *, max_vertices=MAX_VERTEX_COUNT):
                 line = raw_line.strip()
                 if not line or line.startswith(("#", ";", "//")):
                     continue
-                _layout_declaration(line, declarations, state)
-                semantic = _semantic_from_line(line)
                 vertex = _vertex_index(line)
-                if not semantic or vertex is None:
+                if vertex is None:
+                    _layout_declaration(line, declarations, state)
+                    continue
+                semantic = _semantic_from_line(line)
+                if not semantic:
                     continue
                 name, index = semantic
                 if name not in values or index != 0:

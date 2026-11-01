@@ -330,14 +330,44 @@ def _projected_half_span(points, center, axis):
     return ((max(values) - min(values)) * 0.5) if values else 0.0
 
 
-def _trimmed_surface_error(face_groups, body_groups, matrix):
+def _point_tree(points):
+    """Build a small balanced spatial index for exact nearest-point queries."""
+    if not points:
+        return None
+    axis = max(range(3), key=lambda a: max(p[a] for p in points) - min(p[a] for p in points))
+    ordered = sorted(points, key=lambda p: p[axis])
+    middle = len(ordered) // 2
+    return (axis, ordered[middle], _point_tree(ordered[:middle]),
+            _point_tree(ordered[middle + 1:]))
+
+
+def _nearest_squared(tree, point, best=math.inf):
+    while tree is not None:
+        axis, candidate, left, right = tree
+        x = point[0] - candidate[0]
+        y = point[1] - candidate[1]
+        z = point[2] - candidate[2]
+        distance = x*x + y*y + z*z
+        if distance < best:
+            best = distance
+        gap = point[axis] - candidate[axis]
+        near, far = (left, right) if gap <= 0 else (right, left)
+        best = _nearest_squared(near, point, best)
+        if gap * gap >= best:
+            break
+        tree = far
+    return best
+
+
+def _trimmed_surface_error(face_groups, reference_trees, matrix):
     distances = []
-    for face_points, body_points in zip(face_groups, body_groups):
+    for face_points, tree in zip(face_groups, reference_trees):
+        if tree is None:
+            continue
         for point in face_points:
             transformed = transform_point(matrix, point)
-            nearest = min((_length(_sub(transformed, candidate))
-                           for candidate in body_points), default=None)
-            if nearest is not None and math.isfinite(nearest):
+            nearest = math.sqrt(_nearest_squared(tree, transformed))
+            if math.isfinite(nearest):
                 distances.append(nearest * nearest)
     if not distances:
         return None
@@ -381,8 +411,8 @@ def _fit_eye_surface_offset(face_points, body_points, matrix,
         return matrix, 0.0
 
     face_groups = tuple(_sample_points(group) for group in selected)
-    reference_groups = tuple(_sample_points(group) for group in body_groups)
-    baseline = _trimmed_surface_error(face_groups, reference_groups, matrix)
+    reference_trees = tuple(_point_tree(_sample_points(group)) for group in body_groups)
+    baseline = _trimmed_surface_error(face_groups, reference_trees, matrix)
     if baseline is None or baseline <= _EPSILON:
         return matrix, 0.0
     up_range = 1.5 * eye_scale
@@ -397,7 +427,7 @@ def _fit_eye_surface_offset(face_points, body_points, matrix,
         nonlocal best_error, best_matrix, best_up, best_forward
         offset = _add(_scale(target_v, up), _scale(target_f, forward))
         candidate = _with_translation(matrix, _add(base_translation, offset))
-        error = _trimmed_surface_error(face_groups, reference_groups, candidate)
+        error = _trimmed_surface_error(face_groups, reference_trees, candidate)
         if error is not None and error < best_error:
             best_error = error
             best_matrix = candidate

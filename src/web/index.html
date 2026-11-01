@@ -246,7 +246,6 @@
         </div>
       </div>
       <div id="asset-folder-error" class="asset-folder-error" role="alert"></div>
-      <div id="asset-folder-notice" class="asset-folder-notice" role="status" hidden></div>
       <div id="asset-folder-list" class="asset-folder-list folder-registry-list"></div>
       <div id="asset-folder-empty" class="asset-folder-empty folder-registry-empty" hidden>
         <div class="empty-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-assets"></use></svg></div>
@@ -420,19 +419,19 @@
 <div id="asset-extract-backdrop" class="modal-backdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="asset-extract-title">
     <h4 id="asset-extract-title"></h4>
-    <p id="asset-extract-hint"></p>
-    <div id="asset-extract-error" class="modal-error"></div>
+    <div id="asset-extract-error" class="modal-error" role="alert"></div>
     <form id="asset-extract-form">
       <label class="modal-field">
         <span data-i18n="asset.name">Asset name</span>
-        <input id="asset-extract-name" type="text" required maxlength="100" />
+        <input id="asset-extract-name" type="text" required maxlength="100" autocomplete="off" />
       </label>
       <label class="modal-field">
         <span data-i18n="asset.dump">Dump folder</span>
         <div class="asset-folder-path-field">
-          <input id="asset-extract-dump" type="text" readonly />
+          <input id="asset-extract-dump" type="text" readonly aria-describedby="asset-extract-dump-hint" />
           <button id="asset-extract-browse" type="button" data-i18n="modal.browse">Browse</button>
         </div>
+        <span id="asset-extract-dump-hint" class="modal-field-hint" data-i18n="asset.dumpHint"></span>
       </label>
       <div class="modal-actions">
         <button id="asset-extract-cancel" type="button" data-i18n="common.cancel">Cancel</button>

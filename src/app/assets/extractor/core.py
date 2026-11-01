@@ -78,7 +78,9 @@ class Component:
 
     @property
     def default_included(self):
-        return self.status == "included" and not self.provenance.get("duplicate_outline_pass")
+        return (self.status == "included" and not self.provenance.get("duplicate_outline_pass")
+                and not self.provenance.get("duplicate_capture_pass")
+                and not self.provenance.get("auxiliary_face_layer"))
 
 
 @dataclass

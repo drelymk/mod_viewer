@@ -1,13 +1,9 @@
 export default {
-  'asset.extracted': '에셋 저장 완료: 구성 요소 {components}개.',
-  'asset.extractedPartial':
-    '에셋 저장 완료: 구성 요소 {components}개. 건너뛴 리소스 그룹: {skipped}개. 장면/UI 지오메트리 또는 지원되지 않는 에셋 부분이 포함될 수 있습니다.',
   'asset.add': '에셋 추가',
   'asset.update': '에셋 업데이트',
   'asset.name': '에셋 이름',
   'asset.dump': '덤프 폴더',
-  'asset.extractHint': '프레임 덤프에서 이 폴더로 에셋을 추출합니다.',
-  'asset.replaceHint': '현재 에셋 파일을 모두 새 추출 결과로 교체합니다.',
+  'asset.dumpHint': '추출할 에셋이 포함된, 3DMigoto가 생성한 FrameAnalysis 폴더를 선택하세요.',
   'asset.extracting': '추출 중…',
   'asset.required': '에셋 이름을 입력하고 찾아보기로 덤프 폴더를 선택하세요.',
   'toolbar.chooseExport': '내보내기 형식 선택',

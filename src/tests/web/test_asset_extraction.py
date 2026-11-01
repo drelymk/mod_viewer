@@ -5,6 +5,9 @@ def test_asset_add_update_dialog_lifecycle(module_page):
     result = module_page.evaluate('''async () => {
       const html = await (await fetch('./index.html')).text();
       document.body.innerHTML = new DOMParser().parseFromString(html, 'text/html').body.innerHTML;
+      const style = document.createElement('link');
+      style.rel = 'stylesheet'; style.href = './css/app.css';
+      await new Promise((resolve, reject) => {style.onload = resolve; style.onerror = reject; document.head.append(style);});
       const root = {path:'library',type:'ZZMI',index:{status:'ready'}};
       const asset = {path:'library/Asset_001',name:'Asset_001',asset:true};
       const calls = [], switches = [];
@@ -16,6 +19,7 @@ def test_asset_add_update_dialog_lifecycle(module_page):
         extract_asset:async (...args) => {
           calls.push(args);
           await new Promise(resolve => {finish = resolve;});
+          if (indexed && !args[3] && args[1] === asset.name) return {error:'An asset or file with that name already exists.'};
           if (fail) return {error:'synthetic failure'};
           indexed = true;
           return {folders:[root],path:asset.path,warnings:[],
@@ -40,6 +44,12 @@ def test_asset_add_update_dialog_lifecycle(module_page):
       const $ = id => document.getElementById('asset-extract-' + id);
       menuAction(list.querySelector('.asset-folder-row'), 'Add asset');
       const addOpened = $('backdrop').classList.contains('show');
+      const noIntro = !document.getElementById('asset-extract-hint');
+      const dumpHint = $('dump').getAttribute('aria-describedby') === $('dump-hint').id && $('dump-hint').textContent.includes('FrameAnalysis');
+      const matchingStyle = getComputedStyle($('backdrop').querySelector('.modal')).width ===
+        getComputedStyle(document.querySelector('#asset-folder-modal-backdrop .modal')).width &&
+        getComputedStyle($('ok')).backgroundColor === getComputedStyle(document.getElementById('afm-save')).backgroundColor &&
+        getComputedStyle($('cancel')).backgroundColor === getComputedStyle(document.getElementById('afm-cancel')).backgroundColor;
       $('name').value = 'Asset_001';
       $('form').dispatchEvent(new Event('submit', {cancelable:true}));
       await settle();
@@ -51,8 +61,17 @@ def test_asset_add_update_dialog_lifecycle(module_page):
       const busy = $('ok').disabled && $('cancel').disabled && $('backdrop').classList.contains('show') && calls.length === 1;
       finish(); await settle();
       const added = !$('backdrop').classList.contains('show');
-      const notice = document.getElementById('asset-folder-notice');
-      const saved = !notice.hidden && notice.textContent.includes('2 components') && !notice.classList.contains('warning');
+      const saved = !document.getElementById('asset-folder-notice');
+      menuAction(list.querySelector('.asset-folder-row'), 'Add asset');
+      $('name').value = 'Asset_001';
+      $('browse').click(); await settle();
+      $('ok').click(); await settle();
+      finish(); await settle();
+      const duplicate = $('backdrop').classList.contains('show') && !$('ok').disabled &&
+        $('name').value === 'Asset_001' && $('dump').value === 'capture' &&
+        $('error').textContent === 'An asset or file with that name already exists.' &&
+        getComputedStyle($('error')).display !== 'none' && $('error').getBoundingClientRect().height > 0;
+      $('cancel').click();
       list.querySelector('.asset-folder-expand').click(); await settle();
       const child = () => list.querySelector('[data-asset-folder-path="library/Asset_001"]');
       menuAction(child(), 'Update asset');
@@ -61,21 +80,22 @@ def test_asset_add_update_dialog_lifecycle(module_page):
       fail = true;
       $('form').dispatchEvent(new Event('submit', {cancelable:true})); await settle();
       finish(); await settle();
-      const failed = $('error').textContent === 'synthetic failure' && $('backdrop').classList.contains('show') && !$('ok').disabled;
+      const failed = $('error').textContent === 'synthetic failure' && getComputedStyle($('error')).display !== 'none' && $('backdrop').classList.contains('show') && !$('ok').disabled;
       fail = false;
       $('form').dispatchEvent(new Event('submit', {cancelable:true})); await settle();
       finish(); await settle();
-      const partialSaved = !notice.hidden && notice.classList.contains('warning') && notice.textContent.includes('Skipped resource groups: 1');
+      const partialSaved = !document.getElementById('asset-folder-notice') && !$('backdrop').classList.contains('show');
       const noError = !document.getElementById('asset-folder-error').classList.contains('show');
-      return {addOpened,required,busy,added,saved,partialSaved,noError,prefilled,failed,calls,switches,
+      return {addOpened,noIntro,dumpHint,matchingStyle,duplicate,required,busy,added,saved,partialSaved,noError,prefilled,failed,calls,switches,
         closed:!$('backdrop').classList.contains('show'), assetRefreshed:!!child()};
     }''')
     assert all(result[key] for key in (
-        'addOpened', 'required', 'busy', 'added', 'saved', 'partialSaved', 'noError',
+        'addOpened', 'noIntro', 'dumpHint', 'matchingStyle', 'duplicate', 'required', 'busy', 'added', 'saved', 'partialSaved', 'noError',
         'failed', 'closed', 'assetRefreshed'))
     assert result['prefilled'] == 'Asset_001'
     assert result['switches'] == [['library/Asset_001', {'asset': True}]]
     assert result['calls'] == [
+        ['library', 'Asset_001', 'capture', None],
         ['library', 'Asset_001', 'capture', None],
         ['library', 'Asset_001', 'capture', 'library/Asset_001'],
         ['library', 'Asset_001', 'capture', 'library/Asset_001']]

@@ -43,3 +43,34 @@ def make_capture(tmp_path):
 000003 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)
 """, encoding="utf-8")
     return root
+
+
+def add_direct_mesh(root):
+    """Append a repeated unskinned draw with separate declared position/UV streams."""
+    positions = b"".join(struct.pack("<7f", 7, i, 2, -1, 0, 0, 1) for i in range(4))
+    uv = next(root.glob("000001-vb1=*.buf")).read_bytes()
+    for call_id in ("000004", "000005"):
+        for slot, geometry_hash, payload, stride, elements in (
+            (0, "77777777", positions, 28, [("POSITION", 0, "R32G32B32_FLOAT", 4),
+                                           ("NORMAL", 0, "R32G32B32_FLOAT", 16)]),
+            (1, "99999999", uv, 12, [("COLOR", 0, "R8G8B8A8_UNORM", 0),
+                                    ("TEXCOORD", 0, "R16G16_FLOAT", 4),
+                                    ("TEXCOORD", 1, "R16G16_FLOAT", 8)]),
+        ):
+            name = f"{call_id}-vb{slot}={geometry_hash}"
+            (root / (name + ".buf")).write_bytes(payload)
+            text = header(stride, slot, elements).replace("pointlist", "trianglelist")
+            if call_id == "000005":
+                text = text.replace("\n\nvertex-data:", "\nelement[8]:\n  SemanticName: UNUSED\n  SemanticIndex: 0\n  Format: R32_FLOAT\n  InputSlot: 2\n  AlignedByteOffset: 0\n  InputSlotClass: per-vertex\n\nvertex-data:")
+            (root / (name + ".txt")).write_text(text)
+        name = f"{call_id}-ib=88888888"
+        (root / (name + ".buf")).write_bytes(struct.pack("<6H", 3, 3, 3, 0, 1, 2))
+        (root / (name + ".txt")).write_text("byte offset: 0\nfirst index: 3\nindex count: 3\ntopology: trianglelist\nformat: DXGI_FORMAT_R16_UINT\n\n0 1 2\n")
+    with (root / "log.txt").open("a", encoding="utf-8") as stream:
+        stream.write("""000004 IASetVertexBuffers(StartSlot:0, NumBuffers:3)
+       0: resource=0x60 hash=77777777
+       1: resource=0x80 hash=99999999
+000004 IASetIndexBuffer(pIndexBuffer:0x70, Format:57, Offset:0) hash=88888888
+000004 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)
+000005 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)
+""")

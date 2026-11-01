@@ -214,7 +214,7 @@ def _decoded_classification(info, image):
                     "unclassified_pixel_evidence")
 
 
-def classify_dds(path, source_name=None):
+def classify_dds(path, source_name=None, *, decoded_image=None):
     """Classify a DDS using only its validated header and decoded pixels."""
     info = inspect_dds(path)
     if info is None:
@@ -235,8 +235,8 @@ def classify_dds(path, source_name=None):
             None, "effect", "high", (f"format:{info.format}",),
             data_score=0.75)
 
-    image = load_texture_image(
-        path, max_size=128, preserve_alpha=True, source_name=source_name)
+    image = decoded_image if decoded_image is not None else load_texture_image(
+        path, max_size=128, preserve_alpha=False, source_name=source_name)
     if image is None:
         # sRGB is useful structural evidence, but without pixels it is not
         # strong enough to assign a role.

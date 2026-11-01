@@ -5,7 +5,7 @@ import struct
 import time
 from .capture import Inventory, parse_log
 from .core import Analysis, Component, Part, Context, Unsupported
-from .geometry import decode_component
+from .geometry import decode_component, stream_layout
 from .textures import collect, digest
 
 
@@ -90,7 +90,7 @@ def analyze(dump, context=None):
     grouped = {}
     unsupported = defaultdict(list)
     for draw in calls:
-        ctx.tick("Discovering skinned components", draw.sequence, len(calls))
+        ctx.tick("Discovering mesh components", draw.sequence, len(calls))
         if not draw.kind.startswith("DrawIndexed"):
             for output in draw.outputs:
                 writers[output.key] = draw
@@ -100,33 +100,43 @@ def analyze(dump, context=None):
         if not ib or 0 not in vbs:
             continue
         producer, chain = trace(vbs[0], writers)
-        if not producer or producer.kind != "Draw" or not producer.outputs:
-            unsupported[ib.hash].append((draw, "No supported stream-output skinning producer; static attachment or noncharacter geometry"))
-            continue
         try:
-            pvb = producer.bindings["vb"]
-            p = inv.find(producer.id, "vb0", pvb[0])
-            # ZZZ has two and three input posing paths; identify blends by validated byte ratio.
-            psize = inv.path(p).stat().st_size
-            options = []
-            for slot, r in pvb.items():
-                if slot == 0:
-                    continue
-                f = inv.find(producer.id, "vb" + str(slot), r)
-                h, _ = inv.header(f.replace(".buf", ".txt"))
-                stride = int(h.get("stride", 0))
-                if stride in (4, 16, 32) and inv.path(f).stat().st_size * 40 == psize * stride:
-                    options.append((slot, r, f))
-            if len(options) != 1:
-                raise Unsupported("Ambiguous or missing pre-skinning blend stream")
-            blend_slot, blend, b = options[0]
-            if len(pvb) == 3 and blend_slot == 2:
-                uvcall, uvslot, uv = producer, 1, pvb[1]
-            elif 1 in vbs:
+            direct = producer is None and not chain
+            if direct:
+                p = inv.find(draw.id, "vb0", vbs[0])
+                if 1 not in vbs:
+                    raise Unsupported("Missing UV stream")
                 uvcall, uvslot, uv = draw, 1, vbs[1]
+                sources = {"position": dict(file=p, slot=0, hash=vbs[0].hash, resource=asdict(vbs[0]))}
             else:
-                raise Unsupported("Missing UV stream")
+                if not producer or producer.kind != "Draw" or not producer.outputs:
+                    raise Unsupported("No supported stream-output skinning producer")
+                pvb = producer.bindings["vb"]
+                p = inv.find(producer.id, "vb0", pvb[0])
+                # Identify blend streams by validated byte ratio across posing paths.
+                psize = inv.path(p).stat().st_size
+                options = []
+                for slot, r in pvb.items():
+                    if slot == 0:
+                        continue
+                    f = inv.find(producer.id, "vb" + str(slot), r)
+                    h, _ = inv.header(f.replace(".buf", ".txt"))
+                    stride = int(h.get("stride", 0))
+                    if stride in (4, 16, 32) and inv.path(f).stat().st_size * 40 == psize * stride:
+                        options.append((slot, r, f))
+                if len(options) != 1:
+                    raise Unsupported("Ambiguous or missing pre-skinning blend stream")
+                blend_slot, blend, b = options[0]
+                if len(pvb) == 3 and blend_slot == 2:
+                    uvcall, uvslot, uv = producer, 1, pvb[1]
+                elif 1 in vbs:
+                    uvcall, uvslot, uv = draw, 1, vbs[1]
+                else:
+                    raise Unsupported("Missing UV stream")
+                sources = {"position": dict(file=p, slot=0, hash=pvb[0].hash, resource=asdict(pvb[0])),
+                           "blend": dict(file=b, slot=blend_slot, hash=blend.hash, resource=asdict(blend))}
             t = inv.find(uvcall.id, f"vb{uvslot}", uv)
+            sources["texcoord"] = dict(file=t, slot=uvslot, hash=uv.hash, resource=asdict(uv))
             ibfile = inv.find(draw.id, "ib", ib, ".txt")
             header, _ = inv.header(ibfile)
             if "first index" not in header:
@@ -137,19 +147,40 @@ def analyze(dump, context=None):
                 raise Unsupported("Index header and draw range disagree")
             if int(draw.args.get("InstanceCount", 1)) != 1:
                 raise Unsupported("Instanced character grouping is ambiguous")
-            source_key = (ib.key, producer.sequence, uv.key)
+            if direct:
+                # Direct passes can reuse resources under different input layouts.
+                identity = []
+                for role, source in sources.items():
+                    path = inv.path(source["file"])
+                    source["sha256"] = digest(path)
+                    stride, elements, declared, first_vertex = stream_layout(
+                        inv, source["file"], source["slot"],
+                        "direct_position" if role == "position" else role)
+                    # Valid UV subset counts describe the draw, not a different layout.
+                    if role == "texcoord" and first_vertex == 0 and 0 <= declared <= path.stat().st_size // stride:
+                        declared = 0
+                    identity.append((source["resource"]["address"], source["resource"]["version"],
+                                     source["sha256"], repr((stride, elements, declared, first_vertex))))
+                source_key = (ib.key, "direct", tuple(identity))
+            else:
+                source_key = (ib.key, producer.sequence, uv.key)
             # Resource version + layout + content define components; never IB hash alone.
             if source_key not in grouped:
-                sources = {"position": dict(file=p, slot=0, hash=pvb[0].hash, resource=asdict(pvb[0])),
-                           "blend": dict(file=b, slot=blend_slot, hash=blend.hash, resource=asdict(blend)),
-                           "texcoord": dict(file=t, slot=uvslot, hash=uv.hash, resource=asdict(uv))}
                 for source in sources.values():
-                    source["sha256"] = digest(inv.path(source["file"]))
-                token = hashlib.sha256(repr((ib.key, producer.id, [digest(inv.path(x["file"])) for x in sources.values()])).encode()).hexdigest()[:12]
-                component = Component(token, "", ib.hash, "included", "Validated stream-output skinning relationship", sources, [],
-                                      dict(producer=producer.id, root_vs=producer.shaders.get("vs", ""), draw_vb=vbs[0].hash,
-                                           producer_line=producer.line, draw_evidence=[], copy_chain=[x.id for x in chain]))
-                component.morph = morph_trace(pvb[0], producer, writers, inv)
+                    if "sha256" not in source:
+                        source["sha256"] = digest(inv.path(source["file"]))
+                origin = draw if direct else producer
+                token_source = (source_key, [x["sha256"] for x in sources.values()]) if direct else (
+                    ib.key, producer.id, [x["sha256"] for x in sources.values()])
+                token = hashlib.sha256(repr(token_source).encode()).hexdigest()[:12]
+                reason = "Declared direct vertex streams; captured coordinates retained" if direct else "Validated stream-output skinning relationship"
+                component = Component(token, "", ib.hash, "included", reason, sources, [],
+                                      dict(producer="" if direct else producer.id, root_vs=origin.shaders.get("vs", ""), draw_vb=vbs[0].hash,
+                                           producer_line=origin.line, draw_evidence=[], copy_chain=[x.id for x in chain]))
+                if direct:
+                    component.provenance["geometry_kind"] = "direct"
+                else:
+                    component.morph = morph_trace(pvb[0], producer, writers, inv)
                 grouped[source_key] = (component, {})
             component, parts = grouped[source_key]
             base = int(draw.args.get("BaseVertexLocation", 0))
@@ -180,11 +211,15 @@ def analyze(dump, context=None):
             component.parts.append(part)
         components.append(component)
     components.sort(key=lambda c: (min(int(x) for p in c.parts for x in p.draws), c.id))
-    surface_signatures = {}
+    surface_signatures, decoded_meshes = {}, {}
     for i, c in enumerate(components, 1):
         c.name = f"Component{i:03d}"
         try:
             mesh = decode_component(inv, c, ctx)
+            if inv.gimi_evidence and not inv.zzz_evidence and (
+                c.provenance.get("geometry_kind") == "direct" or len(mesh.vertices) <= 4096
+            ):
+                decoded_meshes[c.id] = mesh
             surfaces = set()
             for part, indices in zip(c.parts, mesh.indices):
                 for j in range(0, len(indices), 3):
@@ -195,14 +230,17 @@ def analyze(dump, context=None):
             c.status = "unsupported"
             c.diagnostics.append(str(error))
     classify_surface_overlaps(components, surface_signatures)
+    if inv.gimi_evidence and not inv.zzz_evidence:
+        from .profiles.gimi_faces import classify_faces
+        components.extend(classify_faces(decoded_meshes, ctx))
     for unresolved_index, (h, rows) in enumerate(sorted(unsupported.items()), 1):
         # Noncharacter evidence is deliberately narrow: missing producer remains visible.
         draws = [r[0] for r in rows]
         components.append(Component("unresolved-" + h, f"Unresolved candidate {unresolved_index}", h, "uncertain", rows[0][1], {}, [],
                                     dict(draws=[d.id for d in draws], shaders=[d.shaders for d in draws])))
-    diagnostics = ["Validated stream-output skinning is supported. Unsupported compute skinning and static attachments remain visible.",
+    diagnostics = ["Validated stream-output skinning and declared direct position/normal/UV streams are supported. Direct coordinates are retained without skinning or placement conversion; other layouts remain unresolved.",
                    "Single-asset grouping is an assumption; this capture alone does not establish semantic identity or a complete skeleton.",
-                   "Texture roles are inferred only for recognized ZZZ pass/format/binding signatures; other roles use deterministic slot names. Auxiliary resources are separated."]
+                   "Captured material signatures take priority over extraction-only pixel fallback. Ambiguous pixel evidence remains in the report; unclassified roles retain deterministic slot names. Auxiliary resources are separated."]
     if not any(c.status == "included" for c in components):
         diagnostics.append("No supported character geometry found. Export is unavailable.")
     needed_files = set()

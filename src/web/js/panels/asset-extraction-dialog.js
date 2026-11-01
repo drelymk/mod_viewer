@@ -1,6 +1,7 @@
 // Native-picked dumps feed the compact asset extractor.
 import { bridgeReady } from '../app/bridge.js';
 import { LANGUAGE_CHANGED, t } from '../i18n/index.js';
+import { bindModalDismiss, setModalError } from '../ui/modal-shell.js';
 
 export function initAssetExtractionDialog({ onSaved }) {
   const $ = (id) => document.getElementById(id);
@@ -18,13 +19,12 @@ export function initAssetExtractionDialog({ onSaved }) {
   let revision = 0;
 
   function message(text = '') {
-    error.textContent = text;
-    error.classList.toggle('show', !!text);
+    setModalError(error, text);
   }
 
   function labels() {
     $('asset-extract-title').textContent = t(entry?.asset ? 'asset.update' : 'asset.add');
-    $('asset-extract-hint').textContent = t(entry?.asset ? 'asset.replaceHint' : 'asset.extractHint');
+    $('asset-extract-dump-hint').textContent = t('asset.dumpHint');
     ok.textContent = t(busy ? 'asset.extracting' : 'common.ok');
   }
 
@@ -40,13 +40,7 @@ export function initAssetExtractionDialog({ onSaved }) {
     backdrop.classList.remove('show');
   }
 
-  cancel.addEventListener('click', close);
-  backdrop.addEventListener('click', (event) => {
-    if (event.target === backdrop) close();
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') close();
-  });
+  bindModalDismiss({ backdrop, close, buttons: [cancel] });
   window.addEventListener(LANGUAGE_CHANGED, labels);
   browse.addEventListener('click', async () => {
     if (busy || picking) return;
