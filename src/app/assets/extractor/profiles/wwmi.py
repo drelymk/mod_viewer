@@ -17,7 +17,7 @@ def split_components(mesh):
                         triangle_count=len(indices) // 3,
                         bounds=[[min(p[a] for p in points) for a in range(3)],
                                 [max(p[a] for p in points) for a in range(3)]],
-                        provenance={**c.provenance, "object_folder": c.streams["position"]["hash"],
+                        provenance={**c.provenance,
                                     "draw_evidence": [d for d in c.provenance["draw_evidence"] if d["draw"] in part.draws]})
         yield replace(mesh, component=child, indices=[indices])
 

@@ -50,8 +50,9 @@ def collect(inv, draws, context):
     candidates = []
     for draw in draws:
         images = []
-        for (call_id, slot, h, ext), names in inv.entries.items():
-            if call_id != draw.id or not slot.startswith("ps-t") or ext not in (".dds", ".jpg", ".jpeg", ".png"):
+        entries = inv.entries.get(draw.id, {})
+        for (slot, h, ext), names in entries.items():
+            if not slot.startswith("ps-t") or ext not in (".dds", ".jpg", ".jpeg", ".png"):
                 continue
             for name in names:
                 try:
@@ -59,7 +60,7 @@ def collect(inv, draws, context):
                 except FileNotFoundError:
                     continue
                 images.append((int(slot[4:]), h, ext, name))
-        color = any(k[0] == draw.id and k[1] == "o0" for k in inv.entries)
+        color = any(slot == "o0" for slot, _hash, _ext in entries)
         if images:
             candidates.append((color, len({s for s, *_ in images}), draw, images))
     if not candidates:

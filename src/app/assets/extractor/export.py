@@ -150,8 +150,7 @@ def _texture_plan(meshes, name, options, *, wwmi=False):
                         filename = "assets/" + filename
                     else:
                         # Keep distinct native hashes and payload versions addressable.
-                        group = c.provenance.get("object_folder", "")
-                        identity = group, t["hash"], t["sha256"], ext
+                        identity = t["hash"], t["sha256"], ext
                         filename = shared.setdefault(identity, filename)
                 else:
                     filename = name + c.name + label + t["role"] + ext
@@ -169,9 +168,6 @@ def _component_folders(meshes):
     """Group facial families proven by game-specific material/topology evidence."""
     folders = {}
     for mesh in meshes:
-        if mesh.component.provenance.get("object_folder"):
-            folders[mesh.component.id] = safe_name(mesh.component.provenance["object_folder"])
-            continue
         if mesh.component.provenance.get("gimi_face_family"):
             folders[mesh.component.id] = "Face"
             continue
@@ -186,8 +182,7 @@ def _component_folders(meshes):
         ):
             folders[mesh.component.id] = "Face"
     # A standalone facial selection must keep a usable root metadata document.
-    return folders if len(folders) < len(meshes) or any(
-        m.component.provenance.get("object_folder") for m in meshes) else {}
+    return folders if len(folders) < len(meshes) else {}
 
 
 def extract(analysis, selection=None, context=None):
@@ -303,31 +298,27 @@ def export(package, output, context=None, *, options=None):
             for m in package.meshes))
     metadata_name = WWMI_METADATA if wwmi else "hash.json"
     texture_plan, omitted = _texture_plan(package.meshes, package.name, options, wwmi=wwmi)
-    component_folders = _component_folders(package.meshes)
-    object_folders = {m.component.id for m in package.meshes if m.component.provenance.get("object_folder")}
     if wwmi:
         component_folders = {m.component.id: m.component.streams["position"]["hash"] for m in package.meshes}
-        object_folders = set(component_folders)
-    texture_folders = {}
-    texture_identities = {}
-    for mesh in package.meshes:
-        c = mesh.component
-        for part_index, part in enumerate(c.parts):
-            for texture in part.textures:
-                key = c.id, part_index, texture["file"]
-                if key not in texture_plan:
-                    continue
-                identity = texture["sha256"]
-                texture_identities[key] = identity
-                texture_folders.setdefault(identity, set()).add(component_folders.get(c.id, ""))
-    for key, filename in list(texture_plan.items()):
-        if key[0] in object_folders:
-            folder = component_folders[key[0]]
-        else:
+    else:
+        component_folders = _component_folders(package.meshes)
+        texture_folders = {}
+        texture_identities = {}
+        for mesh in package.meshes:
+            c = mesh.component
+            for part_index, part in enumerate(c.parts):
+                for texture in part.textures:
+                    key = c.id, part_index, texture["file"]
+                    if key not in texture_plan:
+                        continue
+                    identity = texture["sha256"]
+                    texture_identities[key] = identity
+                    texture_folders.setdefault(identity, set()).add(component_folders.get(c.id, ""))
+        for key, filename in list(texture_plan.items()):
             folders = texture_folders[texture_identities[key]]
             folder = next(iter(folders)) if len(folders) == 1 else ""
-        if folder:
-            texture_plan[key] = folder + "/" + filename
+            if folder:
+                texture_plan[key] = folder + "/" + filename
     for mesh in package.meshes:
         safe_name(mesh.component.name)
         for h in (mesh.component.ib, mesh.component.streams["position"]["hash"]):
@@ -346,7 +337,7 @@ def export(package, output, context=None, *, options=None):
             c = mesh.component
             ctx.tick("Exporting " + c.name)
             folder = component_folders.get(c.id, "")
-            group = folder if wwmi else c.provenance.get("object_folder", "")
+            group = folder if wwmi else ""
             if group not in payload_groups:
                 payload_groups[group] = PayloadFiles(stage)
             payloads = payload_groups[group]
@@ -367,8 +358,6 @@ def export(package, output, context=None, *, options=None):
                     from .wwmi_export import write_component, texture_usage
                     ordinal = len(metadata.setdefault(folder, []))
                     native_files, vertex_count = write_component(mesh_directory, ordinal, mesh, part, indices, ctx)
-                    for name in native_files.values():
-                        payloads.generated(mesh_directory / name)
                     vbname, ibname = (prefix_folder + native_files[kind] for kind in ("vb", "ib"))
                     native = dict(component_name=c.name, classification=label, index_offset=part.first,
                                   index_count=part.count, vertex_count=vertex_count, ib_hash=c.ib)
@@ -378,7 +367,7 @@ def export(package, output, context=None, *, options=None):
                     wwmi_usage.setdefault(folder, {})[f"Component {ordinal}"] = texture_usage(c, part)
                 else:
                     prefix = package.name + c.name + label
-                    vbprefix = package.name + c.provenance.get("object_folder", c.name) if options.layout == "compact" else prefix
+                    vbprefix = package.name + c.name if options.layout == "compact" else prefix
                     vbname = f"{prefix_folder}{vbprefix}-vb0={meta['position_vb']}.txt"
                     if main_vb and main_vb != stage / vbname:
                         payloads.alias(main_vb, stage / vbname)

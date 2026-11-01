@@ -28,7 +28,7 @@ def texture_plan(meshes, refs):
         group, native_hash, payload, ext, selected = identity
         suffix = "-" + payload[:12] if len(contents[group, native_hash]) > 1 else ""
         name = "Components-" + "-".join(map(str, sorted(components))) + " t=" + native_hash + suffix + ext
-        filenames[identity] = name if selected else "assets/" + name
+        filenames[identity] = group + "/" + (name if selected else "assets/" + name)
     return {key: filenames[identity] for key, identity in identities.items()}
 
 
