@@ -132,7 +132,6 @@ class ControlFlow:
         self.complete = True
         self._expressions = {}
         self._binding_id = 0
-        self._branch_id = 0
         self._identity_inputs = {
             "$" + variable.casefold()
             for nodes in self.blocks.values()
@@ -160,7 +159,7 @@ class ControlFlow:
                 key: set(values) for key, values in self.artwork.items()
             }
             try:
-                self._call(name, dict(initial), (), [], ())
+                self._call(name, dict(initial), (), [])
             except (ValueError, RecursionError):
                 self.complete = False
                 self.steps = previous_steps
@@ -223,7 +222,7 @@ class ControlFlow:
     def step(self, section, variable, rhs):
         return self.steps.get((section.casefold(), variable.casefold(), rhs))
 
-    def _call(self, section, state, active, parents, path):
+    def _call(self, section, state, active, parents):
         self._calls -= 1
         if section in active or len(active) >= 16 or self._calls < 0:
             raise ValueError("control call budget exhausted")
@@ -232,32 +231,21 @@ class ControlFlow:
             return dict.fromkeys(state)
         frame = {"hits": set(), "renders": {}}
         result = self._walk(
-            self.blocks[section], state, (*active, section), [*parents, frame], path
+            self.blocks[section], state, (*active, section), [*parents, frame]
         )
-        for selector, slot, image, inputs, hit_path in frame["hits"]:
-            # One event must be unconditional relative to the other. Separate
-            # unknown branch choices cannot prove that both events can occur.
-            if any(
-                inputs <= rendered
-                and (
-                    hit_path[: len(render_path)] == render_path
-                    or render_path[: len(hit_path)] == hit_path
-                )
-                for rendered, render_path in frame["renders"].get(image, ())
-            ):
+        for selector, slot, image, inputs in frame["hits"]:
+            if any(inputs <= rendered for rendered in frame["renders"].get(image, ())):
                 self.artwork.setdefault((selector, slot), set()).add(image.resource)
         return result
 
-    def _walk(self, nodes, state, active, frames, path):
+    def _walk(self, nodes, state, active, frames):
         for node in nodes:
             self._budget -= 1
             if self._budget < 0:
                 raise ValueError("control statement budget exhausted")
             if not isinstance(node, str):
                 alternatives, remaining = [], True
-                self._branch_id += 1
-                branch_id, forked = self._branch_id, False
-                for index, branch in enumerate(node["branches"]):
+                for branch in node["branches"]:
                     test = (
                         numeric_value(self.expression(branch["condition"]), state)
                         if branch["condition"] is not None
@@ -268,16 +256,9 @@ class ControlFlow:
                         if test is not None
                         else {False, True}
                     )
-                    forked = forked or len(truth) > 1
                     if True in truth:
                         alternatives.append(
-                            self._walk(
-                                branch["body"],
-                                dict(state),
-                                active,
-                                frames,
-                                (*path, (branch_id, index)) if forked else path,
-                            )
+                            self._walk(branch["body"], dict(state), active, frames)
                         )
                     if False not in truth:
                         remaining = False
@@ -324,7 +305,7 @@ class ControlFlow:
                             if float(slot).is_integer():
                                 for frame in frames:
                                     frame["hits"].update(
-                                        (name[1:], int(slot), image, inputs, path)
+                                        (name[1:], int(slot), image, inputs)
                                         for image in images
                                     )
                 else:
@@ -362,14 +343,12 @@ class ControlFlow:
                         )
                         for frame in frames:
                             for image in images:
-                                frame["renders"].setdefault(image, set()).add(
-                                    (inputs, path)
-                                )
+                                frame["renders"].setdefault(image, set()).add(inputs)
                     # Shader and external state changes are outside this
                     # control analysis. Later statements must reestablish it.
                     state = dict.fromkeys(state)
                 else:
-                    state = self._call(target, state, active, frames, path)
+                    state = self._call(target, state, active, frames)
                 continue
             unknown_write = re.match(
                 r"^(?:(?:pre|post|local)\s+)?(\$\w+|ps-t\d+|Resource[^\s=]+)\b",
