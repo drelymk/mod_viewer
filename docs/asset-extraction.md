@@ -17,8 +17,8 @@ direct position/normal/UV streams. Direct meshes retain captured coordinates
 without fabricated blend data. Compute-only skinning and unfamiliar layouts may
 still need support. Unsupported captures fail without replacing existing files. Partial
 extractions still save the identified asset components. Counts and skipped resource
-groups remain in `extraction_report.json`; those groups may be scene/UI geometry
-or unsupported asset parts. Add/Update closes on success without a routine completion
+groups remain in `extraction_report.json`; unresolved/unsupported groups and
+unproven direct candidates have separate counts. Add/Update closes on success without a routine completion
 message. Partial results show a warning because some asset parts may be missing,
 including after an update. Failures, including duplicate asset names, stay visible in the dialog.
 The dump-field description identifies the FrameAnalysis folder to select.
@@ -78,9 +78,14 @@ Boundary matching allows a small shell offset within 0.01% of the face bounds'
 diagonal, with one-to-one vertex and matching UV checks. The report records the
 measured errors and tolerance; larger offsets and ambiguous matches stay included.
 Other decodable direct geometry has unproven asset membership and is excluded
-from default extraction. It remains in the analysis report and contributes to
-partial/skipped counts. Supported direct candidates can also be explicitly
-selected through the internal API; no new component-selection UI is provided.
+from default extraction. It remains in the analysis report and contributes only
+to `unproven_candidates`, without triggering a partial warning or increasing
+`skipped`. Unresolved or unsupported geometry still triggers the warning; it
+does not establish that the missing geometry belongs to the asset. A non-partial
+result is not a completeness guarantee. Supported direct candidates can also be
+explicitly selected through the internal API; no new component-selection UI is
+provided. Direct-only GIMI dumps without a native Eyes reference cannot establish
+a facial family and therefore cannot be extracted through Add/Update.
 
 Compact metadata names each component's VB file, each range's IB file and each
 texture payload relative to its `hash.json`. These associations keep captured

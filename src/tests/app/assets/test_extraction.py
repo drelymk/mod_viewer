@@ -85,7 +85,7 @@ def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     assert direct.provenance["geometry_kind"] == "direct"
     assert direct.parts[0].draws == ["000004", "000005"]
     assert "blend" not in direct.streams
-    assert direct.requires_review and not direct.default_included
+    assert direct.unproven_direct and direct.requires_review and not direct.default_included
     direct.provenance["gimi_face_family"] = direct.id
     package = extract(analysis, Selection("Face", [direct.id], {direct.id: "Attachment"}))
     mesh, = package.meshes
@@ -133,21 +133,38 @@ def test_unproven_direct_geometry_is_reported_but_requires_explicit_selection(li
     analysis = analyze(dump)
     skinned, direct = analysis.components
     assert direct.status == "included" and direct.vertex_count == 4
-    assert direct.requires_review and not direct.default_included
+    assert direct.unproven_direct and direct.requires_review and not direct.default_included
     assert "membership is unproven" in direct.reason
     package = extract(analysis)
     assert [m.component.id for m in package.meshes] == [skinned.id]
-    assert package.partial
+    assert not package.partial
     report = export(package, root / "exports")
     details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
+    assert not report.partial and report.skipped == 0 and report.unproven_candidates == 1
+    assert details["report"]["skipped"] == 0 and details["report"]["unproven_candidates"] == 1
     candidate, = [c for c in details["analysis"]["components"] if c["id"] == direct.id]
     assert candidate["streams"] == direct.streams and candidate["parts"][0]["count"] == 3
     assert direct.id not in {c["id"] for c in details["components"]}
     explicit = extract(analysis, Selection("Reviewed", [direct.id]))
     assert not explicit.partial
+    assert explicit.skipped == explicit.unproven_candidates == 0
     assert [v[0] for v in explicit.meshes[0].vertices] == [(i, 2, -1) for i in range(4)]
     saved = extraction.extract_asset(str(root), "Asset_001", str(dump))
-    assert saved["extraction"] == {"components": 1, "parts": 1, "partial": True, "skipped": 1}
+    assert saved["extraction"] == {
+        "components": 1, "parts": 1, "partial": False, "skipped": 0, "unproven_candidates": 1}
+    # An unsupported group still warns, without counting the unproven direct mesh twice.
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write("""000006 IASetVertexBuffers(StartSlot:0, NumBuffers:1)
+       0: resource=0x90 hash=aaaa0001
+000006 IASetIndexBuffer(pIndexBuffer:0xa0, Format:57, Offset:0) hash=aaaa0002
+000006 DrawIndexed(IndexCount:3, StartIndexLocation:0, BaseVertexLocation:0)
+""")
+    updated = extraction.extract_asset(str(root), "Asset_001", str(dump), saved["path"])
+    assert updated["extraction"] == {
+        "components": 1, "parts": 1, "partial": True, "skipped": 1, "unproven_candidates": 1}
+    installed = json.loads((Path(updated["path"]) / "extraction_report.json").read_text(encoding="utf-8"))
+    assert installed["report"]["partial"]
+    assert installed["report"]["skipped"] == installed["report"]["unproven_candidates"] == 1
 
 
 @pytest.mark.parametrize("count,first,merged", [(3, 0, True), (5, 0, False), (3, 1, False)])
@@ -343,7 +360,7 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     result = bridge.extract_asset(str(root), "Asset_001", str(dump))
     assert "error" not in result
     assert result["extraction"] == {
-        "components": 1, "parts": 1, "partial": True, "skipped": 1}
+        "components": 1, "parts": 1, "partial": True, "skipped": 1, "unproven_candidates": 0}
     assert result["warnings"] == []
     asset = Path(result["path"])
     def installed_report(folder):

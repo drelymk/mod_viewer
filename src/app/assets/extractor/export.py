@@ -37,6 +37,8 @@ class ModelPackage:
     diagnostics: list
     partial: bool
     extraction_seconds: float
+    skipped: int = 0
+    unproven_candidates: int = 0
 
 
 @dataclass
@@ -58,6 +60,8 @@ class ExportReport:
     omitted_texture_associations: int = 0
     report_path: str = ""
     layout: str = "compact"
+    skipped: int = 0
+    unproven_candidates: int = 0
 
 
 @dataclass
@@ -219,11 +223,13 @@ def extract(analysis, selection=None, context=None):
         mesh = decode_component(inv, c, ctx)
         meshes.append(mesh)
         diagnostics.extend(c.diagnostics)
-    unresolved = [c for c in analysis.components if c.requires_review and c.id not in selected_ids]
+    unresolved = [c for c in analysis.components if c.status in ("uncertain", "unsupported")]
+    unproven = sum(c.unproven_direct and c.id not in selected_ids for c in analysis.components)
     partial = bool(unresolved)
     if partial:
-        diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved, unsupported or unproven geometry candidates are not exported. Static attachments may be missing.")
-    return ModelPackage(analysis, name, meshes, list(dict.fromkeys(diagnostics)), partial, time.perf_counter() - started)
+        diagnostics.append(f"Partial capture coverage: {len(unresolved)} unresolved or unsupported geometry candidates are not exported. Static attachments may be missing.")
+    return ModelPackage(analysis, name, meshes, list(dict.fromkeys(diagnostics)), partial, time.perf_counter() - started,
+                        skipped=len(unresolved), unproven_candidates=unproven)
 
 
 def write_vb(path, mesh, context):
@@ -382,7 +388,8 @@ def export(package, output, context=None, *, options=None):
                               texture_associations=associations, texture_files=len(texture_names), files=len(files),
                               hardlink_aliases=payloads.hardlinks, copy_fallbacks=payloads.fallbacks,
                               logical_bytes=sum(p.stat().st_size for p in files), stored_bytes=sum(unique_files.values()),
-                              omitted_texture_associations=len(omitted), report_path=str(report_path), layout=options.layout)
+                              omitted_texture_associations=len(omitted), report_path=str(report_path), layout=options.layout,
+                              skipped=package.skipped, unproven_candidates=package.unproven_candidates)
         details = dict(schema=1, app_version=__version__, report=asdict(report), analysis=package.analysis.to_dict(),
                        components=[asdict(m.component) for m in package.meshes], outputs=sources,
                        extraction_seconds=package.extraction_seconds,

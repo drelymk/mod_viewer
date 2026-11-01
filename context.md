@@ -337,7 +337,9 @@ of documentation, comments and tests; use portable fixtures instead.
   identical source/layout identities; malformed headers remain rejected.
   Decodability alone does not prove asset membership. Direct geometry defaults
   to excluded unless the facial-family proof establishes its relationship to the
-  asset; retain unproven candidates in the report and partial/skipped counts.
+  asset; retain their source provenance and a separate unproven-candidate count
+  in the report. Unproven candidates alone do not imply partial extraction;
+  only unresolved or unsupported geometry contributes to partial/skipped counts.
   Explicit internal component selection can export supported direct candidates;
   the Add/Update dialog does not expose component or overlay selection.
   Preserve captured coordinates and omit fabricated

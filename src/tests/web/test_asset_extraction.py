@@ -23,7 +23,7 @@ def test_asset_add_update_dialog_lifecycle(module_page):
           if (fail) return {error:'synthetic failure'};
           indexed = true;
           return {folders:[root],path:asset.path,warnings:[],
-            extraction:{components:2,parts:3,partial,skipped:partial ? 1 : 0}};
+            extraction:{components:2,parts:3,partial,skipped:partial ? 1 : 0,unproven_candidates:2}};
         }
       }};
       const {initAssetFolderPanel} = await import('./js/panels/asset-folder-panel.js');
