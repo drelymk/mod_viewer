@@ -31,7 +31,10 @@ def load_asset(asset_type, root, record, *, geometry, texture_source=None,
 def load_asset_parts(asset_type, root, record, *, texture_source=None,
                      part_filter=None):
     """Adapt one exact index record without packing its geometry payload."""
-    if asset_type in ("GIMI", "ZZMI"):
+    hash_metadata = bool(record.get("geometry")) and all(
+        item.get("metadata", "").lower().endswith("/hash.json")
+        for item in record["geometry"])
+    if asset_type in ("GIMI", "ZZMI") or hash_metadata:
         from .hash_asset import load_hash_asset
         adapted = load_hash_asset(
             asset_type, root, record, texture_source=texture_source,

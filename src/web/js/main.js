@@ -375,7 +375,7 @@ rendererReady.then(async (ready) => {
     switchMod,
     onRegistryChanged: updateEmptyFolderAction,
   });
-  const assetFolderPanel = initAssetFolderPanel({ switchAsset });
+  const assetFolderPanel = initAssetFolderPanel({ switchAsset, getCurrentSource: () => viewerState.currentSource });
   $('empty-open-btn').disabled = false;
   emptyFolderAction.disabled = false;
   $('empty-open-btn').addEventListener('click', openMod);

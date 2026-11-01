@@ -1,4 +1,15 @@
 export default {
+  'asset.extracted': 'Recurso guardado: {components} componentes.',
+  'asset.extractedPartial':
+    'Recurso guardado: {components} componentes. Grupos de recursos omitidos: {skipped}. Pueden incluir geometría de la escena o interfaz, o partes no compatibles del recurso.',
+  'asset.add': 'Añadir recurso',
+  'asset.update': 'Actualizar recurso',
+  'asset.name': 'Nombre del recurso',
+  'asset.dump': 'Carpeta de volcado',
+  'asset.extractHint': 'Extraer un recurso de un volcado de fotograma en esta carpeta.',
+  'asset.replaceHint': 'Reemplazar todos los archivos actuales del recurso con una nueva extracción.',
+  'asset.extracting': 'Extrayendo…',
+  'asset.required': 'Introduce un nombre y elige una carpeta de volcado con Examinar.',
   'toolbar.chooseExport': 'Elegir formato de exportación',
   'toolbar.exportOptions': 'Opciones de exportación',
   'toolbar.exportEdits': 'Guardar cambios del mod',

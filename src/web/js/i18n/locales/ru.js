@@ -1,4 +1,15 @@
 export default {
+  'asset.extracted': 'Ассет сохранён: компонентов — {components}.',
+  'asset.extractedPartial':
+    'Ассет сохранён: компонентов — {components}. Пропущено групп ресурсов: {skipped}. Это могут быть геометрия сцены, интерфейса или неподдерживаемые части ассета.',
+  'asset.add': 'Добавить ассет',
+  'asset.update': 'Обновить ассет',
+  'asset.name': 'Имя ассета',
+  'asset.dump': 'Папка дампа',
+  'asset.extractHint': 'Извлечь ассет из дампа кадра в эту папку.',
+  'asset.replaceHint': 'Заменить все текущие файлы ассета результатом нового извлечения.',
+  'asset.extracting': 'Извлечение…',
+  'asset.required': 'Введите имя ассета и выберите папку дампа кнопкой обзора.',
   'toolbar.chooseExport': 'Выбрать формат экспорта',
   'toolbar.exportOptions': 'Параметры экспорта',
   'toolbar.exportEdits': 'Сохранить изменения мода',

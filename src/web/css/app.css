@@ -1518,6 +1518,11 @@ button:focus-visible, input:focus-visible, select:focus-visible,
   color: var(--danger); background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.35);
   font-size: 11px; white-space: pre-wrap; }
 .asset-folder-error.show { display: block; }
+.asset-folder-notice { margin-bottom: 8px; padding: 6px 8px; border-radius: 5px;
+  color: var(--text); background: rgba(35,134,54,.12); border: 1px solid var(--success);
+  font-size: 11px; white-space: pre-wrap; }
+.asset-folder-notice.warning { color: var(--warning); background: rgba(227,179,65,.1);
+  border-color: var(--warning); }
 .folder-registry-empty[hidden] { display: none; }
 .folder-registry-empty .ui-button { margin-top: 5px; }
 .folder-node { min-width: 0; }

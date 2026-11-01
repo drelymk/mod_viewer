@@ -120,7 +120,7 @@ def _asset_parts(asset_type, root, asset):
 def _part_is_covered(part, override, hash_range_count):
     if part.geometry_hash != override.geometry_hash:
         return False
-    if not override.asset_identity_evidence:
+    if not (override.asset_identity_evidence or override.handling_skip):
         return False
     if hash_range_count <= 1:
         return True

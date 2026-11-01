@@ -358,6 +358,12 @@ Direct Asset previews and missing-part fills leave the original files untouched.
 Filled parts last only for the current session and are removed on reload or
 when switching models. Automatic filling requires a unique matching Asset.
 
+To extract from a frame dump, right-click an Asset Folder and choose `Add asset`.
+Enter a name, browse to the dump folder, and click OK. Use `Update asset` on an
+indexed asset to replace all of its files with a new extraction. Both actions
+refresh the index automatically. See [Asset extraction](docs/asset-extraction.md)
+for supported behavior and recovery.
+
 ### 10. Check the INIs and export your edits
 
 #### Read and act on Diagnostics

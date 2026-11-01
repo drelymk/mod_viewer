@@ -1,4 +1,15 @@
 export default {
+  'asset.extracted': 'アセットを保存しました：{components} コンポーネント。',
+  'asset.extractedPartial':
+    'アセットを保存しました：{components} コンポーネント。スキップしたリソースグループ：{skipped}。シーンやUIの形状、未対応のアセットパーツが含まれる場合があります。',
+  'asset.add': 'アセットを追加',
+  'asset.update': 'アセットを更新',
+  'asset.name': 'アセット名',
+  'asset.dump': 'ダンプフォルダー',
+  'asset.extractHint': 'フレームダンプからこのフォルダーにアセットを抽出します。',
+  'asset.replaceHint': '現在のアセットファイルをすべて新しい抽出結果に置き換えます。',
+  'asset.extracting': '抽出中…',
+  'asset.required': 'アセット名を入力し、参照でダンプフォルダーを選択してください。',
   'toolbar.chooseExport': 'エクスポート形式を選択',
   'toolbar.exportOptions': 'エクスポート設定',
   'toolbar.exportEdits': 'Mod の編集を保存',

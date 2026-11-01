@@ -13,6 +13,8 @@ from app.settings import paths
 
 
 EXPECTED_API_METHODS = {
+    "extract_asset",
+    "select_asset_dump_folder",
     "add_asset_folder",
     "add_mod_folder",
     "add_present",
