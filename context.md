@@ -343,7 +343,8 @@ of documentation, comments and tests; use portable fixtures instead.
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
   Nonfinite secondary TEXCOORD channels are omitted whole with diagnostics,
-  retaining primary UVs and all other valid channels. Never fabricate replacement
+  retaining primary UVs declared in the current or a previously decoded stream
+  and all other valid channels. Never fabricate replacement
   values or hide conflicting declarations; nonfinite primary UVs and geometry
   remain rejected.
   Split skinned ATTRIBUTE captures require validated position, packed

@@ -229,6 +229,40 @@ def test_secondary_uv_recovery_preserves_primary_geometry_through_export(
     assert {p.name: digest(p) for p in dump.iterdir()} == original
 
 
+def test_direct_secondary_uv_recovery_uses_primary_from_position_stream(tmp_path):
+    dump = make_capture(tmp_path)
+    add_direct_mesh(dump)
+    for call in ("000004", "000005"):
+        position = next(dump.glob(f"{call}-vb0=*.txt"))
+        position.write_text(header(36, 0, [
+            ("POSITION", 0, "R32G32B32_FLOAT", 4),
+            ("NORMAL", 0, "R32G32B32_FLOAT", 16),
+            ("TEXCOORD", 0, "R32G32_FLOAT", 28),
+        ]).replace("pointlist", "trianglelist"))
+        position.with_suffix(".buf").write_bytes(b"".join(
+            struct.pack("<9f", 7, i, 2, -1, 0, 0, 1, i / 4, 0.25) for i in range(4)))
+        uv = next(dump.glob(f"{call}-vb1=*.txt"))
+        uv.write_text(header(4, 1, [("TEXCOORD", 1, "R16G16_FLOAT", 0)]).replace(
+            "pointlist", "trianglelist"))
+        uv.with_suffix(".buf").write_bytes(b"".join(
+            struct.pack("<2e", float("nan") if i == 1 else 0.125, 0.375) for i in range(4)))
+    original = {p.name: digest(p) for p in dump.iterdir()}
+    analysis = analyze(dump)
+    direct, = [c for c in analysis.components if c.provenance.get("geometry_kind") == "direct"]
+    assert direct.status == "included"
+    assert any("Omitted TEXCOORD1" in note for note in direct.diagnostics)
+    package = extract(analysis, Selection("Asset_001", ids=[direct.id]))
+    mesh, = package.meshes
+    assert [e.index for e in mesh.elements if e.semantic == "TEXCOORD"] == [0]
+    report = export(package, tmp_path / "exports")
+    root = str(Path(report.output).parent)
+    record, = index.build_index("ZZMI", root)["assets"]
+    part, = loader.load_asset("ZZMI", root, record, geometry=GeometryBlob()).parts
+    assert list(struct.iter_unpack("<3f", part.positions)) == [(i, 2, -1) for i in (1, 2, 3)]
+    assert list(struct.iter_unpack("<2f", part.uvs)) == [(i / 4, 0.75) for i in (1, 2, 3)]
+    assert {p.name: digest(p) for p in dump.iterdir()} == original
+
+
 def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
     dump = make_capture(tmp_path)
     add_direct_mesh(dump)

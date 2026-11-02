@@ -215,7 +215,8 @@ def test_native_object_discovery_requires_hash_folder_and_native_fields(tmp_path
 
 
 @pytest.mark.parametrize("case,expected", [
-    ("main", 3), ("small_color_mask", 3), ("simple", 1), ("smaller_atlas", 2), ("hair", 1),
+    ("main", 3), ("main_with_shifted_face", 3), ("small_color_mask", 3),
+    ("simple", 1), ("smaller_atlas", 2), ("hair", 1),
     ("hair_uncompressed", 1), ("eye", 2), ("eye_unbound", None), ("eye_wrong_size", None),
     ("face", 1), ("face_unbound", None), ("face_distinct_data", None),
     ("face_separate_resource", None), ("face_missing_data", None),
@@ -230,7 +231,10 @@ def test_native_object_discovery_requires_hash_folder_and_native_fields(tmp_path
 def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
     formats = ["BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB"]
     sizes = [(512, 512)] * 4
-    if case == "small_color_mask":
+    if case == "main_with_shifted_face":
+        formats.extend(["BC3_UNORM", "BC7_UNORM_SRGB", "B8G8R8A8_UNORM", "B8G8R8A8_UNORM"])
+        sizes.extend([(128, 128), (512, 512), (256, 256), (256, 256)])
+    elif case == "small_color_mask":
         formats[2] = "BC7_UNORM_SRGB"
         sizes[2] = (128, 128)
     elif case == "simple":
@@ -257,6 +261,10 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
             sizes = [(128, 128), (1024, 1024), (512, 512), (512, 512)]
     textures = [dict(slot=i, hash=f"{i + 1:08x}", resource={"hash": f"{i + 1:08x}"},
                      format=fmt, width=sizes[i][0], height=sizes[i][1]) for i, fmt in enumerate(formats)]
+    if case == "main_with_shifted_face":
+        textures[7].update(hash=textures[6]["hash"], resource=dict(textures[6]["resource"]))
+        # Both signatures match; retain the established primary-family priority.
+        assert material_roles(textures[4:], True, "a" * 16) == {5: "Diffuse"}
     if case.startswith("face"):
         data_slot = next(i for i, fmt in enumerate(formats) if fmt == "B8G8R8A8_UNORM")
         if case != "face_distinct_data":

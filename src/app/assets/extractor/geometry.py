@@ -199,7 +199,7 @@ def decode_component(inv, component, context=None):
                 data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx)
         decoded = []
         invalid_secondary_uvs = set()
-        has_primary_uv = any(e.semantic == "TEXCOORD" and e.index == 0 for e in elements)
+        has_primary_uv = "TEXCOORD" in declared_labels
         decoders = [(e.offset, codec(e.format)[1]) for e in elements]
         for i in range(n):
             if i % 1024 == 0:
