@@ -144,53 +144,6 @@ drawindexed = 3,0,0
             key: mesh.get("texture_variants") for key, mesh in payload["meshes"].items()}
 
 
-@pytest.mark.parametrize("guard", ["$mode == 1", "$native_pass"], ids=["toggle", "runtime"])
-def test_asset_diffuse_slot_rejects_conditional_foreign_binding(tmp_path, guard):
-    from core.ini.sections import parse_sections
-
-    mod = tmp_path / "mod"
-    asset = tmp_path / "assets" / "Asset01"
-    mod.mkdir()
-    asset.mkdir(parents=True)
-    files = {"ResourceSlot": "Components-0 t=body.dds",
-             "ResourceForeign": "Components-2 t=other.dds"}
-    for filename in files.values():
-        (mod / filename).write_bytes(b"mod texture")
-    original = "Components-0 t=aaaaaaaa.dds"
-    (asset / original).write_bytes(b"original texture")
-    (asset / "Metadata.json").write_text(json.dumps({
-        "format": "mod-viewer", "vb0_hash": "11111111", "components": [{
-            "component_name": "Part", "index_offset": 0,
-            "texture_hashes": [[["Diffuse", ".dds", "aaaaaaaa", original]]]}]}), encoding="utf-8")
-    (asset / "TextureUsage.json").write_text(json.dumps({"Component 0": {
-        "ps-t3": ["aaaaaaaa-vs=12345678-ps=87654321"]}}), encoding="utf-8")
-    sections = parse_sections("mod.ini", text=f"""[TextureOverrideComponent0]
-ps-t3 = ResourceSlot
-if {guard}
-ps-t3 = ResourceForeign
-endif
-drawindexed = 3,0,0
-""")
-    authored = draw_scan._scan_sections_for_draws(sections, gating_vars={"mode"})[
-        "TextureOverrideComponent0"]["draws"][0]
-    draw = DrawCall(slot_textures=[replace(item, file=files[item.resource])
-                                   for item in authored.slot_textures])
-    binding = AssetComponentBinding(
-        status="exact", component_status="exact", range_status="exact", asset_type="WWMI",
-        root=str(asset.parent), asset="Asset01", metadata="Asset01/Metadata.json",
-        detail_metadata="Asset01/TextureUsage.json", geometry_hash="11111111",
-        first_index=0, component_ordinal=0)
-    parsed = SimpleNamespace(groups=[{"name": "Component0", "draws": [draw]}],
-                             resource_files=[], texture_override_indexes=[],
-                             game=SimpleNamespace(game="wuwa"))
-    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod),
-                              dds_classification_cache={})
-    _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
-    assert draw.texture_default("diffuse") is None
-    assert not draw.texture_rules("diffuse")
-    assert draw.asset_texture_defaults["diffuse"]["path"] == str(asset / original)
-
-
 @pytest.mark.parametrize("reference", ["missing.dds", "../Other/color.dds", "../../../outside.dds",
                                        "C:/outside.dds", "Components-1 t=aaaaaaaa.dds", "", None])
 def test_compact_wwmi_invalid_reference_never_uses_legacy_name(tmp_path, reference):

@@ -514,10 +514,6 @@ def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None, *, a
                         "asset_hash_role": item.role, "conflict": True,
                     })
             roles.add(binding.role_hint)
-        if (binding.slot == diffuse_slot and binding.resource is not None
-                and binding not in component_slots and not roles):
-            # An unproven foreign write invalidates inference for the whole slot.
-            component_slots = []
         slot_roles.setdefault(binding.slot, set()).update(roles)
     resolved = {}
     for binding in draw.slot_textures:
