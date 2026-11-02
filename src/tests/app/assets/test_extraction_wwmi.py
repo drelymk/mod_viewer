@@ -215,15 +215,26 @@ def test_native_object_discovery_requires_hash_folder_and_native_fields(tmp_path
 
 
 @pytest.mark.parametrize("case,expected", [
-    ("main", 3), ("small_color_mask", 3), ("simple", 1), ("smaller_atlas", 2), ("hair", 1),
+    ("main", 3), ("main_with_shifted_face", 3), ("small_color_mask", 3),
+    ("simple", 1), ("smaller_atlas", 2), ("hair", 1),
     ("hair_uncompressed", 1), ("eye", 2), ("eye_unbound", None), ("eye_wrong_size", None),
+    ("face", 1), ("face_unbound", None), ("face_distinct_data", None),
+    ("face_separate_resource", None), ("face_missing_data", None),
+    ("face_wrong_size", None), ("face_contaminated", None),
+    ("face_no_color", None), ("face_no_shader", None),
+    ("face_late_data", 1), ("face_larger_scale", 1), ("face_shifted", 5),
+    ("face_ambiguous", None), ("face_nonsquare", None), ("face_non_power_scale", None),
+    ("face_reordered", None), ("face_data_gap", None), ("face_oversized_data", None),
     ("no_color", None), ("no_shader", None), ("unbound", None), ("contaminated", None),
     ("wrong_size", None), ("wrong_mask", None),
 ])
 def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
     formats = ["BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB"]
     sizes = [(512, 512)] * 4
-    if case == "small_color_mask":
+    if case == "main_with_shifted_face":
+        formats.extend(["BC3_UNORM", "BC7_UNORM_SRGB", "B8G8R8A8_UNORM", "B8G8R8A8_UNORM"])
+        sizes.extend([(128, 128), (512, 512), (256, 256), (256, 256)])
+    elif case == "small_color_mask":
         formats[2] = "BC7_UNORM_SRGB"
         sizes[2] = (128, 128)
     elif case == "simple":
@@ -239,8 +250,26 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
     elif case.startswith("eye"):
         formats = ["BC1_UNORM", "BC3_UNORM_SRGB", "BC7_UNORM_SRGB"]
         sizes = [(256, 256), (256, 256), (512, 512)]
+    elif case.startswith("face"):
+        formats = ["BC3_UNORM", "BC7_UNORM_SRGB", "B8G8R8A8_UNORM", "B8G8R8A8_UNORM"]
+        sizes = [(128, 128), (512, 512), (256, 256), (256, 256)]
+        if case == "face_late_data":
+            formats[2:2] = ["BC7_UNORM_SRGB", "R8_UNORM", "R8_UNORM"]
+            sizes = [(128, 128), (256, 256), (256, 256), (128, 128),
+                     (128, 128), (256, 256), (256, 256)]
+        elif case == "face_larger_scale":
+            sizes = [(128, 128), (1024, 1024), (512, 512), (512, 512)]
     textures = [dict(slot=i, hash=f"{i + 1:08x}", resource={"hash": f"{i + 1:08x}"},
                      format=fmt, width=sizes[i][0], height=sizes[i][1]) for i, fmt in enumerate(formats)]
+    if case == "main_with_shifted_face":
+        textures[7].update(hash=textures[6]["hash"], resource=dict(textures[6]["resource"]))
+        # Both signatures match; retain the established primary-family priority.
+        assert material_roles(textures[4:], True, "a" * 16) == {5: "Diffuse"}
+    if case.startswith("face"):
+        data_slot = next(i for i, fmt in enumerate(formats) if fmt == "B8G8R8A8_UNORM")
+        if case != "face_distinct_data":
+            textures[data_slot + 1].update(hash=textures[data_slot]["hash"],
+                                          resource=dict(textures[data_slot]["resource"]))
     if case == "unbound":
         textures[3]["resource"] = None
     elif case == "contaminated":
@@ -253,29 +282,61 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
         textures[2]["resource"] = None
     elif case == "eye_wrong_size":
         textures[2]["width"] = textures[2]["height"] = 256
-    assert material_roles(textures, case != "no_color", "" if case == "no_shader" else "a" * 16) == (
+    elif case == "face_unbound":
+        textures[1]["resource"] = None
+    elif case == "face_wrong_size":
+        textures[2]["width"] = textures[2]["height"] = 128
+    elif case == "face_contaminated":
+        textures[2]["contaminated"] = True
+    elif case == "face_separate_resource":
+        textures[2]["resource"]["address"] = "0x60"
+        textures[3]["resource"]["address"] = "0x70"
+    elif case == "face_missing_data":
+        textures.pop()
+    elif case == "face_shifted":
+        for t in textures:
+            t["slot"] += 4
+    elif case == "face_ambiguous":
+        extra = [dict(t, slot=t["slot"] + 4) for t in textures]
+        extra[1].update(hash="00000009", resource={"hash": "00000009"})
+        textures.extend(extra)
+    elif case == "face_nonsquare":
+        textures[1]["height"] = 256
+    elif case == "face_non_power_scale":
+        for t in textures[2:]:
+            t.update(width=192, height=192)
+    elif case == "face_reordered":
+        textures[0]["slot"], textures[1]["slot"] = 1, 0
+    elif case == "face_data_gap":
+        textures[3]["slot"] = 4
+    elif case == "face_oversized_data":
+        for t in textures[2:]:
+            t.update(width=1024, height=1024)
+    assert material_roles(textures, not case.endswith("no_color"),
+                          "" if case.endswith("no_shader") else "a" * 16) == (
         {expected: "Diffuse"} if expected is not None else {})
 
 
-def _material_capture(dump, call_id, textures):
+def _material_capture(dump, call_id, textures, aliases=None):
     codes = {"BC7_UNORM": 98, "BC7_UNORM_SRGB": 99, "BC3_UNORM": 77,
              "BC3_UNORM_SRGB": 78, "BC1_UNORM": 71, "R8_UNORM": 61, "B8G8R8A8_UNORM": 87}
     bindings, dump_lines = [], []
     for slot, (fmt, width, height) in enumerate(textures):
-        h = f"{0x10000000 + int(call_id) * 16 + slot:08x}"
+        source_slot = (aliases or {}).get(slot, slot)
+        h = f"{0x10000000 + int(call_id) * 16 + source_slot:08x}"
         name = f"{call_id}-ps-t{slot}={h}.dds"
         size = width * height * (4 if fmt == "B8G8R8A8_UNORM" else 1)
         if fmt == "BC1_UNORM":
             size //= 2
         (dump / name).write_bytes(dx10_dds(bytes(size), dxgi_format=codes[fmt], width=width, height=height))
-        bindings.append(f"       {slot}: resource=0x{slot + 6:x}0 hash={h}\n")
+        bindings.append(f"       {slot}: resource=0x{source_slot + 6:x}0 hash={h}\n")
         dump_lines.append(f"{call_id} 3DMigoto Dumping capture\\{name} -> deduped\\{h}-{fmt}.dds\n")
     return (f"{call_id} PSSetShader(pPixelShader:0xa0) hash=cccccccccccccccc\n"
             + f"{call_id} PSSetShaderResources(StartSlot:0, NumViews:{len(textures)})\n"
             + "".join(bindings) + "".join(dump_lines))
 
 
-@pytest.mark.parametrize("family", ["main", "eye"])
+@pytest.mark.parametrize("family", ["main", "eye", "face", "face_late_data"])
 def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessing(tmp_path, family):
     dump = make_attribute_capture(tmp_path)
     log = dump / "log.txt"
@@ -284,37 +345,54 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
     textures = [(fmt, 128, 128) for fmt in ("BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB")]
     if family == "eye":
         textures = [("BC1_UNORM", 128, 128), ("BC3_UNORM_SRGB", 128, 128), ("BC7_UNORM_SRGB", 256, 256)]
+    elif family.startswith("face"):
+        textures = [("BC3_UNORM", 128, 128), ("BC7_UNORM_SRGB", 512, 512),
+                    ("B8G8R8A8_UNORM", 256, 256), ("B8G8R8A8_UNORM", 256, 256)]
+        if family == "face_late_data":
+            textures = [("BC3_UNORM", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
+                        ("BC7_UNORM_SRGB", 256, 256), ("R8_UNORM", 128, 128),
+                        ("R8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 256),
+                        ("B8G8R8A8_UNORM", 256, 256)]
+    aliases = {3: 2} if family == "face" else {6: 5} if family == "face_late_data" else None
     text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n",
-                        _material_capture(dump, "000001", textures))
+                        _material_capture(dump, "000001", textures, aliases))
     log.write_text(text)
     Image.new("RGB", (16, 16)).save(dump / "000001-o0=aaaaaaaa.png")
     analysis = analyze(dump)
     diffuse, = [t for t in analysis.components[0].parts[0].textures if t["role"] == "Diffuse"]
     assert diffuse["role_confidence"] == "inferred_wwmi_pass_format_bindings"
-    assert diffuse["slot"] == (2 if family == "eye" else 3)
+    assert diffuse["slot"] == {"main": 3, "eye": 2, "face": 1, "face_late_data": 1}[family]
     if family == "eye":
         assert analysis.components[0].parts[0].textures[1]["role"].startswith("TextureSlot")
+    elif family == "face_late_data":
+        assert all(t["role"].startswith("TextureSlot")
+                   for t in analysis.components[0].parts[0].textures if t["slot"] != 1)
     report = export(extract(analysis, Selection("Asset_001")), tmp_path / "exports")
     root = str(Path(report.output).parent)
     loaded = loader.load_asset("WWMI", root, index.build_index("WWMI", root)["assets"][0], geometry=GeometryBlob())
     assert digest(Path(loaded.parts[0].textures["diffuse"].path)) == diffuse["sha256"]
 
 
-def test_complete_hair_pass_outweighs_simple_pair_with_more_resources(tmp_path):
+@pytest.mark.parametrize("competing_family", ["simple", "main"])
+def test_complete_hair_pass_outweighs_less_specific_pass_with_more_resources(tmp_path, competing_family):
     dump = make_attribute_capture(tmp_path)
     log = dump / "log.txt"
     text = "000001 3DMigoto [ShaderRegex\\WWMIv1\\EnableTextureOverrides]\n" + log.read_text()
-    simple = _material_capture(dump, "000001", [("BC7_UNORM", 256, 256), ("BC7_UNORM_SRGB", 256, 256)])
+    textures = [("BC7_UNORM", 256, 256), ("BC7_UNORM_SRGB", 256, 256)]
+    if competing_family == "main":
+        textures = [(fmt, 256, 256) for fmt in ("BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB")]
+    competing = _material_capture(dump, "000001", textures)
     for slot in range(6, 10):
         Image.new("RGB", (16, 16)).save(dump / f"000001-ps-t{slot}={slot:08x}.png")
     hair = _material_capture(dump, "000002", [
         ("BC3_UNORM", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
         ("B8G8R8A8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 128),
         ("R8_UNORM", 128, 128), ("BC7_UNORM", 256, 256),
-    ])
-    # Add enough unrelated snapshots for the simple pass to win a resource-count tie.
+        ("B8G8R8A8_UNORM", 256, 256), ("B8G8R8A8_UNORM", 256, 256),
+    ], {7: 6})
+    # Add enough unrelated snapshots for the competing pass to win by slot count.
     Image.new("RGB", (16, 16)).save(dump / "000001-ps-t10=aaaaaaaa.png")
-    text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n", simple)
+    text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n", competing)
     text = text.replace("000002 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)",
                         hair + "000002 DrawIndexed(IndexCount:3, StartIndexLocation:0, BaseVertexLocation:0)")
     log.write_text(text)

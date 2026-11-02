@@ -171,7 +171,7 @@ def _component_folders(meshes):
         if mesh.component.provenance.get("gimi_face_family"):
             folders[mesh.component.id] = "Face"
             continue
-        if mesh.morph_status != "reversed_recognized" or not mesh.component.parts:
+        if mesh.morph_status not in ("not_detected", "reversed_recognized") or not mesh.component.parts:
             continue
         if all(
             any(t.get("role_confidence") == "unsupported_face_normal_encoding"

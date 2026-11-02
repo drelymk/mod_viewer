@@ -24,8 +24,13 @@ def split_components(mesh):
 
 def material_roles(textures, color_target, shader):
     """Recognize color atlases from complete bound WWMI material families."""
+    return material_evidence(textures, color_target, shader)[0]
+
+
+def material_evidence(textures, color_target, shader):
+    """Return roles and signature specificity before comparing inherited slot counts."""
     if not color_target or not shader:
-        return {}
+        return {}, 0
     by_slot = {t["slot"]: t for t in textures if not t.get("contaminated")
                and (t.get("resource") or {}).get("hash") == t["hash"]}
 
@@ -43,19 +48,19 @@ def material_roles(textures, color_target, shader):
             and image(3, color) and same_size(0, 3)
             and (image(2, {"BC1_UNORM", "R8_UNORM"})
                  or (image(2, color) and by_slot[2]["width"] <= by_slot[3]["width"] / 4))):
-        return {3: "Diffuse"}
+        return {3: "Diffuse"}, 2
     # Simpler materials keep the color atlas beside the full-size vector map.
     if image(0, {"BC7_UNORM"}) and image(1, color) and same_size(0, 1):
-        return {1: "Diffuse"}
+        return {1: "Diffuse"}, 1
     # Eye materials pair a mask and colored data map with a larger iris atlas.
     if (image(0, {"BC1_UNORM"}) and image(1, {"BC3_UNORM_SRGB"})
             and image(2, color) and same_size(0, 1)
             and by_slot[2]["width"] == 2 * by_slot[0]["width"]):
-        return {2: "Diffuse"}
+        return {2: "Diffuse"}, 2
     # This family has a full-size packed vector/mask pair and a smaller atlas.
     if (image(0, {"BC3_UNORM"}) and image(1, {"R8_UNORM"}) and image(2, color)
             and same_size(0, 1) and 1 <= by_slot[0]["width"] / by_slot[2]["width"] <= 2):
-        return {2: "Diffuse"}
+        return {2: "Diffuse"}, 2
     # Hair may bind its vector atlas later, after smaller auxiliary resources.
     mask = by_slot.get(3, {})
     if (image(0, {"BC3_UNORM"}) and image(1, color)
@@ -63,8 +68,42 @@ def material_roles(textures, color_target, shader):
             and mask.get("height", 0) >= 128 and mask.get("width") == 2 * mask["height"]
             and image(5, {"BC7_UNORM"}) and same_size(1, 5)
             and by_slot[2]["width"] < by_slot[1]["width"]):
-        return {1: "Diffuse"}
-    return {}
+        # This late-vector family proves more of its binding layout than the
+        # generic main family, which can also appear over the same hair range.
+        return {1: "Diffuse"}, 3
+    face_slot = _face_atlas_slot(by_slot)
+    if face_slot is not None:
+        return {face_slot: "Diffuse"}, 2
+    return {}, 0
+
+
+def _face_atlas_slot(by_slot):
+    """Match ordered mask/color and shared-data pairs across optional material inputs."""
+    def square(slot, fmt):
+        texture = by_slot.get(slot, {})
+        return (texture.get("format") == fmt and texture.get("width", 0) >= 128
+                and texture.get("width") == texture.get("height"))
+
+    def scaled(large, small):
+        ratio, remainder = divmod(large, small)
+        return not remainder and ratio > 0 and not ratio & (ratio - 1)
+
+    candidates = set()
+    for slot, mask in by_slot.items():
+        if not (square(slot, "BC3_UNORM") and square(slot + 1, "BC7_UNORM_SRGB")):
+            continue
+        atlas = by_slot[slot + 1]
+        for data_slot, data in by_slot.items():
+            if data_slot <= slot + 1 or not (
+                square(data_slot, "B8G8R8A8_UNORM") and square(data_slot + 1, "B8G8R8A8_UNORM")
+            ):
+                continue
+            alias = by_slot[data_slot + 1]
+            if (data["resource"] == alias["resource"] and data["width"] == alias["width"]
+                    and mask["width"] < data["width"] <= atlas["width"]
+                    and scaled(data["width"], mask["width"]) and scaled(atlas["width"], data["width"])):
+                candidates.add(slot + 1)
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def layout(header, raw, slot, role):

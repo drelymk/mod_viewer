@@ -342,6 +342,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Direct unskinned meshes use declared position/normal and UV streams with
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
+  Nonfinite secondary TEXCOORD channels are omitted whole with diagnostics,
+  retaining primary UVs declared in the current or a previously decoded stream
+  and all other valid channels. Never fabricate replacement
+  values or hide conflicting declarations; nonfinite primary UVs and geometry
+  remain rejected.
   Split skinned ATTRIBUTE captures require validated position, packed
   tangent/normal, UV and four/eight-influence blend layouts with matching full
   binary counts. Alias declarations must share the four-influence stream's slot,
@@ -372,7 +377,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Preserve captured coordinates and omit fabricated
   blend data; do not fall back through an unsupported shader writer.
   Automatic ZZMI `Face/` grouping requires recognized facial material evidence on
-  every component part and successfully reconstructed expression data. GIMI uses
+  every component part and either no detected expression or successfully
+  reconstructed expression data. Unsupported expression captures stay at the root;
+  folder placement never fabricates a neutral expression or changes geometry. GIMI uses
   a unique bilateral native Eyes mesh, a matching eye-loop anchor and shared
   diffuse/light payloads on nearby direct geometry. Group that proven family
   using those two required identities; extra recognized maps and
@@ -408,7 +415,13 @@ of documentation, comments and tests; use portable fixtures instead.
   WWMI capture evidence, a color pass and bound shader/resource identities may
   establish diffuse atlases from validated neighboring format/size families.
   Prefer complete WWMI material families over simpler pairs from another pass,
-  before comparing resource counts. Packed eye data may use an sRGB encoding;
+  before comparing resource counts. The more specific late-vector hair family
+  takes priority over a generic main family on the same range. Face-family
+  recognition follows an ordered mask/color pair and a later adjacent pair
+  sharing one packed-data resource across the full captured binding set.
+  Optional inputs may move that pair; require compatible power-of-two atlas
+  scales and a unique color candidate rather than fixed slots or exact sizes.
+  Packed eye data may use an sRGB encoding;
   identify its separate iris atlas through the complete bound eye family.
   Prefer those material passes over unrecognized effects; do not infer other
   WWMI map roles or discard unknown candidates from those signatures.

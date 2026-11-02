@@ -23,7 +23,7 @@ from app.bridge.access import FolderAccess
 from app.bridge.registry import AssetFolderRegistry
 from app.settings import paths
 from core.geometry.mesh_builder import GeometryBlob
-from tests.support.extraction_data import add_direct_mesh, make_capture
+from tests.support.extraction_data import add_direct_mesh, header, make_capture
 from tests.support.dds_data import dx10_dds
 
 
@@ -171,6 +171,96 @@ def test_draw_subset_uv_header_requires_complete_matching_payload(
     else:
         assert component.status == "unsupported"
         assert any(expected in message for message in component.diagnostics)
+
+
+@pytest.mark.parametrize("case,channel,value", [
+    ("valid", None, 0), ("secondary", 1, float("nan")), ("secondary", 1, float("inf")),
+    ("secondary", 3, float("nan")), ("primary", 0, float("nan")), ("primary", 0, float("inf")),
+    ("duplicate", 1, float("nan")), ("missing_primary", 1, float("nan")),
+])
+def test_secondary_uv_recovery_preserves_primary_geometry_through_export(
+        tmp_path, case, channel, value):
+    dump = make_capture(tmp_path)
+    uv_header = next(dump.glob("000001-vb1=*.txt"))
+    fields = [("COLOR", 0, "R32G32B32A32_FLOAT", 0), *[
+        ("TEXCOORD", i, "R32G32_FLOAT", 16 + 8 * i) for i in range(4)]]
+    if case == "duplicate":
+        fields.append(("TEXCOORD", 1, "R32G32_FLOAT", 32))
+    elif case == "missing_primary":
+        fields = [field for field in fields if field[:2] != ("TEXCOORD", 0)]
+    uv_header.write_text(header(48, 1, fields))
+    payload = bytearray(b"".join(struct.pack(
+        "<12f", 1, 0.5, 0.25, 1, i / 4, 0.25, 0.125, 0.375, 0.5, 0.625, 0.75, 0.875)
+        for i in range(4)))
+    if channel is not None:
+        struct.pack_into("<f", payload, 48 + 16 + 8 * channel, value)
+    uv_header.with_suffix(".buf").write_bytes(payload)
+    original = {p.name: digest(p) for p in dump.iterdir()}
+    analysis = analyze(dump)
+    component, = analysis.components
+    if case in ("primary", "duplicate", "missing_primary"):
+        assert component.status == "unsupported"
+        reason = "Conflicting vertex semantic channels" if case == "duplicate" else "Nonfinite texcoord"
+        assert any(reason in message for message in component.diagnostics)
+        assert {p.name: digest(p) for p in dump.iterdir()} == original
+        return
+    assert component.default_included
+    package = extract(analysis)
+    mesh, = package.meshes
+    assert len(mesh.vertices) == 4 and mesh.indices == [[0, 1, 2]]
+    expected = {0, 1, 2, 3} - ({channel} if channel is not None else set())
+    assert {e.index for e in mesh.elements if e.semantic == "TEXCOORD"} == expected
+    for column, element in enumerate(mesh.elements):
+        if element.semantic == "TEXCOORD":
+            expected_uvs = ([(i / 4, 0.25) for i in range(4)] if element.index == 0 else
+                           [{1: (0.125, 0.375), 2: (0.5, 0.625), 3: (0.75, 0.875)}[element.index]] * 4)
+            assert [row[column] for row in mesh.vertices] == expected_uvs
+    notes = [note for note in component.diagnostics if "secondary UV" in note]
+    assert len(notes) == (channel is not None)
+    if channel is not None:
+        assert f"TEXCOORD{channel}" in notes[0]
+    report = export(package, tmp_path / "exports")
+    root = str(Path(report.output).parent)
+    record, = index.build_index("ZZMI", root)["assets"]
+    loaded = loader.load_asset("ZZMI", root, record, geometry=GeometryBlob())
+    part, = loaded.parts
+    assert list(struct.iter_unpack("<3f", part.positions)) == [(1, 0, 0), (2, 0, 0), (3, 0, 0)]
+    assert list(struct.iter_unpack("<2f", part.uvs)) == [(i / 4, 0.75) for i in (1, 2, 3)]
+    assert {p.name: digest(p) for p in dump.iterdir()} == original
+
+
+def test_direct_secondary_uv_recovery_uses_primary_from_position_stream(tmp_path):
+    dump = make_capture(tmp_path)
+    add_direct_mesh(dump)
+    for call in ("000004", "000005"):
+        position = next(dump.glob(f"{call}-vb0=*.txt"))
+        position.write_text(header(36, 0, [
+            ("POSITION", 0, "R32G32B32_FLOAT", 4),
+            ("NORMAL", 0, "R32G32B32_FLOAT", 16),
+            ("TEXCOORD", 0, "R32G32_FLOAT", 28),
+        ]).replace("pointlist", "trianglelist"))
+        position.with_suffix(".buf").write_bytes(b"".join(
+            struct.pack("<9f", 7, i, 2, -1, 0, 0, 1, i / 4, 0.25) for i in range(4)))
+        uv = next(dump.glob(f"{call}-vb1=*.txt"))
+        uv.write_text(header(4, 1, [("TEXCOORD", 1, "R16G16_FLOAT", 0)]).replace(
+            "pointlist", "trianglelist"))
+        uv.with_suffix(".buf").write_bytes(b"".join(
+            struct.pack("<2e", float("nan") if i == 1 else 0.125, 0.375) for i in range(4)))
+    original = {p.name: digest(p) for p in dump.iterdir()}
+    analysis = analyze(dump)
+    direct, = [c for c in analysis.components if c.provenance.get("geometry_kind") == "direct"]
+    assert direct.status == "included"
+    assert any("Omitted TEXCOORD1" in note for note in direct.diagnostics)
+    package = extract(analysis, Selection("Asset_001", ids=[direct.id]))
+    mesh, = package.meshes
+    assert [e.index for e in mesh.elements if e.semantic == "TEXCOORD"] == [0]
+    report = export(package, tmp_path / "exports")
+    root = str(Path(report.output).parent)
+    record, = index.build_index("ZZMI", root)["assets"]
+    part, = loader.load_asset("ZZMI", root, record, geometry=GeometryBlob()).parts
+    assert list(struct.iter_unpack("<3f", part.positions)) == [(i, 2, -1) for i in (1, 2, 3)]
+    assert list(struct.iter_unpack("<2f", part.uvs)) == [(i / 4, 0.75) for i in (1, 2, 3)]
+    assert {p.name: digest(p) for p in dump.iterdir()} == original
 
 
 def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
@@ -549,7 +639,8 @@ def test_extraction_rejects_unauthorized_or_invalid_targets(library, tmp_path, c
     ("reversed_recognized", [True, True], True),
     ("reversed_recognized", [True, False], False),
     ("captured_expression", [True], False),
-    ("not_detected", [True], False),
+    ("not_detected", [True], True),
+    ("not_detected", [True, False], False),
     ("reversed_recognized", [False], False),
     ("reversed_recognized", [], False),
 ])
@@ -567,7 +658,7 @@ def test_facial_grouping_requires_complete_material_and_expression_evidence(
         {"surface-01": "Face"} if expected else {})
 
 
-def _facial_package(dump):
+def _facial_package(dump, morph_status="reversed_recognized"):
     package = extract(analyze(dump), Selection("Asset_001"))
     template = package.meshes[0]
     images = []
@@ -584,7 +675,7 @@ def _facial_package(dump):
         mesh.component.ib = f"{number + 16:08x}"
         mesh.component.streams["position"]["hash"] = f"{number + 32:08x}"
         if number > 1:
-            mesh.morph_status = "reversed_recognized"
+            mesh.morph_status = morph_status
             mesh.component.morph["status"] = mesh.morph_status
         if number == 2:
             mesh.component.parts.append(copy.deepcopy(mesh.component.parts[0]))
@@ -612,10 +703,11 @@ def _loaded_snapshot(result):
 
 
 @pytest.mark.parametrize("layout, debug", [("compact", False), ("compatible", True)])
+@pytest.mark.parametrize("morph_status", ["reversed_recognized", "not_detected"])
 def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
-        library, tmp_path, monkeypatch, layout, debug):
+        library, tmp_path, monkeypatch, layout, debug, morph_status):
     _root, dump = library
-    package = _facial_package(dump)
+    package = _facial_package(dump, morph_status)
     options = ExportOptions(layout=layout, debug_assets=debug)
     with monkeypatch.context() as baseline:
         baseline.setattr("app.assets.extractor.export._component_folders", lambda _meshes: {})
@@ -637,7 +729,8 @@ def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
         assert report.texture_files == 3
         assert report.texture_associations > report.texture_files
     if debug:
-        assert len(list((asset / "Face" / "source_geometry").glob("*.buf"))) == 2
+        assert len(list((asset / "Face" / "source_geometry").glob("*.buf"))) == (
+            2 if morph_status == "reversed_recognized" else 0)
     details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
     for output in details["outputs"]:
         is_face = output["component"] != "surface-01"
