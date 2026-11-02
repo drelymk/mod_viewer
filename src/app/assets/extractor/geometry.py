@@ -166,6 +166,7 @@ def decode_component(inv, component, context=None):
     source_position = b""
     morph_status = "not_detected"
     notes = []
+    declared_labels = set()
     direct = component.provenance.get("geometry_kind") == "direct"
     attribute_skinning = component.provenance.get("geometry_kind") == "attribute_skinning"
     roles = (("position", "normal", "blend", "texcoord") if attribute_skinning else
@@ -175,6 +176,10 @@ def decode_component(inv, component, context=None):
         name, slot = source["file"], source["slot"]
         layout_role = "wwmi_" + role if attribute_skinning else "direct_position" if direct and role == "position" else role
         stride, elements, declared_count, first_vertex = stream_layout(inv, name, slot, layout_role)
+        labels = [e.label for e in elements]
+        if len(set(labels)) != len(labels) or declared_labels.intersection(labels):
+            raise Unsupported("Conflicting vertex semantic channels")
+        declared_labels.update(labels)
         data = inv.path(name).read_bytes()
         if len(data) % stride:
             raise Unsupported(f"Truncated {role} buffer")
@@ -193,14 +198,28 @@ def decode_component(inv, component, context=None):
             if not direct and not attribute_skinning:
                 data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx)
         decoded = []
+        invalid_secondary_uvs = set()
+        has_primary_uv = any(e.semantic == "TEXCOORD" and e.index == 0 for e in elements)
         decoders = [(e.offset, codec(e.format)[1]) for e in elements]
         for i in range(n):
             if i % 1024 == 0:
                 ctx.tick("Decoding " + component.name, i, n)
             row = [decoder(data, i * stride + offset) for offset, decoder in decoders]
             if not all(math.isfinite(v) for value in row for v in value):
-                raise Unsupported(f"Nonfinite {role} vertex {i}")
+                for column, (element, values) in enumerate(zip(elements, row)):
+                    if all(math.isfinite(v) for v in values):
+                        continue
+                    if has_primary_uv and element.semantic == "TEXCOORD" and element.index > 0:
+                        invalid_secondary_uvs.add(column)
+                    else:
+                        raise Unsupported(f"Nonfinite {role} vertex {i}")
             decoded.append(row)
+        if invalid_secondary_uvs:
+            for column in sorted(invalid_secondary_uvs):
+                notes.append(f"Omitted {elements[column].label}: nonfinite secondary UV values; primary UVs retained.")
+            keep = [j for j in range(len(elements)) if j not in invalid_secondary_uvs]
+            elements = [elements[j] for j in keep]
+            decoded = [[row[j] for j in keep] for row in decoded]
         if role == "blend":
             if stride == 4:
                 decoded = [[(1.0,), row[0]] for row in decoded]

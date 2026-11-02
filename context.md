@@ -342,6 +342,10 @@ of documentation, comments and tests; use portable fixtures instead.
   Direct unskinned meshes use declared position/normal and UV streams with
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
+  Nonfinite secondary TEXCOORD channels are omitted whole with diagnostics,
+  retaining primary UVs and all other valid channels. Never fabricate replacement
+  values or hide conflicting declarations; nonfinite primary UVs and geometry
+  remain rejected.
   Split skinned ATTRIBUTE captures require validated position, packed
   tangent/normal, UV and four/eight-influence blend layouts with matching full
   binary counts. Alias declarations must share the four-influence stream's slot,
@@ -408,7 +412,13 @@ of documentation, comments and tests; use portable fixtures instead.
   WWMI capture evidence, a color pass and bound shader/resource identities may
   establish diffuse atlases from validated neighboring format/size families.
   Prefer complete WWMI material families over simpler pairs from another pass,
-  before comparing resource counts. Packed eye data may use an sRGB encoding;
+  before comparing resource counts. The more specific late-vector hair family
+  takes priority over a generic main family on the same range. Face-family
+  recognition follows an ordered mask/color pair and a later adjacent pair
+  sharing one packed-data resource across the full captured binding set.
+  Optional inputs may move that pair; require compatible power-of-two atlas
+  scales and a unique color candidate rather than fixed slots or exact sizes.
+  Packed eye data may use an sRGB encoding;
   identify its separate iris atlas through the complete bound eye family.
   Prefer those material passes over unrecognized effects; do not infer other
   WWMI map roles or discard unknown candidates from those signatures.

@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 from .profiles.zzz import material_roles, auxiliary
 from .profiles.gimi import material_roles as gimi_material_roles
-from .profiles.wwmi import material_roles as wwmi_material_roles
+from .profiles.wwmi import material_evidence as wwmi_material_evidence
 from .image_headers import image_metadata
 
 
@@ -20,7 +20,7 @@ def _captured_roles(inv, draw, images, color):
         return {}, False
     by_slot = defaultdict(list)
     for slot, h, ext, name in images:
-        if slot <= (2 if inv.gimi_evidence else 5):
+        if not inv.gimi_evidence or slot <= 2:
             by_slot[slot].append((ext != ".dds", ext != ".png", h, name))
     textures = []
     for slot, variants in by_slot.items():
@@ -29,19 +29,15 @@ def _captured_roles(inv, draw, images, color):
         textures.append(dict(slot=slot, hash=h, resource=vars(resource) if resource else {},
                              format=inv.formats.get(name, "unknown"), contaminated="!" in name,
                              **image_metadata(inv.path(name))))
-    recognize = gimi_material_roles if inv.gimi_evidence else wwmi_material_roles
-    roles = recognize(textures, color, draw.shaders.get("ps", ""))
+    if not inv.gimi_evidence:
+        return wwmi_material_evidence(textures, color, draw.shaders.get("ps", ""))
+    roles = gimi_material_roles(textures, color, draw.shaders.get("ps", ""))
     diffuse = next((t for t in textures if roles.get(t["slot"]) == "Diffuse"), None)
     complete = inv.gimi_evidence and diffuse is not None and len(textures) == 3 and all(
         t["format"] == ("BC7_UNORM_SRGB" if roles.get(t["slot"]) == "Diffuse" else "BC7_UNORM")
         and t["width"] >= diffuse["width"] / 4 and t["height"] >= diffuse["height"] / 4
         and (t["resource"] or {}).get("hash") == t["hash"] and not t["contaminated"]
         for t in textures)
-    if inv.wwmi_evidence and not inv.gimi_evidence:
-        # Complete material families outrank a simpler pair from another pass.
-        complete = any(roles.get(slot) == "Diffuse" for slot in (2, 3)) or (
-            roles.get(1) == "Diffuse" and any(
-                t["slot"] == 0 and t["format"] == "BC3_UNORM" for t in textures))
     return roles, complete
 
 

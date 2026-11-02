@@ -23,7 +23,7 @@ from app.bridge.access import FolderAccess
 from app.bridge.registry import AssetFolderRegistry
 from app.settings import paths
 from core.geometry.mesh_builder import GeometryBlob
-from tests.support.extraction_data import add_direct_mesh, make_capture
+from tests.support.extraction_data import add_direct_mesh, header, make_capture
 from tests.support.dds_data import dx10_dds
 
 
@@ -171,6 +171,62 @@ def test_draw_subset_uv_header_requires_complete_matching_payload(
     else:
         assert component.status == "unsupported"
         assert any(expected in message for message in component.diagnostics)
+
+
+@pytest.mark.parametrize("case,channel,value", [
+    ("valid", None, 0), ("secondary", 1, float("nan")), ("secondary", 1, float("inf")),
+    ("secondary", 3, float("nan")), ("primary", 0, float("nan")), ("primary", 0, float("inf")),
+    ("duplicate", 1, float("nan")), ("missing_primary", 1, float("nan")),
+])
+def test_secondary_uv_recovery_preserves_primary_geometry_through_export(
+        tmp_path, case, channel, value):
+    dump = make_capture(tmp_path)
+    uv_header = next(dump.glob("000001-vb1=*.txt"))
+    fields = [("COLOR", 0, "R32G32B32A32_FLOAT", 0), *[
+        ("TEXCOORD", i, "R32G32_FLOAT", 16 + 8 * i) for i in range(4)]]
+    if case == "duplicate":
+        fields.append(("TEXCOORD", 1, "R32G32_FLOAT", 32))
+    elif case == "missing_primary":
+        fields = [field for field in fields if field[:2] != ("TEXCOORD", 0)]
+    uv_header.write_text(header(48, 1, fields))
+    payload = bytearray(b"".join(struct.pack(
+        "<12f", 1, 0.5, 0.25, 1, i / 4, 0.25, 0.125, 0.375, 0.5, 0.625, 0.75, 0.875)
+        for i in range(4)))
+    if channel is not None:
+        struct.pack_into("<f", payload, 48 + 16 + 8 * channel, value)
+    uv_header.with_suffix(".buf").write_bytes(payload)
+    original = {p.name: digest(p) for p in dump.iterdir()}
+    analysis = analyze(dump)
+    component, = analysis.components
+    if case in ("primary", "duplicate", "missing_primary"):
+        assert component.status == "unsupported"
+        reason = "Conflicting vertex semantic channels" if case == "duplicate" else "Nonfinite texcoord"
+        assert any(reason in message for message in component.diagnostics)
+        assert {p.name: digest(p) for p in dump.iterdir()} == original
+        return
+    assert component.default_included
+    package = extract(analysis)
+    mesh, = package.meshes
+    assert len(mesh.vertices) == 4 and mesh.indices == [[0, 1, 2]]
+    expected = {0, 1, 2, 3} - ({channel} if channel is not None else set())
+    assert {e.index for e in mesh.elements if e.semantic == "TEXCOORD"} == expected
+    for column, element in enumerate(mesh.elements):
+        if element.semantic == "TEXCOORD":
+            expected_uvs = ([(i / 4, 0.25) for i in range(4)] if element.index == 0 else
+                           [{1: (0.125, 0.375), 2: (0.5, 0.625), 3: (0.75, 0.875)}[element.index]] * 4)
+            assert [row[column] for row in mesh.vertices] == expected_uvs
+    notes = [note for note in component.diagnostics if "secondary UV" in note]
+    assert len(notes) == (channel is not None)
+    if channel is not None:
+        assert f"TEXCOORD{channel}" in notes[0]
+    report = export(package, tmp_path / "exports")
+    root = str(Path(report.output).parent)
+    record, = index.build_index("ZZMI", root)["assets"]
+    loaded = loader.load_asset("ZZMI", root, record, geometry=GeometryBlob())
+    part, = loaded.parts
+    assert list(struct.iter_unpack("<3f", part.positions)) == [(1, 0, 0), (2, 0, 0), (3, 0, 0)]
+    assert list(struct.iter_unpack("<2f", part.uvs)) == [(i / 4, 0.75) for i in (1, 2, 3)]
+    assert {p.name: digest(p) for p in dump.iterdir()} == original
 
 
 def test_direct_mesh_export_keeps_coordinates_and_nested_metadata(tmp_path):
