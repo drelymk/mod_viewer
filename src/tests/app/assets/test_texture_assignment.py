@@ -56,6 +56,10 @@ def test_native_wwmi_uses_ordinal_candidates_and_exact_role_references(tmp_path,
         for stem in ("color", "map", "choice"):
             (asset / texture_file(ordinal, stem)).write_bytes(f"synthetic {ordinal} {stem}".encode())
     path.write_text(json.dumps(raw), encoding="utf-8")
+    (asset / "TextureUsage.json").write_text(json.dumps({
+        f"Component {ordinal}": {"ps-t3": ["aaaaaaaa-vs=12345678-ps=87654321"],
+                                  "ps-t1": ["cccccccc-vs=12345678-ps=87654321"]}
+        for ordinal in range(2)}), encoding="utf-8")
     sibling = asset.parent / "22222222"
     sibling.mkdir()
     (sibling / "opaque-aaaaaaaa.dds").write_bytes(b"unrelated object")
@@ -79,8 +83,11 @@ def test_native_wwmi_uses_ordinal_candidates_and_exact_role_references(tmp_path,
     mod.mkdir()
     _write_geometry(mod)
     (mod / "owned.dds").write_bytes(b"mod texture")
+    for name in ("replacement", "conflicting"):
+        (mod / f"Components-0-1 t={name}.dds").write_bytes(b"mod texture")
+    (mod / "Components-2 t=foreign.dds").write_bytes(b"other component")
     ini = mod / "mod.ini"
-    text = ""
+    text = "[Constants]\nglobal persist $mode = 0\n[KeyMode]\nkey = x\ntype = cycle\n$mode = 0,1,2\n"
     for ordinal in range(2):
         text += f"""[TextureOverrideComponent{ordinal}]
 hash = 11111111
@@ -93,8 +100,21 @@ __BINDING__
 drawindexed = 3,0,0
 """
     text += "[ResourceOwned]\nfilename = owned.dds\n"
+    text += "[ResourceSlot]\nfilename = Components-0-1 t=replacement.dds\n"
+    text += "[ResourceOther]\nfilename = Components-0-1 t=conflicting.dds\n"
+    text += "[ResourceForeign]\nfilename = Components-2 t=foreign.dds\n"
     text += standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
-    for binding in ("", r"Resource\WWMI\Diffuse = ResourceOwned"):
+    for binding, selected in (("", None), (r"Resource\WWMI\Diffuse = ResourceOwned", "owned.dds"),
+                              ("ps-t3 = ResourceSlot", "Components-0-1 t=replacement.dds"),
+                              ("ps-t3 = ResourceOwned", "owned.dds"),
+                              ("ps-t3 = ResourceForeign", None),
+                              (r"Resource\WWMI\Diffuse = ResourceOwned" + "\nps-t3 = ResourceSlot", "owned.dds"),
+                              ("ps-t1 = ResourceSlot", None),
+                              ("ps-t3 = ResourceSlot\nif $mode == 1\nps-t3 = ResourceOther\n"
+                               "elif $mode == 2\nps-t3 = null\nendif", "Components-0-1 t=replacement.dds"),
+                              ("ps-t3 = ResourceOwned\nif $mode == 1\nps-t3 = ResourceOther\n"
+                               "elif $mode == 2\nps-t3 = null\nendif", "owned.dds"),
+                              ("ps-t3 = ResourceSlot\nif $native_pass\nps-t3 = ResourceOther\nendif", None)):
         ini.write_text(text.replace("__BINDING__", binding), encoding="utf-8")
         context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(ini)], str(mod)),
                                  asset_folders=[{"type": "WWMI", "path": str(root), "enabled": True}])
@@ -107,10 +127,21 @@ drawindexed = 3,0,0
             asset_keys = {item["tex_key"] for item in choices if "::asset/" in item["tex_key"]}
             assert asset_keys == {asset_texture_key(str(root), str(asset / texture_file(ordinal, stem)))
                                   for stem in ("color", "map", "choice")}
-            assert mesh["tex_key"] == ("diffuse::owned.dds" if binding else
+            assert mesh["tex_key"] == ("diffuse::" + selected if selected else
                                        asset_texture_key(str(root), str(asset / texture_file(ordinal, "color"))))
-            assert mesh.get("normal_data_key") == (None if binding else asset_texture_key(
+            assert mesh.get("normal_data_key") == (None if selected else asset_texture_key(
                 str(root), str(asset / texture_file(ordinal, "map")), "normal_data"))
+            if "if $mode" in binding:
+                for mode, expected in (("0", "diffuse::" + selected),
+                                       ("1", "diffuse::Components-0-1 t=conflicting.dds"), ("2", None)):
+                    key = next((rule["tex_key"] for rule in reversed(mesh["texture_variants"])
+                                if visible(rule["conditions"], {"mode": mode})), mesh["tex_key"])
+                    assert key == expected
+        semantic = load_semantic_state(context)
+        assert {key: mesh["tex_key"] for key, mesh in semantic["meshes"].items()} == {
+            key: mesh["tex_key"] for key, mesh in payload["meshes"].items()}
+        assert {key: mesh.get("texture_variants") for key, mesh in semantic["meshes"].items()} == {
+            key: mesh.get("texture_variants") for key, mesh in payload["meshes"].items()}
 
 
 @pytest.mark.parametrize("reference", ["missing.dds", "../Other/color.dds", "../../../outside.dds",

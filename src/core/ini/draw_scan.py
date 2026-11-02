@@ -552,7 +552,7 @@ def _scan_sections_for_draws(sections, var_prefix=None, gating_vars=None,
                 conditions = normalize_dnf(
                     combined, tracked_vars, var_prefix, qualified_vars)
                 history = info["_slot_texture_history"].setdefault(slot, [])
-                if not conditions and resource.lower() != "null":
+                if not conditions and not cond_stack and resource.lower() != "null":
                     history.clear()
                 history.append({"resource": None if resource.lower() == "null" else resource,
                                 "conditions": conditions})

@@ -17,6 +17,7 @@ from core.resource_paths import safe_resource_path
 from . import paths as asset_paths
 from . import textures as asset_textures
 from .package_format import FORMAT, is_viewer_metadata
+from .wuwa_texture_names import texture_component_ordinals
 
 
 _ROLE_NAMES = {
@@ -471,11 +472,26 @@ def _append_replacement_evidence(draw, usage, replacement, classification,
     draw.asset_slot_evidence.append(item)
 
 
-def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None):
+def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None, *, asset_slots=None):
     """Promote one draw's slot history using corroborated component evidence."""
     by_hash = {}
     for item in evidence:
         by_hash.setdefault(item.texture_hash, []).append(item)
+    diffuse_slots = {slot for slot, usages in (asset_slots or {}).items()
+                     if any(item.role == "diffuse" for usage in usages
+                            for item in by_hash.get(usage["texture_hash"], ()))}
+    diffuse_slot = next(iter(diffuse_slots)) if len(diffuse_slots) == 1 else None
+    component = getattr(draw.asset_binding, "component_ordinal", None)
+    component_slots = [item for item in draw.slot_textures
+                       if item.slot == diffuse_slot and (
+                           item.resource is None or (item.file and (
+                               texture_component_ordinals(item.file) is None
+                               or asset_textures.component_texture_matches(
+                                   item.file, {0: component}, wwmi=True))))]
+    # Multiple untracked runtime routes cannot be selected by slot number alone.
+    defaults = {item.file for item in component_slots if not item.conditions}
+    if len(defaults) > 1:
+        component_slots = []
     declared_roles = {}
     for geometry, texture_hash, role, filename in declarations:
         roles = {item.role for item in by_hash.get(texture_hash, ()) if item.role}
@@ -501,7 +517,7 @@ def _apply_slot_hashes(draw, evidence, declarations=(), geometry_hash=None):
         slot_roles.setdefault(binding.slot, set()).update(roles)
     resolved = {}
     for binding in draw.slot_textures:
-        roles = slot_roles[binding.slot]
+        roles = slot_roles[binding.slot] | ({"diffuse"} if binding in component_slots else set())
         if len(roles) != 1 or (binding.resource is not None and not binding.file):
             continue
         role = next(iter(roles))
@@ -866,7 +882,8 @@ def apply(groups, bindings, metadata_cache=None, *, include_not_found=False,
                     draw.texture_provenance[item.role] = "mod_texture_hash"
             all_evidence = _unique_evidence(
                 evidence + role_hint_evidence + dds_evidence)
-            _apply_slot_hashes(draw, evidence + role_hint_evidence, declarations, binding.geometry_hash)
+            _apply_slot_hashes(draw, evidence + role_hint_evidence, declarations, binding.geometry_hash,
+                               asset_slots=slots)
             _apply_hash_replacements(draw, all_evidence, index)
             # Use the existing Asset defaults only in states with no applicable
             # mod binding. Conditional null rules are authored empty states.
