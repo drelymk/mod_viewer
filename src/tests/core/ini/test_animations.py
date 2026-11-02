@@ -583,17 +583,31 @@ def test_legacy_tracks_preserve_source_mappings_and_staged_buffers(tmp_path):
     assert geometry_values(reloaded.geometry, reference)[9] == 7.
 
 
-@pytest.mark.parametrize("case", ["compatible", "changed-uv", "changed-topology", "missing-frame"])
-def test_draw_range_animation_requires_matching_geometry(tmp_path, case):
+@pytest.mark.parametrize("case", [
+    "compatible", "changed-uv", "changed-topology", "sparse-first",
+    "missing-frame", "short-indices", "missing-uv", "invalid-unused-position",
+])
+@pytest.mark.parametrize("index_size,base", [(4, 0), (2, 1)])
+def test_draw_range_animation_preserves_frame_topology(tmp_path, case, index_size, base):
     points = [(x, y, z) for z in (0., 1.)
               for x, y in ((0., 0.), (1., 0.), (0., 1.))]
+    if base:
+        points.insert(0, (0., 0., 0.))
+    if case == "invalid-unused-position":
+        points[2 + base] = (float("nan"), 0., 0.)
     write_vertices(tmp_path / "position.buf", points)
     (tmp_path / "texcoord.buf").write_bytes(b"".join(
         b"\0" * 4 + struct.pack("<ee", x, y + (.25 if case == "changed-uv" and z else 0.))
         + b"\0" * 12 for x, y, z in points))
-    indices = (0, 1, 2, 3, 4, 4 if case == "changed-topology" else 5)
-    (tmp_path / "index.buf").write_bytes(struct.pack("<6I", *indices))
-    second = "elif $frame == 1\ndrawindexed = 3, 3, 0" if case != "missing-frame" else ""
+    indices = (0, 1, 1 if case in {"sparse-first", "invalid-unused-position"} else 2,
+               3, 4, 4 if case == "changed-topology" else 5)
+    authored = indices[:-1] if case == "short-indices" else indices
+    fmt = "I" if index_size == 4 else "H"
+    (tmp_path / "index.buf").write_bytes(struct.pack(f"<{len(authored)}{fmt}", *authored))
+    if case == "missing-uv":
+        uv_path = tmp_path / "texcoord.buf"
+        uv_path.write_bytes(uv_path.read_bytes()[:-20])
+    second = f"elif $frame == 1\ndrawindexed = 3, 3, {base}" if case != "missing-frame" else ""
     ini = tmp_path / "source-01.ini"
     ini.write_text(f"""
 [Constants]
@@ -606,7 +620,7 @@ vb0 = ResourcePosition
 vb1 = ResourceTexcoord
 ib = ResourceIB
 if $frame == 0
-drawindexed = 3, 0, 0
+drawindexed = 3, 0, {base}
 {second}
 endif
 [ResourcePosition]
@@ -617,20 +631,45 @@ filename = texcoord.buf
 stride = 20
 [ResourceIB]
 filename = index.buf
-format = DXGI_FORMAT_R32_UINT
+format = DXGI_FORMAT_R{index_size * 8}_UINT
 """, encoding="utf-8")
     geometry = GeometryBlob()
     _, built = load_mod(ini, tmp_path, geometry=geometry)
     assert len(built.meshes) == 1
     entry = next(iter(built.meshes.values()))
-    if case == "compatible":
-        assert entry["animation_geometry"]["frames"] == 2
-        assert geometry_values(geometry, entry["animation_geometry"]["positions"]) == (
-            0., 0., 0., 1., 0., 0., 0., 1., 0.,
-            0., 0., 1., 1., 0., 1., 0., 1., 1.)
+    if case in {"compatible", "changed-uv", "changed-topology", "sparse-first"}:
+        animation = entry["animation_geometry"]
+        assert animation["frames"] == 2
+        assert len(built.animations) == 1
+        assert entry["pos"]["length"] == 3 * 12
+        positions = geometry_values(geometry, animation["positions"])
+        for frame in range(2):
+            def frame_values(attribute, prefix, canonical, kind="f"):
+                selection = animation.get(f"{prefix}_frames", [-1, -1])[frame]
+                if selection == -1:
+                    reference = entry[canonical]
+                    offset, size = reference["offset"], reference["length"]
+                else:
+                    reference = animation[attribute]
+                    size = animation[f"{prefix}_frame_bytes"]
+                    offset = reference["offset"] + selection * size
+                return struct.unpack_from(f"<{size // 4}{kind}", geometry.data, offset)
+
+            frame_indices = frame_values("indices", "index", "idx", "I")
+            uvs = frame_values("texcoords", "texcoord", "uv")
+            actual = []
+            expected = []
+            for vertex, authored_vertex in zip(frame_indices, indices[frame * 3:frame * 3 + 3]):
+                x, y, z = points[authored_vertex + base]
+                actual.append((*positions[frame * 9 + vertex * 3:frame * 9 + vertex * 3 + 3],
+                               *uvs[vertex * 2:vertex * 2 + 2]))
+                expected.append((x, y, z, x, 1. - y - (.25 if case == "changed-uv" and z else 0.)))
+            assert actual == expected
     else:
         assert "animation_geometry" not in entry
         assert not built.animations
+        if case == "invalid-unused-position":
+            assert entry["pos"]["length"] == 2 * 12
         refs = [value for value in entry.values()
                 if isinstance(value, dict) and "offset" in value and "length" in value]
         assert len(geometry) == max(ref["offset"] + ref["length"] for ref in refs)

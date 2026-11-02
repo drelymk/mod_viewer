@@ -1,6 +1,7 @@
 """Ordered control replay independent of GPU availability."""
 
 import math
+import struct
 
 import pytest
 
@@ -2396,11 +2397,35 @@ def test_control_conditions_preserve_or_groups_negation_and_contradictions(modul
     assert result == [True, False, True, False, True]
 
 
-@pytest.mark.parametrize("change", ["all", "indices"], ids=["all-attributes", "topology-only"])
+@pytest.mark.parametrize("change", ["all", "indices", "ranges"],
+                         ids=["all-attributes", "topology-only", "draw-ranges"])
 def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page, tmp_path, change):
-    from tests.support.animations import joined_baked_mod, load_mod
+    from tests.support.animations import joined_baked_mod, load_mod, read_sections, save_sections
 
-    _, built = load_mod(joined_baked_mod(tmp_path, change=change), tmp_path)
+    ini = joined_baked_mod(tmp_path, change="all" if change == "ranges" else change)
+    if change == "ranges":
+        sections = read_sections(ini)
+        for kind in ("position", "texcoord"):
+            (tmp_path / f"{kind}.buf").write_bytes(b"".join(
+                (tmp_path / f"{kind}{frame}.buf").read_bytes() for frame in range(3)))
+        indices = []
+        commands = ["vb0 = ResourcePosition", "vb1 = ResourceTexcoord", "ib = ResourceIB"]
+        for frame in range(3):
+            values = [0, 1, 2, 1, 3, 2] if frame == 0 else [0, 2, 1, 1, 2, 2]
+            indices.extend(vertex + frame * 5 for vertex in values)
+            commands.extend([f"if $frame == {frame}", f"drawindexed = 6, {frame * 6}, 0", "endif"])
+        (tmp_path / "index.buf").write_bytes(struct.pack("<18I", *indices))
+        for section in list(sections):
+            if section.startswith(("TextureOverride", "CommandList", "Resource")):
+                del sections[section]
+        sections.update({
+            "TextureOverrideModel": commands,
+            "ResourcePosition": ["filename = position.buf", "stride = 40"],
+            "ResourceTexcoord": ["filename = texcoord.buf", "stride = 8"],
+            "ResourceIB": ["filename = index.buf", "format = DXGI_FORMAT_R32_UINT"],
+        })
+        save_sections(ini, sections)
+    _, built = load_mod(ini, tmp_path)
     entry = list(built.meshes.values())[-1]
     _prepare_compute_clock(module_page)
     _set_geometry_blob(module_page, built.geometry)
@@ -2459,17 +2484,19 @@ def test_joined_buffer_animation_playback_restores_topology_and_uvs(module_page,
     assert result['registered'] and result['stable']
     assert result['canonicalNoUpload'] and result['repeatedRestoreNoUpload']
     assert result['unchangedIndex']
-    assert result['uvUploaded'] == (change == "all")
+    moving = change in {"all", "ranges"}
+    assert result['uvUploaded'] == moving
     assert result['canonical'] == result['restored'] == result['disabled']
     assert result['selected'] == result['suspended']
-    assert result['selected'] == {'z': 1 if change == "all" else 0,
-                                  'indices': [0, 2, 1, 1, 3, 2],
+    expected_indices = [0, 2, 1, 1, 2, 2] if change == "ranges" else [0, 2, 1, 1, 3, 2]
+    assert result['selected'] == {'z': 1 if moving else 0,
+                                  'indices': expected_indices,
                                   'uv': ([.125, .875, .625, .875, .125, .375, .625, .375]
-                                         if change == "all" else result['canonical']['uv'])}
-    assert result['resumed'] == {'z': 2 if change == "all" else 0,
-                                 'indices': [0, 2, 1, 1, 3, 2],
+                                         if moving else result['canonical']['uv'])}
+    assert result['resumed'] == {'z': 2 if moving else 0,
+                                 'indices': expected_indices,
                                  'uv': ([.25, .75, .75, .75, .25, .25, .75, .25]
-                                        if change == "all" else result['canonical']['uv'])}
+                                        if moving else result['canonical']['uv'])}
 
 
 def test_baked_playback_pause_seek_controls_and_ownership_lifecycle(module_page):

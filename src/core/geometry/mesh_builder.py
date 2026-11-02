@@ -126,8 +126,17 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     default_index_size=index_size, buffers=buffers,
                     geometry_convention=geometry_convention, source=source,
                     zero_out_of_bounds=bool(family.get("position_switching")
-                                            or family.get("binding_frames")),
+                                            or family.get("binding_frames")
+                                            or family.get("range_offsets")),
                     vertex_union=vertex_union)
+                if prepared is None and family.get("range_offsets"):
+                    # Unused frame-local slots cannot hide the canonical draw.
+                    family["invalid_topology"] = True
+                    prepared = _prepare_draw_vertices(
+                        draw, group, mod_dir=mod_dir,
+                        default_streams=default_streams,
+                        default_index_size=index_size, buffers=buffers,
+                        geometry_convention=geometry_convention, source=source)
                 animation_diagnostics["animation_prepare_calls"] += 1
                 animation_diagnostics["animation_prepare_seconds"] += (
                     time.perf_counter() - prepare_started)

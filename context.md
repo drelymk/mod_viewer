@@ -301,6 +301,9 @@ of documentation, comments and tests; use portable fixtures instead.
   index counts and valid referenced UVs; unused UV records may be absent. Unsupported
   families retain one canonical draw. Playback and ownership release restore every
   animated attribute from the canonical baseline.
+- Baked draw-range frames may change topology and UVs with a fixed index count.
+  Share vertex slots relative to each frame's source origin, preserving canonical
+  source IDs without unioning every disjoint baked copy into every frame.
 - Prove immutable topology/UV state from sources, layouts, ranges and contents before
   using position-only packing. Keep preparation memory bounded across frames.
 - Execute program assignments, resets, conditions and dispatches in authored
