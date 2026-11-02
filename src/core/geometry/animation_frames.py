@@ -421,9 +421,13 @@ def _same_float32_attributes(left, right):
 
 def animation_vertex_union(family, *, mod_dir, buffers, default_index_size,
                            geometry_convention, source=None):
-    """Read each distinct topology once and collect this draw's source IDs."""
-    if not family.get("binding_frames") or family.get("position_switching"):
+    """Collect shared vertex slots after validating authored frame topology."""
+    if family.get("position_switching"):
         return None
+    if not family.get("binding_frames"):
+        return _range_vertex_union(
+            family, mod_dir=mod_dir, buffers=buffers,
+            default_index_size=default_index_size, source=source)
     resolve = source.resolve_resource if source is not None else \
         lambda value: safe_resource_path(mod_dir, value)
     exists = source.is_file if source is not None else os.path.exists
@@ -465,6 +469,40 @@ def animation_vertex_union(family, *, mod_dir, buffers, default_index_size,
     return vertices
 
 
+def _range_vertex_union(family, *, mod_dir, buffers, default_index_size, source):
+    """Share frame-local vertex slots without unioning disjoint baked copies."""
+    frames = family["draws"]
+    if set(frames) != set(range(family["frame_start"], family["frame_end"] + 1)):
+        return None
+    resolve = source.resolve_resource if source is not None else \
+        lambda value: safe_resource_path(mod_dir, value)
+    exists = source.is_file if source is not None else os.path.exists
+    origins, vertices = {}, set()
+    count = None
+    for frame, draw in frames.items():
+        path = resolve(draw.ib_file)
+        if not path or not exists(path):
+            family["invalid_topology"] = True
+            return None
+        raw = buffers.indices(path, draw.start, draw.count,
+                              draw.index_size if draw.index_size is not None
+                              else default_index_size)
+        if (not raw or len(raw) % 3 or draw.count is None
+                or len(raw) != draw.count
+                or count is not None and len(raw) != count
+                or min(raw) + draw.base < 0):
+            family["invalid_topology"] = True
+            return None
+        origin = min(raw)
+        origins[frame] = origin + draw.base
+        vertices.update(value - origin for value in raw)
+        count = len(raw)
+    canonical_origin = origins[family["frame_start"]]
+    family["range_offsets"] = {
+        frame: origin - canonical_origin for frame, origin in origins.items()}
+    return {vertex + canonical_origin for vertex in vertices}
+
+
 def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                               mod_dir, group, default_streams,
                               default_index_size, buffers,
@@ -483,7 +521,9 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
                                          source=source)):
         return None
 
-    binding_frames = family.get("binding_frames") and not family.get("position_switching")
+    range_offsets = family.get("range_offsets")
+    binding_frames = (family.get("binding_frames") or range_offsets is not None) \
+        and not family.get("position_switching")
     canonical_topology = None
     if not family.get("position_switching") and not binding_frames:
         canonical_topology = _prepared_topology(canonical_prepared)
@@ -519,18 +559,34 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
         elif family.get("position_switching") or binding_frames:
             if binding_frames:
                 prepare_started = time.perf_counter()
+                vertex_offset = (range_offsets[frame] if range_offsets is not None else 0)
+                if range_offsets is not None:
+                    draw = frames[frame]
+                    path = (source.resolve_resource(draw.ib_file) if source is not None
+                            else safe_resource_path(mod_dir, draw.ib_file))
+                    raw = buffers.indices(
+                        path, draw.start, draw.count,
+                        draw.index_size if draw.index_size is not None else default_index_size)
+                    raw = [value + draw.base - vertex_offset for value in raw]
+                    if geometry_convention.reverse_winding:
+                        raw[1::3], raw[2::3] = raw[2::3], raw[1::3]
+                else:
+                    raw = family["raw_frames"][frame]
                 topology = pack_animation_topology_frame(
                     frames[frame], canonical_prepared,
                     canonical_packed=canonical_packed, mod_dir=mod_dir,
                     buffers=buffers, source=source,
-                    raw_indices=family["raw_frames"][frame], cache=topology_cache)
+                    raw_indices=raw, cache=topology_cache,
+                    vertex_offset=vertex_offset)
                 if diagnostics is not None:
                     diagnostics["animation_prepare_calls"] += 1
                     diagnostics["animation_prepare_seconds"] += time.perf_counter() - prepare_started
                 if topology is None:
                     return reject()
             packed_frame = pack_animation_position_frame(
-                frames[frame], canonical_prepared.used_vertices,
+                frames[frame], [vertex + range_offsets[frame]
+                                for vertex in canonical_prepared.used_vertices]
+                if range_offsets is not None else canonical_prepared.used_vertices,
                 mod_dir=mod_dir, buffers=buffers, source=source,
                 pack_normals=normal_possible)
         else:
@@ -585,6 +641,15 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
             packed_frame.positions, canonical_packed.positions)
         frame_bounds = (canonical_bounds if frame == start else
                         (packed_frame.bounds_min, packed_frame.bounds_max))
+        if binding_frames:
+            # Shared slots unused by this frame must not affect its bounds.
+            frame_bounds = ([float("inf")] * 3, [float("-inf")] * 3)
+            referenced = {vertex for vertex, in struct.iter_unpack("<I", topology[0])}
+            for vertex in referenced:
+                position = struct.unpack_from("<3f", packed_frame.positions, vertex * 12)
+                for axis, value in enumerate(position):
+                    frame_bounds[0][axis] = min(frame_bounds[0][axis], value)
+                    frame_bounds[1][axis] = max(frame_bounds[1][axis], value)
         if frame_bounds[0] is None or frame_bounds[1] is None:
             return reject()
         for index in range(3):

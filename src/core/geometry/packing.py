@@ -545,7 +545,8 @@ def pack_animation_position_frame(
 
 
 def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
-                                   mod_dir, buffers, raw_indices, cache, source=None):
+                                   mod_dir, buffers, raw_indices, cache, source=None,
+                                   vertex_offset=0):
     """Pack IB/UV blocks after union validation and canonical preparation."""
     resolve = source.resolve_resource if source is not None else \
         lambda value: safe_resource_path(mod_dir, value)
@@ -555,7 +556,7 @@ def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
         return None
     raw = raw_indices
     index_key = ("indices", resolve(draw.ib_file), draw.start, draw.count,
-                 draw.base, draw.index_size)
+                 draw.base, draw.index_size, vertex_offset)
     index_bytes = cache.get(index_key)
     if index_bytes is None:
         if raw == canonical.raw_indices:
@@ -572,19 +573,23 @@ def pack_animation_topology_frame(draw, canonical, *, canonical_packed,
     uv_key = ("uv", tc_path, stride, index_key)
     if uv_key not in cache:
         data = buffers.raw(tc_path)
-        if data == canonical.streams.texcoord_data and stride == canonical.streams.texcoord_stride:
+        if (not vertex_offset and data == canonical.streams.texcoord_data
+                and stride == canonical.streams.texcoord_stride):
             if data and (max(raw) * stride + canonical.streams.uv_offset
                          + struct.calcsize(canonical.streams.uv_format) > len(data)):
                 return None
             uv_bytes = canonical_packed.texcoords
         else:
-            uv_offset, uv_format = _detect_uv_best(tc_path, stride, data=data)
+            if data == canonical.streams.texcoord_data and stride == canonical.streams.texcoord_stride:
+                uv_offset, uv_format = canonical.streams.uv_offset, canonical.streams.uv_format
+            else:
+                uv_offset, uv_format = _detect_uv_best(tc_path, stride, data=data)
             uv_struct = struct.Struct(uv_format)
             output = bytearray(len(canonical.used_vertices) * 8) if data else None
             referenced = set(raw)
             if output is not None:
                 for index, vertex in enumerate(canonical.used_vertices):
-                    offset = vertex * stride + uv_offset
+                    offset = (vertex + vertex_offset) * stride + uv_offset
                     if offset < 0 or offset + uv_struct.size > len(data):
                         if vertex in referenced:
                             return None
