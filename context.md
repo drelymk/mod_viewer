@@ -236,7 +236,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Viewer-generated packages use their explicit metadata-relative texture files
   and geometry hash, including WWMI object folders. Invalid explicit references
   cannot fall back to legacy filename guesses. Native WWMI TextureUsage slots
-  remain candidate evidence without automatic material roles.
+  alone remain candidate evidence. An independently labelled diffuse hash can
+  establish its component's slot for unambiguous authored texture bindings.
+  Conflicting untracked runtime routes remain manual.
   Final picker assembly consumes the pool; saved/manual choices remain metadata
   hydration's concern.
   Published picker pools omit rejected sources and unavailable auxiliary maps,
