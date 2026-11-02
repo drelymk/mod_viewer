@@ -377,7 +377,9 @@ of documentation, comments and tests; use portable fixtures instead.
   Preserve captured coordinates and omit fabricated
   blend data; do not fall back through an unsupported shader writer.
   Automatic ZZMI `Face/` grouping requires recognized facial material evidence on
-  every component part and successfully reconstructed expression data. GIMI uses
+  every component part and either no detected expression or successfully
+  reconstructed expression data. Unsupported expression captures stay at the root;
+  folder placement never fabricates a neutral expression or changes geometry. GIMI uses
   a unique bilateral native Eyes mesh, a matching eye-loop anchor and shared
   diffuse/light payloads on nearby direct geometry. Group that proven family
   using those two required identities; extra recognized maps and

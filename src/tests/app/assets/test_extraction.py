@@ -639,7 +639,8 @@ def test_extraction_rejects_unauthorized_or_invalid_targets(library, tmp_path, c
     ("reversed_recognized", [True, True], True),
     ("reversed_recognized", [True, False], False),
     ("captured_expression", [True], False),
-    ("not_detected", [True], False),
+    ("not_detected", [True], True),
+    ("not_detected", [True, False], False),
     ("reversed_recognized", [False], False),
     ("reversed_recognized", [], False),
 ])
@@ -657,7 +658,7 @@ def test_facial_grouping_requires_complete_material_and_expression_evidence(
         {"surface-01": "Face"} if expected else {})
 
 
-def _facial_package(dump):
+def _facial_package(dump, morph_status="reversed_recognized"):
     package = extract(analyze(dump), Selection("Asset_001"))
     template = package.meshes[0]
     images = []
@@ -674,7 +675,7 @@ def _facial_package(dump):
         mesh.component.ib = f"{number + 16:08x}"
         mesh.component.streams["position"]["hash"] = f"{number + 32:08x}"
         if number > 1:
-            mesh.morph_status = "reversed_recognized"
+            mesh.morph_status = morph_status
             mesh.component.morph["status"] = mesh.morph_status
         if number == 2:
             mesh.component.parts.append(copy.deepcopy(mesh.component.parts[0]))
@@ -702,10 +703,11 @@ def _loaded_snapshot(result):
 
 
 @pytest.mark.parametrize("layout, debug", [("compact", False), ("compatible", True)])
+@pytest.mark.parametrize("morph_status", ["reversed_recognized", "not_detected"])
 def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
-        library, tmp_path, monkeypatch, layout, debug):
+        library, tmp_path, monkeypatch, layout, debug, morph_status):
     _root, dump = library
-    package = _facial_package(dump)
+    package = _facial_package(dump, morph_status)
     options = ExportOptions(layout=layout, debug_assets=debug)
     with monkeypatch.context() as baseline:
         baseline.setattr("app.assets.extractor.export._component_folders", lambda _meshes: {})
@@ -727,7 +729,8 @@ def test_face_export_preserves_geometry_bindings_and_metadata_provenance(
         assert report.texture_files == 3
         assert report.texture_associations > report.texture_files
     if debug:
-        assert len(list((asset / "Face" / "source_geometry").glob("*.buf"))) == 2
+        assert len(list((asset / "Face" / "source_geometry").glob("*.buf"))) == (
+            2 if morph_status == "reversed_recognized" else 0)
     details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
     for output in details["outputs"]:
         is_face = output["component"] != "surface-01"
