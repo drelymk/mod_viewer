@@ -453,6 +453,38 @@ def test_unsupported_frame_selection_retains_one_canonical_draw(tmp_path):
     assert geometry_values(built.geometry, entry["pos"])[2::3] == (1.,) * 4
 
 
+def test_draw_range_animation_bounds_exclude_unused_shared_vertices(tmp_path):
+    ini, _ = _baked_mod(tmp_path)
+    sections = read_sections(ini)
+    sections["Constants"] = ["$start = 0", "$end = 2", "$fps = 30"]
+    commands = ["vb1 = ResourceComponent01Texcoord", "ib = ResourceComponent01IB"]
+    indices = []
+    for frame, unused_x in enumerate((10000., 1., -10000.)):
+        write_vertices(tmp_path / f"position{frame}.buf", [
+            (0., 0., float(frame)), (unused_x, 1., float(frame)),
+            (1., 0., float(frame)), (0., 1., float(frame))])
+        sections[f"ResourcePosition{frame}"] = [
+            f"filename = position{frame}.buf", "stride = 40"]
+        indices.extend((0, 1, 2, 1, 3, 2) if frame == 1 else (0, 2, 3, 0, 3, 2))
+        commands.extend([f"if $frame == {frame}", f"vb0 = ResourcePosition{frame}",
+                         f"drawindexed = 6, {frame * 6}, 0", "endif"])
+    sections["TextureOverrideComponent01"] = commands
+    (tmp_path / "index.buf").write_bytes(struct.pack("<18I", *indices))
+    save_sections(ini, sections)
+
+    _, built = load_mod(ini, tmp_path)
+    entry = next(iter(built.meshes.values()))
+    animation = entry["animation_geometry"]
+    assert animation["bounds"] == {"min": [0., 0., 0.], "max": [1., 1., 2.]}
+    assert animation["frames"] == 3
+    assert animation["position_frame_bytes"] == 4 * 12
+    assert animation["index_frames"] == [-1, 0, -1]
+    positions = geometry_values(built.geometry, animation["positions"])
+    assert positions[3] == 10000.
+    assert positions[2 * 12 + 3] == -10000.
+    assert geometry_values(built.geometry, entry["pos"]) == positions[:12]
+
+
 @pytest.mark.parametrize("commandlist", [False, True], ids=["draw-branches", "commandlist"])
 @pytest.mark.parametrize("change,animated", [
     ("unused-data", False), ("unused-vertex", False), ("normal-scale", False),

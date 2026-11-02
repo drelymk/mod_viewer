@@ -641,6 +641,15 @@ def _prepare_animation_family(family, *, canonical_prepared, canonical_packed,
             packed_frame.positions, canonical_packed.positions)
         frame_bounds = (canonical_bounds if frame == start else
                         (packed_frame.bounds_min, packed_frame.bounds_max))
+        if binding_frames:
+            # Shared slots unused by this frame must not affect its bounds.
+            frame_bounds = ([float("inf")] * 3, [float("-inf")] * 3)
+            referenced = {vertex for vertex, in struct.iter_unpack("<I", topology[0])}
+            for vertex in referenced:
+                position = struct.unpack_from("<3f", packed_frame.positions, vertex * 12)
+                for axis, value in enumerate(position):
+                    frame_bounds[0][axis] = min(frame_bounds[0][axis], value)
+                    frame_bounds[1][axis] = max(frame_bounds[1][axis], value)
         if frame_bounds[0] is None or frame_bounds[1] is None:
             return reject()
         for index in range(3):
