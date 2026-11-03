@@ -217,7 +217,9 @@ def test_native_object_discovery_requires_hash_folder_and_native_fields(tmp_path
 @pytest.mark.parametrize("case,expected", [
     ("main", 3), ("main_with_shifted_face", 3), ("small_color_mask", 3),
     ("simple", 1), ("smaller_atlas", 2), ("hair", 1),
-    ("hair_uncompressed", 1), ("eye", 2), ("eye_unbound", None), ("eye_wrong_size", None),
+    ("hair_uncompressed", 1), ("hair_half_vector", 1),
+    ("hair_quarter_vector", None), ("hair_larger_vector", None),
+    ("eye", 2), ("eye_unbound", None), ("eye_wrong_size", None),
     ("face", 1), ("face_unbound", None), ("face_distinct_data", None),
     ("face_separate_resource", None), ("face_missing_data", None),
     ("face_wrong_size", None), ("face_contaminated", None),
@@ -225,6 +227,12 @@ def test_native_object_discovery_requires_hash_folder_and_native_fields(tmp_path
     ("face_late_data", 1), ("face_larger_scale", 1), ("face_shifted", 5),
     ("face_ambiguous", None), ("face_nonsquare", None), ("face_non_power_scale", None),
     ("face_reordered", None), ("face_data_gap", None), ("face_oversized_data", None),
+    ("face_bc1", 1), ("face_bc1_equal_atlas", 1),
+    ("layered", 3), ("layered_inherited", None), ("layered_distinct_mask", None),
+    ("layered_separate_resource", None), ("layered_wrong_scale", None),
+    ("layered_unbound", None), ("layered_contaminated", None),
+    ("layered_missing_mask", None), ("layered_nonsquare", None),
+    ("layered_no_color", None), ("layered_no_shader", None),
     ("no_color", None), ("no_shader", None), ("unbound", None), ("contaminated", None),
     ("wrong_size", None), ("wrong_mask", None),
 ])
@@ -242,11 +250,22 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
     elif case == "smaller_atlas":
         formats = ["BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB"]
         sizes[2] = (256, 256)
-    elif case in ("hair", "hair_uncompressed"):
+    elif case.startswith("hair"):
         formats = ["BC3_UNORM", "BC7_UNORM_SRGB", "B8G8R8A8_UNORM", "BC1_UNORM", "R8_UNORM", "BC7_UNORM"]
         sizes = [(256, 256), (512, 512), (128, 128), (256, 128), (128, 128), (512, 512)]
         if case == "hair_uncompressed":
             formats[3] = "B8G8R8A8_UNORM"
+        elif case == "hair_half_vector":
+            sizes[5] = (256, 256)
+        elif case == "hair_quarter_vector":
+            sizes[5] = (128, 128)
+        elif case == "hair_larger_vector":
+            sizes[5] = (1024, 1024)
+    elif case.startswith("layered"):
+        formats = ["B8G8R8A8_UNORM_SRGB", "BC1_UNORM", "BC3_UNORM", "BC7_UNORM_SRGB",
+                   "BC3_UNORM", "BC7_UNORM_SRGB", "BC7_UNORM_SRGB", "BC3_UNORM"]
+        sizes = [(1, 1), (512, 512), (2048, 2048), (2048, 2048),
+                 (1024, 1024), (1024, 1024), (128, 128), (1024, 1024)]
     elif case.startswith("eye"):
         formats = ["BC1_UNORM", "BC3_UNORM_SRGB", "BC7_UNORM_SRGB"]
         sizes = [(256, 256), (256, 256), (512, 512)]
@@ -259,6 +278,10 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
                      (128, 128), (256, 256), (256, 256)]
         elif case == "face_larger_scale":
             sizes = [(128, 128), (1024, 1024), (512, 512), (512, 512)]
+        elif case.startswith("face_bc1"):
+            formats[0] = "BC1_UNORM"
+            if case == "face_bc1_equal_atlas":
+                sizes[1] = (256, 256)
     textures = [dict(slot=i, hash=f"{i + 1:08x}", resource={"hash": f"{i + 1:08x}"},
                      format=fmt, width=sizes[i][0], height=sizes[i][1]) for i, fmt in enumerate(formats)]
     if case == "main_with_shifted_face":
@@ -270,6 +293,25 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
         if case != "face_distinct_data":
             textures[data_slot + 1].update(hash=textures[data_slot]["hash"],
                                           resource=dict(textures[data_slot]["resource"]))
+    if case.startswith("layered"):
+        textures[7].update(hash=textures[4]["hash"], resource=dict(textures[4]["resource"]))
+        if case == "layered_inherited":
+            textures[0].update(format="BC7_UNORM_SRGB", width=512, height=512)
+        elif case == "layered_distinct_mask":
+            textures[7].update(hash="00000009", resource={"hash": "00000009"})
+        elif case == "layered_separate_resource":
+            textures[7]["resource"]["address"] = "0x90"
+        elif case == "layered_wrong_scale":
+            for slot in (4, 5, 7):
+                textures[slot].update(width=768, height=768)
+        elif case == "layered_unbound":
+            textures[3]["resource"] = None
+        elif case == "layered_contaminated":
+            textures[4]["contaminated"] = True
+        elif case == "layered_missing_mask":
+            textures.pop()
+        elif case == "layered_nonsquare":
+            textures[3]["height"] = 1024
     if case == "unbound":
         textures[3]["resource"] = None
     elif case == "contaminated":
@@ -319,13 +361,14 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
 
 def _material_capture(dump, call_id, textures, aliases=None):
     codes = {"BC7_UNORM": 98, "BC7_UNORM_SRGB": 99, "BC3_UNORM": 77,
-             "BC3_UNORM_SRGB": 78, "BC1_UNORM": 71, "R8_UNORM": 61, "B8G8R8A8_UNORM": 87}
+             "BC3_UNORM_SRGB": 78, "BC1_UNORM": 71, "R8_UNORM": 61,
+             "B8G8R8A8_UNORM": 87, "B8G8R8A8_UNORM_SRGB": 91}
     bindings, dump_lines = [], []
     for slot, (fmt, width, height) in enumerate(textures):
         source_slot = (aliases or {}).get(slot, slot)
         h = f"{0x10000000 + int(call_id) * 16 + source_slot:08x}"
         name = f"{call_id}-ps-t{slot}={h}.dds"
-        size = width * height * (4 if fmt == "B8G8R8A8_UNORM" else 1)
+        size = width * height * (4 if fmt.startswith("B8G8R8A8_") else 1)
         if fmt == "BC1_UNORM":
             size //= 2
         (dump / name).write_bytes(dx10_dds(bytes(size), dxgi_format=codes[fmt], width=width, height=height))
@@ -336,7 +379,7 @@ def _material_capture(dump, call_id, textures, aliases=None):
             + "".join(bindings) + "".join(dump_lines))
 
 
-@pytest.mark.parametrize("family", ["main", "eye", "face", "face_late_data"])
+@pytest.mark.parametrize("family", ["main", "eye", "face", "face_late_data", "face_bc1", "hair_half_vector", "layered"])
 def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessing(tmp_path, family):
     dump = make_attribute_capture(tmp_path)
     log = dump / "log.txt"
@@ -353,7 +396,20 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
                         ("BC7_UNORM_SRGB", 256, 256), ("R8_UNORM", 128, 128),
                         ("R8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 256),
                         ("B8G8R8A8_UNORM", 256, 256)]
-    aliases = {3: 2} if family == "face" else {6: 5} if family == "face_late_data" else None
+        elif family == "face_bc1":
+            textures[0] = ("BC1_UNORM", 128, 128)
+            textures[1] = ("BC7_UNORM_SRGB", 256, 256)
+    elif family == "hair_half_vector":
+        textures = [("BC3_UNORM", 128, 128), ("BC7_UNORM_SRGB", 512, 512),
+                    ("B8G8R8A8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 128),
+                    ("R8_UNORM", 128, 128), ("BC7_UNORM", 256, 256)]
+    elif family == "layered":
+        textures = [("B8G8R8A8_UNORM_SRGB", 1, 1), ("BC1_UNORM", 512, 512),
+                    ("BC3_UNORM", 2048, 2048), ("BC7_UNORM_SRGB", 2048, 2048),
+                    ("BC3_UNORM", 1024, 1024), ("BC7_UNORM_SRGB", 1024, 1024),
+                    ("BC7_UNORM_SRGB", 128, 128), ("BC3_UNORM", 1024, 1024)]
+    aliases = ({3: 2} if family in ("face", "face_bc1") else {6: 5} if family == "face_late_data"
+               else {7: 4} if family == "layered" else None)
     text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n",
                         _material_capture(dump, "000001", textures, aliases))
     log.write_text(text)
@@ -361,7 +417,8 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
     analysis = analyze(dump)
     diffuse, = [t for t in analysis.components[0].parts[0].textures if t["role"] == "Diffuse"]
     assert diffuse["role_confidence"] == "inferred_wwmi_pass_format_bindings"
-    assert diffuse["slot"] == {"main": 3, "eye": 2, "face": 1, "face_late_data": 1}[family]
+    assert diffuse["slot"] == {"main": 3, "eye": 2, "face": 1, "face_late_data": 1,
+                               "face_bc1": 1, "hair_half_vector": 1, "layered": 3}[family]
     if family == "eye":
         assert analysis.components[0].parts[0].textures[1]["role"].startswith("TextureSlot")
     elif family == "face_late_data":
@@ -373,28 +430,47 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
     assert digest(Path(loaded.parts[0].textures["diffuse"].path)) == diffuse["sha256"]
 
 
-@pytest.mark.parametrize("competing_family", ["simple", "main"])
-def test_complete_hair_pass_outweighs_less_specific_pass_with_more_resources(tmp_path, competing_family):
+@pytest.mark.parametrize("competing_family,target_family", [
+    ("simple", "hair"), ("main", "hair"), ("unrecognized", "hair_half_vector"),
+    ("unrecognized", "face_bc1"), ("unrecognized", "layered"),
+])
+def test_complete_material_pass_outweighs_less_specific_pass_with_more_resources(tmp_path, competing_family, target_family):
     dump = make_attribute_capture(tmp_path)
     log = dump / "log.txt"
     text = "000001 3DMigoto [ShaderRegex\\WWMIv1\\EnableTextureOverrides]\n" + log.read_text()
     textures = [("BC7_UNORM", 256, 256), ("BC7_UNORM_SRGB", 256, 256)]
     if competing_family == "main":
         textures = [(fmt, 256, 256) for fmt in ("BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB")]
+    elif competing_family == "unrecognized":
+        textures = [("BC3_UNORM_SRGB", 256, 256), ("BC7_UNORM_SRGB", 256, 256)]
     competing = _material_capture(dump, "000001", textures)
     for slot in range(6, 10):
         Image.new("RGB", (16, 16)).save(dump / f"000001-ps-t{slot}={slot:08x}.png")
-    hair = _material_capture(dump, "000002", [
+    target_textures = [
         ("BC3_UNORM", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
         ("B8G8R8A8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 128),
         ("R8_UNORM", 128, 128), ("BC7_UNORM", 256, 256),
         ("B8G8R8A8_UNORM", 256, 256), ("B8G8R8A8_UNORM", 256, 256),
-    ], {7: 6})
+    ]
+    aliases, expected_slot = {7: 6}, 1
+    if target_family == "hair_half_vector":
+        target_textures[1] = ("BC7_UNORM_SRGB", 512, 512)
+    elif target_family == "face_bc1":
+        target_textures = [("BC1_UNORM", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
+                           ("B8G8R8A8_UNORM", 256, 256), ("B8G8R8A8_UNORM", 256, 256)]
+        aliases = {3: 2}
+    elif target_family == "layered":
+        target_textures = [("B8G8R8A8_UNORM_SRGB", 1, 1), ("BC1_UNORM", 512, 512),
+                           ("BC3_UNORM", 2048, 2048), ("BC7_UNORM_SRGB", 2048, 2048),
+                           ("BC3_UNORM", 1024, 1024), ("BC7_UNORM_SRGB", 1024, 1024),
+                           ("BC7_UNORM_SRGB", 128, 128), ("BC3_UNORM", 1024, 1024)]
+        aliases, expected_slot = {7: 4}, 3
+    target = _material_capture(dump, "000002", target_textures, aliases)
     # Add enough unrelated snapshots for the competing pass to win by slot count.
     Image.new("RGB", (16, 16)).save(dump / "000001-ps-t10=aaaaaaaa.png")
     text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n", competing)
     text = text.replace("000002 DrawIndexed(IndexCount:3, StartIndexLocation:3, BaseVertexLocation:1)",
-                        hair + "000002 DrawIndexed(IndexCount:3, StartIndexLocation:0, BaseVertexLocation:0)")
+                        target + "000002 DrawIndexed(IndexCount:3, StartIndexLocation:0, BaseVertexLocation:0)")
     log.write_text(text)
     second_ib = dump / "000002-ib=55555555.txt"
     second_ib.write_text(second_ib.read_text().replace("first index: 3", "first index: 0"))
@@ -404,7 +480,7 @@ def test_complete_hair_pass_outweighs_less_specific_pass_with_more_resources(tmp
     part, = component.parts
     assert part.draws == ["000001", "000002"]
     diffuse, = [t for t in part.textures if t["role"] == "Diffuse"]
-    assert diffuse["draw"] == "000002" and diffuse["slot"] == 1
+    assert diffuse["draw"] == "000002" and diffuse["slot"] == expected_slot
 
 
 @pytest.mark.parametrize("case", ["normal", "duplicate", "stride", "first", "count", "truncated", "weights",

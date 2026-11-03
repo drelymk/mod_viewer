@@ -13,7 +13,11 @@ along with the geometry.
 Extraction is available for all registered Asset Folder types. It reads captured
 resource history and validated stream layouts without requiring a game marker.
 The engine reconstructs supported stream-output skinning layouts and declared
-direct position/normal/UV streams. It also accepts split skinned `ATTRIBUTE`
+direct position/normal/UV streams. Stream-output inputs support the existing
+40-byte position/normal/tangent layout and a declared 24-byte position/normal
+layout with matching blend and UV payloads; missing tangents are not fabricated.
+Expression reversal remains limited to its recognized 40-byte layout.
+It also accepts split skinned `ATTRIBUTE`
 layouts with declared float positions, packed tangent/normals, half-float UVs
 and four or eight blend influences. All streams must have matching complete
 binary payloads; draw-subset header counts do not discard the remaining vertices.
@@ -87,7 +91,11 @@ effects. Other maps remain unbound unless the existing fallback establishes a
 role. No universal diffuse slot or color-format-only rule is assumed.
 Complete WWMI families outrank simpler texture pairs even when the simpler pass
 has more bound resources. Hair signatures allow compressed or uncompressed
-rectangular auxiliary masks. Eye signatures distinguish the larger iris atlas
+rectangular auxiliary masks and a full- or half-resolution vector atlas. Face
+signatures accept BC1 or BC3 masks with a verified shared-data pair. A separate
+layered family requires a bound constant, scaled mask/color atlases and a repeated
+packed mask; inherited copies on another color-led pass cannot establish that family.
+Eye signatures distinguish the larger iris atlas
 from an sRGB-encoded data map, before pixel fallback runs.
 
 When reconstructed expression data and recognized facial material evidence agree,
@@ -108,6 +116,9 @@ Some GIMI face captures also contain a separate shell over the eye openings.
 When its UV tags, contiguous index range, bounds and shared outer boundary prove
 that separation, extraction keeps it as an optional `FaceEyeOverlay` component
 and excludes it by default. The report retains its source range and streams.
+The shell may use matching primary UV channels or a separately mapped UV2/UV3
+pair. The latter also requires additional closed boundaries in the retained
+surface; both layouts require matching primary UVs along the shared outer rim.
 Only explicit selection through the internal extractor API can export it; the
 Add/Update dialog currently has no component or overlay selector. Facial vertices are unchanged.
 Boundary matching allows a small shell offset within 0.01% of the face bounds'
