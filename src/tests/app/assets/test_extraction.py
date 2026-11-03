@@ -173,6 +173,60 @@ def test_draw_subset_uv_header_requires_complete_matching_payload(
         assert any(expected in message for message in component.diagnostics)
 
 
+@pytest.mark.parametrize("case,expected", [
+    ("valid", None), ("aliases", None),
+    ("missing_normal", "requires declared point-list positions and normals"),
+    ("normal_offset", "requires declared point-list positions and normals"),
+    ("duplicate_position", "requires declared point-list positions and normals"),
+    ("topology", "requires declared point-list positions and normals"),
+    ("truncated", "Ambiguous or missing pre-skinning blend stream"),
+    ("partial", "Partial vertex snapshot"),
+    ("nonfinite", "Nonfinite position"),
+])
+def test_short_skinning_positions_require_complete_declared_layout(tmp_path, case, expected):
+    dump = make_capture(tmp_path)
+    position = next(dump.glob("000001-vb0=*.txt"))
+    fields = [("POSITION", 0, "R32G32B32_FLOAT", 0),
+              ("NORMAL", 0, "R32G32B32_FLOAT", 12)]
+    if case == "missing_normal":
+        fields.pop()
+    elif case == "normal_offset":
+        fields[-1] = ("NORMAL", 0, "R32G32B32_FLOAT", 0)
+    elif case == "duplicate_position":
+        fields.append(("POSITION", 0, "R32G32B32_FLOAT", 12))
+    elif case == "aliases":
+        fields.extend((semantic, 0, "R8G8B8A8_UNORM", 0) for semantic in ("COLOR", "TEXCOORD", "TANGENT"))
+    text = header(24, 0, fields)
+    if case == "topology":
+        text = text.replace("pointlist", "trianglelist")
+    elif case == "partial":
+        text = text.replace("vertex count: 4", "vertex count: 3")
+    position.write_text(text)
+    payload = b"".join(struct.pack("<6f", i, 0, 0, 0, 0, 1) for i in range(4))
+    if case == "truncated":
+        payload = payload[:-1]
+    elif case == "nonfinite":
+        payload = struct.pack("<f", float("nan")) + payload[4:]
+    position.with_suffix(".buf").write_bytes(payload)
+    analysis = analyze(dump)
+    component, = analysis.components
+    if expected:
+        assert not component.default_included
+        assert expected in " ".join([component.reason, *component.diagnostics])
+        return
+    mesh, = extract(analysis).meshes
+    assert mesh.source_position == payload
+    assert [e.label for e in mesh.elements] == ["POSITION", "NORMAL", "BLENDWEIGHTS", "BLENDINDICES", "COLOR", "TEXCOORD", "TEXCOORD1"]
+    assert mesh.indices == [[0, 1, 2]]
+    assert [v[:2] for v in mesh.vertices] == [[(i, 0, 0), (0, 0, 1)] for i in range(4)]
+    # The recognized morph adapter uses 40-byte records and cannot edit this layout.
+    component.morph["dispatches"] = [{"delta": "missing", "constant": "missing"}]
+    preserved, = extract(analysis).meshes
+    assert preserved.vertices == mesh.vertices
+    assert preserved.morph_status == "captured_expression"
+    assert any("Unrecognized morph position layout" in note for note in preserved.component.diagnostics)
+
+
 @pytest.mark.parametrize("case,channel,value", [
     ("valid", None, 0), ("secondary", 1, float("nan")), ("secondary", 1, float("inf")),
     ("secondary", 3, float("nan")), ("primary", 0, float("nan")), ("primary", 0, float("inf")),

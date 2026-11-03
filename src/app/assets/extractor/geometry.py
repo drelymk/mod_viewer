@@ -65,11 +65,22 @@ def stream_layout(inv, name, slot, role, vertex_count=None):
         from .profiles.wwmi import layout
         elements = layout(header, raw, slot, role.removeprefix("wwmi_"))
     elif role == "position":
-        if stride != 40:
-            raise Unsupported(f"ZZZ pre-skinning position stride {stride} is not supported")
         elements = [Element("POSITION", 0, "R32G32B32_FLOAT", 0),
-                    Element("NORMAL", 0, "R32G32B32_FLOAT", 12),
-                    Element("TANGENT", 0, "R32G32B32A32_FLOAT", 24)]
+                    Element("NORMAL", 0, "R32G32B32_FLOAT", 12)]
+        if stride == 40:
+            elements.append(Element("TANGENT", 0, "R32G32B32A32_FLOAT", 24))
+        elif stride == 24:
+            declared = [e for e in raw if e.get("InputSlot") == str(slot)
+                        and e.get("SemanticName") in {"POSITION", "NORMAL"}]
+            actual = sorted((e.get("SemanticName", ""), e.get("SemanticIndex", ""),
+                             e.get("Format", "").removeprefix("DXGI_FORMAT_"),
+                             e.get("AlignedByteOffset", ""), e.get("InputSlotClass", ""))
+                            for e in declared)
+            expected = sorted((e.semantic, "0", e.format, str(e.offset), "per-vertex") for e in elements)
+            if header.get("topology") != "pointlist" or actual != expected:
+                raise Unsupported("Pre-skinning position stride 24 requires declared point-list positions and normals")
+        else:
+            raise Unsupported(f"Pre-skinning position stride {stride} is not supported")
     elif role == "blend":
         if stride == 4:
             elements = [Element("BLENDINDICES", 0, "R32_UINT", 0)]
@@ -101,11 +112,13 @@ def stream_layout(inv, name, slot, role, vertex_count=None):
     return stride, elements, int(header.get("vertex count", 0)), int(header.get("first vertex", 0))
 
 
-def reverse_morph(data, inv, morph, context):
+def reverse_morph(data, inv, morph, context, position_stride=40):
     if not morph or not morph.get("dispatches"):
         return data, "not_detected", []
     # Atomic fallback: failure in any operation leaves the entire captured expression intact.
     try:
+        if position_stride != 40:
+            raise Unsupported("Unrecognized morph position layout")
         result = bytearray(data)
         operations = []
         shaders = {d.get("shader") for d in morph["dispatches"] if d.get("shader")}
@@ -196,7 +209,7 @@ def decode_component(inv, component, context=None):
         if role == "position":
             source_position = data
             if not direct and not attribute_skinning:
-                data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx)
+                data, morph_status, notes = reverse_morph(data, inv, component.morph, ctx, stride)
         decoded = []
         invalid_secondary_uvs = set()
         has_primary_uv = "TEXCOORD" in declared_labels

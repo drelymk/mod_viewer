@@ -81,14 +81,20 @@ def _separate_overlay(mesh):
     channels = {e.index: i for i, e in enumerate(mesh.elements) if e.semantic == "TEXCOORD"}
     if not {0, 1, 2} <= channels.keys():
         return None
+    paired_mask = 3 in channels and all(
+        len(vertex[channels[3]]) == 2 and vertex[channels[2]] == vertex[channels[3]]
+        for vertex in mesh.vertices)
     tagged = []
+    alternate_mask = False
     for vertex in mesh.vertices:
         uv, alternate, mask = (vertex[channels[i]] for i in range(3))
         if any(len(value) != 2 for value in (uv, alternate, mask)):
             return None
         active = any(abs(v) > 1e-6 for v in mask)
-        if active and (uv != alternate or uv != mask):
-            return None
+        if active:
+            if uv != alternate or (uv != mask and not paired_mask):
+                return None
+            alternate_mask |= uv != mask
         tagged.append(active)
     indices = mesh.indices[0]
     flags = []
@@ -103,16 +109,20 @@ def _separate_overlay(mesh):
     if not all(flags[split // 3:]):
         return None
     positions = tuple(v[0] for v in mesh.vertices)
-    boundaries, bounds = [], []
+    boundaries, bounds, loop_counts = [], [], []
     for selected in (indices[:split], indices[split:]):
         absolute = tuple(i + c.parts[0].base_vertex for i in selected)
         loops = _boundary_components(AlignmentMesh(c.name, positions, absolute))
         if not loops:
             return None
+        loop_counts.append(len(loops))
         largest = max(loops, key=len)
         boundaries.append(largest)
         bounds.append(tuple((min(positions[i][a] for i in absolute),
                              max(positions[i][a] for i in absolute)) for a in range(3)))
+    # A separately mapped paired mask must cover openings in the retained shell.
+    if alternate_mask and loop_counts[0] <= loop_counts[1]:
+        return None
     # Separate shells can have a small authored offset; never snap their vertices.
     tolerance = math.dist(tuple(b[0] for b in bounds[0]), tuple(b[1] for b in bounds[0])) * 1e-4
     if (not tolerance or len(boundaries[0]) != len(boundaries[1]) or any(
@@ -140,7 +150,8 @@ def _separate_overlay(mesh):
     overlay.diagnostics.append(note)
     c.provenance["separated_face_overlay"] = dict(component=overlay.id, first=overlay.parts[0].first,
                                                    count=overlay.parts[0].count, boundary_max_error=rim_error,
-                                                   boundary_tolerance=tolerance, boundary_uv_max_error=uv_error)
+                                                   boundary_tolerance=tolerance, boundary_uv_max_error=uv_error,
+                                                   uv_tag_layout="paired_secondary" if alternate_mask else "shared_primary")
     c.parts[0].count = split
     c.triangle_count = split // 3
     mesh.indices[0] = indices[:split]

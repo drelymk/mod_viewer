@@ -66,11 +66,27 @@ def material_evidence(textures, color_target, shader):
     if (image(0, {"BC3_UNORM"}) and image(1, color)
             and image(2, {"B8G8R8A8_UNORM"}) and mask.get("format") in {"BC1_UNORM", "B8G8R8A8_UNORM"}
             and mask.get("height", 0) >= 128 and mask.get("width") == 2 * mask["height"]
-            and image(5, {"BC7_UNORM"}) and same_size(1, 5)
+            and image(5, {"BC7_UNORM"})
+            and by_slot[1]["width"] in (by_slot[5]["width"], 2 * by_slot[5]["width"])
             and by_slot[2]["width"] < by_slot[1]["width"]):
         # This late-vector family proves more of its binding layout than the
         # generic main family, which can also appear over the same hair range.
         return {1: "Diffuse"}, 3
+    # A constant-led layered family has two scaled mask/color atlases and a
+    # repeated packed mask. Requiring the constant rejects inherited bindings
+    # on passes whose first slot is another surface's color texture.
+    constant = by_slot.get(0, {})
+    if (constant.get("format") == "B8G8R8A8_UNORM_SRGB"
+            and constant.get("width") == constant.get("height") == 1
+            and image(1, {"BC1_UNORM"}) and image(2, {"BC3_UNORM"})
+            and image(3, color) and same_size(2, 3)
+            and image(4, {"BC3_UNORM"}) and image(5, color) and same_size(4, 5)
+            and image(6, color) and by_slot[6]["width"] <= by_slot[1]["width"] / 4
+            and image(7, {"BC3_UNORM"}) and same_size(4, 7)
+            and by_slot[4]["resource"] == by_slot[7]["resource"]
+            and by_slot[1]["width"] * 2 == by_slot[4]["width"]
+            and by_slot[4]["width"] * 2 == by_slot[3]["width"]):
+        return {3: "Diffuse"}, 2
     face_slot = _face_atlas_slot(by_slot)
     if face_slot is not None:
         return {face_slot: "Diffuse"}, 2
@@ -90,7 +106,8 @@ def _face_atlas_slot(by_slot):
 
     candidates = set()
     for slot, mask in by_slot.items():
-        if not (square(slot, "BC3_UNORM") and square(slot + 1, "BC7_UNORM_SRGB")):
+        if not ((square(slot, "BC1_UNORM") or square(slot, "BC3_UNORM"))
+                and square(slot + 1, "BC7_UNORM_SRGB")):
             continue
         atlas = by_slot[slot + 1]
         for data_slot, data in by_slot.items():

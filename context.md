@@ -344,6 +344,10 @@ of documentation, comments and tests; use portable fixtures instead.
   for partial extraction/update, and keep failures inline in the open dialog.
   Keep the provenance report inside the installed asset with its final paths,
   replacing and rolling it back with the asset directory.
+  Stream-output inputs support 40-byte position/normal/tangent records and
+  declared 24-byte position/normal records with matching blend/UV counts.
+  Blend discovery uses the validated position stride; never fabricate tangents
+  or apply the 40-byte expression adapter to a different position layout.
   Direct unskinned meshes use declared position/normal and UV streams with
   matching complete payloads. Valid UV draw-subset counts do not split otherwise
   identical source/layout identities; malformed headers remain rejected.
@@ -394,7 +398,9 @@ of documentation, comments and tests; use portable fixtures instead.
   and UVs. Equivalent facial passes require matching rendered attributes,
   resource versions, ranges and materials before excluding a duplicate by default.
   GIMI face anchors may separate an auxiliary shell only when a contiguous
-  triangle suffix has matching UV0/UV1/UV2, the retained triangles have zero UV2,
+  triangle suffix has matching UV0/UV1/UV2, or matching UV0/UV1 with a separate
+  paired UV2/UV3 layout and more closed boundaries in the retained shell.
+  In both layouts the retained triangles have zero UV2,
   no triangle mixes those tags, and both shells match bounds and their largest
   closed boundary within 0.01% of the retained shell's diagonal. Require a
   one-to-one boundary vertex match and UV0/UV1 agreement within 0.0001; retain
@@ -421,9 +427,13 @@ of documentation, comments and tests; use portable fixtures instead.
   establish diffuse atlases from validated neighboring format/size families.
   Prefer complete WWMI material families over simpler pairs from another pass,
   before comparing resource counts. The more specific late-vector hair family
-  takes priority over a generic main family on the same range. Face-family
-  recognition follows an ordered mask/color pair and a later adjacent pair
-  sharing one packed-data resource across the full captured binding set.
+  takes priority over a generic main family on the same range.
+  Hair vector atlases may match the color atlas or use half its resolution.
+  BC1 and BC3 face masks need the same shared-data proof. Constant-led layered
+  families require scaled mask/color atlases and an exact repeated packed mask;
+  inherited bindings under a color-led pass cannot establish that family.
+  Face-family recognition follows an ordered mask/color pair and a later adjacent
+  pair sharing one packed-data resource across the full captured binding set.
   Optional inputs may move that pair; require compatible power-of-two atlas
   scales and a unique color candidate rather than fixed slots or exact sizes.
   Packed eye data may use an sRGB encoding;
