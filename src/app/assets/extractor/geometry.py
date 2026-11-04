@@ -4,6 +4,7 @@ import math
 import re
 import struct
 from .core import Unsupported, Context
+from .budget import ResourceLimit
 
 
 @dataclass
@@ -119,6 +120,7 @@ def reverse_morph(data, inv, morph, context, position_stride=40):
     try:
         if position_stride != 40:
             raise Unsupported("Unrecognized morph position layout")
+        inv.budget.allocate(len(data) * 3)
         result = bytearray(data)
         operations = []
         shaders = {d.get("shader") for d in morph["dispatches"] if d.get("shader")}
@@ -126,8 +128,8 @@ def reverse_morph(data, inv, morph, context, position_stride=40):
             raise Unsupported("Unrecognized mixed-shader expression sequence")
         for dispatch in morph["dispatches"]:
             context.tick("Validating expression metadata")
-            delta = inv.path(dispatch["delta"]).read_bytes()
-            meta = inv.path(dispatch["constant"]).read_bytes()
+            delta = inv.read_bytes(dispatch["delta"])
+            meta = inv.read_bytes(dispatch["constant"])
             import hashlib
             for payload, key in ((delta, "delta_sha256"), (meta, "constant_sha256")):
                 if dispatch.get(key) and hashlib.sha256(payload).hexdigest() != dispatch[key]:
@@ -137,6 +139,7 @@ def reverse_morph(data, inv, morph, context, position_stride=40):
             start, count, scale, _ = struct.unpack("<IIff", meta)
             if not math.isfinite(scale) or start + count > len(delta) // 40:
                 raise Unsupported("Invalid morph range or multiplier")
+            inv.budget.allocate(count * 512)
             for i in range(start, start + count):
                 index, *change = struct.unpack_from("<I9f", delta, i * 40)
                 if index >= len(result) // 40 or not all(math.isfinite(v) for v in change):
@@ -159,6 +162,8 @@ def reverse_morph(data, inv, morph, context, position_stride=40):
             raise Unsupported("Expression reversal did not pass forward-replay validation")
         morph["forward_replay_max_error"] = error
         return bytes(result), "reversed_recognized", []
+    except ResourceLimit:
+        raise
     except (OSError, ValueError, struct.error, KeyError) as error:
         return data, "captured_expression", [f"Expression preserved: {error}"]
 
@@ -184,16 +189,34 @@ def decode_component(inv, component, context=None):
     attribute_skinning = component.provenance.get("geometry_kind") == "attribute_skinning"
     roles = (("position", "normal", "blend", "texcoord") if attribute_skinning else
              ("position", "texcoord") if direct else ("position", "blend", "texcoord"))
+    # Preflight every stream before reading binary payloads or expanding rows.
+    # Account for scalar objects, semantic tuples, stream/merged row lists and
+    # downstream triangle signatures. The budget also counts repeated decoding.
+    prepared = {}
+    expected_bytes = 0
     for role in roles:
         source = component.streams[role]
-        name, slot = source["file"], source["slot"]
         layout_role = "wwmi_" + role if attribute_skinning else "direct_position" if direct and role == "position" else role
-        stride, elements, declared_count, first_vertex = stream_layout(inv, name, slot, layout_role)
+        layout = stream_layout(inv, source["file"], source["slot"], layout_role)
+        stride, elements, _, _ = layout
+        size = inv.path(source["file"]).stat().st_size
+        scalars = sum(len(_storage_format(e.format)[0].format) - 1 for e in elements)
+        expected_bytes += (size // stride) * (128 + 80 * len(elements) + 32 * scalars)
+        prepared[role] = layout, size
+    for part in component.parts:
+        if min(part.first, part.count, part.index_offset) < 0:
+            raise Unsupported("Negative index range")
+        expected_bytes += part.count * 80
+    inv.budget.allocate(expected_bytes)
+    for role in roles:
+        source = component.streams[role]
+        name = source["file"]
+        (stride, elements, declared_count, first_vertex), size = prepared[role]
         labels = [e.label for e in elements]
         if len(set(labels)) != len(labels) or declared_labels.intersection(labels):
             raise Unsupported("Conflicting vertex semantic channels")
         declared_labels.update(labels)
-        data = inv.path(name).read_bytes()
+        data = inv.read_bytes(name, expected_size=size)
         if len(data) % stride:
             raise Unsupported(f"Truncated {role} buffer")
         n = len(data) // stride
@@ -262,7 +285,7 @@ def decode_component(inv, component, context=None):
         if header.get("topology") != "trianglelist" or fmt not in ("R16_UINT", "R32_UINT"):
             raise Unsupported("Only declared triangle-list R16/R32 index buffers are supported")
         width = 2 if fmt == "R16_UINT" else 4
-        data = inv.path(part.ib_file.replace(".txt", ".buf")).read_bytes()
+        data = inv.read_bytes(part.ib_file.replace(".txt", ".buf"))
         # Binary dumps contain the whole resource; the text header supplies the draw range.
         first = part.first * width + part.index_offset
         end = first + part.count * width

@@ -65,7 +65,7 @@ def _sample(inv, texture, context):
     cache[identity] = None
     source = inv.path(texture["file"])
     if inv.source is not None:
-        source = source.read_bytes()
+        source = inv.read_bytes(texture["file"])
     image = load_texture_image(source, max_size=64, preserve_alpha=False,
                                source_name=texture["file"])
     if image is None:

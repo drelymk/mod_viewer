@@ -310,3 +310,33 @@ def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(t
     assets = [{p.relative_to(Path(r.output)).as_posix(): p.read_bytes()
                for p in Path(r.output).rglob("*") if p.is_file()} for r in reports]
     assert assets[0] == assets[1]
+
+
+@pytest.mark.parametrize("limit", ["capacity", "sections"])
+def test_memory_manifest_budget_counts_capacity_and_sections_before_mapping(limit):
+    from app.assets.extractor.budget import CaptureBudget, ResourceLimit
+    manifest, factory = capture_data({"log.txt": b"", "buffer.buf": b""})
+    budget = CaptureBudget(max_source_bytes=65536 if limit == "capacity" else 16 * 1024**3,
+                           max_mappings=1 if limit == "sections" else 16384)
+    opened = []
+    def mapping(name, capacity, offset):
+        opened.append(name)
+        return factory(name, capacity, offset)
+    with pytest.raises(ResourceLimit, match="mapping budget"):
+        MemoryCapture(manifest, mapping_factory=mapping, budget=budget)
+    assert opened == []
+
+
+def test_memory_mapping_failure_closes_previously_opened_sections():
+    manifest, factory = capture_data({"log.txt": b"", "buffer.buf": b""})
+    closed = []
+    def mapping(name, capacity, offset):
+        if closed:
+            raise OSError("Synthetic mapping failure")
+        block = factory(name, capacity, offset)
+        closed.append(False)
+        block.close = lambda: closed.__setitem__(0, True)
+        return block
+    with pytest.raises(OSError, match="Synthetic mapping failure"):
+        MemoryCapture(manifest, mapping_factory=mapping)
+    assert closed == [True]

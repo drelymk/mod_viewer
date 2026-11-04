@@ -191,6 +191,7 @@ def _component_folders(meshes):
 
 def extract(analysis, selection=None, context=None):
     ctx = context or Context()
+    ctx.budget = getattr(analysis, "_budget", ctx.budget)
     selection = selection or Selection()
     name = safe_name(selection.name)
     inv = Inventory(getattr(analysis, "_capture_source", None) or analysis.dump, ctx)
@@ -277,6 +278,7 @@ def write_ib(path, part, indices):
 
 def export(package, output, context=None, *, options=None):
     ctx = context or Context()
+    ctx.budget = getattr(package.analysis, "_budget", ctx.budget)
     options = options or ExportOptions()
     if options.layout not in ("compact", "compatible"):
         raise ValueError("Export layout must be compact or compatible")
@@ -454,6 +456,20 @@ def export(package, output, context=None, *, options=None):
                        omitted_assets=omitted, options=asdict(options),
                        geometry_notes="Component-local bone IDs and vertex order retained. No welding, original skeleton or animations recovered. Base vertex applied in exported IB text; original values recorded. Split ATTRIBUTE captures use the viewer's WWMI winding convention without changing source buffers.",
                        storage_notes="Shared textures use native resource hashes. Hash collisions retain per-part aliases. Hardlinks only join output files; unsupported filesystems use copies. Editing a shared file changes its linked aliases.")
+        details["report"].update(output=package.name, report_path=report_path.name)
+        details["analysis"].pop("dump")
+        # Diagnostics may include OS errors containing source/output paths.
+        def portable(value):
+            if isinstance(value, dict):
+                return {k: portable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [portable(v) for v in value]
+            if isinstance(value, str):
+                for root, label in ((package.analysis.dump, "<capture>"), (str(output), "<output>")):
+                    for spelling in {root, root.replace("\\", "/"), root.replace("/", "\\"), root.replace("\\", "\\\\")}:
+                        value = value.replace(spelling, label)
+            return value
+        details = portable(details)
         staged_report = stage / ".extraction-report.json"
         staged_report.write_text(json.dumps(details, indent=2), encoding="utf-8")
         ctx.tick("Committing export")

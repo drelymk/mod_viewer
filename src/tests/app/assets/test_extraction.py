@@ -10,10 +10,12 @@ import pytest
 from PIL import Image
 
 from app.assets import extraction, folders, index, loader
-from app.assets.extractor.core import Cancelled, Context
+from app.assets.extractor.core import Cancelled, Context, Unsupported
+from app.assets.extractor.budget import CaptureBudget, ResourceLimit
 from app.assets.extractor.capture import Inventory, parse_log
-from app.assets.extractor import discovery
+from app.assets.extractor import capture, discovery
 from app.assets.extractor.discovery import analyze
+from app.assets.extractor.geometry import decode_component
 from app.assets.extractor.export import (
     ExportOptions, Selection, _component_folders, export, extract,
 )
@@ -610,9 +612,10 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     def installed_report(folder):
         filename = folder / "extraction_report.json"
         details = json.loads(filename.read_text(encoding="utf-8"))
-        assert Path(details["report"]["output"]) == folder
-        assert Path(details["report"]["report_path"]) == filename
-        assert details["analysis"]["dump"] == str(dump.resolve())
+        assert details["report"]["output"] == "."
+        assert details["report"]["report_path"] == filename.name
+        assert "dump" not in details["analysis"]
+        assert str(dump.parent) not in filename.read_text(encoding="utf-8").replace("\\\\", "\\")
         assert details["outputs"]
         return details
     original_report = installed_report(asset)
@@ -917,3 +920,219 @@ def test_exported_payload_collisions_preserve_geometry_and_unknown_candidates(li
                 for texture in textures:
                     assert len(texture) == 4
                     assert (metadata_file.parent / texture[3]).is_file()
+
+
+@pytest.mark.parametrize("limit", ["source_bytes", "file_bytes", "decoded_bytes"])
+def test_capture_budget_rejects_oversized_input_before_binary_allocation(tmp_path, monkeypatch, limit):
+    dump = make_capture(tmp_path)
+    sizes = [p.stat().st_size for p in dump.iterdir()]
+    maximum = sum(sizes) - 1 if limit == "source_bytes" else max(sizes) - 1 if limit == "file_bytes" else 1
+    budget = CaptureBudget(**{"max_" + limit: maximum})
+    allocated = []
+    original = Inventory.read_bytes
+    def read(inv, name, **kwargs):
+        allocated.append(name)
+        return original(inv, name, **kwargs)
+    monkeypatch.setattr(Inventory, "read_bytes", read)
+    with pytest.raises(ResourceLimit, match="budget"):
+        analyze(dump, Context(budget=budget))
+    assert allocated == []
+
+
+def test_geometry_budget_counts_indices_and_repeated_decoding(tmp_path):
+    dump = make_capture(tmp_path)
+    analysis = analyze(dump)
+    component, = analysis.components
+    budget = CaptureBudget()
+    inv = Inventory(dump, Context(budget=budget))
+    mesh = decode_component(inv, component)
+    assert len(mesh.vertices) == 4
+    used = budget.decoded_bytes
+    source_bytes = budget.source_bytes
+    Inventory(dump, Context(budget=budget))
+    assert budget.source_bytes == source_bytes
+    budget.max_decoded_bytes = used * 2 - 1
+    with pytest.raises(ResourceLimit, match="decoded geometry budget"):
+        decode_component(inv, component)
+    # A tiny IB with an invented draw count must fail before expanding indices.
+    component.parts[0].count = 2**32
+    with pytest.raises(ResourceLimit, match="decoded geometry budget"):
+        decode_component(Inventory(dump), component)
+    analysis._budget.max_decoded_bytes = analysis._budget.decoded_bytes + 1
+    with pytest.raises(ResourceLimit, match="decoded geometry budget"):
+        extract(analysis)
+
+
+def test_capture_alias_lookup_detects_cycles_and_keeps_containment(tmp_path):
+    dump = make_capture(tmp_path)
+    inv = Inventory(dump)
+    inv.targets.update({"alias-a": "alias-b", "alias-b": "alias-a"})
+    with pytest.raises(ValueError, match="Cyclic capture resource alias"):
+        inv.path("alias-a")
+    inv.targets["alias-b"] = "../outside"
+    with pytest.raises(ValueError, match="escapes"):
+        inv.path("alias-a")
+    inv.targets.update({f"alias-{i}": f"alias-{i + 1}" for i in range(1500)})
+    inv.targets["alias-1500"] = "log.txt"
+    assert inv.path("alias-0") == dump / "log.txt"
+
+
+@pytest.mark.parametrize("bad_hash", ["", "invalid", "!", "abcd-invalid"])
+def test_malformed_copy_rows_do_not_leak_into_later_copy_events(tmp_path, bad_hash):
+    dump = make_capture(tmp_path)
+    log = dump / "log.txt"
+    with log.open("a", encoding="utf-8") as f:
+        f.write(f"""000004 CopyResource()
+       src: resource=0x10 hash={bad_hash}
+       dst: resource=0x20 hash=22222222
+000005 CopyResource()
+       src: resource=0x30 hash=33333333
+000006 Draw(VertexCount:4)
+       dst: resource=0x40 hash=44444444
+000007 CopyResource()
+       src: resource=0x50 hash=55555555
+       dst: resource=0x60 hash=66666666
+""")
+    calls = parse_log(Inventory(dump))
+    copies = [c for c in calls if c.kind == "CopyResource"]
+    assert len(copies) == 1
+    assert copies[0].id == "000007"
+    assert copies[0].source.hash == "55555555"
+    assert copies[0].outputs[0].hash == "66666666"
+    assert any(c.id == "000006" for c in calls)
+
+
+def test_saved_report_paths_are_portable_but_api_paths_remain_absolute(tmp_path):
+    dump = make_capture(tmp_path)
+    analysis = analyze(dump)
+    package = extract(analysis, Selection("Sample"))
+    output = tmp_path / "exports"
+    package.diagnostics.append(f"Source: {dump / 'missing.buf'}; output: {output}")
+    package.diagnostics.append(str(FileNotFoundError(2, "Missing capture resource", str(dump / "missing.buf"))))
+    report = export(package, output)
+    assert report.output == str(output / "Sample")
+    assert Path(report.report_path).is_absolute()
+    assert analysis.dump == str(dump.resolve())
+    assert str(dump) in report.diagnostics[-2]
+    details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
+    assert details["report"]["output"] == "Sample"
+    assert details["report"]["report_path"] == "Sample.extraction_report.json"
+    assert "dump" not in details["analysis"]
+    def strings(value):
+        if isinstance(value, dict):
+            return [s for v in value.values() for s in strings(v)]
+        if isinstance(value, list):
+            return [s for v in value for s in strings(v)]
+        return [value] if isinstance(value, str) else []
+    assert all(str(tmp_path) not in s.replace("\\\\", "\\") and tmp_path.as_posix() not in s for s in strings(details))
+    assert details["outputs"][0]["original_range"]["ib_file"] == analysis.components[0].parts[0].ib_file
+
+
+
+def test_geometry_growth_after_preflight_cannot_bypass_decoded_budget(tmp_path, monkeypatch):
+    dump = make_capture(tmp_path)
+    component, = analyze(dump).components
+    inv = Inventory(dump)
+    original = inv.read_bytes
+    def grow(name, **kwargs):
+        path = inv.path(name)
+        path.write_bytes(path.read_bytes() * 2)
+        return original(name, **kwargs)
+    monkeypatch.setattr(inv, "read_bytes", grow)
+    with pytest.raises(ValueError, match="changed during decoding"):
+        decode_component(inv, component)
+
+
+@pytest.mark.parametrize("op,args,valid", [
+    ("IASetVertexBuffers", "StartSlot:0, NumBuffers:1000000000", False),
+    ("SOSetTargets", "NumBuffers:1000000000", False),
+    ("CSSetUnorderedAccessViews", "StartSlot:0, NumUAVs:1000000000", False),
+    ("CSSetShaderResources", "StartSlot:0, NumViews:1000000000", False),
+    ("CSSetConstantBuffers", "StartSlot:0, NumBuffers:1000000000", False),
+    ("PSSetShaderResources", "StartSlot:0, NumViews:1000000000", False),
+    ("IASetVertexBuffers", "StartSlot:-1, NumBuffers:1", False),
+    ("IASetVertexBuffers", "StartSlot:0, NumBuffers:-1", False),
+    ("PSSetShaderResources", "StartSlot:128, NumViews:0", False),
+    ("PSSetShaderResources", "StartSlot:127, NumViews:2", False),
+    ("PSSetShaderResources", "StartSlot:0, NumViews:128", True),
+    ("PSSetShaderResources", "StartSlot:127, NumViews:1", True),
+    ("SOSetTargets", "NumBuffers:0", True),
+])
+def test_log_binding_ranges_reject_excessive_work(tmp_path, monkeypatch, op, args, valid):
+    (tmp_path / "log.txt").write_text(
+        f"000001 {op}({args})\n000002 Draw(VertexCount:0)\n", encoding="utf-8")
+    # Fail promptly if a regression lets a malicious range reach iteration.
+    def bounded_range(*values):
+        result = range(*values)
+        if len(result) > 128:
+            pytest.fail("Unbounded capture binding loop")
+        return result
+    monkeypatch.setattr(capture, "range", bounded_range, raising=False)
+    inv = Inventory(tmp_path)
+    if valid:
+        call, = parse_log(inv)
+        assert call.id == "000002"
+    else:
+        with pytest.raises(Unsupported, match="D3D11 slots"):
+            parse_log(inv)
+
+
+@pytest.mark.parametrize("last_event", ["Draw", "Dispatch", "CopyResource"])
+def test_log_events_share_a_budget_before_constructing_calls(tmp_path, monkeypatch, last_event):
+    log = tmp_path / "log.txt"
+    log.write_text("""000001 SOSetTargets(NumBuffers:1)
+       0: resource=0x10 hash=11111111
+000002 Draw()
+000003 CSSetUnorderedAccessViews(StartSlot:0, NumUAVs:1)
+       0: resource=0x20 hash=22222222
+000004 Dispatch()
+000005 CopyResource()
+       src: resource=0x10 hash=11111111
+       dst: resource=0x20 hash=22222222
+""", encoding="utf-8")
+    budget = CaptureBudget(max_events=3)
+    calls = parse_log(Inventory(tmp_path, Context(budget=budget)))
+    expected = ["Draw", "Dispatch", "CopyResource"]
+    assert [call.kind for call in calls] == expected
+    assert [call.sequence for call in calls] == [0, 1, 2]
+    assert budget.events == 3
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(f"000006 {last_event}()\n")
+        if last_event == "CopyResource":
+            stream.write("       src: resource=0x10 hash=11111111\n"
+                         "       dst: resource=0x20 hash=22222222\n")
+    constructed = []
+    original = capture.Call
+    def call(*args, **kwargs):
+        constructed.append(args[2])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(capture, "Call", call)
+    budget = CaptureBudget(max_events=3)
+    with pytest.raises(ResourceLimit, match="log event budget"):
+        parse_log(Inventory(tmp_path, Context(budget=budget)))
+    assert constructed == expected
+    assert budget.events == 3
+
+
+@pytest.mark.parametrize("slot,valid", [(0, True), (127, True), (128, False), (100000, False)])
+def test_log_binding_rows_are_bounded_before_resource_creation(tmp_path, monkeypatch, slot, valid):
+    start = slot if valid else 0
+    (tmp_path / "log.txt").write_text(
+        f"000001 PSSetShaderResources(StartSlot:{start}, NumViews:1)\n"
+        f"       {slot}: resource=0x20 hash=22222222\n000002 Draw()\n", encoding="utf-8")
+    constructed = []
+    original = capture.Resource
+    def resource(*args, **kwargs):
+        constructed.append(args)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(capture, "Resource", resource)
+    inv = Inventory(tmp_path)
+    if valid:
+        call, = parse_log(inv)
+        assert set(call.bindings["ps-t"]) == {slot}
+        assert call.bindings["ps-t"][slot].hash == "22222222"
+    else:
+        with pytest.raises(Unsupported, match="binding slot exceeds D3D11 slots"):
+            parse_log(inv)
+        assert constructed == []
+        assert inv.budget.events == 0

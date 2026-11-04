@@ -3,6 +3,7 @@ from pathlib import Path
 from threading import Event
 from typing import Callable
 import json
+from .budget import CaptureBudget
 
 
 class Cancelled(Exception):
@@ -17,6 +18,7 @@ class Unsupported(ValueError):
 class Context:
     cancel: Event = field(default_factory=Event)
     progress: Callable[[str, int, int], None] = lambda *_: None
+    budget: CaptureBudget = field(default_factory=CaptureBudget)
 
     def tick(self, stage, current=0, total=0):
         if self.cancel.is_set():

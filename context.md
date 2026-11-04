@@ -342,8 +342,11 @@ of documentation, comments and tests; use portable fixtures instead.
   A partial capture is a committed success, never an extraction error or a
   completeness claim. Keep ordinary success silent, show a nonblocking warning
   for partial extraction/update, and keep failures inline in the open dialog.
-  Keep the provenance report inside the installed asset with its final paths,
-  replacing and rolling it back with the asset directory.
+  Keep the provenance report inside the installed asset with portable relative paths,
+  replacing and rolling it back with the asset directory. Omit the local capture
+  root and redact local roots from persisted diagnostics; API destinations remain
+  absolute. Directory and memory captures share source-size, mapped-capacity/count
+  and cumulative decoded-work budgets, checked before mapping or geometry allocation.
   Stream-output inputs support 40-byte position/normal/tangent records and
   declared 24-byte position/normal records with matching blend/UV counts.
   Blend discovery uses the validated position stride; never fabricate tangents
