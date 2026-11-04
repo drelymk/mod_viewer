@@ -5,18 +5,23 @@ import json
 from pathlib import Path
 import struct
 import os
+import random
 import mmap
 import subprocess
 import sys
 import uuid
 
 import pytest
+from PIL import Image
 
 import extract_asset as headless
 from app.assets import index
+from app.assets.extractor.discovery import analyze
+from app.assets.extractor.export import Selection, export, extract
 from app.assets.extractor.memory_capture import MemoryCapture
 from app.settings import paths
 from tests.support.extraction_data import make_capture
+from tests.support.dds_data import uncompressed_dds
 
 
 PREFIX = "Local\\ModManager.Capture.7." + "1" * 32 + "."
@@ -50,17 +55,18 @@ class Block:
         pass
 
 
-def capture_data():
-    data = {}
-    make_capture(Seed(data))
-    # A minimal PNG exercises memory-backed texture copying during export.
-    png = (
-        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"
-        + struct.pack(">II", 16, 16)
-        + b"\x08\x02\0\0\0"
-        + b"\0" * 16
-    )
-    data["000002-ps-t0=66666666.png"] = png
+def capture_data(data=None):
+    if data is None:
+        data = {}
+        make_capture(Seed(data))
+        # A minimal PNG exercises memory-backed texture copying during export.
+        png = (
+            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"
+            + struct.pack(">II", 16, 16)
+            + b"\x08\x02\0\0\0"
+            + b"\0" * 16
+        )
+        data["000002-ps-t0=66666666.png"] = png
     manifest = {
         "version": 1,
         "prefix": PREFIX,
@@ -72,10 +78,11 @@ def capture_data():
     for identity, (name, payload) in enumerate(data.items(), 1):
         mapping = PREFIX + str(identity) + ".0"
         blocks[mapping] = payload
+        capacity = max(65536, (len(payload) + 65535) // 65536 * 65536)
         manifest["names"]["frameanalysis-sample/" + name] = identity
         manifest["files"][str(identity)] = {
             "size": len(payload),
-            "mappings": [{"name": mapping, "capacity": 65536, "offset": 0}],
+            "mappings": [{"name": mapping, "capacity": capacity, "offset": 0}],
         }
 
     def factory(name, capacity, offset):
@@ -224,3 +231,36 @@ def test_headless_process_extracts_real_shared_sections_without_raw_dump_files(
     finally:
         for owner in owners:
             owner.close()
+
+
+def test_memory_and_disk_capture_preserve_pixel_roles_geometry_and_asset_metadata(tmp_path):
+    dump = make_capture(tmp_path)
+    randomizer = random.Random(17)
+    palette = [tuple(randomizer.randrange(256) for _ in range(3)) + (255,)
+               for _ in range(64)]
+    pixels = bytes(value for y in range(128) for x in range(128)
+                   for value in palette[(y // 16) * 8 + x // 16])
+    (dump / "000002-ps-t0=66666666.dds").write_bytes(
+        uncompressed_dds(pixels, width=128, height=128, dxgi_format=29))
+    Image.new("RGB", (16, 16)).save(dump / "000002-o0=12345678.png")
+    log = dump / "log.txt"
+    log.write_text(log.read_text(encoding="utf-8").replace(
+        "000002 DrawIndexed", "000002 PSSetShaderResources(StartSlot:0, NumViews:1)\n"
+        "       0: resource=0x60 hash=66666666\n000002 DrawIndexed"), encoding="utf-8")
+    manifest, factory = capture_data({p.name: p.read_bytes() for p in dump.iterdir()})
+    disk = analyze(dump)
+    texture = disk.components[0].parts[0].textures[0]
+    assert texture["role"] == "Diffuse"
+    assert texture["role_confidence"] == "inferred_pixels_high"
+    with MemoryCapture(manifest, mapping_factory=factory) as source:
+        memory = analyze(source)
+        assert memory.components == disk.components
+        disk_report = export(extract(disk, Selection("Sample")), tmp_path / "disk-output")
+        memory_report = export(extract(memory, Selection("Sample")), tmp_path / "memory-output")
+
+    def asset_files(report):
+        root = Path(report.output)
+        return {p.relative_to(root).as_posix(): p.read_bytes()
+                for p in root.rglob("*") if p.is_file()}
+
+    assert asset_files(memory_report) == asset_files(disk_report)

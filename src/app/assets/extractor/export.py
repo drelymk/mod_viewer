@@ -84,11 +84,7 @@ class PayloadFiles:
             os.link(source, destination)
             self.hardlinks += 1
         except OSError:
-            if hasattr(source, "source"):
-                with source.open("rb") as incoming, destination.open("wb") as outgoing:
-                    shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
-            else:
-                shutil.copyfile(source, destination)
+            shutil.copyfile(source, destination)
             self.fallbacks += 1
 
     def texture(self, source, name, identity):
