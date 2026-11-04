@@ -10,10 +10,10 @@ import pytest
 from PIL import Image
 
 from app.assets import extraction, folders, index, loader
-from app.assets.extractor.core import Cancelled, Context
+from app.assets.extractor.core import Cancelled, Context, Unsupported
 from app.assets.extractor.budget import CaptureBudget, ResourceLimit
 from app.assets.extractor.capture import Inventory, parse_log
-from app.assets.extractor import discovery
+from app.assets.extractor import capture, discovery
 from app.assets.extractor.discovery import analyze
 from app.assets.extractor.geometry import decode_component
 from app.assets.extractor.export import (
@@ -1041,3 +1041,37 @@ def test_geometry_growth_after_preflight_cannot_bypass_decoded_budget(tmp_path, 
     monkeypatch.setattr(inv, "read_bytes", grow)
     with pytest.raises(ValueError, match="changed during decoding"):
         decode_component(inv, component)
+
+
+@pytest.mark.parametrize("op,args,valid", [
+    ("IASetVertexBuffers", "StartSlot:0, NumBuffers:1000000000", False),
+    ("SOSetTargets", "NumBuffers:1000000000", False),
+    ("CSSetUnorderedAccessViews", "StartSlot:0, NumUAVs:1000000000", False),
+    ("CSSetShaderResources", "StartSlot:0, NumViews:1000000000", False),
+    ("CSSetConstantBuffers", "StartSlot:0, NumBuffers:1000000000", False),
+    ("PSSetShaderResources", "StartSlot:0, NumViews:1000000000", False),
+    ("IASetVertexBuffers", "StartSlot:-1, NumBuffers:1", False),
+    ("IASetVertexBuffers", "StartSlot:0, NumBuffers:-1", False),
+    ("PSSetShaderResources", "StartSlot:128, NumViews:0", False),
+    ("PSSetShaderResources", "StartSlot:127, NumViews:2", False),
+    ("PSSetShaderResources", "StartSlot:0, NumViews:128", True),
+    ("PSSetShaderResources", "StartSlot:127, NumViews:1", True),
+    ("SOSetTargets", "NumBuffers:0", True),
+])
+def test_log_binding_ranges_reject_excessive_work(tmp_path, monkeypatch, op, args, valid):
+    (tmp_path / "log.txt").write_text(
+        f"000001 {op}({args})\n000002 Draw(VertexCount:0)\n", encoding="utf-8")
+    # Fail promptly if a regression lets a malicious range reach iteration.
+    def bounded_range(*values):
+        result = range(*values)
+        if len(result) > 128:
+            pytest.fail("Unbounded capture binding loop")
+        return result
+    monkeypatch.setattr(capture, "range", bounded_range, raising=False)
+    inv = Inventory(tmp_path)
+    if valid:
+        call, = parse_log(inv)
+        assert call.id == "000002"
+    else:
+        with pytest.raises(Unsupported, match="D3D11 slots"):
+            parse_log(inv)

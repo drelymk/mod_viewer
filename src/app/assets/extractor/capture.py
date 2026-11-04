@@ -174,6 +174,9 @@ def parse_log(inventory, context=None):
                 pending = GROUPS[op]
                 start = int(args.get("StartSlot", 0))
                 count = int(args.get("NumBuffers", args.get("NumViews", args.get("NumUAVs", 0))))
+                # Shader resources have the largest tracked D3D11 slot range.
+                if not 0 <= start < 128 or not 0 <= count <= 128 - start:
+                    raise Unsupported("Capture binding range exceeds D3D11 slots")
                 if pending == "so":
                     states[pending].clear()
                 else:

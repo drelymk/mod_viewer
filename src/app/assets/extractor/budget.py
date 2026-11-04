@@ -11,9 +11,11 @@ class ResourceLimit(ValueError):
 class CaptureBudget:
     # Source bytes retain the Manager ceiling. Decoded work includes repeated
     # analysis/export and Python containers, rather than just packed DXGI bytes.
+    # It is a cumulative work guard, not a peak-memory limit; leave headroom
+    # for large geometry passing through both analysis and reconstruction.
     max_source_bytes: int = 16 * 1024**3
     max_file_bytes: int = 512 * 1024**2
-    max_decoded_bytes: int = 2 * 1024**3
+    max_decoded_bytes: int = 8 * 1024**3
     max_files: int = 100000
     max_mappings: int = 16384
     source_bytes: int = 0
