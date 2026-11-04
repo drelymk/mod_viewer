@@ -31,6 +31,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - During mod loading, pack geometry before reading the Asset registry or
   resolving Asset/material textures. Reuse those packed bytes when finalizing
   material-dependent draw grouping; return one ordinary editable model payload.
+  If Asset materials change baked frame families, discard the provisional
+  geometry ranges before rebuilding those final families; preserve earlier blob data.
 - Diagnostics are lazy, read-only, detached reports cached by edit-session
   revision. Commits invalidate them; diagnostic failures must not fail mod loads.
 - App config is versioned and atomically replaced. Every mutation holds the
@@ -355,6 +357,8 @@ of documentation, comments and tests; use portable fixtures instead.
   absolute.
   On Windows, published Asset directories, children and reports inherit the
   actual destination parent's ACL rather than private temporary-directory ACLs.
+  Skip ACL resets only when the destination volume reports no persistent ACL
+  support; capability-query and permission failures still abort publication.
   Failure to apply permissions aborts publication and preserves the prior Asset/index.
   Directory and memory captures share source-size, mapped-capacity/count
   and cumulative decoded-work budgets, checked before mapping or geometry allocation.

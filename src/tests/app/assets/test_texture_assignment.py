@@ -13,6 +13,7 @@ from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.enrichment import _apply_texture_enrichment
 from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
 from app.assets import index as asset_index
+from app.assets.enrichment import _clear_null_texture_assignments
 from app.assets.textures import collect_texture_inventory
 from app.assets.resolver import AssetComponentBinding
 from app.assets.textures import asset_texture_key
@@ -24,6 +25,23 @@ from core.mod_source import DirectoryModSource, ZipModSource
 from tests.support.model_data import standard_component_resources
 from core.materials.game_profile import GameDetection
 from tests.support.provenance import visible
+
+
+@pytest.mark.parametrize("role", ["diffuse", "normal_map", "light_map", "material_map"])
+def test_conditional_null_preserves_independently_stored_default(role):
+    draw = DrawCall()
+    draw.set_texture_default(role, "base.dds")
+    draw.set_texture_variants(role, [{
+        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
+        "file": None}])
+
+    _clear_null_texture_assignments(draw)
+
+    assert draw.texture_default(role) is None
+    for mode in ("0", "1", "2"):
+        selected = next((rule["file"] for rule in reversed(draw.texture_rules(role))
+                         if visible(rule["conditions"], {"mode": mode})), None)
+        assert selected == (None if mode == "1" else "base.dds")
 
 
 def _write_geometry(root):

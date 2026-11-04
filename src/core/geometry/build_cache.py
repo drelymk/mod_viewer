@@ -41,6 +41,8 @@ class MeshGeometryCache:
     gimi_shared: dict = field(default_factory=dict)
     draws: dict = field(default_factory=dict)
     publications: dict = field(default_factory=dict)
+    geometry_plan: set = field(default_factory=set)
+    geometry_start: int = 0
 
     def remember(self, key, packed, animation, compute):
         if key not in self.draws:

@@ -15,6 +15,17 @@ from tests.support.animations import compute_mod, joined_baked_mod
 from tests.support.model_data import basic_model_ini, triangle_geometry
 
 
+def _bytes_for_refs(value, geometry):
+    if isinstance(value, dict):
+        if set(value) == {"offset", "length"}:
+            start = value["offset"]
+            return bytes(geometry.data[start:start + value["length"]])
+        return {key: _bytes_for_refs(item, geometry) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_bytes_for_refs(item, geometry) for item in value]
+    return value
+
+
 def _write_model(root, *, duplicate=False):
     text = basic_model_ini()
     if duplicate:
@@ -113,16 +124,6 @@ def test_geometry_first_animation_reuses_packed_bytes(
     api = ModViewerAPI()
     root = api._access.remember_mod_picker_selection(root_path)
 
-    def bytes_for_refs(value, geometry):
-        if isinstance(value, dict):
-            if set(value) == {"offset", "length"}:
-                start = value["offset"]
-                return bytes(geometry.data[start:start + value["length"]])
-            return {key: bytes_for_refs(item, geometry) for key, item in value.items()}
-        if isinstance(value, list):
-            return [bytes_for_refs(item, geometry) for item in value]
-        return value
-
     try:
         with patch.object(mesh_builder, "pack_draw_geometry",
                           wraps=mesh_builder.pack_draw_geometry) as pack, \
@@ -146,7 +147,69 @@ def test_geometry_first_animation_reuses_packed_bytes(
         assert (final.get("animations") or {}) == reference.animations
         for name, mesh in reference.meshes.items():
             for field in ("pos", "idx", "uv", "normal", "shape_targets", "animation_geometry"):
-                assert bytes_for_refs(final["meshes"][name].get(field), geometry) == \
-                    bytes_for_refs(mesh.get(field), reference_geometry)
+                assert _bytes_for_refs(final["meshes"][name].get(field), geometry) == \
+                    _bytes_for_refs(mesh.get(field), reference_geometry)
     finally:
         edit.discard(root)
+
+
+@pytest.mark.parametrize("distinct_materials", [False, True])
+def test_asset_material_regrouping_does_not_orphan_animation_geometry(
+        tmp_path, monkeypatch, distinct_materials):
+    ini = joined_baked_mod(tmp_path)
+    ini.write_text("""[Constants]
+$start = 0
+$end = 2
+[Present]
+$frame = (time * 30 % ($end - $start + 1) + $start) // 1
+[TextureOverrideModelA]
+ib = ResourceModelAIB
+vb1 = ResourceModelTexcoord
+""" + "\n".join(
+        f"{'if' if frame == 0 else 'elif'} $frame == {frame}\n"
+        f"vb0 = ResourceModelPosition{frame}\ndrawindexed = 3, 0, 0"
+        for frame in range(3)) + "\nendif\n" + "\n".join(
+        f"[ResourceModelPosition{frame}]\nfilename = position{frame}.buf\nstride = 40"
+        for frame in range(3)) + """
+[ResourceModelTexcoord]
+filename = texcoord0.buf
+stride = 8
+[ResourceModelAIB]
+filename = index0.buf
+format = DXGI_FORMAT_R32_UINT
+""", encoding="utf-8")
+    for number in range(2):
+        Image.new("RGB", (4, 4), (number * 200, 50, 100)).save(tmp_path / f"asset-{number}.png")
+    original_enrich = loader.enrich_mod_analysis
+
+    def enrich(parsed, context):
+        result = original_enrich(parsed, context)
+        for group in parsed.groups:
+            for number, draw in enumerate(group["draws"]):
+                filename = f"asset-{int(distinct_materials and number > 0)}.png"
+                draw.asset_texture_defaults["diffuse"] = {
+                    "path": str(tmp_path / filename), "key": "asset/" + filename}
+        return result
+
+    monkeypatch.setattr(loader, "enrich_mod_analysis", enrich)
+    context = loader._resolve_context(str(tmp_path))
+    parsed = loader.analyze_mod_inis(context.ini)
+    enrich(parsed, context)
+    reference_geometry = GeometryBlob()
+    reference_geometry.add(b"existing bytes")
+    reference = mesh_builder.build_mesh_result(
+        parsed.groups, str(tmp_path), source=context.source, animations=parsed.animations,
+        geometry=reference_geometry)
+    geometry = GeometryBlob()
+    geometry.add(b"existing bytes")
+    final = loader.load_mod(context=context, geometry=geometry)
+    assert not final.get("error")
+    assert set(final["meshes"]) == set(reference.meshes)
+    assert (final.get("animations") or {}) == reference.animations
+    for name, mesh in reference.meshes.items():
+        assert final["meshes"][name]["tex_key"] == mesh["tex_key"]
+        for field in ("pos", "idx", "uv", "normal", "shape_targets", "animation_geometry"):
+            assert _bytes_for_refs(final["meshes"][name].get(field), geometry) == \
+                _bytes_for_refs(mesh.get(field), reference.geometry)
+    assert geometry.data[:len(b"existing bytes")] == b"existing bytes"
+    assert len(geometry) == len(reference.geometry)

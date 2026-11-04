@@ -278,7 +278,9 @@ def _clear_null_texture_assignments(draw):
         rules = draw.texture_rules(role)
         if not any(rule.get("file") is None for rule in rules):
             continue
-        remaining = []
+        default = draw.texture_default(role)
+        remaining = ([{"conditions": [], "file": default}]
+                     if default and not any(not rule["conditions"] for rule in rules) else [])
         for rule in rules:
             if rule.get("file") is not None:
                 remaining.append(rule)

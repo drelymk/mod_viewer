@@ -95,7 +95,28 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         "animation_geometry_bytes": 0,
     }
 
+    plans = []
     for group in groups:
+        unique = ([DrawCall.from_mapping(draw, group) for draw in group["draws"]]
+                  if geometry_only else deduplicate_draws(group, max_draws=max_draws))
+        draws = list(animation_draws(unique, animation_clocks.values(), group))
+        plans.append((group, unique, draws))
+    geometry_plan = {
+        (id(group), draw_geometry_key(draw), animation_geometry_key(family))
+        for group, _unique, draws in plans for draw, family in draws}
+    if geometry_only:
+        cache.geometry_start = len(geometry)
+        cache.geometry_plan = geometry_plan
+    elif cache.geometry_plan and not geometry_plan.issubset(cache.geometry_plan):
+        # Material changes can split or merge baked frame families. Their
+        # old vertex unions and animation ranges no longer describe the final
+        # draws. Roll back this load's provisional bytes before rebuilding.
+        geometry.truncate(cache.geometry_start)
+        cache.draws.clear()
+        cache.publications.clear()
+        cache.gimi_shared.clear()
+
+    for group, unique, draws in plans:
         resolve = source.resolve_resource if source is not None \
             else lambda value: safe_resource_path(mod_dir, value)
         exists = source.is_file if source is not None else os.path.exists
@@ -116,15 +137,9 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             pos_path, pos_stride, tc_path, tc_stride)
         # Preserve the original eager group-IB load and its build-scoped cache.
         buffers.raw(ib_path)
-        # Geometry preparation retains unresolved draws. Material-dependent
-        # deduplication happens after Asset resolution, reusing packed bytes.
-        unique = ([DrawCall.from_mapping(draw, group)
-                   for draw in group["draws"]]
-                  if geometry_only else
-                  deduplicate_draws(group, max_draws=max_draws))
         group_entries = []
 
-        for draw, family in animation_draws(unique, animation_clocks.values(), group):
+        for draw, family in draws:
             cache_key = (id(group), draw_geometry_key(draw),
                          animation_geometry_key(family))
             cached = cache.draws.get(cache_key)
