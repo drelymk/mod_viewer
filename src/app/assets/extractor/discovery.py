@@ -280,7 +280,9 @@ def analyze(dump, context=None):
             needed_files.update(t["file"] for t in part.textures)
         for d in c.morph.get("dispatches", []):
             needed_files.update((d["delta"], d["constant"]))
-    return Analysis(str(inv.root), "stream-output", components, diagnostics,
+    analysis = Analysis(str(inv.root), "stream-output", components, diagnostics,
                     dict(scan_seconds=time.perf_counter() - started, file_count=len(inv.files), logical_bytes=inv.logical_bytes,
                          event_count=len(calls), supported_components=sum(c.status == "included" for c in components),
                          dedup_targets={name: target for name, target in inv.targets.items() if name in needed_files and name not in inv.files}))
+    analysis._capture_source = inv.source
+    return analysis

@@ -6,6 +6,7 @@ import os
 from threading import RLock
 
 from . import paths
+from .process_lock import process_lock
 
 
 CONFIG_VERSION = 1
@@ -19,7 +20,7 @@ def transaction():
     Reentrancy lets registry/index transactions call nested config helpers.
     Locking individual reads and writes alone cannot prevent lost updates.
     """
-    with _config_lock:
+    with _config_lock, process_lock(paths.config_path()):
         yield
 
 
