@@ -9,6 +9,7 @@ import tempfile
 from app.settings import config
 from . import folders, index
 from .paths import relative_asset_path
+from .permissions import inherit_directory_permissions
 from .extractor.discovery import analyze
 from .extractor.export import ExportOptions, Selection, export, extract, safe_name
 
@@ -79,6 +80,9 @@ def extract_asset(folder_path, name, dump_path, original_path=None):
         try:
             Path(report.output).rename(destination)
             installed = True
+            # Export ran inside private staging. Reinherit from the actual
+            # library/category parent before indexing or committing the update.
+            inherit_directory_permissions(destination)
             rebuilt = index.build_index(asset_type, entry["path"], exclude_paths=(stage,))
             relative = relative_asset_path(entry["path"], str(destination))
             if index.find_asset_by_path(rebuilt, relative) is None:

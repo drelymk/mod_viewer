@@ -4,7 +4,6 @@ import os
 import time
 import traceback
 import threading
-from collections import OrderedDict
 
 import webview
 
@@ -32,8 +31,6 @@ from app.session import edit as edit_session
 
 
 class ModPreview:
-    _DDS_CLASSIFICATION_CACHE_FOLDER_LIMIT = 24
-
     def __init__(self, access):
         self._access = access
         self._active_mesh_keys = {}
@@ -44,7 +41,6 @@ class ModPreview:
         self._model_generation = 0
         self._pending_skinning_geometry_urls = set()
         self._model_state_lock = threading.RLock()
-        self._dds_classification_caches = OrderedDict()
 
     @staticmethod
     def _active_texture_source(folder_path, validate=False):
@@ -64,7 +60,8 @@ class ModPreview:
         publication = server.active_texture_publication(folder_path)
         return publication.register_menu_image if publication else None
 
-    def authoritative_context(self, folder_path, disabled_ini=False):
+    def authoritative_context(self, folder_path, disabled_ini=False, *,
+                              defer_assets=False):
         """Load selected INI documents while preserving the current session."""
         folder_path = self._access.mod_folder(folder_path)
         source = edit_session.source_for(folder_path) or \
@@ -96,23 +93,20 @@ class ModPreview:
         context = mod_loader.ModLoadContext(
             folder_path, metadata=saved_metadata, ini=snapshot)
         context.buffer_overrides = edit_session.ib_overrides_for(folder_path)
-        cache_key = os.path.normcase(os.path.abspath(folder_path))
-        with self._model_state_lock:
-            cache = self._dds_classification_caches.pop(cache_key, None)
-            if cache is None:
-                cache = {}
-            self._dds_classification_caches[cache_key] = cache
-            while (len(self._dds_classification_caches)
-                   > self._DDS_CLASSIFICATION_CACHE_FOLDER_LIMIT):
-                self._dds_classification_caches.popitem(last=False)
-        context.dds_classification_cache = cache
+        if defer_assets:
+            context.asset_folder_loader = self._load_asset_folders
+        else:
+            context.asset_folders = self._load_asset_folders()
+        return folder_path, pending_new_sections, context
+
+    @staticmethod
+    def _load_asset_folders():
         try:
-            context.asset_folders = asset_folders.load_registry()
+            return asset_folders.load_registry()
         except asset_folders.AssetFolderError:
             # Optional asset configuration must not make an otherwise valid
             # mod unloadable; the asset UI reports the config error directly.
-            context.asset_folders = []
-        return folder_path, pending_new_sections, context
+            return []
 
     @staticmethod
     def _semantic_read_error():
@@ -163,7 +157,8 @@ class ModPreview:
         self.clear_loaded_model()
         try:
             folder_path, pending_new_sections, context = \
-                self.authoritative_context(folder_path, disabled_ini=disabled_ini)
+                self.authoritative_context(
+                    folder_path, disabled_ini=disabled_ini, defer_assets=True)
         except ModSourceError as error:
             return {"error": str(error)}
         geometry = GeometryBlob()
@@ -454,9 +449,6 @@ class ModPreview:
     def get_memory_diagnostics(self):
         """Return lightweight process-local resource retention metrics."""
         with self._model_state_lock:
-            dds_folder_count = len(self._dds_classification_caches)
-            dds_entry_count = sum(
-                len(cache) for cache in self._dds_classification_caches.values())
             pending_weight_count = len(self._pending_skinning_geometry_urls)
             last_weight_bytes = self._last_weight_blob_bytes
         return {
@@ -466,8 +458,8 @@ class ModPreview:
                 "last_weight_blob_bytes": last_weight_bytes,
             },
             "dds": {
-                "cached_folder_count": dds_folder_count,
-                "classification_entry_count": dds_entry_count,
+                "cached_folder_count": 0,
+                "classification_entry_count": 0,
             },
         }
 

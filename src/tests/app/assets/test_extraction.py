@@ -655,7 +655,7 @@ def test_extract_update_and_rename_replace_entire_asset(library, monkeypatch, as
     assert {p.name: p.read_bytes() for p in dump.iterdir() if p.is_file()} == dump_before
 
 
-@pytest.mark.parametrize("failure", ["extraction", "index"])
+@pytest.mark.parametrize("failure", ["extraction", "permissions", "index"])
 def test_failed_update_preserves_all_files_and_index(library, monkeypatch, failure):
     root, dump = library
     extraction.extract_asset(str(root), "Asset_001", str(dump))
@@ -665,8 +665,12 @@ def test_failed_update_preserves_all_files_and_index(library, monkeypatch, failu
     saved_index = index.snapshot_index("ZZMI", str(root))
     def fail(*_args, **_kwargs):
         raise ValueError("synthetic failure")
-    monkeypatch.setattr(extraction if failure == "extraction" else index,
-                        "analyze" if failure == "extraction" else "save_index", fail)
+    target, method = {
+        "extraction": (extraction, "analyze"),
+        "permissions": (extraction, "inherit_directory_permissions"),
+        "index": (index, "save_index"),
+    }[failure]
+    monkeypatch.setattr(target, method, fail)
     with pytest.raises(ValueError, match="synthetic failure"):
         extraction.extract_asset(str(root), "Asset_002", str(dump), str(asset))
     assert {p.relative_to(asset): p.read_bytes() for p in asset.rglob("*") if p.is_file()} == before
@@ -862,6 +866,24 @@ def test_cancelled_nested_face_export_preserves_existing_output(library, tmp_pat
             raise Cancelled("synthetic cancellation")
     with pytest.raises(Cancelled):
         export(package, output, Context(progress=progress))
+    assert list(output.iterdir()) == [sentinel]
+    assert sentinel.read_bytes() == b"preserve"
+
+
+def test_failed_export_permissions_preserve_existing_output(library, tmp_path, monkeypatch):
+    _root, dump = library
+    package = extract(analyze(dump), Selection("Sample"))
+    output = tmp_path / "output"
+    output.mkdir()
+    sentinel = output / "existing.bin"
+    sentinel.write_bytes(b"preserve")
+
+    def fail(_directory):
+        raise OSError("synthetic permission failure")
+
+    monkeypatch.setattr("app.assets.extractor.export.inherit_directory_permissions", fail)
+    with pytest.raises(OSError, match="synthetic permission failure"):
+        export(package, output)
     assert list(output.iterdir()) == [sentinel]
     assert sentinel.read_bytes() == b"preserve"
 

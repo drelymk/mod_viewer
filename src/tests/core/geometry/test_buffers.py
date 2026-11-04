@@ -53,6 +53,37 @@ def test_signed_uv_detection_does_not_infer_an_axis_from_sparse_attributes():
     assert buffers._detect_uv_best(None, 20, data=data) == (0, "<ff")
 
 
+@pytest.mark.parametrize("auxiliary", ["varying", "sparse"])
+def test_half_uvs_beat_collapsed_floats_and_sparse_auxiliary_data(tmp_path, auxiliary):
+    from core.geometry.mesh_builder import build_mesh_result
+
+    pairs = [(.05 + index % 17 * .055, .05 + index // 17 * .055)
+             for index in range(289)]
+    pairs[:3] = [(.25, -.125), (.75, .25), (.5, .75)]
+    data = bytearray(_texcoord_data(pairs, 0, "<ee", 16))
+    for index in range(len(pairs)):
+        value = (1.0625 if index % 41 == 0 else
+                 -1.0625 if index % 41 == 1 else 0.)
+        extra = ((.8 * math.sin(index * .7), .8 * math.cos(index * .7))
+                 if auxiliary == "varying" else (value, value))
+        struct.pack_into("<ee", data, index * 16 + 4,
+                         *extra)
+    assert buffers._detect_uv_best(None, 16, data=data) == (0, "<ee")
+    for filename, payload in triangle_geometry().items():
+        (tmp_path / filename).write_bytes(payload)
+    (tmp_path / "t.buf").write_bytes(data)
+    built = build_mesh_result([{
+        "name": "Component01", "position_file": "p.buf", "position_stride": 12,
+        "texcoord_file": "t.buf", "texcoord_stride": 16,
+        "ib_file": "i.buf", "index_size": 4,
+        "draws": [{"label": "Component01-1", "count": 3, "start": 0, "base": 0}],
+    }], str(tmp_path))
+    mesh = built.meshes["Component01-1"]
+    assert struct.unpack_from("<6f", built.geometry.data, mesh["uv"]["offset"]) == (
+        .25, 1.125, .75, .75, .5, .25)
+    assert struct.unpack_from("<3I", built.geometry.data, mesh["idx"]["offset"]) == (0, 1, 2)
+
+
 def test_signed_uv_detection_preserves_published_mesh_coordinates(tmp_path):
     from core.geometry.mesh_builder import build_mesh_result
 

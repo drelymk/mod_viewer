@@ -13,6 +13,7 @@ from app.mods.analysis import analyze_mod_inis, build_mod_ini_snapshot
 from app.mods.enrichment import _apply_texture_enrichment
 from app.mods.loader import ModLoadContext, load_mod, load_semantic_state
 from app.assets import index as asset_index
+from app.assets.enrichment import _clear_null_texture_assignments
 from app.assets.textures import collect_texture_inventory
 from app.assets.resolver import AssetComponentBinding
 from app.assets.textures import asset_texture_key
@@ -24,6 +25,23 @@ from core.mod_source import DirectoryModSource, ZipModSource
 from tests.support.model_data import standard_component_resources
 from core.materials.game_profile import GameDetection
 from tests.support.provenance import visible
+
+
+@pytest.mark.parametrize("role", ["diffuse", "normal_map", "light_map", "material_map"])
+def test_conditional_null_preserves_independently_stored_default(role):
+    draw = DrawCall()
+    draw.set_texture_default(role, "base.dds")
+    draw.set_texture_variants(role, [{
+        "conditions": [[{"var": "mode", "value": "1", "negate": False}]],
+        "file": None}])
+
+    _clear_null_texture_assignments(draw)
+
+    assert draw.texture_default(role) is None
+    for mode in ("0", "1", "2"):
+        selected = next((rule["file"] for rule in reversed(draw.texture_rules(role))
+                         if visible(rule["conditions"], {"mode": mode})), None)
+        assert selected == (None if mode == "1" else "base.dds")
 
 
 def _write_geometry(root):
@@ -71,7 +89,7 @@ def test_native_wwmi_uses_ordinal_candidates_and_exact_role_references(tmp_path,
     def no_decode(*_args, **_kwargs):
         raise AssertionError("Metadata-proven candidates must stay lazy")
 
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.classifier.classify_dds", no_decode)
     monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
     from app.assets.loader import load_asset
     preview = load_asset("WWMI", str(root), index["assets"][0], geometry=GeometryBlob())
@@ -127,13 +145,15 @@ drawindexed = 3,0,0
             asset_keys = {item["tex_key"] for item in choices if "::asset/" in item["tex_key"]}
             assert asset_keys == {asset_texture_key(str(root), str(asset / texture_file(ordinal, stem)))
                                   for stem in ("color", "map", "choice")}
-            assert mesh["tex_key"] == ("diffuse::" + selected if selected else
+            mod_default = selected and "if $mode" not in binding
+            assert mesh["tex_key"] == ("diffuse::" + selected if mod_default else
                                        asset_texture_key(str(root), str(asset / texture_file(ordinal, "color"))))
-            assert mesh.get("normal_data_key") == (None if selected else asset_texture_key(
+            assert mesh.get("normal_data_key") == (None if mod_default else asset_texture_key(
                 str(root), str(asset / texture_file(ordinal, "map")), "normal_data"))
             if "if $mode" in binding:
                 for mode, expected in (("0", "diffuse::" + selected),
-                                       ("1", "diffuse::Components-0-1 t=conflicting.dds"), ("2", None)):
+                                       ("1", "diffuse::Components-0-1 t=conflicting.dds"),
+                                       ("2", asset_texture_key(str(root), str(asset / texture_file(ordinal, "color"))))):
                     key = next((rule["tex_key"] for rule in reversed(mesh["texture_variants"])
                                 if visible(rule["conditions"], {"mode": mode})), mesh["tex_key"])
                     assert key == expected
@@ -175,8 +195,7 @@ def test_compact_wwmi_invalid_reference_never_uses_legacy_name(tmp_path, referen
     parsed = SimpleNamespace(groups=[{"name": "Component0", "draws": [draw, other_draw]}],
                              resource_files=[], texture_override_indexes=[],
                              game=SimpleNamespace(game="wuwa"))
-    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod),
-                              dds_classification_cache={})
+    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod))
     _apply_texture_enrichment(parsed, context, [[binding, other_binding]], complete_index=True)
     assert not draw.asset_texture_defaults
     assert other_draw.asset_texture_defaults["diffuse"]["path"] == str(asset / "Components-1 t=aaaaaaaa.dds")
@@ -218,7 +237,7 @@ def test_asset_defaults_share_picker_candidates_with_blank_component_metadata(
     def no_decode(*_args, **_kwargs):
         raise AssertionError("Candidate association must not decode textures")
 
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.classifier.classify_dds", no_decode)
     monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
     text = ""
     for component, first, diffuse in (("Head", 0, "__HEAD_BINDING__"),
@@ -410,6 +429,111 @@ filename = normal-base.dds
     assert not unproven["meshes"]["PartC-1"].get("normal_map_variants")
 
 
+@pytest.mark.parametrize("namespace", ["RabbitFX", "WWMI", "GIMI", "ZZMI"])
+@pytest.mark.parametrize("native_binding", [False, True], ids=["asset", "native-slot"])
+def test_null_texture_assignments_restore_asset_material(
+        tmp_path, monkeypatch, namespace, native_binding):
+    mod = tmp_path / "mod"
+    mod.mkdir()
+    _write_geometry(mod)
+    (mod / "i.buf").write_bytes(struct.pack("<6I", 0, 1, 2, 0, 2, 1))
+    for name in ("color-base", "color-alt", "normal-base", "native-diffuse", "native-normalmap"):
+        (mod / (name + ".dds")).write_bytes(b"synthetic texture")
+    root = tmp_path / "assets"
+    asset = root / "Asset01" / "10101010"
+    asset.mkdir(parents=True)
+    references = [[role, ".dds", value, f"Components-0 t={value}.dds"]
+                  for role, value in (("Diffuse", "11111111"), ("NormalMap", "22222222"),
+                                      ("LightMap", "33333333"), ("MaterialMap", "44444444"))]
+    (asset / "Metadata.json").write_text(json.dumps({
+        "format": "mod-viewer", "vb0_hash": "10101010", "components": [{
+            "component_name": "Component01", "classification": "A", "index_offset": 0,
+            "index_count": 6, "texture_hashes": [references]}]}), encoding="utf-8")
+    for entry in references:
+        (asset / entry[3]).write_bytes(b"original texture")
+    index = asset_index.build_index("WWMI", str(root))
+    monkeypatch.setattr(asset_index, "load_index", lambda *_args: index)
+    monkeypatch.setattr("app.mods.analysis.resolve_game_detection", lambda *_args: GameDetection(
+        game="wuwa", runtime="rabbitfx", texture_api="rabbitfx", confidence="high", scores={}))
+    native = "ps-t3 = ResourceNativeDiffuse\nps-t4 = ResourceNativeNormalMap" if native_binding else ""
+    text = rf"""[Constants]
+global persist $mode = 0
+[KeyMode]
+key = x
+type = cycle
+$mode = 0,1,2,3
+[TextureOverrideComponent01]
+hash = 10101010
+match_first_index = 0
+match_index_count = 6
+ib = ResourceComponent01IB
+vb0 = ResourceComponent01Position
+vb1 = ResourceComponent01Texcoord
+{native}
+Resource\{namespace}\Diffuse = ref ResourceColorBase
+Resource\{namespace}\NormalMap = ref ResourceNormalBase
+Resource\{namespace}\LightMap = ref ResourceNormalBase
+Resource\{namespace}\MaterialMap = ref ResourceNormalBase
+if $mode == 1
+Resource\{namespace}\Diffuse = null
+Resource\{namespace}\NormalMap = null
+Resource\{namespace}\LightMap = null
+Resource\{namespace}\MaterialMap = null
+elif $mode == 2
+Resource\{namespace}\Diffuse = ref ResourceColorAlternate
+Resource\{namespace}\NormalMap = null
+Resource\{namespace}\LightMap = null
+Resource\{namespace}\MaterialMap = null
+endif
+drawindexed = 3,0,0
+run = CommandListClear
+drawindexed = 3,3,0
+[CommandListClear]
+Resource\{namespace}\Diffuse = null
+Resource\{namespace}\NormalMap = null
+Resource\{namespace}\LightMap = null
+Resource\{namespace}\MaterialMap = null
+[ResourceColorBase]
+filename = color-base.dds
+[ResourceColorAlternate]
+filename = color-alt.dds
+[ResourceNormalBase]
+filename = normal-base.dds
+[ResourceNativeDiffuse]
+filename = native-diffuse.dds
+[ResourceNativeNormalMap]
+filename = native-normalmap.dds
+""" + standard_component_resources(position_file="p.buf", texcoord_file="t.buf", ib_file="i.buf")
+    path = mod / "mod.ini"
+    path.write_text(text, encoding="utf-8")
+    context = ModLoadContext(str(mod), build_mod_ini_snapshot([str(path)], str(mod)),
+                             asset_folders=[{"type": "WWMI", "path": str(root), "enabled": True}])
+    payload = load_mod(context=context, geometry=GeometryBlob(),
+                       texture_source=lambda _path, role: f"/texture/test/{role}")
+    assert not payload.get("error")
+    refreshed = load_semantic_state(context)
+    assert len(payload["meshes"]) == 2
+    for ordinal, (key, mesh) in enumerate(payload["meshes"].items()):
+        for field, variants, role, filename, reference in (
+                ("tex_key", "texture_variants", "diffuse", "color-base.dds", references[0][3]),
+                ("normal_data_key", "normal_data_variants", "normal_data", "normal-base.dds", references[1][3]),
+                ("light_map_key", "light_map_variants", "light_map", "normal-base.dds", references[2][3]),
+                ("material_map_key", "material_map_variants", "material_map", "normal-base.dds", references[3][3])):
+            assert refreshed["meshes"][key].get(field) == mesh.get(field)
+            assert refreshed["meshes"][key].get(variants) == mesh.get(variants)
+            original = asset_texture_key(str(root), str(asset / reference), role)
+            for value in range(4):
+                effective = next((rule["tex_key"] for rule in reversed(mesh.get(variants, []))
+                                  if visible(rule["conditions"], {"mode": str(value)})), mesh.get(field))
+                if ordinal == 1 or value == 1:
+                    expected = original
+                elif value == 2:
+                    expected = "diffuse::color-alt.dds" if role == "diffuse" else None
+                else:
+                    expected = role + "::" + filename
+                assert effective == expected, (ordinal, role, value)
+
+
 def test_slot_material_lifecycle_keeps_native_defaults_replacements_and_null(tmp_path, monkeypatch):
     mod = tmp_path / "mod"
     mod.mkdir()
@@ -495,7 +619,8 @@ filename = data-base.dds
             for value in range(4):
                 effective = next((rule["tex_key"] for rule in reversed(mesh.get(variants, []))
                                   if visible(rule["conditions"], {"mode": str(value)})), mesh.get(field))
-                if not base and (value == 0 or (not branches and value != 1)):
+                if ((not base and (value == 0 or (not branches and value != 1)))
+                        or (branches and value == 3)):
                     suffix = {"diffuse": "Diffuse", "normal_map": "NormalMap", "light_map": "LightMap"}[role]
                     expected = asset_texture_key(str(root), str(asset / f"Asset01Component01A{suffix}.dds"), role)
                 else:
@@ -655,7 +780,7 @@ filename = sibling-map.dds
         component_ordinal=2, metadata="Asset01/Metadata.json",
         detail_metadata="Asset01/TextureUsage.json")
     context = SimpleNamespace(
-        mod_dir=str(mod), source=source, dds_classification_cache={})
+        mod_dir=str(mod), source=source)
     parsed.game = SimpleNamespace(game="wuwa")
 
     def unexpected(*args, **kwargs):
@@ -663,7 +788,7 @@ filename = sibling-map.dds
 
     monkeypatch.setattr("core.textures.pipeline._open_texture_image",
                         unexpected)
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", unexpected)
+    monkeypatch.setattr("core.textures.classifier.classify_dds", unexpected)
     with patch.object(source, "list_files", wraps=source.list_files) as enumerate_files:
         _apply_texture_enrichment(parsed, context, [[binding]], complete_index=True)
     enumerate_files.assert_called_once()
@@ -783,7 +908,7 @@ filename = foreign.dds
     assert [group["referenced_texture_files"] for group in parsed.groups] == expected
     parsed.game = SimpleNamespace(game="wuwa")
     context = SimpleNamespace(
-        mod_dir=str(mod), source=source, dds_classification_cache={})
+        mod_dir=str(mod), source=source)
     _apply_texture_enrichment(parsed, context, [], complete_index=False)
     built = build_mesh_result(
         parsed.groups, str(mod), geometry=GeometryBlob(),
@@ -912,7 +1037,7 @@ filename = replacement.dds
     def no_decode(*_args, **_kwargs):
         raise AssertionError("Texture discovery and publication must stay lazy")
 
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.classifier.classify_dds", no_decode)
     monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
     with patch.object(context.source, "list_files", wraps=context.source.list_files) as enumerate_files:
         payload = load_mod(context=context, geometry=GeometryBlob(), texture_source=publish)
@@ -1049,8 +1174,7 @@ def test_wwmi_asset_candidates_keep_metadata_object_and_draw_scope(tmp_path):
     parsed = SimpleNamespace(groups=groups, resource_files=[],
                              texture_override_indexes=[],
                              game=SimpleNamespace(game="wuwa"))
-    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod),
-                              dds_classification_cache={})
+    context = SimpleNamespace(mod_dir=str(mod), source=DirectoryModSource(mod))
     _apply_texture_enrichment(parsed, context, [
         [binding("ObjectA", 0), binding("ObjectB", 1)],
         [binding("ObjectB", 0)]], complete_index=True)

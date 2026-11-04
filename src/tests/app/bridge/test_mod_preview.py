@@ -311,8 +311,9 @@ def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
     context = _context(["mod/DISABLEDActive.ini"])
     captured = {}
 
-    def authoritative_context(_folder, *, disabled_ini=False):
+    def authoritative_context(_folder, *, disabled_ini=False, defer_assets=False):
         captured["disabled_ini"] = disabled_ini
+        captured["defer_assets"] = defer_assets
         return "mod", {}, context
 
     monkeypatch.setattr(preview, "authoritative_context", authoritative_context)
@@ -344,6 +345,7 @@ def test_load_forwards_disabled_mode_to_authoritative_context(monkeypatch):
     preview.load_mod("mod", disabled_ini=True)
 
     assert captured["disabled_ini"] is True
+    assert captured["defer_assets"] is True
     assert captured["context"].ini_paths == ["mod/DISABLEDActive.ini"]
 
 
@@ -488,7 +490,6 @@ def test_stale_skinning_publications_do_not_accumulate_under_repeated_reload(
 
 def test_memory_diagnostics_report_resource_retention(monkeypatch):
     preview = ModPreview(_Access())
-    preview._dds_classification_caches["mod"] = {"one": object()}
     preview._pending_skinning_geometry_urls.add("/geometry/weight")
     preview._last_weight_blob_bytes = 17
     monkeypatch.setattr(
@@ -501,8 +502,8 @@ def test_memory_diagnostics_report_resource_retention(monkeypatch):
             "last_weight_blob_bytes": 17,
         },
         "dds": {
-            "cached_folder_count": 1,
-            "classification_entry_count": 1,
+            "cached_folder_count": 0,
+            "classification_entry_count": 0,
         },
     }
 

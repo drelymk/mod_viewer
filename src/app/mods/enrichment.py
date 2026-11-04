@@ -10,6 +10,10 @@ from app.assets import textures as asset_textures
 
 def enrich_mod_analysis(parsed, context):
     """Resolve Asset/material texture semantics shared by both load paths."""
+    folder_loader = getattr(context, "asset_folder_loader", None)
+    if folder_loader is not None:
+        context.asset_folders = folder_loader()
+        context.asset_folder_loader = None
     availability = {}
     bindings = asset_resolver.resolve_groups(
         parsed.groups, parsed.game, context.asset_folders,
@@ -42,7 +46,6 @@ def _apply_texture_enrichment(parsed, context, bindings, complete_index):
     asset_enrichment.apply(
         parsed.groups, bindings, include_not_found=complete_index,
         mod_dir=context.mod_dir,
-        dds_classification_cache=context.dds_classification_cache,
         source=source, inventory=inventory, game=parsed.game,
         texture_indexes=parsed.texture_override_indexes)
 

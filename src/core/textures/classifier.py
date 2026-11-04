@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 import math
-import os
 
 from .dds import inspect_dds
 from .pipeline import load_texture_image
@@ -26,32 +25,6 @@ class DDSClassification:
     normal_score: float = 0.0
     mask_score: float = 0.0
     data_score: float = 0.0
-
-
-def is_color_candidate(classification):
-    """Return whether analysis supports using a file as a color candidate."""
-    if classification.role == "normal_map":
-        return False
-    if classification.role == "diffuse":
-        # Accept adapters that still provide ``diffuse``; production analysis
-        # classifies color candidates by score.
-        return classification.confidence in {"medium", "high"}
-    if classification.texture_class not in {"color", "effect"}:
-        return False
-    # Four-field callers get the default zero score; use class/confidence.
-    if classification.color_score == 0:
-        return classification.confidence in {"medium", "high"}
-    return classification.color_score >= 0.35
-
-
-def classification_cache_key(path):
-    """Return a filesystem identity suitable for a per-load classification cache."""
-    try:
-        stat = os.stat(path)
-        return (os.path.normcase(os.path.abspath(path)), stat.st_size,
-                stat.st_mtime_ns)
-    except (OSError, TypeError, ValueError):
-        return None
 
 
 def _unknown(texture_class="unknown", *evidence):

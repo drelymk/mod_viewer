@@ -10,7 +10,6 @@ from app.assets.resolver import (AssetComponentBinding, resolve_component,
                                 resolve_groups, summarize_groups)
 from core.geometry.draw_call import DrawCall, SlotTextureBinding
 from core.geometry.identity import GeometryMatch
-from core.textures import classifier as dds_classifier
 from core.ini.parser import TextureOverrideIndex, TextureReplacement
 from core.geometry.mesh_builder import GeometryBlob, build_mesh_result
 from tests.support.asset_data import standard_asset_index
@@ -149,7 +148,6 @@ def test_known_genshin_does_not_probe_matching_zzmi_index(
         GeometryMatch("10101010", 12, 24), "genshin", entries)
 
     assert binding.status == "not_found"
-    assert calls == []
 
 
 @pytest.mark.parametrize("offsets, first_index, status, asset, range_status", [
@@ -580,34 +578,32 @@ def test_wwmi_textureusage_does_not_trigger_dds_classification(
         "textures/replacement.dds")
     index = TextureOverrideIndex(
         replacements_by_hash={"d1d1d1d1": (replacement,)})
-    calls = []
+    def no_decode(*_args, **_kwargs):
+        pytest.fail("Mod loading must not classify replacement pixels")
 
-    def classify(path):
-        calls.append(path)
-        return dds_classifier.DDSClassification(
-            "diffuse", "color", "high", ("test",))
-
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
+    monkeypatch.setattr("core.textures.classifier.classify_dds", no_decode)
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Asset01", root=root,
         component_status="exact", range_status="exact",
         geometry_hash="10101010", component_ordinal=1,
         detail_metadata="Asset01/TextureUsage.json")
-    cache = {}
 
     first = DrawCall()
     apply([{"draws": [first]}], [[binding]], texture_index=index,
-         mod_dir=str(mod_dir), dds_classification_cache=cache)
+         mod_dir=str(mod_dir))
     second = DrawCall()
     apply([{"draws": [second]}], [[binding]], texture_index=index,
-         mod_dir=str(mod_dir), dds_classification_cache=cache)
+         mod_dir=str(mod_dir))
 
-    assert calls == []
     assert first.texture_default("diffuse") is None
     assert second.texture_default("diffuse") is None
 
 
-def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
+@pytest.mark.parametrize("asset_type", ["GIMI", "ZZMI", "WWMI"])
+def test_roleless_hash_stays_unresolved_until_metadata_assigns_role(
+        tmp_path, monkeypatch, asset_type):
+    from app.assets.package_format import FORMAT
+
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     mod_dir = tmp_path / "mod"
     replacement_file = mod_dir / "textures" / "replacement.dds"
@@ -615,37 +611,53 @@ def test_roleless_gimi_hash_uses_generic_dds_fallback(tmp_path, monkeypatch):
     replacement_file.write_bytes(b"replacement")
     asset_dir = tmp_path / "assets" / "Asset01"
     asset_dir.mkdir(parents=True)
-    (asset_dir / "hash.json").write_text(json.dumps([{
-        "ib": "10101010", "object_indexes": [12],
-        "texture_hashes": [[
-            ["UnknownUsage", ".dds", "11111111"],
-        ]],
-    }]), encoding="utf-8")
+    entry = ["UnknownUsage", ".dds", "11111111"]
+
+    def write_metadata():
+        data = ({"format": FORMAT, "vb0_hash": "10101010", "components": [{
+                    "component_name": "Body", "index_offset": 12,
+                    "texture_hashes": [[entry]]}]}
+                if asset_type == "WWMI" else [{
+                    "ib": "10101010", "object_indexes": [12],
+                    "texture_hashes": [[entry]]}])
+        (asset_dir / "hash.json").write_text(json.dumps(data), encoding="utf-8")
+
+    write_metadata()
     replacement = TextureReplacement(
         "11111111", "ResourceTexture0", (), "TextureOverrideTexture0",
         "textures/replacement.dds")
     index = TextureOverrideIndex(
         replacements_by_hash={"11111111": (replacement,)})
-    monkeypatch.setattr(
-        "app.assets.enrichment.classify_dds",
-        lambda _path: dds_classifier.DDSClassification(
-            None, "effect", "medium", ("synthetic_color",),
-            color_score=0.5))
+
+    def no_decode(*_args, **_kwargs):
+        pytest.fail("Mod loading must not classify replacement pixels")
+
+    monkeypatch.setattr("core.textures.classifier.classify_dds", no_decode)
+    monkeypatch.setattr("core.textures.pipeline._open_texture_image", no_decode)
     draw = DrawCall()
     binding = AssetComponentBinding(
-        status="exact", asset_type="GIMI", asset="Asset01", root=root,
+        status="exact", asset_type=asset_type, asset="Asset01", root=root,
         component_status="exact", range_status="exact",
-        geometry_hash="10101010", component_name="Body",
+        geometry_hash="10101010", component_name="Body", component_ordinal=1,
         first_index=12, metadata="Asset01/hash.json")
+    group = {"draws": [draw]}
 
-    apply([{"draws": [draw]}], [[binding]], texture_index=index,
-         mod_dir=str(mod_dir))
+    apply([group], [[binding]], texture_index=index, mod_dir=str(mod_dir))
+    assert all(draw.texture_default(role) is None for role in (
+        "diffuse", "normal_map", "light_map", "material_map"))
+    assert draw.asset_texture_defaults == {}
+    assert draw.asset_slot_evidence == []
+    assert any(candidate["file"] == "textures/replacement.dds"
+               for candidate in group["texture_candidates"])
 
+    entry[0] = "Diffuse"
+    write_metadata()
+    apply([group], [[binding]], texture_index=index, mod_dir=str(mod_dir))
     assert draw.texture_default("diffuse") == "textures/replacement.dds"
-    assert draw.asset_slot_evidence[0]["role_source"] == "dds_analysis"
+    assert draw.texture_provenance["diffuse"] == "mod_texture_hash"
 
 
-def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):
+def test_wwmi_unlabelled_replacements_remain_diagnostics(tmp_path, monkeypatch):
     root = os.path.normcase(os.path.abspath(str(tmp_path / "assets")))
     mod_dir = tmp_path / "mod"
     diffuse_file = mod_dir / "diffuse.dds"
@@ -670,14 +682,10 @@ def test_wwmi_replacements_use_component_local_dds_roles(tmp_path, monkeypatch):
             "normal.dds"),),
     })
 
-    def classify(path):
-        role = "normal_map" if os.path.basename(path) == "normal.dds" \
-            else "diffuse"
-        return dds_classifier.DDSClassification(
-            role, "packed_normal" if role == "normal_map" else "color",
-            "high", ("synthetic",))
+    def no_decode(*_args, **_kwargs):
+        pytest.fail("Mod loading must not classify replacement pixels")
 
-    monkeypatch.setattr("app.assets.enrichment.classify_dds", classify)
+    monkeypatch.setattr("core.textures.classifier.classify_dds", no_decode)
     draw = DrawCall()
     binding = AssetComponentBinding(
         status="exact", asset_type="WWMI", asset="Asset01", root=root,
