@@ -21,7 +21,7 @@ from app.assets.extractor.export import Selection, export, extract
 from app.assets.extractor.memory_capture import MemoryCapture
 from app.settings import paths
 from tests.support.extraction_data import make_capture
-from tests.support.dds_data import uncompressed_dds
+from tests.support.dds_data import dx10_dds, uncompressed_dds
 
 
 PREFIX = "Local\\ModManager.Capture.7." + "1" * 32 + "."
@@ -140,7 +140,7 @@ def test_headless_memory_capture_add_update_and_rollback(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "case", ["traversal", "foreign_section", "missing_extent", "another_frame"]
+    "case", ["traversal", "foreign_section", "missing_extent", "another_frame", "case_collision"]
 )
 def test_memory_capture_rejects_escaped_or_unbacked_input(case):
     manifest, factory = capture_data()
@@ -149,6 +149,10 @@ def test_memory_capture_rejects_escaped_or_unbacked_input(case):
         manifest["names"]["frameanalysis-sample/../escape"] = 1
     elif case == "foreign_section":
         manifest["files"]["1"]["mappings"][0]["name"] = "OtherSection"
+    elif case == "case_collision":
+        name, identity = next(iter(manifest["names"].items()))
+        root, relative = name.split("/", 1)
+        manifest["names"][root + "/" + relative.upper()] = identity
     elif case == "missing_extent":
         manifest["files"]["1"]["size"] = 65537
     else:
@@ -264,3 +268,45 @@ def test_memory_and_disk_capture_preserve_pixel_roles_geometry_and_asset_metadat
                 for p in root.rglob("*") if p.is_file()}
 
     assert asset_files(memory_report) == asset_files(disk_report)
+
+
+@pytest.mark.parametrize("keep_alias", [True, False])
+def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(tmp_path, keep_alias):
+    dump = make_capture(tmp_path)
+    diffuse = "000002-ps-t3=66666666.dds"
+    normal = "000002-ps-t4=!S!=77777777.jpg"
+    (dump / diffuse).write_bytes(dx10_dds(bytes(256 * 256), dxgi_format=99,
+                                         width=256, height=256))
+    Image.new("RGB", (128, 128), (128, 128, 255)).save(dump / normal)
+    Image.new("RGB", (16, 16)).save(dump / "000002-o0=88888888.png")
+    deduped = dump / "deduped"
+    deduped.mkdir()
+    target = "12345678-R8G8B8A8_UNORM.jpg"
+    (deduped / target).write_bytes((dump / normal).read_bytes())
+    log = dump / "log.txt"
+    log.write_text(log.read_text(encoding="utf-8").replace(
+        "000002 DrawIndexed", "000002 PSSetShader(pPixelShader:0x9) hash=cccccccccccccccc\n"
+        "000002 PSSetShaderResources(StartSlot:3, NumViews:2)\n"
+        "       3: resource=0x60 hash=66666666\n"
+        "       4: resource=0x70 hash=77777777\n"
+        f"000002 3DMigoto Dumping Texture2D C:\\Runtime\\{diffuse} -> C:\\Runtime\\deduped\\12345678-BC7_UNORM_SRGB.dds\n"
+        f"000002 3DMigoto Dumping Texture2D C:\\Runtime\\{normal} -> C:\\Runtime\\deduped\\{target}\n"
+        "000002 DrawIndexed"), encoding="utf-8")
+    disk = analyze(dump)
+    expected = [(t["role"], t["format"]) for t in disk.components[0].parts[0].textures]
+    assert expected == [("Diffuse", "BC7_UNORM_SRGB"), ("NormalMap", "R8G8B8A8_UNORM")]
+    data = {p.relative_to(dump).as_posix().lower(): p.read_bytes()
+            for p in dump.rglob("*") if p.is_file()}
+    if not keep_alias:
+        data.pop(normal.lower())
+    manifest, factory = capture_data(data)
+    with MemoryCapture(manifest, mapping_factory=factory) as source:
+        memory = analyze(source)
+        actual = [(t["role"], t["format"]) for t in memory.components[0].parts[0].textures]
+        assert actual == expected
+        assert (source.root / "deduped" / target).read_bytes() == (dump / normal).read_bytes()
+        reports = [export(extract(a, Selection("Sample")), tmp_path / kind)
+                   for a, kind in [(disk, "disk-output"), (memory, "memory-output")]]
+    assets = [{p.relative_to(Path(r.output)).as_posix(): p.read_bytes()
+               for p in Path(r.output).rglob("*") if p.is_file()} for r in reports]
+    assert assets[0] == assets[1]

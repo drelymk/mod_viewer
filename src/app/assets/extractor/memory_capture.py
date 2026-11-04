@@ -111,7 +111,7 @@ class CaptureStream(io.RawIOBase):
 
 class CapturePath:
     def __init__(self, source, path=""):
-        self.source, self.path = source, path
+        self.source, self.path = source, source.canonical_member(path)
 
     def __str__(self):
         return "memory:" + self.path
@@ -182,6 +182,7 @@ class MemoryCapture:
 
     def __init__(self, manifest, *, mapping_factory=Mapping):
         self.files, self.names = {}, {}
+        self._members = {}
         self.root = CapturePath(self)
         self._blocks = []
         try:
@@ -244,7 +245,6 @@ class MemoryCapture:
                 if size > offset:
                     raise ValueError("Capture extent has no backing")
                 self.files[int(identity)] = size, blocks
-            seen = set()
             for name, identity in names.items():
                 path = member(name)
                 if type(identity) is not int or identity not in self.files:
@@ -255,15 +255,19 @@ class MemoryCapture:
                     path = "deduped/" + path.split("/", 1)[1]
                 else:
                     raise ValueError("Capture contains another frame")
-                if path.casefold() in seen:
+                if path.casefold() in self._members:
                     raise ValueError("Ambiguous capture alias")
-                seen.add(path.casefold())
+                self._members[path.casefold()] = path
                 self.names[path] = identity
-            if "log.txt" not in self.names:
+            if "log.txt" not in self._members:
                 raise ValueError("Capture log is missing")
         except BaseException:
             self.close()
             raise
+
+    def canonical_member(self, path):
+        """Match Windows capture members without changing stored spelling."""
+        return self._members.get(path.casefold(), path)
 
     def close(self):
         for block in self._blocks:

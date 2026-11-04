@@ -107,6 +107,9 @@ def parse_log(inventory, context=None):
                 left, right = line.split(" -> ", 1)
                 name = left.rsplit("\\", 1)[-1]
                 target = "deduped/" + right.rsplit("\\", 1)[-1]
+                if inventory.source is not None:
+                    name = inventory.source.canonical_member(name)
+                    target = inventory.source.canonical_member(target)
                 inventory.targets[name] = target
                 if m := FILE.match(name):
                     entries = inventory.entries[m[1]][(m[2], m[3] or "", Path(name).suffix.lower())]

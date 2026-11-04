@@ -736,7 +736,9 @@ of documentation, comments and tests; use portable fixtures instead.
   shared-memory captures. Explicit native Manager Asset Folder configuration
   authorizes root registration; browser APIs retain their native-picker boundary.
   Validate named-section capabilities, member containment, identities and sizes;
-  open existing sections read-only and never stage raw dump files.
+  open existing sections read-only and never stage raw dump files. Match member
+  paths and logged aliases with Windows case-insensitive semantics, preserving
+  their stored spelling and rejecting ambiguous case collisions.
 - Keep the directory and memory sources on the same inventory, analysis,
   reconstruction, compact export and Asset replacement/index transaction.
   Same-name updates require an indexed Asset. Unrelated folders remain untouched.
