@@ -7,6 +7,7 @@ import os
 from pathlib import PurePosixPath, PureWindowsPath
 import re
 from types import SimpleNamespace
+from .budget import CaptureBudget
 
 
 def member(value):
@@ -180,7 +181,8 @@ class CapturePath:
 class MemoryCapture:
     """Validated capability-backed capture; no member name authorizes filesystem access."""
 
-    def __init__(self, manifest, *, mapping_factory=Mapping):
+    def __init__(self, manifest, *, mapping_factory=Mapping, budget=None):
+        self.budget = budget or CaptureBudget()
         self.files, self.names = {}, {}
         self._members = {}
         self.root = CapturePath(self)
@@ -202,11 +204,11 @@ class MemoryCapture:
             if (
                 not isinstance(files, dict)
                 or not isinstance(names, dict)
-                or len(files) > 100000
-                or len(names) > 100000
+                or len(files) > self.budget.max_files
+                or len(names) > self.budget.max_files
             ):
                 raise ValueError("Invalid capture inventory")
-            total = 0
+            sections = []
             for identity, file in files.items():
                 if (
                     not isinstance(identity, str)
@@ -222,14 +224,14 @@ class MemoryCapture:
                     type(size) is not int
                     or size < 0
                     or not isinstance(mappings, list)
-                    or len(mappings) > 65536
+                    or len(mappings) > self.budget.max_mappings
                 ):
                     raise ValueError("Invalid capture size")
-                total += size
-                if total > 16 * 1024**3:
-                    raise ValueError("Capture exceeds memory budget")
+                self.budget.source(int(identity), size)
                 offset, blocks = 0, []
                 for i, raw in enumerate(mappings):
+                    if not isinstance(raw, dict):
+                        raise ValueError("Invalid capture section")
                     capacity = raw.get("capacity")
                     if (
                         raw.get("offset") != offset
@@ -238,9 +240,8 @@ class MemoryCapture:
                         or raw.get("name") != prefix + identity + "." + str(i)
                     ):
                         raise ValueError("Invalid capture section")
-                    block = mapping_factory(raw["name"], capacity, offset)
-                    blocks.append(block)
-                    self._blocks.append(block)
+                    self.budget.mapping(capacity)
+                    sections.append((blocks, raw["name"], capacity, offset))
                     offset += capacity
                 if size > offset:
                     raise ValueError("Capture extent has no backing")
@@ -261,6 +262,11 @@ class MemoryCapture:
                 self.names[path] = identity
             if "log.txt" not in self._members:
                 raise ValueError("Capture log is missing")
+            # Validate the whole manifest before opening any section handles.
+            for blocks, name, capacity, offset in sections:
+                block = mapping_factory(name, capacity, offset)
+                blocks.append(block)
+                self._blocks.append(block)
         except BaseException:
             self.close()
             raise

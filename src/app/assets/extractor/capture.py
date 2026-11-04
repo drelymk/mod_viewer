@@ -19,6 +19,8 @@ class Inventory:
         self.source = dump if isinstance(dump, MemoryCapture) else None
         self.root = dump.root if self.source else Path(dump).resolve()
         self.context = context or Context()
+        self.budget = self.source.budget if self.source else self.context.budget
+        self.context.budget = self.budget
         self.entries = defaultdict(lambda: defaultdict(list))
         self.files = {}
         self.targets = {}
@@ -29,25 +31,51 @@ class Inventory:
         self.logical_bytes = 0
         if not self.root.is_dir():
             raise ValueError("Choose an existing frame-dump directory")
-        for i, p in enumerate(sorted(self.root.iterdir())):
+        for i, p in enumerate(self.root.iterdir()):
             if i % 128 == 0:
                 self.context.tick("Indexing capture", i)
             if p.is_file():
+                self._account(p)
                 self.files[p.name] = p
                 self.logical_bytes += p.stat().st_size
-                if m := FILE.match(p.name):
-                    self.entries[m[1]][(m[2], m[3] or "", p.suffix.lower())].append(p.name)
+        # Sort only after the bounded inventory has been collected.
+        for name, p in sorted(self.files.items()):
+            if m := FILE.match(name):
+                self.entries[m[1]][(m[2], m[3] or "", p.suffix.lower())].append(name)
 
     def path(self, name):
-        p = (self.root / name).resolve()
-        if not p.is_relative_to(self.root):
-            raise ValueError("Capture resource escapes the selected dump")
-        if p.exists():
-            return p
-        target = self.targets.get(name)
-        if target:
-            return self.path(target)
-        raise FileNotFoundError(name)
+        seen = set()
+        while name not in seen:
+            seen.add(name)
+            p = (self.root / name).resolve()
+            if not p.is_relative_to(self.root):
+                raise ValueError("Capture resource escapes the selected dump")
+            if p.exists():
+                if p.is_file():
+                    self._account(p)
+                return p
+            target = self.targets.get(name)
+            if not target:
+                raise FileNotFoundError(name)
+            name = target
+        raise ValueError("Cyclic capture resource alias")
+
+    def _account(self, path):
+        identity = (self.source.names[path.path] if self.source else str(path.resolve()))
+        self.budget.source(identity, path.stat().st_size)
+
+    def read_bytes(self, name, *, expected_size=None):
+        path = self.path(name)
+        size = path.stat().st_size
+        self._account(path)
+        if expected_size is not None and size != expected_size:
+            raise ValueError("Capture resource changed during decoding")
+        self.budget.allocate(size)
+        with path.open("rb") as stream:
+            data = stream.read(size + 1)
+        if len(data) != size:
+            raise ValueError("Capture resource changed while reading")
+        return data
 
     def find(self, call_id, slot, resource, ext=".buf"):
         h = resource.hash if isinstance(resource, Resource) else resource
@@ -122,9 +150,12 @@ def parse_log(inventory, context=None):
                     states[pending][int(m[1])] = Resource(m[3], m[2])
                 continue
             if copy_rows and line.startswith("       ") and "hash=" in line:
-                h = re.search(r"hash=([a-f0-9]+)", line)
+                h = re.search(r"hash=([a-f0-9]+)(?=\s|$)", line)
                 a = re.search(r"(?:resource|pResource)=(0x[0-9a-fA-F]+)", line)
                 # Copy rows use 'src: resource=...' / 'dst: resource=...'.
+                if h is None:
+                    copy_rows = []
+                    continue
                 copy_rows.append(Resource(h[1], a[1] if a else ""))
                 if len(copy_rows) == 3:
                     _, src, dst = copy_rows
@@ -136,6 +167,7 @@ def parse_log(inventory, context=None):
             if not (m := API.match(line)):
                 continue
             call_id, op, body, tail = m.groups()
+            copy_rows = []
             args = {k: v.strip() for k, v in ARGS.findall(body)}
             pending = None
             if op in GROUPS:

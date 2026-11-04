@@ -7,6 +7,7 @@ from .capture import Inventory, parse_log
 from .core import Analysis, Component, Part, Context, Unsupported
 from .geometry import decode_component, stream_layout
 from .textures import collect, digest
+from .budget import ResourceLimit
 
 
 def trace(resource, writers):
@@ -87,6 +88,8 @@ def morph_trace(position, producer, writers, inv):
             constant = inv.find(call.id, "cs-cb0", cb[0])
             dispatches.append(dict(draw=call.id, shader=call.shaders.get("cs", ""), delta=delta, constant=constant,
                                    delta_sha256=digest(inv.path(delta)), constant_sha256=digest(inv.path(constant))))
+        except ResourceLimit:
+            raise
         except (ValueError, FileNotFoundError):
             return {"status": "captured_expression", "dispatches": [{"delta": "missing", "constant": "missing"}],
                     "copy_chain": [x.id for x in chain]}
@@ -220,6 +223,8 @@ def analyze(dump, context=None):
             draws.append(draw)
             component.provenance["draw_evidence"].append(dict(draw=draw.id, line=draw.line, ib=asdict(ib), vb0=asdict(vbs[0]),
                                                               shaders=draw.shaders, first=first, count=count, base_vertex=base, byte_offset=offset))
+        except ResourceLimit:
+            raise
         except (ValueError, OSError, KeyError) as error:
             unsupported[ib.hash].append((draw, str(error)))
     components = []
@@ -249,6 +254,8 @@ def analyze(dump, context=None):
                 decoded_meshes[c.id] = mesh
             if c.id in surface_ids:
                 surface_signatures[c.id] = _surface_signatures(mesh)
+        except ResourceLimit:
+            raise
         except (ValueError, KeyError, OSError) as error:
             c.status = "unsupported"
             c.diagnostics.append(str(error))
@@ -285,4 +292,5 @@ def analyze(dump, context=None):
                          event_count=len(calls), supported_components=sum(c.status == "included" for c in components),
                          dedup_targets={name: target for name, target in inv.targets.items() if name in needed_files and name not in inv.files}))
     analysis._capture_source = inv.source
+    analysis._budget = inv.budget
     return analysis
