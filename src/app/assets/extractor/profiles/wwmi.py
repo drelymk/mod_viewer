@@ -49,6 +49,17 @@ def material_evidence(textures, color_target, shader):
             and (image(2, {"BC1_UNORM", "R8_UNORM"})
                  or (image(2, color) and by_slot[2]["width"] <= by_slot[3]["width"] / 4))):
         return {3: "Diffuse"}, 2
+    # The compact main family omits one mask and ends with a smaller color input.
+    if (image(0, {"BC7_UNORM"}) and image(1, {"BC1_UNORM"})
+            and image(2, color) and same_size(0, 2)
+            and by_slot[1]["width"] * 2 == by_slot[2]["width"]
+            and image(3, color) and by_slot[3]["width"] * 4 == by_slot[2]["width"]):
+        return {2: "Diffuse"}, 2
+    # Color-led hair pairs equal atlases with a short, wide lookup texture.
+    # This complete family outranks inherited eye inputs on the same range.
+    if (image(0, color) and image(1, {"BC7_UNORM"}) and same_size(0, 1)
+            and _color_lookup(by_slot.get(2, {}))):
+        return {0: "Diffuse"}, 3
     # Simpler materials keep the color atlas beside the full-size vector map.
     if image(0, {"BC7_UNORM"}) and image(1, color) and same_size(0, 1):
         return {1: "Diffuse"}, 1
@@ -56,6 +67,16 @@ def material_evidence(textures, color_target, shader):
     if (image(0, {"BC1_UNORM"}) and image(1, {"BC3_UNORM_SRGB"})
             and image(2, color) and same_size(0, 1)
             and by_slot[2]["width"] == 2 * by_slot[0]["width"]):
+        return {2: "Diffuse"}, 2
+    # Layered eyes retain the larger iris and a half-size packed atlas. The
+    # leading mask/data pair can trade places, with a smaller sRGB mask.
+    if (image(2, color) and image(3, {"B8G8R8A8_UNORM"})
+            and by_slot[3]["width"] * 2 == by_slot[2]["width"]
+            and ((image(0, {"BC1_UNORM"}) and image(1, {"BC3_UNORM_SRGB"})
+                  and same_size(0, 1) and by_slot[1]["width"] * 4 == by_slot[2]["width"])
+                 or (image(0, {"BC3_UNORM_SRGB"}) and image(1, {"BC1_UNORM_SRGB"})
+                     and by_slot[1]["width"] * 2 == by_slot[0]["width"]
+                     and by_slot[0]["width"] * 4 == by_slot[2]["width"]))):
         return {2: "Diffuse"}, 2
     # This family has a full-size packed vector/mask pair and a smaller atlas.
     if (image(0, {"BC3_UNORM"}) and image(1, {"R8_UNORM"}) and image(2, color)
@@ -87,13 +108,51 @@ def material_evidence(textures, color_target, shader):
             and by_slot[1]["width"] * 2 == by_slot[4]["width"]
             and by_slot[4]["width"] * 2 == by_slot[3]["width"]):
         return {3: "Diffuse"}, 2
-    face_slot = _face_atlas_slot(by_slot)
+    face_slot, specificity = _face_atlas_evidence(by_slot)
     if face_slot is not None:
-        return {face_slot: "Diffuse"}, 2
+        return {face_slot: "Diffuse"}, specificity
+    unlit_slot = _unlit_atlas_slot(by_slot)
+    if unlit_slot is not None:
+        return {unlit_slot: "Diffuse"}, 2
     return {}, 0
 
 
-def _face_atlas_slot(by_slot):
+def _unlit_atlas_slot(by_slot):
+    """Recognize constant/aliased-mask prefixes and a repeated small color input."""
+    def square(slot, minimum=128):
+        t = by_slot.get(slot, {})
+        return (t.get("format") == "BC7_UNORM_SRGB" and t.get("width", 0) >= minimum
+                and t.get("width") == t.get("height"))
+
+    if 0 in by_slot or not all(square(slot, 16 if slot >= 5 else 128) for slot in (3, 4, 5, 6)):
+        return None
+    small, repeat = by_slot[5], by_slot[6]
+    if small["hash"] != repeat["hash"] or small["width"] != repeat["width"]:
+        return None
+    constant = by_slot.get(1, {})
+    if (constant.get("format") == "B8G8R8A8_UNORM_SRGB"
+            and constant.get("width") == constant.get("height") == 1 and square(2)):
+        slot = 2
+    elif (square(1) and square(2) and by_slot[2]["resource"] == by_slot[3]["resource"]
+          and by_slot[2]["width"] == by_slot[3]["width"]):
+        slot = 1
+    else:
+        return None
+    atlas = by_slot[slot]["width"]
+    for other in (3, 4, 5):
+        ratio, remainder = divmod(atlas, by_slot[other]["width"])
+        if remainder or ratio < 4 or ratio & (ratio - 1):
+            return None
+    return slot if small["width"] <= by_slot[3]["width"] <= by_slot[4]["width"] else None
+
+
+def _color_lookup(texture):
+    return (texture.get("format") == "B8G8R8A8_UNORM_SRGB"
+            and texture.get("width", 0) >= 128 and 1 < texture.get("height", 0) < 128
+            and texture["width"] >= 4 * texture["height"])
+
+
+def _face_atlas_evidence(by_slot):
     """Match ordered mask/color and shared-data pairs across optional material inputs."""
     def square(slot, fmt):
         texture = by_slot.get(slot, {})
@@ -104,7 +163,7 @@ def _face_atlas_slot(by_slot):
         ratio, remainder = divmod(large, small)
         return not remainder and ratio > 0 and not ratio & (ratio - 1)
 
-    candidates = set()
+    candidates = {}
     for slot, mask in by_slot.items():
         if not ((square(slot, "BC1_UNORM") or square(slot, "BC3_UNORM"))
                 and square(slot + 1, "BC7_UNORM_SRGB")):
@@ -116,11 +175,20 @@ def _face_atlas_slot(by_slot):
             ):
                 continue
             alias = by_slot[data_slot + 1]
-            if (data["resource"] == alias["resource"] and data["width"] == alias["width"]
-                    and mask["width"] < data["width"] <= atlas["width"]
+            if data["resource"] != alias["resource"] or data["width"] != alias["width"]:
+                continue
+            specificity = 0
+            if (mask["width"] < data["width"] <= atlas["width"]
                     and scaled(data["width"], mask["width"]) and scaled(atlas["width"], data["width"])):
-                candidates.add(slot + 1)
-    return next(iter(candidates)) if len(candidates) == 1 else None
+                specificity = 2
+            # Equal-size mask/data maps need the trailing lookup and a double-size
+            # color atlas. This full face family outranks color-led hair passes.
+            elif (mask["width"] == data["width"] and atlas["width"] == 2 * data["width"]
+                  and _color_lookup(by_slot.get(data_slot + 2, {}))):
+                specificity = 4
+            if specificity:
+                candidates[slot + 1] = max(candidates.get(slot + 1, 0), specificity)
+    return next(iter(candidates.items())) if len(candidates) == 1 else (None, 0)
 
 
 def layout(header, raw, slot, role):

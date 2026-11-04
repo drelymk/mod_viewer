@@ -225,7 +225,7 @@ function renderFrame() {
   characterShadowController.update();
   cameraFrame.updateViewport();
   cameraFrame.updateClipping();
-  updateOutlineProjectionScale(camera, controls.target, renderer.domElement.clientHeight);
+  updateOutlineProjectionScale(camera, controls.target, renderer.domElement.clientHeight, renderer.getPixelRatio());
   viewGizmoController.updateAxes();
   viewportRenderPipeline.render();
   renderCount += 1;

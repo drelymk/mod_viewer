@@ -106,7 +106,12 @@ def collect_component_overrides(sections, ini_path):
         info = scanned.get(section, {})
         texture_only = bool(
             info.get("diffuse_history_at_end") or info.get("aux_maps_at_end")
-            or info.get("slot_textures_at_end"))
+            or info.get("slot_textures_at_end")
+            # Reuse supported check evidence before the scanner's implicit
+            # compatibility path can hide texture_checks_at_end. Unknown
+            # external execution and local helper definitions retain its rules.
+            or (info.get("_texture_checks_seen")
+                and not info.get("_texture_checks_unknown")))
         # Even an explicit null IB is a geometry operation, not a texture hook.
         texture_only = texture_only and not info.get("index_binding_history")
         component_identity = explicit_asset_identity or (

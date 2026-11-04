@@ -839,15 +839,18 @@ def test_outline_keeps_shallow_backfaces_behind_the_visible_surface(viewer):
     assert max(abs(a - b) for a, b in zip(before, outlined)) < 15
 
 
-def test_outline_and_selection_preserve_coplanar_surface_with_visible_border(viewer):
+@pytest.mark.parametrize('slope,pixel_ratio', [(0., 1), (0.5, 1), (-0.5, 1), (0.5, 2), (-0.5, 2)])
+def test_outline_and_selection_preserve_coplanar_surface_with_visible_border(viewer, slope, pixel_ratio):
     payload = model_payload()
     mesh = payload['meshes']['mesh-00']
+    mesh['pos'] = append_stream(payload, 'f', [0, 0, 0, 1, 0, slope, 0, 1, slope / 2])
     mesh['idx'] = append_stream(payload, 'I', [0, 2, 1])
     mesh['normal'] = append_stream(payload, 'f', [
         -0.707, 0, -0.707, 0.707, 0, -0.707, 0, 0.707, -0.707,
     ])
     page = _open_fixture(viewer, payload)
-    points = [[x, y, 0] for x in (0.15, 0.3, 0.6)
+    page.evaluate("async ratio => {const {renderer} = await import('./js/scene/scene.js'); renderer.setPixelRatio(ratio);}", pixel_ratio)
+    points = [[x, y, slope * (x + y / 2)] for x in (0.15, 0.3, 0.6)
               for y in (0.15, 0.3, 0.6) if x + y < 0.9]
     before = mesh_pixels(page, points)
     page.evaluate("""async () => {
@@ -864,7 +867,7 @@ def test_outline_and_selection_preserve_coplanar_surface_with_visible_border(vie
     selected = mesh_pixels(page, points)
     assert all(max(abs(a - b) for a, b in zip(old, new)) < 15
                for old, new in zip(before, selected))
-    corners = project_mesh_points(page, [[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    corners = project_mesh_points(page, [[0, 0, 0], [1, 0, slope], [0, 1, slope / 2]])
     with Image.open(io.BytesIO(page.screenshot())) as image:
         rgb = image.convert('RGB')
         yellow = sum(

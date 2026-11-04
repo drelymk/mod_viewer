@@ -10,7 +10,7 @@ const MAX_OUTLINE_WIDTH_PIXELS = 1.5;
 const outlineScalePerDepthNode = uniform(0);
 const outlineViewDepth = positionView.z.negate().max(0.000001);
 const outlineWidthView = outlineViewDepth.mul(outlineScalePerDepthNode);
-// Keep surface depth so cavity backfaces cannot expand through the visible face.
+// Keep vertex depth; the raster depth bias below also covers sloped surfaces.
 const outlineNormalView = vec3(normalViewGeometry.xy, 0);
 const displacedOutlinePositionView = positionView.add(outlineNormalView.mul(outlineWidthView));
 const outlineVertexNode = cameraProjectionMatrix.mul(vec4(displacedOutlinePositionView, 1));
@@ -23,6 +23,12 @@ function createOutlineMaterial(color) {
     // Equal-depth backfaces are already visible on the two-sided surface.
     depthFunc: THREE.LessDepth,
     depthWrite: false,
+    // Screen-space expansion shifts a sloped triangle's interpolated depth.
+    // Cover the maximum pixel displacement in both axes, plus rounding at
+    // equal depth, so the hull cannot paint over its own two-sided surface.
+    polygonOffset: true,
+    polygonOffsetFactor: 2 * MAX_OUTLINE_WIDTH_PIXELS,
+    polygonOffsetUnits: 1,
   });
   material.toneMapped = false;
   material.vertexNode = outlineVertexNode;
@@ -143,7 +149,7 @@ export function resetOutlineProjectionReference(camera, target) {
 }
 
 /** Update the shared view-space extrusion scale from camera projection and CSS viewport. */
-export function updateOutlineProjectionScale(camera, target, viewportHeight) {
+export function updateOutlineProjectionScale(camera, target, viewportHeight, pixelRatio = 1) {
   const height = Number(viewportHeight);
   const fov = effectiveFovRadians(camera);
   const currentSpan = fov ? projectionSpan(camera, target, fov.radians) : 0;
@@ -164,6 +170,15 @@ export function updateOutlineProjectionScale(camera, target, viewportHeight) {
     MAX_OUTLINE_WIDTH_PIXELS,
   );
   const scalePerDepth = (2 * Math.tan(fov.radians / 2) * effectiveWidthPixels) / height;
+  // Raster slopes use physical pixels while outline widths use CSS pixels.
+  const ratioValue = Number(pixelRatio);
+  const depthBias = 2 * MAX_OUTLINE_WIDTH_PIXELS * (Number.isFinite(ratioValue) && ratioValue > 0 ? ratioValue : 1);
+  for (const material of [outlineMaterial, selectionOutlineMaterial]) {
+    if (material.polygonOffsetFactor !== depthBias) {
+      material.polygonOffsetFactor = depthBias;
+      material.needsUpdate = true;
+    }
+  }
   outlineScalePerDepthNode.value = Number.isFinite(scalePerDepth) ? scalePerDepth : 0;
   outlineViewportHeight = height;
   outlineEffectiveFov = fov.degrees;

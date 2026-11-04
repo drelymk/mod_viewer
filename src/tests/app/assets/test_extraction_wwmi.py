@@ -359,17 +359,134 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
         {expected: "Diffuse"} if expected is not None else {})
 
 
+_ADDITIONAL_FAMILIES = ("compact_main", "color_led_hair", "layered_eye", "masked_eye",
+                        "unlit_constant", "unlit_alias", "face_equal_mask_lookup")
+
+
+def _additional_material_family(family):
+    aliases = {}
+    if family == "compact_main":
+        textures = [("BC7_UNORM", 512, 512), ("BC1_UNORM", 256, 256),
+                    ("BC7_UNORM_SRGB", 512, 512), ("BC7_UNORM_SRGB", 128, 128)]
+        slot = 2
+    elif family == "color_led_hair":
+        textures = [("BC7_UNORM_SRGB", 512, 512), ("BC7_UNORM", 512, 512),
+                    ("B8G8R8A8_UNORM_SRGB", 128, 8)]
+        slot = 0
+    elif family in ("layered_eye", "masked_eye"):
+        textures = [("BC1_UNORM", 256, 256), ("BC3_UNORM_SRGB", 256, 256),
+                    ("BC7_UNORM_SRGB", 1024, 1024), ("B8G8R8A8_UNORM", 512, 512)]
+        if family == "masked_eye":
+            textures[:2] = [("BC3_UNORM_SRGB", 256, 256), ("BC1_UNORM_SRGB", 128, 128)]
+        slot = 2
+    elif family == "face_equal_mask_lookup":
+        textures = [("BC1_UNORM", 256, 256), ("BC7_UNORM_SRGB", 512, 512),
+                    ("B8G8R8A8_UNORM", 256, 256), ("B8G8R8A8_UNORM", 256, 256),
+                    ("B8G8R8A8_UNORM_SRGB", 128, 8)]
+        aliases, slot = {3: 2}, 1
+    else:
+        textures = [None, ("B8G8R8A8_UNORM_SRGB", 1, 1), ("BC7_UNORM_SRGB", 1024, 1024),
+                    ("BC7_UNORM_SRGB", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
+                    ("BC7_UNORM_SRGB", 64, 64), ("BC7_UNORM_SRGB", 64, 64)]
+        aliases = {6: 5}
+        slot = 2
+        if family == "unlit_alias":
+            textures[1:3] = [textures[2], textures[3]]
+            aliases[3] = 2
+            slot = 1
+    return textures, aliases, slot
+
+
+@pytest.mark.parametrize("family", _ADDITIONAL_FAMILIES)
+def test_additional_wwmi_families_require_bound_neighbors(family):
+    specs, aliases, _ = _additional_material_family(family)
+    textures = []
+    for ordinal, spec in enumerate(specs):
+        if spec is None:
+            continue
+        source = aliases.get(ordinal, ordinal)
+        fmt, width, height = spec
+        textures.append(dict(slot=ordinal, hash=f"{source + 1:08x}",
+                             resource={"hash": f"{source + 1:08x}", "address": f"0x{source + 1:x}0"},
+                             format=fmt, width=width, height=height))
+    by_slot = {t["slot"]: t for t in textures}
+    neighbor = (2 if family == "color_led_hair" else 6 if family.startswith("unlit")
+                else 4 if family == "face_equal_mask_lookup" else 3)
+    by_slot[neighbor]["resource"] = None
+    assert material_roles(textures, True, "a" * 16) == {}
+
+
+@pytest.mark.parametrize("family,change", [
+    ("compact_main", "mask_scale"), ("compact_main", "color_scale"),
+    ("compact_main", "smaller_atlases"),
+    ("color_led_hair", "vector_scale"), ("color_led_hair", "square_lookup"),
+    ("color_led_hair", "smaller_lookup"),
+    ("layered_eye", "packed_scale"), ("layered_eye", "mask_scale"),
+    ("masked_eye", "mask_scale"),
+    ("unlit_constant", "constant_size"), ("unlit_constant", "repeat_hash"),
+    ("unlit_alias", "alias_resource"), ("unlit_alias", "alias_size"),
+    ("unlit_alias", "repeat_size"), ("unlit_alias", "mask_scale"),
+    ("unlit_constant", "non_power_scale"), ("unlit_constant", "extra_prefix"),
+    ("unlit_constant", "repeat_separate_resource"),
+    ("unlit_alias", "alias_version"),
+    ("face_equal_mask_lookup", "mask_scale"), ("face_equal_mask_lookup", "atlas_scale"),
+    ("face_equal_mask_lookup", "packed_mismatch"), ("face_equal_mask_lookup", "alias_resource"),
+])
+def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(family, change):
+    specs, aliases, slot = _additional_material_family(family)
+    textures = {i: dict(slot=i, hash=f"{aliases.get(i, i) + 1:08x}",
+                       resource={"hash": f"{aliases.get(i, i) + 1:08x}"},
+                       format=spec[0], width=spec[1], height=spec[2])
+                for i, spec in enumerate(specs) if spec is not None}
+    if change in ("mask_scale", "color_scale", "vector_scale", "packed_scale", "alias_size", "repeat_size"):
+        target = ({"compact_main": 1, "layered_eye": 0, "masked_eye": 1,
+                   "face_equal_mask_lookup": 0}.get(family, 4)
+                  if change == "mask_scale" else {"color_scale": 3, "vector_scale": 1,
+                      "packed_scale": 3, "alias_size": 2, "repeat_size": 6}[change])
+        textures[target].update(width=textures[target]["width"] * 2, height=textures[target]["height"] * 2)
+    elif change == "square_lookup":
+        textures[2].update(width=128, height=128)
+    elif change == "smaller_lookup":
+        textures[2].update(width=64, height=4)
+    elif change == "smaller_atlases":
+        for texture in textures.values():
+            texture.update(width=texture["width"] // 2, height=texture["height"] // 2)
+    elif change == "atlas_scale":
+        textures[1].update(width=1024, height=1024)
+    elif change == "packed_mismatch":
+        textures[3].update(width=512, height=512)
+    elif change == "constant_size":
+        textures[1].update(width=4, height=4)
+    elif change == "repeat_hash":
+        textures[6].update(hash="00000009", resource={"hash": "00000009"})
+    elif change == "alias_resource":
+        textures[2]["resource"] = dict(textures[2]["resource"], address="0x90")
+    elif change == "alias_version":
+        textures[2]["resource"] = dict(textures[2]["resource"], version=1)
+    elif change == "repeat_separate_resource":
+        textures[6]["resource"] = dict(textures[6]["resource"], address="0x90")
+    elif change == "non_power_scale":
+        textures[4].update(width=192, height=192)
+    elif change == "extra_prefix":
+        textures[0] = dict(textures[2], slot=0)
+    assert material_roles(list(textures.values()), True, "a" * 16) == (
+        {slot: "Diffuse"} if change == "repeat_separate_resource" else {})
+
+
 def _material_capture(dump, call_id, textures, aliases=None):
     codes = {"BC7_UNORM": 98, "BC7_UNORM_SRGB": 99, "BC3_UNORM": 77,
-             "BC3_UNORM_SRGB": 78, "BC1_UNORM": 71, "R8_UNORM": 61,
+             "BC3_UNORM_SRGB": 78, "BC1_UNORM": 71, "BC1_UNORM_SRGB": 72, "R8_UNORM": 61,
              "B8G8R8A8_UNORM": 87, "B8G8R8A8_UNORM_SRGB": 91}
     bindings, dump_lines = [], []
-    for slot, (fmt, width, height) in enumerate(textures):
+    for slot, spec in enumerate(textures):
+        if spec is None:
+            continue
+        fmt, width, height = spec
         source_slot = (aliases or {}).get(slot, slot)
         h = f"{0x10000000 + int(call_id) * 16 + source_slot:08x}"
         name = f"{call_id}-ps-t{slot}={h}.dds"
         size = width * height * (4 if fmt.startswith("B8G8R8A8_") else 1)
-        if fmt == "BC1_UNORM":
+        if fmt in ("BC1_UNORM", "BC1_UNORM_SRGB"):
             size //= 2
         (dump / name).write_bytes(dx10_dds(bytes(size), dxgi_format=codes[fmt], width=width, height=height))
         bindings.append(f"       {slot}: resource=0x{source_slot + 6:x}0 hash={h}\n")
@@ -379,7 +496,7 @@ def _material_capture(dump, call_id, textures, aliases=None):
             + "".join(bindings) + "".join(dump_lines))
 
 
-@pytest.mark.parametrize("family", ["main", "eye", "face", "face_late_data", "face_bc1", "hair_half_vector", "layered"])
+@pytest.mark.parametrize("family", ["main", "eye", "face", "face_late_data", "face_bc1", "hair_half_vector", "layered", *_ADDITIONAL_FAMILIES])
 def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessing(tmp_path, family):
     dump = make_attribute_capture(tmp_path)
     log = dump / "log.txt"
@@ -410,6 +527,8 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
                     ("BC7_UNORM_SRGB", 128, 128), ("BC3_UNORM", 1024, 1024)]
     aliases = ({3: 2} if family in ("face", "face_bc1") else {6: 5} if family == "face_late_data"
                else {7: 4} if family == "layered" else None)
+    if family in _ADDITIONAL_FAMILIES:
+        textures, aliases, _ = _additional_material_family(family)
     text = text.replace("000001 PSSetShaderResources(StartSlot:0, NumViews:1)\n       0: resource=0x60 hash=66666666\n",
                         _material_capture(dump, "000001", textures, aliases))
     log.write_text(text)
@@ -417,8 +536,10 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
     analysis = analyze(dump)
     diffuse, = [t for t in analysis.components[0].parts[0].textures if t["role"] == "Diffuse"]
     assert diffuse["role_confidence"] == "inferred_wwmi_pass_format_bindings"
-    assert diffuse["slot"] == {"main": 3, "eye": 2, "face": 1, "face_late_data": 1,
-                               "face_bc1": 1, "hair_half_vector": 1, "layered": 3}[family]
+    expected_slot = (_additional_material_family(family)[2] if family in _ADDITIONAL_FAMILIES else
+                     {"main": 3, "eye": 2, "face": 1, "face_late_data": 1,
+                      "face_bc1": 1, "hair_half_vector": 1, "layered": 3}[family])
+    assert diffuse["slot"] == expected_slot
     if family == "eye":
         assert analysis.components[0].parts[0].textures[1]["role"].startswith("TextureSlot")
     elif family == "face_late_data":
@@ -433,6 +554,9 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
 @pytest.mark.parametrize("competing_family,target_family", [
     ("simple", "hair"), ("main", "hair"), ("unrecognized", "hair_half_vector"),
     ("unrecognized", "face_bc1"), ("unrecognized", "layered"),
+    ("layered_eye", "color_led_hair"),
+    ("color_led_hair", "face_equal_mask_lookup"),
+    *[("unrecognized", family) for family in _ADDITIONAL_FAMILIES],
 ])
 def test_complete_material_pass_outweighs_less_specific_pass_with_more_resources(tmp_path, competing_family, target_family):
     dump = make_attribute_capture(tmp_path)
@@ -443,6 +567,8 @@ def test_complete_material_pass_outweighs_less_specific_pass_with_more_resources
         textures = [(fmt, 256, 256) for fmt in ("BC7_UNORM", "BC3_UNORM", "R8_UNORM", "BC7_UNORM_SRGB")]
     elif competing_family == "unrecognized":
         textures = [("BC3_UNORM_SRGB", 256, 256), ("BC7_UNORM_SRGB", 256, 256)]
+    elif competing_family in _ADDITIONAL_FAMILIES:
+        textures, _, _ = _additional_material_family(competing_family)
     competing = _material_capture(dump, "000001", textures)
     for slot in range(6, 10):
         Image.new("RGB", (16, 16)).save(dump / f"000001-ps-t{slot}={slot:08x}.png")
@@ -465,6 +591,8 @@ def test_complete_material_pass_outweighs_less_specific_pass_with_more_resources
                            ("BC3_UNORM", 1024, 1024), ("BC7_UNORM_SRGB", 1024, 1024),
                            ("BC7_UNORM_SRGB", 128, 128), ("BC3_UNORM", 1024, 1024)]
         aliases, expected_slot = {7: 4}, 3
+    elif target_family in _ADDITIONAL_FAMILIES:
+        target_textures, aliases, expected_slot = _additional_material_family(target_family)
     target = _material_capture(dump, "000002", target_textures, aliases)
     # Add enough unrelated snapshots for the competing pass to win by slot count.
     Image.new("RGB", (16, 16)).save(dump / "000001-ps-t10=aaaaaaaa.png")

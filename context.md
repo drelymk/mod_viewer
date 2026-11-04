@@ -436,8 +436,18 @@ of documentation, comments and tests; use portable fixtures instead.
   pair sharing one packed-data resource across the full captured binding set.
   Optional inputs may move that pair; require compatible power-of-two atlas
   scales and a unique color candidate rather than fixed slots or exact sizes.
+  Equal-size face mask/data maps additionally require a double-size color atlas
+  and a trailing short, wide lookup. That complete face family outranks a
+  competing color-led hair pass; equality alone is not sufficient evidence.
   Packed eye data may use an sRGB encoding;
   identify its separate iris atlas through the complete bound eye family.
+  Color-led hair requires equal color/vector atlases and a wide, short lookup;
+  prefer it over inherited eye passes on the same range. Compact main materials
+  require their scaled mask and trailing small color input. Layered eye families
+  require the larger iris, half-size packed atlas and ordered mask/data scales.
+  Unlit atlas families require a constant or exact shared-mask prefix, scaled
+  small color inputs and a repeated native-hash input; screen buffers cannot
+  establish the atlas role.
   Prefer those material passes over unrecognized effects; do not infer other
   WWMI map roles or discard unknown candidates from those signatures.
   Preserve confirmed roles, never infer GIMI MaterialMap, and leave ambiguous
@@ -463,6 +473,9 @@ of documentation, comments and tests; use portable fixtures instead.
   identity is present in the mod, including staged documents. Geometry overrides
   and component-level `handling = skip` prevent restoration. Proven texture-only
   hooks do not claim geometry ownership, including through local command lists.
+  Supported pixel-slot checks and the external SkinTexture adapter alone are
+  texture-only hooks, including in implicit-check INIs. Use canonical scan
+  evidence; local helper definitions and unknown external calls retain precedence.
   Bare hash-only component overrides cover every range under that hash; auxiliary
   buffer/compute hashes do not establish component identity. Once an Asset is
   uniquely selected, explicit skips also cover its matching ranges alongside
@@ -650,6 +663,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Environment, outlines and render modes are viewer state, never staged INI or
   material reinterpretation. Outlines use child inverted hulls sharing geometry;
   wireframe/debug suppression retains the user's preference.
+  Both normal and selection hulls need slope-aware raster depth bias scaled to
+  display pixel density: keeping vertex depth alone lets screen-space extrusion
+  cover sloped two-sided faces.
 - MESHES provides navigation, Inspector owns mesh/material/texture/color editing,
   and Controls owns Present/Toggle/Menu. Group Meshes/Toggles by subfolder, root
   INI stem or None for a single INI; retain source INI rows. Selection is an
@@ -729,6 +745,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - Reset/Turn/Tilt stay in the viewport toolbar. Apply auto-upright, game/base
   facing and manual rotation in that order, including late-adopted meshes.
   Reset retains the base transform; removed meshes leave the reset baseline.
+  Direct Asset previews use the backend's authoritative game metadata for this
+  orientation, sharing mod rules without transforming stored Asset geometry.
 
 ## Manager capture integration
 
