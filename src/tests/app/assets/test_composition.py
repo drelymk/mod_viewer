@@ -155,6 +155,10 @@ def test_texture_only_geometry_replacement_and_skip_coverage_lifecycle(
     (["ps-t0 = ResourceSurface", "drawindexed = auto"], True),
     (["vb1 = ResourceBlend", "handling = skip"], False),
     (["run = CommandList\\Unknown\\Helper"], True),
+    (["run = CommandListSkinTexture"], False),
+    ([r"run = CommandList\ZZMIv1\SkinTexture"], False),
+    (["checktextureoverride = ps-t4"], False),
+    (["run = CommandListSkinTexture", "run = CommandListUnknown"], True),
     ([], True),
 ])
 def test_texture_hook_coverage_preserves_explicit_geometry_and_legacy_identity(
@@ -164,6 +168,36 @@ def test_texture_hook_coverage_preserves_explicit_geometry_and_legacy_identity(
     }, "mod.ini")
     assert len(overrides) == 1
     assert overrides[0].asset_identity_evidence is expected
+
+
+def test_external_texture_check_face_coverage_tracks_local_geometry_and_suppression(
+        tmp_path, monkeypatch):
+    index = _index(_geometry("aaaaaaaa", (0, 12)),
+                   _geometry("bbbbbbbb", (0, 9), (9, 6), (15, 3)))
+    monkeypatch.setattr(asset_index, "load_index", lambda _type, _root: index)
+    context = _context(tmp_path, {
+        "mod.ini": _zzmi("aaaaaaaa") + (
+            "[TextureOverrideSurface]\n"
+            "if $\\Runtime\\style == 2\n"
+            "hash = bbbbbbbb\n"
+            "match_priority = 2\n"
+            "run = CommandList Surface Material\n"
+            "endif\n"
+            "[CommandList Surface Material]\n"
+            "post run = CommandListSkinTexture\n"),
+    })
+    plan = asset_composition.plan_missing_asset_parts(context)
+    assert plan.status == "ready"
+    assert [part.first_index for part in plan.missing_parts] == [0, 9, 15]
+    sections = context.ini.records[0].sections
+    helper = sections["CommandList Surface Material"]
+    helper.append("handling = skip")
+    assert asset_composition.plan_missing_asset_parts(context).status == "nothing_missing"
+    helper.pop()
+    sections["CommandListSkinTexture"] = ["ib = ResourceReplacementIB"]
+    assert asset_composition.plan_missing_asset_parts(context).status == "nothing_missing"
+    del sections["CommandListSkinTexture"]
+    assert asset_composition.plan_missing_asset_parts(context).to_dict() == plan.to_dict()
 
 
 def test_plan_unions_nested_inis_and_ignores_non_asset_hashes(

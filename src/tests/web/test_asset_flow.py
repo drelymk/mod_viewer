@@ -1,7 +1,46 @@
 """Explicit Asset viewing remains read-only through the UI."""
 
+import pytest
+
 from .payloads import model_payload, textured_payload
 from .support import bridge_calls, open_model, wait_loaded
+
+
+@pytest.mark.parametrize('asset_type,game,upright', [
+    ('WWMI', 'wuwa', True), ('ZZMI', 'zzz', True), ('GIMI', 'genshin', False),
+])
+@pytest.mark.parametrize('type_source', ['payload', 'entry'])
+def test_asset_type_sets_upright_orientation_across_reload_and_reset(viewer, asset_type, game, upright, type_source):
+    asset = model_payload()
+    asset['metadata'].update(source_kind='asset', game={'id': 'unknown'})
+    if type_source == 'payload':
+        asset['metadata']['asset'] = {'type': asset_type}
+    entry = {'asset': True, 'asset_type': asset_type if type_source == 'entry' else 'GIMI'}
+    mod = model_payload()
+    mod['metadata']['game'] = {'id': game}
+    page = viewer({'fixture-01': mod, 'fixture-02': asset})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    baseline = page.evaluate('window.modViewer.activeMeshes[0].quaternion.toArray()')
+    assert page.evaluate("entry => window.modViewer.switchAsset('fixture-02', entry)", entry)
+    wait_loaded(page)
+    assert page.evaluate('window.modViewer.activeMeshes[0].quaternion.toArray()') == pytest.approx(baseline)
+    assert page.evaluate('''async upright => {
+      const THREE = await import('three');
+      const mesh = window.modViewer.activeMeshes[0];
+      const up = new THREE.Vector3(...(upright ? [0, 0, 1] : [0, 1, 0])).applyQuaternion(mesh.quaternion);
+      return up.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-6;
+    }''', upright)
+    page.locator('#camera-flip-horizontal-btn').click()
+    rotated = page.evaluate('window.modViewer.activeMeshes[0].quaternion.toArray()')
+    assert rotated != pytest.approx(baseline)
+    assert page.evaluate("entry => window.modViewer.switchAsset('fixture-02', entry)", entry)
+    wait_loaded(page)
+    assert page.evaluate('window.modViewer.activeMeshes[0].quaternion.toArray()') == pytest.approx(rotated)
+    page.locator('#camera-reset-view-btn').click()
+    assert page.evaluate('window.modViewer.activeMeshes[0].quaternion.toArray()') == pytest.approx(baseline)
+    assert bridge_calls(page, 'asset') == [['fixture-02'], ['fixture-02']]
+    assert bridge_calls(page, 'export') == []
 
 
 def test_asset_transition_removes_source_edit_actions(viewer):

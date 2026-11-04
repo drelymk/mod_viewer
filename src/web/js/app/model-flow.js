@@ -303,7 +303,13 @@ export async function displayMeshPayload(
   setMeshesAvailable(true);
   viewerState.rightDockEnabled = true;
   syncViewportControlPlacement();
-  const gameId = payload.metadata?.game?.id || null;
+  // Indexed Assets have an explicit game type even when capture/game detection
+  // metadata is missing. Use it for the same upright/base transform as mods.
+  const assetType = String(payload.metadata?.asset?.type || viewerState.currentSource?.assetType || '')
+    .trim()
+    .toUpperCase();
+  const assetGames = { ZZMI: 'zzz', GIMI: 'genshin', WWMI: 'wuwa' };
+  const gameId = (assetMode && assetGames[assetType]) || payload.metadata?.game?.id || null;
   measureLoadStage('fit_to', () =>
     fitTo(activeMeshes, {
       preserveCamera,

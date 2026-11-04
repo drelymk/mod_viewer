@@ -97,6 +97,16 @@ layered family requires a bound constant, scaled mask/color atlases and a repeat
 packed mask; inherited copies on another color-led pass cannot establish that family.
 Eye signatures distinguish the larger iris atlas
 from an sRGB-encoded data map, before pixel fallback runs.
+Color-led hair families use equal color/vector atlases and a short, wide lookup
+texture, taking priority over inherited eye inputs on the same draw range.
+Compact main families retain a half-size mask and quarter-size trailing color
+input. Layered eye families also validate a half-size packed atlas and the
+leading mask/data scales. Unlit atlas families require a constant or shared-mask
+prefix, scaled small color inputs and a repeated native-hash input. Their
+screen-space resources remain unclassified.
+Face masks may match the shared packed-data atlas in size only when a double-size
+color atlas and trailing short, wide lookup complete the family. This variant
+takes priority over competing color-led hair passes on the same geometry range.
 
 When reconstructed expression data and recognized facial material evidence agree,
 the extractor groups those components in `Face/` with their own `hash.json`.
