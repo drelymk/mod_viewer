@@ -1075,3 +1075,40 @@ def test_log_binding_ranges_reject_excessive_work(tmp_path, monkeypatch, op, arg
     else:
         with pytest.raises(Unsupported, match="D3D11 slots"):
             parse_log(inv)
+
+
+@pytest.mark.parametrize("last_event", ["Draw", "Dispatch", "CopyResource"])
+def test_log_events_share_a_budget_before_constructing_calls(tmp_path, monkeypatch, last_event):
+    log = tmp_path / "log.txt"
+    log.write_text("""000001 SOSetTargets(NumBuffers:1)
+       0: resource=0x10 hash=11111111
+000002 Draw()
+000003 CSSetUnorderedAccessViews(StartSlot:0, NumUAVs:1)
+       0: resource=0x20 hash=22222222
+000004 Dispatch()
+000005 CopyResource()
+       src: resource=0x10 hash=11111111
+       dst: resource=0x20 hash=22222222
+""", encoding="utf-8")
+    budget = CaptureBudget(max_events=3)
+    calls = parse_log(Inventory(tmp_path, Context(budget=budget)))
+    expected = ["Draw", "Dispatch", "CopyResource"]
+    assert [call.kind for call in calls] == expected
+    assert [call.sequence for call in calls] == [0, 1, 2]
+    assert budget.events == 3
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(f"000006 {last_event}()\n")
+        if last_event == "CopyResource":
+            stream.write("       src: resource=0x10 hash=11111111\n"
+                         "       dst: resource=0x20 hash=22222222\n")
+    constructed = []
+    original = capture.Call
+    def call(*args, **kwargs):
+        constructed.append(args[2])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(capture, "Call", call)
+    budget = CaptureBudget(max_events=3)
+    with pytest.raises(ResourceLimit, match="log event budget"):
+        parse_log(Inventory(tmp_path, Context(budget=budget)))
+    assert constructed == expected
+    assert budget.events == 3

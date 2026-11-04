@@ -158,6 +158,7 @@ def parse_log(inventory, context=None):
                     continue
                 copy_rows.append(Resource(h[1], a[1] if a else ""))
                 if len(copy_rows) == 3:
+                    inventory.budget.event()
                     _, src, dst = copy_rows
                     source = current(src)
                     versions[dst.address or dst.hash] += 1
@@ -198,6 +199,7 @@ def parse_log(inventory, context=None):
                 if address:
                     versions[address] += 1
             elif op.startswith("Draw") or op.startswith("Dispatch"):
+                inventory.budget.event()
                 b = snapshot()
                 output_group = "u" if op.startswith("Dispatch") else "so"
                 outputs = []

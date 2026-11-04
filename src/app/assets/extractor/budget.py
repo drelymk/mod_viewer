@@ -1,4 +1,4 @@
-"""One capture-wide budget for source extents, mappings and decoded work."""
+"""One capture-wide budget for source extents, mappings, events and decoded work."""
 
 from dataclasses import dataclass, field
 
@@ -18,10 +18,12 @@ class CaptureBudget:
     max_decoded_bytes: int = 8 * 1024**3
     max_files: int = 100000
     max_mappings: int = 16384
+    max_events: int = 8192
     source_bytes: int = 0
     mapped_bytes: int = 0
     mappings: int = 0
     decoded_bytes: int = 0
+    events: int = 0
     _sources: dict = field(default_factory=dict)
 
     def source(self, identity, size):
@@ -44,3 +46,8 @@ class CaptureBudget:
         if size < 0 or self.decoded_bytes + size > self.max_decoded_bytes:
             raise ResourceLimit("Capture exceeds decoded geometry budget")
         self.decoded_bytes += size
+
+    def event(self):
+        if self.events >= self.max_events:
+            raise ResourceLimit("Capture exceeds log event budget")
+        self.events += 1
