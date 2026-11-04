@@ -63,11 +63,15 @@ def _sample(inv, texture, context):
         return cache[identity]
     context.tick("Inspecting unclassified texture pixels")
     cache[identity] = None
-    image = load_texture_image(inv.path(texture["file"]), max_size=64, preserve_alpha=False)
+    source = inv.path(texture["file"])
+    if inv.source is not None:
+        source = source.read_bytes()
+    image = load_texture_image(source, max_size=64, preserve_alpha=False,
+                               source_name=texture["file"])
     if image is None:
         return None
     try:
-        classification = classify_dds(inv.path(texture["file"]), decoded_image=image)
+        classification = classify_dds(source, decoded_image=image)
         active_channels = _active_channels(image)
         image = image.convert("RGB").resize((32, 32))
         raw = image.tobytes()

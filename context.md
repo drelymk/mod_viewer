@@ -730,6 +730,23 @@ of documentation, comments and tests; use portable fixtures instead.
   facing and manual rotation in that order, including late-adopted meshes.
   Reset retains the base transform; removed meshes leave the reset baseline.
 
+## Manager capture integration
+
+- `src/extract_asset.py` is a local headless entry point for Manager's completed
+  shared-memory captures. Explicit native Manager Asset Folder configuration
+  authorizes root registration; browser APIs retain their native-picker boundary.
+  Validate named-section capabilities, member containment, identities and sizes;
+  open existing sections read-only and never stage raw dump files. Match member
+  paths and logged aliases with Windows case-insensitive semantics, preserving
+  their stored spelling and rejecting ambiguous case collisions.
+- Keep the directory and memory sources on the same inventory, analysis,
+  reconstruction, compact export and Asset replacement/index transaction.
+  Same-name updates require an indexed Asset. Unrelated folders remain untouched.
+  Only the final Asset and its transactional output staging use the filesystem.
+- Viewer and headless workers share the Windows per-config process mutex in
+  addition to the thread transaction. Hold it across registry/index commits and
+  rollback; do not kill an extraction worker in the middle of that transaction.
+
 ## Builds and test discipline
 
 - `features.ini` is build-time only: bake a temporary module and remove it after

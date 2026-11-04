@@ -97,7 +97,11 @@ class PayloadFiles:
         if identity in self.by_content:
             self.alias(self.by_content[identity], destination)
         else:
-            shutil.copyfile(source, destination)
+            if hasattr(source, "source"):
+                with source.open("rb") as incoming, destination.open("wb") as outgoing:
+                    shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+            else:
+                shutil.copyfile(source, destination)
             self.by_content[identity] = destination
 
     def generated(self, path):
@@ -189,7 +193,7 @@ def extract(analysis, selection=None, context=None):
     ctx = context or Context()
     selection = selection or Selection()
     name = safe_name(selection.name)
-    inv = Inventory(analysis.dump, ctx)
+    inv = Inventory(getattr(analysis, "_capture_source", None) or analysis.dump, ctx)
     inv.targets.update(analysis.metrics.get("dedup_targets", {}))
     started = time.perf_counter()
     supported = [c for c in analysis.components if c.status == "included"]
@@ -281,7 +285,8 @@ def export(package, output, context=None, *, options=None):
     started = time.perf_counter()
     output = Path(output).resolve()
     dump = Path(package.analysis.dump).resolve()
-    if output == dump or output.is_relative_to(dump) or dump.is_relative_to(output):
+    source = getattr(package.analysis, "_capture_source", None)
+    if source is None and (output == dump or output.is_relative_to(dump) or dump.is_relative_to(output)):
         raise ValueError("Output must be outside the input capture")
     output.mkdir(parents=True, exist_ok=True)
     destination = output / package.name
@@ -289,7 +294,7 @@ def export(package, output, context=None, *, options=None):
     if destination.exists() or report_path.exists():
         existing = destination if destination.exists() else report_path
         raise FileExistsError(f"Output already exists: {existing}. Choose a new name; existing results are preserved.")
-    inv = Inventory(dump, ctx)
+    inv = Inventory(source or dump, ctx)
     # Restore only recorded, capture-relative dedup paths; no log rescan required.
     inv.targets.update(package.analysis.metrics.get("dedup_targets", {}))
     wwmi = options.asset_type == "WWMI" or (

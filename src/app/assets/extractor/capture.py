@@ -3,6 +3,7 @@ from collections import defaultdict
 from pathlib import Path
 import re
 from .core import Resource, Call, Context, Unsupported
+from .memory_capture import MemoryCapture
 
 FILE = re.compile(r"^(\d{6})-((?:[a-z]+-)?(?:vb|ib|t|cb|u|o)\d*)(?:=(?:!.!=)?([a-f0-9]{8})(?:\([a-f0-9]{8}\))?)?(?=[-.])")
 API = re.compile(r"^(\d{6}) ([A-Za-z][A-Za-z0-9]*)\((.*)\)(.*)$")
@@ -15,7 +16,8 @@ GROUPS = {"IASetVertexBuffers": "vb", "SOSetTargets": "so",
 
 class Inventory:
     def __init__(self, dump, context=None):
-        self.root = Path(dump).resolve()
+        self.source = dump if isinstance(dump, MemoryCapture) else None
+        self.root = dump.root if self.source else Path(dump).resolve()
         self.context = context or Context()
         self.entries = defaultdict(lambda: defaultdict(list))
         self.files = {}
@@ -105,6 +107,9 @@ def parse_log(inventory, context=None):
                 left, right = line.split(" -> ", 1)
                 name = left.rsplit("\\", 1)[-1]
                 target = "deduped/" + right.rsplit("\\", 1)[-1]
+                if inventory.source is not None:
+                    name = inventory.source.canonical_member(name)
+                    target = inventory.source.canonical_member(target)
                 inventory.targets[name] = target
                 if m := FILE.match(name):
                     entries = inventory.entries[m[1]][(m[2], m[3] or "", Path(name).suffix.lower())]

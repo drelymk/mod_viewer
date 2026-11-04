@@ -49,8 +49,10 @@ def _target(folder_path, name, original_path):
 def extract_asset(folder_path, name, dump_path, original_path=None):
     entries, entry, destination, original = _target(
         folder_path, name, original_path)
-    dump = folders.normalize_path(dump_path)
-    if (folders.is_within(dump, entry["path"])
+    from .extractor.memory_capture import MemoryCapture
+    memory = isinstance(dump_path, MemoryCapture)
+    dump = dump_path if memory else folders.normalize_path(dump_path)
+    if not memory and (folders.is_within(dump, entry["path"])
             or folders.is_within(entry["path"], dump)):
         raise ValueError("The dump must be outside the Asset Folder.")
     # Stage on the destination volume so committing uses directory renames.
