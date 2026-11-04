@@ -6,8 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from core import textures
 from core.textures.pipeline import _srgb_dds_as_unorm
+from tests.support.dds_data import uncompressed_dds
 
 
 def test_texture_keys_keep_generic_and_field_owned_roles_distinct():
@@ -109,6 +112,58 @@ def test_full_texture_decode_keeps_authored_dimensions_and_alpha(monkeypatch):
     assert image.size == (4096, 1)
     assert image.mode == "RGBA"
     assert image.getpixel((0, 0)) == (1, 2, 3, 129)
+
+
+@pytest.mark.parametrize("bgra,alpha", [
+    (False, True), (True, True), (False, False), (True, False)])
+@pytest.mark.parametrize("source_kind", ["file", "bytes", "bytearray", "memoryview"])
+def test_legacy_byte_dds_uses_native_decode_with_identical_pixels(
+        tmp_path, monkeypatch, bgra, alpha, source_kind):
+    from PIL import Image, DdsImagePlugin
+
+    width, height = 8, 4
+    pixels = bytes(value for index in range(width * height)
+                   for value in (index * 7 % 256, index * 13 % 256,
+                                 index * 23 % 256, index * 29 % 256))
+    # A different second mip verifies that only authored base pixels are decoded.
+    data = uncompressed_dds(
+        pixels + bytes([251] * 4 * 2 * 4), width=width, height=height,
+        mip_count=2, bgra=bgra, alpha=alpha)
+    with Image.open(io.BytesIO(data)) as reference:
+        expected = reference.convert("RGBA")
+    thumbnail = expected.convert("RGB")
+    thumbnail.thumbnail((4, 4), Image.Resampling.LANCZOS)
+    path = tmp_path / "sample.dds"
+    path.write_bytes(data)
+    source = {"file": path, "bytes": data, "bytearray": bytearray(data),
+              "memoryview": memoryview(data)}[source_kind]
+
+    def slow_decode(*_args, **_kwargs):
+        pytest.fail("standard byte layouts must not use the per-pixel decoder")
+
+    monkeypatch.setattr(DdsImagePlugin.DdsRgbDecoder, "decode", slow_decode)
+    full = textures.load_texture_image_full(source, source_name="sample.dds")
+    preview = textures.load_texture_image(
+        source, max_size=4, preserve_alpha=False, source_name="sample.dds")
+    assert full.mode == "RGBA" and full.size == (width, height)
+    assert full.tobytes() == expected.tobytes()
+    assert preview.mode == "RGB" and preview.size == thumbnail.size
+    assert preview.tobytes() == thumbnail.tobytes()
+    assert path.read_bytes() == data
+
+
+def test_nonstandard_dds_masks_retain_pillow_decoder(tmp_path):
+    from PIL import Image
+
+    data = bytearray(uncompressed_dds(bytes(range(64)), width=4, height=4))
+    struct.pack_into("<IIII", data, 92,
+                     0x000003FF, 0x000FFC00, 0x3FF00000, 0xC0000000)
+    with Image.open(io.BytesIO(data)) as reference:
+        expected = reference.convert("RGBA")
+    path = tmp_path / "custom-masks.dds"
+    path.write_bytes(data)
+    result = textures.load_texture_image_full(path)
+    assert result.tobytes() == expected.tobytes()
 
 
 def test_texture_module_does_not_depend_on_mesh_builder():

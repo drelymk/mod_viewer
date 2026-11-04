@@ -12,6 +12,7 @@ from .geometry import decode_component, codec
 from .textures import digest
 from . import __version__
 from ..package_format import FORMAT, WWMI_METADATA
+from ..permissions import inherit_directory_permissions
 
 
 def safe_name(name):
@@ -473,6 +474,9 @@ def export(package, output, context=None, *, options=None):
         staged_report = stage / ".extraction-report.json"
         staged_report.write_text(json.dumps(details, indent=2), encoding="utf-8")
         ctx.tick("Committing export")
+        # A private temporary directory keeps its protected Windows ACL when
+        # renamed. Apply the output parent's ACL to the completed files first.
+        inherit_directory_permissions(stage)
         # On Windows rename refuses an existing directory; no user content is replaced.
         staged_report.rename(report_path)
         committed_report_digest = digest(report_path)

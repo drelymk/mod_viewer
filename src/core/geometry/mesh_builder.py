@@ -21,6 +21,10 @@ from .texture_bindings import (
 from .transport import GeometryBlob
 from .identity import mesh_identity_for_draw
 from .skinning import SkinningManifestEntry
+from .draw_call import DrawCall
+from .build_cache import (
+    MeshGeometryCache, animation_geometry_key, draw_geometry_key,
+)
 from ..resource_paths import safe_resource_path
 from .animation_frames import (
     _animation_clock_dict,
@@ -54,7 +58,8 @@ class MeshBuildResult:
 
 def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                       texture_source=None, game_profile=None, source=None,
-                      animations=None, buffer_overrides=None):
+                      animations=None, buffer_overrides=None,
+                      geometry_cache=None, geometry_only=False):
     """Build mesh draw entries and a shared texture registry.
 
     Geometry packing and texture publication are delegated to focused stages;
@@ -69,8 +74,10 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
     validate_draw_count(groups)
     registry = TextureRegistry(
         mod_dir, texture_profile, texture_source, source=source)
-    buffers = BufferStore(source=source, overrides=buffer_overrides)
-    sparse_shape_cache = {}
+    cache = geometry_cache or MeshGeometryCache(
+        BufferStore(source=source, overrides=buffer_overrides))
+    buffers = cache.buffers
+    sparse_shape_cache = cache.sparse_shapes
     result = {}
     skinning_manifest = {}
     animation_clocks = {}
@@ -78,7 +85,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
         animation_id, value = _animation_clock_dict(clock)
         animation_clocks[animation_id] = value
     used_clock_ids = set()
-    gimi_shared = {}
+    gimi_shared = cache.gimi_shared
     animation_diagnostics = {
         "animation_family_count": 0,
         "animation_frame_count": 0,
@@ -109,12 +116,20 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             pos_path, pos_stride, tc_path, tc_stride)
         # Preserve the original eager group-IB load and its build-scoped cache.
         buffers.raw(ib_path)
-        unique = deduplicate_draws(group, max_draws=max_draws)
+        # Geometry preparation retains unresolved draws. Material-dependent
+        # deduplication happens after Asset resolution, reusing packed bytes.
+        unique = ([DrawCall.from_mapping(draw, group)
+                   for draw in group["draws"]]
+                  if geometry_only else
+                  deduplicate_draws(group, max_draws=max_draws))
         group_entries = []
 
         for draw, family in animation_draws(unique, animation_clocks.values(), group):
+            cache_key = (id(group), draw_geometry_key(draw),
+                         animation_geometry_key(family))
+            cached = cache.draws.get(cache_key)
             prepared = None
-            if family is not None:
+            if family is not None and cached is None:
                 prepare_started = time.perf_counter()
                 vertex_union = animation_vertex_union(
                     family, mod_dir=mod_dir, buffers=buffers,
@@ -142,7 +157,7 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     time.perf_counter() - prepare_started)
                 if prepared is None:
                     continue
-            packed = pack_draw_geometry(
+            packed = cached[0] if cached is not None else pack_draw_geometry(
                 draw, group,
                 mod_dir=mod_dir,
                 default_streams=default_streams,
@@ -156,8 +171,8 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
             if packed is None:
                 continue
 
-            animation_payload = None
-            if family is not None:
+            animation_payload = cached[1] if cached is not None else None
+            if family is not None and cached is None:
                 animation_payload = _prepare_animation_family(
                     family, canonical_prepared=prepared,
                     canonical_packed=packed, mod_dir=mod_dir, group=group,
@@ -165,10 +180,17 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                     default_index_size=index_size, buffers=buffers,
                     geometry_convention=geometry_convention, source=source,
                     geometry=geometry, diagnostics=animation_diagnostics)
+            if animation_payload is not None:
+                animation_payload = {
+                    **animation_payload, "track_id": family["track_id"],
+                    "clock_ids": list(family["clock_ids"]),
+                }
+                if cached is not None:
+                    animation_diagnostics["animation_frame_count"] += animation_payload["frame_count"]
 
-            gimi_payload = None
+            gimi_payload = cached[2] if cached is not None else None
             gimi = group.get("_compute_animation")
-            if gimi is not None and animation_payload is None:
+            if gimi is not None and animation_payload is None and cached is None:
                 shared = gimi_shared.get(gimi["track_id"])
                 if shared is None:
                     shared = _prepare_gimi_shared(
@@ -189,30 +211,14 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                         packed.used_vertices)
 
             entry: dict = {
-                "pos": geometry.add(packed.positions),
-                "idx": geometry.add(packed.indices),
+                **cache.publish(packed, geometry),
                 "skinning_available": draw.skinning_source is not None,
                 "tex_key": None,
                 "normal_map_y_sign": texture_profile.normal_y_sign,
                 "normal_map_enabled": texture_profile.bind_normal_map,
             }
-            apply_draw_texture_bindings(entry, draw, registry=registry)
-            if packed.texcoords is not None:
-                entry["uv"] = geometry.add(packed.texcoords)
-            if packed.normals is not None:
-                entry["normal"] = geometry.add(packed.normals)
-            if packed.shape_targets:
-                entry["shape_targets"] = []
-                for target in packed.shape_targets:
-                    shape_entry = {
-                        "var": target.var,
-                        "pos": geometry.add(target.positions),
-                    }
-                    if target.mode:
-                        shape_entry["mode"] = target.mode
-                    if target.low_positions is not None:
-                        shape_entry["low_pos"] = geometry.add(target.low_positions)
-                    entry["shape_targets"].append(shape_entry)
+            if not geometry_only:
+                apply_draw_texture_bindings(entry, draw, registry=registry)
             if animation_payload is not None:
                 animation_id = animation_payload["track_id"]
                 entry["animation_id"] = animation_id
@@ -270,10 +276,11 @@ def build_mesh_result(groups, mod_dir, max_draws=0, geometry=None,
                 entry["texture_resolution"] = dict(draw.texture_provenance)
             if draw.asset_slot_evidence:
                 entry["asset_slot_evidence"] = list(draw.asset_slot_evidence)
+            cache.remember(cache_key, packed, animation_payload, gimi_payload)
             result[draw.label] = entry
             group_entries.append(entry)
 
-        if group_entries:
+        if group_entries and not geometry_only:
             finalize_texture_candidates(group, draws=unique)
             texture_options = build_texture_options(group, registry)
             if texture_options:

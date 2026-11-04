@@ -7,9 +7,12 @@ implementation details.
 """
 
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from core.geometry.mesh_builder import build_mesh_result, build_mesh_semantics
+from core.geometry.build_cache import MeshGeometryCache
+from core.geometry.buffers import BufferStore
 from core.ini.health import analyze_mod
 from core.materials.profiles import material_profile_for
 from core.mod_discovery import discover_ini_paths
@@ -49,7 +52,7 @@ class ModLoadContext:
     ini: ModIniSnapshot
     metadata: dict = field(default_factory=dict)
     asset_folders: list = field(default_factory=list)
-    dds_classification_cache: dict = field(default_factory=dict)
+    asset_folder_loader: Callable[[], list] | None = None
     skinning_manifest: dict = field(default_factory=dict)
     buffer_overrides: dict = field(default_factory=dict)
 
@@ -244,13 +247,22 @@ def load_mod(folder_path=None, overrides=None, pending_new_sections=None, *,
                        f"{len(context.ini_paths)} ini file(s)."),
                 game=parsed.game, source=context.source)
 
-        _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
+        cache = MeshGeometryCache(BufferStore(
+            source=context.source, overrides=context.buffer_overrides))
+        build_options = dict(
+            game_profile=parsed.game.game, source=context.source,
+            animations=parsed.animations, geometry_cache=cache)
         built = build_mesh_result(
             parsed.groups, context.mod_dir, geometry=geometry,
-            texture_source=texture_source,
-            game_profile=parsed.game.game, source=context.source,
-            animations=parsed.animations,
-            buffer_overrides=getattr(context, "buffer_overrides", None))
+            geometry_only=True, **build_options)
+        asset_resolution = None
+        if built.meshes:
+            # Asset bindings can change draw grouping, but not the packed
+            # vertices. Finalize material semantics using the same geometry.
+            _bindings, asset_resolution = enrich_mod_analysis(parsed, context)
+            built = build_mesh_result(
+                parsed.groups, context.mod_dir, geometry=built.geometry,
+                texture_source=texture_source, **build_options)
         mesh_payload = built.meshes
         if not mesh_payload:
             context.skinning_manifest = {}

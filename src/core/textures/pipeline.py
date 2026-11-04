@@ -6,6 +6,7 @@ import struct
 import warnings
 
 from ..resource_paths import _canonical, safe_resource_path
+from .dds import inspect_dds_layout
 
 
 _MAX_IMAGE_PIXELS = 100_000_000
@@ -19,6 +20,13 @@ _SRGB_DXGI_TO_UNORM = {
     75: 74,  # BC2
     78: 77,  # BC3
     99: 98,  # BC7
+}
+
+_LEGACY_DDS_RAW_MODES = {
+    "rgba8": "RGBA",
+    "bgra8": "BGRA",
+    "rgbx8": "RGBX",
+    "bgrx8": "BGRX",
 }
 
 
@@ -71,12 +79,44 @@ def _srgb_dds_as_unorm(data):
     return bytes(rewritten)
 
 
+def _decode_standard_dds(image, path, image_module):
+    """Use Pillow's native raw decoder for validated legacy byte layouts."""
+    if getattr(image, "format", None) != "DDS":
+        return None
+    layout = inspect_dds_layout(path)
+    if layout is None:
+        return None
+    raw_mode = _LEGACY_DDS_RAW_MODES.get(layout.info.format)
+    if raw_mode is None:
+        return None
+    mip = layout.mips[0]
+    if isinstance(path, (bytes, bytearray, memoryview)):
+        pixels = bytes(memoryview(path)[mip.offset:mip.offset + mip.length])
+    else:
+        with open(path, "rb") as stream:
+            stream.seek(mip.offset)
+            pixels = stream.read(mip.length)
+    # Preserve Pillow's interpretation of legacy headers without an alpha
+    # flag, and keep unused X bytes opaque regardless of their contents.
+    mode = "RGB" if raw_mode.endswith("X") else image.mode
+    if mode == "RGB":
+        raw_mode = raw_mode[:3] + "X"
+    return image_module.frombytes(
+        mode, (mip.width, mip.height), pixels, "raw", raw_mode)
+
+
 def _open_texture_image(path, image_module, source_name=None):
     """Open a texture, retrying typed sRGB DDS files as unorm in memory."""
     try:
         image = image_module.open(
             io.BytesIO(bytes(path)) if isinstance(
                 path, (bytes, bytearray, memoryview)) else path)
+        # Image.open has already applied Pillow's dimension safeguards. Its
+        # generic legacy DDS decoder otherwise loops over every pixel in Python.
+        decoded = _decode_standard_dds(image, path, image_module)
+        if decoded is not None:
+            image.close()
+            return decoded
         image.load()
         return image
     except Exception:

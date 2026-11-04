@@ -28,6 +28,9 @@ of documentation, comments and tests; use portable fixtures instead.
 - Share one canonical analysis per INI across controls, draws, shapes and
   resources. Never share discovery state across sibling INIs or repeat semantic
   stages on the normal load path.
+- During mod loading, pack geometry before reading the Asset registry or
+  resolving Asset/material textures. Reuse those packed bytes when finalizing
+  material-dependent draw grouping; return one ordinary editable model payload.
 - Diagnostics are lazy, read-only, detached reports cached by edit-session
   revision. Commits invalidate them; diagnostic failures must not fail mod loads.
 - App config is versioned and atomically replaced. Every mutation holds the
@@ -211,10 +214,14 @@ of documentation, comments and tests; use portable fixtures instead.
   inheriting a scanned conditional replacement.
 - Candidate discovery supplies viewer choices without inferring semantic
   bindings. Keep texture processing independent of game/material interpretation.
+  Mod loading and semantic refresh never decode texture pixels to infer roles;
+  use explicit mod semantics or independently labelled Asset metadata. Keep
+  unknown roles unresolved. Pixel-role fallback belongs only to Asset extraction.
 - Original Asset defaults apply in states without an applicable mod binding.
   An active mod diffuse suppresses original Asset maps; retain mod-authored maps.
-  Publish explicit null variants as empty material states, preserving conditional
-  Asset defaults through the existing role-rule path.
+  Authored nulls clear the mod's texture assignment, allowing labelled Asset
+  defaults through the existing role-rule path. Apply this consistently to
+  semantic resources and native slots, without runtime-specific exceptions.
 - Collect one lightweight inventory of all DDS/PNG/JPG/JPEG images through
   `ModSource`, including undeclared files, subfolders and compressed mods.
   Collect Asset images only from exact matched Asset directories, never by
@@ -345,7 +352,11 @@ of documentation, comments and tests; use portable fixtures instead.
   Keep the provenance report inside the installed asset with portable relative paths,
   replacing and rolling it back with the asset directory. Omit the local capture
   root and redact local roots from persisted diagnostics; API destinations remain
-  absolute. Directory and memory captures share source-size, mapped-capacity/count
+  absolute.
+  On Windows, published Asset directories, children and reports inherit the
+  actual destination parent's ACL rather than private temporary-directory ACLs.
+  Failure to apply permissions aborts publication and preserves the prior Asset/index.
+  Directory and memory captures share source-size, mapped-capacity/count
   and cumulative decoded-work budgets, checked before mapping or geometry allocation.
   Stream-output inputs support 40-byte position/normal/tangent records and
   declared 24-byte position/normal records with matching blend/UV counts.

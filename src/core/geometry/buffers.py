@@ -34,18 +34,15 @@ _MIN_IN_RANGE = 0.95
 
 
 def _uv_candidate_score(pairs, sampled, uv_off, fmt, *, signed=False, balanced=False):
-    """Rank plausible samples without letting isolated signed outliers win."""
+    """Rank plausible samples without letting isolated outliers win."""
     if not pairs or len(pairs) / sampled < _MIN_IN_RANGE:
         return None
     spreads = []
     for axis in (0, 1):
         values = [pair[axis] for pair in pairs]
-        if signed:
-            values.sort()
-            trim = len(values) // 20
-            spread = values[-1 - trim] - values[trim]
-        else:
-            spread = max(values) - min(values)
+        values.sort()
+        trim = len(values) // 20
+        spread = values[-1 - trim] - values[trim]
         spreads.append(spread)
     both_live = min(spreads) >= _MIN_AXIS_SPREAD
     in_range = round(len(pairs) / sampled, 3)
@@ -57,7 +54,9 @@ def _uv_candidate_score(pairs, sampled, uv_off, fmt, *, signed=False, balanced=F
         # Reinterpreted half-floats can have a tiny U range and a large V range.
         # Require distributed variation and prefer evidence on the weaker axis.
         return (in_range, min(spreads), sum(spreads), uv_off, fmt)
-    return (both_live, in_range, round(sum(spreads), 3), uv_off, fmt)
+    # Every surviving layout already meets the coverage threshold. Prefer
+    # real UV variation to the near-zero Float32 reinterpretation of half pairs.
+    return (both_live, round(sum(spreads), 3), in_range, uv_off, fmt)
 
 
 def _detect_uv_best(tc_path, stride, n=4096, data=None):

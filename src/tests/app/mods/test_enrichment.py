@@ -20,7 +20,6 @@ def test_enrichment_collects_inventory_before_shared_assignment(tmp_path):
     context = SimpleNamespace(
         mod_dir=str(tmp_path),
         asset_folders=[],
-        dds_classification_cache={},
     )
     bindings = [[SimpleNamespace()]]
 
