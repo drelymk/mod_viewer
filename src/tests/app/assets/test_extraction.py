@@ -1112,3 +1112,27 @@ def test_log_events_share_a_budget_before_constructing_calls(tmp_path, monkeypat
         parse_log(Inventory(tmp_path, Context(budget=budget)))
     assert constructed == expected
     assert budget.events == 3
+
+
+@pytest.mark.parametrize("slot,valid", [(0, True), (127, True), (128, False), (100000, False)])
+def test_log_binding_rows_are_bounded_before_resource_creation(tmp_path, monkeypatch, slot, valid):
+    start = slot if valid else 0
+    (tmp_path / "log.txt").write_text(
+        f"000001 PSSetShaderResources(StartSlot:{start}, NumViews:1)\n"
+        f"       {slot}: resource=0x20 hash=22222222\n000002 Draw()\n", encoding="utf-8")
+    constructed = []
+    original = capture.Resource
+    def resource(*args, **kwargs):
+        constructed.append(args)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(capture, "Resource", resource)
+    inv = Inventory(tmp_path)
+    if valid:
+        call, = parse_log(inv)
+        assert set(call.bindings["ps-t"]) == {slot}
+        assert call.bindings["ps-t"][slot].hash == "22222222"
+    else:
+        with pytest.raises(Unsupported, match="binding slot exceeds D3D11 slots"):
+            parse_log(inv)
+        assert constructed == []
+        assert inv.budget.events == 0

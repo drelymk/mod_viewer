@@ -12,6 +12,7 @@ ARGS = re.compile(r"(\w+):([^,)]+)")
 GROUPS = {"IASetVertexBuffers": "vb", "SOSetTargets": "so",
           "CSSetUnorderedAccessViews": "u", "CSSetShaderResources": "cs-t",
           "CSSetConstantBuffers": "cs-cb", "PSSetShaderResources": "ps-t"}
+_SLOT_COUNT = 128
 
 
 class Inventory:
@@ -147,7 +148,10 @@ def parse_log(inventory, context=None):
                 continue
             if m := SLOT.match(line):
                 if pending:
-                    states[pending][int(m[1])] = Resource(m[3], m[2])
+                    slot = int(m[1])
+                    if not 0 <= slot < _SLOT_COUNT:
+                        raise Unsupported("Capture binding slot exceeds D3D11 slots")
+                    states[pending][slot] = Resource(m[3], m[2])
                 continue
             if copy_rows and line.startswith("       ") and "hash=" in line:
                 h = re.search(r"hash=([a-f0-9]+)(?=\s|$)", line)
@@ -176,7 +180,7 @@ def parse_log(inventory, context=None):
                 start = int(args.get("StartSlot", 0))
                 count = int(args.get("NumBuffers", args.get("NumViews", args.get("NumUAVs", 0))))
                 # Shader resources have the largest tracked D3D11 slot range.
-                if not 0 <= start < 128 or not 0 <= count <= 128 - start:
+                if not 0 <= start < _SLOT_COUNT or not 0 <= count <= _SLOT_COUNT - start:
                     raise Unsupported("Capture binding range exceeds D3D11 slots")
                 if pending == "so":
                     states[pending].clear()
