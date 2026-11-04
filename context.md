@@ -745,9 +745,8 @@ of documentation, comments and tests; use portable fixtures instead.
 - Reset/Turn/Tilt stay in the viewport toolbar. Apply auto-upright, game/base
   facing and manual rotation in that order, including late-adopted meshes.
   Reset retains the base transform; removed meshes leave the reset baseline.
-  Direct Asset previews use the backend's Asset type for this game orientation,
-  falling back to the selected Asset type or game metadata when absent. They
-  share mod orientation rules without transforming stored Asset geometry.
+  Direct Asset previews use the backend's authoritative game metadata for this
+  orientation, sharing mod rules without transforming stored Asset geometry.
 
 ## Manager capture integration
 

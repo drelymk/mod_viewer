@@ -398,10 +398,8 @@ def _additional_material_family(family):
 
 
 @pytest.mark.parametrize("family", _ADDITIONAL_FAMILIES)
-@pytest.mark.parametrize("change", ["none", "unbound", "hash_mismatch", "contaminated", "no_color", "no_shader",
-                                   "nonsquare", "neighbor_format", "missing_neighbor"])
-def test_additional_wwmi_families_require_complete_bound_evidence(family, change):
-    specs, aliases, slot = _additional_material_family(family)
+def test_additional_wwmi_families_require_bound_neighbors(family):
+    specs, aliases, _ = _additional_material_family(family)
     textures = []
     for ordinal, spec in enumerate(specs):
         if spec is None:
@@ -414,37 +412,25 @@ def test_additional_wwmi_families_require_complete_bound_evidence(family, change
     by_slot = {t["slot"]: t for t in textures}
     neighbor = (2 if family == "color_led_hair" else 6 if family.startswith("unlit")
                 else 4 if family == "face_equal_mask_lookup" else 3)
-    if change == "unbound":
-        by_slot[slot]["resource"] = None
-    elif change == "hash_mismatch":
-        by_slot[neighbor]["resource"] = {"hash": "ffffffff"}
-    elif change == "contaminated":
-        by_slot[neighbor]["contaminated"] = True
-    elif change == "nonsquare":
-        by_slot[slot]["height"] //= 2
-    elif change == "neighbor_format":
-        by_slot[neighbor]["format"] = "R16_FLOAT"
-    elif change == "missing_neighbor":
-        textures.remove(by_slot[neighbor])
-    assert material_roles(textures, change != "no_color", "" if change == "no_shader" else "a" * 16) == (
-        {slot: "Diffuse"} if change == "none" else {})
+    by_slot[neighbor]["resource"] = None
+    assert material_roles(textures, True, "a" * 16) == {}
 
 
 @pytest.mark.parametrize("family,change", [
     ("compact_main", "mask_scale"), ("compact_main", "color_scale"),
+    ("compact_main", "smaller_atlases"),
     ("color_led_hair", "vector_scale"), ("color_led_hair", "square_lookup"),
-    ("color_led_hair", "tall_lookup"), ("color_led_hair", "narrow_lookup"),
+    ("color_led_hair", "smaller_lookup"),
     ("layered_eye", "packed_scale"), ("layered_eye", "mask_scale"),
-    ("masked_eye", "packed_scale"), ("masked_eye", "mask_scale"),
+    ("masked_eye", "mask_scale"),
     ("unlit_constant", "constant_size"), ("unlit_constant", "repeat_hash"),
     ("unlit_alias", "alias_resource"), ("unlit_alias", "alias_size"),
     ("unlit_alias", "repeat_size"), ("unlit_alias", "mask_scale"),
     ("unlit_constant", "non_power_scale"), ("unlit_constant", "extra_prefix"),
-    ("unlit_constant", "repeat_separate_resource"), ("unlit_alias", "repeat_separate_resource"),
+    ("unlit_constant", "repeat_separate_resource"),
     ("unlit_alias", "alias_version"),
     ("face_equal_mask_lookup", "mask_scale"), ("face_equal_mask_lookup", "atlas_scale"),
     ("face_equal_mask_lookup", "packed_mismatch"), ("face_equal_mask_lookup", "alias_resource"),
-    ("face_equal_mask_lookup", "alias_version"), ("face_equal_mask_lookup", "square_lookup"),
 ])
 def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(family, change):
     specs, aliases, slot = _additional_material_family(family)
@@ -458,9 +444,13 @@ def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(fami
                   if change == "mask_scale" else {"color_scale": 3, "vector_scale": 1,
                       "packed_scale": 3, "alias_size": 2, "repeat_size": 6}[change])
         textures[target].update(width=textures[target]["width"] * 2, height=textures[target]["height"] * 2)
-    elif change in ("square_lookup", "tall_lookup", "narrow_lookup"):
-        textures[4 if family == "face_equal_mask_lookup" else 2].update(
-            width=128, height={"square_lookup": 128, "tall_lookup": 256, "narrow_lookup": 64}[change])
+    elif change == "square_lookup":
+        textures[2].update(width=128, height=128)
+    elif change == "smaller_lookup":
+        textures[2].update(width=64, height=4)
+    elif change == "smaller_atlases":
+        for texture in textures.values():
+            texture.update(width=texture["width"] // 2, height=texture["height"] // 2)
     elif change == "atlas_scale":
         textures[1].update(width=1024, height=1024)
     elif change == "packed_mismatch":

@@ -107,6 +107,11 @@ screen-space resources remain unclassified.
 Face masks may match the shared packed-data atlas in size only when a double-size
 color atlas and trailing short, wide lookup complete the family. This variant
 takes priority over competing color-led hair passes on the same geometry range.
+The compact-main signature requires each square input to be at least 128 pixels
+wide, including its quarter-size trailing input. Lookup-led signatures require
+a lookup width of at least 128 pixels, height between 2 and 127 pixels, and width
+at least four times its height. Smaller layouts remain unclassified by these
+signatures; scale relationships alone do not establish their roles.
 
 When reconstructed expression data and recognized facial material evidence agree,
 the extractor groups those components in `Face/` with their own `hash.json`.

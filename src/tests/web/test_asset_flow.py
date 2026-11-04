@@ -9,13 +9,12 @@ from .support import bridge_calls, open_model, wait_loaded
 @pytest.mark.parametrize('asset_type,game,upright', [
     ('WWMI', 'wuwa', True), ('ZZMI', 'zzz', True), ('GIMI', 'genshin', False),
 ])
-@pytest.mark.parametrize('type_source', ['payload', 'entry'])
-def test_asset_type_sets_upright_orientation_across_reload_and_reset(viewer, asset_type, game, upright, type_source):
+def test_asset_game_metadata_preserves_upright_orientation_across_reload_and_reset(viewer, asset_type, game, upright):
     asset = model_payload()
-    asset['metadata'].update(source_kind='asset', game={'id': 'unknown'})
-    if type_source == 'payload':
-        asset['metadata']['asset'] = {'type': asset_type}
-    entry = {'asset': True, 'asset_type': asset_type if type_source == 'entry' else 'GIMI'}
+    asset['metadata'].update(source_kind='asset', asset={'type': asset_type},
+                             game={'id': game, 'runtime': 'asset',
+                                   'texture_api': asset_type.lower(), 'confidence': 'authoritative'})
+    entry = {'asset': True, 'asset_type': asset_type}
     mod = model_payload()
     mod['metadata']['game'] = {'id': game}
     page = viewer({'fixture-01': mod, 'fixture-02': asset})
