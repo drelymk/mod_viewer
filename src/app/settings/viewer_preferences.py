@@ -1,4 +1,4 @@
-"""Validated, explicitly changed global environment and tool preferences."""
+"""Validated, explicitly changed global viewer preferences."""
 
 from . import config
 
@@ -6,7 +6,7 @@ from . import config
 PREFERENCES_KEY = "viewerPreferences"
 BOOLEAN_KEYS = {
     "wireframe", "outlines", "bloom", "toonShading", "grid",
-    "smoothShading", "navigationGizmo",
+    "smoothShading", "navigationGizmo", "autoRestoreMissingAssetParts",
 }
 CHOICES = {
     "environment": ("default", "studio", "indoor", "outdoor", "sunset"),

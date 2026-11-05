@@ -175,18 +175,170 @@ def test_missing_asset_parts_are_explicit_transient_and_removed_on_reload(viewer
     assert bridge_calls(page, 'export') == []
 
 
-def test_failed_asset_fill_rolls_back_frontend_and_backend_transaction(viewer):
+def test_settings_auto_restore_lifecycle_is_persistent_and_preview_only(viewer):
+    base = model_payload()
+    base['asset_resolution'] = {'configured_roots': 1}
+    fill = model_payload()
+    fill['meshes'] = {'fill-00': fill['meshes'].pop('mesh-00')}
+    fill['meshes']['fill-00'].update(component='component-01', asset_fill=True)
+    asset = model_payload()
+    asset['metadata']['source_kind'] = 'asset'
+    page = viewer({'fixture-01': base, 'fixture-fill': fill,
+                   'fixture-02': asset, 'fixture-03': model_payload()})
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    assert bridge_calls(page, 'fill') == bridge_calls(page, 'preferencesSave') == []
+    assert page.evaluate('document.getElementById("language-control").nextElementSibling.id') == 'settings-btn'
+    page.locator('#language-btn').click()
+    page.locator('#settings-btn').click()
+    assert not page.locator('#language-popover').is_visible()
+    assert page.locator('#settings-dialog').get_attribute('aria-modal') == 'true'
+    checkbox = page.locator('#settings-auto-restore')
+    assert checkbox.evaluate('(element) => element === document.activeElement')
+    assert not checkbox.is_checked()
+    page.keyboard.press('Shift+Tab')
+    assert page.locator('#settings-close').evaluate('(element) => element === document.activeElement')
+    page.keyboard.press('Shift+Tab')
+    assert page.locator('#settings-done').evaluate('(element) => element === document.activeElement')
+    checkbox.check()
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "preferencesSave")')
+    assert bridge_calls(page, 'preferencesSave') == [[{'autoRestoreMissingAssetParts': True}]]
+    assert bridge_calls(page, 'fill') == []
+    page.keyboard.press('Escape')
+    assert not page.locator('#settings-backdrop').is_visible()
+    assert page.locator('#settings-btn').evaluate('(element) => element === document.activeElement')
+    assert page.evaluate('window.modViewer.reloadCurrentMod()')
+    wait_loaded(page, 2)
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    page.locator('#asset-fill-btn').click()
+    page.wait_for_function('window.modViewer.activeMeshes.length === 1')
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    assert page.evaluate('window.modViewer.reloadCurrentMod()')
+    wait_loaded(page, 2)
+    assert bridge_calls(page, 'fill') == [['fixture-01'], ['fixture-01']]
+    assert page.evaluate('window.modViewer.activeMeshes.filter(mesh => mesh.userData.assetFill).length') == 1
+    assert page.locator('#export-btn').is_disabled()
+    assert not page.evaluate('window.__bridge.pending["fixture-01"] || false')
+    assert bridge_calls(page, 'export') == []
+
+    page.reload()
+    page.wait_for_function('window.modViewer !== undefined')
+    page.locator('#settings-btn').click()
+    assert checkbox.is_checked()
+    page.locator('#settings-close').click()
+    open_model(page, 'fixture-01')
+    wait_loaded(page, 2)
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    assert page.evaluate("window.modViewer.switchAsset('fixture-02', {asset: true})")
+    wait_loaded(page)
+    open_model(page, 'fixture-03')
+    wait_loaded(page)
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    page.locator('#settings-btn').click()
+    checkbox.uncheck()
+    page.locator('#settings-done').click()
+    open_model(page, 'fixture-01')
+    wait_loaded(page)
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    page.reload()
+    page.wait_for_function('window.modViewer !== undefined')
+    page.locator('#settings-btn').click()
+    assert not checkbox.is_checked()
+    page.locator('#settings-backdrop').click(position={'x': 5, 'y': 5})
+    assert not page.locator('#settings-backdrop').is_visible()
+    assert bridge_calls(page, 'preferencesSave') == []
+
+
+def test_slow_auto_restore_allows_mod_switch_and_rolls_back_stale_result(viewer):
+    base = model_payload()
+    base['asset_resolution'] = {'configured_roots': 1}
+    fill = model_payload()
+    fill['meshes']['mesh-00']['asset_fill'] = True
+    page = viewer({'fixture-01': base, 'fixture-02': model_payload(2), 'fixture-fill': fill},
+                  preferences={'autoRestoreMissingAssetParts': True})
+    page.evaluate('window.__bridge.blocked.fill = true')
+    open_model(page, 'fixture-01')
+    page.wait_for_function('window.__bridge.waiters.fill?.length === 1')
+    page.wait_for_function('!document.querySelector("#open-btn").disabled', timeout=3000)
+    assert page.locator('#asset-fill-btn').is_disabled()
+
+    open_model(page, 'fixture-02')
+    wait_loaded(page, 2)
+    snapshot = """async () => {
+      const {viewerState} = await import('./js/app/state.js');
+      return {source: viewerState.currentSource, fill: {
+        epoch: viewerState.assetFill.epoch, loading: viewerState.assetFill.loading,
+        loaded: viewerState.assetFill.loaded, fillId: viewerState.assetFill.fillId,
+      }, meshes: window.modViewer.activeMeshes.map(mesh => ({
+        id: mesh.uuid, visible: mesh.visible,
+        positions: [...mesh.geometry.attributes.position.array],
+      }))};
+    }"""
+    new_scene = page.evaluate(snapshot)
+    assert new_scene['source']['path'] == 'fixture-02'
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    assert page.evaluate('window.__bridge.waiters.fill.length') == 1
+
+    page.evaluate('window.__bridge.release("fill")')
+    page.wait_for_function('window.__bridge.calls.some(call => call.name === "fillRemove")')
+    assert bridge_calls(page, 'fillRemove') == [['fixture-01', 'fill-01']]
+    assert page.evaluate(snapshot) == new_scene
+    assert page.evaluate('window.modViewer.activeMeshes.every(mesh => !mesh.userData.assetFill)')
+    assert not page.locator('#dialog-backdrop').is_visible()
+    assert bridge_calls(page, 'export') == []
+
+
+@pytest.mark.parametrize('response', [
+    {'status': 'nothing_missing'}, {'status': 'asset_ambiguous'},
+    {'status': 'asset_not_found'}, {'status': 'error', 'error': 'fixture failure'},
+    {'status': 'unknown'}, None,
+])
+def test_auto_restore_responses_are_silent_but_manual_action_explains(viewer, response):
+    base = model_payload()
+    base['asset_resolution'] = {'configured_roots': 1}
+    page = viewer({'fixture-01': base}, preferences={'autoRestoreMissingAssetParts': True},
+                  native={'fill': response}, startup={'path': 'fixture-01'})
+    wait_loaded(page)
+    assert bridge_calls(page, 'fill') == [['fixture-01']]
+    assert not page.locator('#dialog-backdrop').is_visible()
+    page.locator('#asset-fill-btn').click()
+    page.locator('#dialog-backdrop.show').wait_for()
+    assert page.locator('#dialog-message').inner_text()
+    page.locator('#dialog-ok').click()
+    assert bridge_calls(page, 'fill') == [['fixture-01'], ['fixture-01']]
+    assert bridge_calls(page, 'export') == []
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+def test_failed_asset_fill_rolls_back_frontend_and_backend_transaction(viewer, automatic):
     base = model_payload()
     base['asset_resolution'] = {'configured_roots': 1}
     fill = model_payload()
     fill['_fixture_missing_geometry'] = True
-    page = viewer({'fixture-01': base, 'fixture-fill': fill})
+    page = viewer({'fixture-01': base, 'fixture-fill': fill},
+                  preferences={'autoRestoreMissingAssetParts': automatic})
+    if automatic:
+        page.evaluate('window.__bridge.blocked.fill = true')
     open_model(page, 'fixture-01')
-    wait_loaded(page)
-    page.locator('#asset-fill-btn').click()
-    page.locator('#dialog-backdrop.show').wait_for()
+    if automatic:
+        page.wait_for_function('window.__bridge.waiters.fill?.length > 0')
+        page.locator('#settings-btn').click()
+        page.evaluate('window.__bridge.release("fill")')
+    else:
+        wait_loaded(page)
+        page.locator('#asset-fill-btn').click()
+    if automatic:
+        wait_loaded(page)
+        page.wait_for_function('!document.querySelector("#asset-fill-btn").disabled')
+        assert not page.locator('#dialog-backdrop').is_visible()
+    else:
+        page.locator('#dialog-backdrop.show').wait_for()
     assert page.evaluate('window.modViewer.activeMeshes.length') == 1
     assert bridge_calls(page, 'fillRemove') == [['fixture-01', 'fill-01']]
-    page.locator('#dialog-ok').click()
+    if automatic:
+        assert page.locator('#settings-backdrop').is_visible()
+        page.locator('#settings-close').click()
+    else:
+        page.locator('#dialog-ok').click()
     page.wait_for_function('!document.querySelector("#asset-fill-btn").disabled')
     assert page.locator('#asset-fill-btn').get_attribute('data-state') == 'load'

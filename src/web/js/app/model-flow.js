@@ -2,7 +2,8 @@
 
 import { viewerState, samePath } from './state.js';
 import { syncModelExportAvailability } from './model-export.js';
-import { resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
+import { loadMissingAssetParts, resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
+import { shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
@@ -380,6 +381,19 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     success: true,
     active_meshes: activeMeshes.length,
     payload_meshes: Object.keys(data?.meshes || {}).length,
+  });
+  // Optional restoration must not hold the mod transition open. A delayed
+  // preference read still belongs to this load, including same-path reloads.
+  const assetFillEpoch = viewerState.assetFill.epoch;
+  void shouldAutoRestoreMissingAssetParts().then((enabled) => {
+    if (
+      enabled &&
+      viewerState.assetFill.epoch === assetFillEpoch &&
+      samePath(viewerState.currentModPath, path) &&
+      viewerState.assetFill.available
+    ) {
+      return loadMissingAssetParts({ automatic: true });
+    }
   });
   return true;
 }

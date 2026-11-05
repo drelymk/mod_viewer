@@ -59,6 +59,7 @@ import { getLoadBenchmark } from './app/load-benchmark.js';
 import { initEnvironmentControl, initToolPopovers, initToolbarOverflow } from './ui/toolbar.js';
 import { initPanelCollapse } from './ui/panel-utils.js';
 import { initViewerPreferences } from './ui/viewer-preferences.js';
+import { initSettingsDialog } from './ui/settings.js';
 import { initAnimationPlayback } from './ui/animation-playback.js';
 import { initPersistenceFeedback } from './ui/persistence-feedback.js';
 
@@ -302,6 +303,7 @@ function syncBloomControl() {
 initToolbarOverflow();
 initPanelOpacityControl();
 initLanguageControl();
+initSettingsDialog();
 initOpenModMenu();
 initExportMenu();
 

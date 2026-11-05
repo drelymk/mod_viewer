@@ -519,7 +519,8 @@ of documentation, comments and tests; use portable fixtures instead.
   without automatically binding them. Only actual auxiliary/unusable evidence
   excludes resources from normal output; retain provenance and optional debug files.
 - Index Assets through metadata only. Heavy geometry/textures require explicit
-  indexed-Asset loading or the explicit missing-original-parts action.
+  indexed-Asset loading, the missing-original-parts action, or the user's saved
+  opt-in to restore missing parts automatically after a successful mod load.
   Read geometry-object metadata once per index build and reuse that document
   through validation and record construction; each new build reads fresh data.
   Warn about discarded object metadata while retaining valid sibling objects.
@@ -538,7 +539,15 @@ of documentation, comments and tests; use portable fixtures instead.
   uniquely selected, explicit skips also cover its matching ranges alongside
   auxiliary VB bindings; those hashes still cannot select a different Asset.
   Automatic filling requires one unique Asset and retains component/range provenance;
-  filled geometry is session-only and removed on reload/switch.
+  filled geometry is session-only and removed on reload/switch. The global
+  `autoRestoreMissingAssetParts` preference defaults to off; when enabled, each
+  successful mod load/reload uses the same fill transaction after displaying the
+  mod without keeping the mod transition open. Guard delayed preference reads
+  by the originating path and Asset-fill epoch; stale fill responses use the
+  existing rollback without changing the new scene. Automatic restoration never
+  shows error dialogs or status messages, including on failed loads; failures
+  retain the same rollback and cleanup.
+  Manual restoration still explains errors. Direct Asset previews never trigger filling.
 - New GIMI extraction derives face placement only from captured object matrices
   and a verified native skinning palette: inverse(head skinning) times
   inverse(body world) times face world. Require the supported head-local axis

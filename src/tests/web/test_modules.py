@@ -1119,6 +1119,48 @@ def test_appearance_controls_share_persistence_and_save_explicit_defaults(module
     }
 
 
+def test_settings_wait_for_saved_preference_and_preserve_changes_during_load(module_page):
+    result = module_page.evaluate("""async () => {
+      document.body.innerHTML = `<button id="settings-btn"></button>
+        <div id="settings-backdrop"><section id="settings-dialog">
+          <button id="settings-close"></button><input id="settings-auto-restore" type="checkbox">
+          <button id="settings-done"></button></section></div>`;
+      let resolveRead;
+      let resolveSaved;
+      const saved = new Promise(resolve => {resolveSaved = resolve;});
+      const writes = [];
+      window.pywebview = {api:{
+        get_viewer_preferences: () => new Promise(resolve => {resolveRead = resolve;}),
+        set_viewer_preferences: async changes => {
+          writes.push(changes);
+          if (writes.length === 2) resolveSaved();
+          return {value:changes};
+        },
+      }};
+      const settings = await import('./js/ui/settings.js');
+      const persistence = settings.initSettingsDialog();
+      let checked = false;
+      const reading = settings.shouldAutoRestoreMissingAssetParts().then(value => {checked = true; return value;});
+      await Promise.resolve();
+      const waiting = !checked;
+      const input = document.getElementById('settings-auto-restore');
+      input.checked = true;
+      input.dispatchEvent(new Event('change'));
+      resolveRead({value:{autoRestoreMissingAssetParts:false, grid:false}});
+      await persistence.ready;
+      const enabled = await reading;
+      input.checked = false;
+      input.dispatchEvent(new Event('change'));
+      const disabled = await settings.shouldAutoRestoreMissingAssetParts();
+      await saved;
+      return {waiting, enabled, disabled, checked:input.checked, writes};
+    }""")
+    assert result == {
+        'waiting': True, 'enabled': True, 'disabled': False, 'checked': False,
+        'writes': [{'autoRestoreMissingAssetParts': True}, {'autoRestoreMissingAssetParts': False}],
+    }
+
+
 def _prepare_rig_overlay(page, orthographic=False):
     page.evaluate("""async orthographic => {
       const THREE = await import('three/webgpu');

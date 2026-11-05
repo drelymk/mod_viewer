@@ -95,9 +95,14 @@ async function rollbackAssetFill(path, operation, fillId, addedMeshes, textureKe
   await releaseBackendAssetFill(path, fillId);
 }
 
-export async function loadMissingAssetParts() {
+export async function loadMissingAssetParts({ automatic = false } = {}) {
   const state = viewerState;
-  if (!state.currentModPath || state.currentSource?.kind !== 'mod' || state.assetFill.loading) {
+  if (
+    !state.currentModPath ||
+    state.currentSource?.kind !== 'mod' ||
+    state.assetFill.loading ||
+    state.assetFill.loaded
+  ) {
     return false;
   }
   const path = state.currentModPath;
@@ -127,6 +132,7 @@ export async function loadMissingAssetParts() {
       return false;
     }
     if (result?.status !== 'loaded') {
+      if (automatic) return false;
       const messages = {
         nothing_missing: t('errors.assetFillNothing'),
         asset_ambiguous: t('errors.assetFillAmbiguous'),
@@ -198,7 +204,7 @@ export async function loadMissingAssetParts() {
   } catch (error) {
     await rollback();
     if (!assetFillOperationIsCurrent(operation, path)) return false;
-    await alertDialog(t('errors.loadMissingAsset', { detail: error.message }));
+    if (!automatic) await alertDialog(t('errors.loadMissingAsset', { detail: error.message }));
     return false;
   } finally {
     if (operation === state.assetFill.epoch) {
