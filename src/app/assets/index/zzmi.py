@@ -5,6 +5,6 @@ Keeping this module separate leaves room for game-specific validation without
 making the registry or API infer a type from weak metadata signals.
 """
 
-from .gimi import MetadataError, parse_hash_file
+from .gimi import MetadataError, parse_hash_document, parse_hash_file
 
-__all__ = ["MetadataError", "parse_hash_file"]
+__all__ = ["MetadataError", "parse_hash_document", "parse_hash_file"]

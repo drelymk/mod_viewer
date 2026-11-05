@@ -11,6 +11,7 @@ import threading
 from app.assets import folders as asset_folders
 from app.settings import config, paths
 from core.geometry.identity import normalize_geometry_hash
+from app.assets.package_format import is_viewer_metadata
 from . import gimi, wwmi, zzmi
 from .models import AssetRecord
 
@@ -118,13 +119,14 @@ def _name(path):
     return os.path.basename(path).casefold()
 
 
-def _hash_group_candidates(group, root):
+def _hash_group_candidates(group, root, warnings):
     candidates = []
     weapon_group = _name(group) == "weapondata"
     for child in _safe_child_dirs(group, root):
         marker = _safe_file(child, root, "hash.json")
-        if marker and (not weapon_group or _name(child) in _WEAPON_GROUPS):
-            candidates.append((child, marker))
+        objects = {} if marker else _hash_object_markers(child, root, warnings=warnings)
+        if (marker or objects) and (not weapon_group or _name(child) in _WEAPON_GROUPS):
+            candidates.append((child, marker, objects))
             continue
         # GIMI's full export places weapon assets below a known weapon-type
         # directory. Do not generalize this into arbitrary nested discovery.
@@ -132,20 +134,57 @@ def _hash_group_candidates(group, root):
             continue
         for asset in _safe_child_dirs(child, root):
             asset_marker = _safe_file(asset, root, "hash.json")
-            if asset_marker:
-                candidates.append((asset, asset_marker))
+            objects = {} if asset_marker else _hash_object_markers(asset, root, warnings=warnings)
+            if asset_marker or objects:
+                candidates.append((asset, asset_marker, objects))
     return candidates
 
 
-def _hash_candidates(root):
+def _geometry_object_markers(path, root, filename):
+    """Share bounded hash-folder discovery across native metadata formats."""
+    for child in _safe_child_dirs(path, root):
+        identity = normalize_geometry_hash(os.path.basename(child))
+        if identity is None:
+            continue
+        marker = _safe_file(child, root, filename)
+        if marker:
+            yield identity, marker
+
+
+def _hash_object_markers(path, root, *, warnings=None):
+    """Recognize only explicitly marked viewer geometry objects, one level deep."""
+    markers = {}
+    for identity, marker in _geometry_object_markers(path, root, "hash.json"):
+        try:
+            with open(marker, encoding="utf-8") as stream:
+                document = json.load(stream)
+            if (is_viewer_metadata(document) and document.get("layout") == "geometry-objects"
+                    and document.get("position_vb") == identity
+                    and isinstance(document.get("components"), list) and document["components"]
+                    and all(isinstance(component, dict) and component.get("position_vb") == identity
+                            for component in document["components"])):
+                markers[marker] = document
+            else:
+                raise ValueError("Invalid geometry-object layout or position-buffer identity.")
+        except (OSError, ValueError, UnicodeError) as error:
+            if warnings is not None:
+                warnings.append(_warning(root, marker, error))
+    return markers
+
+
+def _hash_candidates(root, warnings):
     candidates = []
     skipped = []
     for child in _safe_child_dirs(root, root):
         marker = _safe_file(child, root, "hash.json")
         if marker:
-            candidates.append((child, marker))
+            candidates.append((child, marker, {}))
             continue
-        nested = (_hash_group_candidates(child, root)
+        objects = _hash_object_markers(child, root, warnings=warnings)
+        if objects:
+            candidates.append((child, None, objects))
+            continue
+        nested = (_hash_group_candidates(child, root, warnings)
                   if _name(child) in _HASH_GROUPS else [])
         if nested:
             candidates.extend(nested)
@@ -155,14 +194,7 @@ def _hash_candidates(root):
 
 
 def _wwmi_object_markers(path, root):
-    markers = []
-    for child in _safe_child_dirs(path, root):
-        if normalize_geometry_hash(os.path.basename(child)) is None:
-            continue
-        marker = _safe_file(child, root, "Metadata.json")
-        if marker:
-            markers.append(marker)
-    return markers
+    return [marker for _identity, marker in _geometry_object_markers(path, root, "Metadata.json")]
 
 
 def _wwmi_candidates(root):
@@ -189,7 +221,19 @@ def _wwmi_candidates(root):
     return candidates, skipped
 
 
-def _parse_hash_asset(asset_path, root, metadata_path, parser):
+def _parse_hash_asset(asset_path, root, metadata_path, parser, *, objects=None, warnings=None):
+    if metadata_path is None:
+        records = []
+        objects = _hash_object_markers(asset_path, root, warnings=warnings) if objects is None else objects
+        for marker, document in objects.items():
+            try:
+                records.append(parser.parse_hash_document(asset_path, root, marker, normalize_geometry_hash, document))
+            except (OSError, ValueError, UnicodeError) as error:
+                if warnings is not None:
+                    warnings.append(_warning(root, marker, error))
+        if not records:
+            raise ValueError("No valid geometry object metadata")
+        return _merge_asset_records(records)[0]
     metadata_paths = [metadata_path]
     for child in _safe_child_dirs(asset_path, root):
         nested = _safe_file(child, root, "hash.json")
@@ -219,10 +263,11 @@ def _parse_wwmi_asset(asset_path, root, direct, objects):
 
 def _individual_hash_asset(root, parser):
     marker = _safe_file(root, root, "hash.json")
-    if not marker:
+    objects = {} if marker else _hash_object_markers(root, root)
+    if not marker and not objects:
         return False
     try:
-        _parse_hash_asset(root, root, marker, parser)
+        _parse_hash_asset(root, root, marker, parser, objects=objects)
     except (OSError, ValueError, UnicodeError):
         return False
     return True
@@ -303,6 +348,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
     if not os.path.isdir(root):
         raise AssetIndexError("Asset Folder path must be a directory.")
 
+    warnings = []
     if asset_type in ("GIMI", "ZZMI"):
         parser = gimi if asset_type == "GIMI" else zzmi
         if _individual_hash_asset(root, parser):
@@ -310,7 +356,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
                 "This appears to be an individual character asset. "
                 "Select its parent folder containing the character asset folders.")
         children = _safe_child_dirs(root, root)
-        candidates, skipped_paths = _hash_candidates(root)
+        candidates, skipped_paths = _hash_candidates(root, warnings)
     else:
         if _individual_wwmi_asset(root):
             raise IndividualAssetError(
@@ -326,12 +372,14 @@ def build_index(asset_type, root, *, exclude_paths=()):
                              for path in excluded)]
     skipped_paths = [path for path in skipped_paths
                      if asset_folders.normalize_path(path) not in excluded]
+    warnings = [item for item in warnings
+                if not any(asset_folders.is_within(os.path.join(root, item["path"]), path)
+                           for path in excluded)]
     if not children:
         raise NoValidAssetsError(
             "Asset Folder must contain immediate child directories.")
 
     records = []
-    warnings = []
     seen = set()
     for candidate in candidates:
         asset_path = candidate[0]
@@ -342,7 +390,7 @@ def build_index(asset_type, root, *, exclude_paths=()):
         try:
             if asset_type in ("GIMI", "ZZMI"):
                 record = _parse_hash_asset(
-                    asset_path, root, candidate[1], parser)
+                    asset_path, root, candidate[1], parser, objects=candidate[2], warnings=warnings)
             else:
                 record = _parse_wwmi_asset(
                     asset_path, root, candidate[1], candidate[2])

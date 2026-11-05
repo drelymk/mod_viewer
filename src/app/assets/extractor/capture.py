@@ -12,6 +12,7 @@ ARGS = re.compile(r"(\w+):([^,)]+)")
 GROUPS = {"IASetVertexBuffers": "vb", "SOSetTargets": "so",
           "CSSetUnorderedAccessViews": "u", "CSSetShaderResources": "cs-t",
           "CSSetConstantBuffers": "cs-cb", "PSSetShaderResources": "ps-t"}
+GROUPS.update({"VSSetConstantBuffers": "vs-cb", "VSSetShaderResources": "vs-t"})
 _SLOT_COUNT = 128
 
 

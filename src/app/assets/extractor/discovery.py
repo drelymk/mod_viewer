@@ -264,6 +264,8 @@ def analyze(dump, context=None):
     if inv.gimi_evidence and not inv.zzz_evidence:
         from .profiles.gimi_faces import classify_faces
         components.extend(classify_faces(decoded_meshes, ctx))
+        from .profiles.gimi_placement import record_placements
+        record_placements(inv, calls, components, ctx)
     for component in components:
         if component.status == "included" and component.requires_review:
             component.reason = "Decodable direct geometry; target-asset membership is unproven"
@@ -287,6 +289,8 @@ def analyze(dump, context=None):
             needed_files.update(t["file"] for t in part.textures)
         for d in c.morph.get("dispatches", []):
             needed_files.update((d["delta"], d["constant"]))
+        needed_files.update(source["file"] for source in
+                            c.provenance.get("gimi_face_placement", {}).get("sources", []))
     analysis = Analysis(str(inv.root), "stream-output", components, diagnostics,
                     dict(scan_seconds=time.perf_counter() - started, file_count=len(inv.files), logical_bytes=inv.logical_bytes,
                          event_count=len(calls), supported_components=sum(c.status == "included" for c in components),

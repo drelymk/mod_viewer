@@ -42,10 +42,15 @@ def test_attribute_skinning_round_trip_preserves_ranges_weights_and_texture_iden
     assert [v for i in joints for v in mesh.vertices[1][i]] == list(range(influences))
     assert sum(v for i in weights for v in mesh.vertices[0][i]) == 0
     assert sum(v for i in weights for v in mesh.vertices[1][i]) == pytest.approx(1)
-    def reject_hash_layout(_meshes):
-        raise AssertionError("Native WWMI export must choose its own object folders")
-    monkeypatch.setattr("app.assets.extractor.export._component_folders", reject_hash_layout)
+    from app.assets.extractor.export import _component_folders
+    layouts = []
+    def shared_layout(meshes):
+        folders = _component_folders(meshes)
+        layouts.append(folders)
+        return folders
+    monkeypatch.setattr("app.assets.extractor.export._component_folders", shared_layout)
     report = export(package, tmp_path / "exports")
+    assert len(layouts) == 1
     asset = Path(report.output)
     assert not (asset / "hash.json").exists()
     metadata = json.loads((asset / "11111111/Metadata.json").read_text(encoding="utf-8"))
@@ -360,7 +365,8 @@ def test_wwmi_diffuse_requires_material_family_evidence(case, expected):
 
 
 _ADDITIONAL_FAMILIES = ("compact_main", "color_led_hair", "layered_eye", "masked_eye",
-                        "unlit_constant", "unlit_alias", "face_equal_mask_lookup")
+                        "unlit_constant", "unlit_alias", "face_equal_mask_lookup",
+                        "hair_bc1", "face_equal_atlas_lookup", "face_equal_atlas_lookup_bc1")
 
 
 def _additional_material_family(family):
@@ -379,11 +385,22 @@ def _additional_material_family(family):
         if family == "masked_eye":
             textures[:2] = [("BC3_UNORM_SRGB", 256, 256), ("BC1_UNORM_SRGB", 128, 128)]
         slot = 2
-    elif family == "face_equal_mask_lookup":
+    elif family == "hair_bc1":
+        textures = [("BC1_UNORM", 128, 128), ("BC7_UNORM_SRGB", 512, 512),
+                    ("B8G8R8A8_UNORM", 128, 128), ("B8G8R8A8_UNORM", 256, 128),
+                    ("B8G8R8A8_UNORM", 512, 4), ("BC7_UNORM", 512, 512),
+                    ("B8G8R8A8_UNORM_SRGB", 128, 8)]
+        slot = 1
+    elif family.startswith("face_equal_"):
         textures = [("BC1_UNORM", 256, 256), ("BC7_UNORM_SRGB", 512, 512),
                     ("B8G8R8A8_UNORM", 256, 256), ("B8G8R8A8_UNORM", 256, 256),
                     ("B8G8R8A8_UNORM_SRGB", 128, 8)]
         aliases, slot = {3: 2}, 1
+        if family != "face_equal_mask_lookup":
+            textures[0] = ("BC1_UNORM" if family.endswith("bc1") else "BC3_UNORM", 256, 256)
+            textures[1] = ("BC7_UNORM_SRGB", 256, 256)
+            textures.append(textures[4])
+            aliases[5] = 4
     else:
         textures = [None, ("B8G8R8A8_UNORM_SRGB", 1, 1), ("BC7_UNORM_SRGB", 1024, 1024),
                     ("BC7_UNORM_SRGB", 128, 128), ("BC7_UNORM_SRGB", 256, 256),
@@ -410,7 +427,8 @@ def test_additional_wwmi_families_require_bound_neighbors(family):
                              resource={"hash": f"{source + 1:08x}", "address": f"0x{source + 1:x}0"},
                              format=fmt, width=width, height=height))
     by_slot = {t["slot"]: t for t in textures}
-    neighbor = (2 if family == "color_led_hair" else 6 if family.startswith("unlit")
+    neighbor = (2 if family == "color_led_hair" else 5 if family == "hair_bc1"
+                or family.startswith("face_equal_atlas") else 6 if family.startswith("unlit")
                 else 4 if family == "face_equal_mask_lookup" else 3)
     by_slot[neighbor]["resource"] = None
     assert material_roles(textures, True, "a" * 16) == {}
@@ -431,6 +449,13 @@ def test_additional_wwmi_families_require_bound_neighbors(family):
     ("unlit_alias", "alias_version"),
     ("face_equal_mask_lookup", "mask_scale"), ("face_equal_mask_lookup", "atlas_scale"),
     ("face_equal_mask_lookup", "packed_mismatch"), ("face_equal_mask_lookup", "alias_resource"),
+    ("hair_bc1", "vector_scale"), ("hair_bc1", "packed_scale"),
+    ("hair_bc1", "wrong_mask"), ("hair_bc1", "rectangular_mask"),
+    ("face_equal_atlas_lookup", "mask_scale"), ("face_equal_atlas_lookup", "packed_mismatch"),
+    ("face_equal_atlas_lookup", "alias_resource"), ("face_equal_atlas_lookup", "lookup_identity"),
+    ("face_equal_atlas_lookup", "lookup_version"), ("face_equal_atlas_lookup", "lookup_format"),
+    ("face_equal_atlas_lookup", "lookup_size"), ("face_equal_atlas_lookup", "square_lookup"),
+    ("face_equal_atlas_lookup", "lookup_contaminated"),
 ])
 def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(family, change):
     specs, aliases, slot = _additional_material_family(family)
@@ -440,12 +465,16 @@ def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(fami
                 for i, spec in enumerate(specs) if spec is not None}
     if change in ("mask_scale", "color_scale", "vector_scale", "packed_scale", "alias_size", "repeat_size"):
         target = ({"compact_main": 1, "layered_eye": 0, "masked_eye": 1,
-                   "face_equal_mask_lookup": 0}.get(family, 4)
+                   "face_equal_mask_lookup": 0, "face_equal_atlas_lookup": 0}.get(family, 4)
                   if change == "mask_scale" else {"color_scale": 3, "vector_scale": 1,
                       "packed_scale": 3, "alias_size": 2, "repeat_size": 6}[change])
+        if family == "hair_bc1":
+            target = 5 if change == "vector_scale" else 2
         textures[target].update(width=textures[target]["width"] * 2, height=textures[target]["height"] * 2)
+        if family == "hair_bc1" and change == "packed_scale":
+            textures[target].update(width=512, height=512)
     elif change == "square_lookup":
-        textures[2].update(width=128, height=128)
+        textures[4 if family.startswith("face_equal_atlas") else 2].update(width=128, height=128)
     elif change == "smaller_lookup":
         textures[2].update(width=64, height=4)
     elif change == "smaller_atlases":
@@ -455,6 +484,10 @@ def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(fami
         textures[1].update(width=1024, height=1024)
     elif change == "packed_mismatch":
         textures[3].update(width=512, height=512)
+    elif change == "wrong_mask":
+        textures[0]["format"] = "BC1_UNORM_SRGB"
+    elif change == "rectangular_mask":
+        textures[3]["height"] = textures[3]["width"]
     elif change == "constant_size":
         textures[1].update(width=4, height=4)
     elif change == "repeat_hash":
@@ -469,6 +502,16 @@ def test_additional_wwmi_families_validate_neighbor_identity_and_dimensions(fami
         textures[4].update(width=192, height=192)
     elif change == "extra_prefix":
         textures[0] = dict(textures[2], slot=0)
+    elif change == "lookup_identity":
+        textures[5]["resource"] = dict(textures[5]["resource"], address="0x90")
+    elif change == "lookup_version":
+        textures[5]["resource"] = dict(textures[5]["resource"], version=1)
+    elif change == "lookup_format":
+        textures[5]["format"] = "B8G8R8A8_UNORM"
+    elif change == "lookup_size":
+        textures[5]["height"] *= 2
+    elif change == "lookup_contaminated":
+        textures[5]["contaminated"] = True
     assert material_roles(list(textures.values()), True, "a" * 16) == (
         {slot: "Diffuse"} if change == "repeat_separate_resource" else {})
 
@@ -556,6 +599,8 @@ def test_wwmi_diffuse_signature_survives_export_and_loading_without_pixel_guessi
     ("unrecognized", "face_bc1"), ("unrecognized", "layered"),
     ("layered_eye", "color_led_hair"),
     ("color_led_hair", "face_equal_mask_lookup"),
+    ("simple", "hair_bc1"), ("main", "hair_bc1"),
+    ("simple", "face_equal_atlas_lookup"),
     *[("unrecognized", family) for family in _ADDITIONAL_FAMILIES],
 ])
 def test_complete_material_pass_outweighs_less_specific_pass_with_more_resources(tmp_path, competing_family, target_family):

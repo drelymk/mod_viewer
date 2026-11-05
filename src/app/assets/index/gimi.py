@@ -121,7 +121,11 @@ def parse_hash_file(asset_path, root, metadata_path, normalize_hash):
             raw = json.load(stream)
     except (OSError, json.JSONDecodeError) as error:
         raise MetadataError(f"hash.json could not be parsed: {error}") from error
+    return parse_hash_document(asset_path, root, metadata_path, normalize_hash, raw)
 
+
+def parse_hash_document(asset_path, root, metadata_path, normalize_hash, raw):
+    """Build records from a document already read during bounded discovery."""
     records = {}
     for entry in _entries(raw):
         if not isinstance(entry, dict):

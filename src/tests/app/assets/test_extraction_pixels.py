@@ -219,7 +219,7 @@ def test_pixel_fallback_exports_unique_color_without_dump_roles(tmp_path, case):
         assert all(t["role"].startswith("TextureSlot") for t in textures)
     report = export(extract(analysis, Selection("Asset_001")), tmp_path / "exports")
     asset = Path(report.output)
-    metadata = json.loads((asset / "hash.json").read_text(encoding="utf-8"))
+    metadata = json.loads((asset / "11111111" / "hash.json").read_text(encoding="utf-8"))
     assert metadata["components"][0]["texture_hashes"][0][0][0] == texture["role"]
     details = json.loads(Path(report.report_path).read_text(encoding="utf-8"))
     assert details["outputs"][0]["textures"][0]["pixel_analysis"]

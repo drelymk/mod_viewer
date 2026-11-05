@@ -3,7 +3,6 @@
 import copy
 import json
 from pathlib import Path
-import struct
 import os
 import random
 import mmap
@@ -15,80 +14,14 @@ import pytest
 from PIL import Image
 
 import extract_asset as headless
-from app.assets import index
+from app.assets import index, loader
 from app.assets.extractor.discovery import analyze
 from app.assets.extractor.export import Selection, export, extract
 from app.assets.extractor.memory_capture import MemoryCapture
 from app.settings import paths
 from tests.support.extraction_data import make_capture
 from tests.support.dds_data import dx10_dds, uncompressed_dds
-
-
-PREFIX = "Local\\ModManager.Capture.7." + "1" * 32 + "."
-
-
-class Seed:
-    def __init__(self, store, path=""):
-        self.store, self.path = store, path
-
-    def __truediv__(self, name):
-        return Seed(self.store, self.path + "/" + name)
-
-    def mkdir(self):
-        pass
-
-    def write_bytes(self, value):
-        self.store[self.path.rsplit("/", 1)[-1]] = value
-
-    def write_text(self, value, **_kwargs):
-        self.write_bytes(value.encode())
-
-
-class Block:
-    def __init__(self, data, name, capacity, offset):
-        self.data, self.name, self.capacity, self.offset = data, name, capacity, offset
-
-    def read(self, offset, length):
-        return self.data[offset : offset + length]
-
-    def close(self):
-        pass
-
-
-def capture_data(data=None):
-    if data is None:
-        data = {}
-        make_capture(Seed(data))
-        # A minimal PNG exercises memory-backed texture copying during export.
-        png = (
-            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"
-            + struct.pack(">II", 16, 16)
-            + b"\x08\x02\0\0\0"
-            + b"\0" * 16
-        )
-        data["000002-ps-t0=66666666.png"] = png
-    manifest = {
-        "version": 1,
-        "prefix": PREFIX,
-        "capture": "frameanalysis-sample",
-        "names": {},
-        "files": {},
-    }
-    blocks = {}
-    for identity, (name, payload) in enumerate(data.items(), 1):
-        mapping = PREFIX + str(identity) + ".0"
-        blocks[mapping] = payload
-        capacity = max(65536, (len(payload) + 65535) // 65536 * 65536)
-        manifest["names"]["frameanalysis-sample/" + name] = identity
-        manifest["files"][str(identity)] = {
-            "size": len(payload),
-            "mappings": [{"name": mapping, "capacity": capacity, "offset": 0}],
-        }
-
-    def factory(name, capacity, offset):
-        return Block(blocks[name], name, capacity, offset)
-
-    return manifest, factory
+from tests.support.memory_capture_data import PREFIX, capture_data
 
 
 def test_headless_memory_capture_add_update_and_rollback(tmp_path, monkeypatch):
@@ -113,8 +46,8 @@ def test_headless_memory_capture_add_update_and_rollback(tmp_path, monkeypatch):
     }
     first = headless.install_capture(request)
     destination = Path(first["path"])
-    assert (destination / "hash.json").is_file()
-    assert list(destination.glob("*.png"))
+    assert (destination / "11111111" / "hash.json").is_file()
+    assert list((destination / "11111111").glob("*.png"))
     assert first["extraction"]["components"] == 1
     second = headless.install_capture(request)
     assert second["path"] == first["path"]
@@ -229,8 +162,8 @@ def test_headless_process_extracts_real_shared_sections_without_raw_dump_files(
         assert process.returncode == 0, process.stderr + process.stdout
         result = json.loads(process.stdout)
         assert result["ok"]
-        assert (output / "SharedModel" / "hash.json").is_file()
-        assert list((output / "SharedModel").glob("*.png"))
+        assert (output / "SharedModel" / "11111111" / "hash.json").is_file()
+        assert list((output / "SharedModel" / "11111111").glob("*.png"))
         assert not list(tmp_path.glob("FrameAnalysis*"))
     finally:
         for owner in owners:
@@ -271,10 +204,11 @@ def test_memory_and_disk_capture_preserve_pixel_roles_geometry_and_asset_metadat
 
 
 @pytest.mark.parametrize("keep_alias", [True, False])
-def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(tmp_path, keep_alias):
+@pytest.mark.parametrize("hashless", [False, True])
+def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(tmp_path, keep_alias, hashless):
     dump = make_capture(tmp_path)
-    diffuse = "000002-ps-t3=66666666.dds"
-    normal = "000002-ps-t4=!S!=77777777.jpg"
+    diffuse = "000002-ps-t3.dds" if hashless else "000002-ps-t3=66666666.dds"
+    normal = "000002-ps-t4.jpg" if hashless else "000002-ps-t4=!S!=77777777.jpg"
     (dump / diffuse).write_bytes(dx10_dds(bytes(256 * 256), dxgi_format=99,
                                          width=256, height=256))
     Image.new("RGB", (128, 128), (128, 128, 255)).save(dump / normal)
@@ -282,6 +216,7 @@ def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(t
     deduped = dump / "deduped"
     deduped.mkdir()
     target = "12345678-R8G8B8A8_UNORM.jpg"
+    (deduped / "87654321-BC7_UNORM_SRGB.dds").write_bytes((dump / diffuse).read_bytes())
     (deduped / target).write_bytes((dump / normal).read_bytes())
     log = dump / "log.txt"
     log.write_text(log.read_text(encoding="utf-8").replace(
@@ -289,12 +224,16 @@ def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(t
         "000002 PSSetShaderResources(StartSlot:3, NumViews:2)\n"
         "       3: resource=0x60 hash=66666666\n"
         "       4: resource=0x70 hash=77777777\n"
-        f"000002 3DMigoto Dumping Texture2D C:\\Runtime\\{diffuse} -> C:\\Runtime\\deduped\\12345678-BC7_UNORM_SRGB.dds\n"
+        f"000002 3DMigoto Dumping Texture2D C:\\Runtime\\{diffuse} -> C:\\Runtime\\deduped\\87654321-BC7_UNORM_SRGB.dds\n"
         f"000002 3DMigoto Dumping Texture2D C:\\Runtime\\{normal} -> C:\\Runtime\\deduped\\{target}\n"
         "000002 DrawIndexed"), encoding="utf-8")
     disk = analyze(dump)
     expected = [(t["role"], t["format"]) for t in disk.components[0].parts[0].textures]
     assert expected == [("Diffuse", "BC7_UNORM_SRGB"), ("NormalMap", "R8G8B8A8_UNORM")]
+    expected_hashes = ["87654321", "12345678"] if hashless else ["66666666", "77777777"]
+    assert [t["hash"] for t in disk.components[0].parts[0].textures] == expected_hashes
+    assert all((t.get("hash_source") == "logged_dedup") == hashless
+               for t in disk.components[0].parts[0].textures)
     data = {p.relative_to(dump).as_posix().lower(): p.read_bytes()
             for p in dump.rglob("*") if p.is_file()}
     if not keep_alias:
@@ -304,12 +243,20 @@ def test_lowercased_capture_names_preserve_zzz_material_roles_and_dedup_lookup(t
         memory = analyze(source)
         actual = [(t["role"], t["format"]) for t in memory.components[0].parts[0].textures]
         assert actual == expected
+        assert [t["hash"] for t in memory.components[0].parts[0].textures] == expected_hashes
         assert (source.root / "deduped" / target).read_bytes() == (dump / normal).read_bytes()
         reports = [export(extract(a, Selection("Sample")), tmp_path / kind)
                    for a, kind in [(disk, "disk-output"), (memory, "memory-output")]]
     assets = [{p.relative_to(Path(r.output)).as_posix(): p.read_bytes()
                for p in Path(r.output).rglob("*") if p.is_file()} for r in reports]
     assert assets[0] == assets[1]
+    for report in reports:
+        root = str(Path(report.output).parent)
+        loaded = loader.load_asset_parts("ZZMI", root, index.build_index("ZZMI", root)["assets"][0])
+        part, = loaded.parts
+        assert not loaded.warnings
+        assert Path(part.textures["diffuse"].path).read_bytes() == (dump / diffuse).read_bytes()
+        assert Path(part.textures["normal_map"].path).read_bytes() == (dump / normal).read_bytes()
 
 
 @pytest.mark.parametrize("limit", ["capacity", "sections"])
