@@ -2,7 +2,8 @@
 
 import { viewerState, samePath } from './state.js';
 import { syncModelExportAvailability } from './model-export.js';
-import { resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
+import { loadMissingAssetParts, resetAssetFillState, updateAssetFillButton } from './asset-fill.js';
+import { shouldAutoRestoreMissingAssetParts } from '../ui/settings.js';
 import { fitTo, isRendererAvailable, setBloomSuppressedByDebug } from '../scene/scene.js';
 import { setRightDockEnabled } from '../panels/right-dock.js';
 import { clearSelection } from '../scene/selection.js';
@@ -381,6 +382,9 @@ async function loadModAt(path, disabledIni, handlers = {}) {
     active_meshes: activeMeshes.length,
     payload_meshes: Object.keys(data?.meshes || {}).length,
   });
+  if ((await shouldAutoRestoreMissingAssetParts()) && viewerState.assetFill.available) {
+    await loadMissingAssetParts({ automatic: true });
+  }
   return true;
 }
 

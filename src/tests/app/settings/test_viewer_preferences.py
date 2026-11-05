@@ -23,7 +23,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
         "ambientOcclusion": 0.4, "bloom": True, "glossy": 73,
         "toonShading": True, "grid": False, "smoothShading": False,
         "textureMode": "diffuse", "keyLightIntensity": 0.75,
-        "navigationGizmo": False,
+        "navigationGizmo": False, "autoRestoreMissingAssetParts": True,
     }
     for name, value in settings.items():
         viewer_preferences.save_preferences({name: value}, filename)
@@ -37,7 +37,7 @@ def test_viewer_preferences_explicit_lifecycle_preserves_other_config(tmp_path):
         "ambientOcclusion": 0, "bloom": False, "glossy": 0,
         "toonShading": False, "grid": True, "smoothShading": True,
         "textureMode": "all", "keyLightIntensity": 1,
-        "navigationGizmo": True,
+        "navigationGizmo": True, "autoRestoreMissingAssetParts": False,
     }
     assert viewer_preferences.save_preferences(defaults, filename) == defaults
     root = tmp_path / "root"
@@ -70,6 +70,7 @@ def test_legacy_glossy_preferences_load_and_save_as_numeric_levels(tmp_path, leg
 
 @pytest.mark.parametrize("changes", [
     None, [], {"orientation": 90}, {"wireframe": 1}, {"grid": "false"},
+    {"autoRestoreMissingAssetParts": "true"}, {"autoRestoreMissingAssetParts": 1},
     {"environment": "unknown"}, {"textureMode": "unknown"},
     {"ambientOcclusion": True}, {"ambientOcclusion": -0.1},
     {"ambientOcclusion": 1.1}, {"keyLightIntensity": 1.6},

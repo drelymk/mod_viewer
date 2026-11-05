@@ -1,4 +1,8 @@
 export default {
+  'settings.title': '设置',
+  'settings.autoRestore': '从资产自动恢复模组缺失部件',
+  'settings.autoRestoreDescription': '模组加载后，从资产库中匹配的资产恢复缺失的原始部件。恢复的部件仅用于预览。',
+  'settings.hint': '更改会自动保存，并在下次加载模组时生效。',
   'asset.extractedPartial':
     '资产提取不完整：已保存 {components} 个组件，跳过 {skipped} 个资源组。可能缺少部件。详情请查看 extraction_report.json。',
   'asset.add': '添加资产',

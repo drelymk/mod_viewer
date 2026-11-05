@@ -1,4 +1,9 @@
 export default {
+  'settings.title': 'Settings',
+  'settings.autoRestore': 'Auto restore missing mod parts from assets',
+  'settings.autoRestoreDescription':
+    'After a mod loads, restore missing original parts from a matching asset in your Asset Library. Restored parts are preview-only.',
+  'settings.hint': 'Changes are saved automatically and apply the next time a mod loads.',
   'asset.extractedPartial':
     'Partial asset extraction: {components} components saved; {skipped} resource groups skipped. Parts may be missing. See extraction_report.json for details.',
   'mesh.rename': 'Rename',

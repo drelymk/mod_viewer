@@ -754,6 +754,27 @@ body.right-dock-mounted #view-gizmo { top: 52px; right: 338px; }
 .modal-actions button {
   border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; border: 1px solid var(--border);
 }
+.settings-modal { width: 460px; }
+.settings-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.settings-title-row h4 { margin: 0; }
+.settings-option {
+  display: flex; align-items: flex-start; gap: 18px; padding: 14px;
+  margin-bottom: 14px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+}
+.settings-option-copy { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; }
+.settings-option-title { font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--text); }
+.settings-option input {
+  appearance: none; position: relative; flex-shrink: 0; width: 34px; height: 20px;
+  margin-top: 1px; border: 1px solid var(--text-muted); border-radius: 10px;
+  background: var(--bg-control); cursor: pointer;
+}
+.settings-option input::before {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px;
+  border-radius: 50%; background: var(--text); transition: transform .15s;
+}
+.settings-option input:checked { background: var(--accent); border-color: var(--accent); }
+.settings-option input:checked::before { transform: translateX(14px); }
+.settings-option input:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
 #asset-folder-modal-backdrop .modal, #asset-extract-backdrop .modal { width: 360px; }
 .texture-bake-modal { width: min(520px, calc(100vw - 40px)); }
 .texture-bake-title-row {

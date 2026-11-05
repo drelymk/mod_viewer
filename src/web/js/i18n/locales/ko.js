@@ -1,4 +1,9 @@
 export default {
+  'settings.title': '설정',
+  'settings.autoRestore': '에셋에서 누락된 모드 파츠 자동 복원',
+  'settings.autoRestoreDescription':
+    '모드를 불러온 후 에셋 라이브러리에서 일치하는 에셋으로 누락된 원본 파츠를 복원합니다. 복원된 파츠는 미리보기에만 표시됩니다.',
+  'settings.hint': '변경 사항은 자동으로 저장되며 다음 모드 로드 시 적용됩니다.',
   'asset.extractedPartial':
     '에셋이 일부만 추출되었습니다. 구성 요소 {components}개를 저장하고 리소스 그룹 {skipped}개를 건너뛰었습니다. 일부 파트가 누락될 수 있습니다. 자세한 내용은 extraction_report.json을 확인하세요.',
   'asset.add': '에셋 추가',
